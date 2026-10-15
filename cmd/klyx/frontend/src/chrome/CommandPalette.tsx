@@ -5,13 +5,30 @@ import { buildCommands, Command } from "./commands";
 import { fuzzyMatch } from "./fuzzy";
 import { loadBoosts, recordUse } from "./frecency";
 import { vh, vw } from "../app/zoom";
+import { trapTab } from "./modalFocus";
+import { Aspect } from "./primitives/Aspect";
+import { LinePos } from "./primitives/LinePos";
+import { useFleetAxes } from "./FleetIndicator";
+import { AXIS_TITLE, FLEET_AXES } from "../nav/fleetAxes";
+import { entryKey, entryLabel, go, recentPlaces } from "../nav/history";
+import { INSPECTOR_IDENTITY_ID, useInspectorPin } from "../nav/inspectorPin";
+import { useLine } from "../store/line";
+import { clusterCodes } from "../line/codes";
+import { linePosOf, type LinePosModel } from "../line/linePos";
+import type { IndexHit } from "../bridge/fleetIndex";
+import { useIndexSearch } from "./console/useIndexSearch";
+import { openHit } from "./console/openHit";
+import { CONSOLE_GROUPS, consoleGroup, coverageLine, coverageNotes, coveredByIndex, hitAspect, hitNote, matchesPin, type ConsoleGroup } from "./console/consoleModel";
 
-// CommandPalette is the ⌘K primary-nav surface (design principle #6). It mounts
-// once in AppShell and installs a single window keydown handler:
+// CommandPalette is the ⌘K command console (design principle #6; The Line
+// parent §6, slice 9 note §4.1). It mounts once in AppShell and installs a
+// single window keydown handler:
 //   ⌘K / Ctrl+K  toggle
 //   Esc          close
-// On open it reads buildCommands(useFleet.getState()) fresh — no stale index —
-// indexing only what's already loaded (footer: "showing loaded data").
+// Its groups are Objects (the fleet metadata index, every connected
+// cluster), Run (verbs), Go to (places, clusters, views, resources) and Ask
+// (the chat). On open it reads buildCommands(useFleet.getState()) fresh for
+// the commands; objects come from the index, by search, with its coverage.
 
 // Module-level flag so useListKeys (and any other consumer) can read palette open
 // state without prop-drilling or store overhead. Written by the component on
@@ -146,43 +163,39 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
   return <>{out}</>;
 }
 
+// A row of the console: a command, or an object from the fleet index.
+type Row =
+  | { type: "cmd"; key: string; section: string; cmd: Command; positions: number[] }
+  | { type: "hit"; key: string; section: string; hit: IndexHit };
+
+const rowKey = (r: Row) => r.key;
+const rowId = (r: Row) => optionId(r.key);
+
+// Sections of the empty query (parent §6): recent places, the fleet
+// indicator's affected clusters, the verbs for the current selection.
+const RECENT_MAX = 6;
+const AFFECTED_MAX = 8;
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [sel, setSel] = useState(0);
-  const [commands, setCommands] = useState<Command[]>([]);
-  // A second step (Choose cluster): its options replace the results; the
-  // first step's query comes back with Back.
-  const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string; parentId: string } | null>(null);
-  // Why the last activation did nothing (the target became unavailable).
-  const [blocked, setBlocked] = useState<{ id: string; why: string } | null>(null);
-  // Frecency boosts snapshot, taken once per open - rank() runs per keystroke
-  // and must not re-read localStorage each time.
-  const [boost, setBoost] = useState<(id: string) => number>(() => () => 0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  // Focus returns to whatever had it before ⌘K - a keyboard flow keeps its place.
+  // Focus returns to whatever had it before ⌘K - a keyboard flow keeps its
+  // place - unless an object was opened beside: then to its inspector.
   const prevFocusRef = useRef<HTMLElement | null>(null);
+  const besideRef = useRef(false);
 
   const close = useCallback(() => {
     _paletteOpen = false;
     setOpen(false);
-    setQuery("");
-    setSel(0);
-    setStep(null);
-    setBlocked(null);
-    prevFocusRef.current?.focus?.();
+    const identity = besideRef.current ? document.getElementById(INSPECTOR_IDENTITY_ID) : null;
+    besideRef.current = false;
+    (identity ?? prevFocusRef.current)?.focus?.();
     prevFocusRef.current = null;
   }, []);
 
   const openPalette = useCallback(() => {
     _paletteOpen = true;
     prevFocusRef.current = document.activeElement as HTMLElement | null;
-    setCommands(buildCommands(useFleet.getState())); // fresh index, no stale data
-    setBoost(() => loadBoosts());
-    setQuery("");
-    setSel(0);
-    setStep(null);
+    besideRef.current = false;
     setOpen(true);
   }, []);
 
@@ -212,10 +225,42 @@ export function CommandPalette() {
     };
   }, [open, close, openPalette]);
 
+  // The console mounts per open: each open is a fresh session, its state and
+  // its search fence its own (slice 9 note §4.1).
+  return open ? <Console close={close} besideRef={besideRef} /> : null;
+}
+
+function Console({ close, besideRef }: { close: () => void; besideRef: React.MutableRefObject<boolean> }) {
+  const [query, setQuery] = useState("");
+  const [sel, setSel] = useState(0);
+  const [verbsOnly, setVerbsOnly] = useState(false);
+  // An object opened beside: the console moves aside so its inspector, on
+  // the right, stays readable while the list is kept.
+  const [aside, setAside] = useState(false);
+  // On open it reads buildCommands fresh - no stale index.
+  const [commands, setCommands] = useState<Command[]>(() => buildCommands(useFleet.getState()));
+  // A second step (Choose cluster): its options replace the results; the
+  // first step's query comes back with Back.
+  const [step, setStep] = useState<{ title: string; options: Command[]; parentQuery: string; parentId: string } | null>(null);
+  // Why the last activation did nothing (the target became unavailable).
+  const [blocked, setBlocked] = useState<{ id: string; why: string } | null>(null);
+  // Frecency boosts snapshot, taken once per open - rank() runs per keystroke
+  // and must not re-read localStorage each time.
+  const [boost] = useState<(id: string) => number>(() => loadBoosts());
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const search = useIndexSearch(1, step ? "" : query);
+  const pin = useInspectorPin((s) => s.held?.pin ?? null);
+  const axes = useFleetAxes();
+  const clusters = useFleet((s) => s.clusters);
+  const line = useLine((s) => s.dto);
+  const codes = useMemo(() => clusterCodes(clusters.map((c) => c.name)), [clusters]);
+  const faults = useMemo(() => new Set(axes.axes.fault.map((e) => e.cluster.name)), [axes]);
   // The index follows the fleet while open: membership, connection and
   // capability changes rebuild it (and a Choose cluster step's options).
   useEffect(() => {
-    if (!open) return;
     return useFleet.subscribe((st, prev) => {
       // Fleet pushes arrive every few seconds; only what decides a result's
       // eligibility (membership, connection, capabilities, protection) or
@@ -231,24 +276,63 @@ export function CommandPalette() {
         return { ...cur, options: parent?.next?.options ?? parent?.choices ?? [] };
       });
     });
-  }, [open]);
+  }, []);
 
-  // Focus the input whenever the palette opens.
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+  // Focus the input when the console opens.
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const ranked = useMemo(() => rank(step ? step.options : commands, query, step ? () => 0 : boost), [commands, step, query, boost]);
-  // Results are shown grouped, and the arrow keys, Enter and the scroll
-  // follow exactly that order (Codex UI review 2026-10-13: grouping kept the
-  // ranked index, so Down could jump between groups).
-  const results = useMemo(() => inDisplayOrder(ranked.rows), [ranked.rows]);
-  const dropped = ranked.total - results.length;
+  const visible = useMemo(() => commands.filter((c) => !coveredByIndex(c)), [commands]);
+  const ranked = useMemo(() => rank(step ? step.options : visible, query, step ? () => 0 : boost), [visible, step, query, boost]);
+
+  // The rows, in the order shown: the arrow keys, Enter and the scroll follow
+  // exactly this order.
+  const rows: Row[] = useMemo(() => {
+    const cmdRow = (section: string, cmd: Command, positions: number[] = []): Row => ({ type: "cmd", key: `${section}:${cmd.id}`, section, cmd, positions });
+    if (step) return ranked.rows.map((r) => cmdRow("Clusters", r.cmd, r.positions));
+    if (query.trim() === "") {
+      const out: Row[] = [];
+      if (!verbsOnly) {
+        for (const e of recentPlaces().slice(0, RECENT_MAX)) {
+          const { cluster, place } = entryLabel(e);
+          out.push(cmdRow("Recent places", { id: `recent:${entryKey(e)}`, group: "Application", title: place, hint: cluster ?? undefined, run: () => go(e) }));
+        }
+        const seen = new Set<string>();
+        for (const axis of FLEET_AXES) {
+          for (const entry of axes.axes[axis]) {
+            const name = entry.cluster.name;
+            if (seen.has(name) || seen.size >= AFFECTED_MAX) continue;
+            seen.add(name);
+            out.push(cmdRow("Affected clusters", { id: `affected:${name}`, group: "Clusters", title: name, hint: [AXIS_TITLE[axis], entry.reason].filter(Boolean).join(" · "), run: () => useFleet.getState().openCluster(name) }));
+          }
+        }
+      }
+      const verbs = visible.filter((c) => consoleGroup(c) === "Run" && matchesPin(c.target, pin));
+      const heading = pin ? `Run · ${pin.kind} ${pin.namespace ? `${pin.namespace}/` : ""}${pin.name}` : "Run";
+      for (const c of verbs) out.push(cmdRow(heading, c));
+      return out;
+    }
+    const by = new Map<ConsoleGroup, Row[]>(CONSOLE_GROUPS.map((g) => [g, []]));
+    for (const hit of search.data?.hits ?? []) by.get("Objects")!.push({ type: "hit", key: `hit:${hit.cluster}/${hit.uid}`, section: "Objects", hit });
+    for (const r of inDisplayOrder(ranked.rows)) {
+      const g = consoleGroup(r.cmd);
+      by.get(g)!.push(cmdRow(g, r.cmd, r.positions));
+    }
+    if (verbsOnly) return by.get("Run")!;
+    // A command whose title the query starts leads (typing "pods" means the
+    // Pods view); otherwise objects first, then Run, Go to and Ask.
+    const top = ranked.rows[0]?.cmd;
+    const lead = top && top.title.toLowerCase().startsWith(query.trim().toLowerCase()) ? consoleGroup(top) : "Objects";
+    return [lead, ...CONSOLE_GROUPS.filter((g) => g !== lead)].flatMap((g) => by.get(g)!);
+  }, [step, ranked, query, verbsOnly, axes, visible, pin, search.data]);
+
+  const hitsHidden = query.trim() !== "" && !step && !verbsOnly && search.data ? Math.max(0, search.data.total - search.data.hits.length) : 0;
+  // the empty query lists its own sections, never the ranked commands
+  const cmdsHidden = query.trim() === "" && !step ? 0 : ranked.total - ranked.rows.length;
 
   // Keep selection in range as the result set shrinks/grows.
   useEffect(() => {
-    if (sel >= results.length) setSel(results.length === 0 ? 0 : results.length - 1);
-  }, [results.length, sel]);
+    if (sel >= rows.length) setSel(rows.length === 0 ? 0 : rows.length - 1);
+  }, [rows.length, sel]);
 
   // Keep the selected row visible as arrow keys move it past the list's fold.
   useEffect(() => {
@@ -257,12 +341,25 @@ export function CommandPalette() {
     if (el && typeof (el as HTMLElement).scrollIntoView === "function") {
       (el as HTMLElement).scrollIntoView({ block: "nearest" });
     }
-  }, [sel, results]);
+  }, [sel, rows]);
 
   const run = useCallback(
-    (i: number) => {
-      const r = results[i];
+    (i: number, beside = false) => {
+      const r = rows[i];
       if (!r) return;
+      if (r.type === "hit") {
+        // ↵ opens the object in its lens, pinned to its cluster and UID;
+        // ⌘↵ opens it beside: the console stays open over the list.
+        openHit(r.hit);
+        if (beside) {
+          besideRef.current = true;
+          setAside(true);
+          requestAnimationFrame(() => inputRef.current?.focus());
+          return;
+        }
+        close();
+        return;
+      }
       const cmd = r.cmd;
       if (cmd.disabled) {
         // A disabled view runs nothing; its Connect action is explicit.
@@ -285,7 +382,7 @@ export function CommandPalette() {
       close();
       cmd.run();
     },
-    [results, close, query, step],
+    [rows, close, query, step, besideRef],
   );
   const backToResults = () => {
     if (!step) return;
@@ -294,18 +391,22 @@ export function CommandPalette() {
     setSel(0);
     inputRef.current?.focus();
   };
+  const toggleVerbs = () => { setVerbsOnly((v) => !v); setSel(0); };
 
-  // Within-list keyboard nav: Arrow up/down wrap, Enter runs.
+  // Within-list keyboard nav: Arrow up/down wrap, Enter runs, ⌘↵ opens beside.
   const onInputKey = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
+    if (e.altKey && (e.code === "KeyV" || e.key.toLowerCase() === "v")) {
       e.preventDefault();
-      setSel((s) => (results.length === 0 ? 0 : (s + 1) % results.length));
+      toggleVerbs();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSel((s) => (rows.length === 0 ? 0 : (s + 1) % rows.length));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSel((s) => (results.length === 0 ? 0 : (s - 1 + results.length) % results.length));
+      setSel((s) => (rows.length === 0 ? 0 : (s - 1 + rows.length) % rows.length));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      run(sel);
+      run(sel, e.metaKey || e.ctrlKey);
     } else if (e.key === "Backspace" && step && query === "") {
       // Back from Choose cluster to the results, query intact.
       e.preventDefault();
@@ -313,15 +414,15 @@ export function CommandPalette() {
     }
   };
 
-  if (!open) return null;
-
-  // results is already grouped: each group's rows are contiguous.
-  const groups: { group: string; rows: { r: Ranked; idx: number }[] }[] = [];
-  results.forEach((r, idx) => {
-    const last = groups[groups.length - 1];
-    if (last && last.group === r.cmd.group) last.rows.push({ r, idx });
-    else groups.push({ group: r.cmd.group, rows: [{ r, idx }] });
+  // rows are already in sections: each section's rows are contiguous.
+  const sections: { section: string; rows: { r: Row; idx: number }[] }[] = [];
+  rows.forEach((r, idx) => {
+    const last = sections[sections.length - 1];
+    if (last && last.section === r.section) last.rows.push({ r, idx });
+    else sections.push({ section: r.section, rows: [{ r, idx }] });
   });
+  const notes = search.data ? coverageNotes(search.data.coverage) : [];
+  const noResults = step ? "No eligible cluster remains for this view." : query.trim() === "" ? (verbsOnly ? "No verbs for the current selection." : "Nothing recent, and nothing in the fleet needs you.") : "No matches.";
 
   return (
     <div
@@ -333,17 +434,23 @@ export function CommandPalette() {
         position: "fixed",
         inset: 0,
         zIndex: 1000,
-        background: "rgba(0,0,0,0.3)",
+        background: aside ? "rgba(0,0,0,0.12)" : "rgba(0,0,0,0.3)",
         display: "flex",
-        justifyContent: "center",
+        justifyContent: aside ? "flex-start" : "center",
         alignItems: "flex-start",
-        paddingTop: vh(12),
+        paddingTop: 88,
+        paddingLeft: aside ? 24 : 0,
       }}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command console"
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => trapTab(e, panelRef.current)}
         style={{
-          width: 560,
+          width: 760,
           maxWidth: vw(92),
           background: "var(--color-background-primary)",
           border: "0.5px solid var(--color-border-secondary)",
@@ -354,39 +461,45 @@ export function CommandPalette() {
           flexDirection: "column",
         }}
       >
-        {/* The input sits IN a well (Signal Bench): data surfaces are inset. */}
-        <div style={{ margin: 12, borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-          <input
-            ref={inputRef}
-            data-palette-input="true"
-            data-testid="command-palette-input"
-            role="combobox"
-            aria-expanded={true}
-            aria-controls="command-palette-list"
-            aria-activedescendant={results[sel] ? optionId(results[sel].cmd.id) : undefined}
-            aria-autocomplete="list"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSel(0);
-              setBlocked(null);
-            }}
-            onKeyDown={onInputKey}
-            placeholder={step ? "filter clusters…" : "jump or act: view, cluster, pod, drain, sync…"}
-            spellCheck={false}
-            autoComplete="off"
-            style={{
-              border: "none",
-              outline: "none",
-              background: "transparent",
-              color: "var(--color-text-primary)",
-              fontFamily: "var(--font-mono)",
-              fontSize: 14,
-              padding: "11px 14px",
-              width: "100%",
-              boxSizing: "border-box",
-            }}
-          />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: 12 }}>
+          {/* The input sits IN a well: data surfaces are inset. */}
+          <div style={{ flex: 1, minWidth: 0, borderRadius: "var(--radius-sm)", background: "var(--bench-well-bg, transparent)", boxShadow: "var(--bench-well-shadow, none)", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+            <input
+              ref={inputRef}
+              data-palette-input="true"
+              data-testid="command-palette-input"
+              role="combobox"
+              aria-expanded={true}
+              aria-controls="command-palette-list"
+              aria-activedescendant={rows[sel] ? rowId(rows[sel]) : undefined}
+              aria-autocomplete="list"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSel(0);
+                setBlocked(null);
+              }}
+              onKeyDown={onInputKey}
+              placeholder={step ? "filter clusters…" : verbsOnly ? "verbs: drain, sync, restart…" : "an object, a place or a verb, fleet-wide…"}
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                color: "var(--color-text-primary)",
+                fontFamily: "var(--font-mono)",
+                fontSize: 14,
+                padding: "11px 14px",
+                width: "100%",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+          <button type="button" className="l-chip" aria-pressed={verbsOnly} data-testid="verbs-only" title="Show only verbs (alt+V)"
+            onMouseDown={(e) => e.preventDefault()} onClick={() => { toggleVerbs(); inputRef.current?.focus(); }}>
+            Verbs only <kbd style={{ fontSize: 10, opacity: 0.7 }}>alt+V</kbd>
+          </button>
         </div>
 
         {step && (
@@ -395,86 +508,19 @@ export function CommandPalette() {
             <span className="t-section-label">{step.title}</span>
           </div>
         )}
-        <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: vh(50), overflowY: "auto", padding: "4px 0" }}>
-          {results.length === 0 ? (
-            <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>
-              {step ? "No eligible cluster remains for this view." : "No matches."}
-            </div>
+        <div ref={listRef} id="command-palette-list" role="listbox" style={{ maxHeight: vh(55), overflowY: "auto", padding: "4px 0" }}>
+          {rows.length === 0 ? (
+            <div style={{ padding: "16px", fontSize: 13, color: "var(--color-text-tertiary)" }}>{noResults}</div>
           ) : (
-            groups.map((g) => (
-              <div key={g.group}>
-                <div
-                  style={{
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.6,
-                    color: "var(--color-text-tertiary)",
-                    padding: "8px 16px 4px",
-                  }}
-                >
-                  {g.group}
+            sections.map((g) => (
+              <div key={g.section} role="group" aria-label={g.section}>
+                <div className="t-legend" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--color-text-tertiary)", padding: "8px 16px 4px" }}>
+                  {g.section}
                 </div>
-                {g.rows.map(({ r, idx }) => {
-                  const selected = idx === sel;
-                  return (
-                    <div
-                      key={r.cmd.id}
-                      id={optionId(r.cmd.id)}
-                      role="option"
-                      aria-selected={selected}
-                      aria-disabled={r.cmd.disabled ? true : undefined}
-                      data-testid={`command-row-${r.cmd.id}`}
-                      data-selected={selected ? "true" : "false"}
-                      onMouseMove={() => setSel(idx)}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        run(idx);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 12,
-                        padding: "7px 16px",
-                        cursor: "pointer",
-                        fontSize: 13,
-                        color: r.cmd.disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
-                        background: selected ? "var(--bench-selection-bg, var(--color-background-secondary))" : "transparent",
-                        boxShadow: selected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
-                      }}
-                    >
-                      {/* Labels keep 200px before hints and wrap to two
-                          lines; a name is never cut to a lone initial. */}
-                      <span style={{ flex: "1 1 200px", minWidth: 200, overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        <Highlighted text={r.cmd.title} positions={r.positions} />
-                      </span>
-                      {r.cmd.disabled ? (
-                        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flex: "0 1 auto", minWidth: 0, textAlign: "right" }}>
-                          {r.cmd.disabled}{r.cmd.action ? <> · <span style={{ color: "var(--color-text-info)" }}>↵ {r.cmd.action.label}</span></> : null}
-                        </span>
-                      ) : r.cmd.hint && (
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: "var(--color-text-tertiary)",
-                            whiteSpace: "nowrap",
-                            flex: "0 1 auto",
-                            minWidth: 0,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {r.cmd.hint.includes("prd lock") ? (
-                            <>
-                              {r.cmd.hint.slice(0, r.cmd.hint.indexOf("prd lock"))}
-                              <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>prd lock</span>
-                              {r.cmd.hint.slice(r.cmd.hint.indexOf("prd lock") + "prd lock".length)}
-                            </>
-                          ) : r.cmd.hint}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+                {g.rows.map(({ r, idx }) => (
+                  <ConsoleRow key={rowKey(r)} r={r} selected={idx === sel} onHover={() => setSel(idx)} onRun={(beside) => run(idx, beside)}
+                    pos={r.type === "hit" ? linePosOf(line, r.hit.cluster, codes, faults.has(r.hit.cluster)) : null} code={r.type === "hit" ? codes[r.hit.cluster] ?? r.hit.cluster : ""} />
+                ))}
               </div>
             ))
           )}
@@ -487,12 +533,82 @@ export function CommandPalette() {
             padding: "7px 16px",
             borderTop: "0.5px solid var(--color-border-tertiary)",
             background: "var(--color-background-secondary)",
+            display: "grid",
+            gap: 3,
           }}
         >
-          {blocked && <span role="status" style={{ color: "var(--color-text-warning)" }}>Unavailable: {blocked.why} · </span>}
-          {dropped > 0 ? `+${dropped} more - keep typing · ` : ""}↑↓ navigate · ↵ open · {step ? "⌫ back · " : ""}esc close · views always searchable, objects from loaded data
+          <div data-testid="console-coverage">
+            {search.data
+              ? <>{coverageLine(search.data.searchedClusters, search.data.searchedKinds)}{notes.length > 0 && <span title={notes.join("\n")}> · {notes.slice(0, 2).join(" · ")}{notes.length > 2 ? ` · +${notes.length - 2} more` : ""}</span>}</>
+              : search.error ? `The fleet index could not be searched: ${search.error}` : "Reading the fleet index…"}
+          </div>
+          <div>
+            {blocked && <span role="status" style={{ color: "var(--color-text-warning)" }}>Unavailable: {blocked.why} · </span>}
+            {hitsHidden > 0 ? `+${hitsHidden} more objects - keep typing · ` : ""}
+            {cmdsHidden > 0 ? `+${cmdsHidden} more - keep typing · ` : ""}
+            ↑↓ navigate · ↵ open · ⌘↵ open beside · alt+V verbs only · {step ? "⌫ back · " : ""}esc close
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ConsoleRow({ r, selected, onHover, onRun, pos, code }: { r: Row; selected: boolean; onHover: () => void; onRun: (beside: boolean) => void; pos: LinePosModel | null; code: string }) {
+  const base = {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "7px 16px",
+    cursor: "pointer",
+    fontSize: 13,
+    background: selected ? "var(--bench-selection-bg, var(--color-background-secondary))" : "transparent",
+    boxShadow: selected ? "inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info))" : undefined,
+  } as const;
+  const common = {
+    id: rowId(r),
+    role: "option",
+    "aria-selected": selected,
+    "data-selected": selected ? "true" : "false",
+    onMouseMove: onHover,
+    onMouseDown: (e: React.MouseEvent) => { e.preventDefault(); onRun(e.metaKey || e.ctrlKey); },
+  };
+  if (r.type === "hit") {
+    const h = r.hit;
+    return (
+      <div {...common} data-testid={`console-hit-${h.cluster}-${h.uid}`} style={{ ...base, color: "var(--color-text-primary)" }}>
+        <Aspect kind={hitAspect(h)} label={h.role.state === "current" ? h.role.label || h.role.role : "health unverified"} />
+        <span className="t-legend" style={{ flex: "0 0 auto", minWidth: 72, color: "var(--color-text-secondary)" }}>{h.kind}</span>
+        <span className="t-identifier" style={{ flex: "1 1 200px", minWidth: 120, overflowWrap: "anywhere" }}>{h.name}</span>
+        <span style={{ flex: "0 0 auto" }}>{pos ? <LinePos pos={pos} /> : <span className="t-identifier" title={h.cluster}>{code}</span>}</span>
+        <span data-hit-note style={{ fontSize: 11, color: "var(--color-text-tertiary)", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 }}>{hitNote(h)}</span>
+      </div>
+    );
+  }
+  const cmd = r.cmd;
+  return (
+    <div {...common} aria-disabled={cmd.disabled ? true : undefined} data-testid={`command-row-${cmd.id}`}
+      style={{ ...base, color: cmd.disabled ? "var(--color-text-tertiary)" : "var(--color-text-primary)" }}>
+      {/* Labels keep 200px before hints and wrap to two lines; a name is
+          never cut to a lone initial. */}
+      <span style={{ flex: "1 1 200px", minWidth: 200, overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+        <Highlighted text={cmd.title} positions={r.positions} />
+      </span>
+      {cmd.disabled ? (
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", flex: "0 1 auto", minWidth: 0, textAlign: "right" }}>
+          {cmd.disabled}{cmd.action ? <> · <span style={{ color: "var(--color-text-info)" }}>↵ {cmd.action.label}</span></> : null}
+        </span>
+      ) : cmd.hint && (
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", whiteSpace: "nowrap", flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+          {cmd.hint.includes("prd lock") ? (
+            <>
+              {cmd.hint.slice(0, cmd.hint.indexOf("prd lock"))}
+              <span style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>▲ prd lock</span>
+              {cmd.hint.slice(cmd.hint.indexOf("prd lock") + "prd lock".length)}
+            </>
+          ) : cmd.hint}
+        </span>
+      )}
     </div>
   );
 }

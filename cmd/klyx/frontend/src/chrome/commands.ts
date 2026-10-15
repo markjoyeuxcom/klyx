@@ -31,6 +31,8 @@ export type FleetStore = ReturnType<typeof useFleet.getState>;
 // Palette groups (spec §4), in display order.
 export type CommandGroup = "Application" | "Clusters" | "Views" | "Resources" | "Objects" | "Actions";
 
+export type CommandTarget = { cluster: string; kind: string; namespace?: string; name: string; uid?: string };
+
 export type Command = {
   id: string;
   group: CommandGroup;
@@ -50,6 +52,9 @@ export type Command = {
   guard?: () => string | null;
   // Searchable aliases (registry keywords), matched like hints.
   keywords?: string[];
+  // A verb's object (The Line slice 9 note §4.1): the console's empty query
+  // lists the verbs whose target is the open inspector's pin.
+  target?: CommandTarget;
   // Every eligible cluster's option, whether or not activation opens a step:
   // an open Choose cluster step rebuilds from these when eligibility shrinks
   // to one (the parent then runs directly) instead of emptying.
@@ -117,10 +122,11 @@ function openRelatedObject(s: FleetStore, cluster: string, ref: { kind: string; 
 // explainVerb parks an AI Explain for one object and reveals it: its lens
 // selects it, and the inspector runs the request once AI is ready (spec
 // 2026-10-13 §4.3). Read-only; the backend fences the object by UID.
-function explainVerb(cluster: string, task: string, part: string, label: string, ref: RevealRef, target: ExplainTarget): Command {
+function explainVerb(cluster: string, task: string, part: string, label: string, ref: RevealRef, target: ExplainTarget, kind: string): Command {
   return {
     id: `verb:explain:${cluster}/${task}/${part}/${ref.namespace ?? ""}/${ref.name}`,
     group: "Actions",
+    target: { cluster, kind, namespace: ref.namespace, name: ref.name, uid: ref.uid },
     title: `explain ${label}`,
     hint: `${cluster} · AI, read-only`,
     run: () => {
@@ -260,11 +266,12 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (p.uid) {
-        cmds.push(explainVerb(podCluster, "pods", "pods", `pod ${p.namespace}/${p.name}`, { gvr: "v1/pods", namespace: p.namespace, name: p.name, uid: p.uid }, { kind: "row", task: "pods", part: "pods", uid: p.uid }));
+        cmds.push(explainVerb(podCluster, "pods", "pods", `pod ${p.namespace}/${p.name}`, { gvr: "v1/pods", namespace: p.namespace, name: p.name, uid: p.uid }, { kind: "row", task: "pods", part: "pods", uid: p.uid }, "Pod"));
       }
       cmds.push({
         id: `verb:logs:${podCluster}/${p.namespace}/${p.name}`,
         group: "Actions",
+        target: { cluster: podCluster, kind: "Pod", namespace: p.namespace, name: p.name, uid: p.uid },
         title: `logs ${p.namespace}/${p.name}`,
         hint: podCluster,
         run: () => openWithIntent(s, "pods", podCluster, { kind: "logs-pod", cluster: podCluster, namespace: p.namespace, name: p.name }),
@@ -289,11 +296,12 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (n.uid) {
-        cmds.push(explainVerb(nodeCluster, "nodes", "nodes", `node ${n.name}`, { gvr: "v1/nodes", name: n.name, uid: n.uid }, { kind: "row", task: "nodes", part: "nodes", uid: n.uid }));
+        cmds.push(explainVerb(nodeCluster, "nodes", "nodes", `node ${n.name}`, { gvr: "v1/nodes", name: n.name, uid: n.uid }, { kind: "row", task: "nodes", part: "nodes", uid: n.uid }, "Node"));
       }
       cmds.push({
         id: `verb:drain:${nodeCluster}/${n.name}`,
         group: "Actions",
+        target: { cluster: nodeCluster, kind: "Node", name: n.name, uid: n.uid },
         title: `drain node ${n.name}`,
         hint: `${nodeCluster} · opens the drain composer${lockMark(s, nodeCluster)}`,
         run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "drain-node", cluster: nodeCluster, node: n.name }),
@@ -301,6 +309,7 @@ export function buildCommands(s: FleetStore): Command[] {
       cmds.push({
         id: `verb:cordon:${nodeCluster}/${n.name}`,
         group: "Actions",
+        target: { cluster: nodeCluster, kind: "Node", name: n.name, uid: n.uid },
         title: n.unschedulable ? `uncordon node ${n.name}` : `cordon node ${n.name}`,
         hint: `${nodeCluster}${lockMark(s, nodeCluster)}`,
         run: () => openWithIntent(s, "nodes", nodeCluster, { kind: "cordon-node", cluster: nodeCluster, node: n.name, cordon: !n.unschedulable }),
@@ -327,12 +336,13 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (workloadCluster && w.uid && w.gvr) {
-        cmds.push(explainVerb(workloadCluster, "workloads", "workloads", `${w.kind.toLowerCase()} ${w.namespace}/${w.name}`, { gvr: w.gvr, namespace: w.namespace, name: w.name, uid: w.uid }, { kind: "row", task: "workloads", part: "workloads", uid: w.uid }));
+        cmds.push(explainVerb(workloadCluster, "workloads", "workloads", `${w.kind.toLowerCase()} ${w.namespace}/${w.name}`, { gvr: w.gvr, namespace: w.namespace, name: w.name, uid: w.uid }, { kind: "row", task: "workloads", part: "workloads", uid: w.uid }, w.kind));
       }
       if (workloadCluster) {
         cmds.push({
           id: `verb:restart:${workloadCluster}/${key}`,
           group: "Actions",
+          target: { cluster: workloadCluster, kind: w.kind, namespace: w.namespace, name: w.name, uid: w.uid },
           title: `restart ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
           hint: `${workloadCluster}${lockMark(s, workloadCluster)}`,
           run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "restart-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
@@ -343,6 +353,7 @@ export function buildCommands(s: FleetStore): Command[] {
           cmds.push({
             id: `verb:compare:${workloadCluster}/${key}`,
             group: "Actions",
+            target: { cluster: workloadCluster, kind: w.kind, namespace: w.namespace, name: w.name, uid: w.uid },
             title: `compare ${w.kind.toLowerCase()} ${w.namespace}/${w.name} across the fleet`,
             hint: `${s.clusters.length} clusters · read-only`,
             run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "compare-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
@@ -353,6 +364,7 @@ export function buildCommands(s: FleetStore): Command[] {
           cmds.push({
             id: `verb:scale:${workloadCluster}/${key}`,
             group: "Actions",
+            target: { cluster: workloadCluster, kind: w.kind, namespace: w.namespace, name: w.name, uid: w.uid },
             title: `scale ${w.kind.toLowerCase()} ${w.namespace}/${w.name}`,
             hint: `${workloadCluster} · ${w.ready}/${w.desired} ready${lockMark(s, workloadCluster)}`,
             run: () => openWithIntent(s, "workloads", workloadCluster, { kind: "scale-workload", cluster: workloadCluster, workloadKind: w.kind as WorkloadKind, namespace: w.namespace, name: w.name }),
@@ -376,7 +388,7 @@ export function buildCommands(s: FleetStore): Command[] {
           void openHelmRelease(helmCluster, r.namespace, r.name);
         },
       });
-      cmds.push(explainVerb(helmCluster, "helm", "releases", `helm release ${r.namespace}/${r.name}`, { gvr: "", namespace: r.namespace, name: r.name }, { kind: "helm", namespace: r.namespace, name: r.name }));
+      cmds.push(explainVerb(helmCluster, "helm", "releases", `helm release ${r.namespace}/${r.name}`, { gvr: "", namespace: r.namespace, name: r.name }, { kind: "helm", namespace: r.namespace, name: r.name }, "HelmRelease"));
     }
   }
 
@@ -397,11 +409,12 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (r.uid && r.gvr) {
-        cmds.push(explainVerb(gitopsCluster, "flux", "reconciliations", `${r.kind.toLowerCase()} ${r.namespace}/${r.name}`, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid }, { kind: "row", task: "flux", part: "reconciliations", uid: r.uid }));
+        cmds.push(explainVerb(gitopsCluster, "flux", "reconciliations", `${r.kind.toLowerCase()} ${r.namespace}/${r.name}`, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid }, { kind: "row", task: "flux", part: "reconciliations", uid: r.uid }, r.kind));
       }
       cmds.push({
         id: `verb:reconcile:${gitopsCluster}/${key}`,
         group: "Actions",
+        target: { cluster: gitopsCluster, kind: r.kind, namespace: r.namespace, name: r.name, uid: r.uid },
         title: `reconcile ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
         hint: `${gitopsCluster}${lockMark(s, gitopsCluster)}`,
         run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "reconcile-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name }),
@@ -409,6 +422,7 @@ export function buildCommands(s: FleetStore): Command[] {
       cmds.push({
         id: `verb:suspend:${gitopsCluster}/${key}`,
         group: "Actions",
+        target: { cluster: gitopsCluster, kind: r.kind, namespace: r.namespace, name: r.name, uid: r.uid },
         title: r.suspended ? `resume ${r.kind.toLowerCase()} ${r.namespace}/${r.name}` : `suspend ${r.kind.toLowerCase()} ${r.namespace}/${r.name}`,
         hint: `${gitopsCluster}${lockMark(s, gitopsCluster)}`,
         run: () => openWithIntent(s, "gitops", gitopsCluster, { kind: "suspend-flux", cluster: gitopsCluster, fluxKind: r.kind, namespace: r.namespace, name: r.name, suspend: !r.suspended }),
@@ -434,11 +448,12 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (a.uid && a.gvr) {
-        cmds.push(explainVerb(argoCluster, "argo", "applications", `application ${a.namespace}/${a.name}`, { gvr: a.gvr, namespace: a.namespace, name: a.name, uid: a.uid }, { kind: "row", task: "argo", part: "applications", uid: a.uid }));
+        cmds.push(explainVerb(argoCluster, "argo", "applications", `application ${a.namespace}/${a.name}`, { gvr: a.gvr, namespace: a.namespace, name: a.name, uid: a.uid }, { kind: "row", task: "argo", part: "applications", uid: a.uid }, "Application"));
       }
       cmds.push({
         id: `verb:argo-sync:${argoCluster}/${key}`,
         group: "Actions",
+        target: { cluster: argoCluster, kind: "Application", namespace: a.namespace, name: a.name, uid: a.uid },
         title: `sync app ${a.namespace}/${a.name}`,
         hint: `${argoCluster} · opens the sync composer${lockMark(s, argoCluster)}`,
         run: () => openWithIntent(s, "argo", argoCluster, { kind: "sync-argo", cluster: argoCluster, namespace: a.namespace, name: a.name }),
@@ -446,6 +461,7 @@ export function buildCommands(s: FleetStore): Command[] {
       cmds.push({
         id: `verb:argo-refresh:${argoCluster}/${key}`,
         group: "Actions",
+        target: { cluster: argoCluster, kind: "Application", namespace: a.namespace, name: a.name, uid: a.uid },
         title: `refresh app ${a.namespace}/${a.name}`,
         hint: argoCluster,
         run: () => openWithIntent(s, "argo", argoCluster, { kind: "refresh-argo", cluster: argoCluster, namespace: a.namespace, name: a.name }),

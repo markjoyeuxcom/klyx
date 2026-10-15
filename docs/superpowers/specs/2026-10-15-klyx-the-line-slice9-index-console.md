@@ -282,3 +282,28 @@ Five findings, all taken:
   - the hook (`usePinnedSubject.test.tsx`), `PinnedGone`, and `reveal` forwarding;
   - per lens: Pods (same UID, replaced and adopted, absent on incomplete then complete reads, then arriving), Workloads, Nodes, Flux (both), Certificates, ESO, Argo, Gateways and Routes (detached wording), Karpenter;
   - Resources (`InstanceDetail.test.tsx`), and `notFound` in Go (`TestGetInstanceDetailNotFound`).
+
+## 12. As built: 9c-2 (the console)
+
+- **Structure:** `CommandPalette` keeps only the open state, the hotkeys and focus restore; the console itself mounts per open, so each open is a fresh session (its state and its search fence its own) and nothing subscribes while it is closed.
+- **The overlay:** 760px wide, 88px from the top, a modal dialog ("Command console") whose Tab is trapped (`trapTab`), with no animation.
+- **The empty query**, in order:
+  - recent places (up to 6, `recentPlaces()`);
+  - the fleet indicator's affected clusters (up to 8, in chip order, each with its axis and reason);
+  - "Run · <kind> <name>": the verbs whose target is the open inspector's pin, matched by UID, or by cluster, kind, namespace and name. Verb commands gain a `target` for this.
+- **Groups:**
+  - **Ask:** `chat:*` commands.
+  - **Run:** actions, plus terminal, zoom, theme and shortcuts.
+  - **Go to:** every other application command, plus clusters, views and resources.
+  - **Objects:** the index's hits. The open cluster's loaded rows for kinds the index covers are dropped; Helm releases, which it does not index, remain.
+  - **Order:** a command whose title the query starts leads with its group; otherwise Objects, Run, Go to, Ask.
+- **An object row:** its `Aspect` (only a current role marks; anything else reads "checking", never healthy), kind, name, `LinePos` (or the cluster's code when the line does not place it) and a note: namespace · the role's word ("last observed <role> at <time>", "health unverified") · the kind's state when not live.
+- **The search:** `bridge/fleetIndex.searchIndex` is cancellable. `useIndexSearch` debounces 150 ms; each request cancels the previous one in Go, and a reply is applied only for the latest request of the session (A → B → A tested). A short query reads the coverage alone.
+- **Opening** (`console/openHit.ts`): a hit whose kind has a lens is revealed there with its UID; every other kind opens in Resources with its UID expected.
+  - ↵ closes the console.
+  - ⌘↵ keeps it open and moves it aside (left-aligned, a lighter backdrop) so the inspector on the right stays readable. Focus stays in the input, and closing then focuses the inspector's identity.
+- **Verbs only:** a chip button in the header, and alt+V (labelled "alt+V": the ⌥ glyph does not render in the mono face).
+- **Protected verbs** show "▲ prd lock" in their hint and still open the existing confirm and grant flows.
+- **The coverage line:** "Searching N clusters · M kinds", then the gaps, the first two shown and all of them in the tooltip: clusters not indexed or not connected, and kinds partial, refused or stale, each with the lens to search instead. "+N more objects" when the index matched more than it returned.
+- **Tests:** `console/console.test.tsx` covers the frame and focus trap, the empty query's three parts, verbs only, object rows (aspect, LinePos, notes), group lead, ↵ and ⌘↵ (aside, focus to the inspector), coverage notes, the A → B → A fence, and hit opening. The palette's existing tests are updated for the console.
+- **Captures** (`pw/s9c.mjs`, kind lab, 1440×900, both themes): the empty query, a search, verbs only, an object opened beside, and the inspector after closing.

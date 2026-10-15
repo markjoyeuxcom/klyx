@@ -5,10 +5,15 @@ import { useFleet } from "../store/fleet";
 import type { ClusterDTO, PodRowDTO } from "../store/fleet";
 
 vi.mock("../bridge/pods", () => ({ openPodDetail: vi.fn(), listPods: vi.fn() }));
+// The fleet index's search (slice 9c): no objects unless a test seeds them.
+const indexBridge = vi.hoisted(() => ({
+  searchIndex: vi.fn(() => Object.assign(Promise.resolve({ hits: [], total: 0, searchedClusters: 0, searchedKinds: 0, coverage: [] }), { cancel: () => {} })),
+}));
+vi.mock("../bridge/fleetIndex", () => indexBridge);
 vi.mock("../bridge/helm", () => ({ openHelmRelease: vi.fn() }));
 
 const mkCluster = (name: string, env: string, region: string): ClusterDTO =>
-  ({ name, env, region } as ClusterDTO);
+  ({ name, env, region, state: "Synced", reason: "" } as ClusterDTO);
 
 const mkPod = (namespace: string, name: string): PodRowDTO =>
   ({ namespace, name, uid: `uid-${name}`, health: { kind: "ok", label: "Running" } } as PodRowDTO);
@@ -70,6 +75,7 @@ describe("CommandPalette", () => {
     useFleet.setState({ openCluster });
     const { getByTestId } = render(<CommandPalette />);
     pressCmdK();
+    fireEvent.change(getByTestId("command-palette-input"), { target: { value: "prd" } });
     fireEvent.mouseDown(getByTestId("command-row-cluster:prd-ne"));
     expect(openCluster).toHaveBeenCalledWith("prd-ne");
   });
@@ -87,14 +93,20 @@ describe("CommandPalette", () => {
     expect(queryByTestId("command-palette")).toBeNull();
   });
 
-  it("shows a Pods group when the pods slice is seeded", () => {
+  it("objects come from the fleet index; the open cluster's loaded rows no longer stand in for it", async () => {
     seedClusters();
     useFleet.getState().setPodsVisit("dev-we");
     useFleet.getState().setPodsFromRows("dev-we", { items: [mkPod("team", "api-1")], namespaces: ["team"], loading: false });
-    const { getByTestId, queryByTestId } = render(<CommandPalette />);
+    indexBridge.searchIndex.mockImplementation(((q: string) => Object.assign(Promise.resolve({
+      hits: q === "api-1" ? [{ cluster: "prd-ne", kind: "Pod", group: "", version: "v1", resource: "pods", namespace: "team", name: "api-1", uid: "u-prd", kindState: "live", role: { state: "current", role: "ok" } }] : [],
+      total: q === "api-1" ? 1 : 0, searchedClusters: 2, searchedKinds: 30, coverage: [],
+    }), { cancel: () => {} })) as never);
+    const { getByTestId, queryByTestId, findByTestId } = render(<CommandPalette />);
     pressCmdK();
     fireEvent.change(getByTestId("command-palette-input"), { target: { value: "api-1" } });
-    expect(queryByTestId("command-row-pod:team/api-1")).not.toBeNull();
+    expect(await findByTestId("console-hit-prd-ne-u-prd")).toBeTruthy();
+    expect(queryByTestId("command-row-pod:team/api-1")).toBeNull();
+    expect(getByTestId("console-coverage").textContent).toContain("Searching 2 clusters · 30 kinds");
   });
 
   it("moves selection with arrow keys", () => {
@@ -102,11 +114,12 @@ describe("CommandPalette", () => {
     const { getByTestId } = render(<CommandPalette />);
     pressCmdK();
     const input = getByTestId("command-palette-input");
-    // first row selected by default (Application leads the empty list)
-    expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("true");
+    fireEvent.change(input, { target: { value: "fleet" } });
+    const options = () => [...document.querySelectorAll('[role="option"]')];
+    expect(options()[0].getAttribute("data-selected")).toBe("true");
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(getByTestId("command-row-fleet").getAttribute("data-selected")).toBe("false");
-    expect(getByTestId("command-row-fleet:promotion").getAttribute("data-selected")).toBe("true");
+    expect(options()[0].getAttribute("data-selected")).toBe("false");
+    expect(options()[1].getAttribute("data-selected")).toBe("true");
   });
 
   it("scrolls the selected row into view when navigating", () => {
@@ -117,9 +130,10 @@ describe("CommandPalette", () => {
     seedClusters();
     const { getByTestId } = render(<CommandPalette />);
     pressCmdK();
+    fireEvent.change(getByTestId("command-palette-input"), { target: { value: "fleet" } });
     scrollSpy.mockClear();
     fireEvent.keyDown(getByTestId("command-palette-input"), { key: "ArrowDown" });
-    expect(getByTestId("command-row-fleet:promotion").getAttribute("data-selected")).toBe("true");
+    expect([...document.querySelectorAll('[role="option"]')][1].getAttribute("data-selected")).toBe("true");
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
   });
 });
