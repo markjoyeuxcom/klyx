@@ -138,7 +138,8 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 
 - **The station needs these kinds:**
   - **always:** `kustomizations`, `helmreleases` and `applications` (the unit kinds);
-  - **sources:** only the source kinds its readable units reference (`gitrepositories`, `helmrepositories`, `ocirepositories`, `buckets`, `helmcharts`).
+  - **sources:** only the source kinds its readable Kustomizations (Git units) reference: `gitrepositories`, `ocirepositories`, `buckets`.
+  - **Never** a HelmRelease's source. Its recorded-name chart unit (parent §3.2 as revised) compares history alone, and its source's read is context (`ContextRead`), disclosed apart.
   - Coverage is read per kind from `Rows.Part.Kinds`, never from the part's roll-up. A forbidden Bucket kind that no unit references cannot poison a live GitRepository.
 - **Per needed kind:**
 
@@ -150,13 +151,15 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 | stale | last good, not current |
 | unreadable | error |
 
-- **An unread unit kind is never assumed empty.** While `kustomizations` is unreadable, the station cannot know which sources it would reference. All of its Flux source kinds then count as needed, and it reads at best `partial`.
+- **An unread unit kind is never assumed empty.** While `kustomizations` is unreadable, the station cannot know which sources it would reference. Every source kind a Kustomization can reference then counts as needed, and the station reads at best `partial`.
 - **Station read precedence:**
   1. `checking` when the connection is unusable, a needed part is gapped (§2.3), or the station is attaching;
   2. `ok` when every needed kind is live or absent;
   3. `partial` when at least one needed kind is live and another is not;
   4. otherwise the worst of `error` (unreadable), then `stale`, then `checking`.
-- **The per-unit read** is the worse of its own kind's and its referenced source kind's coverage.
+- **The per-unit read:**
+  - for a Git unit, the worse of its own kind's and its referenced source kind's coverage;
+  - for a recorded-name chart unit, its own kind's (`helmreleases`) alone, with the source's read as `ContextRead`.
 - **The parent's state rule 1** (checking when the station read is not ok, or an eligible unit is unread or stale) applies on top: `partial` is never compared.
 - **Tests:**
   - the absent, live, checking, stale and unreadable matrix for each needed kind;
