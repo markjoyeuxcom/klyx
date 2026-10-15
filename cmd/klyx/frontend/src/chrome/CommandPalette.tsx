@@ -135,7 +135,9 @@ export function rank(commands: Command[], query: string, boost: (id: string) => 
     if (!t && !h && prefix === 0) continue;
     // Typing a result's whole title picks it: an exact match outranks any
     // frecency habit ("theme: bench" over a recently used "theme: bench light").
-    const exact = title === lq ? 1000 : 0;
+    // So does the name the lens index shows: "Workloads" is All workloads,
+    // never Pods, whose only claim on it is its group's name.
+    const exact = title === lq || cmd.shownAs?.toLowerCase() === lq ? 1000 : 0;
     const hint = h ? Math.min(h.score * 0.5, HINT_CAP) : 0;
     const primary = (GROUP_BONUS[cmd.group] ?? 0) - (cmd.disabled ? 10 : 0);
     const brevity = -Math.min(cmd.title.length, 60) * 0.02;
@@ -355,7 +357,8 @@ function Console({ close, besideRef }: { close: () => void; besideRef: React.Mut
     // A command whose title the query starts leads (typing "pods" means the
     // Pods view); otherwise objects first, then Run, Go to and Ask.
     const top = ranked.rows[0]?.cmd;
-    const lead = top && top.title.toLowerCase().startsWith(query.trim().toLowerCase()) ? consoleGroup(top) : "Objects";
+    const lq = query.trim().toLowerCase();
+    const lead = top && (top.title.toLowerCase().startsWith(lq) || !!top.shownAs?.toLowerCase().startsWith(lq)) ? consoleGroup(top) : "Objects";
     return [lead, ...CONSOLE_GROUPS.filter((g) => g !== lead)].flatMap((g) => by.get(g)!);
   }, [step, ranked, query, verbsOnly, axes, visible, pin, search.data]);
 

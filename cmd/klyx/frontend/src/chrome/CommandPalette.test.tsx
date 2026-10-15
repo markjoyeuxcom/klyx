@@ -378,6 +378,11 @@ describe("Codex UI review 2026-10-13: palette order and ranking", () => {
     expect(options(list)[0].dataset.testid).toBe("command-row-view:helm");
     type(input, "gateway");
     expect(options(list)[0].dataset.testid).toBe("command-row-view:gateway");
+    // the name the lens index shows picks its lens, never a sibling in its group
+    type(input, "Workloads");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:workloads");
+    type(input, "Resources");
+    expect(options(list)[0].dataset.testid).toBe("command-row-view:builtins");
     // The raw kinds stay findable by their own names.
     type(input, "poddisruption");
     expect(options(list)[0].dataset.testid).toBe("command-row-resource:res:policy/v1/poddisruptionbudgets");

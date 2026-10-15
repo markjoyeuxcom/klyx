@@ -52,6 +52,9 @@ export type Command = {
   guard?: () => string | null;
   // Searchable aliases (registry keywords), matched like hints.
   keywords?: string[];
+  // The name the lens index shows when it differs from the title ("Workloads"
+  // for "All workloads"): typing it whole picks the command, as its title would.
+  shownAs?: string;
   // A verb's object (The Line slice 9 note §4.1): the console's empty query
   // lists the verbs whose target is the open inspector's pin.
   target?: CommandTarget;
@@ -669,22 +672,23 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
   // A lens is findable by its tool's name too: "helm" finds Helm's Releases,
   // "network" its Gateways and routes (Codex UI review 2026-10-13).
   const keywords = d.type === "task" ? [g.label, ...(d.keywords ?? [])] : d.keywords;
+  const shownAs = d.type === "task" ? d.indexLabel : undefined;
   const out: Command[] = [];
   if (here) {
     const mine = states.find((x) => x.c.name === here);
     if (mine && mine.state === "present") {
-      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here), guard: live(here), keywords });
+      out.push({ id, group, title: d.label, hint: [base, here].join(" · "), run: open(here), guard: live(here), keywords, shownAs });
     } else {
       const others = eligible.filter((c) => c.name !== here);
       const why = mine && mine.state !== "present" ? `${CAP_STATE_TEXT[mine.state]} on ${here}` : `not available on ${here}`;
       out.push(others.length > 0
-        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords, choices: chooser(others)?.options }
-        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords });
+        ? { id, group, title: d.label, hint: `${base} · ${why} - choose another cluster`, run: () => {}, next: chooser(others), keywords, shownAs, choices: chooser(others)?.options }
+        : { id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords, shownAs });
     }
   } else if (eligible.length === 1) {
-    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords, choices: chooser(eligible)?.options });
+    out.push({ id, group, title: d.label, hint: [base, eligible[0].name].join(" · "), run: open(eligible[0].name), guard: live(eligible[0].name), keywords, shownAs, choices: chooser(eligible)?.options });
   } else if (eligible.length > 1) {
-    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords, choices: chooser(eligible)?.options });
+    out.push({ id, group, title: d.label, hint: `${base} · ${eligible.length} clusters`, run: () => {}, next: chooser(eligible), keywords, shownAs, choices: chooser(eligible)?.options });
   } else {
     const anyConnected = s.clusters.some(connected);
     const connecting = s.clusters.some((c) => c.state === "Connecting");
@@ -696,7 +700,7 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
       : "not detected on any connected cluster";
     // Connect cluster only where connecting one is the way forward.
     const canConnect = s.clusters.length === 0 || (!anyConnected && !connecting);
-    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords,
+    out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords, shownAs,
       ...(canConnect ? { action: { label: "Connect cluster", run: () => s.openSettings() } } : {}) });
   }
   // Cluster-qualified task results: "events prd-weu" opens Events there.
