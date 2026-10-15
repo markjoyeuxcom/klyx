@@ -5,6 +5,7 @@ import { useHealth, resetHealthStore, applySummary, type HealthRef } from "../st
 import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
 import { clusterAttention } from "../nav/clusterAttention";
 import { NeedsYou, useQueueFilter } from "./NeedsYou";
+import { applyLine, resetLineStore, type LineDTO } from "../store/line";
 
 // The Line slice 5b: "Needs you" on the fleet screen.
 
@@ -17,6 +18,7 @@ const mount = (clusters: ClusterDTO[]) => {
 
 beforeEach(() => {
   resetHealthStore();
+  resetLineStore();
   useQueueFilter.setState({ filter: "all" });
   useFleet.setState({ route: { name: "fleet" }, navIntent: null } as never);
 });
@@ -30,6 +32,33 @@ describe("Needs you", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Fault: Pod shop\/a, CrashLoopBackOff, on prd1/ }));
     expect(useFleet.getState().route).toMatchObject({ name: "cluster", cluster: "prd1", section: "pods" });
     expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-pod", cluster: "prd1", namespace: "shop", name: "a" });
+  });
+
+  // The Line slice 8a (parent §3.7): a row's station is its LinePos tag. The
+  // fill is the fleet's fault truth: a Pod fault fills it while the line's
+  // GitOps comparison is clean (design review of 9705575).
+  it("a row carries the LinePos tag; a Pod fault fills it though the line's GitOps flag is clean", () => {
+    applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: 1 }, [kind("pods")], { top: [ref("a")] })])), {}, "prd1"));
+    applyLine({ version: 1, tracks: [{ name: "weu", kind: "region", label: "West Europe" }], siding: [],
+      stations: [
+        { cluster: "dev1", track: "weu", rank: 0, env: "dev", state: "matches", flags: { failing: false } },
+        { cluster: "prd1", track: "weu", rank: 3, env: "prd", state: "matches", flags: { failing: false } },
+      ] } as unknown as LineDTO);
+    mount([cl("dev1"), cl("prd1", "prd")]);
+    const row = screen.getByRole("button", { name: /^Fault: Pod shop\/a/ });
+    const pos = row.querySelector("[data-linepos]") as HTMLElement;
+    expect(pos.getAttribute("aria-label")).toBe("prd1, prd on West Europe");
+    expect(pos.querySelectorAll("[data-sq]")).toHaveLength(2);
+    expect((pos.querySelector("[data-here]") as HTMLElement).style.background).toContain("danger");
+    expect(row.querySelector(".queue-cluster")).toBeNull(); // the tag replaces the place and name
+  });
+
+  it("a cluster the line does not place keeps its place and name", () => {
+    applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: 1 }, [kind("pods")], { top: [ref("a")] })])), {}, "prd1"));
+    mount([cl("prd1", "prd")]);
+    const row = screen.getByRole("button", { name: /^Fault: Pod shop\/a/ });
+    expect(row.querySelector("[data-linepos]")).toBeNull();
+    expect(row.querySelector(".queue-cluster")?.textContent).toBeTruthy();
   });
 
   it("+N more links to the part's lens", () => {

@@ -3,7 +3,12 @@ import type { ClusterDTO } from "../store/fleet";
 import type { ClusterAttention } from "../nav/clusterAttention";
 import { NAV_GROUPS, navigate } from "../nav/registry";
 import { reveal } from "../nav/reveal";
-import { Aspect } from "../chrome/primitives";
+import { useMemo } from "react";
+import { Aspect, LinePos } from "../chrome/primitives";
+import { useLine } from "../store/line";
+import { clusterCodes } from "../line/codes";
+import { linePosOf, type LinePosModel } from "../line/linePos";
+import { fleetAxes } from "../nav/fleetAxes";
 import { clusterDisplayName } from "./clusterName";
 import { fleetQueue, type QueueFilter, type QueueRow } from "./queue";
 
@@ -36,8 +41,11 @@ export function moreText(row: Extract<QueueRow, { kind: "more" }>): string {
   return `+${total} ${row.lower ? "or more" : "more"} in ${row.lens}${split}`;
 }
 
-function Row({ row }: { row: QueueRow }) {
-  const where = <span className="queue-where"><span>{row.place || "no environment"}</span><span className="queue-cluster">{clusterDisplayName(row.cluster)}</span><span>{row.area}</span></span>;
+// Where a row is: its LinePos station tag (parent §3.7, slice 8a) and its
+// area; a cluster the line does not place keeps its place and name.
+function Row({ row, pos }: { row: QueueRow; pos: LinePosModel | null }) {
+  const station = pos ? <LinePos pos={pos} /> : <><span>{row.place || "no environment"}</span><span className="queue-cluster">{clusterDisplayName(row.cluster)}</span></>;
+  const where = <span className="queue-where">{station}<span>{row.area}</span></span>;
   if (row.kind === "object") {
     const name = `${row.ref.namespace ? `${row.ref.namespace}/` : ""}${row.ref.name}`;
     return (
@@ -65,6 +73,9 @@ function Row({ row }: { row: QueueRow }) {
 export function NeedsYou({ clusters, models }: { clusters: ClusterDTO[]; models: Record<string, ClusterAttention> }) {
   const filter = useQueueFilter((s) => s.filter);
   const q = fleetQueue(clusters, models, filter);
+  const line = useLine((s) => s.dto);
+  const codes = useMemo(() => clusterCodes(clusters.map((c) => c.name)), [clusters]);
+  const faults = useMemo(() => new Set(fleetAxes(clusters, models).axes.fault.map((e) => e.cluster.name)), [clusters, models]);
   // the whole queue's counts, never the samples; "+" on a lower bound
   const plus = q.lower ? "+" : "";
   const counts = [q.faults > 0 ? `${q.faults}${plus} fault${q.faults === 1 && !plus ? "" : "s"}` : "", q.attention > 0 ? `${q.attention}${plus} to look at` : ""].filter(Boolean).join(" · ");
@@ -80,7 +91,7 @@ export function NeedsYou({ clusters, models }: { clusters: ClusterDTO[]; models:
         </div>
       </div>
       <div className="queue-rows">
-        {q.rows.map((row) => <Row key={row.key} row={row} />)}
+        {q.rows.map((row) => <Row key={row.key} row={row} pos={linePosOf(line, row.cluster, codes, faults.has(row.cluster))} />)}
         {q.rows.length === 0 && <p className="queue-empty">{filter === "all" ? "Nothing in the clusters read needs attention." : "Nothing in this filter, in the clusters read."}</p>}
       </div>
       {q.notRead.length > 0 && (

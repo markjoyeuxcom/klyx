@@ -2,6 +2,8 @@
 // every view shares. Import from here, not from per-view local copies.
 export { StatusDot } from "./StatusDot";
 export { Aspect, aspectOfVerdict, type AspectKind } from "./Aspect";
+export { Rail, type RailStep, type RailSegment } from "./Rail";
+export { LinePos } from "./LinePos";
 export {
   type Tone,
   toneColor,

@@ -7,7 +7,7 @@ import { getCertificateChain } from "../bridge/certmanager";
 import { useCertManagerRows } from "../health/useCertManagerRows";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useListKeys } from "../chrome/useListKeys";
-import { StatusDot, mono, readyColor, type Tone } from "../chrome/primitives";
+import { mono, Rail, type AspectKind, type RailStep, type Tone } from "../chrome/primitives";
 import { InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -792,42 +792,43 @@ function flattenChain(nodes: ChainNodeDTO[]): ChainNodeDTO[] {
   return out;
 }
 
-// ChainRail: one vertical rail, a lamp per node. Only the deepest stuck node
-// gets loud - its message in a red-ringed box; healthy links stay quiet.
+// ChainRail: the issuance chain on the shared Rail (The Line slice 8a), one
+// step per node in processing order. Only the deepest stuck node gets loud -
+// "stuck here" and its message in a red-ringed box; healthy links stay quiet.
+const chainAspect: Record<string, AspectKind> = { Ready: "none", Failed: "fault", Issuing: "syncing" };
+
 function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string | null }) {
-  const flat = flattenChain(nodes);
-  return (
-    <div style={{ position: "relative" }}>
-      <span aria-hidden style={{ position: "absolute", left: 3, top: 6, bottom: 6, width: 1, background: "var(--color-border-secondary)" }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {flat.map((node) => {
-          const key = `${node.kind}/${node.namespace}/${node.name}`;
-          const isFail = failKey === key;
-          const bad = node.ready === "Failed";
-          const issuing = node.ready === "Issuing";
-          const kind = node.kind || "Unknown";
-          const stuckText = node.message || node.reason;
-          return (
-            <div key={key} style={{ position: "relative" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11 }}>
-                <StatusDot size={7} color={readyColor[node.ready] ?? readyColor.Unknown} />
-                <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{chainKindLabel[kind] ?? kind.toLowerCase()}</span>
-                <span style={{ ...mono, overflowWrap: "anywhere", minWidth: 0, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{node.name}</span>
-                {(bad || issuing) && node.reason && !isFail && (
-                  <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
-                )}
-                {isFail && <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: "var(--color-text-danger)", color: "var(--color-background-primary)", flexShrink: 0 }}>stuck here</span>}
-              </div>
-              {isFail && stuckText && (
-                <div style={{ marginLeft: 14, marginTop: 4, padding: "6px 9px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)", fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
-                  {stuckText}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+  const steps: RailStep[] = flattenChain(nodes).map((node) => {
+    const key = `${node.kind}/${node.namespace}/${node.name}`;
+    const isFail = failKey === key;
+    const bad = node.ready === "Failed";
+    const issuing = node.ready === "Issuing";
+    const kind = node.kind || "Unknown";
+    const stuckText = node.message || node.reason;
+    const kindWord = chainKindLabel[kind] ?? kind.toLowerCase();
+    return {
+      key,
+      segment: "chain",
+      name: `${kindWord} ${node.name}`,
+      aspect: chainAspect[node.ready] ?? "checking",
+      tags: isFail ? ["stuck here"] : undefined,
+      label: (
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, fontSize: 11, minWidth: 0 }}>
+          <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{kindWord}</span>
+          <span style={{ ...mono, overflowWrap: "anywhere", minWidth: 0, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{node.name}</span>
+          <span className="sr-only">, {node.ready || "Unknown"}</span>
+          {(bad || issuing) && node.reason && !isFail && (
+            <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
+          )}
+        </span>
+      ),
+      body: isFail && stuckText ? (
+        <div style={{ marginTop: 1, padding: "6px 9px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)", fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
+          {stuckText}
+        </div>
+      ) : undefined,
+    };
+  });
+  return <Rail label="Issuance chain" steps={steps} />;
 }
 

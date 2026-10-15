@@ -6,6 +6,7 @@ import { providerLabel } from "../app/AISettingsPanel";
 import { WELL_KNOWN_RESOURCE_REFS } from "../cluster/resourceRefs";
 import { SafeMarkdown } from "./SafeMarkdown";
 import { useChat } from "./chatStore";
+import { Rail, type RailSegment, type RailStep } from "../chrome/primitives";
 
 // ChatDrawer is the cluster chat (spec 2026-10-14 §8): one conversation per
 // cluster, read-only, docked on the right. The backend owns the
@@ -267,19 +268,34 @@ function Exchange({ cluster, ex }: { cluster: string; ex: ChatExchange }) {
   );
 }
 
+// Reads is the answer's read ledger (The Line slice 8a, parent §5.3): a Rail
+// in read order, each step's segment its outcome - completed (and
+// truncated, tagged) in route, failed in danger, cancelled dashed. A read's
+// redaction count stays on its line.
+const readSegment: Record<string, RailSegment> = { completed: "completed", truncated: "completed", failed: "failed", cancelled: "cancelled" };
+
 function Reads({ reads, open }: { reads: ChatRead[]; open?: boolean }) {
   if (reads.length === 0) return null;
   const redacted = reads.reduce((n, r) => n + (r.redacted ?? 0), 0);
+  const steps: RailStep[] = reads.map((r, i) => {
+    const seg = readSegment[r.outcome] ?? "chain";
+    const tags = r.outcome === "truncated" ? ["truncated"] : seg === "chain" && r.outcome ? [r.outcome] : undefined;
+    return {
+      key: String(i),
+      segment: seg,
+      name: `${r.tool}${r.target ? ` ${r.target}` : ""}`,
+      tags,
+      label: (
+        <span className="chat-small">
+          <code>{r.tool}</code>{r.target ? ` ${r.target}` : ""}{r.detail ? ` (${r.detail})` : ""}{r.redacted ? ` · ${r.redacted} redacted` : ""}
+        </span>
+      ),
+    };
+  });
   return (
     <details className="chat-reads" open={open} data-testid="chat-reads">
       <summary className="chat-small">{reads.length} read{reads.length === 1 ? "" : "s"}{redacted ? ` · ${redacted} redacted` : ""}</summary>
-      <ul>
-        {reads.map((r, i) => (
-          <li key={i} className="chat-small">
-            <code>{r.tool}</code>{r.target ? ` ${r.target}` : ""} - {r.outcome}{r.detail ? ` (${r.detail})` : ""}{r.redacted ? ` · ${r.redacted} redacted` : ""}
-          </li>
-        ))}
-      </ul>
+      <Rail label="Reads, in order" steps={steps} leadIn />
     </details>
   );
 }

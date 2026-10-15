@@ -119,6 +119,22 @@ describe("ExternalSecretsView", () => {
     expect(insp().queryByText(/likely cause/i)).toBeNull();
   });
 
+  // The Line slice 8a (parent §5.1): store -> ExternalSecret -> target Secret
+  // on Rail, today's evidence on its steps, nothing new claimed.
+  it("draws the chain on Rail: the store failure on the store, the refresh on the ExternalSecret, then the target", () => {
+    const e = secret({ name: "stripe-api", state: "Failed", reason: "SecretSyncedError" });
+    setup("Healthy", [e], [store({ state: "Failed", reason: "InvalidProviderConfig" })], "payments/stripe-api");
+    render(<ExternalSecretsView cluster="x" />);
+    const rail = insp().getByRole("list", { name: "Store, ExternalSecret and target Secret" });
+    const steps = [...rail.querySelectorAll(":scope > li")];
+    expect(steps.map((li) => li.getAttribute("data-step"))).toEqual(["store", "externalsecret", "target"]);
+    expect(steps[0].querySelector('[data-aspect="fault"]')).not.toBeNull();
+    expect(steps[0].textContent).toMatch(/Store failed: InvalidProviderConfig/);
+    expect(steps[1].textContent).toMatch(/refresh/);
+    expect(steps[2].textContent).toContain("target Secret");
+    expect(steps[2].querySelector("[data-aspect]")).toBeNull(); // the target is not read: no state claimed
+  });
+
   it("treats a missing store as the failure cause", () => {
     const e = secret({ name: "stripe-api", state: "Failed", reason: "SecretSyncedError", storeName: "missing-store" });
     setup("Healthy", [e], [store({})], "payments/stripe-api");

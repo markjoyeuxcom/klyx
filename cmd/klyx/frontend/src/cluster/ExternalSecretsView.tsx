@@ -18,6 +18,7 @@ import { VerdictLamp } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { Rail, aspectOfVerdict } from "../chrome/primitives";
 import { clock, combineEvidence, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
@@ -531,39 +532,63 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
         more={[...(more), ...ai.menu]}
       >
         {ai.block}
-        {storeBroken && (
-          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: storeRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${storeRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
-            <div style={{ color: ROLE_TEXT[storeRole!.kind], fontWeight: 600 }}>{storeRole!.kind === "fault" ? "▲ Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
-            <button onClick={() => onOpenStore(store!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{store!.kind}/{store!.name}</button>
-            {store!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{store!.message}</div>}
-          </div>
-        )}
-        {cause && !storeBroken && (
-          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
-            <div style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>Likely cause</div>
-            <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{cause}</div>
-          </div>
-        )}
-        <InspectorBlock title="Store">
-          <div className="insp-kv">
-            <span>ref</span><span className="t-identifier">{e.storeKind}/{e.storeName}</span>
-            <span>health</span>
-            <span style={{ color: storeRole ? ROLE_TEXT[storeRole.kind] : "var(--color-text-tertiary)" }}>
-              {store
-                ? `${storeRole!.label}${storeRole!.kind === "unknown" ? " (unverified)" : ""}${storeCov === "stale" ? " (last observed)" : ""}`
-                : storeCov === "unknown" ? `unverified (${e.storeKind} read unavailable)` : storeCov === "stale" ? `not found in the last observed ${e.storeKind} list` : `not found in the watched ${e.storeKind} list`}
-            </span>
-            {store?.provider && <><span>provider</span><span>{store.provider}</span></>}
-          </div>
-        </InspectorBlock>
-        <InspectorBlock title="Refresh">
-          <div className="insp-kv">
-            <span>refresh</span><span>{refreshText(e)}</span>
-            <span>last sync</span>
-            <span style={{ color: e.stale ? "var(--color-text-warning)" : hasRefreshed(e) ? undefined : "var(--color-text-danger)" }}>
-              {hasRefreshed(e) ? `${fmtDuration(ageOf(e, nowS))} ago` : "never synced"}
-            </span>
-          </div>
+        <InspectorBlock title="Chain">
+          <Rail label="Store, ExternalSecret and target Secret" steps={[
+            {
+              key: "store", segment: "chain", name: `${e.storeKind} ${e.storeName}`,
+              aspect: storeRole ? aspectOfVerdict(storeRole.kind) : "checking",
+              label: <span className="t-identifier">{e.storeKind}/{e.storeName}</span>,
+              body: (
+                <>
+                {storeBroken && (
+                  <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: storeRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${storeRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
+                    <div style={{ color: ROLE_TEXT[storeRole!.kind], fontWeight: 600 }}>{storeRole!.kind === "fault" ? "▲ Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
+                    <button onClick={() => onOpenStore(store!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{store!.kind}/{store!.name}</button>
+                    {store!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{store!.message}</div>}
+                  </div>
+                )}
+                  <div className="insp-kv">
+                    <span>ref</span><span className="t-identifier">{e.storeKind}/{e.storeName}</span>
+                    <span>health</span>
+                    <span style={{ color: storeRole ? ROLE_TEXT[storeRole.kind] : "var(--color-text-tertiary)" }}>
+                      {store
+                        ? `${storeRole!.label}${storeRole!.kind === "unknown" ? " (unverified)" : ""}${storeCov === "stale" ? " (last observed)" : ""}`
+                        : storeCov === "unknown" ? `unverified (${e.storeKind} read unavailable)` : storeCov === "stale" ? `not found in the last observed ${e.storeKind} list` : `not found in the watched ${e.storeKind} list`}
+                    </span>
+                    {store?.provider && <><span>provider</span><span>{store.provider}</span></>}
+                  </div>
+                
+                </>
+              ),
+            },
+            {
+              key: "externalsecret", segment: "chain", name: `ExternalSecret ${e.namespace}/${e.name}`,
+              aspect: aspectOfVerdict(role.kind),
+              label: <span className="t-identifier">ExternalSecret/{e.name}</span>,
+              body: (
+                <>
+                {cause && !storeBroken && (
+                  <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
+                    <div style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>Likely cause</div>
+                    <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{cause}</div>
+                  </div>
+                )}
+                  <div className="insp-kv">
+                    <span>refresh</span><span>{refreshText(e)}</span>
+                    <span>last sync</span>
+                    <span style={{ color: e.stale ? "var(--color-text-warning)" : hasRefreshed(e) ? undefined : "var(--color-text-danger)" }}>
+                      {hasRefreshed(e) ? `${fmtDuration(ageOf(e, nowS))} ago` : "never synced"}
+                    </span>
+                  </div>
+                
+                </>
+              ),
+            },
+            ...(e.targetSecret ? [{
+              key: "target", segment: "chain" as const, name: `target Secret ${e.targetSecret}`,
+              label: <span><span>target Secret</span> <span className="t-identifier">{e.targetSecret}</span></span>,
+            }] : []),
+          ]} />
         </InspectorBlock>
         {e.message && e.state === "Synced" && (
           <InspectorBlock title="Message" defaultOpen={false}>

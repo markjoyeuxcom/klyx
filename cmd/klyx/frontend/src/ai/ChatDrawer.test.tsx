@@ -80,6 +80,30 @@ describe("ChatDrawer", () => {
     expect(log.mock.calls[0][0].message).toContain("tools: get_resource · completed");
   });
 
+  // The Line slice 8a (parent §5.3): the reads are a Rail in read order, each
+  // step's segment its outcome; a read's redaction count stays on its line.
+  it("draws the reads as a ledger: completed in route, failed in danger, cancelled dashed", async () => {
+    bridge.chatState.mockResolvedValue(state({ version: 1000, exchanges: [exchange({
+      answer: "done",
+      reads: [
+        { tool: "get_resource", target: "Pod shop/web-7f", outcome: "completed", redacted: 2 },
+        { tool: "pod_logs", target: "shop/web-7f", outcome: "truncated", detail: "last 200 lines" },
+        { tool: "list_events", target: "shop", outcome: "failed", detail: "forbidden" },
+        { tool: "get_resource", target: "Service shop/web", outcome: "cancelled" },
+      ],
+    })] }));
+    act(() => openChat("x"));
+    const { findByTestId } = render(<ChatDrawer />);
+    const reads = await findByTestId("chat-reads");
+    const steps = reads.querySelectorAll("[data-rail] > li");
+    expect([...steps].map((s) => s.getAttribute("data-segment"))).toEqual(["completed", "completed", "failed", "cancelled"]);
+    expect(steps[0].textContent).toBe("completed: get_resource Pod shop/web-7f · 2 redacted");
+    expect(steps[1].querySelector("[data-tag]")?.textContent).toBe("truncated");
+    expect(steps[2].querySelector("[data-seg-words]")?.textContent).toBe("failed: ");
+    expect(steps[2].textContent).toContain("(forbidden)");
+    expect(steps[3].querySelector("[data-seg-words]")?.textContent).toBe("cancelled: ");
+  });
+
   // Codex review of 143dc6d D1: an older State reply never overwrites a newer
   // Ask result, whatever order they arrive in.
   it("orders replies by version, not arrival", async () => {
