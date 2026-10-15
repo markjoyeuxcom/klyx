@@ -1,3 +1,4 @@
+import { trackName } from "./place";
 import type { LineDTO } from "../store/line";
 import { RANK_LABEL } from "./board";
 
@@ -27,7 +28,8 @@ export function linePosOf(dto: LineDTO | null, cluster: string, codes: Record<st
   const me = (dto.stations ?? []).find((s) => s.cluster === cluster);
   if (!me) return null;
   const ranks = [...new Set(dto.stations.filter((s) => s.track === me.track && s.rank >= 0).map((s) => s.rank))].sort((a, b) => a - b);
-  const track = (dto.tracks ?? []).find((t) => t.name === me.track)?.label || me.track;
+  const found = (dto.tracks ?? []).find((t) => t.name === me.track);
+  const track = (found && trackName(found)) || me.track;
   const position = me.env || RANK_LABEL[me.rank] || `rank ${me.rank}`;
   return {
     cluster,

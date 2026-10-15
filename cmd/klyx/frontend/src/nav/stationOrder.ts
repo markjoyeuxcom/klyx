@@ -1,3 +1,4 @@
+import { placeName } from "../line/place";
 import type { ClusterDTO } from "../store/fleet";
 
 // Station order (The Line slice 4 §2.2): six similar AKS names read best
@@ -40,6 +41,6 @@ export function stationOrder(clusters: ClusterDTO[]): ClusterDTO[] {
 // stationLabel names a station as the fleet indicator and the switcher list
 // it: "env · region" when either is set, then the cluster's name.
 export function stationLabel(c: Pick<ClusterDTO, "name" | "env" | "region">): { place: string; name: string } {
-  const place = [c.env?.trim(), c.region?.trim()].filter(Boolean).join(" · ");
+  const place = [c.env?.trim(), c.region?.trim() ? placeName(c.region) : ""].filter(Boolean).join(" · ");
   return { place, name: c.name };
 }

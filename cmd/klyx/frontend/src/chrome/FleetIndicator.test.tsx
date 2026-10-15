@@ -96,7 +96,7 @@ describe("the station switcher", () => {
     const clusters = [cl("p", "Synced", { env: "prd" }), cl("d", "Synced", { env: "dev" }), cl("s", "Synced", { env: "stg" })];
     useFleet.setState({ clusters, route: { name: "cluster", cluster: "s", section: "overview" } });
     const { getByRole, getAllByRole } = render(<StationSwitcher current={clusters[2]} />);
-    fireEvent.click(getByRole("button", { name: "Station s. Switch cluster" }));
+    fireEvent.click(getByRole("button", { name: /^Station (.*, )?s\. Switch cluster$/ }));
     const rows = getAllByRole("menuitem");
     expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["d", "s, current", "p, fault"]);
     expect(rows[1].getAttribute("aria-current")).toBe("page");
@@ -110,7 +110,7 @@ describe("the station switcher", () => {
     const clusters = [cl("a"), cl("b")];
     useFleet.setState({ clusters, route: { name: "cluster", cluster: "a", section: "pods" } });
     const { getByRole, getAllByRole, queryByRole } = render(<StationSwitcher current={clusters[0]} />);
-    const crumb = getByRole("button", { name: "Station a. Switch cluster" });
+    const crumb = getByRole("button", { name: /^Station (.*, )?a\. Switch cluster$/ });
     fireEvent.click(crumb);
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(queryByRole("menu")).toBeNull();
@@ -124,7 +124,7 @@ describe("the station switcher", () => {
     const clusters = Array.from({ length: 11 }, (_, i) => cl(`c${i}`));
     useFleet.setState({ clusters });
     const { getByRole, getAllByRole } = render(<StationSwitcher current={clusters[0]} />);
-    fireEvent.click(getByRole("button", { name: "Station c0. Switch cluster" }));
+    fireEvent.click(getByRole("button", { name: /^Station (.*, )?c0\. Switch cluster$/ }));
     expect(getAllByRole("menuitem").map((r) => !!r.querySelector("kbd"))).toEqual([...Array(9).fill(true), false, false]);
   });
 });

@@ -20,7 +20,8 @@ export type IndexEntry = {
   note: string | undefined;
   tone: "danger" | "warning" | undefined; // set only in "Needs you"
   current: boolean; // this entry is the page shown
-  subs: IndexEntry[]; // a tool lens's other tasks, while it is open (never one already in "Needs you")
+  subs: IndexEntry[]; // in "Needs you", a lens's lit tasks; while it is open, its other tasks after them
+  context?: boolean; // a "Needs you" lens row whose only lit tasks are its subs: label only
 };
 
 export type LensIndexModel = { needsYou: IndexEntry[]; rest: IndexEntry[]; absent: string[] };
@@ -97,30 +98,64 @@ export function lensIndex(c: ClusterDTO | undefined, counts: NavCounts, route: R
 
   // "Needs you" (§4.2): every entry or sub-entry whose destination is in
   // navCounts.attention, danger before warning, then count, then registry
-  // order. A sub-entry reads "Lens · Sub".
+  // order.
   const byDest = new Map<string, IndexEntry>();
   for (const e of [...entries, ...[...subsByLens.values()].flat()]) byDest.set(e.id, e);
-  const needsYou: IndexEntry[] = [];
+  const lit: IndexEntry[] = [];
   for (const id of counts.attention) {
     const e = byDest.get(id);
     if (!e || e.state !== "present") continue;
     // a not-ready controller is a danger light (its area's tone), whatever
     // its destination's own line says
     const tone = e.badge?.tone === "danger" || (e.note ?? "").includes("controller not ready") ? "danger" : "warning";
-    const lens = e.kind === "sub" ? entries.find((x) => x.key === `lens:${e.groupId}`) : undefined;
-    needsYou.push({ ...e, tone, label: lens ? `${lens.label} · ${e.label}` : e.label });
+    lit.push({ ...e, tone });
   }
   const rank = (t: IndexEntry["tone"]) => (t === "danger" ? 0 : 1);
-  needsYou.sort((a, b) => rank(a.tone) - rank(b.tone) || (b.badge?.n ?? 0) - (a.badge?.n ?? 0) || a.seq - b.seq);
+  lit.sort((a, b) => rank(a.tone) - rank(b.tone) || (b.badge?.n ?? 0) - (a.badge?.n ?? 0) || a.seq - b.seq);
 
-  const inNeeds = new Set(needsYou.map((e) => e.key));
-  const withSubs = (e: IndexEntry): IndexEntry => (e.kind === "lens" && openGroup === e.groupId ? { ...e, subs: (subsByLens.get(e.key) ?? []).filter((s) => !inNeeds.has(s.key)) } : e);
+  // A tool lens's lit sub-tasks sit under their lens (slice 13a.5): a group
+  // takes the place of its highest-priority lit member - the one exception
+  // to the flat order - and every member keeps its own count, tone and mark;
+  // nothing is summed. A lens whose only lit tasks are its subs is a context
+  // row: its label, never a mark or a count of its own.
+  const groups = new Map<string, IndexEntry>();
+  const needsYou: IndexEntry[] = [];
+  for (const e of lit) {
+    if (e.kind !== "sub") {
+      const held = groups.get(e.key);
+      if (held) Object.assign(held, { tone: e.tone, badge: e.badge, context: false });
+      else { const row = { ...e, subs: [] }; groups.set(e.key, row); needsYou.push(row); }
+      continue;
+    }
+    const lensKey = `lens:${e.groupId}`;
+    let row = groups.get(lensKey);
+    if (!row) {
+      const lens = entries.find((x) => x.key === lensKey);
+      if (!lens) continue;
+      row = { ...lens, tone: undefined, badge: undefined, context: true, subs: [] };
+      groups.set(lensKey, row);
+      needsYou.push(row);
+    }
+    row.subs.push(e);
+  }
+
+  const inNeeds = new Set([...needsYou.map((e) => e.key), ...needsYou.flatMap((e) => e.subs.map((s) => s.key))]);
+  // an open tool lens also lists its other tasks, after any lit ones
+  const withSubs = (e: IndexEntry): IndexEntry => (e.kind === "lens" && openGroup === e.groupId
+    ? { ...e, subs: [...e.subs, ...(subsByLens.get(e.key) ?? []).filter((s) => !inNeeds.has(s.key))] }
+    : e);
   return {
     needsYou: needsYou.map(withSubs),
     rest: entries.filter((e) => !inNeeds.has(e.key)).map(withSubs),
     absent,
   };
 }
+
+// The words that qualify a count (navCounts' coverage notes) stay on the
+// row; a part's explanation ("routes: 3 with a failing attachment") is the
+// lens's to say, and stays in the row's title (slice 13a.5).
+const COVERAGE = new Set(["checking…", "unknown", "observation ended", "controller not ready", "unreadable", "last good", "unverified"]);
+export const coverageOf = (note: string | undefined) => (note ?? "").split(" · ").filter((w) => COVERAGE.has(w)).join(" · ");
 
 // Fleet and app routes (§4.2): the index lists the fleet views, the current
 // one marked; Settings, Activity and Forwards add no entries.

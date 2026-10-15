@@ -356,7 +356,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
       )}
       controls={absent ? undefined : (
         <>
-          <div role="group" aria-label="External Secrets view" style={{ display: "inline-flex", gap: 4 }}>
+          <div role="group" aria-label="External Secrets view" className="l-seg">
             <button className="l-chip" aria-pressed={view === "secrets"} onClick={() => { setView("secrets"); setStatus("all"); }}>ExternalSecrets</button>
             <button className="l-chip" aria-pressed={view === "stores"} onClick={() => { setView("stores"); setStatus("all"); }}>
               Stores {storesNotReady > 0 && <span style={{ color: "var(--color-text-warning)" }}>{storesNotReady}</span>}
@@ -369,9 +369,11 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
               {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
           </label>
-          <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
-          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or refresh overdue"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
-          {view === "secrets" && stale > 0 && <button className="l-chip" aria-pressed={status === "stale"} onClick={() => setStatus("stale")}>Stale <span style={{ color: "var(--color-text-warning)" }}>{stale}</span></button>}
+          <div role="group" aria-label="Status" className="l-seg">
+            <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+            <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or refresh overdue"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
+            {view === "secrets" && stale > 0 && <button className="l-chip" aria-pressed={status === "stale"} onClick={() => setStatus("stale")}>Stale <span style={{ color: "var(--color-text-warning)" }}>{stale}</span></button>}
+          </div>
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search External Secrets</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "stores" ? "Search stores" : "Search name, store, target"} />

@@ -101,7 +101,7 @@ export function FleetExpiry() {
         </>
       }
       controls={
-        <div role="group" aria-label="Expiry window" style={{ display: "inline-flex", gap: 4 }}>
+        <div role="group" aria-label="Expiry window" className="l-seg">
           {WINDOWS.map((w) => (
             <button key={w} className="l-chip" aria-pressed={windowDays === w} onClick={() => setWindowDays(w)}>{w === 0 ? "All" : `${w} days`}</button>
           ))}

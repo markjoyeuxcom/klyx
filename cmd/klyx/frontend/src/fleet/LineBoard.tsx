@@ -1,3 +1,4 @@
+import { trackName } from "../line/place";
 import { Fragment } from "react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import type { LineDTO, LineStationDTO } from "../store/line";
@@ -93,7 +94,7 @@ export function LineBoard({ dto, git = null, clusters, models }: { dto: LineDTO;
             {b.ranks.map((r, i) => <div key={r} className="line-board-rank" style={{ gridColumn: col(i), gridRow: 1 }}>{RANK_LABEL[r] ?? `rank ${r}`}</div>)}
             {b.tracks.map((t, ti) => (
               <Fragment key={t.name || `track-${ti}`}>
-                <div className="line-board-track" style={{ gridColumn: 1, gridRow: 2 + ti * 2 }}>{t.label}</div>
+                <div className="line-board-track" style={{ gridColumn: 1, gridRow: 2 + ti * 2 }}>{trackName(t)}</div>
                 {t.cells.map((c, ci) => (
                   <Fragment key={c.rank}>
                     {ci > 0 && <div className="line-board-seg" aria-hidden data-lit={t.lit[ci - 1] ? "" : undefined} style={{ gridColumn: `${col(t.cells[ci - 1].col) + 1} / ${col(c.col)}`, gridRow: 2 + ti * 2 }} />}

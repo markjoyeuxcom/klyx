@@ -41,8 +41,8 @@ describe("lineVerdict", () => {
     const v = lineVerdict(line({ stations: [st("d", "dev"), held, st("q", "prd", { held: true, heldWhy: "attempted a1b9e3c, failing", track: "northeurope" })],
       tracks: [{ name: "westeurope", kind: "region", label: "westeurope" }, { name: "northeurope", kind: "region", label: "northeurope" }] as never }));
     expect(v.clauses).toEqual([
-      "prd · westeurope is held: attempted a1b9e3c, failing - first observed 20:21; start unknown",
-      "prd · northeurope is held: attempted a1b9e3c, failing",
+      "prd · West Europe is held: attempted a1b9e3c, failing - first observed 20:21; start unknown",
+      "prd · North Europe is held: attempted a1b9e3c, failing",
     ]);
   });
 
@@ -61,7 +61,7 @@ describe("lineVerdict", () => {
   });
 
   it("a station's place: env and track, or env alone on the single Fleet track", () => {
-    expect(stationPlace(st("p", "prd"), line())).toBe("prd · westeurope");
+    expect(stationPlace(st("p", "prd"), line())).toBe("prd · West Europe");
     expect(stationPlace(st("p", "prd", { track: "fleet" }), { tracks: [{ name: "fleet", kind: "fleet", label: "Fleet" }] } as never)).toBe("prd");
   });
 });

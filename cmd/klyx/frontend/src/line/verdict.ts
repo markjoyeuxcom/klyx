@@ -1,4 +1,5 @@
 import type { LineDTO, LineStationDTO } from "../store/line";
+import { trackName } from "./place";
 import type { LineGitDTO } from "../store/lineGit";
 import { gitStation, heldText, historyNote, ordering, targetText } from "./history";
 import { proofText } from "./proof";
@@ -22,7 +23,7 @@ const hhmm = (iso: string) => { const d = new Date(iso); const p = (n: number) =
 // single Fleet track.
 export function trackLabel(s: Pick<LineStationDTO, "track">, dto: Pick<LineDTO, "tracks">): string | null {
   const t = (dto.tracks ?? []).find((x) => x.name === s.track);
-  return t && t.kind !== "fleet" ? t.label : null;
+  return t && t.kind !== "fleet" ? trackName(t) : null;
 }
 
 // stationPlace names a station as the board does: "prd · westeurope", or the

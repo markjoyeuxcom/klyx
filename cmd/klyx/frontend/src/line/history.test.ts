@@ -86,7 +86,7 @@ describe("the verdict with Git history", () => {
     expect(v.headline).toBe("1 of 3 compared stations at main · 2 behind");
     expect(v.target).toBe("main at a1b9e3c · fetched 20:31");
     // held behind T, with evidence tied to T, replaces held at R
-    expect(v.clauses).toEqual(["prd · westeurope is held, 3 commits behind main: attempted a1b9e3c, failing"]);
+    expect(v.clauses).toEqual(["prd · West Europe is held, 3 commits behind main: attempted a1b9e3c, failing"]);
     expect(v.history).toBeNull();
   });
 

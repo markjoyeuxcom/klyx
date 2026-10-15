@@ -415,17 +415,19 @@ export function PodsView({ cluster }: { cluster: string }) {
                   {(pods.namespace && !pods.namespaces.includes(pods.namespace) ? [...pods.namespaces, pods.namespace] : pods.namespaces).map((ns) => <option key={ns} value={ns}>{ns}</option>)}
                 </select>
               </label>
-              <button className="l-chip" aria-pressed={!pods.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
-                All <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.total || ""}</span>
-              </button>
-              <button className="l-chip" aria-pressed={pods.needsAttention} onClick={() => { setUnknownOnly(false); if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
-                Attention {rowCounts.attention > 0 && <span style={{ color: rowTone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
-              </button>
-              {(rowCounts.unknown > 0 || unknownOnly) && (
-                <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { setUnknownOnly(true); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
-                  Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span>
+              <div role="group" aria-label="Status" className="l-seg">
+                <button className="l-chip" aria-pressed={!pods.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
+                  All <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.total || ""}</span>
                 </button>
-              )}
+                <button className="l-chip" aria-pressed={pods.needsAttention} onClick={() => { setUnknownOnly(false); if (!pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
+                  Attention {rowCounts.attention > 0 && <span style={{ color: rowTone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
+                </button>
+                {(rowCounts.unknown > 0 || unknownOnly) && (
+                  <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { setUnknownOnly(true); if (pods.needsAttention) useFleet.getState().togglePodsNeedsAttention(); }}>
+                    Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span>
+                  </button>
+                )}
+              </div>
               <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
                 <span className="sr-only">Search pods</span>
                 <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={pods.search} placeholder="Search pods" onChange={(e) => useFleet.getState().setPodsSearch(e.target.value)} />

@@ -418,23 +418,29 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                 this row holds only filters and search. */}
             {mode === "applications" && (
               <>
-                <button className="l-chip" aria-pressed={appFilter === "all"} onClick={() => setAppFilter("all")}>All</button>
-                <button className="l-chip" aria-pressed={appFilter === "attention"} onClick={() => setAppFilter("attention")}>Attention {broken > 0 && <span style={{ color: "var(--color-text-warning)" }}>{broken}</span>}</button>
-                {outOfSync > 0 && <button className="l-chip" aria-pressed={appFilter === "outofsync"} onClick={() => setAppFilter("outofsync")}>OutOfSync <span style={{ color: "var(--color-text-tertiary)" }}>{outOfSync}</span></button>}
+                <div role="group" aria-label="Application status" className="l-seg">
+                  <button className="l-chip" aria-pressed={appFilter === "all"} onClick={() => setAppFilter("all")}>All</button>
+                  <button className="l-chip" aria-pressed={appFilter === "attention"} onClick={() => setAppFilter("attention")}>Attention {broken > 0 && <span style={{ color: "var(--color-text-warning)" }}>{broken}</span>}</button>
+                  {outOfSync > 0 && <button className="l-chip" aria-pressed={appFilter === "outofsync"} onClick={() => setAppFilter("outofsync")}>OutOfSync <span style={{ color: "var(--color-text-tertiary)" }}>{outOfSync}</span></button>}
+                </div>
               </>
             )}
             {mode === "projects" && (
               <>
-                <button className="l-chip" aria-pressed={projectFilter === "all"} onClick={() => setProjectFilter("all")}>All</button>
-                <button className="l-chip" aria-pressed={projectFilter === "risky"} onClick={() => setProjectFilter("risky")}>Policy risk <span style={{ color: "var(--color-text-tertiary)" }}>{riskyProjects}</span></button>
-                {unusedProjects !== null && <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{countText(unusedProjects, appsCov)}</span></button>}
+                <div role="group" aria-label="Project filter" className="l-seg">
+                  <button className="l-chip" aria-pressed={projectFilter === "all"} onClick={() => setProjectFilter("all")}>All</button>
+                  <button className="l-chip" aria-pressed={projectFilter === "risky"} onClick={() => setProjectFilter("risky")}>Policy risk <span style={{ color: "var(--color-text-tertiary)" }}>{riskyProjects}</span></button>
+                  {unusedProjects !== null && <button className="l-chip" aria-pressed={projectFilter === "unused"} onClick={() => setProjectFilter("unused")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Unused <span style={{ color: "var(--color-text-tertiary)" }}>{countText(unusedProjects, appsCov)}</span></button>}
+                </div>
               </>
             )}
             {mode === "applicationsets" && (
               <>
-                <button className="l-chip" aria-pressed={appSetFilter === "all"} onClick={() => setAppSetFilter("all")}>All</button>
-                <button className="l-chip" aria-pressed={appSetFilter === "attention"} onClick={() => setAppSetFilter("attention")}>Attention {unhealthySets > 0 && <span style={{ color: "var(--color-text-warning)" }}>{unhealthySets}</span>}</button>
-                {missingSets !== null && <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{countText(missingSets, appsCov)}</span></button>}
+                <div role="group" aria-label="ApplicationSet status" className="l-seg">
+                  <button className="l-chip" aria-pressed={appSetFilter === "all"} onClick={() => setAppSetFilter("all")}>All</button>
+                  <button className="l-chip" aria-pressed={appSetFilter === "attention"} onClick={() => setAppSetFilter("attention")}>Attention {unhealthySets > 0 && <span style={{ color: "var(--color-text-warning)" }}>{unhealthySets}</span>}</button>
+                  {missingSets !== null && <button className="l-chip" aria-pressed={appSetFilter === "missing"} onClick={() => setAppSetFilter("missing")} title={appsCov === "stale" ? "from the last good Application read" : undefined}>Missing apps <span style={{ color: "var(--color-text-tertiary)" }}>{countText(missingSets, appsCov)}</span></button>}
+                </div>
               </>
             )}
             <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>

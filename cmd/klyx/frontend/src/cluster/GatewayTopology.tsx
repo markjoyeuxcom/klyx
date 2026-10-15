@@ -280,7 +280,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       }
       controls={t && routes.length > 0 ? (
         <>
-          <div role="group" aria-label="Route filter" style={{ display: "inline-flex", gap: 4 }}>
+          <div role="group" aria-label="Route filter" className="l-seg">
             <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {routes.length}</button>
             <button className="l-chip" aria-pressed={mode === "issues"} onClick={() => setMode("issues")}>Issues {issueCount > 0 && <span style={{ color: broken > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{issueCount}</span>}</button>
             {globalCount > 0 && <button className="l-chip" aria-pressed={mode === "global"} onClick={() => setMode("global")}>Global {globalCount}</button>}

@@ -89,7 +89,7 @@ export function NeedsYou({ clusters, models, station = false }: { clusters: Clus
         <h2 id={station ? "station-queue-h" : "queue-h"} className="queue-title">Needs you</h2>
         {counts && <span className="queue-counts">{counts}</span>}
         {!station && (
-          <div role="group" aria-label="Filter" className="queue-filters">
+          <div role="group" aria-label="Filter" className="queue-filters l-seg">
             {FILTERS.map((f) => (
               <button key={f.id} type="button" className="l-chip" aria-pressed={filter === f.id} onClick={() => useQueueFilter.setState({ filter: f.id })}>{f.label}</button>
             ))}

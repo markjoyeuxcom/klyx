@@ -158,7 +158,7 @@ export function AccessView({ cluster }: { cluster: string }) {
     <form aria-label="Access question" onSubmit={(e) => { e.preventDefault(); if (canRun) void run("cani"); }}
       style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px 10px", alignItems: "end", padding: "10px 12px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
       <Field label="Subject" span={2}>
-        <div role="group" aria-label="Subject" style={{ display: "inline-flex", gap: 4 }}>
+        <div role="group" aria-label="Subject" className="l-seg">
           <button type="button" className="l-chip" aria-pressed={!asSA} onClick={() => setAsSA(false)}>As me</button>
           <button type="button" className="l-chip" aria-pressed={asSA} onClick={() => setAsSA(true)}>As ServiceAccount</button>
         </div>

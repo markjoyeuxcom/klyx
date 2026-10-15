@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { IconSelector } from "@tabler/icons-react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { AXIS_TITLE } from "../nav/fleetAxes";
-import { stationOrder } from "../nav/stationOrder";
+import { stationLabel, stationOrder } from "../nav/stationOrder";
 import { vh } from "../app/zoom";
 import { AxisMark, StationName, firstAxis, useFleetAxes } from "./FleetIndicator";
 import { useMenuPopover } from "./useMenuPopover";
@@ -33,7 +33,8 @@ export function StationSwitcher({ current }: { current: ClusterDTO }) {
   return (
     <div ref={wrapRef} className="locbar-pop">
       <button ref={triggerRef} type="button" className="locbar-crumb locbar-station" aria-haspopup="menu" aria-expanded={open}
-        aria-label={`Station ${current.name}. Switch cluster`} title={`${current.name} - switch cluster`} onClick={() => setOpen((o) => !o)}>
+        aria-label={`Station ${[stationLabel(current).place, current.name].filter(Boolean).join(", ")}. Switch cluster`}
+        title={`${[stationLabel(current).place, current.name].filter(Boolean).join(" ")} - switch cluster`} onClick={() => setOpen((o) => !o)}>
         <StationName c={current} />
         <IconSelector aria-hidden size={12} stroke={1.6} style={{ flexShrink: 0, color: "var(--color-text-tertiary)" }} />
       </button>

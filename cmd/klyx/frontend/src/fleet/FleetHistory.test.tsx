@@ -62,7 +62,7 @@ describe("the fleet screen with Git history (slice 6d)", () => {
     render(<FleetView />);
     expect(screen.getByRole("heading", { level: 2, name: "1 of 3 compared stations at main · 2 behind" })).toBeTruthy();
     expect(screen.getByTestId("line-target").textContent).toMatch(/^main at a1b9e3c · fetched \d\d:\d\d$/);
-    expect(screen.getByText(/prd · westeurope is held, 2 commits behind main: blocked by dependency flux-system\/infra/)).toBeTruthy();
+    expect(screen.getByText(/prd · West Europe is held, 2 commits behind main: blocked by dependency flux-system\/infra/)).toBeTruthy();
     const cells = screen.getAllByRole("button", { name: /^(d|s|p), / });
     expect(cells.map((b) => b.querySelector(".station-cell-rev")?.textContent)).toEqual(["a1b9e3c · at main", "9f2c11d · 2 behind main", "9f2c11d · held · 2 behind"]);
     // held behind T marks the cell for attention

@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconHistory, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconMessageChatbot, IconSearch, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { openChat } from "../ai/chatStore";
-import { KlyxMark } from "./KlyxMark";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/clusterName";
@@ -43,7 +42,8 @@ export function LocationBar() {
         <IndexToggle />
         <HistoryControls />
         <button type="button" className="locbar-mark" style={noDrag} aria-label="Klyx fleet board" title="Fleet board" onClick={() => useFleet.getState().openFleet()}>
-          <KlyxMark size={18} />
+          <LineMark />
+          <span className="locbar-wordmark" aria-hidden="true">Klyx</span>
         </button>
         <nav aria-label="Location" className="locbar-crumbs" style={noDrag}>
           <button type="button" className="locbar-crumb locbar-fleet" aria-current={onBoard ? "page" : undefined} onClick={() => useFleet.getState().openFleet()}>Fleet</button>
@@ -79,7 +79,7 @@ export function LocationBar() {
         <FleetIndicator />
         <button type="button" aria-label="Go to, run or ask" data-testid="command-bar" onClick={openCommandPalette}
           title={`Go to, run or ask (${MOD}K)`} className="locbar-well">
-          <IconSearch size={13} stroke={1.6} style={{ flexShrink: 0 }} aria-hidden />
+          <IconSearch size={14} stroke={1.6} style={{ flexShrink: 0 }} aria-hidden />
           <span className="locbar-well-text">Go to, run or ask</span>
           <kbd>{MOD}K</kbd>
         </button>
@@ -98,6 +98,17 @@ export function LocationBar() {
 }
 
 const Sep = () => <span className="locbar-sep" aria-hidden="true">/</span>;
+
+// LineMark is the redesign's mark (the mockup's): two rails and the one
+// route-coloured sleeper - the line, with a train on it.
+function LineMark() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" focusable="false" style={{ display: "block", flexShrink: 0 }}>
+      <path d="M1 8h20M1 14h20" fill="none" stroke="var(--line-ink-3, var(--color-text-tertiary))" strokeWidth="1.6" />
+      <rect x="13" y="3" width="6" height="16" rx="1.5" fill="var(--line-route, var(--color-text-info))" />
+    </svg>
+  );
+}
 
 // IndexToggle shows or hides the lens index (mod+\), as a disclosure.
 function IndexToggle() {
@@ -185,7 +196,7 @@ function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: Histor
 }
 
 const utilityBtn = (current: boolean): React.CSSProperties => ({
-  display: "inline-flex", alignItems: "center", gap: 4, height: 28, minWidth: 28, padding: "0 6px", borderRadius: 4, border: "none", cursor: "pointer",
+  display: "inline-flex", alignItems: "center", gap: 4, height: 32, minWidth: 32, padding: "0 6px", borderRadius: 6, border: "none", cursor: "pointer",
   justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 11,
   color: current ? "var(--color-text-primary)" : "var(--color-text-secondary)",
   background: current ? "var(--line-sunk, var(--color-background-secondary))" : "transparent",

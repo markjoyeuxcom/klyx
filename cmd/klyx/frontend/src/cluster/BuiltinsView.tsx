@@ -51,12 +51,14 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
         }
         controls={
           <>
-            <button className="l-chip" aria-pressed={builtinCategory === null} onClick={() => setBuiltinCategory(null)}>all</button>
-            {BUILTIN_CATALOG.map((cat) => (
-              <button key={cat.label} className="l-chip" aria-pressed={builtinCategory === cat.label} onClick={() => setBuiltinCategory(builtinCategory === cat.label ? null : cat.label)}>
-                {cat.label}
-              </button>
-            ))}
+            <div role="group" aria-label="Category" className="l-seg">
+              <button className="l-chip" aria-pressed={builtinCategory === null} onClick={() => setBuiltinCategory(null)}>all</button>
+              {BUILTIN_CATALOG.map((cat) => (
+                <button key={cat.label} className="l-chip" aria-pressed={builtinCategory === cat.label} onClick={() => setBuiltinCategory(builtinCategory === cat.label ? null : cat.label)}>
+                  {cat.label}
+                </button>
+              ))}
+            </div>
             <label style={{ display: "flex", flex: "0 1 240px", minWidth: 140, marginLeft: "auto" }}>
               <span className="sr-only">Search built-in kinds</span>
               <input className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="kind, group…" />

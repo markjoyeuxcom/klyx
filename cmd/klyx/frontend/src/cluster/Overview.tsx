@@ -1,3 +1,4 @@
+import { placeName } from "../line/place";
 import { useEffect, useState } from "react";
 import { useFleet, podsText } from "../store/fleet";
 import type { ClusterDTO, EventRowDTO, MetricsDTO, ResourceRef } from "../store/fleet";
@@ -28,7 +29,7 @@ import { NeedsYou } from "../fleet/NeedsYou";
 export function Overview({ c }: { c: ClusterDTO }) {
   // what the station is; where it stands on the line is the verdict's
   // second line (The Line slice 11c)
-  const where = [c.provider, c.region, c.group].filter(Boolean).join(" · ");
+  const where = [c.provider, c.region ? placeName(c.region) : "", c.group].filter(Boolean).join(" · ");
   const metrics = useFleet((s) => s.metrics);
   const loading = useFleet((s) => s.metrics.loading);
   const model = useAttentionModel(c.name);

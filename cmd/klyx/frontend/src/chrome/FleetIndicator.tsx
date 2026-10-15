@@ -1,3 +1,4 @@
+import { placeName } from "../line/place";
 import { useMemo } from "react";
 import { IconAntennaBarsOff, IconPlugConnectedX } from "@tabler/icons-react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
@@ -38,9 +39,13 @@ export function useFleetAxes(): FleetAxes {
 
 export function StationName({ c }: { c: ClusterDTO }) {
   const { place, name } = stationLabel(c);
+  // the region is its own span, so a tight bar can step it out and keep the
+  // environment (slice 13a.4); the crumb's title still names the whole place
+  const env = c.env?.trim();
+  const region = c.region?.trim() ? placeName(c.region) : "";
   return (
     <span className="station-name">
-      {place && <span className="station-place">{place}</span>}
+      {place && <span className="station-place">{env}{region && <span className="station-region">{env ? " · " : ""}{region}</span>}</span>}
       <span className="station-cluster" data-bare={place ? undefined : ""}>{clusterDisplayName(name)}</span>
     </span>
   );

@@ -30,7 +30,7 @@ describe("station order", () => {
   });
 
   it("a station's label: env · region when either is set, then its name", () => {
-    expect(stationLabel(cluster("aks-prd-weu", "prd", "westeurope"))).toEqual({ place: "prd · westeurope", name: "aks-prd-weu" });
+    expect(stationLabel(cluster("aks-prd-weu", "prd", "westeurope"))).toEqual({ place: "prd · West Europe", name: "aks-prd-weu" });
     expect(stationLabel(cluster("nelli", "homelab"))).toEqual({ place: "homelab", name: "nelli" });
     expect(stationLabel(cluster("kind-klyx"))).toEqual({ place: "", name: "kind-klyx" });
   });

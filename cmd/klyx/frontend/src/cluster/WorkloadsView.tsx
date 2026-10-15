@@ -441,17 +441,19 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                   {kindValue === "custom" && <option value="custom" disabled>Custom selection</option>}
                 </select>
               </label>
-              <button className="l-chip" aria-pressed={!wl.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
-                All <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.total || ""}</span>
-              </button>
-              <button className="l-chip" aria-pressed={wl.needsAttention} onClick={() => { setUnknownOnly(false); if (!wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
-                Attention {rowCounts.attention > 0 && <span style={{ color: rowTone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
-              </button>
-              {(rowCounts.unknown > 0 || unknownOnly) && (
-                <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>
-                  Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span>
+              <div role="group" aria-label="Status" className="l-seg">
+                <button className="l-chip" aria-pressed={!wl.needsAttention && !unknownOnly} onClick={() => { setUnknownOnly(false); if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
+                  All <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.total || ""}</span>
                 </button>
-              )}
+                <button className="l-chip" aria-pressed={wl.needsAttention} onClick={() => { setUnknownOnly(false); if (!wl.needsAttention) useFleet.getState().toggleNeedsAttention(); }}>
+                  Attention {rowCounts.attention > 0 && <span style={{ color: rowTone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
+                </button>
+                {(rowCounts.unknown > 0 || unknownOnly) && (
+                  <button className="l-chip" aria-pressed={unknownOnly} onClick={() => { if (wl.needsAttention) useFleet.getState().toggleNeedsAttention(); setUnknownOnly(!unknownOnly); }}>
+                    Unknown <span style={{ color: "var(--color-text-tertiary)" }}>{rowCounts.unknown || ""}</span>
+                  </button>
+                )}
+              </div>
               <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
                 <span className="sr-only">Search workloads</span>
                 <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={wl.search} placeholder="Search workloads" onChange={(e) => useFleet.getState().setWorkloadsSearch(e.target.value)} />

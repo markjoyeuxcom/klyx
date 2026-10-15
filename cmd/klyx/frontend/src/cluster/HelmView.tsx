@@ -244,9 +244,11 @@ export function HelmView({ cluster }: { cluster: string }) {
               {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
           </label>
-          <button className="l-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
-          <button className="l-chip" aria-pressed={filter === "failed"} onClick={() => setFilter("failed")}>Failed {failed > 0 && <span style={{ color: "var(--color-text-danger)" }}>{failed}</span>}</button>
-          <button className="l-chip" aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Pending {pending > 0 && <span style={{ color: stuck > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{pending}</span>}</button>
+          <div role="group" aria-label="Status" className="l-seg">
+            <button className="l-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All</button>
+            <button className="l-chip" aria-pressed={filter === "failed"} onClick={() => setFilter("failed")}>Failed {failed > 0 && <span style={{ color: "var(--color-text-danger)" }}>{failed}</span>}</button>
+            <button className="l-chip" aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Pending {pending > 0 && <span style={{ color: stuck > 0 ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{pending}</span>}</button>
+          </div>
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search Helm releases</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search release, chart, version" />

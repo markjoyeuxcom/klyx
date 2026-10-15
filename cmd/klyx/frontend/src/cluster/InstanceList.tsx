@@ -303,7 +303,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       )}
       controls={
         <>
-          <div role="group" aria-label="resource browsing scope" style={{ display: "inline-flex", gap: 4 }}>
+          <div role="group" aria-label="resource browsing scope" className="l-seg">
             <button className="l-chip" aria-pressed={scope === "cluster"} onClick={() => setScope("cluster")}>This cluster</button>
             <button className="l-chip" aria-pressed={scope === "fleet"} onClick={() => setScope("fleet")}>Fleet</button>
           </div>

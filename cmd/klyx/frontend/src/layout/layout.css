@@ -3,13 +3,15 @@
  * set outer padding, heights or split widths. Colours come from the theme. */
 
 :root {
-  --workspace-header-height: 32px;
-  --workspace-controls-height: 28px;
+  /* The Line scale (parent §2.2-§2.3, slice 13): 36px controls, 20-24px
+     panel padding, a 22px lens title. */
+  --workspace-header-height: 68px;
+  --workspace-controls-height: 36px;
   --workspace-notice-height: 32px;
-  --workspace-inline-padding: 16px;
-  --workspace-bottom-padding: 8px;
-  --workspace-footer-height: 28px;
-  --table-header-height: 24px;
+  --workspace-inline-padding: 24px;
+  --workspace-bottom-padding: 16px;
+  --workspace-footer-height: 32px;
+  --table-header-height: 36px;
   --table-row-height: 40px;
   --split-gap: 8px;
   --inspector-default-width: 400px;
@@ -19,57 +21,69 @@
 }
 
 /* ---- named text roles (spec section 5) ---------------------------------- */
-.t-workspace-title { font: 600 15px/20px var(--font-sans); color: var(--color-text-primary); margin: 0; }
-.t-object-title { font: 600 15px/20px var(--font-mono); color: var(--color-text-primary); overflow-wrap: anywhere; margin: 0; }
-.t-navigation { font: 400 12px/16px var(--font-sans); }
-.t-control { font: 400 12px/16px var(--font-sans); }
-.t-body { font: 400 13px/18px var(--font-sans); color: var(--color-text-primary); }
-.t-identifier { font: 400 12px/16px var(--font-mono); }
-.t-status { font: 600 12px/16px var(--font-sans); }
-.t-secondary { font: 400 11px/16px var(--font-sans); color: var(--color-text-tertiary); }
-.t-section-label { font: 600 11px/16px var(--font-sans); color: var(--color-text-secondary); margin: 0; }
-.t-number { font: 600 13px/18px var(--font-mono); font-variant-numeric: tabular-nums; }
-.t-legend { font: 500 9px/12px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-tertiary); }
+.t-workspace-title { font: 600 22px/28px var(--font-sans); letter-spacing: -0.005em; color: var(--color-text-primary); margin: 0; }
+.t-object-title { font: 500 19px/24px var(--font-mono); color: var(--color-text-primary); overflow-wrap: anywhere; margin: 0; }
+.t-navigation { font: 400 14px/20px var(--font-sans); }
+.t-control { font: 400 13px/18px var(--font-sans); }
+.t-body { font: 400 14px/20px var(--font-sans); color: var(--color-text-primary); }
+.t-identifier { font: 400 13px/18px var(--font-mono); }
+.t-status { font: 500 13px/18px var(--font-sans); }
+.t-secondary { font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+/* section labels speak the board's label face: condensed caps, tracked */
+.t-section-label { font: 500 12px/16px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-tertiary); margin: 0; }
+.t-number { font: 500 13px/18px var(--font-mono); font-variant-numeric: tabular-nums; }
+.t-legend { font: 500 11px/14px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-text-tertiary); }
 
 /* ---- LensLayout --------------------------------------------------------- */
 .lens { display: flex; height: 100%; min-height: 0; min-width: 0; box-sizing: border-box; position: relative; }
 .lens *, .lens *::before, .lens *::after { box-sizing: border-box; }
 .lens-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--workspace-bottom-padding); }
-.lens-header { height: var(--workspace-header-height); flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 var(--workspace-inline-padding); min-width: 0; }
-.lens-header-summary { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; white-space: nowrap; }
-.lens-header-end { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.lens-controls { height: var(--workspace-controls-height); flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 var(--workspace-inline-padding); min-width: 0; }
-.lens-notice { min-height: var(--workspace-notice-height); flex-shrink: 0; margin: 4px 8px 0; }
-.lens-body { flex: 1; min-height: 0; margin: 0 8px; display: flex; flex-direction: column; overflow: hidden; container-type: inline-size; container-name: lens-body;
-  background: var(--line-sunk, var(--color-background-secondary)); border-radius: var(--radius-sm, 4px);
-  box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
-.lens-body-state { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.lens-footer { height: var(--workspace-footer-height); flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 var(--workspace-inline-padding);
-  border-top: 1px solid var(--color-border-tertiary); }
+.lens-header { min-height: var(--workspace-header-height); flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+  padding: 20px var(--workspace-inline-padding) 14px; min-width: 0; }
+.lens-header-summary { display: flex; align-items: baseline; gap: 12px; min-width: 0; overflow: hidden; white-space: nowrap; font: 400 13px/18px var(--font-sans); color: var(--color-text-tertiary); }
+.lens-header-end { margin-left: auto; align-self: center; display: flex; align-items: center; gap: 8px; flex-shrink: 0; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.lens-controls { min-height: var(--workspace-controls-height); flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  padding: 0 var(--workspace-inline-padding) 16px; min-width: 0; }
+.lens-notice { min-height: var(--workspace-notice-height); flex-shrink: 0; margin: 0 var(--workspace-inline-padding) 12px; }
+/* The body is the ground; what it holds is a panel sized to its content (the
+   mockup's table ends after its last row), scrolling inside once the rows are
+   taller than the space: row 1 is min(content, available). The caption
+   (keyboard hints, "n of m") sits under it (slice 13b.3). */
+.lens-body { flex: 1; min-height: 0; margin: 0 var(--workspace-inline-padding); display: grid; grid-template-rows: minmax(0, max-content) auto; grid-template-columns: minmax(0, 1fr);
+  align-content: start; overflow: hidden; container-type: inline-size; container-name: lens-body; }
+.lens[data-variant="canvas"] .lens-body { grid-template-rows: minmax(0, 1fr) auto; }
+.lens-body-state { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 48px 24px; border-radius: 10px;
+  background: var(--color-background-primary); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
+.lens-footer { min-height: var(--workspace-footer-height); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 2px 0;
+  font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
 .lens-footer-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* split separator: 8px hit target, visible grip */
-.lens-separator { width: var(--split-gap); flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: col-resize; outline: none; }
+.lens-separator { width: var(--split-gap); margin-right: calc(-1 * var(--split-gap)); position: relative; z-index: 1; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: col-resize; outline: none; }
+.lens-separator > span { opacity: 0; }
+.lens-separator:hover > span, .lens-separator:focus-visible > span { opacity: 1; }
 .lens-separator > span { width: 2px; height: 28px; border-radius: 1px; background: var(--color-border-secondary); }
 .lens-separator:hover > span, .lens-separator:focus-visible > span { background: var(--color-text-info); }
 
 .lens-inspector { flex-shrink: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
-  background: var(--color-background-primary); border-radius: var(--radius-sm, 4px);
-  box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--color-background-primary); border-left: 1px solid var(--color-border-tertiary); }
 
 /* drawer: below the breakpoint the inspector overlays the body */
 .lens-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 30; }
 .lens-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 31; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35); }
 
 /* table: one coordinated horizontal-scroll surface for header + rows */
-.lens-table { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; display: flex; flex-direction: column; }
+.lens-table { min-height: 0; overflow-x: auto; overflow-y: hidden; display: flex; flex-direction: column;
+  background: var(--color-background-primary); border: 1px solid var(--color-border-tertiary); border-radius: 10px; }
 .lens-table-inner { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* the last row's rule tucks under the panel's own border */
+.lens-table-inner > :last-child { margin-bottom: -1px; }
 
 /* table grid shared by header and rows */
-.lens-table-head { height: var(--table-header-height); flex-shrink: 0; display: grid; align-items: center; gap: 12px; padding: 0 8px;
-  font: 600 11px/16px var(--font-sans); color: var(--color-text-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
-.lens-row { display: grid; align-items: center; gap: 12px; height: var(--table-row-height); padding: 0 8px; cursor: pointer; outline: none;
-  font: 400 12px/16px var(--font-mono); color: var(--color-text-primary); border-bottom: 1px solid var(--color-border-tertiary); }
+.lens-table-head { height: var(--table-header-height); flex-shrink: 0; display: grid; align-items: center; gap: 12px; padding: 0 14px;
+  font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
+.lens-row { display: grid; align-items: center; gap: 12px; height: var(--table-row-height); padding: 0 14px; cursor: pointer; outline: none;
+  font: 400 13px/18px var(--font-mono); color: var(--color-text-primary); border-bottom: 1px solid var(--color-border-tertiary); }
 .lens-row:hover { background: var(--color-background-secondary); }
 .lens-row[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--line-route, var(--color-text-info)); }
 .lens-row[data-selected="true"] { background: var(--line-route-wash, var(--color-background-secondary)); }
@@ -103,7 +117,8 @@
 /* ---- canvas-detail ------------------------------------------------------ */
 /* A canvas body scrolls both ways inside the well; nodes never clip text they
  * cannot show - names ellipsize with the full value in the inspector. */
-.lens-canvas { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.lens-canvas { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; border-radius: 10px;
+  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
 
 /* Gateway topology */
 .gw-crumb { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; color: var(--color-text-info); }
@@ -140,46 +155,59 @@
 .l-dialog-foot { flex-shrink: 0; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 8px 16px; }
 
 /* ---- InspectorLayout ---------------------------------------------------- */
-.insp-identity { flex-shrink: 0; min-height: 56px; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-border-tertiary); }
-.insp-identity-text { flex: 1; min-width: 0; }
-.insp-meta { font: 400 11px/16px var(--font-sans); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.insp-identity { flex-shrink: 0; min-height: 56px; display: flex; align-items: flex-start; gap: 6px; padding: 20px 16px 12px 24px; }
+.insp-identity-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.insp-meta { font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
 .insp-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .insp-sticky { position: sticky; top: 0; z-index: 2; background: var(--color-background-primary); }
-.insp-actions { flex-shrink: 0; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 4px 12px 8px; flex-wrap: nowrap; }
-.insp-tabs { flex-shrink: 0; height: 28px; display: flex; align-items: flex-end; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--color-border-tertiary); }
-.insp-tab { height: 28px; padding: 0 10px; border: 0; background: transparent; cursor: pointer; font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); }
+.insp-actions { flex-shrink: 0; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 6px 24px 14px; flex-wrap: wrap; }
+.insp-tabs { flex-shrink: 0; height: 36px; display: flex; align-items: flex-end; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--color-border-tertiary); }
+.insp-tab { height: 36px; padding: 0 10px; border: 0; background: transparent; cursor: pointer; font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); }
 .insp-tab[aria-selected="true"] { color: var(--color-text-primary); font-weight: 600; box-shadow: inset 0 -2px 0 var(--color-text-info); }
-.insp-body { padding: 12px; display: flex; flex-direction: column; gap: 16px; }
-.insp-verdict { padding: 12px 12px 8px; flex-shrink: 0; }
-.insp-verdict-marked { display: flex; align-items: flex-start; gap: 8px; }
-.insp-verdict-marked > [data-aspect] { margin-top: 4px; }
-.insp-block { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.insp-block-head { display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
-.insp-kv { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 12px; font: 400 12px/16px var(--font-mono); }
+.insp-body { padding: 18px 24px 32px; display: flex; flex-direction: column; gap: 22px; font: 400 13px/18px var(--font-sans); }
+.insp-verdict { padding: 4px 24px 18px; flex-shrink: 0; }
+.insp-verdict-marked { display: flex; align-items: flex-start; gap: 12px; }
+.insp-verdict-marked > [data-aspect] { margin-top: 6px; flex-shrink: 0; }
+.insp-block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.insp-block-head { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; min-height: 24px; }
+.insp-block-head > svg { order: 2; }
+.insp-kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 12px; font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); }
 .insp-kv > :nth-child(odd) { color: var(--color-text-tertiary); }
 .insp-kv > :nth-child(even) { min-width: 0; overflow-wrap: anywhere; }
 
 /* ---- buttons and menus --------------------------------------------------- */
-.l-btn { height: 24px; padding: 0 10px; border-radius: 4px; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font: 400 12px/16px var(--font-sans); color: var(--color-text-primary); background: var(--color-background-secondary);
-  box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
+/* Controls (parent §2.3, slice 13a.3): 36px visual, a 40px hit area, a solid
+   --line-control boundary (a control boundary carries meaning, §2.1). */
+.l-btn { position: relative; height: 36px; padding: 0 14px; border-radius: 6px; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font: 500 14px/20px var(--font-sans); color: var(--color-text-primary); background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-control, var(--color-border-secondary)); }
+.l-btn::after, .l-seg > .l-chip::after { content: ""; position: absolute; inset: -2px 0; }
 .l-btn:disabled { opacity: 0.5; cursor: default; }
-.l-btn-primary { background: var(--color-background-info); color: var(--color-text-info); box-shadow: inset 0 0 0 1px var(--color-border-info); border-top: 0; }
+.l-btn-primary { background: var(--line-route, var(--color-background-info)); color: var(--line-route-ink, var(--color-text-info)); box-shadow: none; font-weight: 600; }
 .l-btn-danger { color: var(--color-text-danger); }
-.l-chip { height: 24px; padding: 0 9px; border-radius: 4px; border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-  font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); white-space: nowrap; }
-/* a pressed filter reads as a selection, the route wash with a route edge -
-   no longer a pressed well (The Line slice 11d) */
-.l-chip[aria-pressed="true"] { background: var(--line-route-wash, var(--color-background-secondary)); color: var(--color-text-primary);
-  box-shadow: inset 0 0 0 1px var(--line-route, var(--color-border-tertiary)); }
-.l-input { height: 24px; border: 0; border-radius: 4px; padding: 0 8px; font: 400 12px var(--font-sans); color: var(--color-text-primary);
-  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); min-width: 0; }
+/* a compact button inside dense evidence (a row, a fact line) */
+.l-btn-sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.l-btn-sm::after { inset: -6px 0; }
+.l-chip { position: relative; height: 32px; padding: 0 12px; border-radius: 6px; border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); white-space: nowrap; }
+.l-chip[aria-pressed="true"] { background: var(--color-background-secondary); color: var(--color-text-primary); font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--line-control, var(--color-border-secondary)); }
+/* A run of filters is one segmented control (the mockup's): a sunk group, the
+   pressed segment raised and ringed - never a lightness step alone. */
+.l-seg { display: inline-flex; align-items: center; gap: 2px; height: 36px; padding: 0 3px; border-radius: 8px; flex-shrink: 0;
+  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
+.l-seg > .l-chip { height: 30px; border-radius: 5px; }
+.l-seg > .l-chip::after { inset: -5px -1px; }
+.l-input { height: 40px; border: 0; border-top: 2px solid transparent; border-bottom: 2px solid transparent; background-clip: padding-box; border-radius: 8px;
+  padding: 0 10px; font: 400 13px var(--font-sans); color: var(--color-text-primary);
+  background-color: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--line-control, var(--color-border-tertiary)); min-width: 0; }
+select.l-input { padding-right: 28px; }
 /* a placeholder is an example, never mistakable for a typed value */
 .l-input::placeholder { color: var(--color-text-tertiary); opacity: 1; }
 .l-menu { position: absolute; z-index: 40; min-width: 200px; padding: 4px; border-radius: 6px; background: var(--color-background-primary);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 0 0 1px var(--color-border-secondary); display: flex; flex-direction: column; }
-.l-menu-item { min-height: 28px; padding: 4px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
-  font: 400 12px/16px var(--font-sans); color: var(--color-text-primary); display: flex; align-items: center; gap: 8px; }
+.l-menu-item { min-height: 32px; padding: 6px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
+  font: 400 13px/18px var(--font-sans); color: var(--color-text-primary); display: flex; align-items: center; gap: 8px; }
 .l-menu-item:hover, .l-menu-item:focus-visible { background: var(--color-background-secondary); outline: none; }
 .l-menu-item[data-danger="true"] { color: var(--color-text-danger); }
 .l-menu-sep { height: 1px; margin: 4px 6px; background: var(--color-border-tertiary); }
@@ -188,19 +216,21 @@
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---- shell geometry (redesign spec §1, step 7b) ---- */
-:root { --shell-inset: 8px; --mast-height: 40px; --shell-band-gap: 4px; }
+:root { --shell-inset: 0px; --mast-height: 52px; --shell-band-gap: 0px; }
 .shell { display: flex; flex-direction: column; height: 100%; padding: var(--shell-inset); gap: var(--shell-band-gap); box-sizing: border-box;
   background: var(--color-background-tertiary); min-width: 0; }
 .shell-body { flex: 1; display: flex; min-height: 0; min-width: 0; gap: var(--shell-band-gap); }
 .shell-main { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: var(--shell-band-gap); }
+/* The shell is one ground (the mockup): bands are separated by hairlines,
+   never floated as modules (slice 13a.2). */
 .shell-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
-.mast { height: var(--mast-height); flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 80px; box-sizing: border-box; min-width: 0;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
+  background: var(--color-background-tertiary); }
+.mast { height: var(--mast-height); flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 80px; box-sizing: border-box; min-width: 0;
+  background: var(--color-background-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
 .mast *, .mast *::before, .mast *::after { box-sizing: border-box; }
 .mast-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .mast-history { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.mast-icon { height: 24px; width: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; padding: 0;
+.mast-icon { height: 32px; width: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; padding: 0;
   background: transparent; color: var(--color-text-secondary); cursor: pointer; }
 .mast-icon:hover:not(:disabled) { background: var(--color-background-secondary); color: var(--color-text-primary); }
 .mast-icon:disabled { color: var(--color-text-tertiary); opacity: 0.45; cursor: default; }
@@ -224,30 +254,31 @@
    Crumbs outrank utilities: the well's words give up width first, then the
    lens crumb, then the station; the protected tag never shrinks. */
 .locbar { gap: 6px; }
-.locbar-left { flex: 1 1 auto; min-width: 0; margin-right: 10px; display: flex; align-items: center; gap: 10px; }
-.locbar-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0;
-  border: 0; padding: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.locbar-left { flex: 1 0.001 auto; min-width: 0; margin-right: 6px; display: flex; align-items: center; gap: 8px; } /* the well gives up width first */
+.locbar-mark { display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 6px; flex-shrink: 0;
+  border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--color-text-primary); }
+.locbar-wordmark { font: 600 16px/20px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; }
 /* The crumbs take the squeeze after the well: each truncates to its floor,
    and past the floors they clip, never running under the strip (the
    switcher's menu hangs from a portal, so the clip cannot cut it). */
 .locbar-crumbs { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .locbar-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent;
-  font: 600 13px/18px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-primary); }
+  font: 600 14px/20px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-primary); }
 button.locbar-crumb { cursor: pointer; }
 button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .locbar-fleet { flex-shrink: 0; color: var(--color-text-tertiary); }
 .locbar-fleet[aria-current="page"] { color: var(--color-text-primary); }
-.locbar-lens { flex-shrink: 20; min-width: 3ch; } /* named again by the lens index and the page header: it gives way first */
-.locbar-object { flex-shrink: 2; min-width: 6ch; text-transform: none; letter-spacing: 0; font: 400 12px/16px var(--font-mono); color: var(--color-text-secondary); }
+.locbar-lens { flex-shrink: 1; min-width: 7ch; } /* slice 13a.4: the station gives way long before the lens */
+.locbar-object { flex-shrink: 1000; min-width: 0; text-transform: none; letter-spacing: 0; font: 400 12px/16px var(--font-mono); color: var(--color-text-secondary); }
 .locbar-object-kind { font: 600 11px/16px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-tertiary); }
 .insp-identity:focus-visible { outline: 1px solid var(--color-border-info); outline-offset: -1px; }
-.insp-drawing { padding: 0 12px 8px; }
+.insp-drawing { padding: 0 24px 18px; }
 .locbar-sep { flex-shrink: 0; color: var(--line-ink-4, var(--color-text-tertiary)); }
 .locbar-station { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 1; }
-.locbar-crumbs > .locbar-pop { flex-shrink: 4; min-width: 9ch; } /* the station truncates before the lens, never away */
+.locbar-crumbs > .locbar-pop { flex-shrink: 40; min-width: 9ch; } /* the station truncates after the object, before the lens, never away */
 .locbar-station .station-name { overflow: hidden; }
 .locbar-station .station-place { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
-.locbar-station .station-cluster { flex-shrink: 3; }
+.locbar-station .station-cluster { flex-shrink: 30; }
 .locbar-protected { flex-shrink: 0; padding: 2px 7px; border-radius: 3px; white-space: nowrap; font: 600 10px/14px var(--font-mono);
   color: var(--color-text-warning); box-shadow: inset 0 0 0 1px var(--color-border-warning); }
 /* The right group's items are the bar's own flex items: the well shrinks first
@@ -255,15 +286,15 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .locbar-right { display: contents; }
 .locbar-right > * { flex-shrink: 0; }
 .locbar-pop { position: relative; display: inline-flex; min-width: 0; }
-.locbar-right > .locbar-well { flex: 0 1000 300px; }
-.locbar-well { min-width: 32px; height: 28px; overflow: hidden; display: flex; align-items: center; gap: 8px; padding: 0 10px;
-  border: 0; border-radius: 6px; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary);
+.locbar-right > .locbar-well { flex: 0 1000 420px; }
+.locbar-well { min-width: 36px; height: 36px; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  border: 0; border-radius: 6px; cursor: pointer; text-align: left; font: 400 13px/18px var(--font-sans); color: var(--color-text-tertiary);
   background: var(--line-sunk, var(--line-sunk, var(--color-background-secondary))); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
 .locbar-well-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .locbar-well kbd { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary);
   box-shadow: inset 0 0 0 1px var(--color-border-secondary); }
-.locbar-ask { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; cursor: pointer;
-  background: transparent; box-shadow: inset 0 0 0 1px var(--color-border-secondary); font: 500 12px/16px var(--font-sans); color: var(--color-text-primary); }
+.locbar-ask { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; box-shadow: inset 0 0 0 1px var(--line-control, var(--color-border-secondary)); font: 500 13px/18px var(--font-sans); color: var(--color-text-primary); }
 .locbar-ask[aria-disabled="true"] { color: var(--color-text-tertiary); }
 
 /* station names: "ENV · REGION" in the label face, the cluster in mono */
@@ -274,7 +305,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .station-cluster[data-bare] { color: var(--color-text-primary); }
 
 /* the fleet indicator (slice 4 §3.2) */
-.fleet-ind { flex-shrink: 0; display: inline-flex; align-items: center; gap: 10px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; cursor: pointer;
+.fleet-ind { flex-shrink: 0; display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; border: 0; border-radius: 6px; cursor: pointer;
   background: transparent; box-shadow: inset 0 0 0 1px var(--color-border-tertiary); font: 500 12px/16px var(--font-mono); color: var(--color-text-secondary); }
 .fleet-ind-axis { display: inline-flex; align-items: center; gap: 5px; }
 .fleet-ind-axis[data-axis="fault"] { color: var(--color-text-danger); }
@@ -312,34 +343,51 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
    drawn; below 1180px it stays, compact - its words ellipsize and Ask keeps
    only its icon (its name is unchanged). The phrase (sr-only) always names
    the whole track. */
-@media (max-width: 1279px) {
+/* The object crumb gives way first (slice 13a.4): below 1680px the inspector's
+   own title, right beside it, names the object, so the crumb steps out
+   rather than truncating to a stub. */
+@media (max-width: 1679px) {
+  .locbar-object, .locbar-sep:has(+ .locbar-object) { display: none; }
+}
+@media (max-width: 1599px) {
   .strip-stop:not([data-here]) { display: none; }
   .strip-stop[data-here] .strip-seg { display: none; }
 }
+@media (max-width: 1439px) {
+  .locbar-station .station-region { display: none; } /* the crumb's title names it */
+}
+@media (max-width: 1279px) {
+  .locbar-wordmark { display: none; }
+}
+/* Below 1180px the crumbs need the room: the strip steps out (the station
+   page states the line, the protected tag stays on the crumb) and so does
+   Recent places (the console's empty state lists them). */
 @media (max-width: 1179px) {
-  .strip { padding: 0; }
-  .strip-box { max-width: 22ch; overflow: hidden; }
-  .strip-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .locbar .strip, .mast-history .locbar-pop { display: none; }
   .locbar-ask > span { display: none; }
   /* "(inferred)" stays in the title and for assistive tech */
   .locbar-protected-why { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
 
 /* ---- The Line lens index (slice 4 §4) ---- */
-.lens-index { width: 232px; flex-shrink: 0; min-height: 0; overflow: auto; box-sizing: border-box; padding: 14px 10px; display: flex; flex-direction: column; gap: 18px;
-  background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--line-module-ring, inset 0 0 0 1px var(--color-border-tertiary)); }
-.lens-index-section { display: flex; flex-direction: column; gap: 1px; }
+.lens-index { width: 232px; flex-shrink: 0; min-height: 0; overflow: auto; box-sizing: border-box; padding: 22px 14px 22px 18px; display: flex; flex-direction: column; gap: 22px;
+  background: var(--color-background-tertiary); border-right: 1px solid var(--color-border-tertiary); }
+.lens-index-section { display: flex; flex-direction: column; gap: 2px; }
 .lens-index-head { margin: 0; padding: 0 10px 6px; font: 500 11px/14px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-tertiary); }
-.lens-entry { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 0 10px 0 28px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
-  text-align: left; font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); }
+.lens-entry { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px 0 28px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  text-align: left; font: 400 14px/20px var(--font-sans); color: var(--color-text-secondary); }
+.lens-index-section[aria-labelledby="lens-index-needs"] .lens-entry { min-height: 34px; }
 .lens-entry:hover:not(:disabled) { background: var(--color-background-secondary); color: var(--color-text-primary); }
 .lens-entry[aria-current="page"] { background: var(--color-background-info); color: var(--color-text-primary); font-weight: 500; }
 /* "Needs you" rows lead with their mark; every label lines up after it */
 .lens-entry[data-marked] { padding-left: 10px; }
-.lens-entry-sub { padding-left: 44px; min-height: 28px; font-size: 12px; }
+.lens-entry-sub { padding-left: 44px; min-height: 30px; font-size: 13px; }
 /* the label wins the row: a long note truncates (its full text is the title) */
-.lens-entry-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lens-entry-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font: 400 11px/14px var(--font-sans); color: var(--color-text-tertiary); }
+.lens-entry-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; padding: 6px 0; }
+.lens-entry-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a coverage word qualifies the count: under the label, never cut away */
+.lens-entry-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 11px/14px var(--font-sans); color: var(--color-text-tertiary); }
+.lens-entry-sub[data-marked] { padding-left: 26px; }
 .lens-entry-count { flex-shrink: 0; margin-left: auto; font: 500 12px/16px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text-tertiary); }
 .lens-index-absent { margin: 0; padding: 0 10px; font: 400 12px/17px var(--font-sans); color: var(--color-text-tertiary); text-wrap: pretty; }
 
@@ -440,7 +488,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .queue-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 .queue-title { margin: 0; font: 600 14px/18px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-text-primary); }
 .queue-counts { font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); }
-.queue-filters { display: flex; gap: 4px; margin-left: auto; }
+.queue-filters { margin-left: auto; }
 .queue-rows { display: flex; flex-direction: column; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--color-border-tertiary); overflow: hidden; }
 .queue-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px 12px; border: 0; border-top: 1px solid var(--color-border-tertiary);
   background: var(--color-background-primary); text-align: left; cursor: pointer; color: var(--color-text-primary); }

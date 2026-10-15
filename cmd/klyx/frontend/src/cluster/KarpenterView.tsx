@@ -319,7 +319,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         </>
       }
       controls={!rowsAbsent || feedDetected ? (
-        <div role="group" aria-label="Karpenter view" style={{ display: "inline-flex", gap: 4 }}>
+        <div role="group" aria-label="Karpenter view" className="l-seg">
           <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {claimAttention > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{claimAttention}</span>}</button>
           <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolAttention > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolAttention}</span>}</button>
           <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || feedIncomplete) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{feedIncomplete ? "+" : ""}</span>}</button>

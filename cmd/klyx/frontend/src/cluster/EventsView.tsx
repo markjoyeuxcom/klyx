@@ -197,8 +197,10 @@ export function EventsView({ cluster }: { cluster: string }) {
               {events.namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
           </label>
-          <button className="l-chip" aria-pressed={!events.warningsOnly} onClick={() => useFleet.getState().setWarningsOnly(false)}>All</button>
-          <button className="l-chip" aria-pressed={events.warningsOnly} onClick={() => useFleet.getState().setWarningsOnly(true)}>Warnings {warnings > 0 && <span style={{ color: "var(--color-text-warning)" }}>{warnings}</span>}</button>
+          <div role="group" aria-label="Event type" className="l-seg">
+            <button className="l-chip" aria-pressed={!events.warningsOnly} onClick={() => useFleet.getState().setWarningsOnly(false)}>All</button>
+            <button className="l-chip" aria-pressed={events.warningsOnly} onClick={() => useFleet.getState().setWarningsOnly(true)}>Warnings {warnings > 0 && <span style={{ color: "var(--color-text-warning)" }}>{warnings}</span>}</button>
+          </div>
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search events</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={events.search} onChange={(e) => useFleet.getState().setEventsSearch(e.target.value)} placeholder="Search reason, object, message" />

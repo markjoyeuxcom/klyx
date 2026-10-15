@@ -168,8 +168,12 @@ describe("location bar crumbs and history", () => {
     useFleet.setState({ clusters: [{ name: "aks-prd-neu", state: "Synced", env: "prd", region: "northeurope" } as never],
       route: { name: "cluster", cluster: "aks-prd-neu", section: "overview" } });
     const { getByRole } = render(<LocationBar />);
-    const station = getByRole("button", { name: "Station aks-prd-neu. Switch cluster" });
-    expect(station.textContent).toBe("prd · northeuropeaks-prd-neu");
+    // the whole place stays in the name and title when a tight bar steps the
+    // region out of sight (slice 13a.4)
+    const station = getByRole("button", { name: "Station prd · North Europe, aks-prd-neu. Switch cluster" });
+    expect(station.textContent).toBe("prd · North Europeaks-prd-neu");
+    expect(station.getAttribute("title")).toBe("prd · North Europe aks-prd-neu - switch cluster");
+    expect(station.querySelector(".station-region")?.textContent).toBe(" · North Europe");
   });
 
   it("on the fleet board the Fleet crumb is the current place; elsewhere it leads back", () => {

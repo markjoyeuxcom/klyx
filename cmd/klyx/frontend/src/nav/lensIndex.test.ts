@@ -73,13 +73,24 @@ describe("Needs you (§4.2)", () => {
     expect(labels(m.rest)).not.toContain("Pods");
   });
 
-  it("a lit sub-entry reads 'Lens · Sub' and is not repeated under its open lens", () => {
+  it("a sub-task lit alone sits under its lens, a context row with no mark or count of its own (slice 13a.5)", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { fault: 1 }), argo()], {}, "dev"));
     const m = model(cl(), at("gitops", { fluxView: "reconciliation" }));
-    expect(m.needsYou.map((e) => [e.key, e.label, e.tone])).toEqual([["sub:flux-sources", "Flux CD · Sources", "danger"]]);
-    const lens = m.rest.find((e) => e.key === "lens:flux")!;
+    expect(m.needsYou.map((e) => [e.key, e.label, e.tone, e.badge?.n, e.context])).toEqual([["lens:flux", "Flux CD", undefined, undefined, true]]);
+    const lens = m.needsYou[0];
     expect(lens.current).toBe(true);
-    expect(lens.subs).toEqual([]);
+    expect(lens.subs.map((s) => [s.key, s.label, s.tone, s.badge?.n])).toEqual([["sub:flux-sources", "Sources", "danger", 1]]);
+    expect(m.rest.some((e) => e.key === "lens:flux")).toBe(false);
+  });
+
+  it("a group takes the place of its highest member; every member keeps its own tone and count, never a sum", () => {
+    // the lens at look-at (2 degraded), its sub at fault (1): the group ranks
+    // as danger, ahead of a look-at Workloads with more objects
+    applySummary(summary([...replace(core(), task("workloads", [verdict("workloads", { degraded: 5, ok: 1 }, [kind("deployments")])])),
+      flux({ degraded: 2, ok: 1 }, { fault: 1 }), argo()], {}, "dev"));
+    const m = model(cl());
+    expect(m.needsYou.map((e) => [e.key, e.tone, e.badge?.n, e.context ?? false])).toEqual([["lens:flux", "warning", 2, false], ["dest:workloads", "warning", 5, false]]);
+    expect(m.needsYou[0].subs.map((s) => [s.key, s.tone, s.badge?.n])).toEqual([["sub:flux-sources", "danger", 1]]);
   });
 
   it("a not-ready controller puts its lens in Needs you as danger, with the words", () => {

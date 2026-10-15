@@ -513,15 +513,17 @@ export function GitOps({ cluster }: { cluster: string }) {
                 </select>
               </label>
             )}
-            <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
-            <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>
-              Not ready {attnHere > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attnHere}</span>}
-            </button>
-            {(view === "sources" ? srcSuspended : suspended) > 0 && (
-              <button className="l-chip" aria-pressed={status === "suspended"} onClick={() => setStatus("suspended")}>
-                Suspended <span style={{ color: "var(--color-text-tertiary)" }}>{view === "sources" ? srcSuspended : suspended}</span>
+            <div role="group" aria-label="Status" className="l-seg">
+              <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+              <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>
+                Not ready {attnHere > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attnHere}</span>}
               </button>
-            )}
+              {(view === "sources" ? srcSuspended : suspended) > 0 && (
+                <button className="l-chip" aria-pressed={status === "suspended"} onClick={() => setStatus("suspended")}>
+                  Suspended <span style={{ color: "var(--color-text-tertiary)" }}>{view === "sources" ? srcSuspended : suspended}</span>
+                </button>
+              )}
+            </div>
             <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
               <span className="sr-only">Search Flux</span>
               <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "sources" ? "Search sources" : "Search name, message, revision"} />

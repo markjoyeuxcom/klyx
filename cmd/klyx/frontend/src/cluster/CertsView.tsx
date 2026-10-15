@@ -396,7 +396,7 @@ export function CertsView({ cluster }: { cluster: string }) {
       )}
       controls={absent ? undefined : (
         <>
-          <div role="group" aria-label="cert-manager view" style={{ display: "inline-flex", gap: 4 }}>
+          <div role="group" aria-label="cert-manager view" className="l-seg">
             <button className="l-chip" aria-pressed={view === "certificates"} onClick={() => { setView("certificates"); setStatus("all"); }}>Certificates</button>
             <button className="l-chip" aria-pressed={view === "issuers"} onClick={() => { setView("issuers"); setStatus("all"); }}>
               Issuers {issuersNotReady > 0 && <span style={{ color: "var(--color-text-warning)" }}>{issuersNotReady}</span>}
@@ -409,15 +409,17 @@ export function CertsView({ cluster }: { cluster: string }) {
               {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
             </select>
           </label>
-          <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
-          <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>Not ready {(view === "issuers" ? issuersNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "issuers" ? issuersNotReady : attention}</span>}</button>
-          {view === "certificates" && (
-            <>
-              <button className="l-chip" aria-pressed={status === "expiring"} onClick={() => setStatus("expiring")}>Expiring <span style={{ color: "var(--color-text-tertiary)" }}>{certs.filter((c) => expiringSoon(c) || expired(c)).length}</span></button>
-              {issuing > 0 && <button className="l-chip" aria-pressed={status === "issuing"} onClick={() => setStatus("issuing")}>Issuing <span style={{ color: "var(--color-text-tertiary)" }}>{issuing}</span></button>}
-              {issuerProblems > 0 && <button className="l-chip" aria-pressed={status === "issuerProblem"} onClick={() => setStatus("issuerProblem")}>Issuer problem <span style={{ color: "var(--color-text-warning)" }}>{issuerProblems}</span></button>}
-            </>
-          )}
+          <div role="group" aria-label="Status" className="l-seg">
+            <button className="l-chip" aria-pressed={status === "all"} onClick={() => setStatus("all")}>All</button>
+            <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>Not ready {(view === "issuers" ? issuersNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "issuers" ? issuersNotReady : attention}</span>}</button>
+            {view === "certificates" && (
+              <>
+                <button className="l-chip" aria-pressed={status === "expiring"} onClick={() => setStatus("expiring")}>Expiring <span style={{ color: "var(--color-text-tertiary)" }}>{certs.filter((c) => expiringSoon(c) || expired(c)).length}</span></button>
+                {issuing > 0 && <button className="l-chip" aria-pressed={status === "issuing"} onClick={() => setStatus("issuing")}>Issuing <span style={{ color: "var(--color-text-tertiary)" }}>{issuing}</span></button>}
+                {issuerProblems > 0 && <button className="l-chip" aria-pressed={status === "issuerProblem"} onClick={() => setStatus("issuerProblem")}>Issuer problem <span style={{ color: "var(--color-text-warning)" }}>{issuerProblems}</span></button>}
+              </>
+            )}
+          </div>
           <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
             <span className="sr-only">Search cert-manager</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "issuers" ? "Search issuers" : "Search name, issuer, DNS, secret"} />

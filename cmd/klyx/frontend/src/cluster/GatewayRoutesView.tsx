@@ -204,7 +204,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
           {toggle}
           {routes.length > 0 && (
             <>
-              <div role="group" aria-label="Route filter" style={{ display: "inline-flex", gap: 4 }}>
+              <div role="group" aria-label="Route filter" className="l-seg">
                 <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {total}</button>
                 <button className="l-chip" aria-pressed={mode === "attention"} onClick={() => setMode("attention")}>Needs attention {attention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attention}</span>}</button>
               </div>

@@ -61,7 +61,7 @@ function GatewayLists({ cluster }: { cluster: string }) {
     return "wait";
   }, [view]);
   const toggle = (
-    <div role="group" aria-label="Gateway API view" style={{ display: "inline-flex", gap: 4 }}>
+    <div role="group" aria-label="Gateway API view" className="l-seg">
       <button className="l-chip" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
       <button className="l-chip" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes {routeAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{routeAttention}</span>}</button>
     </div>
@@ -226,7 +226,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
           {toggle}
           {gateways.length > 0 && (
             <>
-              <div role="group" aria-label="Gateway filter" style={{ display: "inline-flex", gap: 4 }}>
+              <div role="group" aria-label="Gateway filter" className="l-seg">
                 <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {total}</button>
                 <button className="l-chip" aria-pressed={mode === "attention"} onClick={() => setMode("attention")}>Needs attention {attention > 0 && <span style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{attention}</span>}</button>
                 <button className="l-chip" aria-pressed={mode === "programmed"} onClick={() => setMode("programmed")}>Programmed</button>

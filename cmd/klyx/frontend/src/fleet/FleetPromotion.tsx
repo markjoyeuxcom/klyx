@@ -142,7 +142,7 @@ export function FleetPromotion() {
         </>
       }
       controls={rows.length > 0 ? (
-        <div role="group" aria-label="Promotion filter" style={{ display: "inline-flex", gap: 4 }}>
+        <div role="group" aria-label="Promotion filter" className="l-seg">
           <button className="l-chip" aria-pressed={!showAll} onClick={() => setShowAll(false)}>Needs attention {attention.length > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attention.length}</span>}</button>
           <button className="l-chip" aria-pressed={showAll} onClick={() => setShowAll(true)}>All units {rows.length}</button>
         </div>

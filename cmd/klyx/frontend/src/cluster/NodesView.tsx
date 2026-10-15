@@ -720,6 +720,7 @@ export function NodesView({ cluster }: { cluster: string }) {
         }
         controls={
           <>
+            <div role="group" aria-label="Status" className="l-seg">
             <button className="l-chip" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>All <span style={{ color: "var(--color-text-tertiary)" }}>{scopedNodes.length || ""}</span></button>
             <button className="l-chip" aria-pressed={filter === "attention"} onClick={() => setFilter("attention")}>
               Attention {rowCounts.attention > 0 && <span style={{ color: tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{rowCounts.attention}</span>}
@@ -729,6 +730,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             )}
             <button className="l-chip" aria-pressed={filter === "cordoned"} onClick={() => setFilter("cordoned")}>Cordoned <span style={{ color: "var(--color-text-tertiary)" }}>{cordonedCount || ""}</span></button>
             <button className="l-chip" aria-pressed={filter === "tainted"} onClick={() => setFilter("tainted")}>Tainted <span style={{ color: "var(--color-text-tertiary)" }}>{taintedCount || ""}</span></button>
+            </div>
             {roles.length > 0 && (
               <label style={{ display: "flex" }}>
                 <span className="sr-only">Role</span>

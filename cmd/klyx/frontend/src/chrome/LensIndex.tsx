@@ -1,7 +1,7 @@
 import { useFleet } from "../store/fleet";
 import { navigate } from "../nav/registry";
 import { useNavCounts } from "../nav/useNavCounts";
-import { FLEET_VIEWS, absentLine, lensIndex, type IndexEntry } from "../nav/lensIndex";
+import { FLEET_VIEWS, absentLine, coverageOf, lensIndex, type IndexEntry } from "../nav/lensIndex";
 import { LENS_INDEX_ID, useLensIndexOpen } from "../nav/lensIndexOpen";
 import { toneColor } from "./primitives/styles";
 import { Aspect } from "./primitives";
@@ -66,27 +66,29 @@ function ClusterIndex({ cluster }: { cluster: string }) {
   );
 }
 
-function Entry({ e, cluster }: { e: IndexEntry; cluster: string }) {
-  const disabled = e.state !== "present";
+function Row({ e, cluster, sub }: { e: IndexEntry; cluster: string; sub?: boolean }) {
   const n = e.badge && e.badge.n > 0 ? e.badge.n : null;
+  const cover = coverageOf(e.note);
+  return (
+    <button type="button" className={`lens-entry${sub ? " lens-entry-sub" : ""}`} data-kind={sub ? "sub" : e.kind} data-entry={e.key} data-marked={e.tone ? "" : undefined}
+      data-context={e.context ? "" : undefined} aria-current={e.current ? "page" : undefined} disabled={e.state !== "present"}
+      title={[e.badge?.title, e.note ? `${e.label} - ${e.note}` : undefined].filter(Boolean).join("\n") || undefined}
+      onClick={() => navigate(cluster, e.destination)}>
+      {e.tone && <Aspect kind={e.tone === "danger" ? "fault" : "attention"} />}
+      <span className="lens-entry-text">
+        <span className="lens-entry-label">{e.label}</span>
+        {cover && <span className="lens-entry-note">{cover}</span>}
+      </span>
+      {n !== null && <span className="lens-entry-count" style={{ color: e.badge?.tone ? toneColor[e.badge.tone] : undefined }}>{n}</span>}
+    </button>
+  );
+}
+
+function Entry({ e, cluster }: { e: IndexEntry; cluster: string }) {
   return (
     <>
-      <button type="button" className="lens-entry" data-kind={e.kind} data-entry={e.key} data-marked={e.tone ? "" : undefined} aria-current={e.current ? "page" : undefined} disabled={disabled}
-        title={[e.badge?.title, e.note ? `${e.label} - ${e.note}` : undefined].filter(Boolean).join("\n") || undefined}
-        onClick={() => navigate(cluster, e.destination)}>
-        {e.tone && <Aspect kind={e.tone === "danger" ? "fault" : "attention"} />}
-        <span className="lens-entry-label">{e.label}</span>
-        {e.note && <span className="lens-entry-note">{e.note}</span>}
-        {n !== null && <span className="lens-entry-count" style={{ color: e.badge?.tone ? toneColor[e.badge.tone] : undefined }}>{n}</span>}
-      </button>
-      {e.subs.map((s) => (
-        <button key={s.key} type="button" className="lens-entry lens-entry-sub" data-kind="sub" data-entry={s.key} aria-current={s.current ? "page" : undefined} disabled={s.state !== "present"}
-          title={[s.badge?.title, s.note ? `${s.label} - ${s.note}` : undefined].filter(Boolean).join("\n") || undefined} onClick={() => navigate(cluster, s.destination)}>
-          <span className="lens-entry-label">{s.label}</span>
-          {s.note && <span className="lens-entry-note">{s.note}</span>}
-          {s.badge && s.badge.n > 0 && <span className="lens-entry-count" style={{ color: s.badge.tone ? toneColor[s.badge.tone] : undefined }}>{s.badge.n}</span>}
-        </button>
-      ))}
+      <Row e={e} cluster={cluster} />
+      {e.subs.map((s) => <Row key={s.key} e={s} cluster={cluster} sub />)}
     </>
   );
 }

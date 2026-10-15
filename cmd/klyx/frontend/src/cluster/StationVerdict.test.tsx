@@ -42,7 +42,7 @@ describe("the station verdict", () => {
     render(<Page c={cl()} />);
     expect(health().textContent).toBe("nothing raised");
     expect(mark(health())).toBe("none");
-    expect(lineEl().textContent).toBe("prd on westeurope · a1b9e3c");
+    expect(lineEl().textContent).toBe("prd on West Europe · a1b9e3c");
     expect(mark(lineEl())).toBe("none");
   });
 
@@ -94,7 +94,7 @@ describe("the station verdict", () => {
     render(<Page c={cl({ state: "Failed", reason: "dial tcp" })} />);
     expect(health().textContent).toBe("failed: dial tcp");
     expect(mark(health())).toBe("checking");
-    expect(lineEl().textContent).toBe("prd on westeurope");
+    expect(lineEl().textContent).toBe("prd on West Europe");
     expect(mark(lineEl())).toBe("none");
   });
 });

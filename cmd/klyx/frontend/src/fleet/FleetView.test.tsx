@@ -58,8 +58,8 @@ describe("the fleet screen (slice 5a)", () => {
     expect(screen.getByLabelText("Legend").textContent).toContain("Lit: matches the comparison revision. A comparison, not a delivery path.");
     const segs = [...container.querySelectorAll(".line-board-seg")].map((e) => e.hasAttribute("data-lit"));
     expect(segs).toEqual([true, false]);
-    const prd = screen.getByRole("button", { name: /^p, prd on westeurope/ });
-    expect(prd.getAttribute("aria-label")).toBe("p, prd on westeurope, protected, 9f2c11d · differs; health checking…");
+    const prd = screen.getByRole("button", { name: /^p, prd on West Europe/ });
+    expect(prd.getAttribute("aria-label")).toBe("p, prd on West Europe, protected, 9f2c11d · differs; health checking…");
     expect(prd.getAttribute("data-mark")).toBe("fault");
   });
 
@@ -69,9 +69,9 @@ describe("the fleet screen (slice 5a)", () => {
     applySummary(summary(core(), {}, "d"));
     applyLine(line([st("d", "dev", 0), st("p", "prd", 3)]));
     render(<FleetView />);
-    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    const p = screen.getByRole("button", { name: /^p, prd on West Europe/ });
     expect(within(p).getByText("1 area needs attention").getAttribute("data-tone")).toBe("danger");
-    expect(within(screen.getByRole("button", { name: /^d, dev on westeurope/ })).getByText("nothing raised")).toBeTruthy();
+    expect(within(screen.getByRole("button", { name: /^d, dev on West Europe/ })).getByText("nothing raised")).toBeTruthy();
     fireEvent.click(p);
     expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "p", section: "overview" });
   });
@@ -80,7 +80,7 @@ describe("the fleet screen (slice 5a)", () => {
     useFleet.setState({ clusters: [c("d"), c("p", "Failed", { reason: "dial tcp" })] });
     applyLine(line([st("d", "dev", 0), st("p", "prd", 3, { state: "checking", read: "error" })]));
     render(<FleetView />);
-    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    const p = screen.getByRole("button", { name: /^p, prd on West Europe/ });
     expect(p.hasAttribute("data-unreachable")).toBe(true);
     expect(p.textContent).toContain("failed: dial tcp");
     expect(p.querySelector(".station-cell-rev")).toBeNull();
@@ -93,10 +93,10 @@ describe("the fleet screen (slice 5a)", () => {
       heldSince: { basis: "unknown", capped: true } as never, failingSince: { basis: "rule", since: new Date(2026, 9, 15, 20, 21).toISOString() } as never,
     })]));
     render(<FleetView />);
-    const p = screen.getByRole("button", { name: /^p, prd on westeurope/ });
+    const p = screen.getByRole("button", { name: /^p, prd on West Europe/ });
     expect(p.textContent).toContain("held · start unknown (proof capped)");
     expect(p.textContent).toContain("failing since 20:21");
-    expect(screen.getByText(/prd · westeurope is held: attempted a1b9e3c, failing - start unknown \(proof capped\)/)).toBeTruthy();
+    expect(screen.getByText(/prd · West Europe is held: attempted a1b9e3c, failing - start unknown \(proof capped\)/)).toBeTruthy();
   });
 
   it("the siding, the fallback, and mesh notes under the board", () => {
@@ -161,7 +161,7 @@ describe("the aside and footer (slice 5c)", () => {
     await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
     const horizon = screen.getByRole("region", { name: "Horizon" });
     const rows = within(horizon).getAllByRole("listitem").map((li) => li.textContent);
-    expect(rows).toEqual(["expired 2d agoTLS secret edge/old · stg · westeurope a", "6dCertificate shop/storefront-tls · stg · westeurope a"]);
+    expect(rows).toEqual(["expired 2d agoTLS secret edge/old · stg · West Europe a", "6dCertificate shop/storefront-tls · stg · West Europe a"]);
     expect(horizon.textContent).toContain("x: could not be scanned.");
   });
 });

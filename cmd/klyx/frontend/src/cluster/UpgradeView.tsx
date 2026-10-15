@@ -160,7 +160,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
       }
       controls={
         <>
-          <div role="group" aria-label="Upgrade view" style={{ display: "inline-flex", gap: 4 }}>
+          <div role="group" aria-label="Upgrade view" className="l-seg">
             <button className="l-chip" aria-pressed={view === "apis"} onClick={() => switchView("apis")}>Deprecated APIs {ok && <span style={{ color: removedAtTarget.length > 0 ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{apis.length}</span>}</button>
             <button className="l-chip" aria-pressed={view === "skew"} onClick={() => switchView("skew")}>Node skew (current control plane) {ok && <span style={{ color: skewDanger > 0 ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{skew.length}</span>}</button>
           </div>

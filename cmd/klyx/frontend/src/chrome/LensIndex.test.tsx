@@ -6,6 +6,7 @@ import { useListKeys } from "./useListKeys";
 import { addSub, applyRows, applySummary, openStarted, openSucceeded, resetHealthStore } from "../store/health";
 import { core, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import { toggleLensIndex, useLensIndexOpen } from "../nav/lensIndexOpen";
+import { coverageOf } from "../nav/lensIndex";
 import { handleShellKey } from "../app/AppShell";
 
 vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
@@ -162,5 +163,15 @@ describe("focus on collapse (Codex review of 4b)", () => {
     other.focus();
     act(() => { toggleLensIndex(); });
     expect(document.activeElement).toBe(other);
+  });
+});
+
+describe("a row's notes (slice 13a.5)", () => {
+  it("keeps the coverage words that qualify a count, and leaves a part's explanation to the title", () => {
+    expect(coverageOf("unverified · routes: 3 with a failing attachment")).toBe("unverified");
+    expect(coverageOf("controller not ready · issuers: 1 not ready")).toBe("controller not ready");
+    expect(coverageOf("routes: 3 with a failing attachment")).toBe("");
+    expect(coverageOf("last good")).toBe("last good");
+    expect(coverageOf(undefined)).toBe("");
   });
 });
