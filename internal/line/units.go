@@ -20,13 +20,43 @@ type Object[T any] struct {
 	Data      T
 }
 
-// StationInput is one station's rows.
+// StationInput is one station's rows, and each kind's read as the slice 3
+// note §2.4 resolves it (ok, absent, checking, stale, error) keyed by kind
+// name ("kustomizations", "gitrepositories", ...). A kind with no entry reads
+// checking.
 type StationInput struct {
 	Station
 	Kustomizations []Object[flux.Resource]
 	HelmReleases   []Object[flux.Resource]
 	Sources        []Object[flux.Source]
 	Apps           []Object[argo.App]
+	KindRead       map[string]string
+}
+
+// Kind reads beside the station read states.
+const KindAbsent = "absent"
+
+// sourceKinds maps a Flux source kind to its kind name.
+var sourceKinds = map[string]string{
+	"GitRepository": "gitrepositories", "HelmRepository": "helmrepositories", "OCIRepository": "ocirepositories",
+	"Bucket": "buckets", "HelmChart": "helmcharts",
+}
+
+// readRank orders reads worst first; the worse of two wins.
+var readRank = map[string]int{ReadError: 0, ReadStale: 1, ReadChecking: 2, ReadPartial: 3, ReadOK: 4, KindAbsent: 4}
+
+func (in StationInput) kindRead(kind string) string {
+	if r, ok := in.KindRead[kind]; ok {
+		return r
+	}
+	return ReadChecking
+}
+
+func worseRead(a, b string) string {
+	if readRank[b] < readRank[a] {
+		return b
+	}
+	return a
 }
 
 // Key kinds: units compare only within one key, and Git and chart keys
@@ -96,6 +126,10 @@ type Unit struct {
 	Suspended       bool
 	SourceChanged   bool // Argo: the source was reordered or edited since its last deployment
 	SourceName      string
+	// Read is the worse of its own kind's read and its source kind's (§2.4
+	// of the slice 3 note): a unit that is not read ok keeps its station
+	// checking.
+	Read string
 }
 
 // Exclusion is a unit Klyx does not compare, listed per station with its
@@ -131,14 +165,23 @@ func Units(in StationInput) ([]Unit, []Exclusion) {
 	}
 	for _, o := range in.Kustomizations {
 		u, x := kustomizationUnit(o, lookup)
+		if u != nil {
+			u.Read = worseRead(in.kindRead("kustomizations"), in.kindRead(sourceKinds[o.Data.SourceKind]))
+		}
 		units, excl = add(units, excl, u, x)
 	}
 	for _, o := range in.HelmReleases {
 		u, x := helmReleaseUnit(o, lookup)
+		if u != nil {
+			u.Read = worseRead(in.kindRead("helmreleases"), in.kindRead(sourceKinds[o.Data.SourceKind]))
+		}
 		units, excl = add(units, excl, u, x)
 	}
 	for _, o := range in.Apps {
 		us, xs := appUnits(o)
+		for i := range us {
+			us[i].Read = in.kindRead("applications")
+		}
 		units = append(units, us...)
 		excl = append(excl, xs...)
 	}

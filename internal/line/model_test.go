@@ -30,8 +30,11 @@ func gitSrc(name, url, refKind, refName, rev string) Object[flux.Source] {
 		URL: url, RefKind: refKind, RefName: refName, Revision: rev}}
 }
 
+var allKindsOK = map[string]string{"kustomizations": ReadOK, "helmreleases": ReadOK, "applications": ReadOK,
+	"gitrepositories": ReadOK, "helmrepositories": ReadOK, "ocirepositories": ReadOK, "buckets": ReadOK, "helmcharts": ReadOK}
+
 func station(cluster, env string, mod ...func(*StationInput)) StationInput {
-	in := StationInput{Station: Station{Cluster: cluster, Env: env}}
+	in := StationInput{Station: Station{Cluster: cluster, Env: env}, KindRead: allKindsOK}
 	for _, m := range mod {
 		m(&in)
 	}
@@ -395,5 +398,29 @@ func TestSharedKeysAcrossNamespacesAndTools(t *testing.T) {
 	us, _ := Units(in)
 	if len(us) != 3 || us[0].Key != us[1].Key || us[0].Key != us[2].Key {
 		t.Fatalf("one key: %v %v %v", us[0].Key, us[1].Key, us[2].Key)
+	}
+}
+
+// A unit whose own kind or source kind is not read ok keeps its station
+// checking (§3.3 rule 1; slice 3 note §2.4).
+func TestUnitReadKeepsTheStationChecking(t *testing.T) {
+	staleSources := map[string]string{}
+	for k, v := range allKindsOK {
+		staleSources[k] = v
+	}
+	staleSources["gitrepositories"] = ReadStale
+	l := build(station("a", "dev", fluxOn(sha('a')), func(in *StationInput) { in.KindRead = staleSources }), station("b", "prd", fluxOn(sha('a'))))
+	if got := stateOf(l, "a"); got.State != StateChecking || got.Units[0].Read != ReadStale {
+		t.Fatalf("a stale source kind: %+v", got)
+	}
+	// An unrelated kind that is unreadable changes nothing.
+	unrelated := map[string]string{}
+	for k, v := range allKindsOK {
+		unrelated[k] = v
+	}
+	unrelated["buckets"] = ReadError
+	l = build(station("a", "dev", fluxOn(sha('a')), func(in *StationInput) { in.KindRead = unrelated }), station("b", "prd", fluxOn(sha('a'))))
+	if got := stateOf(l, "a"); got.State != StateMatches {
+		t.Fatalf("an unrelated unreadable kind: %+v", got.State)
 	}
 }

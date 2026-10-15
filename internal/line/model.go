@@ -229,8 +229,14 @@ func facts(sl *StationLine, key *Key) {
 		f.SourceChanged = f.SourceChanged || u.SourceChanged
 	}
 	sort.Strings(sl.A)
+	unread := false
+	for _, u := range sl.Units {
+		if u.Key == *key && u.Read != ReadOK && u.Read != KindAbsent {
+			unread = true
+		}
+	}
 	switch {
-	case sl.Read != ReadOK:
+	case sl.Read != ReadOK || unread: // §3.3 rule 1: the station, or any eligible unit, is not read ok
 		sl.State = StateChecking
 	case sl.E == 0:
 		sl.State = StateNotCompared
