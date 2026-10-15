@@ -11,7 +11,7 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, absoluteTime, useNow } from "../chrome/Age";
 import { useListKeys } from "../chrome/useListKeys";
-import { VerdictLamp } from "../health/VerdictView";
+import { VerdictMark } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -337,11 +337,11 @@ function GatewayStrip({ g, clusterPolicies, absentKinds }: { g: GatewayNodeDTO; 
   return (
     <div className="gw-node gw-gateway" data-testid="gateway-strip">
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <Lamp role={role} />
+        <VerdictMark health={role} size={8} />
         <span className="t-legend">gateway</span>
         <span className="t-identifier" style={{ fontWeight: 600 }}>{g.name}</span>
         <span className="t-secondary">{g.className}</span>
-        <span className="t-status" style={{ color: ROLE_TEXT[role.kind], marginLeft: "auto" }}>{role.kind === "fault" ? "▲ " : ""}{role.label}</span>
+        <span className="t-status" style={{ color: ROLE_TEXT[role.kind], marginLeft: "auto" }}>{role.label}</span>
       </div>
       <div className="gw-facts">
         <span>address</span><span style={{ color: address ? undefined : "var(--color-text-tertiary)" }}>{address || "none assigned"}</span>
@@ -376,9 +376,6 @@ function PolicyList({ policies }: { policies: PolicyRefDTO[] }) {
   );
 }
 
-function Lamp({ role }: { role: Role }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", flexShrink: 0 }}><VerdictLamp health={role} size={8} /></span>;
-}
 
 // RuleSummary is a lane's per-rule reading: how many rules, and the rule
 // with the highest latest attributed 5xx share - one rule's value, never a
@@ -414,11 +411,11 @@ function RouteLane({ route, role, ruleMetrics, selected, onSelect }: { route: Ro
       <button ref={ref} className="gw-node gw-route" aria-pressed={selected} data-selected={selected ? "true" : undefined} onClick={onSelect}
         aria-label={`HTTPRoute ${route.namespace}/${route.name}: ${role.label}`}>
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-          <Lamp role={role} />
+          <VerdictMark health={role} size={8} />
           <span className="t-identifier gw-name"><span style={{ color: "var(--color-text-tertiary)" }}>{route.namespace}/</span>{route.name}</span>
         </span>
         <span className="t-secondary gw-line">{route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"} · {route.hostnames[0] ?? "any host"}{route.hostnames.length > 1 ? ` +${route.hostnames.length - 1}` : ""} · {route.matches[0]?.pathValue ?? "/"}{route.matches.length > 1 ? ` +${route.matches.length - 1}` : ""}</span>
-        <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}</span>
+        <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}</span>
         {route.policies.length > 0 && <PolicyList policies={route.policies} />}
       </button>
       <span className="gw-edge" aria-hidden="true">›</span>

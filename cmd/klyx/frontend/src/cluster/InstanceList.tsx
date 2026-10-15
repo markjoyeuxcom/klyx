@@ -13,6 +13,7 @@ import { InstanceDetail } from "./InstanceDetail";
 import { riskFor, supportsRiskFilter } from "./resourceRisk";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 
 // The generic GVR lens behind every Resources and CRD destination, on the
 // workspace template (spec §6 step 3). Same contract as Pods/Nodes/Workloads:
@@ -248,7 +249,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   // Columns: identity keeps its floor; scope and kind-specific columns join by
   // priority; age last.
   const columns: (ColumnDef & { label: string })[] = useMemo(() => [
-    ...(riskSupported ? [{ id: "lamp", label: "", width: 16, priority: 0 }] : []),
+    ...(riskSupported ? [ROW_MARK] : []),
     ...(fleetMode ? [{ id: "cluster", label: "Cluster", width: 120, priority: 1 }] : []),
     ...(namespaced ? [{ id: "namespace", label: "Namespace", width: 140, priority: 1 }] : []),
     { id: "name", label: "Name", width: 240, priority: 0, flex: true },
@@ -382,9 +383,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                   onClick={() => { setCursorKey(k); openRow(r); }}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                 >
-                  {show("lamp") && (risk.bad
-                    ? <span role="img" aria-label={`needs attention: ${risk.reason}`} title={risk.reason} style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--color-text-warning)", justifySelf: "center" }} />
-                    : <span />)}
+                  {show("mark") && <VerdictMark health={risk.bad ? { kind: "degraded", label: "needs attention" } : { kind: "ok", label: "" }} label={risk.bad ? `needs attention: ${risk.reason}` : undefined} />}
                   {show("cluster") && <span className="t-identifier" style={{ color: "var(--color-text-info)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.cluster}</span>}
                   {show("namespace") && <span style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.namespace}</span>}
                   {show("name") && (

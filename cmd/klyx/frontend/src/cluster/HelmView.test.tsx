@@ -47,7 +47,9 @@ describe("HelmView reads the Go rule (1c §2)", () => {
     render(<HelmView cluster="x" />);
     const row = (n: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(n)) as HTMLElement;
     expect(within(row("flagged")).getByRole("img", { name: "Flagged by backend" })).toBeTruthy();
-    expect(within(row("cleared")).getByRole("img", { name: "deployed" })).toBeTruthy();
+    // healthy by the rule: no mark, and not announced (The Line slice 11a)
+    expect(within(row("cleared")).queryByRole("img")).toBeNull();
+    expect(row("cleared").querySelector(".row-mark")?.getAttribute("aria-hidden")).toBe("true");
     expect(rowsText()[0]).toContain("flagged"); // broken first, by the rule's role
     // the header and the Failed filter count the rule's faults, not the status word
     expect(screen.getByRole("button", { name: /^Failed/ }).textContent?.trim()).toBe("Failed 1");

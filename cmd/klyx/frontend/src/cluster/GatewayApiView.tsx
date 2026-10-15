@@ -12,13 +12,13 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { clock, coverageGaps, kindEvidence, lastGoodAt } from "../layout/coverage";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { GatewayTopology } from "./GatewayTopology";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone, type Role } from "./gatewayModel";
+import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
@@ -75,7 +75,7 @@ const keyOf = (g: { namespace: string; name: string }) => `${g.namespace}/${g.na
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 
 const COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Gateway", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 170, priority: 0 },
   { id: "address", label: "Address", width: 150, priority: 1 },
@@ -83,9 +83,6 @@ const COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "listeners", label: "Listeners", width: 200, priority: 3 },
 ];
 
-function Lamp({ role }: { role: Role }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 
 function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: GatewayRows; toggle: React.ReactNode }) {
   // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
@@ -258,10 +255,10 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onDoubleClick={() => openGateway(g.namespace, g.name)}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
-                  {show("lamp") && <Lamp role={role} />}
+                  {show("mark") && <VerdictMark health={role} stale={g.stale} />}
                   {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{g.namespace}/</span>{g.name}</span>}
                   {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}
-                    title={g.stale ? `Observed Gen: ${g.observedGeneration ?? "?"} vs Current: ${g.generation ?? "?"}` : undefined}>{role.kind === "fault" ? "▲ " : ""}{role.label}</span>}
+                    title={g.stale ? `Observed Gen: ${g.observedGeneration ?? "?"} vs Current: ${g.generation ?? "?"}` : undefined}>{role.label}</span>}
                   {show("address") && <span style={{ ...cellStyle, color: address ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{address || "none"}</span>}
                   {show("class") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{g.className || "-"}</span>}
                   {show("listeners") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{(g.listeners ?? []).map(listenerText).join(", ") || "-"}</span>}

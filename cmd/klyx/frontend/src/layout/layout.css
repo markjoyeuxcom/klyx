@@ -10,7 +10,7 @@
   --workspace-bottom-padding: 8px;
   --workspace-footer-height: 28px;
   --table-header-height: 24px;
-  --table-row-height: 32px;
+  --table-row-height: 40px;
   --split-gap: 8px;
   --inspector-default-width: 400px;
   --inspector-min-width: 360px;
@@ -74,29 +74,29 @@
 .lens-row[data-cursor="true"] { box-shadow: inset 2px 0 0 var(--bench-selection-edge, var(--color-text-info)); }
 .lens-row[data-selected="true"] { background: var(--bench-selection-bg, var(--color-background-secondary)); }
 .lens-row:focus-visible { box-shadow: inset 0 0 0 2px var(--color-text-info); }
-/* Staleness (ratified 2026-07-02, refined 2026-10-13): a row whose changes
-   are not yet realized dims its lamp, and its status cell carries the neutral
-   "Syncing…" chip. Text is never dimmed: a composited 0.6 took status and
-   source text below a readable contrast (Codex review of da40ac6). The lamp
-   is the row's first cell in every lens that marks staleness. */
-.lens-row[data-stale="true"] > :first-child { opacity: 0.45; }
+/* Staleness (ratified 2026-07-02, refined 2026-10-13, The Line slice 11a): a
+   row whose changes are not yet realized carries the dashed syncing mark when
+   its verdict would draw none (VerdictMark), and its status cell carries the
+   neutral "Syncing…" chip. Nothing is dimmed: a mark carries meaning, so it
+   keeps its 3:1 stroke contrast (parent §2.1). */
+.row-mark { display: inline-flex; align-items: center; justify-content: center; justify-self: center; }
 .lens-cell-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Pods columns. Optional columns fold away before the name loses its 240px
  * floor. Status, Restarts and Node are sized to what they hold, so the pod
  * name - the identifier - gets the slack (UI review 2026-10-13).
  * Breakpoints are the sums of each grid's floors:
- *   full    16+240+156+48+60+140+44+24 + 7x12 gaps + 16 padding = 828
- *   no node 16+240+156+48+60+44+24     + 6x12 gaps + 16 padding = 676
- *   minimal 16+240+156+48+24           + 4x12 gaps + 16 padding = 548
- * Below 548 the shared LensTable scrolls horizontally (never clips). */
-.pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 60px 140px 44px 24px; }
-@container lens-body (max-width: 827px) {
-  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 60px 44px 24px; }
+ *   full    20+240+156+48+60+140+44+24 + 7x12 gaps + 16 padding = 832
+ *   no node 20+240+156+48+60+44+24     + 6x12 gaps + 16 padding = 680
+ *   minimal 20+240+156+48+24           + 4x12 gaps + 16 padding = 552
+ * Below 552 the shared LensTable scrolls horizontally (never clips). */
+.pods-grid { grid-template-columns: 20px minmax(240px, 1fr) 156px 48px 60px 140px 44px 24px; }
+@container lens-body (max-width: 831px) {
+  .pods-grid { grid-template-columns: 20px minmax(240px, 1fr) 156px 48px 60px 44px 24px; }
   .pods-grid .col-node { display: none; }
 }
-@container lens-body (max-width: 675px) {
-  .pods-grid { grid-template-columns: 16px minmax(240px, 1fr) 156px 48px 24px; }
+@container lens-body (max-width: 679px) {
+  .pods-grid { grid-template-columns: 20px minmax(240px, 1fr) 156px 48px 24px; }
   .pods-grid .col-restarts, .pods-grid .col-age, .pods-grid .col-node { display: none; }
 }
 

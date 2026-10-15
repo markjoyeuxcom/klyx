@@ -22,7 +22,7 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { UpdatedAt, formatAge, useNow, useReceivedAt } from "../chrome/Age";
 import { IconAlertTriangle, IconServer } from "@tabler/icons-react";
 import { ellipsis, btn, StatusDot } from "../chrome/primitives";
-import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { ROW_MARK, VerdictLabel, VerdictMark, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, orderOf, summarize } from "../health/verdict";
 import { useNodeRows } from "../health/useNodeRows";
 import { clock, coverageGaps, kindEvidence, lastGoodAt } from "../layout/coverage";
@@ -439,7 +439,7 @@ const commandPreview: React.CSSProperties = { fontFamily: "var(--font-mono)", fo
 // the usage columns are dropped entirely when no metrics source exists
 // (an unavailable measurement never takes width from the name).
 const NODE_COLUMNS: ColumnDef[] = [
-  { id: "lamp", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", width: 240, priority: 0, flex: true },
   { id: "status", width: 140, priority: 1 },
   { id: "cpuUsed", width: 104, priority: 2 },
@@ -774,7 +774,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                     onClick={() => activate(n)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(n); } }}
                   >
-                    {show("lamp") && <VerdictLamp health={n.health} size={8} />}
+                    {show("mark") && <VerdictMark health={n.health} />}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                         <span className="lens-cell-name" title={n.name} style={{ fontWeight: sel?.name === n.name ? 600 : 400 }}>{n.name}</span>

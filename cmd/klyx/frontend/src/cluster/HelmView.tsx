@@ -13,7 +13,7 @@ import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { YamlBlock } from "../chrome/YamlBlock";
 import { Age, UpdatedAt, formatAge, useNow } from "../chrome/Age";
 import { InspectorStatus } from "./ResourceInspector";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -45,9 +45,6 @@ const ROLE_TEXT: Record<string, string> = {
   unknown: "var(--color-text-tertiary)",
 };
 const roleTone = (k: string) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
-function Lamp({ role }: { role: Role }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const keyOf = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
 
@@ -59,7 +56,7 @@ function matchesQuery(r: HelmReleaseDTO, q: string): boolean {
 }
 
 const COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Release", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 170, priority: 1 },
   { id: "chart", label: "Chart", width: 180, priority: 2, grow: 0.6 },
@@ -278,14 +275,14 @@ export function HelmView({ cluster }: { cluster: string }) {
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(k); autoSelect.current = "done"; select(k === selKey ? null : r); }}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(r); } }}>
-                  {show("lamp") && <Lamp role={role} />}
+                  {show("mark") && <VerdictMark health={role} />}
                   {show("name") && (
                     <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                       <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{r.name}</span></span>
                       <CopyButton text={r.name} label={`copy release name ${r.name}`} appearOnRowHover />
                     </span>
                   )}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}</span>}
                   {show("chart") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.chart}</span>}
                   {show("app") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.appVersion || "-"}</span>}
                   {show("rev") && <span style={{ color: "var(--color-text-secondary)" }}>{r.revision}</span>}

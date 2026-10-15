@@ -9,13 +9,13 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
-import { RANK, ROLE_TEXT, roleTone, routeRole, type Role } from "./gatewayModel";
+import { RANK, ROLE_TEXT, roleTone, routeRole } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
@@ -34,16 +34,13 @@ type Mode = "all" | "attention";
 const keyOf = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "HTTPRoute", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 190, priority: 0 },
   { id: "parent", label: "Worst parent", width: 180, priority: 1 },
   { id: "parents", label: "Parents", width: 64, priority: 2 },
 ];
 
-function Lamp({ role }: { role: Role }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 
 // depQualifier: what the verdicts can claim, from the dependencies they were
 // evaluated against: "" current, "last observed" when one is stale,
@@ -235,9 +232,9 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelKey(k); } }}>
-                  {show("lamp") && <Lamp role={role} />}
+                  {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace}/</span>{r.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{verdictMark}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{verdictMark}</span>}
                   {show("parent") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.parent}</span>}
                   {show("parents") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.attachments.length}</span>}
                 </div>
@@ -272,7 +269,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                 const role = routeRole(a);
                 return (
                   <div key={a.parent} data-testid="route-attachment" style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
-                    <Lamp role={role} />
+                    <VerdictMark health={role} size={8} />
                     <span className="t-identifier">{a.parent}</span>
                     <span style={{ color: ROLE_TEXT[role.kind] }}>{role.label}</span>
                   </div>

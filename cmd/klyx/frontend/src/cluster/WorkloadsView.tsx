@@ -28,7 +28,7 @@ import { FleetCompare } from "./FleetCompare";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { useInspectorAI } from "../ai/AIExplain";
 
-import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { ROW_MARK, VerdictLabel, VerdictMark, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
 import { useWorkloadRows } from "../health/useWorkloadRows";
 import { clock, combineEvidence, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
@@ -100,7 +100,7 @@ type PinnedPending = Pending & { cluster: string };
 // Workload columns: identity keeps its 240px floor; the rest join by priority
 // while they fit. Usage columns exist only when a metrics source does.
 const WL_COLUMNS: ColumnDef[] = [
-  { id: "lamp", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "kind", width: 64, priority: 2 },
   { id: "name", width: 240, priority: 0, flex: true },
   { id: "status", width: 168, priority: 1 },
@@ -497,7 +497,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                       onClick={() => open(w)}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(w); } }}
                     >
-                      {show("lamp") && <VerdictLamp health={w.health} size={8} />}
+                      {show("mark") && <VerdictMark health={w.health} stale={quietStale} />}
                       {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{kindShort[w.kind as WorkloadKind]}</span>}
                       {show("name") && (
                         <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>

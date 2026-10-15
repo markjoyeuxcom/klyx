@@ -14,7 +14,7 @@ import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { IconAlertTriangle, IconShieldLock } from "@tabler/icons-react";
 import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
 import { InspectorStatus } from "./ResourceInspector";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -115,14 +115,11 @@ const ROLE_TEXT: Record<string, string> = {
   unknown: "var(--color-text-tertiary)",
 };
 const roleTone = (k: string) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
-function Lamp({ role }: { role: { kind: string; label: string } }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const storeKey = (s: ExternalSecretStoreDTO) => `${s.kind}/${s.namespace}/${s.name}`;
 
 const SECRET_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "ExternalSecret", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 170, priority: 1 },
   { id: "refreshed", label: "Last sync", width: 76, priority: 1 },
@@ -130,7 +127,7 @@ const SECRET_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "target", label: "Target Secret", width: 140, priority: 3, grow: 0.5 },
 ];
 const STORE_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Store", width: 240, priority: 0, flex: true },
   { id: "kind", label: "Kind", width: 140, priority: 2 },
   { id: "provider", label: "Provider", width: 110, priority: 3 },
@@ -397,11 +394,11 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === storeSel ? "true" : undefined}
                     onClick={() => { setCursorKey(k); setStoreSel(k === storeSel ? null : k); }}
                     onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setStoreSel(k); } }}>
-                    {show("lamp") && <Lamp role={role} />}
+                    {show("mark") && <VerdictMark health={role} />}
                     {show("name") && <span className="lens-cell-name" title={`${s.namespace ? `${s.namespace}/` : ""}${s.name}`}>{s.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>}{s.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{s.kind}</span>}
                     {show("provider") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{s.provider || "-"}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{included(s) && s.reason ? ` · ${s.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{included(s) && s.reason ? ` · ${s.reason}` : ""}</span>}
                     {show("secrets") && <span title={secretsCov === "unknown" ? "ExternalSecret read unavailable" : secretsCov === "stale" ? "from the last observed ExternalSecret list" : undefined}>{secretsCov === "unknown" ? "?" : `${secretsFor(s).length}${secretsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -424,14 +421,14 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                     onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectSecret(k === selKey ? null : k); }}
                     onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); selectSecret(k); } }}>
-                    {show("lamp") && <Lamp role={role} />}
+                    {show("mark") && <VerdictMark health={role} />}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                         <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{e.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{e.name}</span></span>
                         <CopyButton text={e.name} label={`copy external secret name ${e.name}`} appearOnRowHover />
                       </span>
                     )}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
                     {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e, nowS)}</span>}
                     {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.rule.included) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
                     {show("target") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{e.targetSecret || "-"}</span>}

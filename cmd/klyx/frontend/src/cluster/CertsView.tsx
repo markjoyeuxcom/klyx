@@ -17,7 +17,7 @@ import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { IconCertificate, IconAlertTriangle } from "@tabler/icons-react";
 import { SECRET_REF, wellKnownResourceRef } from "./resourceRefs";
 import { SyncingChip, staleProps } from "./staleness";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -113,14 +113,11 @@ const ROLE_TEXT: Record<string, string> = {
   ok: "var(--color-text-secondary)",
   unknown: "var(--color-text-tertiary)",
 };
-function Lamp({ role }: { role: { kind: string; label: string } }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const issuerKey = (i: IssuerDTO) => `${i.kind}/${i.namespace}/${i.name}`;
 
 const CERT_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Certificate", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 170, priority: 1 },
   { id: "expiry", label: "Expires", width: 72, priority: 1 },
@@ -128,7 +125,7 @@ const CERT_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "secret", label: "Secret", width: 140, priority: 3, grow: 0.5 },
 ];
 const ISSUER_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Issuer", width: 240, priority: 0, flex: true },
   { id: "kind", label: "Kind", width: 100, priority: 2 },
   { id: "status", label: "Status", width: 220, priority: 1, grow: 0.8 },
@@ -443,10 +440,10 @@ export function CertsView({ cluster }: { cluster: string }) {
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === issuerSel ? "true" : undefined}
                     onClick={() => { setCursorKey(k); setIssuerSel(k === issuerSel ? null : k); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIssuerSel(k); } }}>
-                    {show("lamp") && <Lamp role={role} />}
+                    {show("mark") && <VerdictMark health={role} />}
                     {show("name") && <span className="lens-cell-name" title={`${i.namespace ? `${i.namespace}/` : ""}${i.name}`}>{i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace} / </span>}{i.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{i.kind}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{included(i) && i.reason ? ` · ${i.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{included(i) && i.reason ? ` · ${i.reason}` : ""}</span>}
                     {show("certs") && <span title={certsCov === "unknown" ? "Certificate read unavailable" : certsCov === "stale" ? "from the last observed Certificate list" : undefined}>{certsCov === "unknown" ? "?" : `${certsFor(i).length}${certsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -468,7 +465,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                     onClick={() => { setCursorKey(k); autoSelect.current = "done"; selectCert(k === selKey ? null : k); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectCert(k); } }}>
-                    {show("lamp") && <Lamp role={role} />}
+                    {show("mark") && <VerdictMark health={role} stale={c.stale && !expired(c)} />}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                         <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{c.namespace} / </span><span style={{ fontWeight: k === selKey ? 600 : 400 }}>{c.name}</span></span>
@@ -478,7 +475,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     {show("status") && (
                       <span style={cellStyle}>
                         {c.stale && !expired(c) ? <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
-                          : <span style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{included(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
+                          : <span style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{included(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
                       </span>
                     )}
                     {show("expiry") && <span style={{ color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }} title={c.notAfterUnix ? dateText(c.notAfterUnix) : undefined}>{expiryText(c)}</span>}

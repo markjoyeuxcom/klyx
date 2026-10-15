@@ -97,7 +97,9 @@ describe("GatewayApiView (redesign step 6)", () => {
     const text = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra/${name}`))!.textContent;
     expect(text("absent")).toContain("no status reported");
     expect(text("pending")).toContain("acceptance pending");
-    expect(text("rejected")).toContain("▲ not accepted");
+    expect(text("rejected")).toContain("not accepted");
+    const rejected = [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes("infra/rejected")) as HTMLElement;
+    expect(rejected.querySelector('[data-aspect="fault"]')).toBeTruthy();
     expect(text("lastseen")).toContain("not accepted (last observed)");
     expect(text("lastseen")).not.toContain("▲");
     expect(screen.getByText("2 unverified")).toBeTruthy();

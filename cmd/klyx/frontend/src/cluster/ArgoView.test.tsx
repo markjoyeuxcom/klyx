@@ -83,7 +83,11 @@ describe("ArgoView", () => {
     seed([broken, healthy]);
     const { getByText, getAllByText } = render(<ArgoView cluster="homelab-nelli" />);
     expect(getAllByText("OutOfSync").length).toBeGreaterThanOrEqual(1);
-    expect(getAllByText(/▲ Degraded/).length).toBeGreaterThanOrEqual(1); // faults carry the shape cue
+    expect(getAllByText("Degraded").length).toBeGreaterThanOrEqual(1);
+    // the row's mark carries the shape (The Line slice 11a): no ▲ in the cell
+    const degraded = [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes("Degraded")) as HTMLElement;
+    expect(degraded.querySelector('[data-aspect="fault"]')).toBeTruthy();
+    expect(degraded.textContent).not.toContain("▲");
     expect(getAllByText("Synced").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText("Healthy").length).toBeGreaterThanOrEqual(1);
     expect(getAllByText(/abc1234d/).length).toBeGreaterThanOrEqual(1); // shortened revision
@@ -484,7 +488,7 @@ describe("ArgoView Codex rework (Argo review)", () => {
     expect(linked.map((a) => [a.rule.included, a.rule.role])).toEqual([[false, "progressing"], [false, "paused"], [true, "degraded"], [false, "ok"]]);
     const lampOf = (name: string) => {
       const row = inspector().getAllByTestId("linked-app").find((r) => r.textContent?.includes(name)) as HTMLElement;
-      return within(row).getByRole("img").outerHTML;
+      return (row.querySelector(".row-mark") as HTMLElement).outerHTML;
     };
     const check = () => {
       // The Line aspects (spec 2026-10-14 §2.4): shape carries the role.
@@ -492,7 +496,8 @@ describe("ArgoView Codex rework (Argo review)", () => {
       expect(lampOf("parked")).toContain('data-aspect="paused"'); // intentional, never healthy
       expect(lampOf("drifting")).toContain('data-aspect="attention"'); // degraded, never fault
       expect(lampOf("drifting")).not.toContain("color-text-danger");
-      expect(lampOf("steady")).toContain('data-aspect="none"'); // healthy carries no mark
+      expect(lampOf("steady")).not.toContain("data-aspect"); // healthy carries no mark
+      expect(lampOf("steady")).toContain('aria-hidden="true"'); // and is not announced
     };
     const seedLinked = () => useFleet.setState((s) => ({ argo: { ...s.argo, cluster: "homelab-nelli", projects: [project], projectsAvailable: true, projectsLoading: false,
       apps: linked, loading: false, error: null, applicationSets: ruledSets([appSet]), applicationSetsAvailable: true, applicationSetsLoading: false } }));

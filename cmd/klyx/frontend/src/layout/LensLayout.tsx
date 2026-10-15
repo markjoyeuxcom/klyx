@@ -13,7 +13,7 @@ export type DatasetState = "loading" | "unreadable" | "empty" | "no-match" | "re
 // The table row height. LensLayout writes it into --table-row-height on its
 // root, so the CSS rows and the virtualiser's windowing share ONE number:
 // a mismatch would overlap rows, clip the last one and drift the cursor.
-export const TABLE_ROW_HEIGHT = 32;
+export const TABLE_ROW_HEIGHT = 40; // parent §2.3: 40px rows
 
 export const INSPECTOR_WIDTH_KEY = "klyx.layout.v1.inspectorWidth";
 export const INSPECTOR_DEFAULT = 400;

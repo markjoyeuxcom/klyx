@@ -16,7 +16,7 @@ import { IconAlertTriangle, IconGitMerge } from "@tabler/icons-react";
 import { Age, UpdatedAt, useReceivedAt } from "../chrome/Age";
 import { InspectorSection, InspectorStatus } from "./ResourceInspector";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
@@ -92,14 +92,11 @@ function riskRole(risks: Risk[]): { kind: string; label: string } {
   return { kind: "ok", label: "restricted" };
 }
 
-function RowLamp({ role }: { role: { kind: string; label: string } }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 
 const cell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 
 const APP_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Application", width: 240, priority: 0, flex: true },
   { id: "sync", label: "Sync", width: 92, priority: 1 },
   { id: "health", label: "Health", width: 104, priority: 1 },
@@ -108,14 +105,14 @@ const APP_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "reconciled", label: "Reconciled", width: 92, priority: 5 },
 ];
 const PROJECT_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "Project", width: 240, priority: 0, flex: true },
   { id: "policy", label: "Policy signal", width: 220, priority: 1, grow: 0.8 },
   { id: "apps", label: "Apps", width: 56, priority: 2 },
   { id: "appsets", label: "AppSets", width: 64, priority: 3 },
 ];
 const APPSET_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "ApplicationSet", width: 240, priority: 0, flex: true },
   { id: "generators", label: "Generators", width: 130, priority: 2 },
   { id: "apps", label: "Apps", width: 56, priority: 1 },
@@ -465,7 +462,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === appKey ? "true" : undefined}
                       onClick={() => { setCursorKey(k); autoSelect.current = "done"; setAppKey(k === appKey ? null : k); }}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAppKey(k); } }}>
-                      {show("lamp") && <RowLamp role={role} />}
+                      {show("mark") && <VerdictMark health={role} />}
                       {show("name") && (
                         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                           <span className="lens-cell-name" title={k}><span style={{ fontWeight: k === appKey ? 600 : 400 }}>{a.name}</span></span>
@@ -474,7 +471,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                         </span>
                       )}
                       {show("sync") && <span style={{ ...cell, color: a.syncStatus === "OutOfSync" ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{a.syncStatus || "-"}</span>}
-                      {show("health") && <span style={{ ...cell, color: ROLE_COLOR[a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "fault" : "ok"], fontWeight: a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? 600 : 400 }}>{a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "▲ " : ""}{a.healthStatus || "-"}</span>}
+                      {show("health") && <span style={{ ...cell, color: ROLE_COLOR[a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "fault" : "ok"], fontWeight: a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? 600 : 400 }}>{a.healthStatus || "-"}</span>}
                       {show("dest") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.destNamespace || "-"}</span>}
                       {show("revision") && <span style={{ ...cell, color: "var(--color-text-tertiary)" }}>{a.revision ? short(a.revision) : "-"}</span>}
                       {show("reconciled") && <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>}
@@ -498,7 +495,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === projKey ? "true" : undefined}
                       onClick={() => { setCursorKey(k); setProjKey(k === projKey ? null : k); }}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProjKey(k); } }}>
-                      {show("lamp") && <RowLamp role={riskRole(risks)} />}
+                      {show("mark") && <VerdictMark health={riskRole(risks)} />}
                       {show("name") && <span className="lens-cell-name" title={p.description || p.name}>{p.name}{p.description && <span style={{ color: "var(--color-text-tertiary)" }}> · {p.description}</span>}</span>}
                       {show("policy") && <span style={{ ...cell, display: "flex", gap: 4 }}>{risks.length === 0 ? <span style={{ color: "var(--color-text-tertiary)" }}>restricted</span> : risks.slice(0, 3).map((r) => <RiskBadge key={r.label} tone={r.tone}>{r.label}</RiskBadge>)}</span>}
                       {show("apps") && <span title={appsCov === "unknown" ? "Application read unavailable" : undefined}>{countText(pApps.length, appsCov)}</span>}
@@ -521,7 +518,7 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                       aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === setKey ? "true" : undefined}
                       onClick={() => { setCursorKey(k); setSetKey(k === setKey ? null : k); }}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSetKey(k); } }}>
-                      {show("lamp") && <RowLamp role={roleOf(a)} />}
+                      {show("mark") && <VerdictMark health={roleOf(a)} />}
                       {show("name") && <span className="lens-cell-name" title={k}><span style={{ color: "var(--color-text-tertiary)" }}>{a.namespace} / </span>{a.name}</span>}
                       {show("generators") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.generators.length === 0 ? "-" : a.generators.join(", ")}</span>}
                       {show("apps") && <span>{a.generatedApps || (appsCov === "unknown" ? "?" : generatedAppsForSet(apps, a).length || "-")}</span>}
@@ -1124,7 +1121,7 @@ function LinkedApps({ apps }: { apps: ArgoAppDTO[] }) {
         const role = roleOf(a);
         return (
           <div key={keyOf(a)} data-testid="linked-app" style={{ display: "grid", gridTemplateColumns: "8px minmax(0,1fr) 82px", gap: 7, alignItems: "center" }}>
-            <RowLamp role={role} />
+            <VerdictMark health={role} size={8} />
             <span style={{ ...monoLine, ...ellipsis }} title={keyOf(a)}>{a.name}</span>
             <span title={role.label} style={{ color: ROLE_COLOR[role.kind] ?? "var(--color-text-tertiary)", fontSize: 10 }}>{a.syncStatus}</span>
           </div>

@@ -27,9 +27,9 @@ import { loadClusterPrefs, loadSearch, savePodsViewPrefs, saveSearch } from "../
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { UpdatedAt, formatAge, useNow, useReceivedAt } from "../chrome/Age";
 import { wellKnownResourceRef } from "./resourceRefs";
-import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
+import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
-import { VerdictLabel, VerdictLamp, VerdictStatus } from "../health/VerdictView";
+import { VerdictLabel, VerdictMark, VerdictStatus } from "../health/VerdictView";
 import { type VerdictCounts, attentionTone, isAttention, kindOf, labelOf, orderOf, summarize } from "../health/verdict";
 import { usePodRows } from "../health/usePodRows";
 import { useCommitProbe } from "../health/perfHooks";
@@ -440,14 +440,14 @@ export function PodsView({ cluster }: { cluster: string }) {
           state={state}
           stateView={stateView}
           body={
-            <LensTable minWidth={548}>
+            <LensTable minWidth={552}>
               <div className="lens-table-head pods-grid" role="row">
                 <span /><span>Pod</span><span>Status</span><span>Ready</span><span className="col-restarts">Restarts</span><span className="col-node">Node</span><span className="col-age">Age</span><span />
               </div>
               <VirtualList
                 ref={listRef}
                 items={filtered}
-                rowHeight={32}
+                rowHeight={TABLE_ROW_HEIGHT}
                 rowKey={(p) => keyOf(p)}
                 style={{ flex: 1, minHeight: 0 }}
                 render={(p, i) => (
@@ -577,7 +577,7 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
     >
-      <VerdictLamp health={p.health} size={8} />
+      <VerdictMark health={p.health} />
       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <input
           type="checkbox"

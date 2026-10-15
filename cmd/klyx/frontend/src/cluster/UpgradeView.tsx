@@ -10,6 +10,7 @@ import { useListKeys } from "../chrome/useListKeys";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { useClusterKey } from "./useClusterKey";
 
 // UpgradeView - "can I upgrade this cluster today?" on the workspace template
@@ -36,12 +37,14 @@ export function daysUntil(dateISO: string, nowMs = Date.now()): number | null {
 }
 
 const API_COLUMNS: (ColumnDef & { label: string })[] = [
+  ROW_MARK,
   { id: "api", label: "API", width: 260, priority: 0, flex: true },
   { id: "removal", label: "Removal", width: 170, priority: 0 },
   { id: "objects", label: "Objects", width: 80, priority: 1 },
   { id: "replacement", label: "Migrate to", width: 200, priority: 2, grow: 0.6 },
 ];
 const SKEW_COLUMNS: (ColumnDef & { label: string })[] = [
+  ROW_MARK,
   { id: "node", label: "Node", width: 240, priority: 0, flex: true },
   { id: "version", label: "Kubelet", width: 110, priority: 0 },
   { id: "detail", label: "Finding", width: 320, priority: 1, grow: 1 },
@@ -193,8 +196,9 @@ export function UpgradeView({ cluster }: { cluster: string }) {
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
+                  {show("mark") && <VerdictMark health={gone ? { kind: "fault", label: `removed in 1.${d.removedInMinor}` } : { kind: "degraded", label: d.removedInMinor === 0 ? "deprecated, removal unscheduled" : `removed in 1.${d.removedInMinor}, after the target` }} />}
                   {show("api") && <span className="lens-cell-name" title={`${d.group}/${d.version} ${d.kind}`}><span style={{ color: "var(--color-text-tertiary)" }}>{d.group}/{d.version} </span>{d.kind}</span>}
-                  {show("removal") && <span style={{ ...cellStyle, color: gone ? "var(--color-text-danger)" : "var(--color-text-secondary)", fontWeight: gone ? 600 : 400 }}>{d.removedInMinor === 0 ? "unscheduled" : gone ? `▲ removed in 1.${d.removedInMinor}` : `removed in 1.${d.removedInMinor}`}</span>}
+                  {show("removal") && <span style={{ ...cellStyle, color: gone ? "var(--color-text-danger)" : "var(--color-text-secondary)", fontWeight: gone ? 600 : 400 }}>{d.removedInMinor === 0 ? "unscheduled" : `removed in 1.${d.removedInMinor}`}</span>}
                   {show("objects") && <span style={{ color: "var(--color-text-secondary)" }} title={d.countKnown ? undefined : "count not readable"}>{objectsText(d)}</span>}
                   {show("replacement") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{d.replacedBy || "-"}</span>}
                 </div>
@@ -206,8 +210,9 @@ export function UpgradeView({ cluster }: { cluster: string }) {
                   aria-selected={s.node === cursorKey} data-cursor={s.node === cursorKey ? "true" : undefined} data-selected={s.node === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(s.node); setSelKey(s.node === selKey ? null : s.node); }}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(s.node); } }}>
+                  {show("mark") && <VerdictMark health={danger ? { kind: "fault", label: "Skew violation" } : { kind: "degraded", label: "Skew warning" }} />}
                   {show("node") && <span className="lens-cell-name">{s.node}</span>}
-                  {show("version") && <span style={{ color: danger ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{danger ? "▲ " : ""}{s.version}</span>}
+                  {show("version") && <span style={{ color: danger ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{s.version}</span>}
                   {show("detail") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{s.detail}</span>}
                 </div>
               );

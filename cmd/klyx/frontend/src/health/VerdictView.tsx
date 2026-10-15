@@ -12,8 +12,29 @@ export function VerdictLamp({ health, size = 7 }: { health: HealthLike | null | 
   return <Aspect kind={aspectOfVerdict(kindOf(health))} size={size} />;
 }
 
-// VerdictLabel is the headline word in the verdict's tone. Danger carries the
-// ▲ shape (never hue-only) via the existing danger-tone CSS convention.
+// VerdictMark is a row's mark in a table's first column (The Line slice
+// 11a): the verdict's Aspect, named for a screen reader. A healthy row's
+// empty mark is not announced - its verdict word, in its own column, is. A
+// row whose changes are not yet realized (generation > observedGeneration)
+// and that would otherwise draw nothing takes the dashed syncing mark; any
+// other verdict keeps its own mark at full strength.
+export function VerdictMark({ health, stale = false, size = 10, label }: { health: HealthLike | null | undefined; stale?: boolean; size?: number; label?: string }) {
+  const own = aspectOfVerdict(kindOf(health));
+  const kind = stale && own === "none" ? "syncing" : own;
+  if (kind === "none") return <span className="row-mark" aria-hidden="true" />;
+  return (
+    <span className="row-mark" role="img" aria-label={label ?? (own === "none" ? "Syncing: changes not yet realized" : labelOf(health))} title={label}>
+      <Aspect kind={kind} size={size} />
+    </span>
+  );
+}
+
+// ROW_MARK is the mark column every table starts with.
+export const ROW_MARK = { id: "mark", label: "", width: 20, priority: 0 } as const;
+
+// VerdictLabel is a row's status word in the verdict's tone. The row's mark
+// column carries the shape (The Line slice 11a), so the word never repeats
+// it as ▲.
 export function VerdictLabel({ health, mono = false }: { health: HealthLike | null | undefined; mono?: boolean }) {
   const k = kindOf(health);
   const tone = verdictTone[k];
@@ -23,7 +44,6 @@ export function VerdictLabel({ health, mono = false }: { health: HealthLike | nu
       title={health?.message || undefined}
       style={{ color, fontWeight: k === "fault" ? 500 : undefined, fontFamily: mono ? "var(--font-mono)" : undefined }}
     >
-      {k === "fault" ? "▲ " : ""}
       {labelOf(health)}
     </span>
   );
@@ -58,7 +78,7 @@ export function VerdictStatus({ health, detail, pendingMessage }: { health: Heal
         }}
       >
         <VerdictLamp health={health} size={8} />
-        <span>{k === "fault" ? "▲ " : ""}{labelOf(health)}</span>
+        <span>{labelOf(health)}</span>
       </span>
       {health?.message ? (
         <ClampedText key={health.message} text={health.message} style={{ fontSize: 12, lineHeight: 1.45, color: lit ? toneColor[tone] : "var(--color-text-primary)", overflowWrap: "anywhere", userSelect: "text" }} />

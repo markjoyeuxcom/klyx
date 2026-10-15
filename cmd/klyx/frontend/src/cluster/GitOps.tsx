@@ -22,7 +22,7 @@ import { wellKnownResourceRef, FLUX_KIND_GROUPS } from "./resourceRefs";
 import { StatusDot, ellipsis, type Tone } from "../chrome/primitives";
 import { compactCount } from "../chrome/format";
 import { InspectorConditions, InspectorStatus } from "./ResourceInspector";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictLamp, VerdictMark } from "../health/VerdictView";
 import { SyncingChip, staleProps } from "./staleness";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
@@ -123,7 +123,7 @@ type PinnedVerb =
   | { cluster: string; kind: "suspend" | "resume"; r: FluxResourceDTO };
 
 const FLUX_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "kind", label: "Kind", width: 32, priority: 2 },
   { id: "name", label: "Resource", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 200, priority: 1 },
@@ -132,7 +132,7 @@ const FLUX_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "since", label: "Since", width: 84, priority: 5 },
 ];
 const SOURCE_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "kind", label: "Type", width: 72, priority: 1 },
   { id: "name", label: "Source", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 200, priority: 1 },
@@ -154,10 +154,6 @@ const STATUS_COLOR: Record<string, string> = {
   ok: "var(--color-text-secondary)",
 };
 
-function Lamp({ r }: { r: { rule: RuleDTO } }) {
-  const h = roleOf(r);
-  return <span role="img" aria-label={h.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={h} size={8} /></span>;
-}
 
 const ellipsisCell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 
@@ -554,12 +550,12 @@ export function GitOps({ cluster }: { cluster: string }) {
                   onClick={() => (keyOf(s) === sourceKey ? setSourceKey(null) : openSource(s))}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSource(s); } }}
                 >
-                  {show("lamp") && <Lamp r={s} />}
+                  {show("mark") && <VerdictMark health={roleOf(s)} />}
                   {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
                   {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
                   {show("status") && (
                     <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind], fontWeight: roleOf(s).kind === "fault" ? 600 : 400 }}>
-                      {roleOf(s).kind === "fault" ? "▲ " : ""}{roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
+                      {roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
                     </span>
                   )}
                   {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={s.revision}>{shortRev(s.revision) || "-"}</span>}
@@ -595,7 +591,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     onClick={() => (k === selKey ? close() : openRow(r))}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                   >
-                    {show("lamp") && <Lamp r={r} />}
+                    {show("mark") && <VerdictMark health={roleOf(r)} stale={!r.suspended && r.stale} />}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }} title={r.kind}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
@@ -610,7 +606,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                       <span style={ellipsisCell} title={included(r) && r.message ? r.message : undefined}>
                         {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)" }}>{h.label}</span>
                           : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
-                          : <span className={h.kind === "fault" ? "klyx-danger-prefix" : undefined} style={{ color: STATUS_COLOR[h.kind], fontWeight: h.kind === "fault" ? 600 : 400 }}>
+                          : <span style={{ color: STATUS_COLOR[h.kind], fontWeight: h.kind === "fault" ? 600 : 400 }}>
                               {h.label}{included(r) && r.reason ? ` · ${r.reason}` : ""}
                             </span>}
                       </span>

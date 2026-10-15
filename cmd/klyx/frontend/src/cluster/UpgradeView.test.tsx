@@ -32,13 +32,18 @@ describe("UpgradeView (redesign step 5)", () => {
     expect(screen.queryByText(/against the curated table$/)).toBeNull();
   });
 
-  it("frames removals against the target and re-frames on change; removal is a shape, not a lamp", async () => {
+  it("frames removals against the target and re-frames on change; a removal's mark is a fault, a later one look-at", async () => {
     vi.mocked(getUpgradeReadiness).mockResolvedValue(report({ deprecated: [api(), api({ resource: "x", kind: "Later", removedInMinor: 34 })] }));
-    const { container } = render(<UpgradeView cluster="x" />);
+    render(<UpgradeView cluster="x" />);
     expect(await screen.findByText("▲ 1 API removed by 1.32")).toBeTruthy();
-    expect(container.querySelector('[role="img"]')).toBeNull();
+    const mark = (kind: string) => ([...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(kind)) as HTMLElement).querySelector(".row-mark") as HTMLElement;
+    expect(mark("FlowSchema").querySelector('[data-aspect="fault"]')).toBeTruthy();
+    expect(mark("FlowSchema").getAttribute("aria-label")).toBe("removed in 1.32");
+    expect(mark("Later").querySelector('[data-aspect="attention"]')).toBeTruthy();
+    expect(document.querySelector(".lens-row")?.textContent).not.toContain("▲"); // the mark carries the shape
     fireEvent.change(screen.getByLabelText("target minor"), { target: { value: "34" } });
     expect(screen.getByText("▲ 2 APIs removed by 1.34")).toBeTruthy();
+    expect(mark("Later").querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 
   it("the API inspector explains the risk and the count's meaning in words", async () => {
@@ -61,6 +66,7 @@ describe("UpgradeView (redesign step 5)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Node skew/ }));
     const rows = [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
     expect(rows[0]).toContain("b-bad");
+    expect(document.querySelector(".lens-row .row-mark")?.getAttribute("aria-label")).toBe("Skew violation");
     fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
     expect(within(screen.getByTestId("lens-inspector")).getByRole("button", { name: "Open node" })).toBeTruthy();
   });

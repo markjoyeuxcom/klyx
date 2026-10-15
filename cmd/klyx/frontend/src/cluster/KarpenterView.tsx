@@ -12,7 +12,7 @@ import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { useKarpenterRows } from "../health/useKarpenterRows";
 import { clock, coverageGaps, joinCoverage, kindEvidence, lastGoodAt, type JoinCoverage, type KindEvidence } from "../layout/coverage";
 import { useListKeys } from "../chrome/useListKeys";
-import { VerdictLamp } from "../health/VerdictView";
+import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
@@ -56,9 +56,6 @@ const ROLE_TEXT: Record<string, string> = {
   ok: "var(--color-text-secondary)", unknown: "var(--color-text-tertiary)",
 };
 const roleTone = (k: string) => (k === "fault" ? "danger" : k === "degraded" ? "warning" : k === "ok" ? "success" : "muted") as "danger" | "warning" | "success" | "muted";
-function Lamp({ role }: { role: Role }) {
-  return <span role="img" aria-label={role.label} style={{ display: "inline-flex", justifySelf: "center" }}><VerdictLamp health={role} size={8} /></span>;
-}
 const cellStyle: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 const pct = (used: number | null, limit: number | null) => (used != null && limit != null && limit > 0 ? used / limit : null);
 const eventKey = (e: KarpenterEventDTO) => `${e.kind}/${e.name}/${e.reason}/${e.lastSeenUnix}`;
@@ -69,7 +66,7 @@ const ageOf = (c: KarpenterClaimDTO, nowS: number) => (c.createdUnix ? Math.max(
 const countText = (n: number, cov: JoinCoverage) => (cov === "unknown" ? "?" : `${n}${cov === "stale" ? "*" : ""}`);
 
 const CLAIM_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "NodeClaim", width: 220, priority: 0, flex: true },
   { id: "status", label: "Status", width: 190, priority: 0 },
   // The NodePool name is an identifier: it shares spare width with the
@@ -81,7 +78,7 @@ const CLAIM_COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "age", label: "Age", width: 56, priority: 1 },
 ];
 const POOL_COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "lamp", label: "", width: 16, priority: 0 },
+  ROW_MARK,
   { id: "name", label: "NodePool", width: 200, priority: 0, flex: true },
   { id: "status", label: "Status", width: 160, priority: 0 },
   { id: "nodes", label: "Nodes", width: 60, priority: 1 },
@@ -341,9 +338,9 @@ export function KarpenterView({ cluster }: { cluster: string }) {
               render={(c) => {
                 const role = roleOf(c);
                 return row(c.name, <>
-                  {show("lamp") && <Lamp role={role} />}
+                  {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name" title={c.nodeName ? `node ${c.nodeName}` : "no node yet"}>{c.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{c.drifted ? " · drifted" : ""}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{c.drifted ? " · drifted" : ""}</span>}
                   {show("pool") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.pool || "-"}</span>}
                   {show("type") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.instanceType || "-"}</span>}
                   {show("capacity") && <span style={{ color: "var(--color-text-tertiary)" }}>{c.capacityType || "-"}</span>}
@@ -357,9 +354,9 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                 const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
                 const mem = capText(p.memUsed, p.memLimit, fmtMem);
                 return row(p.name, <>
-                  {show("lamp") && <Lamp role={role} />}
+                  {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name">{p.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.kind === "fault" ? "▲ " : ""}{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
                   {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }} title={claimsCov === "unknown" ? "NodeClaim read unavailable" : claimsCov === "stale" ? "from the last observed NodeClaim list" : undefined}>{countText(p.nodes, claimsCov)}</span>}
                   {show("cpu") && <span style={{ ...cellStyle, color: cpu.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{cpu.text}</span>}
                   {show("mem") && <span style={{ ...cellStyle, color: mem.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{mem.text}</span>}

@@ -412,7 +412,8 @@ describe("CertsView Codex review corrections (cert-manager)", () => {
     setup("Healthy", [c], [issuer({})], "payments/old");
     render(<CertsView cluster="x" />);
     const row = rowsText().join(" ");
-    expect(row).toContain("▲ Expired");
+    expect(row).toContain("Expired");
+    expect(document.querySelector('.lens-row [data-aspect="fault"]')).toBeTruthy(); // the mark carries the shape
     expect(row).not.toContain("Syncing");
     expect(insp().getByText("Expired")).toBeTruthy();
     expect(insp().getByText(/Spec generation 4 not yet observed/)).toBeTruthy();
