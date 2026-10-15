@@ -64,8 +64,8 @@ Each is Codex-reviewed on its own, in this order.
 - **Parsing** keeps the rule index: `httproute/<ns>/<name>/rule/<n>` reads as (route, rule). Every other shape is skipped, never guessed.
 - **Scoping to the Gateway's proxies:**
   - The proxy pods are listed by `gateway.envoyproxy.io/owning-gateway-name` and `owning-gateway-namespace`, in any namespace.
-  - The series are filtered by the label the scrape gives them, detected per query set: the owning-gateway labels themselves when the series carry them, else `pod` (with `namespace`), else `kubernetes_pod_name`.
-  - With none of them, per-rule metrics read "unavailable (the series cannot be scoped to this Gateway's proxies)".
+  - The series are filtered by the labels the scrape gives them, detected per query set, and always as a pair that identifies one pod: the owning-gateway name and namespace labels themselves when the series carry them; else `pod` with `namespace`; else `kubernetes_pod_name` with `kubernetes_namespace`. A pod name alone is never used: names are unique only within a namespace (design review of 5cdcaa4).
+  - With no such pair, or any ambiguity, per-rule metrics read "unavailable (the series cannot be scoped to this Gateway's proxies)". Scoping fails closed.
 - **Unattributable,** shown "unavailable (shared or custom cluster names)", when:
   - the `EnvoyProxy` that configures the Gateway (its `infrastructure.parametersRef`, else its GatewayClass's `parametersRef`) sets `telemetry.metrics.clusterStatName`, `mergeGateways` or `mergeBackends`;
   - the route attaches to the same Gateway more than once (one cluster per rule serves every listener it names);
@@ -79,9 +79,9 @@ Each is Codex-reviewed on its own, in this order.
   `metrics.Client` gains a multi-series range reader. Every value is per rule; nothing is summed across rules.
 - **Availability is per metric:** each of the four is available, absent ("no series"), or failed, apart.
 - **The per-backend split** is unavailable for Envoy Gateway: a rule's backends share its one cluster, and `mergeBackends` clusters are shared across routes. The DTO keeps the field for gateways that expose one.
-- **Attribution (7b):**
-  - the points before the rule's interval start plus one rate window (1 minute) are marked "unattributable before <time>", and are not this rule's;
-  - with no interval, the whole series is unattributable.
+- **Attribution (7b):** two distinct times are reported, the interval start (the proof) and the attribution cut-off (that start plus one rate window, 1 minute).
+  - The points before the cut-off are marked "unattributable before <time>", and are not this rule's.
+  - With no interval, the whole series is unattributable.
 - **Direct and local responses** (a `directResponse`, a redirect, a 404 with no route) never reach an upstream cluster, so they are absent from these series, and the result says so.
 - **The binding:** a bound per-Gateway method returning, for each of its routes' rules, the four series with their availability and attribution. The route-level metrics the topology shows today stay as they are until slice 8.
 - **Captured-metric fixtures:** Prometheus JSON responses for dedicated clusters, merged backends (shared), a custom stat name, several parents, retries, and direct and local responses.
@@ -92,10 +92,10 @@ Each is Codex-reviewed on its own, in this order.
 - **7b:** fingerprints (stable across key order and defaults; a weight, a match or a backend change moves only that rule's; a reorder moves both); the partition through baseline, change, gap and end; the interval for each case.
 - **7c:** the parser; scoping by each label form and its absence; each unattributable case; the four queries' PromQL; per-metric availability; attribution cut-offs; every fixture.
 
-## 6. Open points (for design review)
+## 6. Open points (ruled in design review of 5cdcaa4: all six accepted, point 2 with the namespace-paired scoping above, point 6 with the cut-off kept distinct from the proof start)
 
 1. **7a's consumer is slice 8:** 7a ships the reader, the read and the binding, with no screen.
-2. **Pod scoping** detects the series' label per query set (owning-gateway labels, then `pod`, then `kubernetes_pod_name`), and says "unavailable" with none.
+2. **Pod scoping** detects the series' labels per query set, always a pair that names one pod (owning-gateway name and namespace, `pod` and `namespace`, or `kubernetes_pod_name` and `kubernetes_namespace`), and fails closed to "unavailable".
 3. **Several parents:** a route attached to the same Gateway more than once is unattributable. Attached to different Gateways, each Gateway's proxies scope its own series.
 4. **No per-backend split for Envoy Gateway** (one cluster per rule; `mergeBackends` clusters are shared across routes).
 5. **The fingerprint** covers matches, backends and weights only, as the parent defines it.
