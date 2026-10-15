@@ -143,3 +143,59 @@ func TestRegress3aFixHelmPathIsNotChartName(t *testing.T) {
 		}
 	}
 }
+
+// Regression from Codex's review of 89f8b8f: a newest history record does
+// not prove an edited path-sourced chart.
+
+func TestRegress3aFix2HistoryDoesNotProveCurrentChartPath(t *testing.T) {
+	for _, kind := range []flux.Kind{flux.GitRepositoryKind, flux.BucketKind} {
+		for _, observed := range []int64{1, 2} {
+			name := string(kind)
+			if observed == 1 {
+				name += "/pending"
+			} else {
+				name += "/terminal-failure"
+			}
+			t.Run(name, func(t *testing.T) {
+				source := Object[flux.Source]{Data: flux.Source{Kind: kind, Namespace: "shop", Name: "repo", URL: "https://example.com/charts", Ready: flux.Ready}}
+				changed := flux.Resource{Kind: flux.HelmReleaseKind, Namespace: "shop", Name: "release", Chart: "./charts/new", SourceKind: string(kind), SourceNamespace: "shop", SourceName: "repo", Generation: 2, ObservedGeneration: observed, Stale: observed < 2, Ready: flux.Failed,
+					History: []flux.HelmHistory{{Version: 1, ChartName: "old", ChartVersion: "1.0.0", Status: "deployed"}}}
+				before := changed
+				before.Chart = "./charts/old"
+				before.Generation = 1
+				before.ObservedGeneration = 1
+				before.Stale = false
+				before.Ready = flux.Ready
+				oldUnits, _ := Units(reviewHelm(before, source))
+				if len(oldUnits) != 1 || oldUnits[0].Applied == nil {
+					t.Fatal("precondition: old path had a deployed release")
+				}
+				staleUnits, _ := Units(reviewHelm(changed, source))
+				if len(staleUnits) != 1 {
+					t.Fatalf("units=%d", len(staleUnits))
+				}
+				if staleUnits[0].Applied != nil {
+					t.Errorf("old deployment assigned to edited path %s: %+v", staleUnits[0].Key.RefName, staleUnits[0].Applied)
+				}
+				stale := reviewHelm(changed, source)
+				stale.Cluster = "stale"
+				stale.Env = "dev"
+				good := changed
+				good.Generation = 1
+				good.ObservedGeneration = 1
+				good.Stale = false
+				good.Ready = flux.Ready
+				good.History = []flux.HelmHistory{{Version: 1, ChartName: "new", ChartVersion: "1.0.0", Status: "deployed"}}
+				current := reviewHelm(good, source)
+				current.Cluster = "good"
+				current.Env = "prd"
+				key := staleUnits[0].Key
+				l := Build(Input{Stations: []StationInput{stale, current}, Read: allOK(stale, current), Selector: &key})
+				got := stateOf(l, "stale")
+				if got.State != StateAppliedUnknown || l.Applied != 1 {
+					t.Errorf("unapplied new chart counted as deployed: state=%q headline=%d/%d R=%s", got.State, l.Applied, l.Compared, l.R)
+				}
+			})
+		}
+	}
+}

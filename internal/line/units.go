@@ -336,17 +336,28 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 	// The key's chart: spec.chart.spec.chart is a chart NAME for a
 	// HelmRepository source, but a PATH for a GitRepository or Bucket source
 	// (./charts/web, or a packaged .tgz), and absent for a chartRef. The
-	// history records the chart's metadata name. So the current chart's
-	// name is the spec's for a HelmRepository source, and otherwise the
-	// newest history record's - Flux writes it from the current spec.
+	// history records the chart's metadata name, and is written by Helm
+	// actions - not by every spec edit (a pending edit, or a terminal failure
+	// before any Helm action, leaves the old chart's record on top). So:
+	//   - by name (a HelmRepository source), the spec's chart name is the
+	//     current chart's, compared against each record's name;
+	//   - by path or chartRef, the records are the current spec's only when
+	//     that is provable: the spec was never edited (generation 1, so every
+	//     record is of the current chart), or the current generation
+	//     reconciled successfully (observed, not stale, Ready=True: the
+	//     release is in sync with the spec). Otherwise the correspondence is
+	//     unknown: applied unknown, never the old chart's record.
 	chart := r.Chart
 	current := ""
 	byName := r.SourceKind == "HelmRepository" && r.Chart != ""
+	inSync := r.Generation > 0 && r.ObservedGeneration == r.Generation && !r.Stale && r.Ready == flux.Ready
+	proven := byName || r.Generation == 1 || inSync
 	if byName {
 		current = r.Chart
-	} else if len(r.History) > 0 {
+	} else if len(r.History) > 0 && proven {
 		current = r.History[0].ChartName
 	}
+	unproven := !proven
 	if chart == "" {
 		chart = current
 	}
@@ -356,7 +367,12 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 	}
 	u := &Unit{Origin: "HelmRelease", Namespace: r.Namespace, Name: r.Name, UID: o.UID, SourceName: s.Data.Name,
 		Key: Key{Kind: KeyChart, Repo: repoID, RefName: chart}, Suspended: r.Suspended, ArtifactTime: s.Data.ArtifactUpdated}
-	ofCurrent := func(h flux.HelmHistory) bool { return h.ChartName == "" || current == "" || h.ChartName == current }
+	ofCurrent := func(h flux.HelmHistory) bool {
+		if unproven {
+			return false // the record's correspondence to the current spec is unknown
+		}
+		return h.ChartName == "" || current == "" || h.ChartName == current
+	}
 	// Applied: the newest deployed history entry - of the current chart. A
 	// deployed record of another chart (the spec changed charts since) is
 	// not deployment evidence for this key: applied unknown, source changed.
@@ -365,7 +381,7 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 			continue
 		}
 		if !ofCurrent(h) {
-			u.SourceChanged = true
+			u.SourceChanged = !unproven // a proven other chart; unproven stays unknown
 			break
 		}
 		u.Applied = &Revision{Version: h.ChartVersion, Digest: h.ConfigDigest, Raw: h.ChartVersion}
