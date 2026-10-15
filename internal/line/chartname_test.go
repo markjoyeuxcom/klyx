@@ -171,3 +171,49 @@ func TestRecordedChartTieBreakAndNoHeld(t *testing.T) {
 		t.Fatalf("R %q, c %+v", l.R, c)
 	}
 }
+
+// Codex's review of a9f7ef9: a recorded-name unit's comparison depends on its
+// history alone - an unread current source is disclosed context, never a
+// gate - and a historical attempt is never current syncing.
+func TestRecordedChartSourceIsContextAndAttemptsAreHistory(t *testing.T) {
+	key := Key{Kind: KeyChartName, RefName: "web"}
+	in := func(cluster, env string) StationInput {
+		s := station(cluster, env, func(in *StationInput) {
+			in.Sources = []Object[flux.Source]{gitSourceAt("https://example.com/repo")}
+			in.HelmReleases = []Object[flux.Resource]{{UID: "hr-" + cluster, Data: fluxRelease(recorded("web", "1.0.0", "deployed"))}}
+		})
+		unread := map[string]string{}
+		for k, v := range allKindsOK {
+			unread[k] = v
+		}
+		unread["gitrepositories"] = ReadError
+		s.KindRead = unread
+		return s
+	}
+	stations := []StationInput{in("a", "dev"), in("b", "prd")}
+	read := map[string]string{}
+	for i := range stations {
+		cov := map[string]string{"kustomizations": "absent", "helmreleases": "live", "applications": "absent", "gitrepositories": "unreadable"}
+		read[stations[i].Cluster] = ResolveRead(&stations[i], cov, Availability{Usable: true})
+	}
+	l := Build(Input{Stations: stations, Read: read, Selector: &key})
+	a := stateOf(l, "a")
+	if read["a"] != ReadOK || a.State != StateMatches || l.Compared != 2 || a.Units[0].ContextRead != ReadError || a.Units[0].Read != ReadOK {
+		t.Fatalf("read %q, state %q, compared %d, unit %+v", read["a"], a.State, l.Compared, a.Units[0])
+	}
+
+	r := fluxRelease(recorded("web", "1.1.0", "failed"), recorded("web", "1.0.0", "deployed"))
+	r.Suspended = true
+	u := oneUnit(t, r, gitSourceAt("https://example.com/repo"))
+	if u.Attempted == nil || u.Syncing || u.Failing {
+		t.Fatalf("a suspended release keeps its historical attempt, never syncing: %+v", u)
+	}
+	r.Suspended = false
+	if u := oneUnit(t, r, gitSourceAt("https://example.com/repo")); u.Syncing {
+		t.Fatalf("a historical attempt is not current syncing: %+v", u)
+	}
+	r.Stale = true
+	if u := oneUnit(t, r, gitSourceAt("https://example.com/repo")); !u.Syncing {
+		t.Fatalf("an unobserved spec is: %+v", u)
+	}
+}

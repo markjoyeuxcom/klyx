@@ -94,6 +94,9 @@ type LineUnitDTO struct {
 	// deployed chart" - current context, never a provenance claim.
 	ConfiguredChartDiffers bool   `json:"configuredChartDiffers,omitempty"`
 	Read                   string `json:"read"`
+	// ContextRead: a recorded-name chart unit's current source read -
+	// context only, disclosed apart, never gating its comparison.
+	ContextRead string `json:"contextRead,omitempty"`
 }
 
 type LineExclusionDTO struct {
@@ -187,7 +190,7 @@ func stationDTO(sl line.StationLine, key *line.Key) LineStationDTO {
 		d.Units = append(d.Units, LineUnitDTO{Origin: u.Origin, Namespace: u.Namespace, Name: u.Name, SourceIndex: u.SourceIndex, UID: u.UID,
 			Applied: revID(u.Applied), Attempted: revID(u.Attempted), AttemptPhase: u.AttemptPhase, Compared: revID(u.Compared),
 			Failing: u.Failing, Syncing: u.Syncing, Suspended: u.Suspended, SourceChanged: u.SourceChanged,
-			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read})
+			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read, ContextRead: u.ContextRead})
 	}
 	for _, x := range sl.Excluded {
 		d.Excluded = append(d.Excluded, LineExclusionDTO{Origin: x.Origin, Namespace: x.Namespace, Name: x.Name, Reason: x.Reason, Digest: x.Digest})

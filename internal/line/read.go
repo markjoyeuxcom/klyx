@@ -5,9 +5,10 @@ package line
 // unitKinds are the kinds that define units: always needed.
 var unitKinds = []string{"kustomizations", "helmreleases", "applications"}
 
-// fluxSourceKinds are every Flux source kind, needed when a unit kind is
-// unread (its references are unknown, never assumed empty).
-var fluxSourceKinds = []string{"gitrepositories", "helmrepositories", "ocirepositories", "buckets", "helmcharts"}
+// kustomizationSourceKinds are the source kinds a Kustomization can
+// reference, all needed while the Kustomization kind is unread (its
+// references are unknown, never assumed empty).
+var kustomizationSourceKinds = []string{"gitrepositories", "ocirepositories", "buckets"}
 
 // ReadOfCoverage maps an Observer coverage word to a kind read.
 func ReadOfCoverage(coverage string) string {
@@ -33,8 +34,10 @@ type Availability struct {
 
 // ResolveRead fills in.KindRead from the Observer's per-kind coverage and
 // returns the station read. Needed kinds are the unit kinds plus the source
-// kinds the station's units reference; when a unit kind is not read, every
-// Flux source kind is needed.
+// kinds the Git units (Kustomizations) reference; when the Kustomization kind
+// is not read, every Git-capable Flux source kind is needed. A HelmRelease's
+// source is never needed: its recorded-name chart unit compares history
+// alone, and the source is context (Unit.ContextRead).
 func ResolveRead(in *StationInput, coverage map[string]string, av Availability) string {
 	in.KindRead = map[string]string{}
 	for kind, cov := range coverage {
@@ -44,24 +47,15 @@ func ResolveRead(in *StationInput, coverage map[string]string, av Availability) 
 		return ReadChecking
 	}
 	needed := map[string]bool{}
-	unitUnread := false
 	for _, k := range unitKinds {
 		needed[k] = true
-		if r := in.kindRead(k); r != ReadOK && r != KindAbsent {
-			unitUnread = true
-		}
 	}
-	if unitUnread {
-		for _, k := range fluxSourceKinds {
+	if r := in.kindRead("kustomizations"); r != ReadOK && r != KindAbsent {
+		for _, k := range kustomizationSourceKinds {
 			needed[k] = true
 		}
 	}
 	for _, o := range in.Kustomizations {
-		if k := sourceKinds[o.Data.SourceKind]; k != "" {
-			needed[k] = true
-		}
-	}
-	for _, o := range in.HelmReleases {
 		if k := sourceKinds[o.Data.SourceKind]; k != "" {
 			needed[k] = true
 		}

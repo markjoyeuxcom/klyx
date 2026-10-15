@@ -141,10 +141,14 @@ type Unit struct {
 	// HelmRepository source) differs from its recorded deployed chart -
 	// current context, never a provenance claim.
 	ConfiguredChartDiffers bool
-	// Read is the worse of its own kind's read and its source kind's (§2.4
-	// of the slice 3 note): a unit that is not read ok keeps its station
-	// checking.
+	// Read is the read of what the unit's compared facts come from (§2.4 of
+	// the slice 3 note): for a Git unit, the worse of its own kind's and its
+	// source kind's; for a recorded-name chart unit, its own kind's alone (its
+	// history). A unit that is not read ok keeps its station checking.
 	Read string
+	// ContextRead is a recorded-name chart unit's current source kind read:
+	// context only, disclosed separately, never gating the comparison.
+	ContextRead string
 }
 
 // Exclusion is a unit Klyx does not compare, listed per station with its
@@ -190,7 +194,8 @@ func Units(in StationInput) ([]Unit, []Exclusion) {
 	for _, o := range in.HelmReleases {
 		u, x := helmReleaseUnit(o, lookup)
 		if u != nil {
-			u.Read = worseRead(in.kindRead("helmreleases"), in.kindRead(sourceKinds[o.Data.SourceKind]))
+			u.Read = in.kindRead("helmreleases")
+			u.ContextRead = in.kindRead(sourceKinds[o.Data.SourceKind])
 		}
 		units, excl = add(units, excl, u, x)
 	}
@@ -404,7 +409,9 @@ func helmReleaseUnit(o Object[flux.Resource], lookup func(kind, ns, name string)
 		}
 		u.FailSince = earliest(a, b)
 	}
-	u.Syncing = !u.Failing && (r.Stale || u.Attempted != nil)
+	// Syncing is current evidence only - an unobserved spec - never a
+	// historical attempt, and never for a suspended release.
+	u.Syncing = !u.Failing && !r.Suspended && r.Stale
 	return u, nil
 }
 
