@@ -1,0 +1,213 @@
+package appbridge
+
+// Regressions from Codex's review of slice 3b (0af176c): history follows
+// every accepted change, at capture times; seeding keeps a newer recovery;
+// an unneeded source loss keeps a Git failure proof; Final publishes; a
+// configured cluster missing from a mesh sample is unknown.
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/moomora/klyx/internal/clustermesh"
+	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/obslog"
+)
+
+func regress3bKinds(ks ...string) []observe.KindCoverage {
+	var out []observe.KindCoverage
+	for _, k := range ks {
+		out = append(out, observe.KindCoverage{Kind: k, Role: "counted", Coverage: observe.Live})
+	}
+	return out
+}
+func regress3bRecon(at time.Time, v uint64, failed bool) observe.Rows {
+	ready := flux.Ready
+	if failed {
+		ready = flux.Failed
+	}
+	return observe.Rows{Cluster: "c1", Incarnation: 1, Task: "flux", EvaluatedAt: at, Part: observe.Part{ID: "reconciliations", Ver: v, Kinds: regress3bKinds("kustomizations", "helmreleases")}, Rows: healthsrc.RowSet[flux.Resource]{Rows: []healthsrc.Row[flux.Resource]{{Ref: healthsrc.RowRef{UID: "u1"}, Data: flux.Resource{Kind: flux.KustomizationKind, Name: "apps", Namespace: "ns", Ready: ready, Revision: "main@sha1:" + lineSha('a'), SourceKind: "GitRepository", SourceNamespace: "ns", SourceName: "repo"}}}}}
+}
+func regress3bSvc(now *time.Time) *LineService {
+	sink := NewHealthSink(&rowsSinkRec{rows: map[string][]RowsDTO{}})
+	st := &lineStation{cfg: clusterCfg("c1", "dev"), inc: 1, usable: true, att: &lineAttachment{cancel: func() {}}, parts: map[partitionRef]*stationPartition{}, booted: map[string]bool{}, rows: map[string]observe.Rows{
+		"flux/reconciliations": regress3bRecon(*now, 1, false),
+		"flux/sources":         {Cluster: "c1", Incarnation: 1, Task: "flux", EvaluatedAt: *now, Part: observe.Part{ID: "sources", Ver: 1, Kinds: regress3bKinds("gitrepositories", "buckets")}, Rows: healthsrc.RowSet[flux.Source]{Rows: []healthsrc.Row[flux.Source]{{Ref: healthsrc.RowRef{UID: "src"}, Data: flux.Source{Kind: "GitRepository", Namespace: "ns", Name: "repo", URL: lineRepo, RefKind: "branch", RefName: "main", Ready: flux.Ready}}}}},
+		"argo/applications":    {Cluster: "c1", Incarnation: 1, Task: "argo", EvaluatedAt: *now, Part: observe.Part{ID: "applications", Ver: 1, Kinds: []observe.KindCoverage{{Kind: "applications", Role: "counted", Coverage: observe.Absent}}}},
+	}}
+	return &LineService{d: LineDeps{Sink: sink, Now: func() time.Time { return *now }}, ctx: context.Background(), tap: newLineTap(), stations: map[string]*lineStation{"c1": st}, hist: newLineHistory(sink.ObservationLog()), selector: &gitKey}
+}
+func regress3bFail(t *testing.T, s *LineService, now *time.Time) {
+	t.Helper()
+	s.recompute()
+	*now = now.Add(time.Second)
+	s.tap.OnRows(regress3bRecon(*now, 2, true))
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	if ds.FailingSince == nil || ds.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("fixture: %+v", ds)
+	}
+}
+func TestRegress3bDrainedRowsCanHideAFlipBeforeRecompute(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	regress3bFail(t, s, &now)
+	now = now.Add(100 * time.Millisecond)
+	s.tap.OnRows(regress3bRecon(now, 3, false))
+	s.applyDrain()
+	now = now.Add(100 * time.Millisecond)
+	s.tap.OnRows(regress3bRecon(now, 4, true))
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	if ds.FailingSince != nil && ds.FailingSince.Basis == obslog.ProofObserved && ds.FailingSince.Since.Before(now) {
+		t.Fatalf("old continuous proof survived observed recovery/failure across two drains: %+v", ds.FailingSince)
+	}
+}
+func TestRegress3bQuietRecomputesDoNotAdvanceEvidenceLowerBound(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	captured := now.Add(time.Second)
+	now = now.Add(2 * time.Second)
+	s.recompute() // no newer row evidence
+	now = now.Add(time.Second)
+	s.tap.OnRows(regress3bRecon(captured, 2, true))
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	p := ds.FailingSince
+	if p != nil && p.NotBefore != nil && p.NotBefore.After(captured) {
+		t.Fatalf("claims failure began after %v although failing rows were captured at %v", p.NotBefore, captured)
+	}
+}
+func TestRegress3bSeedKeepsNewerRecoveryVersion(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	st := s.stations["c1"]
+	s.d.Sink.ObservationLog().Apply(observe.TransitionBatch{Cluster: "c1", Incarnation: 1, Task: "flux", Part: "sources", Source: "gitrepositories", Kind: observe.BatchBaseline, PartVer: 3, At: now})
+	s.seed("c1", st, st.rows["flux/sources"])
+	pr := partitionRef{"flux", "sources", "gitrepositories"}
+	if st.parts[pr].ver != 3 {
+		t.Fatalf("bootstrap v1 masks recovery v3: %+v", st.parts[pr])
+	}
+	_, read, _ := s.input(st)
+	if read == line.ReadOK {
+		t.Fatal("rows preceding recovery were accepted as current")
+	}
+}
+func TestRegress3bUnneededSourceLossKeepsFailureProof(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	regress3bFail(t, s, &now)
+	now = now.Add(time.Second)
+	b := batchOn(observe.BatchLoss, 1, 2, observe.LossCoverage)
+	b.Source = "buckets"
+	s.tap.OnTransitions(b)
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	if ds.Read != line.ReadOK {
+		t.Fatalf("fixture: bucket is unrelated: %+v", ds)
+	}
+	if ds.FailingSince == nil || ds.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("unneeded bucket loss destroyed Git failure proof: %+v", ds.FailingSince)
+	}
+}
+func TestRegress3bFinalSchedulesPublication(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	s.tap.OnSummary(observe.Summary{Cluster: "c1", Incarnation: 1, Seq: 2, Connection: "connected", Final: true})
+	s.applyDrain()
+	if !s.dirty {
+		t.Fatal("Final changes ended state but schedules no DTO; matches stays published until next 5s scan")
+	}
+}
+func TestRegress3bMissingMeshMemberIsUnknown(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.stations["offline"] = &lineStation{cfg: clusterCfg("offline", "prd"), rows: map[string]observe.Rows{}}
+	s.applyMesh(meshResult{graph: clustermesh.BuildGraph([]clustermesh.Member{{Cluster: "c1", Present: true, Installed: true}})})
+	s.recompute()
+	for _, n := range s.Line().Mesh.Unknown {
+		if n == "offline" {
+			return
+		}
+	}
+	t.Fatalf("configured cluster omitted by the member reader has no unknown disclosure: %+v", s.Line().Mesh)
+}
+
+func TestRegress3bDifferentPartsCanHideAFailureGap(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	s.recompute()
+	source := func(v uint64, failed bool) observe.Rows {
+		r := s.stations["c1"].rows["flux/sources"]
+		r.Part.Ver = v
+		r.EvaluatedAt = now
+		rs := r.Rows.(healthsrc.RowSet[flux.Source])
+		rs.Rows = append([]healthsrc.Row[flux.Source](nil), rs.Rows...)
+		rs.Rows[0].Data.Ready = flux.Ready
+		if failed {
+			rs.Rows[0].Data.Ready = flux.Failed
+		}
+		r.Rows = rs
+		return r
+	}
+	now = now.Add(time.Second)
+	s.tap.OnRows(source(2, true))
+	s.applyDrain()
+	s.recompute()
+	before, _ := stationIn(s.Line(), "c1")
+	if before.FailingSince == nil || before.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("fixture: %+v", before)
+	}
+	// Distinct Observer parts can publish independently inside one 250ms service window.
+	now = now.Add(2 * time.Second)
+	s.tap.OnRows(source(3, false))
+	s.applyDrain()
+	now = now.Add(100 * time.Millisecond)
+	s.tap.OnRows(regress3bRecon(now, 2, true))
+	s.applyDrain()
+	s.recompute()
+	after, _ := stationIn(s.Line(), "c1")
+	if p := after.FailingSince; p != nil && p.Basis == obslog.ProofObserved && p.Since.Equal(*before.FailingSince.Since) {
+		t.Fatalf("source healed before unit failed but old failing proof survived: %+v", p)
+	}
+}
+
+// A bootstrap caught while Argo's probe is still checking seeds a loss; a
+// source absent from the start commits no batch, so rows at or after that
+// loss carry the absent word. A loss newer than the rows still reads checking.
+func TestRegress3bAbsentFromStartClearsABootstrapLoss(t *testing.T) {
+	now := time.Now()
+	s := regress3bSvc(&now)
+	st := s.stations["c1"]
+	apps := func(v uint64, cov observe.Coverage) observe.Rows {
+		return observe.Rows{Cluster: "c1", Incarnation: 1, Task: "argo", EvaluatedAt: now, Part: observe.Part{ID: "applications", Ver: v, Kinds: []observe.KindCoverage{{Kind: "applications", Role: "counted", Coverage: cov}}}}
+	}
+	delete(st.rows, "argo/applications")
+	st.rows["argo/applications"] = apps(1, observe.Checking)
+	s.seed("c1", st, st.rows["argo/applications"])
+	if _, read, _ := s.input(st); read == line.ReadOK {
+		t.Fatal("fixture: a mid-probe bootstrap reads checking")
+	}
+	s.tap.OnRows(apps(2, observe.Absent))
+	s.applyDrain()
+	if _, read, reasons := s.input(st); read != line.ReadOK {
+		t.Fatalf("Argo absent from the start stays checking: %s %v", read, reasons)
+	}
+	b := batchOn(observe.BatchLoss, 1, 3, observe.LossCoverage)
+	b.Task, b.Part, b.Source = "argo", "applications", "applications"
+	s.tap.OnTransitions(b)
+	s.applyDrain()
+	if _, read, _ := s.input(st); read == line.ReadOK {
+		t.Fatal("a loss newer than the absent rows reads ok")
+	}
+}

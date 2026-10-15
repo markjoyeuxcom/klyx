@@ -53,7 +53,8 @@ func batchOn(kind string, inc, ver uint64, reason string) observe.TransitionBatc
 }
 
 // A burst of batches between two drains, then quiet: the worker sees the
-// last state, its recovery PartVer and the history-gap bit (revision 4).
+// last state, the PartVer of the batch that set it and the history-gap bit
+// (revision 4).
 func TestTapPartitionKeepsTheLatestStateThroughABurst(t *testing.T) {
 	pr := partitionRef{healthsrc.TaskFlux, "sources", "gitrepositories"}
 	cases := []struct {
@@ -62,10 +63,10 @@ func TestTapPartitionKeepsTheLatestStateThroughABurst(t *testing.T) {
 		state string
 		ver   uint64
 	}{
-		{"ends in a loss", []observe.TransitionBatch{batchOn(observe.BatchAfterGap, 1, 4, ""), batchOn(observe.BatchLoss, 1, 5, observe.LossCoverage)}, partitionLost, 0},
+		{"ends in a loss", []observe.TransitionBatch{batchOn(observe.BatchAfterGap, 1, 4, ""), batchOn(observe.BatchLoss, 1, 5, observe.LossCoverage)}, partitionLost, 5},
 		{"ends in an after-gap", []observe.TransitionBatch{batchOn(observe.BatchLoss, 1, 4, observe.LossRelist), batchOn(observe.BatchAfterGap, 1, 5, "")}, partitionAvailable, 5},
 		{"ends in a baseline (cap recovery)", []observe.TransitionBatch{batchOn(observe.BatchLoss, 1, 4, observe.LossCapped), batchOn(observe.BatchBaseline, 1, 6, "")}, partitionAvailable, 6},
-		{"ends absent (uninstalled)", []observe.TransitionBatch{batchOn(observe.BatchLoss, 1, 4, observe.LossAbsent)}, partitionAbsent, 0},
+		{"ends absent (uninstalled)", []observe.TransitionBatch{batchOn(observe.BatchLoss, 1, 4, observe.LossAbsent)}, partitionAbsent, 4},
 	}
 	for _, c := range cases {
 		tp := newLineTap()
@@ -104,87 +105,91 @@ func TestTapPartitionKeepsTheLatestStateThroughABurst(t *testing.T) {
 
 var gitKey = line.Key{Kind: line.KeyGit, Repo: "github.com/acme/fleet", RefKind: "branch", RefName: "main"}
 
-func lineWith(failing, held bool, r string) line.Line {
-	return line.Line{Key: &gitKey, R: r, Stations: []line.StationLine{{
-		Placed: line.Placed{Station: line.Station{Cluster: "c1"}}, Read: line.ReadOK, State: line.StateDiffers, Held: held,
-		Units: []line.Unit{{UID: "u1", Key: gitKey, Failing: failing}},
-	}}}
-}
-
-func historyHarness() (*lineHistory, map[string]*lineStation, *obslog.Log) {
-	log := obslog.New()
-	return newLineHistory(log), map[string]*lineStation{"c1": {inc: 1, usable: true}}, log
-}
-
 var h0 = time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
 
 func at0(min int) time.Time { return h0.Add(time.Duration(min) * time.Minute) }
 
-func TestLineHistoryObservedFailureAndFirstSight(t *testing.T) {
-	h, st, _ := historyHarness()
-	if p := h.commit(lineWith(true, false, "a"), st, at0(0)); p["c1"].failing == nil || p["c1"].failing.Basis != obslog.ProofUnknown || !p["c1"].failing.FirstSeen.Equal(at0(0)) {
-		t.Fatalf("first sight: start unknown: %+v", p["c1"].failing)
+const u1 = "line/unit/u1#0"
+
+func failing(v bool) map[string]string {
+	if v {
+		return map[string]string{u1: predFault}
 	}
-	h, st, _ = historyHarness()
-	h.commit(lineWith(false, false, "a"), st, at0(0))
-	p := h.commit(lineWith(true, false, "a"), st, at0(5))
-	f := p["c1"].failing
-	if f == nil || f.Basis != obslog.ProofObserved || !f.Since.Equal(at0(5)) || !f.NotBefore.Equal(at0(0)) {
-		t.Fatalf("observed: began in (09:00, 09:05]: %+v", f)
+	return map[string]string{u1: predOK}
+}
+
+func unitsAt(h *lineHistory, fault bool, min int, readable, broken bool) {
+	h.commitUnits("c1", 1, unitsKustomizations, failing(fault), readable, broken, at0(min))
+}
+
+func TestLineHistoryObservedFailureAndFirstSight(t *testing.T) {
+	h := newLineHistory(obslog.New())
+	unitsAt(h, true, 0, true, false)
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown || !p.FirstSeen.Equal(at0(0)) {
+		t.Fatalf("first sight: start unknown: %+v", p)
+	}
+	h = newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, true, 5, true, false)
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofObserved || !p.Since.Equal(at0(5)) || !p.NotBefore.Equal(at0(0)) {
+		t.Fatalf("observed: began in (09:00, 09:05]: %+v", p)
 	}
 }
 
-// A role's own proof is never borrowed: the failing predicate is dated from
-// when the line saw it, whatever the object's role did.
-func TestLineHistoryBreaksReBaselineAtOnce(t *testing.T) {
-	h, st, _ := historyHarness()
-	h.commit(lineWith(false, false, "a"), st, at0(0))
-	h.commit(lineWith(true, false, "a"), st, at0(5)) // failing since ~09:05 (observed)
-	// v2 (recovered) and v3 (failing) arrived while the worker was busy: v2
-	// was overwritten unseen, so 09:05 is not kept.
-	st["c1"].histGap = true
-	p := h.commit(lineWith(true, false, "a"), st, at0(9))
-	if f := p["c1"].failing; f == nil || f.Basis != obslog.ProofUnknown || f.Since != nil || !f.AfterGap {
-		t.Fatalf("after a break: start unknown, at once: %+v", f)
+// Review of 0af176c: an unchanged commit never advances the evidence
+// watermark, so a later change keeps the true lower bound.
+func TestLineHistoryQuietCommitsKeepTheWatermark(t *testing.T) {
+	h := newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, false, 7, true, false) // nothing changed
+	unitsAt(h, true, 3, true, false)  // a capture from 09:03, delivered later
+	if p := h.proof("c1", u1); p == nil || p.NotBefore == nil || !p.NotBefore.Equal(at0(0)) {
+		t.Fatalf("the lower bound is the last change's capture, 09:00: %+v", p)
 	}
-	// An unreadable station freezes; reading again re-baselines.
-	h, st, _ = historyHarness()
-	h.commit(lineWith(false, false, "a"), st, at0(0))
-	h.commit(lineWith(true, false, "a"), st, at0(5))
-	l := lineWith(true, false, "a")
-	l.Stations[0].Read = line.ReadStale
-	h.commit(l, st, at0(6))
-	if p := h.commit(lineWith(true, false, "a"), st, at0(8)); p["c1"].failing.Basis != obslog.ProofUnknown {
-		t.Fatalf("after an unreadable spell: %+v", p["c1"].failing)
+}
+
+func TestLineHistoryBreaksReBaselineAtOnce(t *testing.T) {
+	h := newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, true, 5, true, false) // failing since ~09:05 (observed)
+	unitsAt(h, true, 9, true, true)  // a break: 09:05 is not kept
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown || p.Since != nil || !p.AfterGap {
+		t.Fatalf("after a break: start unknown, at once: %+v", p)
+	}
+	h = newLineHistory(obslog.New())
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, true, 5, true, false)
+	unitsAt(h, true, 6, false, false) // unreadable: frozen
+	unitsAt(h, true, 8, true, false)
+	if p := h.proof("c1", u1); p.Basis != obslog.ProofUnknown {
+		t.Fatalf("after an unreadable spell: %+v", p)
 	}
 }
 
 func TestLineHistoryHeldEndsOnAReferenceChange(t *testing.T) {
-	h, st, _ := historyHarness()
-	h.commit(lineWith(true, false, "a"), st, at0(0))
-	p := h.commit(lineWith(true, true, "a"), st, at0(2)) // held under R=a, observed
-	if hp := p["c1"].held; hp == nil || hp.Basis != obslog.ProofObserved || !hp.Since.Equal(at0(2)) {
-		t.Fatalf("held: %+v", hp)
+	h := newLineHistory(obslog.New())
+	h.commitHeld("c1", 1, false, "a", true, false, at0(0))
+	h.commitHeld("c1", 1, true, "a", true, false, at0(2))
+	if p := h.proof("c1", keyHeld); p == nil || p.Basis != obslog.ProofObserved || !p.Since.Equal(at0(2)) {
+		t.Fatalf("held: %+v", p)
 	}
-	p = h.commit(lineWith(true, true, "b"), st, at0(4)) // R changed: the reference changed
-	if hp := p["c1"].held; hp == nil || hp.Basis != obslog.ProofUnknown || !hp.FirstSeen.Equal(at0(4)) {
-		t.Fatalf("a held proof ends with its R: %+v", hp)
-	}
-	if f := p["c1"].failing; f == nil || f.Basis != obslog.ProofUnknown || !f.FirstSeen.Equal(at0(0)) {
-		t.Fatalf("the failing predicate is not tied to R: %+v", f)
+	h.commitHeld("c1", 1, true, "b", true, false, at0(4)) // R changed
+	if p := h.proof("c1", keyHeld); p == nil || p.Basis != obslog.ProofUnknown || !p.FirstSeen.Equal(at0(4)) {
+		t.Fatalf("a held proof ends with its R: %+v", p)
 	}
 }
 
 func TestLineHistoryIsFencedByIncarnation(t *testing.T) {
-	h, st, log := historyHarness()
-	h.commit(lineWith(false, false, "a"), st, at0(0))
-	h.commit(lineWith(true, false, "a"), st, at0(5))
+	log := obslog.New()
+	h := newLineHistory(log)
+	unitsAt(h, false, 0, true, false)
+	unitsAt(h, true, 5, true, false)
 	log.Apply(observe.TransitionBatch{Cluster: "c1", Incarnation: 2, Task: "pods", Part: "pods", Source: "pods", Kind: observe.BatchBaseline, At: at0(6)})
-	if p := h.proof("c1", unitPredKey(line.Unit{UID: "u1"})); p != nil {
+	if p := h.proof("c1", u1); p != nil {
 		t.Fatalf("a newer incarnation ends the old line proofs: %+v", p)
 	}
-	st["c1"].inc = 2
-	if p := h.commit(lineWith(true, false, "a"), st, at0(7)); p["c1"].failing.Basis != obslog.ProofUnknown {
-		t.Fatalf("a new incarnation re-baselines: %+v", p["c1"].failing)
+	h.commitUnits("c1", 2, unitsKustomizations, failing(true), true, false, at0(7))
+	if p := h.proof("c1", u1); p == nil || p.Basis != obslog.ProofUnknown {
+		t.Fatalf("a new incarnation re-baselines: %+v", p)
 	}
 }

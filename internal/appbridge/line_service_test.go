@@ -294,6 +294,8 @@ func TestLineServiceHeldBootstrapDoesNotBlock(t *testing.T) {
 	gate := make(chan struct{})
 	h := newLineHarness(t, sink, clusterCfg("dev", "dev"), clusterCfg("prd", "prd"))
 	dev := startLineCluster(t, sink, "dev", lineSha('a'), gate) // its reconciliations bootstrap hangs
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(gate) }) }) // before the Observer's cleanup waits on it, on any failure
 	prd := startLineCluster(t, sink, "prd", lineSha('a'), nil)
 	h.setObserver("dev", dev.obs)
 	h.setObserver("prd", prd.obs)
@@ -308,7 +310,7 @@ func TestLineServiceHeldBootstrapDoesNotBlock(t *testing.T) {
 	h.mu.Unlock()
 	h.svc.Rescan()
 	h.waitLine("dev removed", func(d LineDTO) bool { _, ok := stationIn(d, "dev"); return !ok })
-	close(gate) // let the Observer finish its evaluation for cleanup
+	release.Do(func() { close(gate) }) // let the Observer finish its evaluation
 }
 
 // The mesh feed (note §6): sampled off the worker, every outcome published,

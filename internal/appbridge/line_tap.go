@@ -49,7 +49,7 @@ const (
 type tapPartition struct {
 	inc   uint64
 	state string
-	ver   uint64 // available: the recovery batch's PartVer
+	ver   uint64 // the PartVer of the batch that set the state
 	gap   bool   // a loss arrived since the worker last drained
 }
 
@@ -143,7 +143,7 @@ func (t *lineTap) OnTransitions(b observe.TransitionBatch) {
 	switch b.Kind {
 	case observe.BatchLoss:
 		p.gap = true
-		p.state, p.ver = partitionLost, 0
+		p.state, p.ver = partitionLost, b.PartVer
 		if b.Loss != nil && b.Loss.Reason == observe.LossAbsent {
 			p.state = partitionAbsent
 		}

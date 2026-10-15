@@ -57,23 +57,31 @@ type lineAttachment struct {
 	inflight map[string]bool // part key -> a bootstrap job is running
 }
 
+// stationPartition is a source partition's continuity with the part
+// version that set it: a recovery's, a loss's, or the bootstrap rows'.
 type stationPartition struct {
 	state string
 	ver   uint64
 }
 
 type lineStation struct {
-	cfg        config.ClusterConfig
-	order      int
-	att        *lineAttachment
-	inc        uint64
-	ended      bool // Final: terminal for inc
-	usable     bool // the connection word allows observation
-	conn       string
-	rows       map[string]observe.Rows // per part key, current incarnation
-	booted     map[string]bool
-	parts      map[partitionRef]*stationPartition
-	histGap    bool // continuity broke since the line history last committed
+	cfg    config.ClusterConfig
+	order  int
+	att    *lineAttachment
+	inc    uint64
+	ended  bool // Final: terminal for inc
+	usable bool // the connection word allows observation
+	conn   string
+	rows   map[string]observe.Rows // per part key, current incarnation
+	booted map[string]bool
+	parts  map[partitionRef]*stationPartition
+	// History breaks since the last commit (note §5): allGap breaks every
+	// predicate partition (connection, Final, a new incarnation); gapKinds
+	// are the kinds whose continuity broke (a partition loss, overwritten
+	// rows), applied only to the partitions whose inputs need them.
+	allGap     bool
+	gapKinds   map[string]bool
+	histDirty  bool // an accepted change awaits its history commit
 	lastOKAt   *time.Time
 	snapState  fleet.ConnState
 	snapReason string
@@ -118,8 +126,12 @@ type LineService struct {
 	nextAtt  uint64
 	mesh     meshState
 	hist     *lineHistory
-	dirty    bool
-	lastRun  time.Time
+	// The reference of the last build: held is evaluated against it on every
+	// accepted change.
+	lastKey *line.Key
+	lastR   string
+	dirty   bool
+	lastRun time.Time
 }
 
 // NewLineService registers the tap, then starts the worker, which scans the
@@ -251,6 +263,8 @@ func (s *LineService) scan() {
 		switch {
 		case obs == nil:
 			s.detach(st)
+		case st.ended && obs.Incarnation() == st.inc:
+			// Final was terminal for this incarnation: wait for the next.
 		case st.att == nil || st.att.obs != obs:
 			s.detach(st)
 			s.attach(cc.Name, st, obs)
@@ -274,7 +288,7 @@ func (s *LineService) attach(cluster string, st *lineStation, obs *observe.Obser
 		st.inc, st.ended, st.usable, st.conn = inc, false, true, ""
 		st.rows, st.booted = map[string]observe.Rows{}, map[string]bool{}
 		st.parts = map[partitionRef]*stationPartition{}
-		st.lastOKAt, st.histGap = nil, true
+		st.lastOKAt, st.allGap, st.gapKinds, st.histDirty = nil, true, map[string]bool{}, true
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.nextAtt++
@@ -349,7 +363,8 @@ func (s *LineService) applyResult(r any) {
 		}
 		s.applyRows(st, r.part.key(), r.rows, false)
 		s.seed(r.cluster, st, r.rows)
-		s.dirty = true
+		st.histDirty, s.dirty = true, true
+		s.commitDirty()
 	case meshResult:
 		s.applyMesh(r)
 	}
@@ -362,6 +377,8 @@ func (s *LineService) applyDrain() {
 		if st == nil {
 			continue
 		}
+		// Only what the line reads makes it recompute: summaries arrive on
+		// every publish of any part.
 		if sum := d.summary; sum != nil {
 			switch {
 			case sum.Incarnation > st.inc:
@@ -370,13 +387,18 @@ func (s *LineService) applyDrain() {
 				if usable := lineConnectionUsable(sum.Connection); usable != st.usable {
 					st.usable = usable
 					if !usable {
-						st.histGap = true
+						st.allGap = true
 					}
+					st.histDirty, s.dirty = true, true
 				}
-				st.conn = sum.Connection
-				if sum.Final {
-					st.ended, st.histGap = true, true
+				if sum.Connection != st.conn {
+					st.conn = sum.Connection
+					s.dirty = true
+				}
+				if sum.Final && !st.ended {
+					st.ended, st.allGap = true, true
 					s.detach(st)
+					st.histDirty, s.dirty = true, true
 				}
 			}
 		}
@@ -387,33 +409,58 @@ func (s *LineService) applyDrain() {
 			if r.Incarnation != st.inc {
 				continue
 			}
-			s.applyRows(st, k, r, d.overwrite[k])
+			if s.applyRows(st, k, r, d.overwrite[k]) || d.overwrite[k] {
+				st.histDirty, s.dirty = true, true
+			}
 		}
 		for pr, p := range d.partitions {
 			if p.inc != st.inc {
 				continue
 			}
 			if p.state != partitionUnknown {
-				st.parts[pr] = &stationPartition{state: p.state, ver: p.ver}
+				if cur := st.parts[pr]; cur == nil || cur.state != p.state || cur.ver != p.ver {
+					st.parts[pr] = &stationPartition{state: p.state, ver: p.ver}
+					st.histDirty, s.dirty = true, true
+				}
 			}
 			if p.gap {
-				st.histGap = true
+				st.gapKind(pr.source)
+				st.histDirty, s.dirty = true, true
 			}
 		}
-		s.dirty = true
 	}
+	s.commitDirty()
 }
 
-// applyRows keeps a part's rows when they are newer than the ones held.
-func (s *LineService) applyRows(st *lineStation, key string, r observe.Rows, overwritten bool) {
+// partKinds are the counted kinds of each line part: overwritten rows of a
+// part break the continuity of all of them.
+var partKinds = map[string][]string{
+	partRef{healthsrc.TaskFlux, "reconciliations"}.key(): {"kustomizations", "helmreleases"},
+	partRef{healthsrc.TaskFlux, "sources"}.key():         {"gitrepositories", "helmrepositories", "ocirepositories", "buckets", "helmcharts"},
+	partRef{healthsrc.TaskArgo, "applications"}.key():    {"applications"},
+}
+
+func (st *lineStation) gapKind(kind string) {
+	if st.gapKinds == nil {
+		st.gapKinds = map[string]bool{}
+	}
+	st.gapKinds[kind] = true
+}
+
+// applyRows keeps a part's rows when they are newer than the ones held, and
+// reports whether it did.
+func (s *LineService) applyRows(st *lineStation, key string, r observe.Rows, overwritten bool) bool {
 	if overwritten {
-		st.histGap = true // a discarded row set may have shown a flip (note §5)
+		for _, k := range partKinds[key] {
+			st.gapKind(k) // a discarded row set may have shown a flip (note §5)
+		}
 	}
 	if held, ok := st.rows[key]; ok && held.Part.Ver >= r.Part.Ver {
-		return
+		return false
 	}
 	st.rows[key] = r
 	st.booted[key] = true
+	return true
 }
 
 // seed sets each source partition's continuity at bootstrap: losses before
@@ -433,9 +480,9 @@ func (s *LineService) seed(cluster string, st *lineStation, r observe.Rows) {
 		case observe.Live:
 			st.parts[pr] = &stationPartition{state: partitionAvailable, ver: r.Part.Ver}
 		case observe.Absent:
-			st.parts[pr] = &stationPartition{state: partitionAbsent}
+			st.parts[pr] = &stationPartition{state: partitionAbsent, ver: r.Part.Ver}
 		default:
-			st.parts[pr] = &stationPartition{state: partitionLost}
+			st.parts[pr] = &stationPartition{state: partitionLost, ver: r.Part.Ver}
 		}
 	}
 	inc, states, ok := s.d.Sink.ObservationLog().PartitionSnapshot(cluster)
@@ -453,13 +500,15 @@ func (s *LineService) seed(cluster string, st *lineStation, r observe.Rows) {
 		}
 		switch {
 		case ps.Live:
-			if cur == nil || cur.state != partitionAvailable {
+			// A newer recovery than the bootstrap's own rows: keep its
+			// version, so rows that precede it stay checking.
+			if cur == nil || cur.state != partitionAvailable || ps.PartVer > cur.ver {
 				st.parts[pr] = &stationPartition{state: partitionAvailable, ver: ps.PartVer}
 			}
-		case ps.Loss != nil && ps.Loss.Reason == "absent":
-			st.parts[pr] = &stationPartition{state: partitionAbsent}
+		case ps.Loss != nil && ps.Loss.Reason == observe.LossAbsent:
+			st.parts[pr] = &stationPartition{state: partitionAbsent, ver: ps.PartVer}
 		default:
-			st.parts[pr] = &stationPartition{state: partitionLost}
+			st.parts[pr] = &stationPartition{state: partitionLost, ver: ps.PartVer}
 		}
 	}
 }
@@ -559,6 +608,11 @@ func (s *LineService) input(st *lineStation) (line.StationInput, string, []strin
 			cov := string(kc.Coverage)
 			if sp := st.parts[partitionRef{p.task, p.part, kc.Kind}]; sp != nil {
 				switch {
+				case sp.state == partitionLost && kc.Coverage == observe.Absent && r.Part.Ver >= sp.ver:
+					// A source absent from the start commits no batch (slice
+					// 2b): rows at or after the loss carry the capability
+					// word, or a bootstrap caught mid-probe stays checking.
+					cov = "absent"
 				case sp.state == partitionLost:
 					cov = "checking"
 				case sp.state == partitionAbsent:
@@ -605,7 +659,24 @@ func (s *LineService) recompute() {
 		}
 	}
 	l := line.Build(in)
-	proofs := s.hist.commit(l, s.stations, now)
+	s.lastKey, s.lastR = l.Key, l.R
+	ref := lineRef(l.Key, l.R)
+	proofs := map[string]*stationProofs{}
+	for _, sls := range [][]line.StationLine{l.Stations, l.Siding} {
+		for _, sl := range sls {
+			st := s.stations[sl.Cluster]
+			if st.inc == 0 {
+				continue
+			}
+			if st.histDirty || !s.hist.committed(sl.Cluster, st.inc) {
+				s.commitStation(sl.Cluster, st)
+			}
+			// Held under this build's reference: a reference change ends it;
+			// an unchanged value advances nothing.
+			s.hist.commitHeld(sl.Cluster, st.inc, sl.Held, ref, sl.Read == line.ReadOK && s.attached(st), false, latestEvaluated(st, now))
+			proofs[sl.Cluster] = s.hist.proofsOf(l, sl)
+		}
+	}
 	dto := lineDTO(l)
 	fill := func(ds []LineStationDTO) {
 		for i := range ds {
@@ -625,9 +696,18 @@ func (s *LineService) recompute() {
 	fill(dto.Siding)
 	if s.mesh.graph != nil {
 		dto.Mesh = meshDTO(line.Mesh(l.Placement, *s.mesh.graph))
+		// A configured station the sample has no read for - its reader
+		// skipped it (not connected) or could not read it - has unknown
+		// peerings, never "no peers".
+		read := map[string]bool{}
 		for _, n := range s.mesh.graph.Nodes {
-			if n.ReadNote != "" {
-				dto.Mesh.Unknown = append(dto.Mesh.Unknown, n.Cluster)
+			if n.Present && n.ReadNote == "" {
+				read[n.Cluster] = true
+			}
+		}
+		for _, name := range names {
+			if !read[name] {
+				dto.Mesh.Unknown = append(dto.Mesh.Unknown, name)
 			}
 		}
 	} else {
@@ -642,6 +722,130 @@ func (s *LineService) recompute() {
 	if s.d.Emitter != nil {
 		s.d.Emitter.Emit(LineEvent, dto)
 	}
+}
+
+// commitDirty commits every station with an accepted change since its last
+// history commit (note §5: history follows every accepted change, not the
+// presentation's coalesced recompute).
+func (s *LineService) commitDirty() {
+	for name, st := range s.stations {
+		if st.histDirty && st.inc != 0 {
+			s.commitStation(name, st)
+		}
+	}
+}
+
+// attached: the station's current incarnation is attached, usable and has
+// rows for every line part.
+func (s *LineService) attached(st *lineStation) bool {
+	if st.att == nil || st.ended || !st.usable {
+		return false
+	}
+	for _, p := range lineParts {
+		if _, ok := st.rows[p.key()]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// commitStation commits a station's unit failing predicates, per unit kind,
+// and its held predicate under the last build's reference, at the station's
+// capture time. A gap breaks only the partitions whose inputs need it.
+func (s *LineService) commitStation(cluster string, st *lineStation) {
+	in, read, _ := s.input(st)
+	units, _ := line.Units(in)
+	at := latestEvaluated(st, s.d.Now())
+	attached := s.attached(st)
+	preds := map[string]map[string]string{}
+	for _, p := range unitPartitions {
+		preds[p] = map[string]string{}
+	}
+	for _, u := range units {
+		v := predOK
+		if u.Failing {
+			v = predFault
+		}
+		preds[unitPartitionOf(u)][unitPredKey(u)] = v
+	}
+	needed := neededByPartition(in)
+	anyBroken := st.allGap
+	for _, p := range unitPartitions {
+		readable := attached
+		broken := st.allGap
+		for _, k := range needed[p] {
+			if r := in.KindRead[k]; r != line.ReadOK && r != line.KindAbsent {
+				readable = false
+			}
+			if st.gapKinds[k] {
+				broken = true
+			}
+		}
+		anyBroken = anyBroken || broken
+		s.hist.commitUnits(cluster, st.inc, p, preds[p], readable, broken, at)
+	}
+	held := false
+	if s.lastKey != nil && s.lastKey.Kind != line.KeyChartName && s.lastR != "" {
+		for _, u := range units {
+			if u.Key == *s.lastKey && u.Failing && u.Attempted != nil && revID(u.Attempted) == s.lastR {
+				held = true
+			}
+		}
+	}
+	s.hist.commitHeld(cluster, st.inc, held, lineRef(s.lastKey, s.lastR), attached && read == line.ReadOK, anyBroken, at)
+	st.allGap, st.gapKinds, st.histDirty = false, map[string]bool{}, false
+}
+
+// neededByPartition is each unit partition's input kinds (note §2.4): Git
+// units need their own kind and the source kinds they reference (every
+// Kustomization-capable source kind while their kind is unread); recorded-
+// name chart units and Argo applications need only their own kind.
+func neededByPartition(in line.StationInput) map[string][]string {
+	ks := []string{"kustomizations"}
+	seen := map[string]bool{}
+	add := func(k string) {
+		if k != "" && !seen[k] {
+			seen[k] = true
+			ks = append(ks, k)
+		}
+	}
+	if r := in.KindRead["kustomizations"]; r != line.ReadOK && r != line.KindAbsent {
+		for _, k := range []string{"gitrepositories", "ocirepositories", "buckets"} {
+			add(k)
+		}
+	}
+	srcKinds := map[string]string{"GitRepository": "gitrepositories", "OCIRepository": "ocirepositories", "Bucket": "buckets"}
+	for _, o := range in.Kustomizations {
+		add(srcKinds[o.Data.SourceKind])
+	}
+	return map[string][]string{
+		unitsKustomizations: ks,
+		unitsHelmReleases:   {"helmreleases"},
+		unitsApplications:   {"applications"},
+	}
+}
+
+func lineRef(k *line.Key, r string) string {
+	if k == nil {
+		return ""
+	}
+	return k.String() + "@" + r
+}
+
+// latestEvaluated is the newest capture time among a station's line parts:
+// the evidence time of a history commit (never the worker's clock, unless
+// the station holds no rows yet).
+func latestEvaluated(st *lineStation, fallback time.Time) time.Time {
+	var out time.Time
+	for _, r := range st.rows {
+		if r.EvaluatedAt.After(out) {
+			out = r.EvaluatedAt
+		}
+	}
+	if out.IsZero() {
+		return fallback
+	}
+	return out
 }
 
 // oldestEvaluated is the oldest evaluation time among a station's line parts.
