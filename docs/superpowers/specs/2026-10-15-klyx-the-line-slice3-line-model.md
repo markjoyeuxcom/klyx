@@ -15,6 +15,15 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 | 5. Predicate-specific, fenced ages | §5 |
 | 6. A mesh feed | §6 |
 
+**Revision 3** answers Codex's review of e28f81d:
+
+| Finding | Where it is addressed |
+|---|---|
+| 1. Gaps per source partition, recovery by baseline too, seeded at attach | §2.3 |
+| 2. Coalesced rows must not hide a flip | §2.1, §5 |
+| 3. Bootstraps as cancellable jobs, never blocking the worker | §2.2 |
+| 4. Mesh status and freshness publish, and the provider is context-aware | §6 |
+
 ## 1. Packages
 
 - **`internal/line` (pure, slice 3a):**
@@ -36,7 +45,8 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 - **The record is bounded and coalescing:** a per-cluster slot set behind a small mutex.
   - **summary:** the latest per cluster;
   - **rows:** the latest `observe.Rows` per (cluster, part), for the three parts the line reads;
-  - **losses:** a sticky per-(cluster, part) gap flag, set by any loss batch and cleared only by the worker;
+  - **overwritten:** a sticky per-(cluster, part) flag. It is set when a new `Rows` replaces an unconsumed one with a different `Part.Ver`. A discarded row set may have shown a predicate flip and flip-back, so the worker treats this as a history gap for that part (§5). Presentation may coalesce; history discloses what it did not see;
+  - **batches:** the transition batches of the three parts, per (cluster, part, source), each reduced to its kind, loss reason, `PartVer` and incarnation, in arrival order. This list is bounded: past 64 unconsumed batches it collapses to a single sticky gap;
   - **end:** a sticky flag set by Final.
 - **A one-slot channel wakes the worker.** Nothing in a listener blocks.
 - **The service worker is one goroutine, cancelled with the app context.** It drains the slots, does every subscription and bootstrap, recomputes and emits.
@@ -50,11 +60,17 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 - **The scan, at start and every 5 s, plus on demand from config changes:**
   - **every configured cluster** in the live config (`LiveClusterConfig`, hot-adds included) is a station;
   - **with no connection or no Observer** (a failed connection factory, or not started), the station reads `error`, or `checking` while connecting, with no facts;
-  - **with an Observer not yet attached** (or a newer incarnation than the attached one), the service:
+  - **with an Observer not yet attached** (or a newer incarnation than the attached one), the service creates an attachment, which:
+    - has its own id and a context derived from the service's;
     - acquires the Flux and Argo domain leases once each, with `Owner{Kind: "line"}`;
     - calls `SubscribeRows` per required part;
-    - bootstraps each part with `RowsNowCtx`;
-  - **a replaced, removed or ended Observer** has its subscriptions and leases released, and any bootstrap in flight for it is cancelled.
+    - starts bootstrap **jobs** (below);
+  - **a replaced, removed or ended Observer** has its attachment cancelled (its jobs end at once), and its subscriptions and leases are released.
+- **Bootstraps are jobs, never worker calls** (finding 3). Each part's `RowsNowCtx` runs on its own goroutine:
+  - under the attachment's context with a 10 s deadline;
+  - with at most 8 jobs fleet-wide (a semaphore);
+  - delivering its result to the worker through a result channel, tagged with the attachment id and incarnation.
+  The worker keeps draining lifecycle events, publishing checking states and cancelling attachments while jobs wait. A result whose attachment is no longer current is discarded.
 - **A config change** (`ConfigService` add, edit or remove) triggers a scan and a recompute, even with no GitOps row event, so placement follows the fleet.
 - **Tests:**
   - an Observer already running before the service starts;
@@ -69,10 +85,31 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - A newer incarnation drops the station's facts and its line history proofs (§5), then attaches.
   - Final is terminal for its incarnation. It marks the station checking with its last good facts, and any reply or row of that incarnation that arrives later is ignored.
 - **Part version:** a row set is applied only when its `Part.Ver` is newer than the one held. A bootstrap reply that loses to a newer push is discarded.
-- **Availability does not travel in row versions** (finding 2). A connection change leaves rows live, at the same `Part.Ver`. So the station also tracks:
+- **Availability does not travel in row versions.** A connection change leaves rows live, at the same `Part.Ver`. So the station also tracks:
   - **the connection word,** from the same-incarnation `Summary`. When it is not usable, the station reads `checking`: nothing matches and the last good facts show "as of".
-  - **gaps,** from transition losses on the three parts the line reads. A loss marks those parts gapped until their after-gap. While gapped, the station reads `checking`, and the line's own predicate proofs are downgraded (§5).
-- **Recovery recomputes even with identical rows:** a connection becoming usable again, an after-gap, or an unchanged relist (seen as its loss and after-gap pair) each trigger a recompute.
+  - **each source partition's continuity** (finding 1), keyed by (task, part, source) and fenced by incarnation, from the batches:
+
+| Batch | Partition state |
+|---|---|
+| loss (coverage, relist, generation, connection, membership) | **lost** |
+| loss (capped) | **lost** (its recovery is a baseline) |
+| loss (absent) | **absent**: known empty; never a gap for the read, but a break in history |
+| baseline (first sight, cap recovery, reinstall) | **available** from that batch's `PartVer` |
+| after-gap | **available** from that batch's `PartVer` |
+| changes | unchanged |
+
+    - **Two facts are kept apart.** A partition's current availability (above) is one. "A gap occurred since the last drain" is a sticky flag for history (§5), set by any loss.
+    - **A partition becomes current only once the worker holds that part's rows at or after the recovery batch's `PartVer`.** Until then its retained facts stay "as of".
+    - **Only needed partitions gate the read** (§2.4). A lost Bucket partition never blocks a station that needs only GitRepository. A GitRepository recovery never clears a Bucket loss.
+  - **Seeding at attach:** losses that predate the listener are not replayed by `RowsNowCtx`. So when a bootstrap lands, each source partition is seeded:
+    - from the bootstrap reply's per-kind coverage (`Part.Kinds`): live is available, absent is absent, anything else is lost;
+    - and, under the same incarnation, from the observation log's `Partitions`, which holds a loss still awaiting its recovery.
+- **Recovery recomputes even with identical rows:** a connection becoming usable again, a baseline or after-gap that makes a partition current, or an unchanged relist (its loss and after-gap pair) each trigger a recompute.
+- **Tests:**
+  - cap, then a baseline;
+  - uninstall, then known empty, then reinstall;
+  - two source kinds recovering independently;
+  - attaching during an existing relist.
 - **Tests:**
   - a same-incarnation outage and recovery with unchanged rows;
   - an unchanged relist;
@@ -149,7 +186,13 @@ This note fixes the implementation shape the parent leaves open. The rules thems
 - **How it is recorded:** as batches into the observation log, in the station's cluster, with `Task: "line"` and `Mode: "line"`, so they share its bounds, wording and incarnation fencing.
   - A predicate becoming true under continuous line coverage is an observed change, "since ~<at> (observed)".
   - First sight, an after-gap or a new incarnation gives "start unknown; first seen <at>".
-- **Line coverage is continuous** only while the station read stays `ok` with no gap and no connection loss between recomputes. Any break emits a line loss, and after it each predicate is re-baselined as start unknown.
+- **Line coverage is continuous** only while all of these hold between recomputes:
+  - the station read stays `ok`;
+  - no needed partition had a gap since the last drain;
+  - no needed part's rows were **overwritten** unconsumed (§2.1; finding 2);
+  - the connection was not lost.
+
+  Any break emits a line loss, and after it each predicate is re-baselined as start unknown. For example, the worker held failing=true since 09:00 while v2 (recovered) and v3 (failing) arrived. v2 was overwritten unseen, so 09:00 is not kept: the predicate is re-baselined.
 - **A reference change** (a new key, R changing, or the selector) is recorded as "reference changed", never as a deployment or a hold. It ends every held proof, because held is tied to R. A changed attempted revision likewise restarts that unit's held evidence.
 - **Rule-proven `since`** (parent §8.1 as revised) dates a failing predicate only where the rule's role is exactly that predicate: a Flux source or Kustomization Ready=False with no overlay. Since no Flux role is proven today, line failure ages come from the line's own history. The deciding condition's age is shown beside them as evidence.
 - **Fencing:**
@@ -160,20 +203,30 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - a changed attempted R (held restarts);
   - a changed selector and a changed R (reference changed, held ends);
   - a proof racing the rows;
-  - continuity across a gap (start unknown after it).
+  - continuity across a gap (start unknown after it);
+  - a deterministic true → false → true while the worker is held (re-baselined, never 09:00);
+  - an attempted revision and a reference that change and change back while the worker is held.
 
 ## 6. The mesh feed (finding 6)
 
 - **`LineService` samples the mesh graph itself,** off the Observer and off the pure builder:
-  - once at start, then every 60 s, single-flight, each read bounded by 15 s, and cancelled with the service;
-  - through `MeshService`'s member reads.
-  - It never reads the mesh inside a recompute.
-- **The sample is cached** with its `readAt` and any error. `LineDTO.mesh` discloses "as of <readAt>", or the error, when the last sample failed. A member whose station is not connected has unknown peerings, never "no peers".
-- **A changed sample** (a different edge set) triggers a recompute. An unchanged one only refreshes `readAt`.
+  - once at start, then every 60 s, single-flight;
+  - each sample under a context with a 15 s deadline, cancelled with the service;
+  - never inside a recompute.
+- **The provider is context-aware** (finding 4). `MeshService`'s member reader becomes `func(ctx context.Context) []clustermesh.Member`. `main.go` passes that context into each cluster's mesh reads, replacing its own 30 s Background timeout, so cancellation and the 15 s deadline reach the underlying reads. `GetMeshGraph` passes its own bounded context.
+- **The sample is cached** with its `readAt`, its status (ok, or the error) and its node facts (state, read notes):
+  - `LineDTO.mesh` discloses "as of <readAt>", or the error when the last sample failed, which keeps the last good graph;
+  - a member whose station is not connected has unknown peerings, never "no peers".
+- **Publishing:**
+  - Every sample outcome that changes anything the DTO shows publishes a new DTO version: status (ok, error, recovered), node facts, or the refreshed `readAt` of a successful sample.
+  - Topology placement (`line.Mesh`) is recomputed only when the edge set changed. A metadata-only change republishes without re-placing.
 - **Tests:**
-  - a mesh-only change recomputes;
-  - a failed sample discloses an error and keeps the last good graph as "as of";
-  - shutdown cancels a sample in flight.
+  - unchanged edges with a failure;
+  - failure, then success;
+  - a node-only change;
+  - a refreshed `readAt` on a quiet fleet;
+  - cancellation reaching the underlying reads;
+  - shutdown cancelling a sample in flight.
 
 ## 7. Tests (summary)
 
