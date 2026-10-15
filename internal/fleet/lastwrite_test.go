@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/cluster"
+	"k8s.io/client-go/kubernetes"
 	"os"
 	"strings"
 	"testing"
@@ -54,20 +56,24 @@ func TestObjectWritesReadsManagedFields(t *testing.T) {
 		{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "settings", UID: "u1"},
 		{Kind: "Namespace", Name: "shop", UID: "n1"},
 		{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "settings", UID: "older-uid"},
-		{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "gone"},
+		{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "gone", UID: "g1"},
 		{Version: "v1", Kind: "Secret", Namespace: "shop", Name: "token", UID: "s1"},
-		{Group: "example.test", Version: "v1", Kind: "Widget", Namespace: "shop", Name: "w"},
-		{Version: "v1", Kind: "Pod", Namespace: "shop", Name: "p"}, // only a subresource is served
+		{Group: "example.test", Version: "v1", Kind: "Widget", Namespace: "shop", Name: "w", UID: "w1"},
+		{Version: "v1", Kind: "Pod", Namespace: "shop", Name: "p", UID: "p1"},   // only a subresource is served
+		{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "settings"}, // no UID: never read by name alone
 	}
 	got, err := c.ObjectWrites(context.Background(), refs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{WritesOK, WritesNone, WritesReplaced, WritesGone, WritesError, WritesError, WritesError}
+	want := []string{WritesOK, WritesNone, WritesReplaced, WritesGone, WritesError, WritesError, WritesError, WritesError}
 	for i, w := range want {
 		if got[i].State != w {
 			t.Errorf("%+v: %s (%s), want %s", refs[i], got[i].State, got[i].Error, w)
 		}
+	}
+	if !strings.Contains(got[7].Error, "no UID") || got[7].Writes.Last != nil {
+		t.Fatalf("an unpinned reference: %+v", got[7])
 	}
 	if l := got[0].Writes.LastSpec; l == nil || l.Manager != "kustomize-controller" || !l.Time.Equal(when.Time) {
 		t.Fatalf("the ConfigMap's record %+v", got[0].Writes)
@@ -82,10 +88,27 @@ func TestObjectWritesReadsManagedFields(t *testing.T) {
 //	KLYX_LAB_CONTEXT=kind-klyx go test ./internal/fleet -run TestLabObjectWrites -v -count=1
 func TestLabObjectWrites(t *testing.T) {
 	c := labConn(t)
+	ctxName := os.Getenv("KLYX_LAB_CONTEXT")
+	rc, err := cluster.RESTConfig(config.ClusterConfig{Name: ctxName, Context: ctxName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm, err := admin.CoreV1().ConfigMaps("default").Get(context.Background(), "kube-root-ca.crt", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := admin.CoreV1().Namespaces().Get(context.Background(), "default", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := c.ObjectWrites(context.Background(), []ObjectRef{
-		{Version: "v1", Kind: "ConfigMap", Namespace: "default", Name: "kube-root-ca.crt"},
-		{Kind: "Namespace", Name: "default"},
-		{Version: "v1", Kind: "ConfigMap", Namespace: "default", Name: "klyx-no-such-object"},
+		{Version: "v1", Kind: "ConfigMap", Namespace: "default", Name: "kube-root-ca.crt", UID: string(cm.UID)},
+		{Kind: "Namespace", Name: "default", UID: string(ns.UID)},
+		{Version: "v1", Kind: "ConfigMap", Namespace: "default", Name: "klyx-no-such-object", UID: "nope"},
 	})
 	if err != nil {
 		t.Fatal(err)

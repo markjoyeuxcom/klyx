@@ -6,7 +6,8 @@ import { ObjectWritesService } from "../../bindings/github.com/moomora/klyx/inte
 // writer, and nothing says which field changed. A status update is
 // labelled as one and never used for change proximity.
 
-export type ObjectRef = { group: string; version: string; kind: string; namespace?: string; name: string; uid?: string };
+// uid is required: the read is pinned to it, never by name alone.
+export type ObjectRef = { group: string; version: string; kind: string; namespace?: string; name: string; uid: string };
 export type ManagedWrite = { time: string; manager: string; operation: string; subresource?: string; statusUpdate: boolean };
 export type ObjectWrite = { ref: ObjectRef; state: "ok" | "no record" | "replaced" | "gone" | "error"; last?: ManagedWrite; lastSpec?: ManagedWrite; error?: string };
 export type ObjectWrites = { results: ObjectWrite[]; error?: string };

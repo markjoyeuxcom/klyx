@@ -27,14 +27,15 @@ func NewObjectWritesService(lookup func(string) (ObjectWritesConn, bool)) *Objec
 	return &ObjectWritesService{lookup: lookup}
 }
 
-// ObjectRefDTO names one object, pinned to its UID.
+// ObjectRefDTO names one object, pinned to its UID (required: a reference
+// without one reads as an error, never by name alone).
 type ObjectRefDTO struct {
 	Group     string `json:"group"`
 	Version   string `json:"version"`
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
-	UID       string `json:"uid,omitempty"`
+	UID       string `json:"uid"`
 }
 
 // ManagedWriteDTO is one managed-field entry.

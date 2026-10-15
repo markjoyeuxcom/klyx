@@ -35,7 +35,7 @@ func TestObjectWritesServiceMapsResults(t *testing.T) {
 	conn := &writesConn{}
 	svc := NewObjectWritesService(func(c string) (ObjectWritesConn, bool) { return conn, c == "prd" })
 	refs := []ObjectRefDTO{{Version: "v1", Kind: "ConfigMap", Namespace: "shop", Name: "settings", UID: "u1"},
-		{Version: "v1", Kind: "Secret", Namespace: "shop", Name: "token"}}
+		{Version: "v1", Kind: "Secret", Namespace: "shop", Name: "token", UID: "s1"}}
 	d := svc.ObjectWrites("prd", refs)
 	if d.Error != "" || len(d.Results) != 2 || conn.got[0].UID != "u1" {
 		t.Fatalf("%+v", d)

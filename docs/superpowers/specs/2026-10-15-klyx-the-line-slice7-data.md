@@ -37,7 +37,7 @@ Each is Codex-reviewed on its own, in this order.
   - No entries (absent, or reset) read "no managed-field record". Klyx never says which field changed, and never calls a manager an authenticated writer.
 - **The read** (`ClusterConn.ObjectWrites`): for each reference `{group, version, kind, namespace, name, uid}`, one metadata GET (`PartialObjectMetadata`), metadata only.
   - The resource comes from the cached discovery: the served resource for the group, version and kind.
-  - **UID-pinned:** a different UID reads "replaced"; NotFound reads "gone"; any other failure is that reference's error, never "no managed-field record".
+  - **UID-pinned:** the UID is required. A reference without one is an error and is never read by name alone (design review of 74175e6). A different UID reads "replaced"; NotFound reads "gone"; any other failure is that reference's error, never "no managed-field record".
   - **Bounds:** at most 200 references per call, 8 at a time, 10s for the whole call.
 - **The binding:** a bound batch method returning one result per reference. Slice 8's dependency graph calls it for its nodes and their supply objects.
 

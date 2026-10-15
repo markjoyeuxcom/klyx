@@ -14,8 +14,9 @@ import (
 	"github.com/moomora/klyx/internal/lastwrite"
 )
 
-// ObjectRef names one object for a managed-field read, pinned to its UID.
-// An empty Version takes the group's served preferred version.
+// ObjectRef names one object for a managed-field read, pinned to its UID,
+// which is required: a name alone could read a replacement. An empty
+// Version takes the group's served preferred version.
 type ObjectRef struct {
 	Group, Version, Kind, Namespace, Name, UID string
 }
@@ -74,6 +75,11 @@ func (c *ClusterConn) ObjectWrites(ctx context.Context, refs []ObjectRef) ([]Wri
 
 func (c *ClusterConn) objectWrites(ctx context.Context, ref ObjectRef) WriteResult {
 	r := WriteResult{Ref: ref}
+	if ref.UID == "" {
+		// Never a name-only read reported as pinned (design review of 74175e6).
+		r.State, r.Error = WritesError, "no UID to pin the read to"
+		return r
+	}
 	gvr, namespaced, err := c.resourceFor(ref)
 	if err != nil {
 		r.State, r.Error = WritesError, err.Error()
@@ -92,7 +98,7 @@ func (c *ClusterConn) objectWrites(ctx context.Context, ref ObjectRef) WriteResu
 	case err != nil:
 		r.State, r.Error = WritesError, err.Error()
 		return r
-	case ref.UID != "" && string(m.GetUID()) != ref.UID:
+	case string(m.GetUID()) != ref.UID:
 		r.State = WritesReplaced
 		return r
 	}
