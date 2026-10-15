@@ -7,11 +7,12 @@ import { LensLayout } from "../layout/LensLayout";
 import { useFleetAttention } from "../nav/fleetAttention";
 import { LineBoard, LineVerdictView } from "./LineBoard";
 import { NeedsYou } from "./NeedsYou";
+import { Horizon, Ledger } from "./FleetAside";
 
 // The fleet screen (The Line slice 5): the line's verdict and legend, then
-// the board, from LineDTO and each cluster's summary, then "Needs you" from
-// the same summaries - the screen fetches nothing of its own. The aside
-// (5c) follows.
+// the board, from LineDTO and each cluster's summary; then "Needs you" from
+// the same summaries beside the aside - the Ledger and the Horizon, whose
+// expiry scans run once per session, shared with the Expiry view.
 export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const dto = useLine((s) => s.dto);
@@ -20,6 +21,16 @@ export function FleetView() {
   // Unknown counts are never summed as zero: the total says how many are out.
   const pods = clusters.reduce((n, c) => n + (c.podsKnown === false ? 0 : c.pods), 0);
   const podsUnknown = clusters.filter((c) => c.podsKnown === false).length;
+  // The footer counts connections only; it never says the line or the fleet
+  // is live (parent §3.6).
+  const conn = (states: string[]) => clusters.filter((c) => states.includes(c.state)).length;
+  const footer = [
+    `${clusters.length} cluster${clusters.length === 1 ? "" : "s"}`,
+    `${conn(["Synced", "Degraded"])} connected`,
+    conn(["Stale"]) > 0 ? `${conn(["Stale"])} stale` : "",
+    conn(["Failed", "Unconnected"]) > 0 ? `${conn(["Failed", "Unconnected"])} failed` : "",
+    conn(["Connecting"]) > 0 ? `${conn(["Connecting"])} connecting` : "",
+  ].filter(Boolean).join(" · ");
 
   return (
     <LensLayout
@@ -44,10 +55,16 @@ export function FleetView() {
               <LineBoard dto={dto} clusters={clusters} models={models} />
             </>
           ) : <SkeletonRows rows={3} label="reading the line" />}
-          <NeedsYou clusters={clusters} models={models} />
+          <div className="fleet-lower">
+            <NeedsYou clusters={clusters} models={models} />
+            <aside className="fleet-aside" aria-label="Ledger and Horizon">
+              <Ledger dto={dto} />
+              <Horizon clusters={clusters} />
+            </aside>
+          </div>
         </div>
       }
-      footerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</span>}
+      footerEnd={clusters.length === 0 ? undefined : <span className="t-secondary" data-testid="fleet-footer">{footer}</span>}
     />
   );
 }

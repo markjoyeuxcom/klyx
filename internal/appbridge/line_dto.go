@@ -77,19 +77,23 @@ type LineFlagsDTO struct {
 }
 
 type LineUnitDTO struct {
-	Origin        string `json:"origin"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	SourceIndex   int    `json:"sourceIndex,omitempty"`
-	UID           string `json:"uid,omitempty"`
-	Applied       string `json:"applied,omitempty"` // empty: applied unknown
-	Attempted     string `json:"attempted,omitempty"`
-	AttemptPhase  string `json:"attemptPhase,omitempty"`
-	Compared      string `json:"compared,omitempty"`
-	Failing       bool   `json:"failing,omitempty"`
-	Syncing       bool   `json:"syncing,omitempty"`
-	Suspended     bool   `json:"suspended,omitempty"`
-	SourceChanged bool   `json:"sourceChanged,omitempty"`
+	Origin       string `json:"origin"`
+	Namespace    string `json:"namespace"`
+	Name         string `json:"name"`
+	SourceIndex  int    `json:"sourceIndex,omitempty"`
+	UID          string `json:"uid,omitempty"`
+	Applied      string `json:"applied,omitempty"` // empty: applied unknown
+	Attempted    string `json:"attempted,omitempty"`
+	AttemptPhase string `json:"attemptPhase,omitempty"`
+	Compared     string `json:"compared,omitempty"`
+	// ComparedAt dates the Compared revision only: the source artifact's
+	// lastUpdateTime, read from the same source object as Compared. It is
+	// never applied to an older Applied revision (slice 5 note §5.1).
+	ComparedAt    *time.Time `json:"comparedAt,omitempty"`
+	Failing       bool       `json:"failing,omitempty"`
+	Syncing       bool       `json:"syncing,omitempty"`
+	Suspended     bool       `json:"suspended,omitempty"`
+	SourceChanged bool       `json:"sourceChanged,omitempty"`
 	// ConfiguredChartDiffers: "configured chart name differs from recorded
 	// deployed chart" - current context, never a provenance claim.
 	ConfiguredChartDiffers bool   `json:"configuredChartDiffers,omitempty"`
@@ -187,10 +191,17 @@ func stationDTO(sl line.StationLine, key *line.Key) LineStationDTO {
 		if key == nil || u.Key != *key {
 			continue
 		}
-		d.Units = append(d.Units, LineUnitDTO{Origin: u.Origin, Namespace: u.Namespace, Name: u.Name, SourceIndex: u.SourceIndex, UID: u.UID,
+		ud := LineUnitDTO{Origin: u.Origin, Namespace: u.Namespace, Name: u.Name, SourceIndex: u.SourceIndex, UID: u.UID,
 			Applied: revID(u.Applied), Attempted: revID(u.Attempted), AttemptPhase: u.AttemptPhase, Compared: revID(u.Compared),
 			Failing: u.Failing, Syncing: u.Syncing, Suspended: u.Suspended, SourceChanged: u.SourceChanged,
-			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read, ContextRead: u.ContextRead})
+			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read, ContextRead: u.ContextRead}
+		// the artifact time dates the compared revision, read from the same
+		// source object; with no compared revision it dates nothing
+		if u.Compared != nil && !u.ArtifactTime.IsZero() {
+			t := u.ArtifactTime
+			ud.ComparedAt = &t
+		}
+		d.Units = append(d.Units, ud)
 	}
 	for _, x := range sl.Excluded {
 		d.Excluded = append(d.Excluded, LineExclusionDTO{Origin: x.Origin, Namespace: x.Namespace, Name: x.Name, Reason: x.Reason, Digest: x.Digest})

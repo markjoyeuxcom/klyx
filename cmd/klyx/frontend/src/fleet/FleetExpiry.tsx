@@ -1,13 +1,12 @@
 import { useMemo, useState } from "react";
 import type { ExpiryItemDTO, ExpiryScanResultDTO } from "../store/fleet";
-import { getExpiryScan } from "../bridge/expiry";
+import { useExpiryScans } from "../store/expiry";
 import { ellipsis } from "../chrome/primitives";
 import { IconCertificate } from "@tabler/icons-react";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { UpdatedAt } from "../chrome/Age";
-import { useFleetBatch } from "./useFleetBatch";
 import { MembershipNote } from "./MembershipNote";
 
 // FleetExpiry is the "what dies next" horizon: every certificate with a
@@ -26,12 +25,13 @@ const sourceLabel: Record<string, string> = {
   "cert-manager": "cert-manager",
 };
 
-const failedScan = (e: unknown): ExpiryScanResultDTO => ({ items: [], warnings: [], error: e instanceof Error ? e.message : "expiry scan failed" });
-
 export function FleetExpiry() {
-  // One scan = one pinned membership (useFleetBatch): joined/left clusters
-  // are named, Refresh scans the current fleet, late replies are dropped.
-  const batch = useFleetBatch(getExpiryScan, failedScan);
+  // The session's shared scans (The Line slice 5 §6, with the fleet
+  // screen's Horizon): each cluster once, a joining cluster once when it
+  // joins, a leaving one dropped; Refresh scans the current fleet anew and
+  // late replies are dropped. No membership is pinned, so none is named.
+  const scans = useExpiryScans();
+  const batch = { ...scans, joined: [] as string[], left: [] as string[] };
   const clusters = batch.members;
   const snaps: Record<string, ExpiryScanResultDTO | null> = batch.results;
   const [windowDays, setWindowDays] = useState<number>(90);

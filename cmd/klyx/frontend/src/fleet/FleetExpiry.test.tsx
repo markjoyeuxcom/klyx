@@ -3,6 +3,7 @@ import { render, fireEvent, act, screen } from "@testing-library/react";
 import { useFleet } from "../store/fleet";
 import type { ClusterDTO, ExpiryScanResultDTO } from "../store/fleet";
 import { FleetExpiry } from "./FleetExpiry";
+import { resetExpiryStore } from "../store/expiry";
 
 vi.mock("../bridge/expiry", () => ({
   getExpiryScan: vi.fn(async () => ({ items: [], warnings: [] }) as ExpiryScanResultDTO),
@@ -15,6 +16,7 @@ const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400;
 describe("FleetExpiry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetExpiryStore();
     useFleet.setState({ clusters: [cl("homelab"), cl("prd-weu")] });
   });
 
@@ -97,16 +99,19 @@ describe("FleetExpiry", () => {
     expect((await findAllByText(/1 of 2 clusters scanned, 1 partially/)).length).toBeGreaterThan(0);
   });
 
-  it("scans a pinned membership: a joining cluster is named and scanned on Refresh (Codex 7d review)", async () => {
+  // The Line slice 5 §6 (design review d25f7275): the session's shared
+  // scans - a joining cluster is scanned once when it joins, the others are
+  // not rescanned for it, a leaving one is dropped; Refresh scans anew.
+  it("a joining cluster is scanned once; nobody else is rescanned; Refresh scans the current fleet", async () => {
     useFleet.setState({ clusters: [cl("homelab")] });
     render(<FleetExpiry />);
     await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
     act(() => { useFleet.setState({ clusters: [cl("homelab"), cl("prd-weu")] }); });
-    expect(screen.getByText(/joined: prd-weu/)).toBeTruthy();
-    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab"]);
+    await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab", "prd-weu"]);
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
-    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab", "homelab", "prd-weu"]);
+    expect(vi.mocked(getExpiryScan).mock.calls.map((c) => c[0])).toEqual(["homelab", "prd-weu", "homelab", "prd-weu"]);
   });
 
   it("a rejected scan is a named failure with Retry, never a hang", async () => {

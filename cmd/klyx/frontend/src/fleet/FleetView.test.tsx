@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent, within, act } from "@testing-library/react";
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { applySummary, resetHealthStore } from "../store/health";
 import { applyLine, resetLineStore, type LineDTO, type LineStationDTO } from "../store/line";
 import { core, kind, replace, summary, task, verdict } from "../test/healthFixtures";
+import { resetExpiryStore } from "../store/expiry";
+import type { ExpiryScanResultDTO } from "../store/fleet";
+
+const scans = vi.hoisted(() => ({ byCluster: {} as Record<string, unknown> }));
+vi.mock("../bridge/expiry", () => ({
+  getExpiryScan: vi.fn(async (cluster: string) => (scans.byCluster[cluster] ?? { items: [], warnings: [] }) as ExpiryScanResultDTO),
+}));
 import { FleetView } from "./FleetView";
 
 // The Line slice 5a: the fleet screen is the line's verdict and the board,
@@ -24,6 +31,8 @@ beforeEach(() => {
   useFleet.setState({ clusters: [], route: { name: "fleet" } });
   resetHealthStore();
   resetLineStore();
+  resetExpiryStore();
+  scans.byCluster = {};
 });
 
 describe("the fleet screen (slice 5a)", () => {
@@ -115,5 +124,44 @@ describe("the fleet screen (slice 5a)", () => {
     const link = container.querySelector(".line-board-link") as HTMLElement;
     expect(link.hasAttribute("data-oneway")).toBe(true);
     expect(link.textContent).toBe("one-way · pn");
+  });
+});
+
+describe("the aside and footer (slice 5c)", () => {
+  const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400;
+
+  it("the footer counts connections only, never 'live'", () => {
+    useFleet.setState({ clusters: [c("a"), c("b", "Degraded"), c("x", "Failed"), c("n", "Connecting"), c("s", "Stale")] });
+    render(<FleetView />);
+    expect(screen.getByTestId("fleet-footer").textContent).toBe("5 clusters · 2 connected · 1 stale · 1 failed · 1 connecting");
+    expect(document.body.textContent).not.toMatch(/\blive\b/i);
+  });
+
+  it("the Ledger lists the revisions on the line now, R marked", () => {
+    useFleet.setState({ clusters: [c("d"), c("p")] });
+    applyLine(line([st("d", "dev", 0), st("p", "prd", 3, { state: "differs", single: OLD })]));
+    render(<FleetView />);
+    const ledger = screen.getByRole("region", { name: "Ledger" });
+    expect(within(ledger).getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual([
+      "a1b9e3c, the comparison revision, on 1 station", "9f2c11d, on 1 station",
+    ]);
+  });
+
+  it("the Horizon: the next 30 days soonest first, expired rows, and a failed or unscanned cluster named", async () => {
+    scans.byCluster = {
+      a: { items: [
+        { source: "cert-manager", namespace: "shop", name: "storefront-tls", detail: "", subject: "", notAfterUnix: days(6) },
+        { source: "tls-secret", namespace: "edge", name: "old", detail: "", subject: "", notAfterUnix: days(-2) },
+        { source: "tls-secret", namespace: "edge", name: "later", detail: "", subject: "", notAfterUnix: days(45) },
+      ], warnings: [] },
+      x: { items: [], warnings: [], error: "forbidden" },
+    };
+    useFleet.setState({ clusters: [c("a", "Synced", { env: "stg", region: "westeurope" }), c("x")] });
+    render(<FleetView />);
+    await act(async () => { await new Promise<void>((r) => setTimeout(r, 0)); });
+    const horizon = screen.getByRole("region", { name: "Horizon" });
+    const rows = within(horizon).getAllByRole("listitem").map((li) => li.textContent);
+    expect(rows).toEqual(["expired 2d agoTLS secret edge/old · stg · westeurope a", "6dCertificate shop/storefront-tls · stg · westeurope a"]);
+    expect(horizon.textContent).toContain("x: could not be scanned.");
   });
 });
