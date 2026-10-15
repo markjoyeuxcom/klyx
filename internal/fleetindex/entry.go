@@ -25,7 +25,8 @@ const (
 	// StreamReserve is charged while a list or a watch is open: its decode
 	// holds one object at a time (§2.6).
 	StreamReserve = 256 << 10
-	// SearchReserve is the search's working set, charged once (§3).
+	// SearchReserve is the fixed part of a search's working set; each search
+	// admits it plus its per-hit and coverage parts (search.go).
 	SearchReserve = 64 << 10
 )
 
@@ -45,6 +46,9 @@ type Entry struct {
 	labelHash uint64 // of the source's labels, before the cap
 	mark      uint64 // the last read that saw it (mark-and-sweep)
 	size      int64  // what the budget holds for it
+	// gen and inc: the acquisition generation and Observer incarnation the
+	// entry was last read under - the evidence a hit carries (review of 9b)
+	gen, inc uint64
 }
 
 // Source is what an entry is built from: a projected object's metadata.

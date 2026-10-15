@@ -70,13 +70,54 @@ func (o *Observer) RolesNow(ctx context.Context, qs []RoleQuery) ([]RoleView, bo
 	}
 }
 
-// serveRoles reads the ledger. Loop goroutine only.
-func (o *Observer) serveRoles(req rolesReq) {
+// serveRoles reads the ledger after reconciling what it has not yet
+// committed (review of 9b): a change the Observer has recorded - a lost
+// connection, a relist, a mutation - marks its parts dirty at once, but the
+// ledger commits it only at the next (throttled) evaluation. Each dirty
+// ledger part that counts a queried source is evaluated now, as a rows
+// bootstrap does, so its loss or after-gap is committed - and emitted -
+// before any role is read from it. It reports whether a publish is owed.
+// Loop goroutine only.
+func (o *Observer) serveRoles(req rolesReq) bool {
+	sources := map[string]bool{}
+	for _, q := range req.qs {
+		sources[q.Source] = true
+	}
+	var due []*partState
+	o.mu.Lock()
+	for _, d := range o.domains {
+		for _, p := range d.parts {
+			if p.ledger == nil || !o.dirty[p.key] {
+				continue
+			}
+			for _, src := range p.spec.Counted {
+				if sources[src] {
+					delete(o.dirty, p.key) // this capture covers every mutation so far
+					due = append(due, p)
+					break
+				}
+			}
+		}
+	}
+	o.mu.Unlock()
+	owed := false
+	now := o.clk.Now()
+	for _, p := range due {
+		if verChanged, _ := o.evaluate(p, now, false); verChanged {
+			owed = true
+		}
+	}
+	if owed {
+		o.mu.Lock()
+		o.summaryDirty = true
+		o.mu.Unlock()
+	}
 	out := make([]RoleView, len(req.qs))
 	for i, q := range req.qs {
 		out[i] = o.roleOf(q)
 	}
 	req.reply <- out
+	return owed
 }
 
 func (o *Observer) roleOf(q RoleQuery) RoleView {

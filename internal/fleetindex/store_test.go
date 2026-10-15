@@ -47,7 +47,7 @@ func read(t *testing.T, c *clusterStore, gen uint64, kind string, class Class, s
 func TestStoreMarkAndSweep(t *testing.T) {
 	b := NewBudget(DefaultLimits)
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	if !read(t, c, 1, "configmaps", ClassOther, sources(0, 10)) {
 		t.Fatal("first read")
 	}
@@ -96,7 +96,7 @@ func TestStoreMarkAndSweep(t *testing.T) {
 func TestStoreFreezesAtCap(t *testing.T) {
 	b := NewBudget(Limits{ClusterEntries: 10, ClusterBytes: 1 << 30, FleetEntries: 100, FleetBytes: 1 << 30, PodPercent: 100})
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	if read(t, c, 1, "configmaps", ClassOther, sources(0, 15)) {
 		t.Fatal("a read past the cap completes")
 	}
@@ -122,7 +122,7 @@ func TestStoreFreezesAtCap(t *testing.T) {
 	}
 	b.Admit("a", ClassOther, 5, 0) // restore the accounting the test borrowed
 	// a new generation re-reads in place: unchanged entries cost nothing
-	c.begin(2)
+	c.begin(2, 1)
 	if _, ok := c.beginRead(2, "configmaps", ClassOther); !ok {
 		t.Fatal("a new generation thaws")
 	}
@@ -133,7 +133,7 @@ func TestStoreFreezesAtCap(t *testing.T) {
 func TestStoreGenerationFence(t *testing.T) {
 	b := NewBudget(DefaultLimits)
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	mark, _ := c.beginRead(1, "configmaps", ClassOther)
 	c.put(1, "configmaps", mark, sources(0, 1)[0])
 	c.staleAll(t0.Add(time.Minute)) // the connection went down
@@ -145,7 +145,7 @@ func TestStoreGenerationFence(t *testing.T) {
 		t.Fatalf("stale status %+v", st)
 	}
 	// recovery: a new generation reads in place
-	c.begin(3)
+	c.begin(3, 1)
 	if !read(t, c, 3, "configmaps", ClassOther, sources(0, 3)) || len(uids(c, "configmaps")) != 3 {
 		t.Fatal("recovery read")
 	}
@@ -160,7 +160,7 @@ func TestStoreGenerationFence(t *testing.T) {
 func TestStorePodsCappedFirst(t *testing.T) {
 	b := NewBudget(Limits{ClusterEntries: 10, ClusterBytes: 1 << 30, FleetEntries: 100, FleetBytes: 1 << 30, PodPercent: 80})
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	if read(t, c, 1, "pods", ClassPods, sources(0, 20)) {
 		t.Fatal("pods past their ceiling")
 	}

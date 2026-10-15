@@ -3,6 +3,7 @@ package fleetindex
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -47,23 +48,97 @@ type Hit struct {
 }
 
 // Result is a search's hits, the number of matches before the bound, and
-// the coverage they were searched under.
+// the coverage they were searched under. Release returns the search's
+// working reservation once the caller is done with the result (its DTO
+// built); it is idempotent.
 type Result struct {
 	Hits     []Hit
 	Total    int
 	Coverage []ClusterCoverage
+	release  func()
 }
 
-// Search runs one search; a newer search waits for an older to return, and
-// the caller cancels the older through its context.
+// Release returns the search's reservation.
+func (r *Result) Release() {
+	if r.release != nil {
+		r.release()
+		r.release = nil
+	}
+}
+
+// The search's working set (review of 9b), admitted against the fleet
+// budget for each search and calibrated by TestSearchWorkingSetFitsItsReservation:
+// a fixed part (the query, the matcher, the call), per possible hit (its
+// candidate, its Hit, its role query and answer, its DTO), per cluster and
+// per kind of coverage.
+const (
+	MaxQueryBytes   = 512 // a longer query can match no name: it searches nothing
+	searchPerHit    = 1 << 10
+	searchPerCover  = 512
+	searchPerKind   = 256
+	searchFixedPart = SearchReserve
+)
+
+// ErrSearchBudget: the index's budget cannot hold a search's working set now.
+var ErrSearchBudget = errors.New("fleetindex: the index's memory budget cannot hold a search now")
+
+func searchReserve(limit int, cov []ClusterCoverage) int64 {
+	n := int64(searchFixedPart) + int64(limit)*searchPerHit + int64(len(cov))*searchPerCover
+	for _, c := range cov {
+		n += int64(len(c.Kinds)) * searchPerKind
+	}
+	return n
+}
+
+// candidate is a scanned match, compact: the Hit is built only for the
+// best limit of them.
+type candidate struct {
+	e        *Entry
+	desc     int32 // into the search's kind descriptions
+	order    int32
+	score    int32
+	gen, inc uint64
+}
+
+// scannedKind is one kind's description as the scan read it.
+type scannedKind struct {
+	key, kind, gvr, observer, state string
+	asOf                            *time.Time
+	cluster                         string
+}
+
+// Search runs one search. Searches run one at a time; waiting for the slot
+// honours ctx, so a cancelled search never waits behind another.
 func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, error) {
-	ix.searchMu.Lock()
-	defer ix.searchMu.Unlock()
-	res := Result{Coverage: ix.Coverage()}
+	select {
+	case ix.searchSlot <- struct{}{}:
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
+	defer func() { <-ix.searchSlot }()
 	if limit <= 0 || limit > MaxHits {
 		limit = MaxHits
 	}
-	m := newMatcher(query)
+	cov := ix.Coverage()
+	reserve := searchReserve(limit, cov)
+	if !ix.budget.Admit("", ClassOther, 0, reserve) {
+		return Result{}, ErrSearchBudget
+	}
+	released := false
+	res := Result{Coverage: cov, release: func() {
+		if !released {
+			released = true
+			ix.budget.Release("", 0, reserve)
+		}
+	}}
+	fail := func(err error) (Result, error) {
+		res.Release()
+		return Result{}, err
+	}
+	var m *matcher
+	if len(query) <= MaxQueryBytes {
+		m = newMatcher(query)
+	}
 	if m == nil {
 		return res, nil
 	}
@@ -93,20 +168,15 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 		}
 		return names[i] < names[j]
 	})
-	top := &hitHeap{}
+	var kinds []scannedKind
+	top := &candHeap{c: make([]candidate, 0, limit), kinds: &kinds}
 	scanned := 0
 	for i, name := range names {
-		c := cs[name]
-		c.mu.Lock()
-		var inc uint64
-		if c.obs != nil {
-			inc = c.obs.Incarnation()
-		}
-		c.mu.Unlock()
-		c.store.scan(func(kind string, k *kindStore, gen uint64) bool {
+		cs[name].store.scan(func(kind string, k *kindStore, _ uint64) bool {
 			if !m.kindOK(k.desc.ref) {
 				return true
 			}
+			d := int32(-1)
 			for _, e := range k.entries {
 				if scanned++; scanned%4096 == 0 && ctx.Err() != nil {
 					return false
@@ -116,40 +186,55 @@ func (ix *Index) Search(ctx context.Context, query string, limit int) (Result, e
 					continue
 				}
 				res.Total++
-				h := Hit{Cluster: name, Kind: k.desc.ref.Kind, Key: kind, GVR: k.desc.gvr, Namespace: e.Namespace, Name: e.Name, UID: e.UID,
-					Incarnation: inc, Gen: gen, KindState: k.status.State, score: score, order: i, observer: k.desc.observer}
-				if k.status.State != StateLive {
-					h.AsOf = k.status.AsOf
+				if d < 0 {
+					sk := scannedKind{key: kind, kind: k.desc.ref.Kind, gvr: k.desc.gvr, observer: k.desc.observer, state: k.status.State, cluster: name}
+					if k.status.State != StateLive {
+						sk.asOf = k.status.AsOf
+					}
+					kinds = append(kinds, sk)
+					d = int32(len(kinds) - 1)
 				}
+				c := candidate{e: e, desc: d, order: int32(i), score: int32(score), gen: e.gen, inc: e.inc}
 				if top.Len() < limit {
-					heap.Push(top, h)
-				} else if before(h, (*top)[0]) {
-					(*top)[0] = h
+					heap.Push(top, c)
+				} else if top.better(c, top.c[0]) {
+					top.c[0] = c
 					heap.Fix(top, 0)
 				}
 			}
 			return true
 		})
 		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+			return fail(ctx.Err())
 		}
 	}
 	hits := make([]Hit, top.Len())
 	for i := len(hits) - 1; i >= 0; i-- {
-		hits[i] = heap.Pop(top).(Hit)
+		c := heap.Pop(top).(candidate)
+		k := kinds[c.desc]
+		hits[i] = Hit{Cluster: k.cluster, Kind: k.kind, Key: k.key, GVR: k.gvr, Namespace: c.e.Namespace, Name: c.e.Name, UID: c.e.UID,
+			Incarnation: c.inc, Gen: c.gen, KindState: k.state, AsOf: k.asOf, score: int(c.score), order: int(c.order), observer: k.observer}
 	}
 	if err := ix.roles(ctx, cs, hits); err != nil {
-		return Result{}, err
+		return fail(err)
 	}
 	res.Hits = hits
 	return res, nil
 }
 
 // roles sets each hit's aspect from its cluster's Observer, one call per
-// cluster, fenced by the incarnation the hit was indexed under.
+// cluster, fenced by the incarnation the hit was indexed under - checked
+// before the call and again after it, so an Observer replaced during the
+// read never lends its answer to the new one's hits (review of 9b).
 func (ix *Index) roles(ctx context.Context, cs map[string]*coord, hits []Hit) error {
 	unverified := func(reason string) observe.RoleView {
 		return observe.RoleView{State: observe.RoleUnverified, Reason: reason}
+	}
+	const changed = "the cluster's Observer changed since it was indexed"
+	current := func(c *coord) Observed {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.obs
 	}
 	byCluster := map[string][]int{}
 	for i := range hits {
@@ -161,14 +246,12 @@ func (ix *Index) roles(ctx context.Context, cs map[string]*coord, hits []Hit) er
 	}
 	for name, idx := range byCluster {
 		c := cs[name]
-		c.mu.Lock()
-		obs := c.obs
-		c.mu.Unlock()
+		obs := current(c)
 		var qs []observe.RoleQuery
 		var asked []int
 		for _, i := range idx {
 			if obs == nil || obs.Incarnation() != hits[i].Incarnation {
-				hits[i].Role = unverified("the cluster's Observer changed since it was indexed")
+				hits[i].Role = unverified(changed)
 				continue
 			}
 			qs = append(qs, observe.RoleQuery{UID: hits[i].UID, Source: hits[i].observer})
@@ -181,46 +264,58 @@ func (ix *Index) roles(ctx context.Context, cs map[string]*coord, hits []Hit) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		same := current(c) == obs
 		for j, i := range asked {
-			if !ok {
+			switch {
+			case !ok:
 				hits[i].Role = unverified("the Observer did not answer")
-				continue
+			case !same || obs.Incarnation() != hits[i].Incarnation:
+				hits[i].Role = unverified(changed)
+			default:
+				hits[i].Role = vs[j]
 			}
-			hits[i].Role = vs[j]
 		}
 	}
 	return nil
 }
 
-// before orders hits: score, then fleet order, kind, namespace, name, UID.
-func before(a, b Hit) bool {
+// candHeap keeps the best candidates, at most its capacity, with the worst
+// at the root; ties read the scanned kinds' keys.
+type candHeap struct {
+	c     []candidate
+	kinds *[]scannedKind
+}
+
+func (h *candHeap) Len() int           { return len(h.c) }
+func (h *candHeap) Less(i, j int) bool { return h.better(h.c[j], h.c[i]) }
+func (h *candHeap) Swap(i, j int)      { h.c[i], h.c[j] = h.c[j], h.c[i] }
+func (h *candHeap) Push(x any)         { h.c = append(h.c, x.(candidate)) }
+func (h *candHeap) Pop() any {
+	x := h.c[len(h.c)-1]
+	h.c = h.c[:len(h.c)-1]
+	return x
+}
+
+// better orders matches: score, then fleet order, kind, namespace, name,
+// UID. An entry's identity fields never change once built, so they are read
+// outside the store's lock.
+func (h *candHeap) better(a, b candidate) bool {
 	switch {
 	case a.score != b.score:
 		return a.score > b.score
 	case a.order != b.order:
 		return a.order < b.order
-	case a.Key != b.Key:
-		return a.Key < b.Key
-	case a.Namespace != b.Namespace:
-		return a.Namespace < b.Namespace
-	case a.Name != b.Name:
-		return a.Name < b.Name
 	}
-	return a.UID < b.UID
-}
-
-// hitHeap keeps the best `limit` hits with the worst at the root.
-type hitHeap []Hit
-
-func (h hitHeap) Len() int           { return len(h) }
-func (h hitHeap) Less(i, j int) bool { return before(h[j], h[i]) }
-func (h hitHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *hitHeap) Push(x any)        { *h = append(*h, x.(Hit)) }
-func (h *hitHeap) Pop() any {
-	old := *h
-	x := old[len(old)-1]
-	*h = old[:len(old)-1]
-	return x
+	if ka, kb := (*h.kinds)[a.desc].key, (*h.kinds)[b.desc].key; ka != kb {
+		return ka < kb
+	}
+	switch {
+	case a.e.Namespace != b.e.Namespace:
+		return a.e.Namespace < b.e.Namespace
+	case a.e.Name != b.e.Name:
+		return a.e.Name < b.e.Name
+	}
+	return a.e.UID < b.e.UID
 }
 
 // matcher is one query: a name (and namespace/name) needle, and an

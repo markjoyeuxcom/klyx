@@ -240,6 +240,18 @@ Nine findings, all taken:
 - **`IndexService.Search(ctx, query, limit)`** (bound) returns the hits (cluster, kind, group/version/resource, namespace, name, UID, the kind's state and as-of time, the role word), `Total`, the coverage of every cluster (connection word, indexed or not, each kind's state, entries, as-of and error), and the counts for the coverage line: indexed clusters, and configured kinds readable on at least one of them. A cancelled search answers "search cancelled".
 - **Measured:** 50,000 entries searched in about 17 ms under `-race`.
 
+### 10.1 Review of 647f21c
+
+Five findings, all taken:
+- **Recorded but uncommitted changes:** `RolesNow` first evaluates every dirty ledger part that counts a queried source, as a rows bootstrap does. A lost connection, a relist or a mutation the Observer has recorded is committed (its loss or after-gap emitted, once) before a role is read, so a role is never current across a recorded loss.
+- **A hit's identity:** each entry records the acquisition generation and Observer incarnation it was last read under, refreshed whenever a read sees it. A hit carries its entry's identity, never the attachment's current one, so an entry a new incarnation has not re-read reads unverified.
+- **The fence after the call:** a cluster's role answer is accepted only if the same Observer is still attached, with the hit's incarnation, after `RolesNow` returns.
+- **Cancellation:** searches take a one-place slot whose wait honours the caller's context.
+- **The working set:** each search admits its own reservation against the fleet budget, refused as `ErrSearchBudget`. It covers 64 KiB fixed, 1 KiB per possible hit (candidate, Hit, role query and answer, DTO), 512 B per cluster and 256 B per kind of coverage, and is released by `Result.Release` after the DTO is built.
+  - Matches are kept as compact candidates in a heap preallocated to `limit`; Hits are built only for the winners.
+  - A query over 512 bytes (`MaxQueryBytes`) can match no name and searches nothing, before it is normalized.
+  - Measured: a 200-hit search holds 69 KiB while waiting on roles, against 264 KiB reserved.
+
 ## 11. As built: 9c-1 (the expected UID)
 
 9c is reviewed in two parts: 9c-1 carries the UID through navigation; 9c-2 is the console on top of it.

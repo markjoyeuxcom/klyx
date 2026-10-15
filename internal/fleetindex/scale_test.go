@@ -30,7 +30,7 @@ func BenchmarkVisitSteadyState(b *testing.B) {
 	obs := bigObs(50_000)
 	ix := New(Settings{Kinds: []KindRef{refPods}, Limits: Limits{ClusterEntries: 1e6, ClusterBytes: 1 << 40, FleetEntries: 1e6, FleetBytes: 1 << 40, PodPercent: 100}})
 	c := ix.coordFor("a")
-	c.store.begin(1)
+	c.store.begin(1, 1)
 	visitOnce(b, c, 1, obs)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -48,7 +48,7 @@ func TestVisitCost(t *testing.T) {
 	obs := bigObs(50_000)
 	ix := New(Settings{Kinds: []KindRef{refPods}, Limits: Limits{ClusterEntries: 1e6, ClusterBytes: 1 << 40, FleetEntries: 1e6, FleetBytes: 1 << 40, PodPercent: 100}})
 	c := ix.coordFor("a")
-	c.store.begin(1)
+	c.store.begin(1, 1)
 	start := time.Now()
 	visitOnce(t, c, 1, obs)
 	t.Logf("first fill: %v", time.Since(start))
@@ -75,7 +75,7 @@ func TestObserverKindPeakMemory(t *testing.T) {
 	base := heapNow()
 	ix := New(Settings{Kinds: []KindRef{refPods}})
 	c := ix.coordFor("a")
-	c.store.begin(1)
+	c.store.begin(1, 1)
 	visitOnce(t, c, 1, obs)
 	after := heapNow()
 	_, charged, _, _ := ix.budget.Used("a")
@@ -108,8 +108,8 @@ func entryUIDsOf(c *coord, key string) map[string]*Entry {
 func TestFleetContention(t *testing.T) {
 	ix := New(Settings{Kinds: []KindRef{refPods, refConfigMaps}, Limits: Limits{ClusterEntries: 1000, ClusterBytes: 1 << 30, FleetEntries: 1000, FleetBytes: 1 << 30, PodPercent: 80}})
 	a, b := ix.coordFor("a"), ix.coordFor("b")
-	a.store.begin(1)
-	b.store.begin(2)
+	a.store.begin(1, 1)
+	b.store.begin(2, 1)
 	visitOnce(t, a, 1, bigObs(2000))
 	if st := a.store.status()["/pods"]; st.State != StateCapped || st.Entries != 800 {
 		t.Fatalf("a's pods %+v", st)
@@ -128,7 +128,7 @@ func TestLabelGrowthAtCap(t *testing.T) {
 	src := sources(0, 1)[0]
 	b := NewBudget(Limits{ClusterEntries: 10, ClusterBytes: kindOverhead + estimate(src) + mapSlot, FleetEntries: 10, FleetBytes: 1 << 30, PodPercent: 100})
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	if !read(t, c, 1, "configmaps", ClassOther, []Source{src}) {
 		t.Fatal("fits exactly")
 	}

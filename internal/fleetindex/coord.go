@@ -57,18 +57,18 @@ type Index struct {
 	s      Settings
 	budget *Budget
 
-	mu       sync.Mutex
-	order    []string
-	clusters map[string]*coord
-	genSeq   uint64
-	searchMu sync.Mutex // one search at a time
-	wg       sync.WaitGroup
-	stopped  bool
-	quit     chan struct{} // closed by Stop
+	mu         sync.Mutex
+	order      []string
+	clusters   map[string]*coord
+	genSeq     uint64
+	searchSlot chan struct{} // one search at a time; waiting honours the caller's context
+	wg         sync.WaitGroup
+	stopped    bool
+	quit       chan struct{} // closed by Stop
 }
 
-// New builds an index. The search's working set is charged to the fleet
-// once (§2.6).
+// New builds an index. Each search admits its own working set (§2.6,
+// review of 9b).
 func New(s Settings) *Index {
 	if s.Kinds == nil {
 		s.Kinds = DefaultKinds
@@ -94,8 +94,7 @@ func New(s Settings) *Index {
 	if s.WatchTimeout == 0 {
 		s.WatchTimeout = 5 * time.Minute
 	}
-	ix := &Index{s: s, budget: NewBudget(s.Limits), clusters: map[string]*coord{}, quit: make(chan struct{})}
-	ix.budget.Admit("", ClassOther, 0, SearchReserve)
+	ix := &Index{s: s, budget: NewBudget(s.Limits), clusters: map[string]*coord{}, quit: make(chan struct{}), searchSlot: make(chan struct{}, 1)}
 	return ix
 }
 
@@ -229,7 +228,7 @@ func (c *coord) startLocked() {
 	c.stopLocked()
 	gen := c.ix.nextGen()
 	c.gen, c.ran = gen, true
-	c.store.begin(gen)
+	c.store.begin(gen, c.obs.Incarnation())
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 	obs, acq := c.obs, c.acq

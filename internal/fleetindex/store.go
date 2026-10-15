@@ -60,6 +60,7 @@ type clusterStore struct {
 
 	mu    sync.RWMutex
 	gen   uint64
+	inc   uint64 // the Observer incarnation generation gen reads under
 	kinds map[string]*kindStore
 }
 
@@ -67,12 +68,13 @@ func newClusterStore(cluster string, b *Budget, clk func() time.Time) *clusterSt
 	return &clusterStore{cluster: cluster, budget: b, clk: clk, kinds: map[string]*kindStore{}}
 }
 
-// begin starts acquisition generation gen (> 0): a frozen kind is thawed for its
-// in-place re-read, keeping what it holds.
-func (c *clusterStore) begin(gen uint64) {
+// begin starts acquisition generation gen (> 0), reading under Observer
+// incarnation inc: a frozen kind is thawed for its in-place re-read,
+// keeping what it holds.
+func (c *clusterStore) begin(gen, inc uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gen = gen
+	c.gen, c.inc = gen, inc
 	for _, k := range c.kinds {
 		k.frozen = false
 	}
@@ -153,6 +155,7 @@ func (c *clusterStore) put(gen uint64, kind string, mark uint64, s Source) int {
 		if mark > e.mark {
 			e.mark = mark
 		}
+		e.gen, e.inc = gen, c.inc // read again: the evidence is this generation's
 		if e.same(s, hash) {
 			return putApplied
 		}
@@ -164,7 +167,7 @@ func (c *clusterStore) put(gen uint64, kind string, mark uint64, s Source) int {
 			c.budget.Release(c.cluster, 0, -d)
 		}
 		ne := build(s, hash, size)
-		ne.mark = e.mark
+		ne.mark, ne.gen, ne.inc = e.mark, gen, c.inc
 		k.entries[s.UID] = ne
 		k.bytes += size - e.size
 		return putApplied
@@ -183,7 +186,7 @@ func (c *clusterStore) put(gen uint64, kind string, mark uint64, s Source) int {
 		k.bytes += slot
 	}
 	e := build(s, hash, size)
-	e.mark = max(mark, k.mark)
+	e.mark, e.gen, e.inc = max(mark, k.mark), gen, c.inc
 	k.entries[s.UID] = e
 	k.bytes += size
 	return putApplied

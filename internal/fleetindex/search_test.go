@@ -142,7 +142,7 @@ func TestSearchCancels(t *testing.T) {
 	ix := New(Settings{Kinds: []KindRef{refPods}, Limits: Limits{ClusterEntries: 1e6, ClusterBytes: 1 << 40, FleetEntries: 1e6, FleetBytes: 1 << 40, PodPercent: 100}})
 	defer ix.Stop()
 	c := ix.coordFor("a")
-	c.store.begin(1)
+	c.store.begin(1, 1)
 	visitOnce(t, c, 1, bigObs(50_000))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

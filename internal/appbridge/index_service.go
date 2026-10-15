@@ -88,6 +88,7 @@ func (s *IndexService) Search(ctx context.Context, query string, limit int) (Ind
 		}
 		return IndexSearchDTO{}, err
 	}
+	defer res.Release() // the search's reservation covers the DTO built from it
 	return searchDTO(res), nil
 }
 

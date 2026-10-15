@@ -148,3 +148,34 @@ func TestRolesNowConcurrentWithCommits(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// Review of 9b: a change the Observer recorded but has not yet committed -
+// here a lost connection, before the throttled evaluation - is reconciled
+// before any role is read: never current across a recorded loss.
+func TestRolesNowReconcilesARecordedLoss(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	h := ledgerHarness(t, src, Config{})
+	next := h.baseline("a:absent>ok")
+	h.o.SetConnection("unreachable")
+	v := roles(t, h, RoleQuery{"a", "cms"})[0] // the clock has not advanced: no publish ran
+	if v.State != RoleLastObserved || v.Role != "ok" {
+		t.Fatalf("a recorded disconnect: %+v", v)
+	}
+	// the loss was committed and emitted, once, by the role read
+	n := 0
+	for _, b := range h.sink.allBatches()[next:] {
+		if b.Kind == BatchLoss {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d loss batches", n)
+	}
+	h.settle(300 * time.Millisecond)
+	for _, b := range h.sink.allBatches()[next+1:] {
+		if b.Kind == BatchLoss {
+			t.Fatalf("the publish repeated the loss: %+v", b)
+		}
+	}
+}

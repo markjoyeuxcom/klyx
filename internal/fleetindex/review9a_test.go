@@ -44,7 +44,7 @@ func TestExpiredContinueSweepsTheAbandonedSnapshot(t *testing.T) {
 	ix := New(testSettings(refConfigMaps))
 	defer ix.Stop()
 	c := ix.coordFor("a")
-	c.store.begin(1)
+	c.store.begin(1, 1)
 	if _, err := c.list(context.Background(), 1, &Reader{Client: srv.Client(), Host: srv.URL}, planned{ref: refConfigMaps}, cmGVR, make(chan struct{}, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestScannerBoundsLabelCount(t *testing.T) {
 func TestDeletionKeepsMapCapacityCharged(t *testing.T) {
 	b := NewBudget(DefaultLimits)
 	c := newClusterStore("a", b, func() time.Time { return t0 })
-	c.begin(1)
+	c.begin(1, 1)
 	mark, _ := c.beginRead(1, "/configmaps", ClassOther)
 	before := heapNow() // the store and its empty kind exist: what follows is the entries
 	for i := 0; i < 50000; i++ {
