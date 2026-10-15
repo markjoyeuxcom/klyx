@@ -36,12 +36,12 @@ Each sub-slice is Codex-reviewed on its own, in this order:
 
 | | Builds | Retires |
 |---|---|---|
-| **4a** | Location bar, fleet indicator, Settings > Appearance, the parity table (§2) | `TopBar`'s mast, `AttentionButton`, `ThemeToggle`, `FleetSpine` |
+| **4a** | Location bar, fleet indicator, Settings > Appearance, the parity table (§2) | `TopBar`'s mast, `AttentionButton`, the main window's `ThemeToggle`, `FleetSpine` |
 | **4b** | Lens index (§4) | `NavBand`, its group selector and the nav-tree event |
 | **4c** | `LineDTO` bridge and store, station strip (§5) | - |
 | **4d** | Inspector anatomy, cluster and UID pinning, the object crumb (§6) | Route-cluster fallbacks in inspectors |
 
-`PopoutBar` stays for the logs window.
+`PopoutBar` stays for the logs window, with its `ThemeToggle`: a pop-out has no Settings, and its theme is its own window's.
 
 ## 2. The parity table, implemented
 
@@ -52,12 +52,12 @@ Every function of the retired chrome gets a home in the same sub-slice that reti
 | Mark (to the fleet) | Location bar mark | 4a |
 | Back, forward, `RecentMenu` | Location bar arrows; the recent menu stays on them until the console (slice 9) takes recent places | 4a |
 | "cluster / place" identity | Crumbs: Fleet / Station / Lens / Object | 4a (Object in 4d) |
-| `AttentionButton` (the open cluster's areas, the nav tree) | The fleet indicator for clusters. The lens index's "Needs you" for the open cluster's areas (always visible). | 4a, 4b |
+| `AttentionButton` (the open cluster's areas, the nav tree) | The fleet indicator for clusters, the open one included. The lens index's "Needs you" for the open cluster's areas (always visible). Between 4a and 4b, `NavBand`'s badges and its tree carry the open cluster's areas. | 4a, 4b |
 | "prd lock" chip | A persistent "protected" tag on the station crumb, and in the station strip. "protected (inferred)" when inferred. | 4a, 4c |
 | ⌘K well | Location bar ⌘K well ("Go to, run or ask") | 4a |
-| `ForwardsIndicator` and stop-all | Location bar "forwards" utility, shown while any forward is active, with stop-all inside | 4a |
+| `ForwardsIndicator` and stop-all | Location bar "forwards" utility on every route: with none active it opens the Forwards view; with any active it shows the count and a list with stop-all | 4a |
 | Ask | Location bar utility. Disabled with a reason on routes with no cluster. | 4a |
-| Activity, Terminal, Settings (with its count) | Location bar utilities. Terminal only with an open cluster. | 4a |
+| Activity, Terminal, Settings (with its count) | Location bar utilities on every route. Terminal opens the fleet's kubeconfig, not one cluster's, so it is not tied to an open cluster. | 4a |
 | `ThemeToggle` | Settings > Appearance (new) and the existing palette command. No new shortcut. | 4a |
 | `FleetSpine` lamps and pager | The fleet indicator (§3), plus the station switcher on the station crumb (§2.1) | 4a |
 | Spine expand toggle (`klyx.layout.v1.spineExpanded`) | Retired with the spine; the key is ignored | 4a |
@@ -86,6 +86,13 @@ The order is not read from `LineDTO`:
 - the order must be stable before the first DTO arrives;
 - it must hold for clusters with no Observer.
 
+### 2.3 Geometry (as built)
+
+- **Height:** 40px (`--mast-height`), up from the mast's 36px.
+- **Crumbs:** "Fleet" in the label face, `/` separators, the station as "ENV · REGION" in the label face beside the cluster name in mono, then the lens. On the fleet board "Fleet" alone is the current place; on other fleet and app routes it is "Fleet / place".
+- **Shrink order:** the ⌘K well's words first (down to its icon), then the station's name, then the lens (never below 7ch). The protected tag, the fleet indicator and every utility never shrink, so nothing leaves the screen at 1024px.
+- **Ask:** off a cluster it stays, `aria-disabled`, with its reason ("a conversation is bounded to one cluster").
+
 ## 3. The fleet indicator (4a)
 
 ### 3.1 The model
@@ -94,11 +101,11 @@ A pure `nav/fleetAxes.ts`, built on `fleetAttention.ts` and `clusterAttention.ts
 
 | Axis | A cluster is on it when | Reason shown |
 |---|---|---|
-| **fault** | `mastReading` is attention with a danger tone | its first lit line (`healthReading`) |
+| **fault** | `mastReading` is attention with a danger tone | its first danger line, or the controller that is not ready |
 | **warning** | attention with a warning tone, and not fault | its first lit line |
 | **unreachable** | Failed or Unconnected | `connectionText` |
 | **connection** | Stale or Degraded | `connectionText` |
-| **unverified** | Any of: Connecting; observation ended; or connected with `healthGaps` | "connecting", "observation ended at …", or the first gap |
+| **unverified** | Any of: Connecting (any state that is not settled); observation ended; or Synced or Degraded with `healthGaps`, as `fleetMeters` counts unknown | the connection text, "observation ended at …", "health checking…", or the first gap |
 
 **Overlaps:**
 - Fault and warning are exclusive: danger wins, as the spine's lamp did.
@@ -124,9 +131,9 @@ A pure `nav/fleetAxes.ts`, built on `fleetAttention.ts` and `clusterAttention.ts
 - **Visibility:** on every route, including inside a cluster (parent §4).
 - **Retired with it:**
   - the blink and the lamp column (owner trade-off, parent §14.4);
-  - `spineLamp`'s callers.
+  - `spineCodes` and the spine's expand toggle.
 
-  `fleetMeters` and `ClusterCard` keep their readings.
+  `fleetMeters` and `ClusterCard` keep their readings. `ClusterCard` still calls `spineLamp`, so it stays.
 
 ## 4. The lens index (4b)
 
