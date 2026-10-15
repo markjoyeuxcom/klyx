@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -75,10 +76,13 @@ type captured struct {
 }
 
 // servedGVR inserts a generation's probed version into a KindSpec GVR. A CRD
-// kind's spec GVR is group/resource (no version); a core kind's is already
-// complete and has no probe.
+// kind's spec GVR is group/resource (no version). A spec that already names
+// its version - group/version/resource, or version/resource in the core
+// group - is served as it is, even when a probe gates it (Gateway API's
+// Services and EndpointSlices are probed but fully versioned): inserting the
+// version again would serve "v1/v1/services".
 func servedGVR(spec, version string) string {
-	if version == "" {
+	if version == "" || versioned(spec) {
 		return spec
 	}
 	i := strings.LastIndex(spec, "/")
@@ -86,6 +90,14 @@ func servedGVR(spec, version string) string {
 		return version + "/" + spec
 	}
 	return spec[:i] + "/" + version + "/" + spec[i+1:]
+}
+
+var apiVersion = regexp.MustCompile(`^v[0-9]+((alpha|beta)[0-9]+)?$`)
+
+// versioned: the spec already names its version.
+func versioned(spec string) bool {
+	parts := strings.Split(spec, "/")
+	return len(parts) == 3 || (len(parts) == 2 && apiVersion.MatchString(parts[0]))
 }
 
 // sourceIdentityLocked is one source's continuity now. Caller holds o.mu.

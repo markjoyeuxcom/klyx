@@ -735,3 +735,24 @@ func TestLedgerAbsenceLossKeepsTheServedVersion(t *testing.T) {
 		t.Fatalf("absence loss GVR: %+v", bs)
 	}
 }
+
+// A probed kind whose spec already names its version is served as it is
+// (The Line slice 12 review: Gateway API's Services and EndpointSlices were
+// served as v1/v1/services and discovery.k8s.io/v1/v1/endpointslices, and
+// the index opened their objects as removed).
+func TestServedGVRKeepsAVersionedSpec(t *testing.T) {
+	for spec, want := range map[string]string{
+		"v1/services":                        "v1/services",
+		"discovery.k8s.io/v1/endpointslices": "discovery.k8s.io/v1/endpointslices",
+		"cert-manager.io/certificates":       "cert-manager.io/v1/certificates",
+		"gateway.networking.k8s.io/gateways": "gateway.networking.k8s.io/v1/gateways",
+		"karpenter.sh/nodeclaims":            "karpenter.sh/v1/nodeclaims",
+	} {
+		if got := servedGVR(spec, "v1"); got != want {
+			t.Errorf("%s served as %s, want %s", spec, got, want)
+		}
+	}
+	if got := servedGVR("cert-manager.io/certificates", ""); got != "cert-manager.io/certificates" {
+		t.Errorf("no probe: %s", got)
+	}
+}
