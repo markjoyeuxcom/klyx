@@ -557,7 +557,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
                     </span>
                     {store?.provider && <><span>provider</span><span>{store.provider}</span></>}
                   </div>
-                
+
                 </>
               ),
             },
@@ -580,7 +580,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
                       {hasRefreshed(e) ? `${fmtDuration(ageOf(e, nowS))} ago` : "never synced"}
                     </span>
                   </div>
-                
+
                 </>
               ),
             },
