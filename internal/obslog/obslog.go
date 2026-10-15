@@ -96,7 +96,11 @@ type cluster struct {
 	// with its partition so a replacement or drop clears them. Bounded by
 	// maxProofs too.
 	proofsCapped map[string]partitionKey
-	partitions   map[partitionKey]*PartitionState
+	// overflow are partitions with non-ok keys in neither proofs nor
+	// proofsCapped (both at their cap): a bounded, conservative disclosure
+	// that the partition's proof coverage is incomplete.
+	overflow   map[partitionKey]bool
+	partitions map[partitionKey]*PartitionState
 }
 
 // Log is the observation log for every cluster.
@@ -116,7 +120,7 @@ func New() *Log {
 
 func newCluster(inc uint64) *cluster {
 	return &cluster{incarnation: inc, proofs: map[string]*Proof{}, proofsCapped: map[string]partitionKey{},
-		partitions: map[partitionKey]*PartitionState{}}
+		overflow: map[partitionKey]bool{}, partitions: map[partitionKey]*PartitionState{}}
 }
 
 // live is the retained entries, oldest first.
@@ -134,6 +138,7 @@ func (c *cluster) dropPartitionProofs(pk partitionKey) {
 			delete(c.proofsCapped, k)
 		}
 	}
+	delete(c.overflow, pk)
 }
 
 // Apply consumes one batch, whole, under the log's lock. A batch from an
@@ -316,8 +321,11 @@ func proofOf(b observe.TransitionBatch, it observe.Transition) *Proof {
 // "start unknown (proof capped)".
 func (l *Log) keep(c *cluster, key string, p *Proof) {
 	if _, ok := c.proofs[key]; !ok && len(c.proofs) >= l.maxProofs {
+		pk := partitionKey{p.Task, p.Part, p.Source}
 		if _, marked := c.proofsCapped[key]; marked || len(c.proofsCapped) < l.maxProofs {
-			c.proofsCapped[key] = partitionKey{p.Task, p.Part, p.Source}
+			c.proofsCapped[key] = pk
+		} else {
+			c.overflow[pk] = true // markers exhausted: disclose the partition instead
 		}
 		return
 	}
@@ -328,6 +336,7 @@ func (l *Log) keep(c *cluster, key string, p *Proof) {
 func (l *Log) endProofs(c *cluster) {
 	c.proofs = map[string]*Proof{}
 	c.proofsCapped = map[string]partitionKey{}
+	c.overflow = map[partitionKey]bool{}
 }
 
 func entryOf(b observe.TransitionBatch) Entry {
@@ -375,8 +384,10 @@ func (l *Log) expire(c *cluster) {
 	}
 }
 
-// ProofOf returns a key's current proof. capped reports a non-ok key whose
-// proof was not kept (the cap): its start reads unknown.
+// ProofOf returns a key's current proof. capped reports that the key's
+// proof may have been dropped by the cap - marked by key, or (once the
+// markers are exhausted too) because some partition's proof coverage is
+// incomplete - so a non-ok key's start reads "start unknown (proof capped)".
 func (l *Log) ProofOf(clusterName, key string) (p Proof, ok, capped bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -384,11 +395,12 @@ func (l *Log) ProofOf(clusterName, key string) (p Proof, ok, capped bool) {
 	if c == nil {
 		return Proof{}, false, false
 	}
+	l.expire(c)
 	if pr := c.proofs[key]; pr != nil {
 		return *pr, true, false
 	}
 	_, capped = c.proofsCapped[key]
-	return Proof{}, false, capped
+	return Proof{}, false, capped || len(c.overflow) > 0
 }
 
 // Recent returns up to limit entries, newest first.
@@ -420,6 +432,7 @@ func (l *Log) Partitions(clusterName, task, part string) []PartitionState {
 	if c == nil {
 		return nil
 	}
+	l.expire(c)
 	var out []PartitionState
 	for k, s := range c.partitions {
 		if k.task == task && k.part == part {

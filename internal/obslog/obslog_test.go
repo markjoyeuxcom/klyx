@@ -10,6 +10,15 @@ import (
 var t0 = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
 func at(min int) time.Time       { return t0.Add(time.Duration(min) * time.Minute) }
+
+// newLog is a log on a fixture clock at t0: expiry never depends on the
+// calendar. Tests that test expiry move the clock themselves.
+func newLog() *Log {
+	l := New()
+	l.now = func() time.Time { return t0 }
+	return l
+}
+
 func ptr(t time.Time) *time.Time { return &t }
 
 func batch(kind string, min int, items ...observe.Transition) observe.TransitionBatch {
@@ -38,7 +47,7 @@ func noProof(t *testing.T, l *Log, key string) {
 }
 
 func TestBaselineProvesOnlyRuleStarts(t *testing.T) {
-	l := New()
+	l := newLog()
 	ruled := item("a", observe.StateAbsent, "fault")
 	ruled.Since = ptr(at(-90))
 	l.Apply(batch(observe.BatchBaseline, 0, ruled, item("b", observe.StateAbsent, "fault"), item("c", observe.StateAbsent, "ok")))
@@ -55,7 +64,7 @@ func TestBaselineProvesOnlyRuleStarts(t *testing.T) {
 }
 
 func TestObservedSampledAndDerivedProofs(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "ok")))
 	ch := batch(observe.BatchChanges, 5, item("a", "ok", "fault"))
 	ch.PrevAt = ptr(at(4))
@@ -82,7 +91,7 @@ func TestObservedSampledAndDerivedProofs(t *testing.T) {
 }
 
 func TestRestatedUpdatesTheRuleStart(t *testing.T) {
-	l := New()
+	l := newLog()
 	a := item("a", observe.StateAbsent, "fault")
 	a.Since = ptr(at(-60))
 	l.Apply(batch(observe.BatchBaseline, 0, a))
@@ -100,7 +109,7 @@ func TestRestatedUpdatesTheRuleStart(t *testing.T) {
 }
 
 func TestLossSuspendsAndAfterGapDowngradesObservedProofs(t *testing.T) {
-	l := New()
+	l := newLog()
 	ruled := item("r", observe.StateAbsent, "fault")
 	ruled.Since = ptr(at(-60))
 	l.Apply(batch(observe.BatchBaseline, 0, ruled, item("o", observe.StateAbsent, "ok")))
@@ -126,7 +135,7 @@ func TestLossSuspendsAndAfterGapDowngradesObservedProofs(t *testing.T) {
 }
 
 func TestGoneOkAndUnevaluatedCloseProofs(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault"), item("b", observe.StateAbsent, "fault"), item("c", observe.StateAbsent, "fault")))
 	l.Apply(batch(observe.BatchChanges, 1, item("a", "fault", observe.StateGone), item("b", "fault", "ok"), item("c", "fault", observe.StateUnevaluated)))
 	noProof(t, l, "a")
@@ -135,7 +144,7 @@ func TestGoneOkAndUnevaluatedCloseProofs(t *testing.T) {
 }
 
 func TestCapAndAbsentLossesDropAndABaselineReplaces(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.Apply(batch(observe.BatchBaseline, 0, item("old", observe.StateAbsent, "fault")))
 	capped := batch(observe.BatchLoss, 1)
 	capped.Loss = &observe.Loss{Reason: observe.LossCapped}
@@ -154,7 +163,7 @@ func TestCapAndAbsentLossesDropAndABaselineReplaces(t *testing.T) {
 }
 
 func TestIncarnationsAndEnd(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault")))
 	newer := batch(observe.BatchBaseline, 1, item("b", observe.StateAbsent, "fault"))
 	newer.Incarnation = 2
@@ -179,7 +188,7 @@ func TestIncarnationsAndEnd(t *testing.T) {
 }
 
 func TestEntryAndProofBounds(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.maxEntries, l.maxProofs = 3, 2
 	l.Apply(batch(observe.BatchBaseline, 0))
 	for i := 1; i <= 4; i++ {
@@ -209,7 +218,7 @@ func TestEntryAndProofBounds(t *testing.T) {
 // Review of a0c5cf9: an ended cluster terminally marks its partitions and,
 // once its history expires, keeps only the incarnation fence.
 func TestEndMarksPartitionsAndExpiresToAFence(t *testing.T) {
-	l := New()
+	l := newLog()
 	now := at(0)
 	l.now = func() time.Time { return now }
 	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault")))
@@ -230,7 +239,7 @@ func TestEndMarksPartitionsAndExpiresToAFence(t *testing.T) {
 // Review of a0c5cf9: an after-gap is recorded even with no changed items, so
 // the history keeps when coverage returned.
 func TestAfterGapIsAlwaysLogged(t *testing.T) {
-	l := New()
+	l := newLog()
 	l.Apply(batch(observe.BatchBaseline, 0))
 	loss := batch(observe.BatchLoss, 1)
 	loss.Loss = &observe.Loss{Reason: observe.LossCoverage}
@@ -240,5 +249,43 @@ func TestAfterGapIsAlwaysLogged(t *testing.T) {
 	l.Apply(gap)
 	if es := l.Recent("c1", 1); len(es) != 1 || es[0].Kind != observe.BatchAfterGap || !es[0].PrevAt.Equal(at(1)) {
 		t.Fatalf("after-gap marker: %+v", es)
+	}
+}
+
+// Review of 8b0b822: once proofs and markers are both at the cap, a further
+// non-ok key still reads capped (its partition's coverage is incomplete),
+// and a replacement clears that disclosure.
+func TestMarkerExhaustionStillDisclosesTheCap(t *testing.T) {
+	l := newLog()
+	l.maxProofs = 1
+	l.Apply(batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault"), item("b", observe.StateAbsent, "fault"), item("c", observe.StateAbsent, "fault")))
+	n := 0
+	for _, k := range []string{"a", "b", "c"} {
+		if _, ok, capped := l.ProofOf("c1", k); ok {
+			n++
+		} else if !capped {
+			t.Fatalf("%s: neither proved nor disclosed as capped", k)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("one proof kept under maxProofs=1, got %d", n)
+	}
+	l.Apply(batch(observe.BatchBaseline, 1))
+	if _, _, capped := l.ProofOf("c1", "c"); capped {
+		t.Fatal("a replacement clears the overflow disclosure")
+	}
+}
+
+// Review of 8b0b822: expiry follows the log's clock, never the calendar -
+// fixtures far older than 24h by the wall clock still behave.
+func TestFixturesNeverExpireByTheCalendar(t *testing.T) {
+	l := newLog()
+	old := t0.Add(-72 * time.Hour)
+	l.now = func() time.Time { return old }
+	b := batch(observe.BatchBaseline, 0, item("a", observe.StateAbsent, "fault"))
+	b.At = old
+	l.Apply(b)
+	if es := l.Recent("c1", 0); len(es) != 1 {
+		t.Fatalf("an old fixture expired by the calendar: %+v", es)
 	}
 }

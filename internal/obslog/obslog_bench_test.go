@@ -13,7 +13,7 @@ import (
 //	go test ./internal/obslog -run '^$' -bench Apply -benchmem
 
 func fullLog() *Log {
-	l := New()
+	l := newLog()
 	for i := 0; i < MaxEntries; i++ {
 		l.Apply(batch(observe.BatchChanges, 0, item(fmt.Sprint("f", i), "ok", "ok")))
 	}
