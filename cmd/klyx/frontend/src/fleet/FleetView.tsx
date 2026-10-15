@@ -6,10 +6,12 @@ import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout } from "../layout/LensLayout";
 import { useFleetAttention } from "../nav/fleetAttention";
 import { LineBoard, LineVerdictView } from "./LineBoard";
+import { NeedsYou } from "./NeedsYou";
 
 // The fleet screen (The Line slice 5): the line's verdict and legend, then
-// the board, from LineDTO and each cluster's summary - the screen fetches
-// nothing of its own. "Needs you" (5b) and the aside (5c) follow.
+// the board, from LineDTO and each cluster's summary, then "Needs you" from
+// the same summaries - the screen fetches nothing of its own. The aside
+// (5c) follows.
 export function FleetView() {
   const clusters = useFleet((s) => s.clusters);
   const dto = useLine((s) => s.dto);
@@ -42,6 +44,7 @@ export function FleetView() {
               <LineBoard dto={dto} clusters={clusters} models={models} />
             </>
           ) : <SkeletonRows rows={3} label="reading the line" />}
+          <NeedsYou clusters={clusters} models={models} />
         </div>
       }
       footerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{clusters.length} cluster{clusters.length === 1 ? "" : "s"}</span>}

@@ -43,6 +43,8 @@ import { spineLamp, connectionText } from "./fleetAttention";
 import { NAV_GROUPS } from "./registry";
 import { StationCell } from "../fleet/LineBoard";
 import { stationReading } from "../fleet/stationReading";
+import { fleetQueue } from "../fleet/queue";
+import { NeedsYou, useQueueFilter } from "../fleet/NeedsYou";
 import type { LineDTO, LineStationDTO } from "../store/line";
 import { LensIndex } from "../chrome/LensIndex";
 import { lensIndex } from "./lensIndex";
@@ -224,7 +226,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
     }
   });
 
-  it("the fleet indicator, the lens index, the station cell and Overview render each case - and call no list endpoint", () => {
+  it("the fleet indicator, the lens index, the station cell, Needs you and Overview render each case - and call no list endpoint", () => {
     for (const c of captures()) {
       load(c, true);
       const m = model(c);
@@ -298,6 +300,25 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       else expect(text, c.case).toContain(c.case === "B" ? "nothing raised" : "health partly unverified");
       expect(text.includes("connected with notes"), `${c.case} connection`).toBe(c.expect.state === "Degraded");
       cell.unmount();
+
+      // "Needs you" (slice 5b): each lit line's fault and attention samples
+      // are rows with their label, "+N more" past them, each not-ready
+      // controller and each gap line is a row - the card's per-line words
+      const qm = fleetQueue([c.cluster], { [c.cluster.name]: m });
+      for (const { a, l } of litLines) {
+        const shown = l.top.filter((t) => t.role === "fault" || t.role === "degraded");
+        for (const t of shown) expect(qm.rows.some((row) => row.kind === "object" && row.task === a.id && row.part === l.part && row.ref.name === t.name && row.label === t.label), `${c.case} ${a.id}/${l.part} ${t.name}`).toBe(true);
+        const more = qm.rows.find((row) => row.kind === "more" && row.task === a.id && row.part === l.part);
+        expect(more?.kind === "more" ? more.count : 0, `${c.case} ${a.id}/${l.part} more`).toBe(Math.max(0, l.n - shown.length));
+      }
+      for (const a of ctl) expect(qm.rows.some((row) => row.kind === "controller" && row.task === a.id), `${c.case} ${a.id} controller row`).toBe(true);
+      for (const { a, l } of gapLines) {
+        if (l.gaps.some((g) => /could not be read|last good|not read yet/.test(g)) || l.state === "unreadable") expect(qm.rows.some((row) => row.kind === "coverage" && row.task === a.id && row.part === l.part), `${c.case} ${a.id}/${l.part} coverage row`).toBe(true);
+      }
+      useQueueFilter.setState({ filter: "all" });
+      const qv = render(<NeedsYou clusters={[c.cluster]} models={{ [c.cluster.name]: m }} />);
+      expect(qv.container.querySelectorAll(".queue-row").length, `${c.case} rendered rows`).toBe(qm.rows.length);
+      qv.unmount();
 
       // Overview
       useFleet.setState({ route: { name: "cluster", cluster: c.cluster.name, section: "overview" } });

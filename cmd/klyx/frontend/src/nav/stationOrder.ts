@@ -13,7 +13,8 @@ const ENV_RANK: [RegExp, number][] = [
   [/^(stg|stage|staging|preprod|pre-prod)$/, 2],
   [/^(prd|prod|production)$/, 3],
 ];
-const envRank = (env: string) => ENV_RANK.find(([re]) => re.test(env))?.[1] ?? 4;
+// envRank: 0 dev … 3 prd; 4 for an unrecognised environment.
+export const envRank = (env: string) => ENV_RANK.find(([re]) => re.test(env))?.[1] ?? 4;
 
 export type StationGroup = { env: string | null; clusters: ClusterDTO[] };
 
