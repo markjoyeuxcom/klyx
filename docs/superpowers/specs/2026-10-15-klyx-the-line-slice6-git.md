@@ -135,7 +135,7 @@ git:
   repos:
     - url: git@github.com:acme/fleet.git   # executed exactly as approved
       web: https://github.com/acme/fleet   # optional: "Open in Git" for unknown hosts
-      remoteBases: false                   # 6e: allow remote Kustomize bases from approved repos
+      remoteBases: false                   # reserved: remote bases stay refused (deferred, §7.1)
 ```
 
 - **The writer** generalises the AI block writer: `replaceTopLevelBlock(doc, key, block)` and `onlyKeyChanged(before, after, key)`, used by `SaveAI` and the new `SaveGit`, under the same lock and `replaceUnchanged`.
@@ -175,7 +175,7 @@ git:
   - "Clear cache" needs no confirmation, since the next fetch rebuilds the cache.
   - "Remove" withdraws the approval and clears the cache, after a confirmation.
 - **Startup:** Git starts in the background, so the panel reads "Checking git…" until it is ready.
-- **Left for later:** the fetch cadence and `line:git` are 6d; the `remoteBases` toggle is 6e.
+- **Left for later:** the fetch cadence and `line:git` are 6d; the `remoteBases` setting is deferred beyond slice 6 (§7.1).
 
 ## 6. The line with history (6d)
 
@@ -255,14 +255,16 @@ git:
 
 The parent's contract, with the modules it needs:
 - **New dependencies:** `sigs.k8s.io/kustomize/api` and `kyaml` for the in-process build, and `github.com/fluxcd/pkg/ssa` for the server-side dry-run diff `flux diff` itself uses.
-- **The build:** the input set in rounds (at most 10, 5,000 files, 64 MiB), acquired as content, exported with `git archive`, loaded into an in-memory filesystem that refuses absolute paths, `..` and escaping links, and built with root-only load restrictions, no plugins, no exec functions, and a loader that refuses every remote URL (unless `remoteBases` is on for that repo, and then only from approved URLs through the same acquisition).
+- **The build:** the input set in rounds (at most 10, 5,000 files, 64 MiB), acquired as content, exported with `git archive`, loaded into an in-memory filesystem that refuses absolute paths, `..` and escaping links, and built with root-only load restrictions, no plugins, no exec functions, and a loader that refuses every remote URL (§7.1: remote bases are refused; the per-repo setting is deferred).
 - **The diff:** server-side dry-run on the station's pinned connection, as `flux diff` does. SOPS files are diffed as stored and the result says so; post-build substitution is not applied and the result says "variables shown unsubstituted".
 - **The UI:** the Flux inspector's "Compute diff" uses the cache when its repo is approved and fetched, and says which (cache or none) it used. The flux CLI path stays for unapproved repos.
 - **Fixtures:** a generator reading `../outside.txt` fails, a nested base escaping the root fails, and a remote base is refused.
 
-### 7.1 Design addendum for 6e (for review before it is built)
+### 7.1 Design addendum for 6e
 
-Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does not settle. Each is proposed here for a ruling before any 6e code.
+Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does not settle. Ruled in design review of 241dfd7:
+- 1, 2, 4, 5 and 6 accepted. Point 1 holds for Unix; on Windows the path is off. Point 2's deferral is reconciled in the parent.
+- 3 revised below, with a freshness fence.
 
 1. **The build runs in a contained child process.**
    - **Why not in-process:** `krusty.Kustomizer.Run` builds its own loader (`internal/loader.NewLoader`), and neither of its remote paths can be switched off through the public API:
@@ -279,9 +281,16 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
    - **Windows:** no reviewed containment, so the cache diff is off and the flux CLI path stays.
 2. **Remote references are refused before the build.** The rounds parse every kustomization file. Any `resources`, `bases` or `components` entry kustomize would load remotely is refused, naming it: an `http(s)` URL, or a repository spec as kustomize reads one (`git::`, `ssh://`, `https://`, `git@host:`, or `host/org/repo?ref=`). The child's refusing transport and missing `PATH` are the second line.
    - **`remoteBases` is deferred.** §7 allows remote bases per repo, but only from approved URLs through the same acquisition, and that needs a resolver mapping a base URL onto an approved cache and an in-memory mount. In 6e every remote base is refused ("remote bases are not supported yet"), and Settings > Git shows no toggle.
-3. **The revision built** is the Kustomization's own `status.lastAttemptedRevision`, the commit Flux is trying to apply. When absent, it is the GitRepository's artifact revision. Either is a full commit id.
-   - When the cache lacks that commit, Klyx fetches exactly it (a commit ref, `+<sha>:refs/klyx/staging/commit/<sha>`) through the acquisition contract, then acquires content.
-   - This adds a third source of a tracked ref to §3.6, beside the line key and the override: a Flux Kustomization's attempted revision, a validated full commit id read from the cluster, fetched only when the owner asks for a cache diff.
+3. **The revision built is the one Flux would apply next** (revised in design review of 241dfd7): the Kustomization's GitRepository's current artifact revision. For a suspended Kustomization it is what resuming would apply.
+   - **Fenced to the current spec and source.** The diff is refused as "not reconciled yet" unless:
+     - the Kustomization's `status.observedGeneration` equals its `metadata.generation`;
+     - its GitRepository's `status.observedGeneration` equals its `metadata.generation`;
+     - the GitRepository is Ready, with an artifact naming a revision.
+
+     An artifact or attempted revision from before a URL, ref, path or source edit could otherwise be built under today's paths and overlay.
+   - **Parsed, never passed through.** Flux's revision syntax (`<ref>@sha1:<id>`, `sha1:<id>`, `<ref>/<id>`) is parsed to a full commit id and validated as 40 or 64 hex. Raw cluster text is never used as a ref.
+   - **Fetched when missing.** When the cache lacks the commit, Klyx fetches exactly it (a commit ref, `+<sha>:refs/klyx/staging/commit/<sha>`) through the acquisition contract, then acquires content. This adds a third source of a tracked ref to §3.6, beside the line key and the override: the validated commit id of a fenced GitRepository artifact, fetched only when the owner asks for a cache diff.
+   - **Sources other than a GitRepository** (OCIRepository, Bucket) are refused: the cache holds Git history only.
 4. **The input set and its export.**
    - **Rounds** start at the literal `spec.path`. Each round reads the kustomization file (`kustomization.yaml`, `kustomization.yml` or `Kustomization`) of each newly added directory and adds what it references, resolved against that directory and refused if it leaves the repository:
      - `resources`, `bases` and `components` directories (their subtrees) or files;
@@ -298,7 +307,7 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
 5. **What Flux adds is applied too.** kustomize-controller wraps `spec.path` in a generated overlay, so a bare build would not be what Flux applies. The child gets that overlay from the Kustomization's spec, as Flux's own generator writes it: `targetNamespace`, `namePrefix`, `nameSuffix`, `commonMetadata`, `images`, `patches` and `components`.
    - Not applied, and said in the result: `postBuild` substitution ("variables shown unsubstituted") and SOPS ("encrypted files diffed as stored").
 6. **The diff.** In Klyx's process, each built object is dry-run applied server-side on the station's pinned connection (`ssa.ResourceManager.Diff`), with Flux's field manager (`kustomize-controller`), so the diff is what Flux would change.
-   - **The output:** per object "created", "configured" with a YAML diff, or "unchanged". When `spec.prune` is on, an object in the Kustomization's inventory and not in the build reads "would be pruned". Secret `data` and `stringData` values are always masked.
+   - **The output** is the diff result, never a claim about delivery or cause: per object "created", "configured" with a YAML diff, or "unchanged". When `spec.prune` is on, an object in the Kustomization's inventory and not in the build reads "would be pruned". Secret `data` and `stringData` values are always masked. The result names the revision built and what was not applied.
    - **The modules:**
      - `sigs.k8s.io/kustomize/api` and `kyaml` v0.21.3.
      - `github.com/fluxcd/pkg/ssa` v0.77.0, the last release built on client-go v0.36.2 (v0.78+ would move the whole app to k8s 0.37, controller-runtime 0.25, kubectl and cli-runtime). It brings controller-runtime v0.24.1.
@@ -314,7 +323,7 @@ Surveying kustomize api v0.21.3 and `fluxcd/pkg/ssa` showed six points §7 does 
 - **6b:** every row of the parent's recovery table, by killing the process between journaled steps; a cap mid-fetch; cancellation in the queue; the content contract (only the listed ids, refusal above 5,000); `fsck --connectivity-only` after restart.
 - **6c:** the writer changes only `git`; matching by normalised URL; an alias entry mapped explicitly; an unapproved URL never executed.
 - **6d:** each ordered state and its reason; "held · N behind" for each evidence kind; the Ledger's union and its diverged/ahead listing; caps on untrusted text; a `line:git` for an older LineDTO is not shown.
-- **6e:** the confinement fixtures; SOPS and substitution wording; a remote base refused, then allowed per repo.
+- **6e:** the confinement fixtures; SOPS and substitution wording; a remote base refused; a stale source refused (§7.1 point 3).
 
 ## 9. Open points (ruled in design review e48a108c)
 

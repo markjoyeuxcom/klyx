@@ -753,7 +753,7 @@ A published cache passes `git fsck --connectivity-only` with its blobs missing, 
 
      Because nothing outside the archive exists in that filesystem, no generator, patch, schema or nested base can read the owner's disk.
   4. The objects built are diffed against the cluster with a server-side dry-run, through Flux's `ssa` package, which is what `flux diff` itself uses. It runs on the station's pinned connection.
-- **Remote bases** are refused, unless the owner enables them per repo in Settings > Git. In that case they are fetched only from approved `git.repos` URLs, through the same staged acquisition.
+- **Remote bases** are refused. (Revised 2026-10-15, slice 6 note §7.1: the per-repo setting that would allow them from approved `git.repos` URLs, through the same staged acquisition, is deferred beyond slice 6.)
 - **Not done:**
   - **Decryption:** never. SOPS-encrypted files are diffed as stored, and the result says so.
   - **Flux post-build substitution:** not applied. The diff says "variables shown unsubstituted".
@@ -1249,6 +1249,6 @@ Each source below is new, and each declares where its claims come from.
     - Each configurable in `fleet.yaml`.
 12. **Git previews and builds.** Proposal:
     - Reading an allowed repo never authorises remote Kustomize bases, plugins or decryption.
-    - Remote bases can be enabled per repo, explicitly, and only from approved repos.
-    - Cache builds are in-process and confined; the flux CLI is not used for them.
+    - Remote bases can be enabled per repo, explicitly, and only from approved repos. (Deferred beyond slice 6, slice 6 note §7.1: until then remote bases are always refused.)
+    - Cache builds are confined; the flux CLI is not used for them. (Slice 6 note §7.1: the build runs in a contained child process of Klyx's own binary, because kustomize's loader fetches remote content outside the transport boundary.)
     - Decryption is never offered.
