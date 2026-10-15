@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { DepGraph, DepNode } from "../bridge/depGraph";
-import { conditionText, depTree, notHereText, proximityText, supplyText, writeText, type DepStep } from "./depGraph";
+import { conditionText, depTree, notHereText, proximityText, shortSha, supplyText, writeLines, writeText, type DepStep } from "./depGraph";
 
 // The Line slice 8c (parent §5.1): the graph as steps, in the parent's
 // words - typed edges, reported blockers, "upstream failure", "reported
@@ -80,9 +80,13 @@ describe("depTree", () => {
 
   it("states supply and change proximity without causality", () => {
     const [platform] = byName(/^GitRepository flux-system\/platform$/);
-    expect(platform.evidence.supply).toEqual(["Credential supplied by ExternalSecret flux-system/deploy-key (Ready)"]);
+    expect(platform.evidence.supply).toEqual([
+      "Credential supplied by ExternalSecret flux-system/deploy-key (Ready)",
+      "Secret flux-system/deploy-key: no managed-field record",
+      "ExternalSecret flux-system/deploy-key: no managed-field record",
+    ]);
     expect(platform.evidence.proximity[0]).toMatch(/^Secret flux-system\/deploy-key: last managed-field update \d\d:\d\d \(external-secrets, Update\)\. GitRepository flux-system\/platform Ready=False since \d\d:\d\d \(condition time\)\.$/);
-    expect(platform.evidence.writes).toMatch(/^last managed-field update \d\d:\d\d \(kubectl, Update\)$/);
+    expect(platform.evidence.writes).toEqual(["no managed-field record"]); // lastWrite is the actual last update; this node has none
   });
 });
 
@@ -111,5 +115,34 @@ describe("wording", () => {
     expect(notHereText({ ...r, state: "at", commits: [] }, "./apps")).toBe("at T");
     expect(notHereText({ ...r, state: "unavailable", reason: "its applied revision is ahead of T", commits: [] }, "./apps")).toBe("not here yet: unavailable (its applied revision is ahead of T)");
     expect(notHereText(undefined, "./apps")).toBeUndefined();
+  });
+});
+
+// Design review of d4ed130: managed-field records are shown as they are,
+// the condition keeps its generation in a proximity sentence, and a sha256
+// id is abbreviated from its start.
+describe("review of d4ed130", () => {
+  const status = { time: "2026-10-15T20:30:00Z", manager: "status_writer", operation: "Update", subresource: "status", statusUpdate: true };
+  const spec = { time: "2026-10-15T20:00:00Z", manager: "spec_writer", operation: "Apply", statusUpdate: false };
+  it("the actual last update, then the older main-resource one", () => {
+    const lines = writeLines(status, spec);
+    expect(lines[0]).toMatch(/^last managed-field update \d\d:\d\d \(status_writer, Update, status update\)$/);
+    expect(lines[1]).toMatch(/^last main-resource update \d\d:\d\d \(spec_writer, Apply\)$/);
+    expect(writeLines(spec, spec)).toHaveLength(1);
+  });
+  it("a non-status subresource is named", () => {
+    expect(writeText({ time: at, manager: "kubectl", operation: "Update", subresource: "scale", statusUpdate: false })).toMatch(/, subresource scale\)$/);
+  });
+  it("a proximity sentence keeps the condition's generation", () => {
+    const failing = n("Kustomization/flux-system/apps", { ready: "False", conditionGeneration: 1, generation: 2, conditionTime: at });
+    expect(proximityText({ failing: failing.id, conditionTime: at, object: "Secret/flux-system/age", write: spec }, failing))
+      .toMatch(/\(condition time; for generation 1; the spec is at generation 2\)\.$/);
+  });
+  it("abbreviates a complete id from its start", () => {
+    const sha256 = "0123456789abcdef".repeat(4);
+    expect(shortSha("main@sha256:" + sha256)).toBe("0123456");
+    expect(shortSha(sha256)).toBe("0123456");
+    expect(shortSha("main@sha1:" + "a".repeat(40))).toBe("aaaaaaa");
+    expect(shortSha("v1.2.3")).toBe("v1.2.3");
   });
 });

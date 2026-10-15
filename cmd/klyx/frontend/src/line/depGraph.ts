@@ -14,7 +14,7 @@ export type DepEvidence = {
   condition?: string; // the failing condition, qualified by its generation
   supply: string[]; // supply facts
   proximity: string[]; // change proximity, two qualified times side by side
-  writes?: string; // the node's last recorded managed-field update
+  writes: string[]; // the node's last recorded managed-field update (and its last main-resource one when that is older)
   inventory?: string; // "last applied <sha>; inventory N objects (M workloads)"
 };
 
@@ -36,8 +36,10 @@ export type DepStep = {
 // hhmm: a 24-hour clock, as the parent words times ("20:21").
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
+// shortSha abbreviates a complete commit id - sha1 (40 hex) or sha256 (64
+// hex), bare or after "<ref>@sha1:" / "sha256:" - from its beginning.
 export const shortSha = (rev: string) => {
-  const m = /([0-9a-f]{40})$/.exec(rev);
+  const m = /(?:^|[@:])([0-9a-f]{64}|[0-9a-f]{40})$/.exec(rev);
   return m ? m[1].slice(0, 7) : rev;
 };
 
@@ -49,17 +51,39 @@ export function nodeName(n: DepNode): string {
 
 // writeText: the last recorded managed-field update, never an audit entry:
 // a manager is a workflow identifier, and nothing says which field changed.
-export function writeText(w: DepWrite | undefined): string {
+export function writeText(w: DepWrite | undefined, what = "last managed-field update"): string {
   if (!w) return "no managed-field record";
-  return `last managed-field update ${hhmm(w.time)} (${w.manager}, ${w.operation}${w.statusUpdate ? ", status update" : ""})`;
+  const sub = w.statusUpdate ? ", status update" : w.subresource ? `, subresource ${w.subresource}` : "";
+  return `${what} ${hhmm(w.time)} (${w.manager}, ${w.operation}${sub})`;
 }
+
+// writeLines: the actual last update, and the last main-resource one when
+// that is a different, older record (change proximity reads only that).
+export function writeLines(last: DepWrite | undefined, spec: DepWrite | undefined): string[] {
+  const lines = [writeText(last)];
+  if (last && spec && (spec.time !== last.time || spec.manager !== last.manager || spec.operation !== last.operation || spec.subresource !== last.subresource)) {
+    lines.push(writeText(spec, "last main-resource update"));
+  }
+  return lines;
+}
+
+// generationText qualifies a condition that describes an older spec.
+const generationText = (n: DepNode) =>
+  n.conditionGeneration > 0 && n.conditionGeneration < n.generation ? ` - for generation ${n.conditionGeneration}; the spec is at generation ${n.generation}` : "";
 
 export function conditionText(n: DepNode): string | undefined {
   if (n.ready !== "False") return undefined;
   const at = n.conditionTime ? ` since ${hhmm(n.conditionTime)} (condition time)` : "";
-  const gen = n.conditionGeneration > 0 && n.conditionGeneration < n.generation
-    ? ` - for generation ${n.conditionGeneration}; the spec is at generation ${n.generation}` : "";
-  return `Ready=False${at}${n.reason ? `: ${n.reason}` : ""}${n.message ? ` - ${n.message}` : ""}${gen}`;
+  return `Ready=False${at}${n.reason ? `: ${n.reason}` : ""}${n.message ? ` - ${n.message}` : ""}${generationText(n)}`;
+}
+
+// supplyLines: the supply fact, then the managed-field records of what was
+// read - the Secret's and its supplier's - or their honest absence.
+export function supplyLines(s: DepSupply): string[] {
+  const lines = [supplyText(s)];
+  if (!s.error && !s.notFound) lines.push(`Secret ${s.namespace}/${s.name}: ${writeText(s.lastWrite)}`);
+  if (s.supplier) lines.push(`ExternalSecret ${s.supplier.namespace}/${s.supplier.name}: ${writeText(s.supplier.lastWrite)}`);
+  return lines;
 }
 
 export function supplyText(s: DepSupply): string {
@@ -81,7 +105,8 @@ export function proximityText(p: DepPair, failing: DepNode | undefined): string 
   const obj = p.object.split("/");
   const who = obj.length === 3 ? `${obj[0]} ${obj[1]}/${obj[2]}` : p.object;
   const node = failing ? `${failing.kind} ${failing.namespace}/${failing.name}` : p.failing;
-  return `${who}: last managed-field update ${hhmm(p.write.time)} (${p.write.manager}, ${p.write.operation}). ${node} Ready=False since ${hhmm(p.conditionTime)} (condition time).`;
+  const gen = failing ? generationText(failing) : "";
+  return `${who}: last managed-field update ${hhmm(p.write.time)} (${p.write.manager}, ${p.write.operation}). ${node} Ready=False since ${hhmm(p.conditionTime)} (condition time${gen ? gen.replace(/^ - /, "; ") : ""}).`;
 }
 
 function aspectOf(n: DepNode): AspectKind {
@@ -116,20 +141,20 @@ export function depTree(g: DepGraph): DepStep[] {
   const step = (id: string, segment: RailSegment, words: string | undefined, path: string): DepStep => {
     const n = byId.get(id);
     const key = `${path}>${id}`;
-    if (!n) return { key, id, segment, name: id, aspect: "checking", tags: [], evidence: { supply: [], proximity: [] }, chainEnd: false, branches: [] };
+    if (!n) return { key, id, segment, name: id, aspect: "checking", tags: [], evidence: { supply: [], proximity: [], writes: [] }, chainEnd: false, branches: [] };
     const incomplete = !!n.stub && INCOMPLETE.has(n.stub);
     const seg: RailSegment = incomplete ? "incomplete" : segment;
     const segWords = incomplete ? `incomplete: ${n.stub}` : words;
     if (drawn.has(id)) {
-      return { key, id, segment: seg, segmentWords: segWords, name: `${nodeName(n)} (see above)`, aspect: aspectOf(n), tags: [], evidence: { supply: [], proximity: [] }, chainEnd: false, ref: true, branches: [] };
+      return { key, id, segment: seg, segmentWords: segWords, name: `${nodeName(n)} (see above)`, aspect: aspectOf(n), tags: [], evidence: { supply: [], proximity: [], writes: [] }, chainEnd: false, ref: true, branches: [] };
     }
     drawn.add(id);
     const start = id === g.start;
     const evidence: DepEvidence = {
       condition: conditionText(n),
-      supply: (n.supply ?? []).map(supplyText),
+      supply: (n.supply ?? []).flatMap(supplyLines),
       proximity: (pairs.get(id) ?? []).map((p) => proximityText(p, n)),
-      writes: n.stub ? undefined : writeText(n.lastSpecWrite ?? n.lastWrite),
+      writes: n.stub ? [] : writeLines(n.lastWrite, n.lastSpecWrite),
       inventory: n.inventory ? `${n.inventory.lastApplied ? `last applied ${shortSha(n.inventory.lastApplied)}` : "no applied revision recorded"}; inventory ${n.inventory.entries} objects (${n.inventory.workloads} workloads)` : undefined,
     };
     const branches = (out.get(id) ?? []).map((e) => [
@@ -146,7 +171,7 @@ export function depTree(g: DepGraph): DepStep[] {
   const cycleStep = (to: string, reported: boolean, path: string): DepStep => {
     const n = byId.get(to);
     return { key: `${path}>cycle>${to}`, id: to, segment: "incomplete", segmentWords: reported ? "incomplete: cycle, reported blocker" : "incomplete: cycle", name: `cycle: back to ${n ? nodeName(n) : to} (see above)`,
-      aspect: "checking", tags: [], evidence: { supply: [], proximity: [] }, chainEnd: false, ref: true, branches: [] };
+      aspect: "checking", tags: [], evidence: { supply: [], proximity: [], writes: [] }, chainEnd: false, ref: true, branches: [] };
   };
   if (!g.start) return [];
   return [step(g.start, "chain", undefined, "")];

@@ -13,11 +13,13 @@ import { depTree, notHereText, type DepStep } from "../line/depGraph";
 
 type Walk = { key: string; graph?: DepGraph; error?: string };
 
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
 export function DependencyGraphSection({ cluster, kind, namespace, name, uid }: { cluster: string; kind: string; namespace: string; name: string; uid: string }) {
   const [tick, setTick] = useState(0);
   const key = `${cluster}\u0000${kind}\u0000${namespace}\u0000${name}\u0000${uid}\u0000${tick}`;
   const [walk, setWalk] = useState<Walk>({ key: "" });
-  const [git, setGit] = useState<{ key: string; res: NotHereYet } | null>(null);
+  const [git, setGit] = useState<{ key: string; res?: NotHereYet; error?: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -30,7 +32,10 @@ export function DependencyGraphSection({ cluster, kind, namespace, name, uid }: 
         const nodes = g.nodes.filter((n) => n.git).map((n) => ({ id: n.id, ...n.git! }));
         if (nodes.length === 0) return;
         gitCall = notHereYet(nodes);
-        gitCall.then((res) => live && setGit({ key, res }), () => {});
+        gitCall.then(
+          (res) => live && setGit({ key, res }),
+          (e: unknown) => live && setGit({ key, error: e instanceof Error ? e.message : String(e) }),
+        );
       },
       (e: unknown) => live && setWalk({ key, error: e instanceof Error ? e.message : String(e) }),
     );
@@ -44,7 +49,9 @@ export function DependencyGraphSection({ cluster, kind, namespace, name, uid }: 
   const mine = walk.key === key ? walk : null;
   const g = mine?.graph;
   const results = new Map<string, NotHereYetResult>();
-  if (git && git.key === key) for (const r of git.res.results) results.set(r.id, r);
+  const gitNow = git && git.key === key ? git : null;
+  if (gitNow?.res) for (const r of gitNow.res.results) results.set(r.id, r);
+  const target = gitNow?.res?.target;
   const paths = new Map((g?.nodes ?? []).filter((n) => n.git).map((n) => [n.id, n.git!.path]));
   const err = mine?.error ?? g?.error;
 
@@ -53,9 +60,15 @@ export function DependencyGraphSection({ cluster, kind, namespace, name, uid }: 
       <div data-testid="dep-graph" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="t-secondary" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
           {g && !g.error && <span>{g.reads} read{g.reads === 1 ? "" : "s"}</span>}
-          {git && git.key === key && git.res.target && (
-            <span>T {git.res.target.name}{git.res.target.fetchedAt ? `, fetched ${new Date(git.res.target.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+          {target && (
+            <span data-git-target>
+              T {target.name}
+              {target.fetchedAt && (target.error
+                ? `, history as of ${clock(target.fetchedAt)}; fetch failed: ${target.error}`
+                : `, fetched ${clock(target.fetchedAt)}`)}
+            </span>
           )}
+          {gitNow?.error && <span data-git-error style={{ color: "var(--line-caution, var(--color-text-warning))" }}>not here yet: unavailable (Git read failed: {gitNow.error})</span>}
           <button type="button" className="t-secondary" onClick={() => setTick((t) => t + 1)} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)" }}>
             Re-walk
           </button>
@@ -81,7 +94,7 @@ function railStep(s: DepStep, git: Map<string, NotHereYetResult>, paths: Map<str
     for (const x of s.evidence.supply) lines.push({ text: x });
     for (const x of s.evidence.proximity) lines.push({ text: x });
     if (s.evidence.inventory) lines.push({ text: s.evidence.inventory });
-    if (s.evidence.writes) lines.push({ text: s.evidence.writes, tone: "muted" });
+    for (const w of s.evidence.writes) lines.push({ text: w, tone: "muted" });
   }
   const gitText = s.ref ? undefined : notHereText(r, paths.get(s.id) ?? "");
   return {

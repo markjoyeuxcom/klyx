@@ -76,6 +76,21 @@ describe("DependencyGraphSection", () => {
     expect(getByTestId("dep-graph").textContent).toContain("Dependency graph read failed: deadline exceeded");
   });
 
+  // Design review of d4ed130: a failed fetch is disclosed beside the T it
+  // kept, and a failed Git read says so; the graph stays usable.
+  it("discloses a failed fetch and a failed Git read", async () => {
+    const r1 = render(<DependencyGraphSection cluster="prd" kind="Kustomization" namespace="flux-system" name="apps" uid="u1" />);
+    await act(async () => graphCalls[0].resolve(graphOf("apps")));
+    await act(async () => gitCalls[0].c.resolve({ target: { ref: "refs/heads/main", name: "main", sha: "b".repeat(40), fetchedAt: "2026-10-15T20:31:00Z", error: "auth failed" }, results: [] }));
+    expect(r1.getByTestId("dep-graph").querySelector("[data-git-target]")?.textContent).toMatch(/^T main, history as of \d\d:\d\d; fetch failed: auth failed$/);
+    r1.unmount();
+    const r2 = render(<DependencyGraphSection cluster="prd" kind="Kustomization" namespace="flux-system" name="apps" uid="u1" />);
+    await act(async () => graphCalls[1].resolve(graphOf("apps")));
+    await act(async () => gitCalls[1].c.reject(new Error("store unavailable")));
+    expect(r2.getByTestId("dep-graph").querySelector("[data-git-error]")?.textContent).toBe("not here yet: unavailable (Git read failed: store unavailable)");
+    expect(r2.getByRole("list", { name: "Dependencies" })).toBeTruthy();
+  });
+
   it("cancels on unmount", () => {
     const { unmount } = render(<DependencyGraphSection cluster="prd" kind="Kustomization" namespace="flux-system" name="apps" uid="u1" />);
     unmount();
