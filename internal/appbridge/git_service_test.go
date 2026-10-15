@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,6 +29,7 @@ type fakeGitStore struct {
 	cleared   []string
 	status    map[string]gitcache.Status
 	err       error
+	read      func(url string, fn func(gitcli.Repo) error) error
 }
 
 func (f *fakeGitStore) Start(context.Context) error { return nil }
@@ -45,8 +47,18 @@ func (f *fakeGitStore) Clear(_ context.Context, url string) error {
 	f.cleared = append(f.cleared, url)
 	return nil
 }
-func (f *fakeGitStore) Size(url string) int64             { return int64(len(url)) }
-func (f *fakeGitStore) Status(url string) gitcache.Status { return f.status[url] }
+func (f *fakeGitStore) Size(url string) int64 { return int64(len(url)) }
+func (f *fakeGitStore) Status(url string) gitcache.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status[url]
+}
+func (f *fakeGitStore) Read(url string, fn func(gitcli.Repo) error) error {
+	if f.read == nil {
+		return errors.New("no history fetched yet")
+	}
+	return f.read(url, fn)
+}
 
 const gitFleet = `clusters:
   - name: prd
@@ -61,11 +73,37 @@ git:
 `
 
 type gitHarness struct {
-	t     *testing.T
-	svc   *GitService
-	store *fakeGitStore
-	path  string
-	key   *LineKeyDTO
+	t       *testing.T
+	svc     *GitService
+	store   *fakeGitStore
+	path    string
+	key     *LineKeyDTO
+	sources []LineGitSource
+	em      *gitEvents
+}
+
+// gitEvents records line:git events.
+type gitEvents struct {
+	mu  sync.Mutex
+	got []LineGitDTO
+}
+
+func (e *gitEvents) Emit(name string, payload any) {
+	if name != LineGitEvent {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.got = append(e.got, payload.(LineGitDTO))
+}
+
+// push hands the service a LineDTO with the harness's key (unless the DTO
+// names its own) and sources, as LineService does after every build.
+func (h *gitHarness) push(dto LineDTO) {
+	if dto.Key == nil {
+		dto.Key = h.key
+	}
+	GitLineSink(h.svc)(dto, h.sources)
 }
 
 func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
@@ -75,24 +113,22 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 		t.Fatal(err)
 	}
 	h := &gitHarness{t: t, path: path, store: &fakeGitStore{refreshed: map[string][]string{}, status: map[string]gitcache.Status{}},
-		key: &LineKeyDTO{Kind: line.KeyGit, Repo: "github.com/acme/fleet", RefKind: "branch", RefName: "main"}}
+		key: &LineKeyDTO{Kind: line.KeyGit, Repo: "github.com/acme/fleet", RefKind: "branch", RefName: "main"}, em: &gitEvents{}}
 	fetched := time.Date(2026, 10, 15, 20, 31, 0, 0, time.UTC)
 	h.store.status["git@github.com:acme/fleet.git"] = gitcache.Status{FetchedAt: fetched, AttemptedAt: fetched.Add(time.Minute), Error: "fetch failed"}
+	h.sources = []LineGitSource{
+		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "https://github.com/acme/fleet"},
+		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "ssh://git@github.com/acme/fleet.git"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "apps", URL: "https://github.com/acme/platform.git"},
+		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "http://git.internal/infra.git"},
+		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "https://deploy:s3cr3t@git.internal/infra.git"},
+		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", URL: "https://github.com/acme/tools.git"},
+		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "scp", URL: "scpuser:scp-cluster-secret@git.internal:infra.git"},
+	}
 	h.svc = NewGitService(context.Background(), GitDeps{
 		ConfigPath: path,
-		Line:       func() LineDTO { return LineDTO{Key: h.key} },
 		Override:   &line.Key{Kind: line.KeyGit, Repo: "github.com/acme/platform", RefKind: "semver", RefName: ">=1.0"},
-		Sources: func() []LineGitSource {
-			return []LineGitSource{
-				{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "https://github.com/acme/fleet"},
-				{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "ssh://git@github.com/acme/fleet.git"},
-				{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "apps", URL: "https://github.com/acme/platform.git"},
-				{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "http://git.internal/infra.git"},
-				{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "https://deploy:s3cr3t@git.internal/infra.git"},
-				{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", URL: "https://github.com/acme/tools.git"},
-				{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "scp", URL: "scpuser:scp-cluster-secret@git.internal:infra.git"},
-			}
-		},
+		Emitter:    h.em,
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
 			if startErr != nil {
 				return gitcli.Runner{}, gitcli.Helpers{}, startErr
@@ -102,6 +138,7 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 		},
 		NewStore: func(gitcli.Runner) gitStore { return h.store },
 	})
+	h.push(LineDTO{Version: 1})
 	deadline := time.Now().Add(5 * time.Second)
 	for !h.svc.GetGitSettings().Binary.Ready {
 		if time.Now().After(deadline) {
@@ -257,6 +294,7 @@ func TestFetchNowFetchesOnlyTrackedRefsOfAnApprovedRepo(t *testing.T) {
 	}
 	// A pinned commit on the line's key.
 	h.key = &LineKeyDTO{Kind: line.KeyGit, Repo: "github.com/acme/platform", RefKind: "commit", RefName: strings.Repeat("a", 40)}
+	h.push(LineDTO{Version: 2})
 	if r := h.svc.FetchGitRepo("work-gh:acme/platform.git"); !r.OK {
 		t.Fatal(r.Error)
 	}
@@ -324,8 +362,8 @@ func TestNoSentinelReachesTheSettingsDTO(t *testing.T) {
 		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "c", URL: "SENTINEL_G@github.com/acme/bare"},
 		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "d", URL: "u:SENTINEL_H@git.internal:infra.git"},
 	}
-	base := h.svc.d.Sources
-	h.svc.d.Sources = func() []LineGitSource { return append(base(), extra...) }
+	h.sources = append(h.sources, extra...)
+	h.push(LineDTO{Version: 2})
 	d := h.svc.GetGitSettings()
 	b, err := json.Marshal(d)
 	if err != nil {

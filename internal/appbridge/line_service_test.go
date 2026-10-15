@@ -124,6 +124,9 @@ type lineHarness struct {
 	obs    map[string]*observe.Observer
 	snaps  map[string]fleet.Snapshot
 	cancel context.CancelFunc
+	// What the OnLine hook received, last call.
+	hookVer  uint64
+	hookSrcs []LineGitSource
 }
 
 func newLineHarness(t *testing.T, sink *HealthSink, clusters ...config.ClusterConfig) *lineHarness {
@@ -146,7 +149,12 @@ func newLineHarness(t *testing.T, sink *HealthSink, clusters ...config.ClusterCo
 			}
 			return out
 		},
-		Observer:  func(name string) *observe.Observer { h.mu.Lock(); defer h.mu.Unlock(); return h.obs[name] },
+		Observer: func(name string) *observe.Observer { h.mu.Lock(); defer h.mu.Unlock(); return h.obs[name] },
+		OnLine: func(d LineDTO, srcs []LineGitSource) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.hookVer, h.hookSrcs = d.Version, srcs
+		},
 		ScanEvery: 30 * time.Millisecond, MeshEvery: time.Hour, Coalesce: 5 * time.Millisecond, BootstrapTimeout: 5 * time.Second})
 	return h
 }
@@ -189,6 +197,36 @@ func stateIs(cluster, state string) func(LineDTO) bool {
 
 func clusterCfg(name, env string) config.ClusterConfig {
 	return config.ClusterConfig{Name: name, Environment: env}
+}
+
+// The OnLine hook (slice 6d) receives every LineDTO with the Git source
+// URLs its stations' rows name.
+func TestLineServiceHandsEveryLineToTheHook(t *testing.T) {
+	sink := NewHealthSink(&rowsSinkRec{rows: map[string][]RowsDTO{}})
+	h := newLineHarness(t, sink, clusterCfg("dev", "dev"), clusterCfg("prd", "prd"))
+	h.setObserver("dev", startLineCluster(t, sink, "dev", lineSha('a'), nil).obs)
+	h.setObserver("prd", startLineCluster(t, sink, "prd", lineSha('b'), nil).obs)
+	d := h.waitLine("both stations read", func(d LineDTO) bool {
+		a, ok1 := stationIn(d, "dev")
+		b, ok2 := stationIn(d, "prd")
+		return ok1 && ok2 && a.Single != "" && b.Single != ""
+	})
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		h.mu.Lock()
+		ver, srcs := h.hookVer, h.hookSrcs
+		h.mu.Unlock()
+		if ver >= d.Version && len(srcs) == 2 {
+			for _, src := range srcs {
+				if src.URL != lineRepo || src.Origin != "GitRepository" || src.Name != "fleet" {
+					t.Fatalf("hook source %+v", src)
+				}
+			}
+			return
+		}
+		if time.Now().After(end) {
+			t.Fatalf("the hook saw version %d with %d sources; the line is at %d", ver, len(srcs), d.Version)
+		}
+	}
 }
 
 func TestLineServiceComparesAndFollowsChanges(t *testing.T) {

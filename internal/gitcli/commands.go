@@ -282,9 +282,9 @@ func forEachRef(gitDir string) cmd {
 // MaxLogCommits bounds a log read (parent §7: 20 commits per view).
 const MaxLogCommits = 20
 
-// logFormat: full id, author name, author time, subject - unit- and
-// record-separated, so no field can end a record.
-const logFormat = "--format=%H%x1f%an%x1f%at%x1f%s%x1e"
+// logFormat: full id, author name, author time, committer time, subject -
+// unit- and record-separated, so no field can end a record.
+const logFormat = "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e"
 
 // logCommits lists commits in include and not in exclude, newest first.
 func logCommits(gitDir string, include, exclude []Rev, max int) (cmd, error) {

@@ -101,6 +101,11 @@ type LineUnitDTO struct {
 	// ContextRead: a recorded-name chart unit's current source read -
 	// context only, disclosed apart, never gating its comparison.
 	ContextRead string `json:"contextRead,omitempty"`
+	// SourceNotReady and BlockedBy are held evidence with Git history
+	// (parent §3.4): the Flux GitRepository is not ready; the unit reports
+	// DependencyNotReady, naming this dependency.
+	SourceNotReady bool   `json:"sourceNotReady,omitempty"`
+	BlockedBy      string `json:"blockedBy,omitempty"`
 }
 
 type LineExclusionDTO struct {
@@ -194,7 +199,8 @@ func stationDTO(sl line.StationLine, key *line.Key) LineStationDTO {
 		ud := LineUnitDTO{Origin: u.Origin, Namespace: u.Namespace, Name: u.Name, SourceIndex: u.SourceIndex, UID: u.UID,
 			Applied: revID(u.Applied), Attempted: revID(u.Attempted), AttemptPhase: u.AttemptPhase, Compared: revID(u.Compared),
 			Failing: u.Failing, Syncing: u.Syncing, Suspended: u.Suspended, SourceChanged: u.SourceChanged,
-			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read, ContextRead: u.ContextRead}
+			ConfiguredChartDiffers: u.ConfiguredChartDiffers, Read: u.Read, ContextRead: u.ContextRead,
+			SourceNotReady: u.SourceNotReady, BlockedBy: u.BlockedBy}
 		// the artifact time dates the compared revision, read from the same
 		// source object; with no compared revision it dates nothing
 		if u.Compared != nil && !u.ArtifactTime.IsZero() {

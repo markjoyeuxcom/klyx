@@ -201,6 +201,32 @@ git:
 - The fleet screen calls `GitService.FetchDue()` when it mounts and every 5 minutes while mounted; "Fetch now" calls `Fetch(repo)`. The service fetches a repo only when its last attempt is at least 5 minutes old, unless asked now.
 - A failed or capped fetch keeps the last good history, labelled "history as of <time>; fetch failed: <scrubbed error>".
 
+### 6.4 As built in 6d-1 (Go)
+
+6d ships in two reviewed parts: 6d-1, the Go ordering, `line:git` and the cadence; 6d-2, the fleet screen.
+- **The hook.** `LineService` hands every LineDTO, with the clusters' Git source URLs it was built from, to `GitService` (`LineDeps.OnLine`, through `GitLineSink`). It never blocks the line's worker. `GitService` is built first; it no longer reads the line or the sources itself.
+- **Held evidence comes from Flux only.** The line's units gain two facts:
+  - `SourceNotReady`: the unit's GitRepository reports Ready=False, the unit and source not suspended. It is worded "its GitRepository is not ready", the controller's state, not a claim that a fetch failed.
+  - `BlockedBy`: the unit reports `DependencyNotReady`, naming the dependency from Flux's message, else "a dependency".
+
+  Argo has neither: its `ComparisonError` mixes fetch and render failures. A station behind T takes the first evidence found, in the parent's order: source, a unit that attempted T and is failing, dependency.
+- **Ordered stations** are those in state 5 (`matches` or `differs` with a full commit id). Every distinct revision is classified once, in the parent's table order:
+  - not in fetched history (`cat-file`);
+  - behind N (`merge-base --is-ancestor`, then `rev-list --count`);
+  - ahead N;
+  - diverged at the merge base, or unrelated.
+- **The Ledger:**
+  - The union of each behind or diverged station's newest 20 missing commits (`log T ^sha`), newest first by committer time (`log` gains `%ct`), capped at 20, with a flag when there are more.
+  - A commit's dots are the ordered stations whose list lacks it; at-target and ahead stations contain every one, and unknown or unrelated stations get none. A commit in the union's newest 20 that a station lacks is within that station's own newest 20, since both follow committer-time order, so the lists suffice.
+  - Commits only on an ahead or diverged station are its newest 5 of `log sha ^T`, with the rest counted by `rev-list --count`.
+- **"Open in Git"** is a `{sha}` link template:
+  - GitHub, GitLab.com, Bitbucket and Azure DevOps (https and ssh forms);
+  - otherwise `git.repos[].web`, with `{sha}` placed where the owner wrote it, else `/commit/{sha}` appended.
+- **When there is no ordering,** the state says why: no Git key (`none`), `checking`, `off` (Git off, or the cache needs repair), `unapproved` (with the key to approve), `notarget` (the ref kind's reason), `unfetched` (the fetch error, or the ref not yet in the history), `error`.
+- **Reuse.** An ordering whose inputs are unchanged is reused for the newer LineDTO, with no git read. The inputs are the key, each station's revision, state and evidence, the repository and the cache's fetch status.
+- **Recomputed** after every LineDTO, fetch, approval change and Clear; published as `line:git`. `LineGit()` bootstraps it.
+- **The cadence.** `FetchDue()` returns at once. It fetches, in the background, each approved repository the line tracks whose last attempt is at least 5 minutes old. "Fetch now" and the cadence share one per-repository guard.
+
 ## 7. The cache diff (6e)
 
 The parent's contract, with the modules it needs:

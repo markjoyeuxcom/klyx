@@ -424,3 +424,38 @@ func TestUnitReadKeepsTheStationChecking(t *testing.T) {
 		t.Fatalf("an unrelated unreadable kind: %+v", got.State)
 	}
 }
+
+// Held evidence with Git history (parent §3.4, slice 6d): a Flux unit's
+// GitRepository that is not ready, and a reported DependencyNotReady
+// naming its dependency - the controller's own words, never inferred.
+func TestHeldEvidenceFacts(t *testing.T) {
+	notReady := func(in *StationInput) { in.Sources[0].Data.Ready = flux.Failed }
+	blocked := func(r *flux.Resource) {
+		r.Ready, r.Reason, r.Message = flux.Failed, "DependencyNotReady", "dependency 'flux-system/infra' is not ready"
+	}
+	us, _ := Units(station("a", "dev", fluxOn(sha('a')), notReady))
+	if len(us) != 1 || !us[0].SourceNotReady || !us[0].Failing || us[0].BlockedBy != "" {
+		t.Fatalf("source not ready: %+v", us)
+	}
+	us, _ = Units(station("a", "dev", fluxOn(sha('a'), blocked)))
+	if len(us) != 1 || us[0].SourceNotReady || us[0].BlockedBy != "flux-system/infra" {
+		t.Fatalf("dependency: %+v", us)
+	}
+	us, _ = Units(station("a", "dev", fluxOn(sha('a'), func(r *flux.Resource) { r.Reason, r.Message = "DependencyNotReady", "waiting" })))
+	if us[0].BlockedBy != "a dependency" {
+		t.Fatalf("an unnamed dependency: %+v", us[0])
+	}
+	// A suspended unit is never evidence.
+	us, _ = Units(station("a", "dev", fluxOn(sha('a'), blocked, func(r *flux.Resource) { r.Suspended = true }), notReady))
+	if us[0].SourceNotReady || us[0].BlockedBy != "" {
+		t.Fatalf("suspended: %+v", us[0])
+	}
+	// Argo never reports either.
+	us, _ = Units(station("b", "dev", func(in *StationInput) {
+		in.Apps = append(in.Apps, argoApp("app", []argo.Source{gitSource("main")}, deployed([]argo.Source{gitSource("main")}, sha('b')),
+			func(a *argo.App) { a.Conditions = []argo.Condition{{Type: "ComparisonError", Message: "repository not found"}} }))
+	}))
+	if len(us) != 1 || us[0].SourceNotReady || us[0].BlockedBy != "" {
+		t.Fatalf("argo: %+v", us)
+	}
+}

@@ -294,10 +294,11 @@ func parseRefs(out []byte) ([]RefValue, error) {
 // Commit is one log entry. Author and Subject are untrusted text: valid
 // UTF-8, control characters replaced, capped (parent §7).
 type Commit struct {
-	SHA     string
-	Author  string
-	Time    time.Time
-	Subject string
+	SHA       string
+	Author    string
+	Time      time.Time // authored
+	Committed time.Time // the order git's own date order follows
+	Subject   string
 }
 
 // Short is the abbreviated id the UI shows.
@@ -332,15 +333,16 @@ func parseLog(out []byte) ([]Commit, error) {
 			continue
 		}
 		f := strings.Split(rec, "\x1f")
-		if len(f) != 4 || !validSHA(f[0]) {
+		if len(f) != 5 || !validSHA(f[0]) {
 			return nil, fmt.Errorf("unexpected log record %q", truncate(rec, 80))
 		}
-		secs, err := strconv.ParseInt(f[2], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("unexpected log time %q", truncate(f[2], 40))
+		at, err1 := strconv.ParseInt(f[2], 10, 64)
+		ct, err2 := strconv.ParseInt(f[3], 10, 64)
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("unexpected log time %q / %q", truncate(f[2], 40), truncate(f[3], 40))
 		}
-		cs = append(cs, Commit{SHA: f[0], Author: plainText(f[1], maxAuthor), Time: time.Unix(secs, 0).UTC(),
-			Subject: plainText(f[3], maxSubject)})
+		cs = append(cs, Commit{SHA: f[0], Author: plainText(f[1], maxAuthor), Time: time.Unix(at, 0).UTC(),
+			Committed: time.Unix(ct, 0).UTC(), Subject: plainText(f[4], maxSubject)})
 	}
 	return cs, nil
 }

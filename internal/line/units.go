@@ -2,6 +2,7 @@ package line
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -137,6 +138,13 @@ type Unit struct {
 	Suspended       bool
 	SourceChanged   bool // Argo: the source was reordered or edited since its last deployment
 	SourceName      string
+	// SourceNotReady: a Flux unit's GitRepository reports Ready=False (and
+	// is not suspended) - held evidence with Git history (§3.4). Never set
+	// for Argo, whose ComparisonError mixes fetch and render failures.
+	SourceNotReady bool
+	// BlockedBy: a Flux unit reports DependencyNotReady - the dependency
+	// it names ("ns/name"), or "a dependency" when the message names none.
+	BlockedBy string
 	// ConfiguredChartDiffers: a Flux release's configured chart name (a
 	// HelmRepository source) differs from its recorded deployed chart -
 	// current context, never a provenance claim.
@@ -261,6 +269,17 @@ func argoRef(target string) (string, string) {
 	return RefUnqualified, t
 }
 
+var dependencyName = regexp.MustCompile(`dependency '([^']+)'`)
+
+// blockedBy reads the dependency a DependencyNotReady message names, as
+// Flux words it ("dependency 'flux-system/infra' is not ready").
+func blockedBy(msg string) string {
+	if m := dependencyName.FindStringSubmatch(msg); m != nil {
+		return m[1]
+	}
+	return "a dependency"
+}
+
 func earliest(ts ...*time.Time) *time.Time {
 	var out *time.Time
 	for _, t := range ts {
@@ -320,6 +339,10 @@ func kustomizationUnit(o Object[flux.Resource], lookup func(kind, ns, name strin
 	unitFailing := r.Ready == flux.Failed
 	sourceFailing := s.Data.Ready == flux.Failed && !s.Data.Suspended
 	u.Failing = !r.Suspended && (unitFailing || sourceFailing)
+	u.SourceNotReady = !r.Suspended && sourceFailing
+	if !r.Suspended && r.Reason == "DependencyNotReady" { // Flux's own reason
+		u.BlockedBy = blockedBy(r.Message)
+	}
 	if u.Failing {
 		var a, b *time.Time
 		if unitFailing {

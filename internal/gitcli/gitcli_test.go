@@ -219,7 +219,7 @@ func TestTheTypedArgv(t *testing.T) {
 			"delete refs/klyx/tracked/commit/"+b+" "+b+"\n", false)
 	c, err = logCommits("/k/c.git", []Rev{main.Tracked()}, []Rev{ra, rb}, 20)
 	check("log", c, err, []string{"log", "--no-renames", "--no-mailmap", "--no-notes", "--no-show-signature", "--no-color",
-		"--max-count=20", "--format=%H%x1f%an%x1f%at%x1f%s%x1e", "--end-of-options", "refs/klyx/tracked/refs/heads/main",
+		"--max-count=20", "--format=%H%x1f%an%x1f%at%x1f%ct%x1f%s%x1e", "--end-of-options", "refs/klyx/tracked/refs/heads/main",
 		"^" + a, "^" + b, "--"}, "/k/c.git", "", false)
 	c, err = revListCount("/k/c.git", []Rev{rb}, []Rev{ra})
 	check("rev-list", c, err, []string{"rev-list", "--count", "--end-of-options", b, "^" + a, "--"}, "/k/c.git", "", false)
@@ -528,7 +528,7 @@ func TestTheReadQueries(t *testing.T) {
 
 	commits, err := p.Log(ctx, []Rev{main.Tracked()}, []Rev{sha(f.c1)}, 20)
 	if err != nil || len(commits) != 1 || commits[0].SHA != f.c2 || commits[0].Author != "Ada" ||
-		!commits[0].Time.Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) {
+		!commits[0].Time.Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) || !commits[0].Committed.Equal(commits[0].Time) {
 		t.Fatalf("log %+v %v", commits, err)
 	}
 	if n := len([]rune(commits[0].Subject)); n != 200 || !strings.HasSuffix(commits[0].Subject, "…") {
@@ -777,7 +777,7 @@ func TestParsersRefuseMalformedOutput(t *testing.T) {
 	if _, err := parseRefs([]byte("refs/heads/main\x00" + strings.Repeat("a", 40) + "\x00\n")); err == nil {
 		t.Fatal("a ref outside refs/klyx")
 	}
-	if _, err := parseLog([]byte("nothex\x1fa\x1f1\x1fs\x1e")); err == nil {
+	if _, err := parseLog([]byte("nothex\x1fa\x1f1\x1f1\x1fs\x1e")); err == nil {
 		t.Fatal("a log record without an id")
 	}
 	if _, err := parseLsTree([]byte("100644 blob short\tpath\x00")); err == nil {

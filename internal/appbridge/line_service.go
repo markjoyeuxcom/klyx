@@ -33,7 +33,10 @@ type LineDeps struct {
 	Observer  func(cluster string) *observe.Observer
 	Mesh      *MeshService // nil: no mesh
 	Override  *line.Key    // fleet.yaml line.source
-	Now       func() time.Time
+	// OnLine receives every LineDTO with the clusters' Git source URLs it
+	// was built from (GitLineSink); it must not block the worker.
+	OnLine func(LineDTO, []LineGitSource)
+	Now    func() time.Time
 
 	// Cadences; zero takes the note's defaults.
 	ScanEvery        time.Duration // 5s
@@ -122,7 +125,6 @@ type LineService struct {
 
 	dtoMu sync.RWMutex
 	dto   LineDTO
-	git   []LineGitSource // the Git source URLs the stations' rows name, with the dto
 
 	// Worker-owned.
 	stations map[string]*lineStation
@@ -764,8 +766,11 @@ func (s *LineService) recompute() {
 	s.version++
 	dto.Version = s.version
 	s.dtoMu.Lock()
-	s.dto, s.git = dto, git
+	s.dto = dto
 	s.dtoMu.Unlock()
+	if s.d.OnLine != nil {
+		s.d.OnLine(dto, git)
+	}
 	if s.d.Emitter != nil {
 		s.d.Emitter.Emit(LineEvent, dto)
 	}
@@ -1004,14 +1009,4 @@ func gitSources(in line.StationInput) []LineGitSource {
 		}
 	}
 	return out
-}
-
-// LineGitSources returns the Git source URLs as of the current LineDTO: a
-// package-level accessor, so it is not bound to the webview.
-func LineGitSources(s *LineService) func() []LineGitSource {
-	return func() []LineGitSource {
-		s.dtoMu.RLock()
-		defer s.dtoMu.RUnlock()
-		return append([]LineGitSource(nil), s.git...)
-	}
 }

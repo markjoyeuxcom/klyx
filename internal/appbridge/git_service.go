@@ -37,6 +37,14 @@ type GitService struct {
 	helpers  gitcli.Helpers
 	store    gitStore
 	fetching map[string]bool
+	// The line, as LineService last pushed it (GitLineSink), and the
+	// ordering computed from it (6d).
+	line    LineDTO
+	sources []LineGitSource
+	lineGit LineGitDTO
+	lineVer uint64
+	lineFP  string
+	wake    chan struct{}
 }
 
 // gitStore is the cache store (internal/gitcache) as the service uses it.
@@ -46,18 +54,20 @@ type gitStore interface {
 	Clear(ctx context.Context, url string) error
 	Size(url string) int64
 	Status(url string) gitcache.Status
+	Read(url string, fn func(gitcli.Repo) error) error
 }
 
-// GitDeps wires the service.
+// GitDeps wires the service. The line and the clusters' Git sources arrive
+// through GitLineSink, which LineService calls after every LineDTO.
 type GitDeps struct {
 	ConfigPath string
-	Line       func() LineDTO                                               // the current line: its key is a tracked ref's source
-	Override   *line.Key                                                    // fleet.yaml line.source, the other source
-	Sources    func() []LineGitSource                                       // the clusters' Git source URLs (LineGitSources)
+	Override   *line.Key                                                    // fleet.yaml line.source, a tracked ref's other source
+	Emitter    Emitter                                                      // line:git
 	StartGit   func(context.Context) (gitcli.Runner, gitcli.Helpers, error) // nil: gitcli.Start with the owner's environment
 	NewStore   func(gitcli.Runner) gitStore                                 // nil: gitcache under the config dir
 	SaveGit    func(string, config.GitConfig) error                         // nil: config.SaveGit
 	Load       func(string) (*config.Config, error)                         // nil: config.Load
+	Now        func() time.Time                                             // nil: time.Now
 }
 
 // NewGitService prepares Git in the background - resolving git, reading
@@ -79,10 +89,13 @@ func NewGitService(ctx context.Context, d GitDeps) *GitService {
 	if d.Load == nil {
 		d.Load = config.Load
 	}
-	if d.Sources == nil {
-		d.Sources = func() []LineGitSource { return nil }
+	if d.Now == nil {
+		d.Now = time.Now
 	}
-	s := &GitService{d: d, ctx: ctx, fetching: map[string]bool{}}
+	s := &GitService{d: d, ctx: ctx, fetching: map[string]bool{}, wake: make(chan struct{}, 1),
+		lineGit: LineGitDTO{State: LineGitChecking, Reason: "Git is still starting", Stations: []LineGitStationDTO{},
+			Ledger: []LineGitCommitDTO{}, Only: []LineGitOnlyDTO{}}}
+	go s.lineLoop()
 	go s.start()
 	return s
 }
@@ -97,13 +110,14 @@ func (s *GitService) start() {
 		}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.ready, s.helpers = true, h
 	if err != nil {
 		s.off = gitOffReason(err)
-		return
+	} else {
+		s.git, s.store = r.Git, store
 	}
-	s.git, s.store = r.Git, store
+	s.mu.Unlock()
+	s.wakeLine()
 }
 
 func gitOffReason(err error) string {
@@ -199,6 +213,7 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	dto.RefusedHelpers = len(s.helpers.Refused)
 	store := s.store
 	fetching := copyFlags(s.fetching)
+	sources, lk := s.sources, s.line.Key
 	s.mu.Unlock()
 
 	cfg, err := s.d.Load(s.d.ConfigPath)
@@ -213,7 +228,7 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	byEntry := map[string][]GitSourceDTO{}
 	unapproved := map[string][]GitSourceDTO{}
 	raw := map[string][]string{}
-	for _, src := range s.d.Sources() {
+	for _, src := range sources {
 		key := line.NormalizeRepo(src.URL)
 		d := GitSourceDTO{Cluster: src.Cluster, Origin: src.Origin, Namespace: src.Namespace, Name: src.Name, URL: shownURL(src.URL)}
 		if e, ok := owner[key]; ok {
@@ -223,7 +238,6 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 		unapproved[key] = append(unapproved[key], d)
 		raw[key] = append(raw[key], src.URL)
 	}
-	lk := s.d.Line().Key
 	for _, r := range repos {
 		rd := GitRepoDTO{URL: r.URL, Web: r.Web, Key: line.NormalizeRepo(r.URL), Matches: append([]string{}, r.Matches...),
 			Sources: byEntry[r.URL], Tracked: []string{}, TrackNotes: []string{}, Fetching: fetching[r.URL]}
@@ -459,6 +473,7 @@ func (s *GitService) editGit(change func(*config.GitConfig) error) ActionResultD
 	if err := s.d.SaveGit(s.d.ConfigPath, g); err != nil {
 		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
 	}
+	s.wakeLine()
 	return ActionResultDTO{OK: true}
 }
 
@@ -479,10 +494,16 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 		return ActionResultDTO{Error: "only an approved repository is fetched"}
 	}
 	owner, _ := keyOwners(repos)
-	refs, notes := trackedRefs(url, owner, s.d.Line().Key, s.d.Override)
+	refs, notes := trackedRefs(url, owner, s.lineKey(), s.d.Override)
 	if len(refs) == 0 {
 		return ActionResultDTO{Error: "nothing to fetch: " + strings.Join(notes, "; ")}
 	}
+	return s.fetch(store, url, refs)
+}
+
+// fetch runs one history refresh, one per repository at a time, and
+// recomputes the line's ordering after it.
+func (s *GitService) fetch(store gitStore, url string, refs []gitcli.Ref) ActionResultDTO {
 	s.mu.Lock()
 	if s.fetching[url] {
 		s.mu.Unlock()
@@ -494,11 +515,52 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 		s.mu.Lock()
 		delete(s.fetching, url)
 		s.mu.Unlock()
+		s.wakeLine()
 	}()
 	if err := store.RefreshHistory(s.ctx, url, refs); err != nil {
 		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
 	}
 	return ActionResultDTO{OK: true}
+}
+
+// fetchEvery is the fleet screen's cadence (slice 6 note §6.3).
+const fetchEvery = 5 * time.Minute
+
+// FetchDue is the fleet screen's cadence: on mount and every 5 minutes it
+// asks, and each approved repository the line tracks is fetched in the
+// background when its last attempt is at least 5 minutes old. It returns at
+// once; line:git follows each fetch.
+func (s *GitService) FetchDue() {
+	store, err := s.gitOn()
+	if err != nil {
+		return
+	}
+	cfg, err := s.d.Load(s.d.ConfigPath)
+	if err != nil {
+		return
+	}
+	repos, _ := cfg.ApprovedGitRepos()
+	owner, _ := keyOwners(repos)
+	for _, r := range repos {
+		refs, _ := trackedRefs(r.URL, owner, s.lineKey(), s.d.Override)
+		if len(refs) == 0 {
+			continue
+		}
+		st := store.Status(r.URL)
+		s.mu.Lock()
+		running := s.fetching[r.URL]
+		s.mu.Unlock()
+		if running || st.NeedsRepair || (!st.AttemptedAt.IsZero() && s.d.Now().Sub(st.AttemptedAt) < fetchEvery) {
+			continue
+		}
+		go s.fetch(store, r.URL, refs)
+	}
+}
+
+func (s *GitService) lineKey() *LineKeyDTO {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.line.Key
 }
 
 // ClearGitCache removes a repository's cache; the next fetch rebuilds it.
@@ -510,5 +572,6 @@ func (s *GitService) ClearGitCache(url string) ActionResultDTO {
 	if err := store.Clear(s.ctx, strings.TrimSpace(url)); err != nil {
 		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
 	}
+	s.wakeLine()
 	return ActionResultDTO{OK: true}
 }
