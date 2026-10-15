@@ -99,4 +99,4 @@ Each is Codex-reviewed on its own, in this order.
 3. **Several parents:** a route attached to the same Gateway more than once is unattributable. Attached to different Gateways, each Gateway's proxies scope its own series.
 4. **No per-backend split for Envoy Gateway** (one cluster per rule; `mergeBackends` clusters are shared across routes).
 5. **The fingerprint** covers matches, backends and weights only, as the parent defines it.
-6. **The interval start** is the latest of the last change, the first sighting and the post-gap live span, plus the 1-minute rate window.
+6. **Two times, kept apart:** the interval start (the proof) is the latest of the last change, the first sighting and the start of the post-gap live span; the attribution cut-off is that start plus the 1-minute rate window.
