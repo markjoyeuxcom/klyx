@@ -1,0 +1,306 @@
+package appbridge
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/gitcache"
+	"github.com/moomora/klyx/internal/gitcli"
+	"github.com/moomora/klyx/internal/gitops/argo"
+	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/line"
+)
+
+// The Line slice 6c (slice 6 note §5): Settings > Git - approval, mapping,
+// the clusters' unapproved URLs, tracked refs, "Fetch now", "Clear cache".
+
+type fakeGitStore struct {
+	mu        sync.Mutex
+	refreshed map[string][]string
+	cleared   []string
+	status    map[string]gitcache.Status
+	err       error
+}
+
+func (f *fakeGitStore) Start(context.Context) error { return nil }
+func (f *fakeGitStore) RefreshHistory(_ context.Context, url string, refs []gitcli.Ref) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range refs {
+		f.refreshed[url] = append(f.refreshed[url], r.String())
+	}
+	return f.err
+}
+func (f *fakeGitStore) Clear(_ context.Context, url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleared = append(f.cleared, url)
+	return nil
+}
+func (f *fakeGitStore) Size(url string) int64             { return int64(len(url)) }
+func (f *fakeGitStore) Status(url string) gitcache.Status { return f.status[url] }
+
+const gitFleet = `clusters:
+  - name: prd
+  - name: stg
+git:
+  repos:
+    - url: git@github.com:acme/fleet.git
+    - url: work-gh:acme/platform.git
+      matches: [github.com/acme/platform]
+    - url: https://ghp_tok@github.com/acme/leak.git
+`
+
+type gitHarness struct {
+	t     *testing.T
+	svc   *GitService
+	store *fakeGitStore
+	path  string
+	key   *LineKeyDTO
+}
+
+func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	if err := os.WriteFile(path, []byte(fleet), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &gitHarness{t: t, path: path, store: &fakeGitStore{refreshed: map[string][]string{}, status: map[string]gitcache.Status{}},
+		key: &LineKeyDTO{Kind: line.KeyGit, Repo: "github.com/acme/fleet", RefKind: "branch", RefName: "main"}}
+	fetched := time.Date(2026, 10, 15, 20, 31, 0, 0, time.UTC)
+	h.store.status["git@github.com:acme/fleet.git"] = gitcache.Status{FetchedAt: fetched, AttemptedAt: fetched.Add(time.Minute), Error: "fetch failed"}
+	h.svc = NewGitService(context.Background(), GitDeps{
+		ConfigPath: path,
+		Line:       func() LineDTO { return LineDTO{Key: h.key} },
+		Override:   &line.Key{Kind: line.KeyGit, Repo: "github.com/acme/platform", RefKind: "semver", RefName: ">=1.0"},
+		Sources: func() []LineGitSource {
+			return []LineGitSource{
+				{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "https://github.com/acme/fleet"},
+				{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "ssh://git@github.com/acme/fleet.git"},
+				{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "apps", URL: "https://github.com/acme/platform.git"},
+				{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "http://git.internal/infra.git"},
+				{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "https://deploy:s3cr3t@git.internal/infra.git"},
+				{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", URL: "https://github.com/acme/tools.git"},
+			}
+		},
+		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
+			if startErr != nil {
+				return gitcli.Runner{}, gitcli.Helpers{}, startErr
+			}
+			return gitcli.Runner{Git: gitcli.Git{Path: "/opt/homebrew/bin/git", Version: gitcli.Version{Major: 2, Minor: 56, Raw: "git version 2.56.0"}}},
+				gitcli.Helpers{Values: []string{"osxkeychain", "store --file /x"}, Refused: []string{"!f() { echo; }; f"}}, nil
+		},
+		NewStore: func(gitcli.Runner) gitStore { return h.store },
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for !h.svc.GetGitSettings().Binary.Ready {
+		if time.Now().After(deadline) {
+			t.Fatal("Git never finished starting")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return h
+}
+
+func (h *gitHarness) fleet() string {
+	b, err := os.ReadFile(h.path)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestGitSettingsShowsApprovedUnapprovedAndWhy(t *testing.T) {
+	h := newGitHarness(t, gitFleet, nil)
+	d := h.svc.GetGitSettings()
+	if d.Binary.Path != "/opt/homebrew/bin/git" || d.Binary.Version != "git version 2.56.0" || d.Binary.Off != "" {
+		t.Fatalf("binary %+v", d.Binary)
+	}
+	if !reflect.DeepEqual(d.Helpers, []string{"osxkeychain", "store"}) || d.RefusedHelpers != 1 {
+		t.Fatalf("helpers %v refused %d", d.Helpers, d.RefusedHelpers)
+	}
+	if len(d.Repos) != 2 {
+		t.Fatalf("repos %+v", d.Repos)
+	}
+	fleet, platform := d.Repos[0], d.Repos[1]
+	// Both clusters' spellings map to the ssh entry by key.
+	if fleet.Key != "github.com/acme/fleet" || len(fleet.Sources) != 2 || !reflect.DeepEqual(fleet.Tracked, []string{"refs/heads/main"}) ||
+		fleet.Error != "fetch failed" || fleet.FetchedAt == nil || fleet.Size == 0 {
+		t.Fatalf("fleet %+v", fleet)
+	}
+	// The alias entry serves its explicit match; the override's semver range
+	// has no single target and says so.
+	if len(platform.Sources) != 1 || len(platform.Tracked) != 0 || len(platform.TrackNotes) != 1 ||
+		!strings.Contains(platform.TrackNotes[0], "semver") {
+		t.Fatalf("platform %+v", platform)
+	}
+	// Unapproved: grouped by key; a URL that cannot run is never suggested,
+	// and a credential in a cluster's URL is never shown.
+	if len(d.Unapproved) != 2 {
+		t.Fatalf("unapproved %+v", d.Unapproved)
+	}
+	infra, tools := d.Unapproved[0], d.Unapproved[1]
+	if infra.Key != "git.internal/infra" || infra.Suggest != "" || infra.Refused == "" || len(infra.Sources) != 2 {
+		t.Fatalf("infra %+v", infra)
+	}
+	if tools.Suggest != "https://github.com/acme/tools.git" || tools.Refused != "" {
+		t.Fatalf("tools %+v", tools)
+	}
+	all := strings.Join(d.Notes, "\n")
+	for _, src := range infra.Sources {
+		all += src.URL
+	}
+	if strings.Contains(all, "s3cr3t") || strings.Contains(all, "ghp_tok") || !strings.Contains(all, "never fetched") {
+		t.Fatalf("a credential leaked or the ignored entry is not noted:\n%s", all)
+	}
+}
+
+func TestApproveWritesExactlyWhatWillRun(t *testing.T) {
+	h := newGitHarness(t, gitFleet, nil)
+	before := h.fleet()
+	for _, bad := range []string{"https://tok@github.com/acme/tools.git", "http://github.com/acme/tools.git", "file:///srv/x", "git@github.com:acme/fleet.git"} {
+		if r := h.svc.ApproveGitRepo(bad, "", ""); r.OK {
+			t.Fatalf("%s was approved", bad)
+		}
+	}
+	if h.fleet() != before {
+		t.Fatal("a refused approval changed fleet.yaml")
+	}
+	if r := h.svc.ApproveGitRepo("https://github.com/acme/tools.git", "", "github.com/acme/tools"); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if r := h.svc.ApproveGitRepo("tools-alias:acme/tools2.git", "https://github.com/acme/tools2/", "github.com/acme/tools2"); !r.OK {
+		t.Fatal(r.Error)
+	}
+	cfg, err := config.Load(h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Git.Repos[len(cfg.Git.Repos)-2:]
+	want := []config.GitRepoConfig{
+		{URL: "https://github.com/acme/tools.git"}, // serves its own key: no match written
+		{URL: "tools-alias:acme/tools2.git", Web: "https://github.com/acme/tools2", Matches: []string{"github.com/acme/tools2"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("approved %+v", got)
+	}
+	// The ignored entry stays as the owner wrote it.
+	if !strings.Contains(h.fleet(), "ghp_tok@github.com/acme/leak.git") {
+		t.Fatal("an owner-written entry was dropped")
+	}
+	if d := h.svc.GetGitSettings(); len(d.Unapproved) != 1 {
+		t.Fatalf("tools is still unapproved: %+v", d.Unapproved)
+	}
+}
+
+func TestMatchesAndRemoval(t *testing.T) {
+	h := newGitHarness(t, gitFleet, nil)
+	if r := h.svc.SetGitRepoMatch("git@github.com:acme/fleet.git", "git.internal/infra", true); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if d := h.svc.GetGitSettings(); len(d.Repos[0].Sources) != 4 || len(d.Unapproved) != 1 {
+		t.Fatalf("after mapping: %+v / %+v", d.Repos[0].Sources, d.Unapproved)
+	}
+	for _, bad := range []string{"https://git.internal/infra", "GIT.internal/infra", "git.internal/infra.git"} {
+		if r := h.svc.SetGitRepoMatch("git@github.com:acme/fleet.git", bad, true); r.OK {
+			t.Fatalf("match %q accepted", bad)
+		}
+	}
+	if r := h.svc.SetGitRepoMatch("git@github.com:acme/fleet.git", "github.com/acme/fleet", true); r.OK {
+		t.Fatal("an entry matched its own key")
+	}
+	if r := h.svc.SetGitRepoMatch("git@github.com:acme/fleet.git", "git.internal/infra", false); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if d := h.svc.GetGitSettings(); len(d.Unapproved) != 2 {
+		t.Fatalf("after unmapping: %+v", d.Unapproved)
+	}
+	if r := h.svc.RemoveGitRepo("git@github.com:acme/fleet.git"); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if strings.Contains(h.fleet(), "git@github.com:acme/fleet.git") || !reflect.DeepEqual(h.store.cleared, []string{"git@github.com:acme/fleet.git"}) {
+		t.Fatalf("removal: cleared %v\n%s", h.store.cleared, h.fleet())
+	}
+	if r := h.svc.RemoveGitRepo("git@github.com:acme/fleet.git"); r.OK {
+		t.Fatal("removing twice succeeded")
+	}
+}
+
+func TestFetchNowFetchesOnlyTrackedRefsOfAnApprovedRepo(t *testing.T) {
+	h := newGitHarness(t, gitFleet, nil)
+	if r := h.svc.FetchGitRepo("git@github.com:acme/fleet.git"); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if got := h.store.refreshed["git@github.com:acme/fleet.git"]; !reflect.DeepEqual(got, []string{"refs/heads/main"}) {
+		t.Fatalf("refreshed %v", got)
+	}
+	if r := h.svc.FetchGitRepo("https://github.com/acme/tools.git"); r.OK || !strings.Contains(r.Error, "approved") {
+		t.Fatalf("an unapproved URL: %+v", r)
+	}
+	if r := h.svc.FetchGitRepo("https://ghp_tok@github.com/acme/leak.git"); r.OK {
+		t.Fatal("an ignored entry was fetched")
+	}
+	if r := h.svc.FetchGitRepo("work-gh:acme/platform.git"); r.OK || !strings.Contains(r.Error, "nothing to fetch") {
+		t.Fatalf("a repo with no target: %+v", r)
+	}
+	// A pinned commit on the line's key.
+	h.key = &LineKeyDTO{Kind: line.KeyGit, Repo: "github.com/acme/platform", RefKind: "commit", RefName: strings.Repeat("a", 40)}
+	if r := h.svc.FetchGitRepo("work-gh:acme/platform.git"); !r.OK {
+		t.Fatal(r.Error)
+	}
+	if len(h.store.refreshed) != 2 {
+		t.Fatalf("refreshed %v", h.store.refreshed)
+	}
+	if r := h.svc.ClearGitCache("work-gh:acme/platform.git"); !r.OK || len(h.store.cleared) != 1 {
+		t.Fatalf("clear %+v %v", r, h.store.cleared)
+	}
+}
+
+func TestGitOffSaysWhyAndFetchesNothing(t *testing.T) {
+	h := newGitHarness(t, gitFleet, &gitcli.ErrOff{Reason: "git 2.44.0 is older than 2.45, which partial-clone safety needs"})
+	d := h.svc.GetGitSettings()
+	if !strings.Contains(d.Binary.Off, "older than 2.45") || d.Binary.Path != "" || len(d.Repos) != 2 {
+		t.Fatalf("off: %+v", d)
+	}
+	if r := h.svc.FetchGitRepo("git@github.com:acme/fleet.git"); r.OK || !strings.Contains(r.Error, "Git features are off") {
+		t.Fatalf("fetch while off: %+v", r)
+	}
+	// Approval still works: it only writes fleet.yaml.
+	if r := h.svc.ApproveGitRepo("https://github.com/acme/tools.git", "", ""); !r.OK {
+		t.Fatal(r.Error)
+	}
+}
+
+func TestGitSourcesAreFluxGitRepositoriesAndArgoGitSources(t *testing.T) {
+	in := line.StationInput{Station: line.Station{Cluster: "prd"}}
+	in.Sources = []line.Object[flux.Source]{
+		{Data: flux.Source{Kind: flux.GitRepositoryKind, Namespace: "flux-system", Name: "fleet", URL: "ssh://git@github.com/acme/fleet.git"}},
+		{Data: flux.Source{Kind: "HelmRepository", Namespace: "flux-system", Name: "charts", URL: "https://charts.example.test"}},
+		{Data: flux.Source{Kind: "OCIRepository", Namespace: "flux-system", Name: "oci", URL: "oci://ghcr.io/acme/x"}},
+	}
+	in.Apps = []line.Object[argo.App]{{Data: argo.App{Namespace: "argocd", Name: "apps", Sources: []argo.Source{
+		{RepoURL: "https://github.com/acme/apps.git", Path: "apps"},
+		{RepoURL: "https://charts.example.test", Chart: "redis"},
+		{RepoURL: "https://github.com/acme/values.git", Ref: "values"},
+	}}}}
+	got := gitSources(in)
+	var urls []string
+	for _, s := range got {
+		if s.Cluster != "prd" {
+			t.Fatalf("cluster %+v", s)
+		}
+		urls = append(urls, s.Origin+" "+s.URL)
+	}
+	want := []string{"GitRepository ssh://git@github.com/acme/fleet.git", "Application https://github.com/acme/apps.git",
+		"Application https://github.com/acme/values.git"}
+	if !reflect.DeepEqual(urls, want) {
+		t.Fatalf("git sources %q", urls)
+	}
+}

@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -37,16 +34,6 @@ type aiYAML struct {
 // AppendClusters and refuses to overwrite an edit made on disk meanwhile
 // (spec 2026-10-13 §2.3).
 func SaveAI(path string, a AIConfig) error {
-	fleetWriteMu.Lock()
-	defer fleetWriteMu.Unlock()
-
-	original, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("there is no fleet config at %q yet - add a cluster first", path)
-		}
-		return fmt.Errorf("read fleet config %q: %w", path, err)
-	}
 	if a.KeySource != "legacy" {
 		a.APIKey = "" // only a legacy source keeps a key in the file
 	}
@@ -54,37 +41,14 @@ func SaveAI(path string, a AIConfig) error {
 	if err != nil {
 		return err
 	}
-	candidate, err := replaceAIBlock(string(original), block)
-	if err != nil {
-		return fmt.Errorf("fleet config %q: %w", path, err)
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
-	if err != nil {
-		return fmt.Errorf("create temp config: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }() // best-effort temp cleanup
-	if _, err := tmp.WriteString(candidate); err != nil {
-		_ = tmp.Close() // already returning the write error
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp config: %w", err)
-	}
-	got, err := Load(tmpPath)
-	if err != nil {
-		return fmt.Errorf("the AI settings failed validation (file unchanged): %w", err)
-	}
-	if err := onlyAIChanged(original, []byte(candidate)); err != nil {
-		return fmt.Errorf("saving AI settings would change other settings (file unchanged): %w", err)
-	}
 	want := a
 	want.applyDefaults()
-	if got.AI == nil || !AIEqual(*got.AI, want) {
-		return errors.New("the written AI block does not read back as intended (file unchanged)")
-	}
-	return replaceUnchanged(path, tmpPath, original, true)
+	return saveTopLevelBlock(path, "ai", block, "AI settings", func(got *Config) error {
+		if got.AI == nil || !AIEqual(*got.AI, want) {
+			return errors.New("the written AI block does not read back as intended (file unchanged)")
+		}
+		return nil
+	})
 }
 
 // AIEqual compares two applied-defaults AI blocks on every field that changes
@@ -122,71 +86,4 @@ func renderAIBlock(a AIConfig) (string, error) {
 		b.WriteString("  " + line + "\n")
 	}
 	return b.String(), nil
-}
-
-// replaceAIBlock swaps the top-level `ai:` block in doc for block, or appends
-// block when there is none. The old block runs from its `ai:` line to the next
-// column-0 line (another key, a column-0 comment, a document marker); trailing
-// blank lines stay where they were.
-func replaceAIBlock(doc, block string) (string, error) {
-	lines := strings.SplitAfter(doc, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	start := -1
-	for i, l := range lines {
-		if isTopLevelKey(l, "ai") {
-			if start >= 0 {
-				return "", errors.New("the file has more than one top-level ai: key")
-			}
-			start = i
-		}
-	}
-	if start < 0 {
-		out := doc
-		if out != "" && !strings.HasSuffix(out, "\n") {
-			out += "\n"
-		}
-		return out + block, nil
-	}
-	end := start + 1
-	for end < len(lines) {
-		l := lines[end]
-		if strings.TrimSpace(l) == "" || l[0] == ' ' || l[0] == '\t' {
-			end++
-			continue
-		}
-		break
-	}
-	for end > start+1 && strings.TrimSpace(lines[end-1]) == "" {
-		end-- // trailing blank lines belong to what follows
-	}
-	return strings.Join(lines[:start], "") + block + strings.Join(lines[end:], ""), nil
-}
-
-// isTopLevelKey reports whether line is the column-0 mapping key name.
-func isTopLevelKey(line, name string) bool {
-	if !strings.HasPrefix(line, name) {
-		return false
-	}
-	rest := strings.TrimLeft(line[len(name):], " \t")
-	return strings.HasPrefix(rest, ":")
-}
-
-// onlyAIChanged confirms that, decoded, every top-level key except ai is
-// identical before and after.
-func onlyAIChanged(before, after []byte) error {
-	var a, b map[string]any
-	if err := yaml.Unmarshal(before, &a); err != nil {
-		return fmt.Errorf("decode current config: %w", err)
-	}
-	if err := yaml.Unmarshal(after, &b); err != nil {
-		return fmt.Errorf("decode new config: %w", err)
-	}
-	delete(a, "ai")
-	delete(b, "ai")
-	if !reflect.DeepEqual(a, b) {
-		return errors.New("a setting outside ai would change")
-	}
-	return nil
 }

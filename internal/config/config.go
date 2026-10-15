@@ -17,6 +17,23 @@ type Config struct {
 	Clusters []ClusterConfig `yaml:"clusters"`
 	AI       *AIConfig       `yaml:"ai"`
 	Line     *LineConfig     `yaml:"line"`
+	Git      *GitConfig      `yaml:"git"`
+}
+
+// GitConfig is The Line's read-only Git access (parent spec §7, slice 6
+// note §5): only Settings > Git writes it. Klyx fetches only from these
+// approved URLs, exactly as written; a URL read from a cluster is only
+// matched to one, never executed.
+type GitConfig struct {
+	Repos []GitRepoConfig `yaml:"repos"`
+}
+
+// GitRepoConfig is one approved repository.
+type GitRepoConfig struct {
+	URL         string   `yaml:"url"`         // executed exactly as approved: https or ssh, never a credential
+	Web         string   `yaml:"web"`         // optional https base for "Open in Git" on hosts Klyx does not know
+	RemoteBases bool     `yaml:"remoteBases"` // the cache diff (6e): remote Kustomize bases from approved repos
+	Matches     []string `yaml:"matches"`     // normalised repository keys this entry also serves (an SSH alias)
 }
 
 // LineConfig configures The Line (spec 2026-10-14 §3.2): Source overrides the
@@ -163,7 +180,8 @@ func (c *Config) Warnings() []string {
 			w = append(w, fmt.Sprintf("cluster %q: metrics.serviceRef is ignored because metrics.endpoint is set", cl.Name))
 		}
 	}
-	return w
+	_, notes := c.ApprovedGitRepos()
+	return append(w, notes...)
 }
 
 // Summary is a one-line description of the loaded fleet for the startup log, so a

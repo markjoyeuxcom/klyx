@@ -162,12 +162,12 @@ func TestReplaceAIBlock_Edges(t *testing.T) {
 		"aiExtra key kept": {"aiExtra: 1\nai:\n  backend: off\n", "aiExtra: 1\n" + block},
 	}
 	for name, tc := range cases {
-		got, err := replaceAIBlock(tc.in, block)
+		got, err := replaceTopLevelBlock(tc.in, "ai", block)
 		if err != nil || got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q (err %v)", name, got, tc.want, err)
 		}
 	}
-	if _, err := replaceAIBlock("ai: {}\nai: {}\n", block); err == nil {
+	if _, err := replaceTopLevelBlock("ai: {}\nai: {}\n", "ai", block); err == nil {
 		t.Error("two top-level ai keys must be refused")
 	}
 }
@@ -177,7 +177,7 @@ func TestReplaceAIBlock_Edges(t *testing.T) {
 // of defence if it ever does.
 func TestOnlyAIChanged(t *testing.T) {
 	before := []byte("clusters:\n  - name: a\nai:\n  backend: hosted\n")
-	if err := onlyAIChanged(before, []byte("clusters:\n  - name: a\nai:\n  provider: off\n")); err != nil {
+	if err := onlyKeyChanged(before, []byte("clusters:\n  - name: a\nai:\n  provider: off\n"), "ai"); err != nil {
 		t.Fatalf("an ai-only change was refused: %v", err)
 	}
 	for name, after := range map[string]string{
@@ -185,7 +185,7 @@ func TestOnlyAIChanged(t *testing.T) {
 		"key added":       "clusters:\n  - name: a\nextra: 1\nai:\n  provider: off\n",
 		"key removed":     "ai:\n  provider: off\n",
 	} {
-		if err := onlyAIChanged(before, []byte(after)); err == nil {
+		if err := onlyKeyChanged(before, []byte(after), "ai"); err == nil {
 			t.Errorf("%s: must be refused", name)
 		}
 	}

@@ -157,6 +157,21 @@ git:
 - **Unapproved:** every Git source URL read from the clusters that matches no entry, with "Approve…". The approval dialog shows the exact URL that will run, says it runs through the system git with the owner's SSH agent or credential helper, and that a helper that opens its own window is outside Klyx's control.
 - **The binary line:** the git path and version, or the reason Git is off.
 
+### 5.4 As built in 6c
+
+- **Loading** (`config.ApprovedGitRepos`) ignores an entry whose URL fails §5.1, with a note that never repeats a credential, and a second entry with the same URL. A bad `web` link or `matches` key is dropped on its own; the entry stays. The notes join fleet.yaml's load warnings.
+- **The writer** (`config.SaveGit`, through the generalised `saveTopLevelBlock`) writes the entries it is given, as given. An entry the owner wrote that loading ignores stays in the file untouched. `GitService` validates every entry it adds: the URL (§5.1), the web link (https, no user, query or fragment) and each key (a normalised `host/path`).
+- **One key, two entries:** the first in fleet.yaml order serves it, and a note says so.
+- **The clusters' URLs** come from `LineService`, recorded beside each LineDTO from the rows it already holds: Flux `GitRepository` URLs, and Argo sources without a chart (values-only `ref` sources included). They are matched by `NormalizeRepo` and shown scrubbed. `Scrub` keeps an SSH user (`git@`), since it is not a secret. It drops all http(s) userinfo, any other URL's password, and every query.
+- **Unapproved repositories** are grouped by key. The dialog is prefilled with a cluster's URL only when that URL passes §5.1 as written; otherwise it starts empty and says why. Approving always passes the row's key as the entry's `serves`, which the service drops when it equals the URL's own key. So an SSH alias approved from that row serves the clusters' repository explicitly.
+- **Tracked refs** (§3.6) are shown per entry, or the reason there are none: no line key uses the repository, or the key has no single target.
+- **The actions:**
+  - "Fetch now" waits for the fetch to end and is disabled with nothing tracked; one fetch per repository runs at a time.
+  - "Clear cache" needs no confirmation, since the next fetch rebuilds the cache.
+  - "Remove" withdraws the approval and clears the cache, after a confirmation.
+- **Startup:** Git starts in the background, so the panel reads "Checking git…" until it is ready.
+- **Left for later:** the fetch cadence and `line:git` are 6d; the `remoteBases` toggle is 6e.
+
 ## 6. The line with history (6d)
 
 ### 6.1 Where it is computed

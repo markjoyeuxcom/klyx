@@ -120,15 +120,19 @@ func (r Runner) run(ctx context.Context, c cmd, ok ...int) (procrun.Result, erro
 const stderrMax = 64 << 10
 
 var (
-	urlUserinfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]*@`)
-	urlQuery    = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^\s?#]*)[?#][^\s'"]*`)
-	secretPair  = regexp.MustCompile(`(?i)\b(access_token|token|password|passwd|secret|authorization|private[-_]token)(\s*[=:]\s*)\S+`)
+	httpUserinfo = regexp.MustCompile(`(?i)\b(https?://)[^/\s@]*@`)
+	urlPassword  = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^/\s@:]*):[^/\s@]*@`)
+	urlQuery     = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^\s?#]*)[?#][^\s'"]*`)
+	secretPair   = regexp.MustCompile(`(?i)\b(access_token|token|password|passwd|secret|authorization|private[-_]token)(\s*[=:]\s*)\S+`)
 )
 
 // Scrub removes what could be a credential from text shown to the owner
-// (slice 6 note §4): URLs' userinfo and query, and token-like pairs.
+// (slice 6 note §4): all of an http(s) URL's userinfo (a token often rides
+// as the user), any other URL's password, URLs' query and fragment, and
+// token-like pairs. An SSH user alone ("git@") is not a secret and stays.
 func Scrub(s string) string {
-	s = urlUserinfo.ReplaceAllString(s, "$1")
+	s = httpUserinfo.ReplaceAllString(s, "$1")
+	s = urlPassword.ReplaceAllString(s, "$1@")
 	s = urlQuery.ReplaceAllString(s, "$1")
 	return secretPair.ReplaceAllString(s, "$1$2…")
 }

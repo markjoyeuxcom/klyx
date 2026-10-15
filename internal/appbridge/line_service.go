@@ -122,6 +122,7 @@ type LineService struct {
 
 	dtoMu sync.RWMutex
 	dto   LineDTO
+	git   []LineGitSource // the Git source URLs the stations' rows name, with the dto
 
 	// Worker-owned.
 	stations map[string]*lineStation
@@ -692,9 +693,11 @@ func (s *LineService) recompute() {
 	sort.Slice(names, func(i, j int) bool { return s.stations[names[i]].order < s.stations[names[j]].order })
 	in := line.Input{Read: map[string]string{}, Override: s.d.Override, Selector: s.selector}
 	reasons := map[string][]string{}
+	var git []LineGitSource
 	for _, n := range names {
 		st := s.stations[n]
 		si, read, why := s.input(st)
+		git = append(git, gitSources(si)...)
 		in.Stations = append(in.Stations, si)
 		in.Read[n], reasons[n] = read, why
 		if read == line.ReadOK {
@@ -761,7 +764,7 @@ func (s *LineService) recompute() {
 	s.version++
 	dto.Version = s.version
 	s.dtoMu.Lock()
-	s.dto = dto
+	s.dto, s.git = dto, git
 	s.dtoMu.Unlock()
 	if s.d.Emitter != nil {
 		s.d.Emitter.Emit(LineEvent, dto)
@@ -974,4 +977,41 @@ func oldestEvaluated(st *lineStation) *time.Time {
 		}
 	}
 	return out
+}
+
+// LineGitSource is one Git repository URL a station's rows name, exactly as
+// the cluster holds it: a GitRepository's spec.url or an Argo Git source's
+// repoURL. Settings > Git only matches it to an approved entry and shows it
+// scrubbed; it is never executed (parent §7).
+type LineGitSource struct {
+	Cluster, Origin, Namespace, Name, URL string
+}
+
+func gitSources(in line.StationInput) []LineGitSource {
+	var out []LineGitSource
+	for _, o := range in.Sources {
+		if o.Data.Kind == flux.GitRepositoryKind && o.Data.URL != "" {
+			out = append(out, LineGitSource{Cluster: in.Cluster, Origin: string(o.Data.Kind), Namespace: o.Data.Namespace,
+				Name: o.Data.Name, URL: o.Data.URL})
+		}
+	}
+	for _, o := range in.Apps {
+		for _, src := range o.Data.Sources {
+			if src.Chart == "" && src.RepoURL != "" {
+				out = append(out, LineGitSource{Cluster: in.Cluster, Origin: "Application", Namespace: o.Data.Namespace,
+					Name: o.Data.Name, URL: src.RepoURL})
+			}
+		}
+	}
+	return out
+}
+
+// LineGitSources returns the Git source URLs as of the current LineDTO: a
+// package-level accessor, so it is not bound to the webview.
+func LineGitSources(s *LineService) func() []LineGitSource {
+	return func() []LineGitSource {
+		s.dtoMu.RLock()
+		defer s.dtoMu.RUnlock()
+		return append([]LineGitSource(nil), s.git...)
+	}
 }

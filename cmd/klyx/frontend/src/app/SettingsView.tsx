@@ -8,6 +8,7 @@ import type { FleetConfigDTO } from "../bridge/configsvc";
 import { btn, ellipsis } from "../chrome/primitives";
 import { AISettingsPanel } from "./AISettingsPanel";
 import { AppearancePanel } from "./AppearancePanel";
+import { GitSettingsPanel } from "./GitSettingsPanel";
 
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
@@ -82,7 +83,7 @@ export function SettingsView() {
       <Section title="Fleet configuration">
         <PathRow label="file" path={cfg.path} />
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 8 }}>
-          Cluster identity, tags, protection, and metrics endpoints live here. Klyx writes this file in two places only: it appends clusters you add below, and Settings &gt; AI saves the ai block (comments inside that block are not kept). Your cluster entries and every other line stay as you wrote them; edit the file directly for anything else.
+          Cluster identity, tags, protection, and metrics endpoints live here. Klyx writes this file in three places only: it appends clusters you add below, Settings &gt; AI saves the ai block, and Settings &gt; Git saves the git block (comments inside those two blocks are not kept). Your cluster entries and every other line stay as you wrote them; edit the file directly for anything else.
         </div>
         {cfg.warnings.length > 0 && (
           <div style={{ marginBottom: 8 }}>
@@ -113,6 +114,10 @@ export function SettingsView() {
 
       <Section title="AI assist">
         <AISettingsPanel />
+      </Section>
+
+      <Section title="Git history">
+        <GitSettingsPanel />
       </Section>
 
       <Section title="Kubeconfig contexts">

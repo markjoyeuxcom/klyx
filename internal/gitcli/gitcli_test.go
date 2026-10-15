@@ -363,6 +363,18 @@ func TestScrub(t *testing.T) {
 	if !strings.Contains(got, "https://github.com/acme/fleet.git/") {
 		t.Fatalf("the URL itself was lost: %q", got)
 	}
+	for in, want := range map[string]string{
+		"ssh://git@github.com/acme/fleet.git":      "ssh://git@github.com/acme/fleet.git", // an SSH user is not a secret
+		"ssh://git:pw@github.com/acme/fleet.git":   "ssh://git@github.com/acme/fleet.git",
+		"https://ghp_tok@github.com/a/b.git":       "https://github.com/a/b.git",
+		"HTTP://user:pw@git.internal/a.git":        "HTTP://git.internal/a.git",
+		"git@github.com:acme/fleet.git":            "git@github.com:acme/fleet.git",
+		"https://github.com/a/b.git?private_token": "https://github.com/a/b.git",
+	} {
+		if got := Scrub(in); got != want {
+			t.Errorf("Scrub(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // --- the real git ---

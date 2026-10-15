@@ -236,6 +236,15 @@ func main() {
 		Override: lineOverride,
 	})
 
+	// The Line slice 6: read-only Git access through the system git, only
+	// from fleet.yaml's approved git.repos (Settings > Git).
+	gitSvc := appbridge.NewGitService(ctx, appbridge.GitDeps{
+		ConfigPath: configPath(),
+		Line:       lineSvc.Line,
+		Override:   lineOverride,
+		Sources:    appbridge.LineGitSources(lineSvc),
+	})
+
 	metricsSvc := appbridge.NewMetricsService(func(name string) (appbridge.MetricsConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -482,6 +491,7 @@ func main() {
 			application.NewService(gatewaySvc),
 			application.NewService(meshSvc),
 			application.NewService(lineSvc),
+			application.NewService(gitSvc),
 			application.NewService(metricsSvc),
 			application.NewService(workloadsSvc),
 			application.NewService(podsSvc),
