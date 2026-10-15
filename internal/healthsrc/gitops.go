@@ -45,15 +45,15 @@ func GitOps(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	domains := []observe.DomainSpec{
 		{ID: TaskFlux, Parts: []observe.PartSpec{
 			{ID: "reconciliations", Entity: "Kustomizations and HelmReleases", Scope: ns, Classifier: "native",
-				Counted: []string{KindKustomizations, KindHelmReleases}, Evaluate: evalFluxReconciliations(c)},
+				Counted: []string{KindKustomizations, KindHelmReleases}, Evaluate: evalFluxReconciliations(c), Ledger: true},
 			{ID: "sources", Entity: "Flux sources", Scope: ns, Classifier: "native",
-				Counted: fluxSourceKinds, Evaluate: evalFluxSources(c)},
+				Counted: fluxSourceKinds, Evaluate: evalFluxSources(c), Ledger: true},
 		}},
 		{ID: TaskArgo, Parts: []observe.PartSpec{
 			{ID: "applications", Entity: "Applications", Scope: ns, Classifier: "native",
-				Counted: []string{KindApplications}, Evaluate: evalArgoApps(c)},
+				Counted: []string{KindApplications}, Evaluate: evalArgoApps(c), Ledger: true},
 			{ID: "applicationsets", Entity: "ApplicationSets", Scope: ns, Classifier: "native",
-				Counted: []string{KindApplicationSets}, Evaluate: evalArgoAppSets(c)},
+				Counted: []string{KindApplicationSets}, Evaluate: evalArgoAppSets(c), Ledger: true},
 		}},
 	}
 	return kinds, domains
@@ -76,7 +76,7 @@ func evalFluxReconciliations(cluster string) func(observe.Capture) observe.PartR
 			rows = append(rows, nativeRow(it, r))
 		}
 		// The lens's legacy word: "not ready" still includes progressing.
-		res := nativeResult(cluster, TaskFlux, "not ready", items)
+		res := nativeResult(c.RoleCap, cluster, TaskFlux, "not ready", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)
 		}
@@ -96,7 +96,7 @@ func evalFluxSources(cluster string) func(observe.Capture) observe.PartResult {
 				rows = append(rows, nativeRow(it, src))
 			}
 		}
-		res := nativeResult(cluster, TaskFlux, "not ready", items)
+		res := nativeResult(c.RoleCap, cluster, TaskFlux, "not ready", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)
 		}
@@ -114,7 +114,7 @@ func evalArgoApps(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, a))
 		}
-		res := nativeResult(cluster, TaskArgo, "out of sync or unhealthy", items)
+		res := nativeResult(c.RoleCap, cluster, TaskArgo, "out of sync or unhealthy", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)
 		}
@@ -132,7 +132,7 @@ func evalArgoAppSets(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, s))
 		}
-		res := nativeResult(cluster, TaskArgo, "need attention", items)
+		res := nativeResult(c.RoleCap, cluster, TaskArgo, "need attention", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)
 		}

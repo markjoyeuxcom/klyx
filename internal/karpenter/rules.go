@@ -31,6 +31,9 @@ func ClaimRule(c NodeClaim) health.NativeEval {
 		}
 		if c.AgeSeconds > int(LaunchDeadline/time.Second) {
 			e.Role, e.Label = health.Degraded, phase+", appears stuck"
+			if !c.Created.IsZero() {
+				e.Boundary = health.At(c.Created.Add(LaunchDeadline + time.Second))
+			}
 		} else {
 			e.Role, e.Label = health.Progressing, phase
 			if !c.Created.IsZero() {

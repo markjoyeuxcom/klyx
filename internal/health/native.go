@@ -27,6 +27,11 @@ type NativeEval struct {
 	// - makes the start unprovable, and Since stays nil: the age comes from
 	// Klyx's own observation instead (The Line §8.1).
 	Since *time.Time
+	// Boundary is the instant a time-only threshold flipped this object's
+	// role (a pending deadline, a launch deadline, an overdue refresh, an
+	// expiry), set while the role is the crossed one: evidence for a derived
+	// change, never the role's start (The Line slice 2b §1.1).
+	Boundary *time.Time
 	// Cond is the condition the role was read from, with its own transition
 	// time: qualified evidence ("Ready=False since 09:00, condition time"),
 	// never the role's start. Nil when no condition decided the role or its

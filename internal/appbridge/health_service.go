@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/obslog"
 )
 
 // HealthSummaryEvent carries one cluster's complete summary (1c addendum §4).
@@ -20,11 +21,12 @@ const HealthSummaryEvent = "health:summary"
 type HealthSink struct {
 	em      Emitter
 	lineage *rowsLineage
-	trace   *rowsTrace // nil unless KLYX_ROWS_TRACE names a file (the 1c §6a lab gate)
+	trace   *rowsTrace  // nil unless KLYX_ROWS_TRACE names a file (the 1c §6a lab gate)
+	log     *obslog.Log // the observation log every Observer's transition stream feeds (The Line slice 2b)
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
-	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE"))}
+	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE")), log: obslog.New()}
 	if h.trace != nil {
 		startLabNoise(em) // lab-only, and only when asked for
 	}
@@ -35,6 +37,14 @@ func (h *HealthSink) Summary(s observe.Summary) {
 	h.lineage.summary(s)
 	h.em.Emit(HealthSummaryEvent, s)
 }
+
+// Transitions feed the observation log (The Line slice 2b §6): each batch
+// is applied whole, at its commit, on the Observer's loop goroutine. Nothing
+// is emitted to the webview yet.
+func (h *HealthSink) Transitions(b observe.TransitionBatch) { h.log.Apply(b) }
+
+// ObservationLog is the log the sink feeds.
+func (h *HealthSink) ObservationLog() *obslog.Log { return h.log }
 
 // Rows go to one event per part, as the lens's DTOs (slice 3 §2): a part
 // no lens reads yet has no converter and is not emitted. A delta part with

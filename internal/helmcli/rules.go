@@ -38,7 +38,9 @@ func ReleaseRule(r Release, now time.Time) health.NativeEval {
 	case inFlight[r.Status]:
 		deadline := int64(PendingDeadline / time.Second)
 		if r.UpdatedUnix > 0 && now.Unix()-r.UpdatedUnix > deadline {
-			return eval(health.Degraded, r.Status+", appears stuck")
+			e := eval(health.Degraded, r.Status+", appears stuck")
+			e.Boundary = health.At(time.Unix(r.UpdatedUnix+deadline+1, 0)) // the step Next named
+			return e
 		}
 		e := eval(health.Progressing, r.Status)
 		if r.UpdatedUnix > 0 {

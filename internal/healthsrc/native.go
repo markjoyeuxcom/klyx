@@ -72,21 +72,21 @@ func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	domains := []observe.DomainSpec{
 		{ID: TaskCerts, Parts: []observe.PartSpec{
 			{ID: "certificates", Entity: "Certificates", Scope: "all namespaces", Classifier: "native",
-				Counted: []string{KindCertificates}, Evaluate: evalCertificates(c)},
+				Counted: []string{KindCertificates}, Evaluate: evalCertificates(c), Ledger: true},
 			{ID: "issuers", Entity: "Issuers and ClusterIssuers", Scope: "all namespaces + cluster-scoped", Classifier: "native",
-				Counted: []string{KindIssuers, KindClusterIssuers}, Evaluate: evalIssuers(c)},
+				Counted: []string{KindIssuers, KindClusterIssuers}, Evaluate: evalIssuers(c), Ledger: true},
 		}},
 		{ID: TaskESO, Parts: []observe.PartSpec{
 			{ID: "externalsecrets", Entity: "ExternalSecrets", Scope: "all namespaces", Classifier: "native",
-				Counted: []string{KindExternalSecrets}, Evaluate: evalExternalSecrets(c)},
+				Counted: []string{KindExternalSecrets}, Evaluate: evalExternalSecrets(c), Ledger: true},
 			{ID: "stores", Entity: "SecretStores and ClusterSecretStores", Scope: "all namespaces + cluster-scoped", Classifier: "native",
-				Counted: []string{KindSecretStores, KindClusterSecretStores}, Evaluate: evalStores(c)},
+				Counted: []string{KindSecretStores, KindClusterSecretStores}, Evaluate: evalStores(c), Ledger: true},
 		}},
 		{ID: TaskKarpenter, Parts: []observe.PartSpec{
 			{ID: "nodeclaims", Entity: "NodeClaims", Scope: "cluster-scoped", Classifier: "native",
-				Counted: []string{KindNodeClaims}, Evaluate: evalNodeClaims(c)},
+				Counted: []string{KindNodeClaims}, Evaluate: evalNodeClaims(c), Ledger: true},
 			{ID: "nodepools", Entity: "NodePools", Scope: "cluster-scoped", Classifier: "native",
-				Counted: []string{KindNodePools}, Deps: []string{KindNodeClaims}, Evaluate: evalNodePools(c)},
+				Counted: []string{KindNodePools}, Deps: []string{KindNodeClaims}, Evaluate: evalNodePools(c), Ledger: true},
 		}},
 	}
 	return kinds, domains
@@ -129,11 +129,16 @@ type nativeItem struct {
 // nativeResult partitions relocated-rule verdicts by role, counts the lens's
 // inclusion, and picks Top refs among included objects (role order, then
 // namespace/name) - spec §2.
-func nativeResult(cluster, route, word string, items []nativeItem) observe.PartResult {
+func nativeResult(roleCap int, cluster, route, word string, items []nativeItem) observe.PartResult {
 	nc := observe.NativeCounts{Word: word}
 	var next *time.Time
 	var incl []nativeItem
+	roles := newRoles(roleCap, len(items))
+	capped := false
 	for _, it := range items {
+		roles = appendRole(roles, &capped, roleCap, observe.RoleEntry{Source: it.ref.source, GVR: it.ref.gvr, Key: it.ref.key(),
+			NS: it.ref.ns, Name: it.ref.name, Role: it.eval.Role.String(), Label: it.eval.Label, Since: it.eval.Since,
+			Boundary: it.eval.Boundary, Condition: conditionOf(it.eval.Cond), Reason: it.eval.Reason})
 		nc.Total++
 		switch it.eval.Role {
 		case health.Fault:
@@ -177,7 +182,7 @@ func nativeResult(cluster, route, word string, items []nativeItem) observe.PartR
 			Role: it.eval.Role.String(), Label: it.eval.Label, Generation: it.ref.generation, Route: route,
 			Since: it.eval.Since, Condition: conditionOf(it.eval.Cond), Reason: it.eval.Reason})
 	}
-	return observe.PartResult{Native: &nc, Top: top, Next: next}
+	return observe.PartResult{Native: &nc, Top: top, Next: next, Roles: roles, RolesCapped: capped}
 }
 
 // conditionOf carries a rule's condition evidence onto a ref.
@@ -193,7 +198,8 @@ func conditionOf(c *health.CondSince) *observe.Condition {
 // documented fallback - plus the resource: "cert-manager.io/v1/certificates",
 // the same group/version/resource form as core refs.
 func refOf(u *unstructured.Unstructured, resource string) refInput {
-	return refInput{gvr: u.GetAPIVersion() + "/" + resource, ns: u.GetNamespace(), name: u.GetName(), uid: string(u.GetUID()), generation: u.GetGeneration()}
+	return refInput{gvr: u.GetAPIVersion() + "/" + resource, ns: u.GetNamespace(), name: u.GetName(), uid: string(u.GetUID()), generation: u.GetGeneration(),
+		source: resource} // kind names are their resources
 }
 
 func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
@@ -206,7 +212,7 @@ func evalCertificates(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, cert))
 		}
-		r := nativeResult(cluster, TaskCerts, "not ready", items)
+		r := nativeResult(c.RoleCap, cluster, TaskCerts, "not ready", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -226,7 +232,7 @@ func evalIssuers(cluster string) func(observe.Capture) observe.PartResult {
 				rows = append(rows, nativeRow(it, is))
 			}
 		}
-		r := nativeResult(cluster, TaskCerts, "not ready", items)
+		r := nativeResult(c.RoleCap, cluster, TaskCerts, "not ready", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -244,7 +250,7 @@ func evalExternalSecrets(cluster string) func(observe.Capture) observe.PartResul
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, e))
 		}
-		r := nativeResult(cluster, TaskESO, "not synced or refresh overdue", items)
+		r := nativeResult(c.RoleCap, cluster, TaskESO, "not synced or refresh overdue", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -264,7 +270,7 @@ func evalStores(cluster string) func(observe.Capture) observe.PartResult {
 				rows = append(rows, nativeRow(it, s))
 			}
 		}
-		r := nativeResult(cluster, TaskESO, "not ready", items)
+		r := nativeResult(c.RoleCap, cluster, TaskESO, "not ready", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -282,7 +288,7 @@ func evalNodeClaims(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, cl))
 		}
-		r := nativeResult(cluster, TaskKarpenter, "not ready or appear stuck", items)
+		r := nativeResult(c.RoleCap, cluster, TaskKarpenter, "not ready or appear stuck", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -305,7 +311,7 @@ func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, p))
 		}
-		r := nativeResult(cluster, TaskKarpenter, "not ready", items)
+		r := nativeResult(c.RoleCap, cluster, TaskKarpenter, "not ready", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}

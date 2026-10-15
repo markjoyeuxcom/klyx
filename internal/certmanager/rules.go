@@ -65,6 +65,7 @@ func CertificateRule(c Certificate, now time.Time) health.NativeEval {
 func certificateDated(e *health.NativeEval, c Certificate, expired bool) {
 	if expired {
 		e.Reason = health.CapReason("Expired", "notAfter "+c.NotAfter.UTC().Format(time.RFC3339))
+		e.Boundary = health.At(time.Unix(c.NotAfter.Unix(), 0).UTC()) // evidence, never a start
 		return
 	}
 	if e.Role == health.Fault || e.Role == health.Degraded {

@@ -15,7 +15,7 @@ import (
 func TestTopRefReasonIsScrubbed(t *testing.T) {
 	src := flux.Source{Ready: flux.Failed, Reason: "GitOperationFailed",
 		Message: "failed to clone https://alice:review-password@repo.invalid/a: token=review-credential rejected"}
-	res := nativeResult("x", "flux", "sources", []nativeItem{{eval: flux.SourceRule(src), ref: refInput{ns: "flux-system", name: "fleet", uid: "u1"}}})
+	res := nativeResult(0, "x", "flux", "sources", []nativeItem{{eval: flux.SourceRule(src), ref: refInput{ns: "flux-system", name: "fleet", uid: "u1"}}})
 	if len(res.Top) != 1 {
 		t.Fatalf("top: %+v", res.Top)
 	}
@@ -45,7 +45,7 @@ func TestReasonCapNeverCutsASecret(t *testing.T) {
 func TestTopRefCarriesConditionEvidence(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	src := flux.Source{Ready: flux.Failed, Reason: "GitOperationFailed", ReadySince: at}
-	res := nativeResult("x", "flux", "sources", []nativeItem{{eval: flux.SourceRule(src), ref: refInput{ns: "flux-system", name: "fleet", uid: "u1"}}})
+	res := nativeResult(0, "x", "flux", "sources", []nativeItem{{eval: flux.SourceRule(src), ref: refInput{ns: "flux-system", name: "fleet", uid: "u1"}}})
 	if len(res.Top) != 1 {
 		t.Fatalf("top: %+v", res.Top)
 	}

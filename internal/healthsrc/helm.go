@@ -50,7 +50,7 @@ func Helm(d HelmDeps) ([]observe.SnapshotSpec, []observe.DomainSpec) {
 		}}
 	domains := []observe.DomainSpec{{ID: TaskHelm, Parts: []observe.PartSpec{
 		{ID: "releases", Entity: "Helm releases", Scope: "all namespaces", Classifier: "native",
-			Counted: []string{SnapHelm}, Evaluate: evalReleases(d.Cluster)},
+			Counted: []string{SnapHelm}, Evaluate: evalReleases(d.Cluster), Ledger: true},
 	}}}
 	return []observe.SnapshotSpec{snap}, domains
 }
@@ -91,11 +91,11 @@ func evalReleases(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []Row[helmcli.Release]
 		for _, o := range c.Objects[SnapHelm] {
 			r := o.(helmcli.Release)
-			it := nativeItem{helmcli.ReleaseRule(r, c.Now), refInput{ns: r.Namespace, name: r.Name}}
+			it := nativeItem{helmcli.ReleaseRule(r, c.Now), refInput{ns: r.Namespace, name: r.Name, source: SnapHelm}}
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, r))
 		}
-		res := nativeResult(cluster, TaskHelm, "failed or appear stuck", items)
+		res := nativeResult(c.RoleCap, cluster, TaskHelm, "failed or appear stuck", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)
 		}

@@ -26,10 +26,11 @@ const (
 	partitionFrozen                       // a loss was emitted; held for the after-gap
 )
 
-// ledgerEntry is one key's committed state. Strings are shared with the
-// evaluator's values, never copied.
+// ledgerEntry is one key's committed state: a pointer into the evaluation's
+// own role slice (which the committed ledger then retains), never a copy -
+// a 50,000-object part keeps one slice and a map of pointers.
 type ledgerEntry struct {
-	RoleEntry
+	*RoleEntry
 	unevaluated bool // present in the source but not evaluated: a state, not a role
 }
 
@@ -174,20 +175,18 @@ func lossOf(prev, cur ContinuityIdentity) *Loss {
 	return l
 }
 
-// memberMeta is one captured object's identity, for membership.
-type memberMeta struct{ ns, name string }
-
 // membershipOf is a watched source's authoritative membership: the UIDs of
-// its captured objects. ok is false when any object has no accessible
-// metadata or UID - the source then claims no deletions (fail closed).
-func membershipOf(objs []any) (map[string]memberMeta, bool) {
-	m := make(map[string]memberMeta, len(objs))
-	for _, obj := range objs {
+// its captured objects, each mapped to its index in objs (its namespace and
+// name are read only for the few members the evaluator skipped). ok is false
+// when any object has no accessible metadata or UID.
+func membershipOf(objs []any) (map[string]int, bool) {
+	m := make(map[string]int, len(objs))
+	for i, obj := range objs {
 		a, err := meta.Accessor(obj)
 		if err != nil || a.GetUID() == "" {
 			return nil, false
 		}
-		m[string(a.GetUID())] = memberMeta{ns: a.GetNamespace(), name: a.GetName()}
+		m[string(a.GetUID())] = i
 	}
 	return m, true
 }
@@ -199,16 +198,21 @@ func (o *Observer) commitLedger(p *partState, cp captured, c Capture, res PartRe
 	if lg == nil || o.tsink == nil {
 		return
 	}
-	bySource := map[string][]RoleEntry{}
-	for _, r := range res.Roles {
-		bySource[r.Source] = append(bySource[r.Source], r)
+	// Group by source as indices into the evaluation's own slice: the
+	// ledger points into it rather than copying each entry.
+	bySource := map[string][]int{}
+	if len(p.spec.Counted) > 1 {
+		for i := range res.Roles {
+			bySource[res.Roles[i].Source] = append(bySource[res.Roles[i].Source], i)
+		}
 	}
 	for _, src := range p.spec.Counted {
-		o.commitPartition(p, lg, src, cp, c, bySource[src], res.RolesCapped, ver)
+		idx, all := bySource[src], len(p.spec.Counted) == 1
+		o.commitPartition(p, lg, src, cp, c, res.Roles, idx, all, res.RolesCapped, ver)
 	}
 }
 
-func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp captured, c Capture, roles []RoleEntry, capped bool, ver uint64) {
+func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp captured, c Capture, roles []RoleEntry, idx []int, all, capped bool, ver uint64) {
 	id := partitionIdentity(p.spec, src, cp)
 	pt := lg.parts[src]
 	base := TransitionBatch{Source: src, GVR: id.Sources[0].GVR, Mode: ModeWatch, PartVer: ver, Identity: id, At: cp.at}
@@ -240,7 +244,7 @@ func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp 
 	var membershipUnknown bool
 	if !capped && live {
 		var st entriesStatus
-		entries, st = o.entriesOf(src, id, c, roles, sampled && cp.truncated[src])
+		entries, st = o.entriesOf(src, id, c, roles, idx, all, sampled && cp.truncated[src])
 		capped = st == entriesCapped
 		// Unknown membership cannot tell a deletion from a skipped object:
 		// continuity is not proven, so the partition is not live (review of
@@ -312,26 +316,38 @@ const (
 // is neither evaluated nor a member is gone. When membership is unknown no
 // entries are built: the caller suspends the partition instead of claiming
 // either a deletion or continuity.
-func (o *Observer) entriesOf(src string, id ContinuityIdentity, c Capture, roles []RoleEntry, truncated bool) (map[string]ledgerEntry, entriesStatus) {
-	if truncated || len(roles) > o.cfg.RoleCap {
+func (o *Observer) entriesOf(src string, id ContinuityIdentity, c Capture, roles []RoleEntry, idx []int, all, truncated bool) (map[string]ledgerEntry, entriesStatus) {
+	n := len(idx)
+	if all {
+		n = len(roles)
+	}
+	if truncated || n > o.cfg.RoleCap {
 		return nil, entriesCapped
 	}
-	entries := make(map[string]ledgerEntry, len(roles))
-	for _, r := range roles {
-		entries[r.Key] = ledgerEntry{RoleEntry: r}
+	entries := make(map[string]ledgerEntry, n)
+	if all {
+		for i := range roles {
+			entries[roles[i].Key] = ledgerEntry{RoleEntry: &roles[i]}
+		}
+	} else {
+		for _, i := range idx {
+			entries[roles[i].Key] = ledgerEntry{RoleEntry: &roles[i]}
+		}
 	}
 	if _, isKind := o.kinds[src]; !isKind {
 		return entries, entriesOK // a complete read: a missing key is gone
 	}
-	members, known := membershipOf(c.Objects[src])
+	objs := c.Objects[src]
+	members, known := membershipOf(objs)
 	if !known {
 		return nil, entriesMembershipUnknown
 	}
-	for uid, m := range members {
+	for uid, i := range members {
 		if _, ok := entries[uid]; ok {
 			continue
 		}
-		entries[uid] = ledgerEntry{RoleEntry: RoleEntry{Source: src, GVR: id.Sources[0].GVR, Key: uid, NS: m.ns, Name: m.name}, unevaluated: true}
+		a, _ := meta.Accessor(objs[i]) // known readable: membershipOf checked it
+		entries[uid] = ledgerEntry{RoleEntry: &RoleEntry{Source: src, GVR: id.Sources[0].GVR, Key: uid, NS: a.GetNamespace(), Name: a.GetName()}, unevaluated: true}
 	}
 	if len(entries) > o.cfg.RoleCap {
 		return nil, entriesCapped

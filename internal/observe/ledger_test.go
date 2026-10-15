@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	testingclock "k8s.io/utils/clock/testing"
 )
 
 // The role ledger and transition stream (slice 2b §9). Objects are
@@ -641,5 +642,96 @@ func TestLedgerSampledReadsAndDerivedBoundaries(t *testing.T) {
 		d.Items[0].Boundary.Format(time.RFC3339) != ua || d.Items[1].Boundary.Format(time.RFC3339) != ub ||
 		!d.ReadAt.Equal(*d.PrevReadAt) || d.At.Equal(*d.Items[0].Boundary) {
 		t.Fatalf("derived: %q %+v at %v", itemsOf(d), d.Items, d.At)
+	}
+}
+
+// ---- review of 5fcb5f2: the capture clock, a late read, the served GVR -------------------
+
+// directObserver builds an unstarted Observer with one live cms generation,
+// for driving evaluate and publish directly.
+func directObserver(t *testing.T, clk *testingclock.FakeClock, sink *recSink, gvr string, parts ...PartSpec) *Observer {
+	t.Helper()
+	k := ledgerKind("cms", newSource())
+	k.GVR = gvr
+	if len(parts) == 0 {
+		parts = []PartSpec{ledgerPart("cms", []string{"cms"})}
+	}
+	o := New(Config{Cluster: "direct", Clock: clk, Sink: sink, Kinds: []KindSpec{k}, Domains: []DomainSpec{{ID: "things", Parts: parts}}})
+	ks := o.kinds["cms"]
+	ks.refs, ks.probed, ks.served, ks.version = 1, true, true, "v1beta2"
+	ks.gen = &kindGen{o: o, ks: ks, id: 1, epoch: 1, version: "v1beta2", cancel: func() {}, fresh: freshness{cov: Live},
+		model: map[string]any{"ns/a": &cmObj{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns", UID: "a"}, Bad: true}}}
+	return o
+}
+
+// The rules evaluate at the capture's own clock read, and the batch is
+// stamped with it: a slow part earlier in the cycle cannot make a later part
+// report a pre-deadline role after the deadline.
+func TestLedgerRulesAndBatchShareTheCaptureClock(t *testing.T) {
+	clk := testingclock.NewFakeClock(t0)
+	sink := &recSink{}
+	slow := PartSpec{ID: "slow", Counted: []string{"cms"}, Evaluate: func(Capture) PartResult {
+		clk.Step(2 * time.Minute)
+		return PartResult{}
+	}}
+	o := directObserver(t, clk, sink, "", slow, ledgerPart("late", []string{"cms"}))
+	o.kinds["cms"].gen.model = map[string]any{"ns/a": &cmObj{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns", UID: "a"},
+		Until: t0.Add(time.Minute).Format(time.RFC3339)}}
+	for _, p := range o.domains[0].parts {
+		o.dirty[p.key] = true
+	}
+	o.publish(t0)
+	bs := sink.allBatches()
+	if len(bs) != 1 || len(bs[0].Items) != 1 || !bs[0].At.Equal(t0.Add(2*time.Minute)) || bs[0].Items[0].To != "fault" {
+		t.Fatalf("captured at %v past the 12:01 boundary must read fault: %+v", bs[0].At, bs)
+	}
+}
+
+// A successful read that lands after the previous one went overdue - before
+// the loop's boundary check - keeps the gap.
+func TestLedgerLateSuccessfulReadKeepsTheOverdueGap(t *testing.T) {
+	clk := testingclock.NewFakeClock(t0)
+	sink := &recSink{}
+	eval := func(c Capture) PartResult {
+		var roles []RoleEntry
+		for _, v := range c.Objects["helm"] {
+			roles = append(roles, RoleEntry{Source: "helm", Key: "ns/a", NS: "ns", Name: "a", Role: v.(string)})
+		}
+		return PartResult{Roles: roles}
+	}
+	o := New(Config{Cluster: "direct", Clock: clk, Sink: sink, Snapshots: []SnapshotSpec{{Name: "helm", Cadence: time.Minute}},
+		Domains: []DomainSpec{{ID: "helm", Parts: []PartSpec{{ID: "releases", Counted: []string{"helm"}, Evaluate: eval, Ledger: true}}}}})
+	ss := o.snaps["helm"]
+	g := &snapGen{o: o, ss: ss, ctx: context.Background(), id: 1, fresh: freshness{cov: Checking}}
+	ss.gen = g
+	g.apply(SnapshotRead{Items: []any{"ok"}})
+	p := o.domains[0].parts[0]
+	o.evaluate(p, clk.Now(), false)
+	clk.Step(3 * time.Minute) // the loop was busy, or the machine slept, past 2x cadence
+	g.apply(SnapshotRead{Items: []any{"fault"}})
+	o.applyBoundaries(clk.Now())
+	o.evaluate(p, clk.Now(), false)
+	bs := sink.allBatches()
+	if len(bs) != 3 || bs[1].Kind != BatchLoss || bs[2].Kind != BatchAfterGap {
+		t.Fatalf("a late read must not erase the overdue gap: %+v", bs)
+	}
+}
+
+// An absence loss names the last served version, never the unversioned
+// descriptor.
+func TestLedgerAbsenceLossKeepsTheServedVersion(t *testing.T) {
+	clk := testingclock.NewFakeClock(t0)
+	sink := &recSink{}
+	o := directObserver(t, clk, sink, "example.io/widgets")
+	p := o.domains[0].parts[0]
+	o.evaluate(p, clk.Now(), false)
+	o.mu.Lock()
+	o.applyProbeLocked(o.kinds["cms"], Probe{Served: false})
+	o.mu.Unlock()
+	clk.Step(time.Second)
+	o.evaluate(p, clk.Now(), false)
+	bs := sink.allBatches()
+	if len(bs) != 2 || bs[1].Kind != BatchLoss || bs[1].GVR != "example.io/v1beta2/widgets" || bs[1].Identity.Sources[0].GVR != "example.io/v1beta2/widgets" {
+		t.Fatalf("absence loss GVR: %+v", bs)
 	}
 }

@@ -472,8 +472,10 @@ func certObj(name, ready string) *unstructured.Unstructured {
 type obsHarness struct {
 	o      *observe.Observer
 	rec    *rowsSinkRec
+	sink   *HealthSink
 	svc    *HealthService
 	cancel context.CancelFunc
+	dyn    *dynamicfake.FakeDynamicClient
 }
 
 // startCertObserver runs a real Observer over certificates. gate, when set,
@@ -527,10 +529,11 @@ func startCertObserverServed(t *testing.T, cluster string, gate chan struct{}, s
 		}
 	}
 	rec := &rowsSinkRec{rows: map[string][]RowsDTO{}}
-	o := observe.New(observe.Config{Cluster: cluster, Sink: NewHealthSink(rec), Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond, ReprobeEvery: 20 * time.Millisecond})
+	sink := NewHealthSink(rec)
+	o := observe.New(observe.Config{Cluster: cluster, Sink: sink, Kinds: kinds, Domains: domains, Throttle: 10 * time.Millisecond, ReprobeEvery: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	o.Start(ctx)
-	h := &obsHarness{o: o, rec: rec, cancel: cancel}
+	h := &obsHarness{o: o, rec: rec, sink: sink, cancel: cancel, dyn: dyn}
 	h.svc = NewHealthService(func() []*observe.Observer { return []*observe.Observer{h.o} })
 	t.Cleanup(func() { cancel(); <-o.Done() })
 	return h

@@ -52,6 +52,9 @@ func secretDated(ev *health.NativeEval, e ExternalSecret) {
 	if e.State == Synced && e.Stale {
 		ev.Reason = health.CapReason("", fmt.Sprintf("refresh overdue: last refresh %s, interval %s",
 			e.RefreshTime.UTC().Format(time.RFC3339), e.RefreshInterval))
+		if !e.RefreshTime.IsZero() {
+			ev.Boundary = health.At(e.StaleAt())
+		}
 		if e.Generation == 1 && !e.ReadySince.IsZero() {
 			since := e.StaleAt()
 			if e.ReadySince.After(since) {

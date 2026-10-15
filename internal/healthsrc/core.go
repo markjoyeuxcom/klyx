@@ -98,17 +98,17 @@ func Core(d CoreDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 			ID: "workloads", Entity: "workloads (Deployments, StatefulSets, DaemonSets)", Scope: "all namespaces", Classifier: "verdict",
 			Counted: []string{KindDeployments, KindStatefulSets, KindDaemonSets}, Deps: []string{KindPods, KindReplicaSets},
 			Facts:    []string{FactFluxPresent},
-			Evaluate: evalWorkloads(d.Cluster),
+			Evaluate: evalWorkloads(d.Cluster), Ledger: true,
 		}}},
 		{ID: TaskPods, Parts: []observe.PartSpec{{
 			ID: "pods", Entity: "pods", Scope: "all namespaces", Classifier: "verdict",
 			Counted: []string{KindPods}, Deps: []string{KindReplicaSets},
-			Evaluate: evalPods(d.Cluster),
+			Evaluate: evalPods(d.Cluster), Ledger: true,
 		}}},
 		{ID: TaskNodes, Parts: []observe.PartSpec{{
 			ID: "nodes", Entity: "nodes", Scope: "cluster-scoped", Classifier: "verdict",
 			Counted:  []string{KindNodes},
-			Evaluate: evalNodes(d.Cluster),
+			Evaluate: evalNodes(d.Cluster), Ledger: true,
 		}}},
 	}
 	return kinds, domains
@@ -178,9 +178,10 @@ func evalWorkloads(cluster string) func(observe.Capture) observe.PartResult {
 		refs := make([]refInput, len(ws))
 		for i := range ws {
 			verdicts[i] = ws[i].Health
-			refs[i] = refInput{gvr: workloadGVR(ws[i].Kind), ns: ws[i].Namespace, name: ws[i].Name, uid: string(ws[i].UID), generation: ws[i].Generation}
+			refs[i] = refInput{gvr: workloadGVR(ws[i].Kind), ns: ws[i].Namespace, name: ws[i].Name, uid: string(ws[i].UID), generation: ws[i].Generation,
+				source: workloadSource(ws[i].Kind)}
 		}
-		r := verdictResult(cluster, TaskWorkloads, verdicts, refs)
+		r := verdictResult(c.RoleCap, cluster, TaskWorkloads, verdicts, refs)
 		if c.Rows {
 			r.Rows = RowSet[workloads.Workload]{Rows: verdictRows(ws, refs), Facts: map[string]any{FactFluxPresent: flux}}
 		}
@@ -204,9 +205,9 @@ func evalPods(cluster string) func(observe.Capture) observe.PartResult {
 		refs := make([]refInput, len(sums))
 		for i := range sums {
 			verdicts[i] = sums[i].Health
-			refs[i] = refInput{gvr: "v1/pods", ns: sums[i].Namespace, name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation}
+			refs[i] = refInput{gvr: "v1/pods", ns: sums[i].Namespace, name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation, source: KindPods}
 		}
-		r := verdictResult(cluster, TaskPods, verdicts, refs)
+		r := verdictResult(c.RoleCap, cluster, TaskPods, verdicts, refs)
 		if c.Rows {
 			r.Rows = rowSet(verdictRows(sums, refs))
 		}
@@ -225,9 +226,9 @@ func evalNodes(cluster string) func(observe.Capture) observe.PartResult {
 		refs := make([]refInput, len(sums))
 		for i := range sums {
 			verdicts[i] = sums[i].Health
-			refs[i] = refInput{gvr: "v1/nodes", name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation}
+			refs[i] = refInput{gvr: "v1/nodes", name: sums[i].Name, uid: string(sums[i].UID), generation: sums[i].Generation, source: KindNodes}
 		}
-		r := verdictResult(cluster, TaskNodes, verdicts, refs)
+		r := verdictResult(c.RoleCap, cluster, TaskNodes, verdicts, refs)
 		if c.Rows {
 			r.Rows = rowSet(verdictRows(sums, refs))
 		}
@@ -241,6 +242,17 @@ func podsOf(objs []any) []corev1.Pod {
 		pods = append(pods, *o.(*corev1.Pod))
 	}
 	return pods
+}
+
+func workloadSource(kind string) string {
+	switch kind {
+	case "StatefulSet":
+		return KindStatefulSets
+	case "DaemonSet":
+		return KindDaemonSets
+	default:
+		return KindDeployments
+	}
 }
 
 func workloadGVR(kind string) string {
@@ -257,6 +269,38 @@ func workloadGVR(kind string) string {
 type refInput struct {
 	gvr, ns, name, uid string
 	generation         int64
+	source             string // the counted kind or snapshot (the ledger partition)
+}
+
+// key is the ledger key: the UID, or namespace/name for an object without
+// one (a Helm release).
+func (r refInput) key() string {
+	if r.uid != "" {
+		return r.uid
+	}
+	return r.ns + "/" + r.name
+}
+
+// newRoles preallocates a ledger part's role slice (nil without a ledger).
+func newRoles(cap, n int) []observe.RoleEntry {
+	if cap <= 0 {
+		return nil
+	}
+	return make([]observe.RoleEntry, 0, min(cap, n))
+}
+
+// appendRole adds one ledger role entry, bounded by cap (The Line slice 2b
+// §1.1): past it, capped is set and nothing more is appended. cap 0 means the
+// part keeps no ledger.
+func appendRole(roles []observe.RoleEntry, capped *bool, cap int, e observe.RoleEntry) []observe.RoleEntry {
+	if cap <= 0 {
+		return roles
+	}
+	if len(roles) >= cap {
+		*capped = true
+		return roles
+	}
+	return append(roles, e)
 }
 
 // maxTop bounds Top refs per part (spec §5).
@@ -265,11 +309,19 @@ const maxTop = 5
 // verdictResult partitions verdicts into Counts, picks the worst Top refs
 // (verdict order, then rank, then namespace/name) and the earliest time
 // boundary any verdict depends on.
-func verdictResult(cluster, route string, verdicts []health.Verdict, refs []refInput) observe.PartResult {
+func verdictResult(roleCap int, cluster, route string, verdicts []health.Verdict, refs []refInput) observe.PartResult {
 	var counts observe.Counts
 	var next *time.Time
+	roles := newRoles(roleCap, len(verdicts))
+	capped := false
 	idx := make([]int, 0, len(verdicts))
 	for i, v := range verdicts {
+		e := observe.RoleEntry{Source: refs[i].source, GVR: refs[i].gvr, Key: refs[i].key(), NS: refs[i].ns, Name: refs[i].name,
+			Role: v.Kind.String(), Label: v.Label}
+		if v.Kind == health.Fault || v.Kind == health.Degraded {
+			e.Reason = health.CapReason(v.Reason, v.Message)
+		}
+		roles = appendRole(roles, &capped, roleCap, e)
 		counts.Total++
 		switch v.Kind {
 		case health.Fault:
@@ -316,7 +368,7 @@ func verdictResult(cluster, route string, verdicts []health.Verdict, refs []refI
 		top = append(top, observe.Ref{Cluster: cluster, GVR: r.gvr, Namespace: r.ns, Name: r.name, UID: r.uid,
 			Role: verdicts[i].Kind.String(), Label: verdicts[i].Label, Generation: r.generation, Route: route})
 	}
-	return observe.PartResult{Counts: &counts, Top: top, Next: next}
+	return observe.PartResult{Counts: &counts, Top: top, Next: next, Roles: roles, RolesCapped: capped}
 }
 
 // NodeReadyTally is the nodes kind's native Ready tally (1c slice 3 §6): the

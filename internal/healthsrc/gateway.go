@@ -59,9 +59,9 @@ func Gateway(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	c := d.Cluster
 	domains := []observe.DomainSpec{{ID: TaskGateway, Parts: []observe.PartSpec{
 		{ID: "gateways", Entity: "Gateways", Scope: "all namespaces", Classifier: "native",
-			Counted: []string{KindGateways}, Deps: []string{KindGatewayClasses}, Evaluate: evalGateways(c)},
+			Counted: []string{KindGateways}, Deps: []string{KindGatewayClasses}, Evaluate: evalGateways(c), Ledger: true},
 		{ID: "routes", Entity: "HTTPRoutes with a failing attachment", Scope: "routes attached to a Gateway", Classifier: "native",
-			Counted: []string{KindHTTPRoutes}, Deps: []string{KindGateways, KindGatewayServices, KindGatewayEndpoints}, Evaluate: evalRoutes(c)},
+			Counted: []string{KindHTTPRoutes}, Deps: []string{KindGateways, KindGatewayServices, KindGatewayEndpoints}, Evaluate: evalRoutes(c), Ledger: true},
 	}}}
 	return kinds, domains
 }
@@ -97,7 +97,7 @@ func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, g))
 		}
-		r := nativeResult(cluster, TaskGateway, "need attention", items)
+		r := nativeResult(c.RoleCap, cluster, TaskGateway, "need attention", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}
@@ -200,6 +200,15 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 				Parent: a.Parent, Role: a.Role, Label: a.Label, Reason: a.Reason, Generation: ref.generation, Route: TaskGateway})
 		}
 		res := observe.PartResult{Native: &nc, Top: top}
+		// One ledger role per counted route (slice 2b §1.1): the reduced
+		// attachment's worst role. A route attached to no Gateway in this
+		// capture is not evaluated - the Observer's membership names it
+		// unevaluated, never gone.
+		for _, a := range reduced {
+			ref := uidOf[a.UID].ref
+			res.Roles = appendRole(res.Roles, &res.RolesCapped, c.RoleCap, observe.RoleEntry{Source: KindHTTPRoutes, GVR: ref.gvr, Key: a.UID,
+				NS: a.Namespace, Name: a.Name, Role: a.Role, Label: a.Label, Reason: a.Reason})
+		}
 		if c.Rows {
 			// The reduced attachment carries its captured evaluation (role,
 			// label, inclusion) itself; the row adds the route's identity.
