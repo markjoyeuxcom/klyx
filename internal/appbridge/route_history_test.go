@@ -95,3 +95,34 @@ func TestRuleHistoryNeedsTheGatewaysLive(t *testing.T) {
 		t.Fatal("an interval with the Gateways unread")
 	}
 }
+
+// The Observer's end drops the cluster's fingerprints and keeps only the
+// incarnation fence: a late end of an older incarnation clears nothing, and a
+// late row of the ended one is refused (design review of 682f9cb).
+func TestRuleHistoryEnd(t *testing.T) {
+	log := obslog.New()
+	h := newRouteHistory(log)
+	h.OnRows(routeRows(1, t0, true, map[string][]string{"r1": {"fpA"}}))
+	h.OnRows(routeRows(2, t0.Add(time.Minute), true, map[string][]string{"r1": {"fpA"}}))
+	h.OnTransitions(observe.TransitionBatch{Cluster: "prd", Incarnation: 1, Kind: observe.BatchEnd, At: t0.Add(2 * time.Minute)})
+	if c := h.st["prd"]; c.inc != 2 || len(c.prev) != 1 || c.ended {
+		t.Fatalf("a late end of an older incarnation cleared newer state: %+v", c)
+	}
+	end := observe.TransitionBatch{Cluster: "prd", Incarnation: 2, Kind: observe.BatchEnd, At: t0.Add(3 * time.Minute)}
+	log.Apply(end) // the health sink hands the log the same end
+	h.OnTransitions(end)
+	if c := h.st["prd"]; c.inc != 2 || c.prev != nil || !c.ended {
+		t.Fatalf("the end kept the fingerprints: %+v", c)
+	}
+	h.OnRows(routeRows(2, t0.Add(4*time.Minute), true, map[string][]string{"r1": {"fpA"}}))
+	if c := h.st["prd"]; c.prev != nil || c.seen {
+		t.Fatalf("a late row of the ended incarnation: %+v", c)
+	}
+	if _, ok := h.Interval("prd", "r1", 0); ok {
+		t.Fatal("an interval after the end")
+	}
+	h.OnRows(routeRows(3, t0.Add(5*time.Minute), true, map[string][]string{"r1": {"fpA"}}))
+	if iv, ok := h.Interval("prd", "r1", 0); !ok || !iv.Start.Equal(t0.Add(5*time.Minute)) {
+		t.Fatalf("a new incarnation after the end: %+v %v", iv, ok)
+	}
+}

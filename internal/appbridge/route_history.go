@@ -42,6 +42,7 @@ type ruleCluster struct {
 	prev   map[string]string
 	live   bool
 	seen   bool
+	ended  bool // the incarnation's Observer ended: only the fence remains
 	lastAt time.Time
 }
 
@@ -78,7 +79,7 @@ func (h *routeHistory) OnRows(r observe.Rows) {
 	if c == nil || r.Incarnation > c.inc {
 		c = &ruleCluster{inc: r.Incarnation}
 		h.st[r.Cluster] = c
-	} else if r.Incarnation < c.inc {
+	} else if r.Incarnation < c.inc || c.ended {
 		return
 	}
 	at := r.EvaluatedAt
@@ -123,8 +124,19 @@ func (h *routeHistory) OnRows(r observe.Rows) {
 }
 
 // OnTransitions: a loss of the Observer's own routes partition is a break in
-// the rules' continuity too; the next readable rows re-baseline after it.
+// the rules' continuity too; the next readable rows re-baseline after it. The
+// Observer's end drops the cluster's fingerprints (the log ends the partition
+// itself) and keeps only the incarnation fence, so a removed cluster leaves
+// nothing behind but that.
 func (h *routeHistory) OnTransitions(b observe.TransitionBatch) {
+	if b.Kind == observe.BatchEnd {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if c := h.st[b.Cluster]; c != nil && b.Incarnation == c.inc {
+			h.st[b.Cluster] = &ruleCluster{inc: c.inc, ended: true}
+		}
+		return
+	}
 	if b.Task != healthsrc.TaskGateway || b.Part != "routes" || b.Kind != observe.BatchLoss {
 		return
 	}
