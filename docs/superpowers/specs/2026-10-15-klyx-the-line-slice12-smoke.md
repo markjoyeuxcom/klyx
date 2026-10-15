@@ -70,7 +70,7 @@ This Wails version runs `WebviewWindowOptions.JS` after `WebViewDidFinishNavigat
   - **Tokens:** in each theme `--line-ground`, `--line-route` and `--line-danger` resolve to the spec's values (parent §2.1).
   - **APIs:** `ResizeObserver`, `structuredClone` and `CSS.supports('container-type: inline-size')` are present.
   - **Geometry:** the lens body, rows and inspector have non-zero sizes. Zero or unmeasurable sizes, as a hidden window might give, fail the step as "unmeasurable", never pass.
-  - **Fonts:** `document.fonts.load()` is awaited for each face and weight the themes use (Barlow 400/500/600, Barlow Condensed 600, DM Mono 400/500), then each matching `FontFace` must have `status === "loaded"` and `document.fonts.check()` must be true. A missing or blocked font asset fails the check. The computed families are recorded besides.
+  - **Fonts:** `document.fonts.load()` is awaited for every face `theme/fonts.css` declares (Barlow 400/500/600, Barlow Condensed 500/600, DM Mono 400/500), then each matching `FontFace` must have `status === "loaded"` and `document.fonts.check()` must be true. A missing or blocked font asset fails the check. The computed families are recorded besides.
 - **The result** is `pass` only when every step passed. Any failed, timed-out or unmeasurable step makes it `fail` or `incomplete`, with each reason listed.
 - **Hidden first.** If the hidden window proves unmeasurable, the smoke is not passed. A visible run happens only with the owner's consent.
 
