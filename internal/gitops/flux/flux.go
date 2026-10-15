@@ -75,6 +75,9 @@ type Resource struct {
 	// first, at most HistoryMax entries; nil for a Kustomization. Only an
 	// entry whose Status is "deployed" is deployment evidence.
 	History []HelmHistory
+	// Chart is a HelmRelease's spec.chart.spec.chart (empty for a chartRef
+	// release, whose source names the chart): The Line's chart key.
+	Chart string
 }
 
 // HelmHistory is one HelmRelease status.history snapshot.
@@ -179,6 +182,7 @@ func ParseHelmRelease(u *unstructured.Unstructured) Resource {
 		r.Revision = cv
 	}
 	r.History = parseHelmHistory(u)
+	r.Chart, _, _ = unstructured.NestedString(u.Object, "spec", "chart", "spec", "chart")
 	if r.SourceName == "" {
 		if n, ok, _ := unstructured.NestedString(u.Object, "spec", "chart", "spec", "sourceRef", "name"); ok && n != "" {
 			r.SourceName = n
