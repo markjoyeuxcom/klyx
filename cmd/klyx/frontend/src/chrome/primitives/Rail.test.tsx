@@ -76,6 +76,19 @@ describe("Rail", () => {
     expect(container.querySelector('[data-step="ks"] [data-tag]')?.textContent).toBe("upstream failure");
   });
 
+  it("joins branches to their parent: a trunk below the parent, an elbow in each branch's segment style", () => {
+    const steps = [step("ks", "chain", { branches: [[step("dep-a", "reported")], [step("dep-b", "dependsOn")]] })];
+    const { container } = render(<Rail label="r" steps={steps} />);
+    expect(container.querySelector('[data-step="ks"] > [data-trunk]')).not.toBeNull();
+    const elbowA = container.querySelector('[data-step="dep-a"] > [data-elbow]') as HTMLElement;
+    const elbowB = container.querySelector('[data-step="dep-b"] > [data-elbow]') as HTMLElement;
+    expect(elbowA.style.borderTop).toContain("2px solid");
+    expect(elbowB.style.borderTop).toContain("1px solid");
+    // a top-level step keeps its stub, never an elbow
+    const { container: flat } = render(<Rail label="r2" steps={[step("a", "chain"), step("b", "source")]} />);
+    expect(flat.querySelector("[data-elbow]")).toBeNull();
+  });
+
   it("draws an aspect when given, and a quiet box otherwise; marks are hidden", () => {
     const { container } = render(<Rail label="r" steps={[step("x", "chain", { aspect: "fault" }), step("y", "source")]} />);
     expect(container.querySelector('[data-step="x"] [data-aspect="fault"]')).not.toBeNull();

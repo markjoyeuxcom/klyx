@@ -43,6 +43,13 @@ const words: Record<RailSegment, string> = {
 // Shown with the step, not only spoken: the types whose words carry meaning.
 const shown: Partial<Record<RailSegment, true>> = { reported: true, incomplete: true, failed: true, cancelled: true };
 
+// elbowStyle is lineStyle turned to run across: a branch's first step joins
+// its parent's trunk with it.
+function elbowStyle(seg: RailSegment): CSSProperties {
+  const l = lineStyle(seg).borderLeft as string;
+  return { borderTop: l };
+}
+
 function lineStyle(seg: RailSegment): CSSProperties {
   switch (seg) {
     case "reported":
@@ -78,12 +85,15 @@ const LINE_X = MARK / 2;
 export function Rail({ steps, label, className, leadIn = false }: { steps: RailStep[]; label: string; className?: string; leadIn?: boolean }) {
   return (
     <ol aria-label={label} className={className} data-rail style={{ listStyle: "none", margin: 0, padding: 0 }}>
-      <RailSteps steps={steps} root={!leadIn} />
+      <RailSteps steps={steps} root={!leadIn} branch={false} />
     </ol>
   );
 }
 
-function RailSteps({ steps, root }: { steps: RailStep[]; root: boolean }) {
+// INDENT is how far a branch sits in from its parent's line.
+const INDENT = MARK + 8;
+
+function RailSteps({ steps, root, branch }: { steps: RailStep[]; root: boolean; branch: boolean }) {
   return (
     <>
       {steps.map((s, i) => {
@@ -92,9 +102,12 @@ function RailSteps({ steps, root }: { steps: RailStep[]; root: boolean }) {
         const w = incoming ? s.segmentWords ?? words[incoming] : "";
         const show = !!incoming && !!shown[incoming] && !!w;
         return (
-          <li key={s.key} data-step={s.key} data-segment={incoming ?? undefined} style={{ position: "relative", paddingLeft: MARK + 8, paddingBottom: next ? 6 : 0 }}>
-            {incoming && <span aria-hidden data-seg-in style={{ position: "absolute", left: LINE_X - 0.5, top: 0, height: 5, ...lineStyle(incoming) }} />}
+          <li key={s.key} data-step={s.key} data-segment={incoming ?? undefined} style={{ position: "relative", paddingLeft: INDENT, paddingBottom: next ? 6 : 0 }}>
+            {incoming && (branch && i === 0
+              ? <span aria-hidden data-seg-in data-elbow style={{ position: "absolute", left: LINE_X - INDENT, top: 5 + MARK / 2, width: INDENT - LINE_X, ...elbowStyle(incoming) }} />
+              : <span aria-hidden data-seg-in style={{ position: "absolute", left: LINE_X - 0.5, top: 0, height: 5, ...lineStyle(incoming) }} />)}
             {next && <span aria-hidden data-seg-out style={{ position: "absolute", left: LINE_X - 0.5, top: 5 + MARK, bottom: 0, ...lineStyle(next.segment) }} />}
+            {!next && s.branches?.length ? <span aria-hidden data-trunk style={{ position: "absolute", left: LINE_X - 0.5, top: 5 + MARK, bottom: 0, ...lineStyle("source") }} /> : null}
             <span aria-hidden style={{ position: "absolute", left: 0, top: 5 }}>
               {s.aspect && s.aspect !== "none" ? <Aspect kind={s.aspect} size={MARK} /> : <span style={{ display: "inline-block", width: MARK, height: MARK, boxSizing: "border-box", borderRadius: 1, border: "1px solid var(--line-track, var(--color-border-secondary))" }} />}
             </span>
@@ -109,7 +122,7 @@ function RailSteps({ steps, root }: { steps: RailStep[]; root: boolean }) {
             {s.body && <div style={{ marginTop: 3 }}>{s.body}</div>}
             {s.branches?.map((b, bi) => (
               <ol key={bi} data-branch style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
-                <RailSteps steps={b} root={false} />
+                <RailSteps steps={b} root={false} branch />
               </ol>
             ))}
           </li>

@@ -16,6 +16,19 @@ vi.mock("../bridge/gitops", () => ({
   fluxDiff: vi.fn(async () => ({ available: true, hasChanges: true, output: "± spec.replicas: 2 -> 3", error: "" })),
 }));
 
+// The Dependencies section (slice 8c) walks in Go: a cancellable call that
+// these tests answer with a fixed graph, and no Git.
+const depGraphCall = vi.fn();
+vi.mock("../bridge/depGraph", () => ({
+  dependencyGraph: (...a: unknown[]) => depGraphCall(...a),
+}));
+vi.mock("../bridge/notHereYet", () => ({
+  notHereYet: () => Object.assign(Promise.resolve({ results: [] }), { cancel: () => {} }),
+}));
+const cancellable = <T,>(v: T) => Object.assign(Promise.resolve(v), { cancel: vi.fn() });
+const noGraph = { start: "", nodes: [], edges: [], incomplete: [], proximity: [], reads: 0 };
+depGraphCall.mockImplementation(() => cancellable(noGraph));
+
 // The reconcile composer (OperationDialog) registers protected-cluster grants
 // via the config bridge; mock it so no Wails runtime is needed.
 vi.mock("../bridge/configsvc", () => ({
@@ -286,31 +299,48 @@ describe("GitOps view", () => {
     expect(getByText(/auth required/i)).toBeTruthy();
   });
 
-  it("renders a blocked-by line and dependency states when DependencyNotReady", () => {
+  // The Line slice 8c (parent §5.1): "blocked by" became the Dependencies
+  // section - the walked graph on Rail, in the controllers' words.
+  it("draws the Dependencies graph with the reported blocker and where its chain ends", async () => {
+    const node = (id: string, over: object) => {
+      const [kind, namespace, name] = id.split("/");
+      return { id, group: "", kind, namespace, name, uid: `u-${name}`, ready: "True", conditionGeneration: 0, generation: 1, observedGeneration: 1,
+        stale: false, suspended: false, failing: false, upstreamFailure: false, chainEnd: false, supply: [], ...over };
+    };
+    depGraphCall.mockImplementationOnce(() => cancellable({
+      start: "Kustomization/flux-system/apps", reads: 2, incomplete: [], proximity: [],
+      nodes: [
+        node("Kustomization/flux-system/apps", { ready: "False", reason: "DependencyNotReady", failing: true }),
+        node("Kustomization/flux-system/infra", { ready: "False", reason: "BuildFailed", failing: true, upstreamFailure: true, chainEnd: true }),
+      ],
+      edges: [{ from: "Kustomization/flux-system/apps", to: "Kustomization/flux-system/infra", type: "dependsOn", reported: true, cycle: false }],
+    }));
     useFleet.setState({
       clusters: [cluster("Healthy")],
       gitops: {
         cluster: "x",
         resources: [
-          res({ kind: "Kustomization", namespace: "flux-system", name: "apps", ready: "Reconciling", reason: "DependencyNotReady" }),
-          res({ kind: "Kustomization", namespace: "flux-system", name: "infra", ready: "Failed" }),
+          res({ kind: "Kustomization", namespace: "flux-system", name: "apps", ready: "Reconciling", reason: "DependencyNotReady", uid: "u-apps" }),
+          res({ kind: "Kustomization", namespace: "flux-system", name: "infra", ready: "Failed", uid: "u-infra" }),
         ],
         sources: [],
         loading: false,
         expandedKey: "Kustomization/flux-system/apps",
         detailCluster: "x",
         detail: {
-          kind: "Kustomization", namespace: "flux-system", name: "apps",
+          kind: "Kustomization", namespace: "flux-system", name: "apps", uid: "u-apps",
           reason: "DependencyNotReady", appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false,
           conditions: [], inventory: [],
           dependsOn: [{ namespace: "flux-system", name: "infra" }],
         },
       },
     });
-    const { getByText, getAllByText } = render(<GitOps cluster="x" />);
-    expect(getByText(/blocked by/i)).toBeTruthy();
-    // "flux-system/infra" shows both in the resource list and the dependency row.
-    expect(getAllByText("flux-system/infra").length).toBeGreaterThanOrEqual(1);
+    const { findByRole } = render(<GitOps cluster="x" />);
+    const rail = await findByRole("list", { name: "Dependencies" });
+    expect(depGraphCall).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "apps", "u-apps");
+    expect(rail.textContent).toContain("reported blocker (depends on): Kustomization flux-system/infra");
+    expect(rail.textContent).toContain("reported chain ends here");
+    expect(rail.textContent).not.toMatch(/root cause/i);
   });
 
   it("renders the drift/events timeline in the detail panel", () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
-import type { DependencyRefDTO, EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO, RuleDTO } from "../store/fleet";
+import type { EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO, RuleDTO } from "../store/fleet";
 import { getResourceDetail, reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
 import { FLUX_PART_KINDS, useFluxRows } from "../health/useFluxRows";
 import { useNow } from "../chrome/Age";
@@ -28,6 +28,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useInspectorAI } from "../ai/AIExplain";
+import { DependencyGraphSection } from "./DependencyGraph";
 import { ClampedText } from "../chrome/ClampedText";
 import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
@@ -642,7 +643,6 @@ export function GitOps({ cluster }: { cluster: string }) {
             detailPrior={shownDetail !== null && (removed || shownDetail === priorDetail)}
             detailError={detailError}
             detailOfOther={detailOfOther}
-            deps={byKey}
             onClose={close}
             onReconcile={(r) => setPinned({ kind: "reconcile", r })}
             onToggleSuspend={(r, isSuspended) => setPinned({ kind: isSuspended ? "resume" : "suspend", r })}
@@ -787,7 +787,7 @@ function sinceWord(r: FluxResourceDTO): string {
 // full message; Reconcile (primary), Suspend/Resume (secondary), More (view in
 // Git, manifest); then the bound source (the usual root cause), dependsOn
 // blockers, drift/events, conditions, inventory, and the gated live diff.
-function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced, isProtected, detail, detailPrior, detailError, detailOfOther, deps, onClose, onReconcile, onToggleSuspend }: {
+function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced, isProtected, detail, detailPrior, detailError, detailOfOther, onClose, onReconcile, onToggleSuspend }: {
   cluster: string;
   resource: FluxResourceDTO;
   nowS: number;
@@ -801,7 +801,6 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
   detailError: string | null;
   // detailOfOther: the last detail read was of an earlier object with this name
   detailOfOther: boolean;
-  deps: Map<string, FluxResourceDTO>;
   onClose: () => void;
   onReconcile: (r: FluxResourceDTO) => void;
   onToggleSuspend: (r: FluxResourceDTO, suspended: boolean) => void;
@@ -894,9 +893,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
                   <div data-testid="source-warning" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{detail.sourceWarning}</div>
                 </InspectorBlock>
               ) : null}
-            {detail.dependsOn && detail.dependsOn.length > 0 && (
-              <DependsOnSection deps={detail.dependsOn} kind={r.kind} resolve={deps} blocked={detail.reason === "DependencyNotReady"} />
-            )}
+            {r.uid && !removed && <DependencyGraphSection cluster={cluster} kind={r.kind} namespace={r.namespace} name={r.name} uid={r.uid} />}
             {detail.events && <EventsSection events={detail.events} />}
             <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={included(r)}>
               <InspectorConditions conditions={detail.conditions} />
@@ -1068,37 +1065,6 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
           )}
         </div>
       </div>
-    </InspectorBlock>
-  );
-}
-
-function DependsOnSection({ deps, kind, resolve, blocked }: {
-  deps: DependencyRefDTO[];
-  kind: string;
-  resolve: Map<string, FluxResourceDTO>;
-  blocked: boolean;
-}) {
-  // Dependencies are implicitly the same kind as the resource.
-  const stateOf = (d: DependencyRefDTO): string | null => resolve.get(`${kind}/${d.namespace}/${d.name}`)?.ready ?? null;
-  const blocker = blocked ? deps.find((d) => stateOf(d) !== "Ready") : undefined;
-  return (
-    <InspectorBlock title="Depends on">
-      {blocker && (
-        <div style={{ color: "var(--color-text-danger)", fontWeight: 500, marginBottom: 4 }}>
-          blocked by <span style={{ fontFamily: "var(--font-mono)" }}>{blocker.namespace}/{blocker.name}</span>
-        </div>
-      )}
-      {deps.map((d) => {
-        const state = stateOf(d);
-        const dep = resolve.get(`${kind}/${d.namespace}/${d.name}`);
-        return (
-          <div key={`${d.namespace}/${d.name}`} style={{ display: "grid", gridTemplateColumns: "9px minmax(0,1fr) auto", gap: 8, alignItems: "baseline" }}>
-            {dep ? <span role="img" aria-label={dep.rule.label} style={{ display: "inline-flex" }}><VerdictLamp health={roleOf(dep)} size={7} /></span> : <StatusDot color="var(--color-text-tertiary)" />}
-            <span style={{ fontFamily: "var(--font-mono)", ...ellipsis }}>{d.namespace}/{d.name}</span>
-            <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>{state ? state.toLowerCase() : "not found"}</span>
-          </div>
-        );
-      })}
     </InspectorBlock>
   );
 }

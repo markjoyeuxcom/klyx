@@ -146,6 +146,15 @@ Each is Codex-reviewed on its own, in this order.
 - **Incomplete stubs** use the `incomplete` segment, and the header carries "incomplete: …".
 - **Refresh:** the graph is fetched on selection and cancelled when the selection changes. A refresh control re-walks it; there is no polling.
 
+### 4.1 As built in 8c
+
+- **The section** is `cluster/DependencyGraph.tsx`, mounted in the Flux inspector's detail in place of "Depends on" (the old section is removed), for a row with a UID that is not removed. The source section stays.
+- **Fetching:** on selection, through `bridge/depGraph.ts`; the effect's cleanup cancels the walk and Git's call (the generated `cancel()`), and a reply is applied only for the selection and refresh that asked. Git's "not here yet" is asked only for nodes carrying Git facts. "Re-walk" walks again; nothing polls.
+- **The model** (`line/depGraph.ts`, pure): the graph as steps from the selected node. A node reached twice is drawn once, then "(see above)". A cycle edge is an incomplete "cycle" step back to its node (and keeps "reported blocker" when it is one). The walk's summary is an incomplete step with its counts. Tags: "upstream failure", "reported chain ends here", "not found", the status's generation, "suspended".
+- **Evidence on each step:** the failing condition with "(condition time)" and, when the condition is behind the spec, "for generation N; the spec is at generation M"; the supply facts ("Credential supplied by ExternalSecret …", or "(no supplier recorded …)"); the change proximity sentence; the inventory line ("no applied revision recorded" when there is none); the last managed-field update; and Git's answer ("not here yet: N commits touch ./apps", the commits, the files with "and N more files", "behind T; no commit touches …", "at T", or "unavailable (…)"). Times are a 24-hour clock.
+- **`Rail` gained** a trunk under a step with branches and an elbow joining each branch's first step, in that branch's segment style.
+- **Captures** (kind lab, both themes): `edited-pending` reads its condition as generation 1's with the spec at 2, so its source edge is not reported; the observability stack shows its failing source as an upstream failure.
+
 ## 5. 8d: the data path
 
 - **Go, per-rule verdicts:** `TopologyDTO` routes gain `rules: [{index, verdict, backends}]`, from `gwapi.RouteRule`. A backend's issue is its own, so a failing backend gets a danger branch.
