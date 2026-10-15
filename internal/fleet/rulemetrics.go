@@ -55,7 +55,7 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 			continue
 		}
 		q.Routes = append(q.Routes, routemetrics.RouteRules{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
-			Fingerprints: gwapi.RuleFingerprints(u), SameGatewayTwice: n > 1})
+			Fingerprints: gwapi.RuleFingerprints(u), SameGatewayTwice: n > 1, Unit: fluxUnitOf(u.GetLabels())})
 	}
 	q.Unattributable = c.envoyProxyReason(ctx, gw)
 
@@ -135,4 +135,16 @@ func (c *ClusterConn) envoyProxyReason(ctx context.Context, gw *unstructured.Uns
 		}
 	}
 	return ""
+}
+
+// fluxUnitOf reads the Flux unit that manages an object now, from the labels
+// kustomize-controller and helm-controller set on what they apply.
+func fluxUnitOf(l map[string]string) *routemetrics.UnitRef {
+	switch {
+	case l["kustomize.toolkit.fluxcd.io/name"] != "" && l["kustomize.toolkit.fluxcd.io/namespace"] != "":
+		return &routemetrics.UnitRef{Kind: "Kustomization", Namespace: l["kustomize.toolkit.fluxcd.io/namespace"], Name: l["kustomize.toolkit.fluxcd.io/name"]}
+	case l["helm.toolkit.fluxcd.io/name"] != "" && l["helm.toolkit.fluxcd.io/namespace"] != "":
+		return &routemetrics.UnitRef{Kind: "HelmRelease", Namespace: l["helm.toolkit.fluxcd.io/namespace"], Name: l["helm.toolkit.fluxcd.io/name"]}
+	}
+	return nil
 }

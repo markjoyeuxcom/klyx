@@ -202,6 +202,16 @@ Each is Codex-reviewed on its own, in this order.
 - **Below the drawing:** the rules and policies table, and the mesh note for global Services.
 - **Polling:** per-rule metrics every 30 seconds while the view is open (the step), single-flight and cancellable: the bridge keeps the generated promise's cancel, so `bridge/ruleMetrics.ts` is reworked here. The route-level poll ends, because the drawing replaces the lane's traffic line.
 
+### 5.1 As built in 8d-1 (the data; the drawing is 8d-2)
+
+- **Per-rule verdicts:** `gwapi.RuleVerdicts` judges every `spec.rules` entry (a route now records `RuleCount`, so a direct-response rule with no backendRefs is still a rule, read "no backendRefs"). Each backend carries its own verdict and its effective configured weight (1 when unset); a weight-0 backend reads "no traffic (weight 0)". `RouteRule` and `RuleVerdicts` share one `judgeRule`, so a route's verdict and its rules' never disagree. Matches carry their rule index. `TopologyDTO` routes gain `rules: [{index, rule, matches, backends}]`.
+- **The applied history** (`appbridge.appliedHistory`, a health-sink listener on the Flux reconciliation rows the line already subscribes): task `units`, part `applied`, one key per unit UID, the value `<kind>:<value>` from `line.AppliedValue`, which types by what the unit is bound to (git, artifact for OCIRepository and Bucket, chart `name@version` from the newest deployed Helm entry).
+  - Unknown values never reach the log. The writer emits unknown → known as a restatement (the log starts it at first sight, basis unknown), known → unknown as gone (the proof ends), and known → known as a change, the only observed one.
+  - Readability: every reconciliation kind live. A partition loss or a coverage break makes a loss; the Observer's end leaves only the incarnation fence.
+  - `Change(cluster, uid)` returns the typed value, `observedAt` only with an observed basis inside the current live span, and the live span's start. `UnitFor(cluster, kind, ns, name)` resolves a unit to its UID from the latest readable rows, and to nothing when the name is not a single row.
+- **Route units:** the per-rule read records each route's Flux unit from its labels (`kustomize.toolkit.fluxcd.io/name` and `namespace`, else `helm.toolkit.fluxcd.io/...`). `RuleMetricsDTO.routes` carries each route with that unit, its UID when the rows name a single one, and its applied value. Nothing says when the unit began to manage the route.
+- **Wiring:** `SetAppliedChanges` is a package function, so the webview binds no setter.
+
 ## 6. Testing
 
 - **8a:**

@@ -1,6 +1,7 @@
 package gwapi
 
 import (
+	"strings"
 	"testing"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -69,5 +70,50 @@ func TestRouteRuleDiagnosesEveryCarryingBackend(t *testing.T) {
 				t.Fatalf("want %s %q, got %s %q", c.role, c.label, got.Role, got.Label)
 			}
 		})
+	}
+}
+
+// The Line slice 8d: each rule judged on its own, each backend with its own
+// verdict and configured weight, and a rule with no backendRefs still a rule.
+func TestRuleVerdicts(t *testing.T) {
+	rn := acceptedRoute(
+		inRule(weighted(svc("web", 0, 2), 90), 0), inRule(weighted(svc("web-canary", 1, 1), 10), 0),
+		inRule(weighted(svc("api", 1, 1), 0), 1), inRule(weighted(svc("api-old", 1, 1), 0), 1),
+		inRule(svc("docs", 2, 2), 3), inRule(weighted(svc("docs-off", 0, 1), 0), 3),
+	)
+	rn.RuleCount = 4 // rule 2 is a direct response: no backendRefs
+	got := RuleVerdicts(rn)
+	if len(got) != 4 {
+		t.Fatalf("%d rules", len(got))
+	}
+	want := []struct {
+		role  health.Kind
+		label string
+		bs    []string
+	}{
+		{health.Degraded, "web: no ready endpoints", []string{"degraded no ready endpoints", "ok resolved"}},
+		{health.Fault, "every backend has weight 0", []string{"ok no traffic (weight 0)", "ok no traffic (weight 0)"}},
+		{health.Unknown, "no backendRefs", nil},
+		{health.OK, "resolved", []string{"ok resolved", "ok no traffic (weight 0)"}},
+	}
+	for i, w := range want {
+		r := got[i]
+		if r.Index != i || r.Eval.Role != w.role || r.Eval.Label != w.label {
+			t.Errorf("rule %d: %+v, want %v %q", i, r.Eval, w.role, w.label)
+		}
+		var bs []string
+		for _, b := range r.Backends {
+			bs = append(bs, b.Eval.Role.String()+" "+b.Eval.Label)
+		}
+		if strings.Join(bs, ",") != strings.Join(w.bs, ",") {
+			t.Errorf("rule %d backends: %q, want %q", i, bs, w.bs)
+		}
+	}
+	if !got[0].Eval.Included || !got[1].Eval.Included || got[3].Eval.Included {
+		t.Fatal("included follows fault and degraded")
+	}
+	// The route's verdict reads the same judgments.
+	if e := RouteRule(rn, nil); e.Role != health.Fault || e.Label != "rule 2: every backend has weight 0" {
+		t.Fatalf("route: %+v", e)
 	}
 }

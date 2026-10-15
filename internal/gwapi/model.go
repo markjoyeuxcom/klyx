@@ -49,9 +49,12 @@ type RouteNode struct {
 	ParentSectionName      string
 	Accepted, ResolvedRefs bool // scoped to THIS Gateway's parentRef
 	Backends               []Backend
-	Policies               []PolicyRef   // M5-b; empty in M5-a
-	Services               []ServiceNode // resolved Service backends; lane shows primary
-	Pods                   PodCount      // for the first RESOLVED Service backend (legacy lane)
+	// RuleCount is len(spec.rules): a rule with no backendRefs (a direct
+	// response or a redirect) is still a rule.
+	RuleCount int
+	Policies  []PolicyRef   // M5-b; empty in M5-a
+	Services  []ServiceNode // resolved Service backends; lane shows primary
+	Pods      PodCount      // for the first RESOLVED Service backend (legacy lane)
 
 	// ParentFound reports a status.parents entry for THIS Gateway (and
 	// listener); without one the conditions below are absent, not False.
@@ -79,7 +82,13 @@ type GatewayAddress struct{ Type, Value string }
 type CertificateRef struct {
 	Group, Kind, Namespace, Name string
 }
-type Match struct{ PathType, PathValue, Method string }
+
+// Match is one rule match; Rule is the index of the spec.rules entry it
+// belongs to.
+type Match struct {
+	PathType, PathValue, Method string
+	Rule                        int
+}
 type Backend struct {
 	Kind, Name, Namespace string
 	Port, Weight          int32

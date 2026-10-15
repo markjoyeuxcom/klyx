@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +111,51 @@ func TestGetRuleMetricsAttribution(t *testing.T) {
 func TestCeilUnix(t *testing.T) {
 	if ceilUnix(time.Unix(100, 0)) != 100 || ceilUnix(time.Unix(100, 1)) != 101 {
 		t.Fatal("ceilUnix")
+	}
+}
+
+// The Line slice 8d: each route carries the unit its labels name now, with
+// that unit's applied value when the rows name a single unit.
+type fakeApplied struct{}
+
+func (fakeApplied) UnitFor(cluster, kind, ns, name string) (string, bool) {
+	if name == "apps" {
+		return "u-apps", true
+	}
+	return "", false
+}
+
+func (fakeApplied) Change(cluster, uid string) (AppliedChange, bool) {
+	at := time.Unix(1792079000, 0)
+	return AppliedChange{Kind: "git", Value: strings.Repeat("a", 40), ObservedAt: &at, Basis: obslog.ProofObserved, LiveSince: at.Add(-time.Hour)}, true
+}
+
+func TestRuleMetricsRouteUnits(t *testing.T) {
+	res := routemetrics.GatewayRules{Status: routemetrics.Status{Available: true}, Routes: []routemetrics.RouteRules{
+		{Namespace: "shop", Name: "web", UID: "r1", Unit: &routemetrics.UnitRef{Kind: "Kustomization", Namespace: "flux-system", Name: "apps"}},
+		{Namespace: "shop", Name: "api", UID: "r2", Unit: &routemetrics.UnitRef{Kind: "Kustomization", Namespace: "flux-system", Name: "twice"}},
+		{Namespace: "shop", Name: "raw", UID: "r3"},
+	}}
+	conn := &fakeRuleConn{res: res}
+	s := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
+	SetAppliedChanges(s, fakeApplied{})
+	dto := s.GetRuleMetrics("prd", "infra", "eg")
+	if len(dto.Routes) != 3 {
+		t.Fatalf("routes: %+v", dto.Routes)
+	}
+	web := dto.Routes[0].Unit
+	if web == nil || web.UID != "u-apps" || web.Applied == nil || web.Applied.Kind != "git" || web.Applied.Basis != obslog.ProofObserved || web.Applied.ObservedAt == "" || web.Applied.LiveSince == "" {
+		t.Fatalf("web's unit: %+v", web)
+	}
+	if api := dto.Routes[1].Unit; api == nil || api.UID != "" || api.Applied != nil {
+		t.Fatalf("a unit the rows do not name once: %+v", api)
+	}
+	if dto.Routes[2].Unit != nil {
+		t.Fatalf("a route with no Flux labels: %+v", dto.Routes[2].Unit)
+	}
+	// Without the history wired, the unit is named and nothing more.
+	s2 := NewGatewayService(func(string) (GatewayConn, bool) { return conn, true })
+	if u := s2.GetRuleMetrics("prd", "infra", "eg").Routes[0].Unit; u == nil || u.UID != "" || u.Applied != nil {
+		t.Fatalf("no history: %+v", u)
 	}
 }

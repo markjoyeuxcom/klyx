@@ -89,7 +89,13 @@ type RouteRules struct {
 	Namespace, Name, UID string
 	Fingerprints         []string // by rule index (gwapi.RuleFingerprints)
 	SameGatewayTwice     bool     // its parentRefs name this Gateway more than once
+	// Unit is the Flux unit the route's labels say manages it now (slice
+	// 8d's revision proximity); nil without those labels.
+	Unit *UnitRef
 }
+
+// UnitRef names a Flux unit (Kustomization or HelmRelease).
+type UnitRef struct{ Kind, Namespace, Name string }
 
 // ProxyPod is one of the Gateway's proxy pods.
 type ProxyPod struct{ Namespace, Name string }
@@ -141,6 +147,7 @@ type GatewayRules struct {
 	ScopeNote      string
 	Unattributable string // Gateway-wide reason
 	Start, End     time.Time
+	Routes         []RouteRules // the routes read, with their units
 	Rules          []RuleSeries
 	BackendSplit   string
 	Notes          []string
@@ -173,7 +180,7 @@ func NewEnvoyRuleSource(c *metrics.Client) *EnvoyRuleSource { return &EnvoyRuleS
 // base lists the query's rules, with no series read: the rules a reader
 // names, and the cluster names of those it can read.
 func base(q RuleQuery) (GatewayRules, []string) {
-	out := GatewayRules{Status: Status{Available: true}, Start: q.End.Add(-RuleWindow), End: q.End,
+	out := GatewayRules{Status: Status{Available: true}, Start: q.End.Add(-RuleWindow), End: q.End, Routes: q.Routes,
 		BackendSplit: NoteBackendSplit, Notes: []string{NoteDirectResponses, NoteUptake}, Unattributable: q.Unattributable}
 	var names []string
 	for _, r := range q.Routes {

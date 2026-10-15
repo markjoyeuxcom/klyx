@@ -22,6 +22,7 @@ type GatewayService struct {
 	lookup        func(string) (GatewayConn, bool)
 	globalReach   func(cluster, ns, name string) (peers []string, unconfirmed bool)
 	ruleIntervals func(cluster, uid string, index int, fingerprint string) (RuleInterval, bool)
+	applied       appliedSource
 }
 
 func NewGatewayService(lookup func(string) (GatewayConn, bool)) *GatewayService {

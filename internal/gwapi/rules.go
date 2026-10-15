@@ -206,7 +206,6 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		add(health.Unknown, "no backendRefs")
 	default:
 		var order []int
-		carrying := map[int][]Backend{}
 		listed := map[int]bool{}
 		total := 0
 		for _, b := range rn.Backends {
@@ -215,14 +214,13 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 				order = append(order, b.Rule)
 			}
 			if b.CarriesTraffic() {
-				carrying[b.Rule] = append(carrying[b.Rule], b)
 				total++
 			}
 		}
 		named := total > 1
 		for _, ri := range order {
-			rc := carrying[ri]
-			if len(rc) == 0 {
+			allZero, js := judgeRule(rulesBackends(rn.Backends, ri))
+			if allZero {
 				if len(order) > 1 {
 					add(health.Fault, fmt.Sprintf("rule %d: every backend has weight 0", ri+1))
 				} else {
@@ -230,26 +228,15 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 				}
 				continue
 			}
-			var found []routeIssue
-			faults := 0
-			for _, b := range rc {
-				role, short := BackendIssue(b)
-				if role == health.OK {
+			for _, j := range js {
+				if !j.carries || j.role == health.OK {
 					continue
 				}
-				if role == health.Fault {
-					faults++
-				}
+				short := j.short
 				if named {
-					short = b.Name + ": " + short
+					short = j.b.Name + ": " + short
 				}
-				found = append(found, routeIssue{role: role, short: short})
-			}
-			for _, is := range found {
-				if len(rc) > 1 && is.role == health.Fault && faults < len(rc) {
-					is.role = health.Degraded
-				}
-				issues = append(issues, is)
+				issues = append(issues, routeIssue{role: j.role, short: short})
 			}
 		}
 	}
@@ -270,6 +257,131 @@ func RouteRule(rn RouteNode, listeners []Listener) health.NativeEval {
 		e.Reason = health.CapReason(worst.cond.Reason, worst.cond.Message)
 	}
 	return e
+}
+
+func rulesBackends(all []Backend, rule int) []Backend {
+	var out []Backend
+	for _, b := range all {
+		if b.Rule == rule {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+type backendJudgment struct {
+	b       Backend
+	carries bool
+	role    health.Kind
+	short   string // "" when OK
+}
+
+// judgeRule judges one rule's backends. Weights split traffic within one
+// rule (Gateway API BackendRef.Weight): a rule whose backends all have
+// weight 0 serves nothing (allZero); a weight-0 backend is left out; and a
+// backend fault is degraded while another carrying backend is not faulty.
+// RouteRule and RuleVerdicts share it, so a route's verdict and its rules'
+// never disagree.
+func judgeRule(bs []Backend) (allZero bool, js []backendJudgment) {
+	var carrying []int
+	for i, b := range bs {
+		js = append(js, backendJudgment{b: b, carries: b.CarriesTraffic()})
+		if js[i].carries {
+			carrying = append(carrying, i)
+		}
+	}
+	if len(carrying) == 0 {
+		return true, js
+	}
+	faults := 0
+	for _, i := range carrying {
+		js[i].role, js[i].short = BackendIssue(bs[i])
+		if js[i].role == health.Fault {
+			faults++
+		}
+	}
+	for _, i := range carrying {
+		if len(carrying) > 1 && js[i].role == health.Fault && faults < len(carrying) {
+			js[i].role = health.Degraded
+		}
+	}
+	return false, js
+}
+
+// RuleVerdict is one spec.rules entry's verdict (The Line slice 8d, parent
+// §5.2): its backends judged together, each backend with its own verdict, so
+// the data path draws a failing backend's branch in danger.
+type RuleVerdict struct {
+	Index    int
+	Eval     health.NativeEval
+	Backends []BackendVerdict
+}
+
+// BackendVerdict is one backendRef of a rule, with its configured weight
+// (unset counts as 1) and its own verdict.
+type BackendVerdict struct {
+	Backend
+	Eval health.NativeEval
+}
+
+// RuleVerdicts judges every rule of the route, in spec order. A rule with no
+// backendRefs (a direct response or a redirect answers it) is unknown here:
+// Klyx does not evaluate filters.
+func RuleVerdicts(rn RouteNode) []RuleVerdict {
+	n := rn.RuleCount
+	for _, b := range rn.Backends {
+		if b.Rule+1 > n {
+			n = b.Rule + 1
+		}
+	}
+	out := make([]RuleVerdict, 0, n)
+	for i := 0; i < n; i++ {
+		rv := RuleVerdict{Index: i}
+		bs := rulesBackends(rn.Backends, i)
+		if len(bs) == 0 {
+			rv.Eval = health.NativeEval{Role: health.Unknown, Label: "no backendRefs"}
+			out = append(out, rv)
+			continue
+		}
+		allZero, js := judgeRule(bs)
+		carrying := 0
+		for _, j := range js {
+			if j.carries {
+				carrying++
+			}
+		}
+		var worst *backendJudgment
+		for k := range js {
+			j := js[k]
+			bv := BackendVerdict{Backend: j.b}
+			switch {
+			case !j.carries:
+				bv.Eval = health.NativeEval{Role: health.OK, Label: "no traffic (weight 0)"}
+			case j.role == health.OK:
+				bv.Eval = health.NativeEval{Role: health.OK, Label: "resolved"}
+			default:
+				bv.Eval = health.NativeEval{Role: j.role, Label: j.short, Included: j.role == health.Fault || j.role == health.Degraded}
+				if worst == nil || lensRank[j.role] < lensRank[worst.role] {
+					worst = &js[k]
+				}
+			}
+			rv.Backends = append(rv.Backends, bv)
+		}
+		switch {
+		case allZero:
+			rv.Eval = health.NativeEval{Role: health.Fault, Label: "every backend has weight 0", Included: true}
+		case worst == nil:
+			rv.Eval = health.NativeEval{Role: health.OK, Label: "resolved"}
+		default:
+			label := worst.short
+			if carrying > 1 {
+				label = worst.b.Name + ": " + label
+			}
+			rv.Eval = health.NativeEval{Role: worst.role, Label: label, Included: worst.role == health.Fault || worst.role == health.Degraded}
+		}
+		out = append(out, rv)
+	}
+	return out
 }
 
 // BackendIssue is one backend's own verdict: OK when Klyx found nothing

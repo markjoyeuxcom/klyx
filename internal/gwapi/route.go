@@ -47,6 +47,7 @@ func RouteForGateway(u *unstructured.Unstructured, gwNamespace, gwName string) (
 	rn.Hostnames, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "hostnames")
 
 	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+	rn.RuleCount = len(rules)
 	for ri, r := range rules {
 		rm, ok := r.(map[string]interface{})
 		if !ok {
@@ -58,7 +59,7 @@ func RouteForGateway(u *unstructured.Unstructured, gwNamespace, gwName string) (
 			if !ok {
 				continue
 			}
-			match := Match{}
+			match := Match{Rule: ri}
 			match.Method, _ = mm["method"].(string)
 			if pth, ok := mm["path"].(map[string]interface{}); ok {
 				match.PathType, _ = pth["type"].(string)

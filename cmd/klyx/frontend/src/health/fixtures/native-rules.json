@@ -3490,6 +3490,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -3567,6 +3593,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -3648,6 +3700,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -3725,6 +3803,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -3806,6 +3910,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -3883,6 +4013,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -3964,6 +4120,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4041,6 +4223,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -4122,6 +4330,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4199,6 +4433,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -4280,6 +4540,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4359,6 +4645,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4422,6 +4734,7 @@
           "accepted": false,
           "resolvedRefs": false,
           "backends": [],
+          "rules": [],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4494,6 +4807,32 @@
               "weightSet": false,
               "rule": 0,
               "state": "unsupported"
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "unknown",
+                "label": "ServiceImport backend not evaluated"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "ServiceImport",
+                  "namespace": "",
+                  "name": "x",
+                  "port": 0,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "unknown",
+                    "label": "ServiceImport backend not evaluated"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -4570,6 +4909,32 @@
               "state": ""
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "unknown",
+                "label": "backend not evaluated"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "x",
+                  "port": 0,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "unknown",
+                    "label": "backend not evaluated"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4642,6 +5007,32 @@
               "weightSet": false,
               "rule": 0,
               "state": "not-found"
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "backend not found"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "gone",
+                  "port": 0,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "backend not found"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -4733,6 +5124,45 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "gone: backend not found"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "gone",
+                  "port": 0,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "degraded",
+                    "label": "backend not found"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4808,6 +5238,32 @@
               "error": "forbidden"
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "unknown",
+                "label": "backend unreadable"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "x",
+                  "port": 0,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "unknown",
+                    "label": "backend unreadable"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -4880,6 +5336,32 @@
               "weightSet": false,
               "rule": 0,
               "state": "resolved"
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "unknown",
+                "label": "endpoints unreadable"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "unknown",
+                    "label": "endpoints unreadable"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -4962,6 +5444,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "unknown",
+                "label": "endpoints unreadable"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "unknown",
+                    "label": "endpoints unreadable"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5039,6 +5547,32 @@
                 "total": 0,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no endpoints"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -5150,6 +5684,58 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "web: no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "degraded",
+                    "label": "no endpoints"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-1",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5229,6 +5815,32 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no ready endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no ready endpoints"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5306,6 +5918,32 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "2/3 endpoints ready"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "degraded",
+                    "label": "2/3 endpoints ready"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -5402,6 +6040,45 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "web-b: no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-b",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "degraded",
+                    "label": "no endpoints"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5494,6 +6171,45 @@
                 "total": 2,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "web-a: no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-a",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no endpoints"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-b",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no ready endpoints"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -5590,6 +6306,45 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "canary",
+                  "port": 80,
+                  "weight": 0,
+                  "weightSet": true,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "no traffic (weight 0)"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5682,6 +6437,45 @@
                 "total": 3,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "every backend has weight 0"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 0,
+                  "weightSet": true,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "no traffic (weight 0)"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-1",
+                  "port": 80,
+                  "weight": 0,
+                  "weightSet": true,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "no traffic (weight 0)"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -5778,6 +6572,56 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "every backend has weight 0"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "dead",
+                  "port": 80,
+                  "weight": 0,
+                  "weightSet": true,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "no traffic (weight 0)"
+                  }
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -5870,6 +6714,56 @@
                 "total": 0,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": false,
+                "role": "ok",
+                "label": "resolved"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            },
+            {
+              "index": 1,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "empty",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no endpoints"
+                  }
+                }
+              ]
             }
           ],
           "services": [],
@@ -5966,6 +6860,45 @@
               }
             }
           ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "web-b: 1/3 endpoints ready"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-b",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "degraded",
+                    "label": "1/3 endpoints ready"
+                  }
+                }
+              ]
+            }
+          ],
           "services": [],
           "pods": {
             "ready": 0,
@@ -6043,6 +6976,32 @@
                 "total": 0,
                 "nonPod": 0
               }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no endpoints"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no endpoints"
+                  }
+                }
+              ]
             }
           ],
           "services": [],

@@ -260,3 +260,17 @@ func TestRuleMetricsGates(t *testing.T) {
 		t.Fatalf("metrics unavailable keeps the rules: %+v %v", res, err)
 	}
 }
+
+func TestFluxUnitOf(t *testing.T) {
+	k := fluxUnitOf(map[string]string{"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"})
+	if k == nil || k.Kind != "Kustomization" || k.Namespace != "flux-system" || k.Name != "apps" {
+		t.Fatalf("kustomize labels: %+v", k)
+	}
+	h := fluxUnitOf(map[string]string{"helm.toolkit.fluxcd.io/name": "web", "helm.toolkit.fluxcd.io/namespace": "shop"})
+	if h == nil || h.Kind != "HelmRelease" || h.Name != "web" {
+		t.Fatalf("helm labels: %+v", h)
+	}
+	if fluxUnitOf(map[string]string{"kustomize.toolkit.fluxcd.io/name": "apps"}) != nil || fluxUnitOf(nil) != nil {
+		t.Fatal("a half label or none names no unit")
+	}
+}

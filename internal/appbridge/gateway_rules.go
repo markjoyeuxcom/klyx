@@ -66,6 +66,36 @@ type RuleMetricDTO struct {
 	Backends       []RuleBackendSeriesDTO `json:"backends"`
 }
 
+// RouteUnitDTO is the Flux unit a route's labels say manages it now, with
+// its applied value (slice 8d's revision proximity). It claims nothing about
+// when the unit began to manage the route.
+type RouteUnitDTO struct {
+	Kind      string      `json:"kind"`
+	Namespace string      `json:"namespace"`
+	Name      string      `json:"name"`
+	UID       string      `json:"uid,omitempty"` // "" when the rows do not name a single unit
+	Applied   *AppliedDTO `json:"applied,omitempty"`
+}
+
+// AppliedDTO is a unit's typed applied value and when its change was
+// observed: observedAt only for a known value that changed to another in
+// Klyx's sight (basis observed); liveSince is the coverage span's start.
+type AppliedDTO struct {
+	Kind       string `json:"kind"` // git | artifact | chart
+	Value      string `json:"value"`
+	ObservedAt string `json:"observedAt,omitempty"`
+	Basis      string `json:"basis"` // observed | unknown
+	LiveSince  string `json:"liveSince"`
+}
+
+// RuleRouteDTO is one route the read covered.
+type RuleRouteDTO struct {
+	Namespace string        `json:"namespace"`
+	Name      string        `json:"name"`
+	UID       string        `json:"uid"`
+	Unit      *RouteUnitDTO `json:"unit,omitempty"`
+}
+
 // RuleMetricsDTO is one Gateway's per-rule read.
 type RuleMetricsDTO struct {
 	Status         RouteMetricsStatusDTO `json:"status"`
@@ -76,10 +106,23 @@ type RuleMetricsDTO struct {
 	End            string                `json:"end"`
 	StepSeconds    int                   `json:"stepSeconds"`
 	RateSeconds    int                   `json:"rateSeconds"`
+	Routes         []RuleRouteDTO        `json:"routes"`
 	Rules          []RuleMetricDTO       `json:"rules"`
 	BackendSplit   string                `json:"backendSplit"`
 	Notes          []string              `json:"notes"`
 	Error          string                `json:"error,omitempty"` // the Gateway could not be read
+}
+
+// appliedSource is what the data path reads from the applied history (8d).
+type appliedSource interface {
+	UnitFor(cluster, kind, ns, name string) (string, bool)
+	Change(cluster, uid string) (AppliedChange, bool)
+}
+
+// SetAppliedChanges wires the applied-revision history (slice 8d). A package
+// function, not a method, so it is not bound to the webview.
+func SetAppliedChanges(s *GatewayService, h appliedSource) {
+	s.applied = h
 }
 
 // SetRuleIntervals wires the rule history (7b) that attributes per-rule
@@ -94,13 +137,13 @@ func SetRuleIntervals(s *GatewayService, f func(cluster, uid string, index int, 
 func (s *GatewayService) GetRuleMetrics(cluster, namespace, name string) RuleMetricsDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return RuleMetricsDTO{Status: RouteMetricsStatusDTO{Message: "cluster not connected"}, Rules: []RuleMetricDTO{}, Notes: []string{}}
+		return RuleMetricsDTO{Status: RouteMetricsStatusDTO{Message: "cluster not connected"}, Routes: []RuleRouteDTO{}, Rules: []RuleMetricDTO{}, Notes: []string{}}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayTimeout)
 	defer cancel()
 	res, err := conn.RuleMetrics(ctx, namespace, name)
 	if err != nil {
-		return RuleMetricsDTO{Status: RouteMetricsStatusDTO{Message: err.Error()}, Rules: []RuleMetricDTO{}, Notes: []string{}, Error: err.Error()}
+		return RuleMetricsDTO{Status: RouteMetricsStatusDTO{Message: err.Error()}, Routes: []RuleRouteDTO{}, Rules: []RuleMetricDTO{}, Notes: []string{}, Error: err.Error()}
 	}
 	return s.ruleMetricsDTO(cluster, res)
 }
@@ -115,9 +158,30 @@ func (s *GatewayService) ruleMetricsDTO(cluster string, res routemetrics.Gateway
 		End:            rfc3339(res.End),
 		StepSeconds:    int(routemetrics.RuleStep / time.Second),
 		RateSeconds:    int(routemetrics.RuleRate / time.Second),
+		Routes:         make([]RuleRouteDTO, 0, len(res.Routes)),
 		Rules:          make([]RuleMetricDTO, 0, len(res.Rules)),
 		BackendSplit:   res.BackendSplit,
 		Notes:          append([]string{}, res.Notes...),
+	}
+	for _, r := range res.Routes {
+		rd := RuleRouteDTO{Namespace: r.Namespace, Name: r.Name, UID: r.UID}
+		if u := r.Unit; u != nil {
+			ud := &RouteUnitDTO{Kind: u.Kind, Namespace: u.Namespace, Name: u.Name}
+			if s.applied != nil {
+				if uid, ok := s.applied.UnitFor(cluster, u.Kind, u.Namespace, u.Name); ok {
+					ud.UID = uid
+					if c, ok := s.applied.Change(cluster, uid); ok {
+						ad := &AppliedDTO{Kind: c.Kind, Value: c.Value, Basis: c.Basis, LiveSince: rfc3339(c.LiveSince)}
+						if c.ObservedAt != nil {
+							ad.ObservedAt = rfc3339(*c.ObservedAt)
+						}
+						ud.Applied = ad
+					}
+				}
+			}
+			rd.Unit = ud
+		}
+		dto.Routes = append(dto.Routes, rd)
 	}
 	for _, r := range res.Rules {
 		rd := RuleMetricDTO{Namespace: r.Namespace, Name: r.Name, UID: r.UID, Rule: r.Rule, Fingerprint: r.Fingerprint,

@@ -79,6 +79,29 @@ type MatchDTO struct {
 	PathType  string `json:"pathType"`
 	PathValue string `json:"pathValue"`
 	Method    string `json:"method"`
+	Rule      int    `json:"rule"` // the spec.rules index it belongs to
+}
+
+// RouteRuleDTO is one spec.rules entry with its verdict and each backend's
+// own (The Line slice 8d): the data path draws a branch per rule, a bar per
+// backend for its configured weight, and a failing backend in danger.
+type RouteRuleDTO struct {
+	Index    int                   `json:"index"`
+	Rule     RuleDTO               `json:"rule"`
+	Matches  []MatchDTO            `json:"matches"`
+	Backends []RouteRuleBackendDTO `json:"backends"`
+}
+
+// RouteRuleBackendDTO is a backendRef of one rule: its configured weight
+// (an unset weight counts as 1) and its own verdict.
+type RouteRuleBackendDTO struct {
+	Kind      string  `json:"kind"`
+	Namespace string  `json:"namespace"`
+	Name      string  `json:"name"`
+	Port      int32   `json:"port"`
+	Weight    int32   `json:"weight"` // the effective configured weight: 1 when unset
+	WeightSet bool    `json:"weightSet"`
+	Rule      RuleDTO `json:"rule"`
 }
 type BackendDTO struct {
 	Kind      string `json:"kind"`
@@ -120,6 +143,7 @@ type RouteNodeDTO struct {
 	Accepted          bool             `json:"accepted"`
 	ResolvedRefs      bool             `json:"resolvedRefs"`
 	Backends          []BackendDTO     `json:"backends"`
+	Rules             []RouteRuleDTO   `json:"rules"` // every spec.rules entry, judged (slice 8d)
 	Services          []ServiceNodeDTO `json:"services"`
 	Pods              PodCountDTO      `json:"pods"`
 	Policies          []PolicyRefDTO   `json:"policies"`
@@ -264,7 +288,24 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd.Backends = make([]BackendDTO, 0, len(r.Backends))
 	rd.Services = make([]ServiceNodeDTO, 0, len(r.Services))
 	for _, m := range r.Matches {
-		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method})
+		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method, Rule: m.Rule})
+	}
+	rd.Rules = make([]RouteRuleDTO, 0, r.RuleCount)
+	for _, rv := range gwapi.RuleVerdicts(r) {
+		rr := RouteRuleDTO{Index: rv.Index, Rule: toRuleDTO(rv.Eval), Matches: []MatchDTO{}, Backends: make([]RouteRuleBackendDTO, 0, len(rv.Backends))}
+		for _, m := range rd.Matches {
+			if m.Rule == rv.Index {
+				rr.Matches = append(rr.Matches, m)
+			}
+		}
+		for _, b := range rv.Backends {
+			w := b.Weight
+			if !b.WeightSet {
+				w = 1
+			}
+			rr.Backends = append(rr.Backends, RouteRuleBackendDTO{Kind: b.Kind, Namespace: b.Namespace, Name: b.Name, Port: b.Port, Weight: w, WeightSet: b.WeightSet, Rule: toRuleDTO(b.Eval)})
+		}
+		rd.Rules = append(rd.Rules, rr)
 	}
 	for _, b := range r.Backends {
 		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, State: string(b.State), Error: b.Error}
