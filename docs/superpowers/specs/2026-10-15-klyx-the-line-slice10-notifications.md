@@ -254,6 +254,7 @@ The re-review of 066ca6b found two more gaps, answered here:
     - a new episode for a UID ends, for good, any recovery still owed for its earlier one.
     - What each item still owes is indexed (onsets by episode, recoveries by UID), so ending one is O(1).
     - Items no longer owed stay in the queue until they are the majority (past 32), then are compacted in one pass. The queue holds at most twice what is owed plus 32, and a full partition of onsets is linear (50,000 onsets and closes in about 50 ms).
+    - A window starts with the first **owed** item, never the physical queue's emptiness, so dead items never shorten a new item's 60 seconds. A queue holding only dead items is cleared at the next tick.
 - **`appbridge.NotificationsService`:**
   - **Bound:** `Settings`, `SetSettings`, `SetFocus` and `RecentBaselines`.
     - `SetSettings` writes the block through `config.SaveNotifications` and requests the OS permission when enabling; a refusal keeps the setting and says so.
@@ -286,6 +287,7 @@ The re-review of 066ca6b found two more gaps, answered here:
   - pending work ending with its episode: a UID flapping 2,000 times before one dispatch leaves one onset, and a later episode, even one deleted before dispatch, ends an older recovery;
   - checkpoints listing the faults they hold: an empty after-gap of two parts lists a retained fault once, an after-cap baseline lists it again, and a loss lists nothing;
   - a full partition of onsets and closes finishing in linear time, with a benchmark;
+  - a window starting with the first owed item, even with a dead item still queued;
   - in flight: a recovery during a blocked `Send` goes when it succeeds and is withdrawn when it fails; end, reincarnation and disabling during the call revive nothing; a blocked `Send` never blocks `Apply`.
 - **Service tests** (`appbridge/notifications_service_test.go`):
   - the settings round trip, refusal, sending, a click and recent listings;
@@ -297,7 +299,9 @@ The re-review of 066ca6b found two more gaps, answered here:
 
 - **`bridge/notifications.ts`:**
   - `startHealthNotifications()` runs once from the app shell. It subscribes to the baseline and open events, then reads `RecentBaselines()`; each listing is said once, by its number, as an `info` Activity entry and toast. A `dropped` listing says how many notifications de-duplication had no room for.
-  - **Remembered numbers are bounded.** The service keeps its last 20 listings, numbered in order, so only the 64 numbers below the highest seen are remembered, and an older one is taken as said. A newer event that arrives before the start-up read still lets the read's older, unseen listings through.
+  - **Remembered numbers are bounded once the start-up read is answered.**
+    - Until then every number is remembered: the read's reply may arrive after any number of newer events, and its older, unseen entries are still said.
+    - Afterwards only events arrive, in order, so only the 64 numbers below the highest are kept, and an older one is taken as said.
   - It reports `{focused, cluster}` on window focus and blur and on every route change, only when it changes.
   - `openNotified` reveals a notified object in its part's lens with its UID (a burst opens its cluster).
 - **Settings > Notifications** (`app/NotificationSettingsPanel.tsx`): "Notify me about new faults" (off), the cluster scope and "Also notify recoveries", the latter two disabled until enabled. A failed save reverts and says why; an OS refusal is kept and said.

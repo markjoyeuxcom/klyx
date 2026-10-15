@@ -71,12 +71,14 @@ describe("a webview that subscribes after a connect", () => {
     const unsub = useFleet.subscribe((st) => { if (st.actionStatus) logged.push(st.actionStatus.message); });
     startHealthNotifications();
     await new Promise((r) => setTimeout(r, 0));
-    rt.handlers[BASELINE_EVENT]({ data: { seq: 21, cluster: "c21", reason: "connect", count: 1, items: [] } });
+    // ...even more than the remembered window of them
+    for (let seq = 21; seq <= 100; seq++) rt.handlers[BASELINE_EVENT]({ data: { seq, cluster: `c${seq}`, reason: "connect", count: 1, items: [] } });
     read([2, 3, 21].map((seq) => ({ seq, cluster: `c${seq}`, reason: "connect", count: 1, items: [] })));
     await new Promise((r) => setTimeout(r, 0));
-    expect(logged).toEqual(["1 fault present at connect on c21", "1 fault present at connect on c2", "1 fault present at connect on c3"]);
+    expect(logged.length).toBe(82);
+    expect(logged.slice(-2)).toEqual(["1 fault present at connect on c2", "1 fault present at connect on c3"]);
     // 400 more: the remembered set stays bounded
-    for (let seq = 22; seq < 422; seq++) rt.handlers[BASELINE_EVENT]({ data: { seq, cluster: "x", reason: "connect", count: 1, items: [] } });
+    for (let seq = 101; seq < 501; seq++) rt.handlers[BASELINE_EVENT]({ data: { seq, cluster: "x", reason: "connect", count: 1, items: [] } });
     unsub();
     expect(_listedForTest()).toBeLessThanOrEqual(64);
   });

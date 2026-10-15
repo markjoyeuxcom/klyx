@@ -481,6 +481,8 @@ func (cs *clusterState) died() {
 	cs.pending, cs.dead = kept, 0
 }
 
+func (cs *clusterState) owedCount() int { return len(cs.owedOn) + len(cs.owedRec) }
+
 func (cs *clusterState) clearPending() {
 	cs.pending, cs.dead = nil, 0
 	clear(cs.owedOn)
@@ -516,7 +518,9 @@ func (e *Engine) enqueueLocked(cs *clusterState, it pendingItem) {
 	if at, seen := cs.dedupe[dedupeKey{it.obj.UID, role(it)}]; seen && now.Sub(at) < DedupeWindow {
 		return // withheld: this episode's onset does not count as sent
 	}
-	if len(cs.pending) == 0 {
+	// the window starts with the first owed item: dead items left queued by
+	// O(1) invalidation never shorten a new item's 60 seconds
+	if cs.owedCount() == 0 {
 		cs.windowAt = now
 	}
 	if it.recovery {
@@ -598,7 +602,10 @@ func (e *Engine) Flush() {
 				delete(cs.dedupe, k)
 			}
 		}
-		if len(cs.pending) > 0 && now.Sub(cs.windowAt) >= BurstWindow {
+		if cs.owedCount() == 0 && len(cs.pending) > 0 {
+			cs.clearPending() // only dead items: nothing is owed
+		}
+		if cs.owedCount() > 0 && now.Sub(cs.windowAt) >= BurstWindow {
 			if out, any := e.dispatchLocked(name, cs, now); any {
 				sends = append(sends, out)
 			}

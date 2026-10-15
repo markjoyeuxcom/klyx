@@ -59,20 +59,26 @@ export function openNotified(o: NotificationObject): void {
 let started = false;
 let lastFocus = "";
 // Each listing is said once, whether its event or the start-up read
-// delivers it. The service keeps its last 20, numbered in order, so a number
-// more than LISTED_WINDOW below the highest seen can never arrive unsaid:
-// only that window is remembered (an older number is taken as said).
+// delivers it. Until that read has been answered every number is
+// remembered: its reply may come after any number of newer events, and its
+// older entries must still be said. Once it has, only events arrive, in
+// order, so only the LISTED_WINDOW numbers below the highest are kept (an
+// older one is taken as said).
 const LISTED_WINDOW = 64;
 const listed = new Set<number>();
 let highest = 0;
+let bootstrapped = false;
+
+function prune(): void {
+  if (!bootstrapped) return;
+  for (const n of listed) if (n <= highest - LISTED_WINDOW) listed.delete(n);
+}
 
 function listBaseline(b: HealthBaseline | undefined): void {
-  if (!b || b.count <= 0 || listed.has(b.seq) || b.seq <= highest - LISTED_WINDOW) return;
+  if (!b || b.count <= 0 || listed.has(b.seq) || (bootstrapped && b.seq <= highest - LISTED_WINDOW)) return;
   listed.add(b.seq);
-  if (b.seq > highest) {
-    highest = b.seq;
-    for (const n of listed) if (n <= highest - LISTED_WINDOW) listed.delete(n);
-  }
+  highest = Math.max(highest, b.seq);
+  prune();
   useFleet.getState().setActionStatus({ kind: "info", message: baselineMessage(b) });
 }
 
@@ -98,7 +104,8 @@ export function startHealthNotifications(): void {
   // subscribe, then read what a cluster that connected before this webview listed
   void Promise.resolve().then(() => NotificationsService.RecentBaselines())
     .then((rs) => { for (const b of (rs ?? []) as HealthBaseline[]) listBaseline(b); })
-    .catch(() => { /* the events keep arriving */ });
+    .catch(() => { /* the events keep arriving */ })
+    .finally(() => { bootstrapped = true; prune(); });
   Events.On(OPEN_EVENT, (ev: { data: NotificationObject }) => {
     if (ev?.data?.cluster) openNotified(ev.data);
   });
@@ -114,6 +121,7 @@ export function _resetHealthNotificationsForTest(): void {
   lastFocus = "";
   listed.clear();
   highest = 0;
+  bootstrapped = false;
   window.removeEventListener("focus", reportFocus);
   window.removeEventListener("blur", reportFocus);
 }

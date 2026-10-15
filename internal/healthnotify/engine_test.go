@@ -747,3 +747,20 @@ func BenchmarkOnsetBatch(b *testing.B) {
 		onsetBatch(observe.DefaultRoleCap)
 	}
 }
+
+func TestAWindowStartsWithTheFirstOwedItem(t *testing.T) {
+	r := newRig(t, on)
+	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
+	r.now = r.now.Add(time.Second)
+	r.e.Apply(batch(observe.BatchChanges, item("a", "fault", "ok"))) // a's onset is no longer owed
+	r.now = r.now.Add(49 * time.Second) // no flush between: a's dead item is still queued
+	r.e.Apply(batch(observe.BatchChanges, item("b", "ok", "fault")))
+	r.step(10 * time.Second) // 60s after a, 10s after b
+	if len(r.sent) != 0 {
+		t.Fatalf("b went after 10 seconds: %v", r.bodies())
+	}
+	r.step(50 * time.Second)
+	if len(r.sent) != 1 || r.sent[0].Single.UID != "b" {
+		t.Fatalf("b after its own 60 seconds: %v", r.bodies())
+	}
+}
