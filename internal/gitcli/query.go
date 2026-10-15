@@ -465,9 +465,10 @@ func (p Repo) Diff(ctx context.Context, a, b Rev, paths []string) (text string, 
 	return string(res.Stdout), res.StdoutOver, nil
 }
 
-// Archive writes a tar of paths at rev to output.
-func (p Repo) Archive(ctx context.Context, rev Rev, paths []string, output string) error {
-	c, err := archiveTar(p.dir, rev, paths, output)
+// Archive writes a tar of one subtree at rev ("" for the whole tree) to
+// output, its entries under path/.
+func (p Repo) Archive(ctx context.Context, rev Rev, path, output string) error {
+	c, err := archiveTar(p.dir, rev, path, output)
 	if err == nil {
 		_, err = p.r.run(ctx, c)
 	}

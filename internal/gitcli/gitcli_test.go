@@ -233,9 +233,12 @@ func TestTheTypedArgv(t *testing.T) {
 	c, err = diffContent("/k/c.git", ra, rb, []string{"apps/a.yaml"})
 	check("diff", c, err, []string{"diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--end-of-options",
 		a, b, "--", "apps/a.yaml"}, "/k/c.git", "", false)
-	c, err = archiveTar("/k/c.git", ra, []string{"apps"}, "/k/out.tar")
-	check("archive", c, err, []string{"archive", "--format=tar", "--output=/k/out.tar", "--end-of-options", a, "apps"},
-		"/k/c.git", "", false)
+	c, err = archiveTar("/k/c.git", ra, "./clusters/prd/", "/k/out.tar")
+	check("archive", c, err, []string{"archive", "--format=tar", "--output=/k/out.tar", "--prefix=clusters/prd/",
+		"--end-of-options", a + ":clusters/prd"}, "/k/c.git", "", false)
+	c, err = archiveTar("/k/c.git", main.Tracked(), ".", "/k/out.tar")
+	check("archive root", c, err, []string{"archive", "--format=tar", "--output=/k/out.tar", "--end-of-options",
+		"refs/klyx/tracked/refs/heads/main"}, "/k/c.git", "", false)
 }
 
 func TestTheConstructorsRefuseUnvalidatedInput(t *testing.T) {
@@ -246,9 +249,9 @@ func TestTheConstructorsRefuseUnvalidatedInput(t *testing.T) {
 		"zero Rev":         func() error { _, err := mergeBase("/c", ra, Rev{}); return err }(),
 		"parent path":      func() error { _, err := lsTree("/c", ra, []string{"apps/../../etc"}); return err }(),
 		"absolute path":    func() error { _, err := diffTree("/c", ra, ra, []string{"/etc/passwd"}); return err }(),
-		"dash path":        func() error { _, err := archiveTar("/c", ra, []string{"-x"}, "/o.tar"); return err }(),
+		"dash path":        func() error { _, err := archiveTar("/c", ra, "-x", "/o.tar"); return err }(),
 		"control path":     func() error { _, err := diffContent("/c", ra, ra, []string{"a\nb"}); return err }(),
-		"relative archive": func() error { _, err := archiveTar("/c", ra, nil, "out.tar"); return err }(),
+		"relative archive": func() error { _, err := archiveTar("/c", ra, "", "out.tar"); return err }(),
 		"short id":         func() error { _, err := catFileCheck("/c", []string{"abc123"}); return err }(),
 		"option id":        func() error { _, err := fetchContent("/s", []string{"--upload-pack=evil"}); return err }(),
 		"too many ids":     func() error { _, err := fetchContent("/s", slices.Repeat([]string{a}, MaxContentIDs+1)); return err }(),
@@ -566,7 +569,7 @@ func TestTheReadQueries(t *testing.T) {
 		t.Fatalf("diff %q %v %v", text, truncated, err)
 	}
 	out := filepath.Join(t.TempDir(), "snap.tar")
-	if err := p.Archive(ctx, main.Tracked(), []string{"apps"}, out); err != nil {
+	if err := p.Archive(ctx, main.Tracked(), "apps", out); err != nil {
 		t.Fatal(err)
 	}
 	tarList, err := exec.Command("/usr/bin/tar", "-tf", out).Output()
@@ -633,7 +636,7 @@ func TestAPartialCacheNeverLazyFetches(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "lazy fetching disabled") {
 		t.Fatalf("a content diff with missing blobs: %v", err)
 	}
-	if err := p.Archive(ctx, sha(f.c2), nil, filepath.Join(t.TempDir(), "x.tar")); err == nil {
+	if err := p.Archive(ctx, sha(f.c2), "", filepath.Join(t.TempDir(), "x.tar")); err == nil {
 		t.Fatal("an archive with missing blobs succeeded")
 	}
 }

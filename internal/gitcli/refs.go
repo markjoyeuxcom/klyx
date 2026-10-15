@@ -129,6 +129,9 @@ func checkRefName(name string) error {
 	return nil
 }
 
+// IsSHA reports whether s is a full object id: 40 or 64 lowercase hex.
+func IsSHA(s string) bool { return validSHA(s) }
+
 func validSHA(s string) bool {
 	if len(s) != 40 && len(s) != 64 {
 		return false

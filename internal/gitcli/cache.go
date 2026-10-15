@@ -48,7 +48,7 @@ func WriteGlobalConfig(path string, h Helpers, caInfo string) error {
 	if caInfo != "" {
 		b.WriteString("[http]\n\tsslCAInfo = " + quoteConfig(caInfo) + "\n")
 	}
-	return writeFileSync(path, []byte(b.String()), 0o600)
+	return WriteFileDurable(path, []byte(b.String()), 0o600)
 }
 
 // writeRepoConfig replaces a repository's config with the partial-clone
@@ -67,7 +67,7 @@ func writeRepoConfig(gitDir, approvedURL string) error {
 		"\turl = " + quoteConfig(approvedURL) + "\n" +
 		"\tpromisor = true\n" +
 		"\tpartialclonefilter = blob:none\n"
-	return writeFileSync(filepath.Join(gitDir, "config"), []byte(cfg), 0o600)
+	return WriteFileDurable(filepath.Join(gitDir, "config"), []byte(cfg), 0o600)
 }
 
 // InitRepo creates a bare partial-clone repository at gitDir - a cache or a
@@ -90,7 +90,7 @@ func (r Runner) InitRepo(ctx context.Context, gitDir, approvedURL string) error 
 		err = writeRepoConfig(gitDir, approvedURL)
 	}
 	if err == nil {
-		err = syncDir(filepath.Dir(gitDir))
+		err = SyncDir(filepath.Dir(gitDir))
 	}
 	if err != nil {
 		_ = os.RemoveAll(gitDir)
@@ -105,9 +105,9 @@ func quoteConfig(v string) string {
 	return `"` + r.Replace(v) + `"`
 }
 
-// writeFileSync writes a file durably: a temporary file in the same
+// WriteFileDurable writes a file durably: a temporary file in the same
 // directory, fsynced, renamed over the target, then the directory fsynced.
-func writeFileSync(path string, data []byte, perm os.FileMode) error {
+func WriteFileDurable(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
 	if err != nil {
@@ -133,10 +133,11 @@ func writeFileSync(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return syncDir(dir)
+	return SyncDir(dir)
 }
 
-func syncDir(dir string) error {
+// SyncDir fsyncs a directory, making a rename or removal in it durable.
+func SyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return err

@@ -93,6 +93,7 @@ What 6a adds to, or makes precise in, parent §7's command contract:
 - **The content fetch mirrors git's own lazy fetch:** `-c fetch.negotiationAlgorithm=noop fetch --no-tags --no-write-fetch-head --recurse-submodules=no --filter=blob:none --stdin origin`. The history fetch adds `--no-write-fetch-head --recurse-submodules=no`.
 - **`log`** adds `--no-mailmap --no-notes --no-show-signature --no-color`. Subjects and author names become plain text as they are parsed: valid UTF-8, control characters as spaces, capped at 200 characters.
 - **Ref kinds** follow `internal/line`'s: `branch`, `tag` and `commit` are fetched; `semver`, `default`, `unqualified` and a Flux `name` ref outside `refs/heads`/`refs/tags` are refused with their reason.
+- **`archive` takes one subtree** (revised in 6b): `--prefix=<path>/` over the tree-ish `<rev>:<path>`, never a pathspec. Probed on 2.56: in a partial clone, `git archive <rev> <path>` prefetches every blob of the whole tree, whatever the pathspec, so it fails (`GIT_NO_LAZY_FETCH`) unless everything was acquired. 6e builds its export from subtrees, or from exact blob reads if a later review adds `cat-file --batch` for that.
 - **Probed for 6b:** against a server without filter support, git only warns ("filtering not recognized by server, ignoring") and sends every blob. 6b's validation of the staging packs is what refuses it.
 
 ## 4. Acquisition (6b)
@@ -104,6 +105,23 @@ The parent's §7 contract, built as one `acquire` function with two callers (his
 - **Publication and recovery:** the parent's journal and recovery table, exactly. Recovery runs on start and before every acquisition.
 - **Size sampling:** every 250ms; the fetch is killed past its reservation.
 - **Scrubbing:** an error shown to the owner has URLs' userinfo and any `token=`-like query removed.
+
+### 4.1 As built in 6b
+
+`internal/gitcache` is the store: `Start` (delete leftover staging repos, recover every journal), `RefreshHistory`, `AcquireSnapshot`, `AcquireDiff`, `Read`, `Clear`, `Size`, `Status`. Beyond §7's contract, it makes these precise:
+- **Two locks.** The acquisition lock is a one-slot channel: waiters queue on it, and a cancelled waiter leaves. A separate read-write lock covers only the short steps that change what a reader sees (publication, recovery, Clear). `Read` takes it shared, so reads never wait behind a 60s fetch. `Clear` takes both.
+- **The staging repo** is `<cache>.staging`, made with the same `InitRepo` as the cache, with `objects/info/alternates` written by Klyx.
+- **Validation also refuses** anything in the staging packs other than `pack-<id>.{pack,idx,rev,promisor}` (a `.keep`, a bitmap, a temporary pack, a multi-pack index), a pack without its `.pack` or `.idx`, and any loose object.
+- **Publication skips** a pack whose name the cache already holds (the same content): it is neither moved nor journaled, so a rollback can never delete it. A history refresh whose refs did not move publishes nothing.
+- **Recovery's two extra rows:**
+  - every ref at `old` while the journal is marked committed (only outside interference can do that) is uncertain;
+  - a journal that fails validation (a file that is not a pack file by name, a ref outside `refs/klyx/`, a short id) is uncertain too.
+
+  Both mark the cache "needs repair" and delete nothing.
+- **A failure during publication** (not a crash) goes to the same recovery code at once, so there is one decision path.
+- **After a content publication,** the listed ids are checked again; any still missing is "content incomplete".
+- **The status** (`klyx-status.json` in the cache) keeps the last good refresh time, the last attempt, and the last scrubbed error, so "history as of <time>; fetch failed: <error>" survives a restart.
+- **The tests** abandon an acquisition at each journaled step (a test hook), as a killed process would leave it, then start a fresh store over the same disk. A real kill leaves the same disk state, because recovery reads only the disk.
 
 ## 5. `git.repos` and Settings > Git (6c)
 

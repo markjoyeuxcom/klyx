@@ -246,6 +246,10 @@ func updateRefs(gitDir string, updates []RefUpdate) (cmd, error) {
 	return cmd{args: []string{"update-ref", "--stdin"}, stdin: []byte(b.String()), gitDir: gitDir}, nil
 }
 
+// IsKlyxRef reports whether name is a staging or tracked ref Klyx itself
+// names.
+func IsKlyxRef(name string) bool { return checkKlyxRef(name) == nil }
+
 // checkKlyxRef accepts only refs Klyx itself names: a staging or tracked
 // ref of a validated branch, tag or object id.
 func checkKlyxRef(name string) error {
@@ -354,14 +358,17 @@ func diffContent(gitDir string, a, b Rev, paths []string) (cmd, error) {
 	return cmd{args: append(append(args, "--"), ps...), gitDir: gitDir}, nil
 }
 
-// archiveTar exports a snapshot of paths to a tar file Klyx names, run only
-// after its blobs were acquired. Output goes to the file, never through the
-// captured stdout.
-func archiveTar(gitDir string, rev Rev, paths []string, output string) (cmd, error) {
+// archiveTar exports one subtree at rev to a tar file Klyx names, run only
+// after its blobs were acquired. The subtree is the tree-ish <rev>:<path>
+// with --prefix=<path>/, never a pathspec: in a partial clone, `git archive
+// <rev> <path>` prefetches every blob of the whole tree whatever the
+// pathspec (probed on 2.56), so a pathspec would read outside what was
+// acquired. Output goes to the file, never through the captured stdout.
+func archiveTar(gitDir string, rev Rev, path, output string) (cmd, error) {
 	if !filepath.IsAbs(output) || strings.ContainsFunc(output, func(r rune) bool { return r < 0x20 }) {
 		return cmd{}, fmt.Errorf("archive output %q is not an absolute path", output)
 	}
-	ps, err := pathArgs(paths)
+	p, err := CleanPath(path)
 	if err != nil {
 		return cmd{}, err
 	}
@@ -369,6 +376,11 @@ func archiveTar(gitDir string, rev Rev, paths []string, output string) (cmd, err
 	if err != nil {
 		return cmd{}, err
 	}
-	args := append([]string{"archive", "--format=tar", "--output=" + output, "--end-of-options"}, rs...)
-	return cmd{args: append(args, ps...), gitDir: gitDir}, nil
+	args := []string{"archive", "--format=tar", "--output=" + output}
+	treeish := rs[0]
+	if p != "" {
+		args = append(args, "--prefix="+p+"/")
+		treeish += ":" + p
+	}
+	return cmd{args: append(args, "--end-of-options", treeish), gitDir: gitDir}, nil
 }
