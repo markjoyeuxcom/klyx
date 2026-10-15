@@ -91,11 +91,16 @@ func servedGVR(spec, version string) string {
 func (o *Observer) sourceIdentityLocked(name string, cov Coverage) SourceIdentity {
 	id := SourceIdentity{Source: name, Coverage: cov}
 	if ks := o.kinds[name]; ks != nil {
-		id.GVR = servedGVR(ks.spec.GVR, ks.version)
+		// The last served GVR, kept across an absence; empty before any
+		// generation started, never the unversioned descriptor of a probed kind.
 		if g := ks.gen; g != nil {
 			id.Generation, id.Epoch, id.Relisting = g.id, g.epoch, g.relisting
-			id.GVR = servedGVR(ks.spec.GVR, g.version)
+			ks.servedGVR = servedGVR(ks.spec.GVR, g.version) // refreshed from the live generation
 		}
+		// A core kind's version is "": its descriptor is already complete.
+		// Before any generation started a probed kind has none: no GVR,
+		// never its unversioned descriptor.
+		id.GVR = ks.servedGVR
 		return id
 	}
 	if ss := o.snaps[name]; ss != nil && ss.gen != nil {
@@ -232,10 +237,16 @@ func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp 
 	live := liveForLedger(id)
 
 	var entries map[string]ledgerEntry
+	var membershipUnknown bool
 	if !capped && live {
-		var ok bool
-		entries, ok = o.entriesOf(src, id, c, roles, pt, sampled && cp.truncated[src])
-		capped = !ok
+		var st entriesStatus
+		entries, st = o.entriesOf(src, id, c, roles, sampled && cp.truncated[src])
+		capped = st == entriesCapped
+		// Unknown membership cannot tell a deletion from a skipped object:
+		// continuity is not proven, so the partition is not live (review of
+		// 5fcb5f2) until membership is readable again.
+		membershipUnknown = st == entriesMembershipUnknown
+		live = live && !membershipUnknown
 	}
 	if capped {
 		if !lg.capped[src] {
@@ -270,7 +281,11 @@ func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp 
 			commit(BatchBaseline, baselineItems(entries), nil)
 		}
 	case pt.state == partitionLive && !live:
-		emitLoss(lossOf(pt.ident, id), copyTime(&pt.committedAt))
+		l := lossOf(pt.ident, id)
+		if membershipUnknown {
+			l = &Loss{Reason: LossMembership, Coverage: id.Sources[0].Coverage}
+		}
+		emitLoss(l, copyTime(&pt.committedAt))
 		pt.state, pt.lossAt = partitionFrozen, cp.at
 	case pt.state == partitionLive && !sameIdentity(pt.ident, id):
 		// A gap between two Live captures: the loss, then the after-gap, in
@@ -284,46 +299,44 @@ func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp 
 	}
 }
 
+type entriesStatus int
+
+const (
+	entriesOK                entriesStatus = iota
+	entriesCapped                          // over the cap, or a truncated sampled read
+	entriesMembershipUnknown               // a captured object has no readable UID
+)
+
 // entriesOf builds the partition's new entries: the evaluated roles, plus
 // every member the evaluator did not evaluate. A key in the old ledger that
-// is neither evaluated nor a known member is gone; when membership is
-// unknown it is carried over unchanged (no deletion is claimed). ok is false
-// when the result exceeds the cap or a sampled read was truncated.
-func (o *Observer) entriesOf(src string, id ContinuityIdentity, c Capture, roles []RoleEntry, pt *partition, truncated bool) (map[string]ledgerEntry, bool) {
+// is neither evaluated nor a member is gone. When membership is unknown no
+// entries are built: the caller suspends the partition instead of claiming
+// either a deletion or continuity.
+func (o *Observer) entriesOf(src string, id ContinuityIdentity, c Capture, roles []RoleEntry, truncated bool) (map[string]ledgerEntry, entriesStatus) {
 	if truncated || len(roles) > o.cfg.RoleCap {
-		return nil, false
+		return nil, entriesCapped
 	}
 	entries := make(map[string]ledgerEntry, len(roles))
 	for _, r := range roles {
 		entries[r.Key] = ledgerEntry{RoleEntry: r}
 	}
 	if _, isKind := o.kinds[src]; !isKind {
-		return entries, true // a complete read: a missing key is gone
+		return entries, entriesOK // a complete read: a missing key is gone
 	}
 	members, known := membershipOf(c.Objects[src])
 	if !known {
-		if pt != nil {
-			for k, e := range pt.entries {
-				if _, ok := entries[k]; !ok {
-					entries[k] = e
-				}
-			}
-		}
-		return entries, len(entries) <= o.cfg.RoleCap
+		return nil, entriesMembershipUnknown
 	}
 	for uid, m := range members {
 		if _, ok := entries[uid]; ok {
 			continue
 		}
-		e := ledgerEntry{RoleEntry: RoleEntry{Source: src, GVR: id.Sources[0].GVR, Key: uid, NS: m.ns, Name: m.name}, unevaluated: true}
-		if pt != nil {
-			if old, ok := pt.entries[uid]; ok {
-				e.GVR = old.GVR
-			}
-		}
-		entries[uid] = e
+		entries[uid] = ledgerEntry{RoleEntry: RoleEntry{Source: src, GVR: id.Sources[0].GVR, Key: uid, NS: m.ns, Name: m.name}, unevaluated: true}
 	}
-	return entries, len(entries) <= o.cfg.RoleCap
+	if len(entries) > o.cfg.RoleCap {
+		return nil, entriesCapped
+	}
+	return entries, entriesOK
 }
 
 func itemOf(e ledgerEntry, from, to string) Transition {

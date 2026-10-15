@@ -195,6 +195,12 @@ func (g *snapGen) apply(r SnapshotRead) bool {
 		o.markSnapLocked(g.ss)
 		return true
 	}
+	// A read that lands after the previous one went overdue - before the
+	// loop's boundary check turned it stale (a delayed loop, a suspended
+	// machine) - still follows a gap: continuity is not proven across it.
+	if g.fresh.cov == Live && g.fresh.readAt != nil && !now.Before(g.fresh.readAt.Add(2*g.ss.spec.Cadence)) {
+		g.epoch++
+	}
 	if !reflect.DeepEqual(g.items, r.Items) || g.fresh.truncated != r.Truncated {
 		g.items = r.Items
 		o.bumpSnapLocked(g.ss)

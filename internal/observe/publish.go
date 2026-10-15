@@ -238,7 +238,7 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	p.last = &part
 	p.boundaryFired = false
 	if verChanged || p.evaluatedAt.IsZero() {
-		p.evaluatedAt = now
+		p.evaluatedAt = c.Now // the capture's own clock read (slice 2b review)
 	}
 	if subscribed {
 		p.lastRows, p.hasRows = res.Rows, true
@@ -262,8 +262,12 @@ func samePart(a, b Part) bool {
 // absent only when every counted source is absent; an absent dependency or a
 // missing optional kind leaves the rest of the part observed.
 func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCoverage, bool, captured) {
-	c := Capture{Now: now, Objects: map[string][]any{}}
-	cp := captured{at: o.clk.Now(), connEpoch: o.connEpoch, connUsable: o.connUsable}
+	// One clock read under the lock is the capture's time: the rules
+	// evaluate at it, and its batches and rows are stamped with it - never an
+	// earlier cycle time, which a slow evaluation before it would make stale.
+	at := o.clk.Now()
+	c := Capture{Now: at, Objects: map[string][]any{}}
+	cp := captured{at: at, connEpoch: o.connEpoch, connUsable: o.connUsable}
 	if p.ledger != nil {
 		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
 	}

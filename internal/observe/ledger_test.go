@@ -385,28 +385,38 @@ func TestLedgerUnevaluatedIsNotGone(t *testing.T) {
 	}
 }
 
-func TestLedgerUnknownMembershipClaimsNoDeletion(t *testing.T) {
+// Review of 5fcb5f2: an object without a readable UID makes membership
+// unknown - a deletion and a skipped object look alike - so the partition is
+// suspended (one loss), claims nothing, and reconciles once membership is
+// readable again.
+func TestLedgerUnknownMembershipSuspendsThePartition(t *testing.T) {
 	src := newSource()
-	src.put("a", nil)
+	src.put("a", map[string]string{"bad": "1"})
 	src.put("b", nil)
-	// cmView has no ObjectMeta: membership is unknown.
-	k := cmKind("cms", src)
-	eval := func(c Capture) PartResult {
-		var roles []RoleEntry
-		for _, o := range c.Objects["cms"] {
-			v := o.(cmView)
-			roles = append(roles, RoleEntry{Source: "cms", Key: v.Name, Name: v.Name, Role: "ok"})
+	k := ledgerKind("cms", src)
+	k.Project = func(obj any) (any, error) {
+		v, err := projectCMObj(obj)
+		if obj.(*corev1.ConfigMap).Data["nouid"] == "1" {
+			v.(*cmObj).UID = ""
 		}
-		n := len(roles)
-		return PartResult{Evidence: &n, Roles: roles}
+		return v, err
 	}
-	h := start(t, Config{Kinds: []KindSpec{k}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{{ID: "cms", Counted: []string{"cms"}, Evaluate: eval, Ledger: true}}}}})
-	next := h.baseline("a:absent>ok b:absent>ok")
-	src.remove("a")
-	src.put("c", nil)
-	b, _ := h.waitBatch(next, kindIs(BatchChanges), "c appears")
-	if itemsOf(b) != "c:absent>ok" {
-		t.Fatalf("no deletion is claimed without membership: %q", itemsOf(b))
+	h := ledgerHarness(t, src, Config{Kinds: []KindSpec{k}})
+	next := h.baseline("a:absent>fault b:absent>ok")
+	src.put("b", map[string]string{"nouid": "1"})
+	loss, i := h.waitBatch(next, kindIs(BatchLoss), "membership unknown")
+	if loss.Loss.Reason != LossMembership {
+		t.Fatalf("loss: %+v", loss.Loss)
+	}
+	src.remove("a") // unseen while suspended: no claim either way
+	h.settle(300 * time.Millisecond)
+	if bs := h.sink.allBatches(); len(bs) != i+1 {
+		t.Fatalf("a suspended partition emits nothing: %+v", bs[i+1:])
+	}
+	src.put("b", nil)
+	gap, _ := h.waitBatch(i+1, kindIs(BatchAfterGap), "membership readable again")
+	if itemsOf(gap) != "a:fault>gone" || gap.PrevAt == nil || !gap.PrevAt.Equal(loss.At) {
+		t.Fatalf("after-gap: %q prev %v", itemsOf(gap), gap.PrevAt)
 	}
 }
 

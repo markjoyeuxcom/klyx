@@ -223,6 +223,7 @@ const (
 	LossConnection = "connection" // the cluster connection is not usable
 	LossAbsent     = "absent"     // the source is not installed; never a deletion
 	LossCapped     = "capped"     // the part exceeded RoleCap
+	LossMembership = "membership" // a captured object has no readable UID: deletions cannot be told apart
 )
 
 // SourceIdentity is one source's continuity at a capture. Any field change

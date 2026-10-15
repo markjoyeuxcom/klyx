@@ -83,6 +83,9 @@ type kindState struct {
 	served   bool
 	version  string
 	probeErr string // the current discovery failure; cleared by a success
+	// servedGVR is the last effective served GVR (group/version/resource):
+	// kept across an absence, so a loss names what was observed.
+	servedGVR string
 	// watchers are WatchKind listeners; stateSeq is the kind's watermark.
 	watchers []*kindWatcher
 	stateSeq uint64
@@ -218,6 +221,7 @@ func (o *Observer) startKind(ks *kindState, version string) {
 	g := &kindGen{o: o, ks: ks, ctx: ctx, cancel: cancel, version: version, id: o.kindGenSeq,
 		model: map[string]any{}, fresh: freshness{cov: Checking}, backoff: o.cfg.BackoffMin}
 	ks.gen = g
+	ks.servedGVR = servedGVR(ks.spec.GVR, version)
 	o.markKindLocked(ks)
 	o.goSafe(func() { g.run() })
 	o.goSafe(func() { g.initialTimeout() })
