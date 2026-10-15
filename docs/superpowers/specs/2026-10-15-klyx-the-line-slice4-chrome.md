@@ -90,7 +90,7 @@ The order is not read from `LineDTO`:
 
 - **Height:** 40px (`--mast-height`), up from the mast's 36px.
 - **Crumbs:** "Fleet" in the label face, `/` separators, the station as "ENV · REGION" in the label face beside the cluster name in mono, then the lens. On the fleet board "Fleet" alone is the current place; on other fleet and app routes it is "Fleet / place".
-- **Shrink order:** the ⌘K well's words first (down to its icon), then the station's name, then the lens (never below 7ch). The protected tag, the fleet indicator and every utility never shrink, so nothing leaves the screen at 1024px.
+- **Shrink order** (revised with §5.4 after the design review): the ⌘K well's words first (down to its icon), then the lens crumb (to 3ch; the lens index and the page header also name it), then the station crumb to its 9ch floor; past the floors the crumbs clip, and the station switcher's menu hangs from a portal so the clip never cuts it. The current station's strip box, the protected tag, the fleet indicator and every utility never shrink; below 1180px Ask keeps only its icon and the tag's "(inferred)" moves to its title and assistive tech. Nothing leaves the screen or overlaps at 1024px.
 - **Ask:** off a cluster it stays, `aria-disabled`, with its reason ("a conversation is bounded to one cluster").
 
 ## 3. The fleet indicator (4a)
