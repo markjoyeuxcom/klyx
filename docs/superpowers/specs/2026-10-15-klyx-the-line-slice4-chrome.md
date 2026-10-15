@@ -286,7 +286,15 @@ No lens changes its content in slice 4. The lens sweep is slice 11.
 - The five UID-less inspectors without a cluster prop gained one: Access grants, Argo projects, the topology's routes, Karpenter events and Upgrade's deprecated APIs.
 - `cluster/useClusterKey.ts` holds a local selection as `{ cluster, key }` and returns the key only on that cluster. Its setter is stable and records the cluster current when it runs, so memoised handlers stay correct. It is used in all eleven local-selection lenses.
 - `aspect` and `drawing` render as specified; no lens passes them until the slice 11 sweep.
-- "Replaced" waits for open point 6.3a.
+- "Replaced" waits for open point 6.3a (built in part 2, below).
+
+### 6.3c As built (4d, part 2: Replaced)
+
+- `cluster/usePinnedSubject.ts` pins a selection to the UID it had when first seen and replaces each lens's last-row ref. It returns the pinned subject and one of: "removed" (absent from a complete read of its kind), "unverified" (absent, or a different UID, on a read that is not complete; nothing is claimed), or "replaced" (a complete read holds a different UID at the key) with the new row and `adopt`. An object with no UID never pins and is never replaced.
+- `InspectorLayout`'s `replaced` handler shows "Replaced." in place of the verdict, keeps the body as the pinned object's last evidence, and replaces the whole action band with "Open the new object". Lenses also pass "removed" to their inspector's own gating, so actions inside the body stay off.
+- Detail and history reads follow the pinned UID only: Pods, Nodes and Flux resources stop re-reading while replaced, the certificate chain is not resolved for the new UID, and Workloads' rollout history is not requested for it. "Open the new object" re-pins and reads it afresh.
+- Built for every UID-bearing selection: Pods, Nodes, Workloads, Gateways, Gateway routes (where "removed" reads "detached"), Karpenter claims and pools, certificates and issuers, external secrets and stores, Argo applications and ApplicationSets, Flux resources and sources.
+- Not applicable: CRD instances are one-off snapshot reads with no live rows, so no replacement reaches an open inspector, and their Explain and Suggest-fix already follow the read's UID. The UID-less inspectors (Events, Access grants, Upgrade findings, Argo projects, Karpenter events, the topology's routes, Helm releases) never claim replacement.
 
 ### 6.4 The object crumb
 
