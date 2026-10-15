@@ -11,6 +11,7 @@ import { openTerminal } from "../bridge/configsvc";
 import { vh } from "../app/zoom";
 import { FleetIndicator } from "./FleetIndicator";
 import { StationSwitcher } from "./StationSwitcher";
+import { StationStrip } from "./StationStrip";
 import { useMenuPopover } from "./useMenuPopover";
 import { MOD } from "./modKey";
 import { drag, noDrag } from "./drag";
@@ -55,6 +56,9 @@ export function LocationBar() {
             </>
           )}
         </nav>
+        {route.name === "cluster" && (
+          <StationStrip cluster={route.cluster} protection={current?.protected ? (current.protectedInferred ? "protected (inferred)" : "protected") : undefined} />
+        )}
       </div>
       <div className="locbar-right" style={noDrag}>
         <FleetIndicator />
