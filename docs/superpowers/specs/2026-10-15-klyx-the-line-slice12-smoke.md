@@ -162,3 +162,28 @@ Review findings answered: the single-instance lock (§3.1), bounded progress and
   - **Go:** the watchdog's four outcomes (never started, never reported, first result only, no result never passes), the asset hash, and the build constraint (`smoke.go` only under the tag).
   - **Frontend:** the handshake in both orders and never without the signal; the bounded wait; unmeasurable geometry; the tokens; a face that does not load; the verdict; every registry destination stepped; a run with nothing laid out reporting a non-pass.
 - **A trial run** found that a row picked up before its page had mounted measured 0×0. The step now waits for the page, then for a row with a measurable box.
+
+## 8. The runs (2026-10-15, kind lab)
+
+- **12a, Go lab tests:**
+  - `KLYX_LAB_CONTEXT=kind-klyx go test -count=1 -run TestLab ./internal/...` passes.
+  - `TestLabIndex`, `TestLabObjectWrites` and `TestLabDependencyGraph` ran and passed.
+  - `TestLab` and `TestLabChurn` skip by design: they are the 1c load-budget lab and need the 5,000-pod `klyx-load` fixture.
+- **12a, the parity gate:**
+  - `klyx-parity.sh up` took 40s.
+  - `TestParityGate` passed in 80.7s (run `ddaa4964ff399cd3`, commit `9c72ca5`, clean, capability re-probe 10s).
+  - The frontend stage passed 2/2 on that output, then `down`.
+- **12a, the walk** (`pw/s12.mjs`, server-mode Klyx on the lab fleet config): night and day at 1440×900 pass 35/35; at 1024×768, 36/36 (the drawer's Escape step runs only narrow).
+  - **Steps:** the fleet board, its three queue filters and its aside; the station page and its queue opening a row pinned; every lens; the four drawings; the console's search, verbs only, open beside and Escape; Escape over a drawer; Settings; the chat drawer opened without a question.
+  - **One script correction:** at the narrow width the modal drawer covers the list, so the walk closes it before acting on the list, as a person would.
+- **12b, the native smoke:** `KlyxSmoke.app` built at clean commit `4ef8c0b` from fresh assets (hash recorded in each report), hidden window. Night and day at 1440×900 and 1024×768 all `pass`, 97/97 steps:
+  - the tokens;
+  - the web platform;
+  - all seven font faces loaded;
+  - the lab connecting;
+  - the fleet board;
+  - every registry destination;
+  - the inspector split at 1440 and a drawer at 1024, with focus inside it.
+
+  The installed Klyx (`/Applications/klyx.app`) held the ordinary `com.moomora.klyx` lock throughout, observed read-only with `lsof`, so the separate identity is proven in use. The owner's app and data were not touched.
+- **12c:** `docs/eyeball-checklist-2026-10-15-the-line.md`.
