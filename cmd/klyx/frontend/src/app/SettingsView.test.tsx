@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import { SettingsView } from "./SettingsView";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import type { FleetConfigDTO } from "../bridge/configsvc";
 
 const mockGetFleetConfig = vi.fn<() => Promise<FleetConfigDTO | null>>();
@@ -33,7 +34,7 @@ describe("SettingsView", () => {
   });
 
   it("renders the fleet file path, clusters, and load warnings", async () => {
-    const { findByText, getByText, getAllByText } = render(<SettingsView />);
+    const { findByText, getByText, getAllByText } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     expect(await findByText("/home/me/.config/klyx/fleet.yaml")).toBeTruthy();
     expect(getByText("homelab-nelli")).toBeTruthy();
     // prd-weu appears in the clusters table AND the contexts list.
@@ -51,7 +52,7 @@ describe("SettingsView", () => {
         { name: "aks-prd-we", context: "aks-prd-we", env: "", region: "", provider: "", account: "", group: "", protected: true, protectedInferred: true, hasMetrics: false },
       ],
     });
-    const { findAllByText } = render(<SettingsView />);
+    const { findAllByText } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     // Only aks-prd-we is inferred; prd-weu (explicit) still reads "yes".
     const inferred = await findAllByText("inferred");
     expect(inferred).toHaveLength(1);
@@ -59,7 +60,7 @@ describe("SettingsView", () => {
   });
 
   it("marks contexts in/not-in fleet and only offers checkboxes for new ones", async () => {
-    const { findAllByText, getAllByText, queryByLabelText, getByLabelText } = render(<SettingsView />);
+    const { findAllByText, getAllByText, queryByLabelText, getByLabelText } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     expect((await findAllByText("in fleet")).length).toBe(2);
     expect(getAllByText("not in fleet").length).toBe(1);
     expect(getByLabelText("select context kubernetes-admin@homelab-orange")).toBeTruthy();
@@ -68,7 +69,7 @@ describe("SettingsView", () => {
 
   it("add flow: select, add, success banner says restart", async () => {
     mockAddClusters.mockResolvedValue({ ok: true, error: "" });
-    const { findByLabelText, getByRole, findByTestId } = render(<SettingsView />);
+    const { findByLabelText, getByRole, findByTestId } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     fireEvent.click(await findByLabelText("select context kubernetes-admin@homelab-orange"));
     fireEvent.click(getByRole("button", { name: /add 1 to fleet/i }));
     await waitFor(() => expect(mockAddClusters).toHaveBeenCalledWith(["kubernetes-admin@homelab-orange"]));
@@ -78,7 +79,7 @@ describe("SettingsView", () => {
 
   it("add failure surfaces the error honestly", async () => {
     mockAddClusters.mockResolvedValue({ ok: false, error: "appended config failed validation (file unchanged)" });
-    const { findByLabelText, getByRole, findByTestId } = render(<SettingsView />);
+    const { findByLabelText, getByRole, findByTestId } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     fireEvent.click(await findByLabelText("select context kubernetes-admin@homelab-orange"));
     fireEvent.click(getByRole("button", { name: /add 1 to fleet/i }));
     const banner = await findByTestId("settings-banner");
@@ -87,7 +88,27 @@ describe("SettingsView", () => {
 
   it("scan error renders instead of an empty context list", async () => {
     mockGetFleetConfig.mockResolvedValue({ ...baseCfg, contexts: [], scanError: "parse kubeconfig: yaml error" });
-    const { findByText } = render(<SettingsView />);
+    const { findByText } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     expect(await findByText(/Could not read the kubeconfig/)).toBeTruthy();
+  });
+});
+
+// The Line slice 4 §2: the theme's home is Settings > Appearance.
+describe("Settings > Appearance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFleetConfig.mockResolvedValue(baseCfg);
+  });
+
+  it("lists every theme as a radio; choosing one sets the theme", async () => {
+    const { findByRole, getByRole } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
+    const group = await findByRole("group", { name: "Theme" });
+    const radios = Array.from(group.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
+    expect(radios.map((r) => r.value)).toEqual(["system", "night", "day", "light", "dark", "bench", "bench-light"]);
+    fireEvent.click(getByRole("radio", { name: "Day" }));
+    await waitFor(() => expect(document.documentElement.getAttribute("data-theme")).toBe("day"));
+    expect((getByRole("radio", { name: "Day" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(getByRole("radio", { name: "Night" }));
+    await waitFor(() => expect(document.documentElement.getAttribute("data-theme")).toBe("night"));
   });
 });

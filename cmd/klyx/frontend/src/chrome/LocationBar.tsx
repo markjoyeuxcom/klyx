@@ -1,79 +1,68 @@
 import { useState, useRef, useEffect } from "react";
-import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconCommand, IconHistory, IconMessageChatbot, IconSettings, IconTerminal2 } from "@tabler/icons-react";
+import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconHistory, IconMessageChatbot, IconSearch, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { openChat } from "../ai/chatStore";
-import { ThemeToggle } from "./ThemeToggle";
 import { KlyxMark } from "./KlyxMark";
-import { useFleet } from "../store/fleet";
-import { openNavTree } from "../nav/navTree";
-import { lineText, mastReading, provenance } from "../nav/clusterAttention";
-import { useAttentionModel } from "../nav/useAttentionModel";
+import { useFleet, type ClusterDTO } from "../store/fleet";
 import { back, backTarget, entryKey, entryLabel, forward, forwardTarget, go, recentPlaces, useHistory, type HistoryEntry } from "../nav/history";
 import { clusterDisplayName } from "../fleet/ClusterCard";
 import { stopAllForwards } from "../bridge/forwards";
 import { openCommandPalette } from "./CommandPalette";
 import { openTerminal } from "../bridge/configsvc";
 import { vh } from "../app/zoom";
+import { FleetIndicator } from "./FleetIndicator";
+import { StationSwitcher } from "./StationSwitcher";
+import { useMenuPopover } from "./useMenuPopover";
+import { MOD } from "./modKey";
+import { drag, noDrag } from "./drag";
 
-// Wails v3 window-drag regions: the bar is draggable, interactive children opt out.
-const drag = { "--wails-draggable": "drag" } as React.CSSProperties;
-const noDrag = { "--wails-draggable": "no-drag" } as React.CSSProperties;
 
-// TopBar is the mast (spec §1): one 36px band. Left: Back / Forward / Recent,
-// then the readable context - cluster and the place in it - and the
-// protected-cluster cue, which never clips. Right: the palette and the app
-// utilities. Context outranks utility text: the palette label is the first
-// thing to give up width. The empty middle drags the window; macOS traffic
-// lights sit in the left padding.
-export function TopBar() {
+// LocationBar (The Line slice 4 §2): history, the mark, the crumbs
+// Fleet / Station / Lens, the fleet indicator, the ⌘K well and the
+// utilities. Every function of the retired mast and spine has a home here
+// or in Settings (the parity table). Crumbs outrank utilities: the well's
+// words give up width first; the protected tag never shrinks.
+export function LocationBar() {
   const route = useFleet((s) => s.route);
   const kindFilter = useFleet((s) => s.workloads.kindFilter);
   const current = useFleet((s) => (s.route.name === "cluster" ? s.clusters.find((c) => c.name === (s.route as { cluster: string }).cluster) : undefined));
   const where = entryLabel({ route, kindFilter });
-  const clusterName = where.cluster ? clusterDisplayName(where.cluster) : null;
+  const onBoard = route.name === "fleet" && !route.view;
   return (
-    // data-list-keys="ignore": a focused mast control keeps its keys (see NavBand).
-    <header className="mast" style={drag} data-list-keys="ignore">
-      <div className="mast-left">
+    // data-list-keys="ignore": a focused bar control keeps its keys (see NavBand).
+    <header className="mast locbar" style={drag} data-list-keys="ignore">
+      <div className="locbar-left">
         <HistoryControls />
-        <KlyxMark size={18} />
-        <div className="mast-identity" style={noDrag} title={where.cluster ? `${where.cluster} / ${where.place}` : where.place}>
-          {clusterName ? (
-            <>
-              <span className="mast-cluster">{clusterName}</span>
-              <span className="mast-sep" aria-hidden="true">/</span>
-              <span className="mast-place">{where.place}</span>
-            </>
-          ) : <span className="mast-cluster">{where.place}</span>}
-        </div>
-        {route.name === "cluster" && <AttentionButton cluster={route.cluster} />}
-        {/* The protected cue never clips: it does not shrink, the place does. */}
-        {current?.protected && (
-          <span className="mast-protected" style={noDrag} title={current.protectedInferred ? "Protected - inferred from the cluster's environment name; operations need typed confirmation" : "Protected - operations need typed confirmation"}>
-            prd lock
-          </span>
-        )}
-      </div>
-      <div className="mast-right" style={noDrag}>
-        <button
-          type="button"
-          aria-label="open command palette"
-          data-testid="command-bar"
-          onClick={openCommandPalette}
-          title="open command palette with cmd+k or ctrl+k"
-          className="mast-palette"
-        >
-          <IconCommand size={13} stroke={1.5} style={{ flexShrink: 0 }} />
-          <span className="mast-palette-text">jump or run a command</span>
-          <kbd>⌘K</kbd>
+        <button type="button" className="locbar-mark" style={noDrag} aria-label="Klyx fleet board" title="Fleet board" onClick={() => useFleet.getState().openFleet()}>
+          <KlyxMark size={18} />
         </button>
-        {/* App utilities (spec §4): icon buttons whose names live in their
-            accessible labels and tooltips - context outranks utility text. */}
+        <nav aria-label="Location" className="locbar-crumbs" style={noDrag}>
+          <button type="button" className="locbar-crumb locbar-fleet" aria-current={onBoard ? "page" : undefined} onClick={() => useFleet.getState().openFleet()}>Fleet</button>
+          {route.name === "cluster" ? (
+            <>
+              <Sep />
+              {current ? <StationSwitcher current={current} /> : <span className="locbar-crumb">{clusterDisplayName(route.cluster)}</span>}
+              {current?.protected && <ProtectedTag c={current} />}
+              <Sep />
+              <span className="locbar-crumb locbar-lens" aria-current="page" title={where.place}>{where.place}</span>
+            </>
+          ) : !onBoard && (
+            <>
+              <Sep />
+              <span className="locbar-crumb locbar-lens" aria-current="page">{where.place}</span>
+            </>
+          )}
+        </nav>
+      </div>
+      <div className="locbar-right" style={noDrag}>
+        <FleetIndicator />
+        <button type="button" aria-label="Go to, run or ask" data-testid="command-bar" onClick={openCommandPalette}
+          title={`Go to, run or ask (${MOD}K)`} className="locbar-well">
+          <IconSearch size={13} stroke={1.6} style={{ flexShrink: 0 }} aria-hidden />
+          <span className="locbar-well-text">Go to, run or ask</span>
+          <kbd>{MOD}K</kbd>
+        </button>
         <ForwardsIndicator />
-        {route.name === "cluster" && (
-          <UtilityButton label={`Ask about ${route.cluster}`} title="Ask about this cluster - read-only AI chat" onClick={() => openChat(route.cluster)}>
-            <IconMessageChatbot size={15} stroke={1.5} />
-          </UtilityButton>
-        )}
+        <AskButton cluster={route.name === "cluster" ? route.cluster : null} />
         <UtilityButton label="Activity" title="Activity - recent action outcomes" current={route.name === "activity"} onClick={() => useFleet.getState().openActivity()}>
           <IconHistory size={15} stroke={1.5} />
         </UtilityButton>
@@ -81,75 +70,40 @@ export function TopBar() {
           <IconTerminal2 size={15} stroke={1.5} />
         </UtilityButton>
         <SettingsButton current={route.name === "settings"} />
-        <ThemeToggle />
       </div>
     </header>
   );
 }
 
-// PopoutBar: the mast of a pop-out window (logs). It keeps the main mast's
-// geometry - a draggable strip clear of the traffic lights - but none of its
-// navigation: a pop-out has no places, history or palette, so Back, Recent,
-// the palette and the utilities would be controls that lie.
-export function PopoutBar({ title }: { title: string }) {
+const Sep = () => <span className="locbar-sep" aria-hidden="true">/</span>;
+
+// The protected cue (parity: the "prd lock" chip) is a persistent tag on
+// the station crumb, never clipped; "inferred" when the environment name
+// implied it.
+function ProtectedTag({ c }: { c: ClusterDTO }) {
   return (
-    <header className="mast" style={drag}>
-      <div className="mast-left">
-        <KlyxMark size={18} />
-        <div className="mast-identity" style={noDrag} title={title}>
-          <span className="mast-cluster">{title}</span>
-        </div>
-      </div>
-      <div className="mast-right" style={noDrag}>
-        <ThemeToggle />
-      </div>
-    </header>
+    <span className="locbar-protected" title={c.protectedInferred ? "Protected - inferred from the cluster's environment name; operations need typed confirmation" : "Protected - operations need typed confirmation"}>
+      {c.protectedInferred ? "protected (inferred)" : "protected"}
+    </span>
   );
 }
 
-// AttentionButton (spec §4, health 1c slice 4): the cluster's actionable
-// summary in one line - how many AREAS need attention, never a sum of
-// objects - and the gaps and parts the summary does not cover, counted
-// apart. Never an unqualified all-clear. It opens the same fault-aware
-// navigation tree, not a second ledger.
-function AttentionButton({ cluster }: { cluster: string }) {
-  const m = useAttentionModel(cluster);
-  if (!m) return null;
-  const r = mastReading(m);
-  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  // "unverified", not "gaps": the count is of areas whose reading is not
-  // fully established (UI review 2026-10-13).
-  const quals = [r.gaps > 0 ? `${r.gaps} unverified` : ""].filter(Boolean);
-  const refreshing = m.areas.some((a) => a.lines.some((l) => l.refreshing));
-  let text: string;
-  let color = "var(--color-text-secondary)";
-  if (r.state === "ended") text = `Observation ended at ${clockOf(m.ended)}`;
-  else if (r.state === "checking") text = "Checking…";
-  else if (r.state === "attention") {
-    text = [`${r.tone === "danger" ? "▲ " : ""}${r.areas} area${r.areas === 1 ? "" : "s"} need attention`, ...quals].join(" · ");
-    color = r.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)";
-  } else {
-    text = [`No attention in ${plural(r.read, "area")} read`, ...quals].join(" · ");
-  }
-  const lines = [
-    ...m.areas.flatMap((a) => [
-      `${a.label}${a.controller ? ` (controller ${a.controller.state}${a.controller.reason ? `: ${a.controller.reason}` : ""})` : ""}`,
-      ...a.lines.map((l) => `  ${l.label}: ${lineText(l)} - ${provenance(a, l)}`),
-    ]),
-  ].filter(Boolean);
+// Ask is a conversation bounded to one cluster: off a cluster it stays
+// visible, disabled, with its reason.
+function AskButton({ cluster }: { cluster: string | null }) {
+  const label = cluster ? `Ask about ${cluster}` : "Ask - open a cluster first";
   return (
-    <button type="button" className="mast-attention" style={{ ...noDrag, color }} onClick={() => openNavTree("attention")}
-      aria-label={`Attention: ${text}.${refreshing ? " Refreshing." : ""} Opens the view tree.`}
-      title={`${lines.join("\n")}\n\nOpen the view tree`}>
-      {text}{refreshing && <span className="t-secondary" style={{ fontWeight: 400 }}> · refreshing</span>}
+    <button type="button" className="locbar-ask" aria-label={label} aria-disabled={cluster ? undefined : true}
+      title={cluster ? "Ask about this cluster - read-only AI chat" : "Ask needs an open cluster: a conversation is bounded to one cluster"}
+      onClick={() => { if (cluster) openChat(cluster); }}>
+      <IconMessageChatbot size={14} stroke={1.5} aria-hidden />
+      <span>Ask</span>
     </button>
   );
 }
 
-const clockOf = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "");
-
-// HistoryControls: Back / Forward (⌘[ / ⌘]) and the Recent menu. They move
-// between places; nothing they restore runs an action.
+// HistoryControls: Back / Forward (mod+[ / mod+]) and the Recent menu. They
+// move between places; nothing they restore runs an action.
 function HistoryControls() {
   // Re-render on history, route and fleet membership: the buttons name the
   // place they would actually reach, skipping clusters that left the fleet.
@@ -164,10 +118,10 @@ function HistoryControls() {
   const recent = recentPlaces();
   return (
     <div className="mast-history" style={noDrag}>
-      <button type="button" className="mast-icon" aria-label={prev ? `Back to ${name(prev)}` : "Back"} title={prev ? `Back to ${name(prev)} (⌘[)` : "Back (⌘[)"} disabled={!prev} onClick={() => back()}>
+      <button type="button" className="mast-icon" aria-label={prev ? `Back to ${name(prev)}` : "Back"} title={prev ? `Back to ${name(prev)} (${MOD}[)` : `Back (${MOD}[)`} disabled={!prev} onClick={() => back()}>
         <IconArrowLeft size={15} stroke={1.6} />
       </button>
-      <button type="button" className="mast-icon" aria-label={next ? `Forward to ${name(next)}` : "Forward"} title={next ? `Forward to ${name(next)} (⌘])` : "Forward (⌘])"} disabled={!next} onClick={() => forward()}>
+      <button type="button" className="mast-icon" aria-label={next ? `Forward to ${name(next)}` : "Forward"} title={next ? `Forward to ${name(next)} (${MOD}])` : `Forward (${MOD}])`} disabled={!next} onClick={() => forward()}>
         <IconArrowRight size={15} stroke={1.6} />
       </button>
       <RecentMenu places={recent} name={name} />
@@ -176,33 +130,9 @@ function HistoryControls() {
 }
 
 function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: HistoryEntry) => string }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-    const onDown = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); triggerRef.current?.focus(); return; }
-      if (e.key === "Tab") { setOpen(false); return; }
-      const list = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
-      if (list.length === 0) return;
-      const i = list.indexOf(document.activeElement as HTMLElement);
-      let n = -1;
-      if (e.key === "ArrowDown") n = i < 0 ? 0 : (i + 1) % list.length;
-      else if (e.key === "ArrowUp") n = i < 0 ? list.length - 1 : (i - 1 + list.length) % list.length;
-      else if (e.key === "Home") n = 0;
-      else if (e.key === "End") n = list.length - 1;
-      if (n >= 0) { e.preventDefault(); e.stopPropagation(); list[n].focus(); }
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey, true);
-    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey, true); };
-  }, [open]);
+  const { open, setOpen, close, wrapRef, triggerRef, menuRef } = useMenuPopover();
   return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
+    <div ref={wrapRef} className="locbar-pop">
       <button ref={triggerRef} type="button" className="mast-icon" aria-label="Recent places" title="Recent places" aria-haspopup="menu" aria-expanded={open}
         disabled={places.length === 0} onClick={() => setOpen((o) => !o)}>
         <IconClock size={15} stroke={1.6} />
@@ -211,7 +141,7 @@ function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: Histor
         <div ref={menuRef} role="menu" aria-label="Recent places" className="l-menu" style={{ top: "calc(100% + 6px)", left: 0, width: 340, maxHeight: vh(60), overflow: "auto" }}>
           <div className="l-menu-label">Recent places</div>
           {places.map((e) => (
-            <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { setOpen(false); triggerRef.current?.focus(); go(e); }} title={name(e)}>
+            <button key={entryKey(e)} role="menuitem" className="l-menu-item" onClick={() => { close(); go(e); }} title={name(e)}>
               <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{name(e)}</span>
             </button>
           ))}
@@ -222,8 +152,8 @@ function RecentMenu({ places, name }: { places: HistoryEntry[]; name: (e: Histor
 }
 
 const utilityBtn = (current: boolean): React.CSSProperties => ({
-  display: "inline-flex", alignItems: "center", gap: 4, height: 24, minWidth: 24, padding: "0 6px", borderRadius: 4, border: "none", cursor: "pointer",
-  fontFamily: "var(--font-mono)", fontSize: 11,
+  display: "inline-flex", alignItems: "center", gap: 4, height: 28, minWidth: 28, padding: "0 6px", borderRadius: 4, border: "none", cursor: "pointer",
+  justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 11,
   color: current ? "var(--color-text-primary)" : "var(--color-text-secondary)",
   background: current ? "var(--bench-well-bg, var(--color-background-secondary))" : "transparent",
   boxShadow: current ? "var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary))" : undefined,
@@ -248,7 +178,7 @@ function SettingsButton({ current }: { current: boolean }) {
   );
 }
 
-// ForwardsIndicator is the mast's Port-forwards utility: "⇄" plus the live
+// ForwardsIndicator is the bar's Port-forwards utility: "⇄" plus the live
 // count. Clicking it opens a glanceable dropdown - one compact line per
 // forward, any line jumps to the Forwards view where the real management
 // lives - and "stop all" stays here as the emergency brake. Broken rows render
@@ -282,7 +212,7 @@ function ForwardsIndicator() {
   const anyBroken = forwards.some((f) => f.status === "broken");
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={ref} className="locbar-pop">
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={`Port-forwards, ${forwards.length} active${anyBroken ? ", some broken" : ""}`}
@@ -304,7 +234,7 @@ function ForwardsIndicator() {
         <div
           data-testid="forwards-panel"
           style={{
-            position: "absolute", top: 30, right: 0, zIndex: 50,
+            position: "absolute", top: 34, right: 0, zIndex: 50,
             width: 280, maxHeight: 320, overflowY: "auto",
             background: "var(--color-background-primary)",
             border: "0.5px solid var(--color-border-tertiary)",

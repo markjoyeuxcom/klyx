@@ -10,7 +10,9 @@ declare const process: { env: Record<string, string | undefined> };
 // The 1c slice 6 coverage-parity gate, the frontend stage (spec
 // docs/superpowers/specs/2026-10-12-klyx-health-1c-slice6-parity.md §3):
 // each case the Go stage captured on the parity cluster, loaded into the
-// real health store, through the model and the five mounted surfaces.
+// real health store, through the model and the mounted surfaces (the fleet
+// indicator replaced the mast's Attention button and the spine in The Line
+// slice 4a).
 // Skipped unless KLYX_PARITY_OUT names the Go stage's output.
 //
 //   KLYX_PARITY_OUT=<dir> npx vitest run src/nav/parityGate.test.tsx
@@ -38,12 +40,12 @@ vi.mock("../chrome/CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { useHealth, resetHealthStore, applySummary, applyRows, addSub, openStarted, openSucceeded, findPart, type HealthSummary, type HealthPart, type RowsDTO } from "../store/health";
 import { TASKS, clusterAttention, lineText, mastReading, type Area, type ClusterAttention, type Line } from "./clusterAttention";
-import { spineLamp, healthReading, connectionText } from "./fleetAttention";
+import { spineLamp, connectionText } from "./fleetAttention";
 import { NAV_GROUPS } from "./registry";
 import { clusterDiagnosticScore, ClusterCard } from "../fleet/ClusterCard";
-import { TopBar } from "../chrome/TopBar";
 import { NavBand } from "../chrome/NavBand";
-import { FleetSpine } from "../chrome/FleetSpine";
+import { FleetIndicator } from "../chrome/FleetIndicator";
+import { fleetAxes, fleetAxesLabel } from "./fleetAxes";
 import { Overview } from "../cluster/Overview";
 
 type Roles = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
@@ -219,7 +221,7 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
     }
   });
 
-  it("the mast, the tree, the spine, the card and Overview render each case - and call no list endpoint", () => {
+  it("the fleet indicator, the tree, the card and Overview render each case - and call no list endpoint", () => {
     for (const c of captures()) {
       load(c, true);
       const m = model(c);
@@ -228,15 +230,28 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       const gapLines = m.areas.flatMap((a) => a.lines.filter((l) => l.gaps.length > 0 || l.state === "unreadable").map((l) => ({ a, l })));
       const ctl = m.areas.filter((a) => a.controller?.state === "not ready");
 
-      // the mast
-      const mast = render(<TopBar />);
-      const btn = mast.getByRole("button", { name: /^Attention/ });
-      const label = btn.getAttribute("aria-label") ?? "";
-      if (r.state === "attention") expect(label, c.case).toMatch(new RegExp(`^Attention: (▲ )?${r.areas} areas? need attention`));
-      else expect(label, c.case).toMatch(new RegExp(`^Attention: No attention in ${r.read} areas? read${r.gaps > 0 ? ` · ${r.gaps} unverified` : "\\."}`));
-      for (const { l } of [...litLines, ...gapLines]) expect(btn.getAttribute("title"), c.case).toContain(`${l.label}: ${lineText(l)}`);
-      for (const a of ctl) expect(btn.getAttribute("title"), c.case).toContain(`${a.label} (controller not ready`);
-      mast.unmount();
+      // the fleet indicator: the case's cluster sits on the axes its model
+      // and connection give it, each listing with its reason (The Line
+      // slice 4 §3) - B alone on none
+      const f = fleetAxes([c.cluster], { [c.cluster.name]: m });
+      const ind = render(<FleetIndicator />);
+      const chip = ind.getByRole("button", { name: /^Fleet:/ });
+      expect(chip.getAttribute("aria-label"), c.case).toBe(fleetAxesLabel(f));
+      const on = Object.entries(f.axes).filter(([, e]) => e.length > 0).map(([a]) => a);
+      if (c.case === "B") expect(on, c.case).toEqual([]);
+      if (r.state === "attention") expect(on, c.case).toContain(r.tone === "danger" ? "fault" : "warning");
+      else expect(on.filter((a) => a === "fault" || a === "warning"), c.case).toEqual([]);
+      if (r.gaps > 0) expect(on, c.case).toContain("unverified");
+      // both axes: the connection is its own fact
+      expect(connectionText(c.cluster).startsWith(c.expect.state.toLowerCase()), c.case).toBe(true);
+      expect(on.includes("connection"), c.case).toBe(c.cluster.state === "Stale" || c.cluster.state === "Degraded");
+      act(() => { chip.click(); });
+      const listed = ind.queryAllByRole("menuitem").map((e) => e.textContent ?? "");
+      for (const [, entries] of Object.entries(f.axes)) for (const e of entries) expect(listed.some((t) => t.includes(e.reason)), `${c.case} ${e.reason}`).toBe(true);
+      // a lit reason is one of the model's lit lines or a not-ready controller
+      const litReasons = [...litLines.map(({ a, l }) => `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}: ${lineText(l)}`), ...ctl.map((a) => `${a.label}: controller not ready`)];
+      for (const e of [...f.axes.fault, ...f.axes.warning]) expect(litReasons.some((x) => e.reason.startsWith(x)), `${c.case} ${e.reason}`).toBe(true);
+      ind.unmount();
 
       // the tree: each lit group shows its count, a controller-only light and
       // a gap their words
@@ -254,16 +269,6 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       for (const a of ctl) expect(group(a.groupId), `${c.case} ${a.id}`).toContain("controller not ready");
       for (const { a, l } of gapLines) expect(group(a.groupId), `${c.case} ${a.id}`).toContain(l.state === "unreadable" ? "unreadable" : l.gaps.some((g) => g.includes("last good")) ? "last good" : "unverified");
       tree.unmount();
-
-      // the spine: the lamp's title is the model's, both axes
-      useFleet.setState({ route: { name: "fleet" } });
-      const spine = render(<FleetSpine />);
-      const want = spineLamp(c.cluster, m).title;
-      expect(Array.from(spine.container.querySelectorAll("[title]")).some((e) => e.getAttribute("title") === want), c.case).toBe(true);
-      expect(want.split("\n")[0], c.case).toBe(`${c.cluster.name} - ${connectionText(c.cluster)}`); // both axes: the connection first
-      expect(connectionText(c.cluster).startsWith(c.expect.state.toLowerCase()), c.case).toBe(true);
-      expect(want).toContain(healthReading(m)[0]);
-      spine.unmount();
 
       // the card
       const card = render(<ClusterCard c={c.cluster} />);

@@ -3,6 +3,7 @@ import { getPaletteOpen } from "./CommandPalette";
 import { vh, vw } from "../app/zoom";
 import { trapTab } from "./modalFocus";
 import { useRestoreFocus } from "./useRestoreFocus";
+import { MOD } from "./modKey";
 
 // ShortcutsOverlay - the "?" cheatsheet. Every shortcut in the app was
 // previously undiscoverable outside the palette's footer line; this overlay
@@ -18,15 +19,13 @@ function inEditable(t: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable === true;
 }
 
-const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform ?? "");
-const MOD = isMac ? "⌘" : "Ctrl";
 
 const GROUPS: { title: string; rows: [string, string][] }[] = [
   {
     title: "Global",
     rows: [
       [`${MOD} K`, "command palette - jump anywhere, run actions"],
-      [`${MOD} 1…9`, "switch to the nth cluster (fleet spine order)"],
+      [`${MOD} 1…9`, "switch to the nth cluster (station order)"],
       [`${MOD} [  ·  ${MOD} ]`, "back / forward between places (never re-runs an action)"],
       [`${MOD} =  ·  ${MOD} -  ·  ${MOD} 0`, "zoom in / out / actual size (80-200%)"],
       ["?", "this cheatsheet"],

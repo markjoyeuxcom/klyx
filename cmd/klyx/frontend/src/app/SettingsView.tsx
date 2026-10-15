@@ -7,12 +7,13 @@ import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/c
 import type { FleetConfigDTO } from "../bridge/configsvc";
 import { btn, ellipsis } from "../chrome/primitives";
 import { AISettingsPanel } from "./AISettingsPanel";
+import { AppearancePanel } from "./AppearancePanel";
 
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
-// one-click "add to fleet". Adds append to the file on disk AND join the
-// running fleet immediately - the new cluster appears in the spine within a
-// push-loop tick, no restart needed.
+// one-click "add to fleet", and the app's appearance. Adds append to the file
+// on disk AND join the running fleet immediately - the new cluster appears in
+// the station switcher within a push-loop tick, no restart needed.
 
 export function SettingsView() {
   const [cfg, setCfg] = useState<FleetConfigDTO | null>(null);
@@ -40,7 +41,7 @@ export function SettingsView() {
     const r = await addClusters(selected);
     setBusy(false);
     if (r.ok) {
-      setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml - connecting now, watch the fleet spine.` });
+      setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml - connecting now.` });
       setSelected([]);
       void load();
       void refreshNewContextCount();
@@ -73,6 +74,10 @@ export function SettingsView() {
   // Step 7d: an app route on the workspace template.
   return frame("ready", null, (
     <div className="lens-canvas" style={{ fontSize: 12, maxWidth: 900 }}>
+
+      <Section title="Appearance">
+        <AppearancePanel />
+      </Section>
 
       <Section title="Fleet configuration">
         <PathRow label="file" path={cfg.path} />

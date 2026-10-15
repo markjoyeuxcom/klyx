@@ -1,0 +1,46 @@
+import { IconSelector } from "@tabler/icons-react";
+import { useFleet, type ClusterDTO } from "../store/fleet";
+import { AXIS_TITLE } from "../nav/fleetAxes";
+import { stationOrder } from "../nav/stationOrder";
+import { vh } from "../app/zoom";
+import { AxisMark, StationName, firstAxis, useFleetAxes } from "./FleetIndicator";
+import { useMenuPopover } from "./useMenuPopover";
+import { MOD } from "./modKey";
+
+// The station crumb and its switcher (The Line slice 4 §2.1): the fleet
+// indicator lists only affected clusters, so the crumb keeps the spine's
+// one-click reach to every cluster - in station order, each with its
+// indicator mark, mod+1..9 hinted beside the first nine.
+export function StationSwitcher({ current }: { current: ClusterDTO }) {
+  const clusters = useFleet((s) => s.clusters);
+  const openCluster = useFleet((s) => s.openCluster);
+  const f = useFleetAxes();
+  const { open, setOpen, close, wrapRef, triggerRef, menuRef } = useMenuPopover();
+  const order = stationOrder(clusters);
+  return (
+    <div ref={wrapRef} className="locbar-pop">
+      <button ref={triggerRef} type="button" className="locbar-crumb locbar-station" aria-haspopup="menu" aria-expanded={open}
+        aria-label={`Station ${current.name}. Switch cluster`} title={`${current.name} - switch cluster`} onClick={() => setOpen((o) => !o)}>
+        <StationName c={current} />
+        <IconSelector aria-hidden size={12} stroke={1.6} style={{ flexShrink: 0, color: "var(--color-text-tertiary)" }} />
+      </button>
+      {open && (
+        <div ref={menuRef} role="menu" aria-label="Stations" className="l-menu station-menu" style={{ maxHeight: vh(70) }}>
+          {order.map((c, i) => {
+            const axis = firstAxis(f, c.name);
+            const here = c.name === current.name;
+            return (
+              <button key={c.name} type="button" role="menuitem" className="l-menu-item station-row" aria-current={here ? "page" : undefined}
+                aria-label={`${c.name}${axis ? `, ${AXIS_TITLE[axis].toLowerCase()}` : ""}${here ? ", current" : ""}`}
+                onClick={() => { close(false); if (!here) openCluster(c.name); }}>
+                <span className="station-row-mark">{axis && <AxisMark axis={axis} />}</span>
+                <StationName c={c} />
+                {i < 9 && <kbd className="station-row-key" aria-hidden>{MOD}{i + 1}</kbd>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

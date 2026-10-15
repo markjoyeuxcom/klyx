@@ -27,11 +27,11 @@ vi.mock("../chrome/CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { useFleet, type ClusterDTO } from "../store/fleet";
 import { applySummary, resetHealthStore } from "../store/health";
 import { core, summary } from "../test/healthFixtures";
-import { TopBar } from "../chrome/TopBar";
+import { LocationBar } from "../chrome/LocationBar";
 import { NavBand } from "../chrome/NavBand";
 import { Overview } from "../cluster/Overview";
 import { FleetView } from "../fleet/FleetView";
-import { FleetSpine } from "../chrome/FleetSpine";
+import { FleetIndicator } from "../chrome/FleetIndicator";
 
 const c = { name: "dev", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1", gitopsTier: "Absent", gitopsReason: "",
   networkTier: "Absent", networkReason: "", env: "", region: "", provider: "", group: "", ageSeconds: 0 } as ClusterDTO;
@@ -43,19 +43,19 @@ beforeEach(() => {
 });
 
 describe("no attention fan-out on cluster entry", () => {
-  it("the mast, the tree and Overview read the summary and call no list endpoint", async () => {
+  it("the location bar, the tree and Overview read the summary and call no list endpoint", async () => {
     applySummary(summary(core(), {}, "dev"));
-    render(<><TopBar /><NavBand /><Overview c={c} /></>);
+    render(<><LocationBar /><NavBand /><Overview c={c} /></>);
     await new Promise((r) => setTimeout(r, 20));
     expect(calls).toEqual([]);
   });
 });
 
 describe("no health fan-out on the fleet board (slice 5)", () => {
-  it("the board, its cards and the spine read summaries and call no list endpoint", async () => {
+  it("the board, its cards and the fleet indicator read summaries and call no list endpoint", async () => {
     useFleet.setState({ clusters: [c, { ...c, name: "prd" }], route: { name: "fleet" }, mesh: null });
     applySummary(summary(core(), {}, "dev"));
-    render(<><FleetSpine /><FleetView /></>);
+    render(<><FleetIndicator /><FleetView /></>);
     await new Promise((r) => setTimeout(r, 20));
     expect(calls).toEqual([]);
   });

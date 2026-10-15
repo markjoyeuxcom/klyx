@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { useFleet } from "../store/fleet";
 import { NavBand } from "../chrome/NavBand";
 import { ShortcutsOverlay } from "../chrome/ShortcutsOverlay";
-import { FleetSpine, spineOrder } from "../chrome/FleetSpine";
-import { TopBar } from "../chrome/TopBar";
+import { stationOrder } from "../nav/stationOrder";
+import { LocationBar } from "../chrome/LocationBar";
 import { FleetView } from "../fleet/FleetView";
 import { FleetPromotion } from "../fleet/FleetPromotion";
 import { FleetExpiry } from "../fleet/FleetExpiry";
@@ -18,10 +18,9 @@ import { back, forward } from "../nav/history";
 import { handleZoomKey } from "./zoom";
 import { startSummaries } from "../bridge/healthRows";
 
-// AppShell owns the frame (redesign spec §1): an 8px inset, the 36px mast,
-// then the fleet spine beside the 32px navigation band and the workspace,
-// separated by 4px band gaps. The geometry lives in layout.css tokens so the
-// first table row of a standard lens lands at y=168.
+// AppShell owns the frame (The Line slice 4): an 8px inset, the location
+// bar, then the navigation band and the workspace, separated by 4px band
+// gaps. The geometry lives in layout.css tokens.
 // Shell shortcuts yield to whatever owns the keyboard: a handler that already
 // took the event, a text field or editor (ctrl+[ is an editing key there), the
 // palette, and any open dialog - a confirmation must never lose its cluster
@@ -51,8 +50,8 @@ export function handleShellKey(e: KeyboardEvent): void {
   e.preventDefault();
   // mod+[ / mod+] move through history - places only, never actions.
   if (history) { if (e.key === "[") back(); else forward(); return; }
-  // mod+1..9 hops to the nth cluster in the spine's visual order.
-  const c = spineOrder(useFleet.getState().clusters)[n - 1];
+  // mod+1..9 hops to the nth cluster in station order.
+  const c = stationOrder(useFleet.getState().clusters)[n - 1];
   if (c) useFleet.getState().openCluster(c.name);
 }
 
@@ -68,7 +67,8 @@ export function handleShellMouse(e: MouseEvent): void {
 export function AppShell() {
   const route = useFleet((s) => s.route);
   // Every cluster's summary from app start (health 1c slice 5 §1): the
-  // spine, the fleet board and the open cluster read them; idempotent.
+  // fleet indicator, the fleet board and the open cluster read them;
+  // idempotent.
   useEffect(() => { startSummaries(); }, []);
 
   useEffect(() => {
@@ -81,9 +81,8 @@ export function AppShell() {
     <div className="shell">
       <CommandPalette />
       <ShortcutsOverlay />
-      <TopBar />
+      <LocationBar />
       <div className="shell-body">
-        <FleetSpine />
         <div className="shell-main">
           <NavBand />
           <main className="shell-workspace" aria-label="Workspace">

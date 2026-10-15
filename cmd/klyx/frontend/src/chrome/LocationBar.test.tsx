@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import { TopBar } from "./TopBar";
+import { LocationBar } from "./LocationBar";
 import { useFleet } from "../store/fleet";
-import { applySummary, resetHealthStore } from "../store/health";
-import { core, dep, kind, native, replace, summary, task, verdict } from "../test/healthFixtures";
 import type { ForwardDTO } from "../store/fleet";
 
 // Mock the forwards bridge so no Wails runtime is needed; assert dispatches.
@@ -13,12 +11,11 @@ vi.mock("../bridge/forwards", () => ({
 }));
 import { stopAllForwards } from "../bridge/forwards";
 
-// ThemeToggle touches matchMedia; stub it.
-vi.mock("./ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("./CommandPalette", () => ({ openCommandPalette: vi.fn() }));
 import { openCommandPalette } from "./CommandPalette";
 vi.mock("../bridge/configsvc", () => ({ openTerminal: vi.fn(async () => {}) }));
 vi.mock("../bridge/healthRows", () => ({ startSummaries: vi.fn() }));
+vi.mock("../ai/chatStore", () => ({ openChat: vi.fn() }));
 import { openTerminal } from "../bridge/configsvc";
 
 const active: ForwardDTO = {
@@ -34,7 +31,7 @@ const active: ForwardDTO = {
 };
 const broken: ForwardDTO = { ...active, id: "c/team/web#2", targetName: "web", status: "broken" };
 
-describe("TopBar forwards indicator", () => {
+describe("location bar forwards utility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useFleet.getState().setForwards([]);
@@ -42,28 +39,28 @@ describe("TopBar forwards indicator", () => {
 
   it("with no forwards there is no live chip - the Port-forwards utility opens the view", () => {
     useFleet.setState({ route: { name: "fleet" } });
-    const { queryByTestId, getByRole } = render(<TopBar />);
+    const { queryByTestId, getByRole } = render(<LocationBar />);
     expect(queryByTestId("forwards-chip")).toBeNull();
     fireEvent.click(getByRole("button", { name: "Port-forwards" }));
     expect(useFleet.getState().route).toEqual({ name: "forwards" });
   });
 
-  it("opens the command palette when the command bar is clicked", () => {
-    const { getByTestId } = render(<TopBar />);
+  it("opens the command palette from the well", () => {
+    const { getByTestId } = render(<LocationBar />);
     fireEvent.click(getByTestId("command-bar"));
     expect(openCommandPalette).toHaveBeenCalled();
   });
 
   it("renders the chip with the forward count", () => {
     useFleet.getState().setForwards([active, broken]);
-    const { getByTestId } = render(<TopBar />);
+    const { getByTestId } = render(<LocationBar />);
     const chip = getByTestId("forwards-chip");
     expect(chip.textContent).toContain("2");
   });
 
   it("clicking a row navigates to the forwards section and closes the panel", () => {
     useFleet.getState().setForwards([active]);
-    const { getByTestId, queryByTestId } = render(<TopBar />);
+    const { getByTestId, queryByTestId } = render(<LocationBar />);
     fireEvent.click(getByTestId("forwards-chip"));
     fireEvent.click(getByTestId(`forward-row-${active.id}`));
     expect(useFleet.getState().route).toEqual({ name: "forwards" });
@@ -72,7 +69,7 @@ describe("TopBar forwards indicator", () => {
 
   it("dispatches stop all", () => {
     useFleet.getState().setForwards([active, broken]);
-    const { getByTestId } = render(<TopBar />);
+    const { getByTestId } = render(<LocationBar />);
     fireEvent.click(getByTestId("forwards-chip"));
     fireEvent.click(getByTestId("forwards-stop-all"));
     expect(stopAllForwards).toHaveBeenCalled();
@@ -80,7 +77,7 @@ describe("TopBar forwards indicator", () => {
 
   it("styles a broken row with the warning colour", () => {
     useFleet.getState().setForwards([broken]);
-    const { getByTestId } = render(<TopBar />);
+    const { getByTestId } = render(<LocationBar />);
     fireEvent.click(getByTestId("forwards-chip"));
     const row = getByTestId(`forward-row-${broken.id}`);
     // Broken rows render warning-coloured (presence assertion on the token).
@@ -90,21 +87,21 @@ describe("TopBar forwards indicator", () => {
 
   it("has no per-row stop buttons - management lives in the Forwards section", () => {
     useFleet.getState().setForwards([active, broken]);
-    const { getByTestId, queryByTestId } = render(<TopBar />);
+    const { getByTestId, queryByTestId } = render(<LocationBar />);
     fireEvent.click(getByTestId("forwards-chip"));
     expect(queryByTestId(`forward-stop-${active.id}`)).toBeNull();
     expect(queryByTestId("forwards-view-all")).toBeNull();
   });
 });
 
-describe("TopBar app utilities (redesign step 7a)", () => {
+describe("location bar utilities", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useFleet.setState({ route: { name: "fleet" }, forwards: [], newContexts: 0 });
   });
 
-  it("Activity and Settings are mast utilities with accessible names; the current one is marked", () => {
-    const { getByRole } = render(<TopBar />);
+  it("Activity and Settings are utilities with accessible names; the current one is marked", () => {
+    const { getByRole } = render(<LocationBar />);
     fireEvent.click(getByRole("button", { name: "Activity" }));
     expect(useFleet.getState().route).toEqual({ name: "activity" });
     fireEvent.click(getByRole("button", { name: "Settings" }));
@@ -112,8 +109,23 @@ describe("TopBar app utilities (redesign step 7a)", () => {
     expect(getByRole("button", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
   });
 
+  it("Ask opens the chat on the open cluster; off a cluster it is disabled with its reason", async () => {
+    const { openChat } = await import("../ai/chatStore");
+    const r1 = render(<LocationBar />);
+    const off = r1.getByRole("button", { name: "Ask - open a cluster first" });
+    expect(off.getAttribute("aria-disabled")).toBe("true");
+    expect(off.getAttribute("title")).toMatch(/bounded to one cluster/);
+    fireEvent.click(off);
+    expect(openChat).not.toHaveBeenCalled();
+    r1.unmount();
+    useFleet.setState({ clusters: [{ name: "dev", state: "Synced" } as never], route: { name: "cluster", cluster: "dev", section: "overview" } });
+    const r2 = render(<LocationBar />);
+    fireEvent.click(r2.getByRole("button", { name: "Ask about dev" }));
+    expect(openChat).toHaveBeenCalledWith("dev");
+  });
+
   it("Terminal launches the escape hatch without changing route", () => {
-    const { getByRole } = render(<TopBar />);
+    const { getByRole } = render(<LocationBar />);
     fireEvent.click(getByRole("button", { name: "Terminal" }));
     expect(openTerminal).toHaveBeenCalledTimes(1);
     expect(useFleet.getState().route).toEqual({ name: "fleet" });
@@ -121,25 +133,61 @@ describe("TopBar app utilities (redesign step 7a)", () => {
 
   it("Settings carries the new-context count in its name, not only in a tooltip", () => {
     useFleet.setState({ newContexts: 2 });
-    const { getByRole } = render(<TopBar />);
+    const { getByRole } = render(<LocationBar />);
     expect(getByRole("button", { name: "Settings, 2 new kubeconfig contexts" }).textContent).toContain("2");
   });
 });
 
-describe("TopBar mast identity and history (redesign step 7b)", () => {
+describe("location bar crumbs and history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useFleet.setState({ forwards: [], newContexts: 0, clusters: [{ name: "aks-prd-weu-platform-01", state: "Synced", protected: true, protectedInferred: false } as never] });
   });
 
-  it("names the cluster and the place in it; the protected cue is present", () => {
+  it("crumbs read Fleet / Station / Lens; the protected tag sits on the station", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "aks-prd-weu-platform-01", section: "gitops", fluxView: "sources" } });
-    const { container, getByText } = render(<TopBar />);
-    expect(container.querySelector(".mast-cluster")?.textContent).toBe("aks-prd-weu-platform-01");
-    expect(container.querySelector(".mast-place")?.textContent).toBe("Sources");
-    expect(getByText("prd lock")).toBeTruthy();
-    // No global green freshness readout in the mast.
+    const { getByRole, getByText, container } = render(<LocationBar />);
+    const nav = getByRole("navigation", { name: "Location" });
+    expect(nav.textContent).toBe("Fleet/aks-prd-weu-platform-01protected/Sources");
+    expect(getByText("Sources").getAttribute("aria-current")).toBe("page");
+    expect(getByText("protected").getAttribute("title")).toMatch(/^Protected - operations need typed confirmation/);
+    // No global green freshness readout in the bar.
     expect(container.textContent).not.toMatch(/watching/i);
+  });
+
+  it("an inferred protection says so", () => {
+    useFleet.setState({ clusters: [{ name: "aks-prd-weu-platform-01", state: "Synced", protected: true, protectedInferred: true } as never],
+      route: { name: "cluster", cluster: "aks-prd-weu-platform-01", section: "overview" } });
+    const { getByText } = render(<LocationBar />);
+    expect(getByText("protected (inferred)")).toBeTruthy();
+  });
+
+  it("the station crumb names env · region beside the cluster", () => {
+    useFleet.setState({ clusters: [{ name: "aks-prd-neu", state: "Synced", env: "prd", region: "northeurope" } as never],
+      route: { name: "cluster", cluster: "aks-prd-neu", section: "overview" } });
+    const { getByRole } = render(<LocationBar />);
+    const station = getByRole("button", { name: "Station aks-prd-neu. Switch cluster" });
+    expect(station.textContent).toBe("prd · northeuropeaks-prd-neu");
+  });
+
+  it("on the fleet board the Fleet crumb is the current place; elsewhere it leads back", () => {
+    useFleet.setState({ route: { name: "fleet" } });
+    const r1 = render(<LocationBar />);
+    expect(r1.getByRole("button", { name: "Fleet" }).getAttribute("aria-current")).toBe("page");
+    expect(r1.getByRole("navigation", { name: "Location" }).textContent).toBe("Fleet");
+    r1.unmount();
+    useFleet.setState({ route: { name: "settings" } });
+    const r2 = render(<LocationBar />);
+    expect(r2.getByRole("navigation", { name: "Location" }).textContent).toBe("Fleet/Settings");
+    fireEvent.click(r2.getByRole("button", { name: "Fleet" }));
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+  });
+
+  it("the mark leads to the fleet board", () => {
+    useFleet.setState({ route: { name: "activity" } });
+    const { getByRole } = render(<LocationBar />);
+    fireEvent.click(getByRole("button", { name: "Klyx fleet board" }));
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
   });
 
   it("Back is disabled with no history and names its target when there is one", async () => {
@@ -147,73 +195,13 @@ describe("TopBar mast identity and history (redesign step 7b)", () => {
     _resetHistoryForTest();
     useFleet.setState({ route: { name: "fleet" } });
     const off = initHistory();
-    const { getByRole, rerender } = render(<TopBar />);
+    const { getByRole, rerender } = render(<LocationBar />);
     expect((getByRole("button", { name: "Back" }) as HTMLButtonElement).disabled).toBe(true);
     useFleet.getState().openCluster("aks-prd-weu-platform-01");
     await new Promise<void>((r) => queueMicrotask(r));
-    rerender(<TopBar />);
+    rerender(<LocationBar />);
     expect((getByRole("button", { name: "Back to Fleet board" }) as HTMLButtonElement).disabled).toBe(false);
     off();
   });
 });
 
-describe("TopBar Attention button (health 1c slice 4)", () => {
-  const dev = (over: Record<string, unknown> = {}) => ({ name: "dev", state: "Synced", ...over } as never);
-  const sum = (tasks: Parameters<typeof summary>[0], over: Parameters<typeof summary>[1] = {}) => summary(tasks, over, "dev");
-  beforeEach(() => {
-    resetHealthStore();
-    useFleet.setState({ route: { name: "cluster", cluster: "dev", section: "pods" }, clusters: [dev()], forwards: [] });
-  });
-  const button = (r: ReturnType<typeof render>) => r.getByRole("button", { name: /^Attention/ });
-
-  it("names areas needing attention (not an object sum) and opens the view tree", () => {
-    applySummary(sum(replace(replace(core(), task("workloads", [verdict("workloads", { fault: 3, ok: 2 }, [kind("deployments")])])),
-      task("helm", [native("releases", { fault: 1, ok: 1 }, 1, "failed or pending", [kind("helm")])]))));
-    const opened = vi.fn();
-    window.addEventListener("klyx:open-nav-tree", opened);
-    const r = render(<TopBar />);
-    const btn = button(r);
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 2 areas need attention\./);
-    fireEvent.click(btn);
-    expect(opened).toHaveBeenCalledTimes(1);
-    window.removeEventListener("klyx:open-nav-tree", opened);
-  });
-
-  it("checking before anything answers; an unreadable area is a gap and not read, never quiet", () => {
-    const r1 = render(<TopBar />);
-    expect(button(r1).getAttribute("aria-label")).toMatch(/^Attention: Checking…/);
-    r1.unmount();
-    applySummary(sum(replace(core(), task("pods", [verdict("pods", {}, [kind("pods", { coverage: "unreadable", class: "forbidden" })], { coverage: "unreadable" })]))));
-    const r2 = render(<TopBar />);
-    expect(button(r2).getAttribute("aria-label")).toMatch(/^Attention: No attention in 4 areas read · 1 unverified\./);
-  });
-
-  it("no Attention button outside a cluster", () => {
-    useFleet.setState({ route: { name: "fleet" } });
-    const { queryByRole } = render(<TopBar />);
-    expect(queryByRole("button", { name: /^Attention/ })).toBeNull();
-  });
-
-  it("never an unqualified all-clear: installed domains the summary does not carry are checking gaps (slice 6 §4)", () => {
-    useFleet.setState({ clusters: [dev({ certManagerPresent: true, gatewayAPIVersion: "v1.2" })] });
-    applySummary(sum(core()));
-    const btn = button(render(<TopBar />));
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: No attention in 5 areas read · 2 unverified\./);
-    expect(btn.getAttribute("title")).toMatch(/Certificates\n {2}Certificates: checking… - not read yet/);
-    expect(btn.getAttribute("title")).toMatch(/Gateways\n {2}Gateways: checking… - not read yet/);
-    expect(btn.getAttribute("title")).not.toContain("not covered");
-  });
-
-  it("a fault with a gap is lit AND a gap; the tooltip names each line's provenance", () => {
-    applySummary(sum(replace(core(), task("pods", [verdict("pods", { fault: 1, ok: 4 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])]))));
-    const btn = button(render(<TopBar />));
-    expect(btn.getAttribute("aria-label")).toMatch(/^Attention: ▲ 1 area need attention · 1 unverified\./);
-    expect(btn.getAttribute("title")).toMatch(/Pods: 1 need attention · ReplicaSets could not be read - a dependency - cluster summary as of/);
-  });
-
-  it("after a Final the observation has ended: no counts, nothing quiet", () => {
-    applySummary(sum(core()));
-    applySummary(sum([], { seq: 2, final: true, evaluatedAt: "2026-10-12T12:05:00Z" }));
-    expect(button(render(<TopBar />)).getAttribute("aria-label")).toMatch(/^Attention: Observation ended at /);
-  });
-});

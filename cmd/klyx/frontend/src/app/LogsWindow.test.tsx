@@ -4,7 +4,7 @@ import { getZoom, zoomReset } from "./zoom";
 import { LogsWindow } from "./LogsWindow";
 import { ThemeProvider } from "../theme/ThemeProvider";
 
-// LogsWindow now hosts the shared TopBar (ThemeToggle needs the provider),
+// LogsWindow hosts the PopoutBar (ThemeToggle needs the provider),
 // matching the production boot path where ThemeProvider wraps both branches.
 const renderWindow = (params: URLSearchParams) =>
   render(<ThemeProvider><LogsWindow params={params} /></ThemeProvider>);

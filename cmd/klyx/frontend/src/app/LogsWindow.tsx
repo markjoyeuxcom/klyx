@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { LogsPane } from "../cluster/LogsPane";
-import { PopoutBar } from "../chrome/TopBar";
+import { PopoutBar } from "../chrome/PopoutBar";
 import { handleZoomKey } from "./zoom";
 
 // LogsWindow is the root rendered in a pop-out log window (URL flag logswin=1).

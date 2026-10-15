@@ -217,10 +217,10 @@
 .navtree-foot { padding: 6px 10px; border-top: 1px solid var(--color-border-tertiary); }
 
 /* ---- shell geometry (redesign spec §1, step 7b) ---- */
-:root { --shell-inset: 8px; --mast-height: 36px; --shell-band-gap: 4px; --spine-width: 44px; --spine-expanded-width: 160px; --spine-workspace-gap: 8px; }
+:root { --shell-inset: 8px; --mast-height: 40px; --shell-band-gap: 4px; }
 .shell { display: flex; flex-direction: column; height: 100%; padding: var(--shell-inset); gap: var(--shell-band-gap); box-sizing: border-box;
   background: var(--color-background-tertiary); min-width: 0; }
-.shell-body { flex: 1; display: flex; min-height: 0; min-width: 0; gap: var(--spine-workspace-gap); }
+.shell-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
 .shell-main { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: var(--shell-band-gap); }
 .shell-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
   background: var(--color-background-primary); border-radius: 6px; box-shadow: var(--bench-module-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
@@ -248,6 +248,80 @@
   background: var(--bench-well-bg, var(--color-background-secondary)); box-shadow: var(--bench-well-shadow, inset 0 0 0 1px var(--color-border-tertiary)); }
 .mast-palette-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mast-palette kbd { font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary); flex-shrink: 0; }
+
+/* ---- The Line location bar (slice 4 §2) ----
+   Crumbs outrank utilities: the well's words give up width first, then the
+   lens crumb, then the station; the protected tag never shrinks. */
+.locbar { gap: 6px; }
+.locbar-left { flex: 1 1 auto; min-width: 0; margin-right: 10px; display: flex; align-items: center; gap: 10px; }
+.locbar-mark { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0;
+  border: 0; padding: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.locbar-crumbs { min-width: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; } /* no overflow clip: the switcher's menu hangs below */
+.locbar-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent;
+  font: 600 13px/18px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-primary); }
+button.locbar-crumb { cursor: pointer; }
+button.locbar-crumb:hover { background: var(--color-background-secondary); }
+.locbar-fleet { flex-shrink: 0; color: var(--color-text-tertiary); }
+.locbar-fleet[aria-current="page"] { color: var(--color-text-primary); }
+.locbar-lens { flex-shrink: 1; min-width: 7ch; }
+.locbar-sep { flex-shrink: 0; color: var(--line-ink-4, var(--color-text-tertiary)); }
+.locbar-station { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 1; }
+.locbar-crumbs > .locbar-pop { flex-shrink: 4; } /* the station truncates before the lens */
+.locbar-station .station-name { overflow: hidden; }
+.locbar-station .station-place { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.locbar-station .station-cluster { flex-shrink: 3; }
+.locbar-protected { flex-shrink: 0; padding: 2px 7px; border-radius: 3px; white-space: nowrap; font: 600 10px/14px var(--font-mono);
+  color: var(--color-text-warning); box-shadow: inset 0 0 0 1px var(--color-border-warning); }
+/* The right group's items are the bar's own flex items: the well shrinks first
+   (weight 1000), the crumbs next, and every utility stays on screen. */
+.locbar-right { display: contents; }
+.locbar-right > * { flex-shrink: 0; }
+.locbar-pop { position: relative; display: inline-flex; min-width: 0; }
+.locbar-right > .locbar-well { flex: 0 1000 300px; }
+.locbar-well { min-width: 32px; height: 28px; overflow: hidden; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border: 0; border-radius: 6px; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary);
+  background: var(--line-sunk, var(--bench-well-bg, var(--color-background-secondary))); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
+.locbar-well-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.locbar-well kbd { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary);
+  box-shadow: inset 0 0 0 1px var(--color-border-secondary); }
+.locbar-ask { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; box-shadow: inset 0 0 0 1px var(--color-border-secondary); font: 500 12px/16px var(--font-sans); color: var(--color-text-primary); }
+.locbar-ask[aria-disabled="true"] { color: var(--color-text-tertiary); }
+
+/* station names: "ENV · REGION" in the label face, the cluster in mono */
+.station-name { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
+.station-place { white-space: nowrap; font: 600 13px/18px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text-primary); }
+.station-cluster { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0;
+  font: 400 12px/16px var(--font-mono); color: var(--color-text-tertiary); }
+.station-cluster[data-bare] { color: var(--color-text-primary); }
+
+/* the fleet indicator (slice 4 §3.2) */
+.fleet-ind { flex-shrink: 0; display: inline-flex; align-items: center; gap: 10px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; box-shadow: inset 0 0 0 1px var(--color-border-tertiary); font: 500 12px/16px var(--font-mono); color: var(--color-text-secondary); }
+.fleet-ind-axis { display: inline-flex; align-items: center; gap: 5px; }
+.fleet-ind-axis[data-axis="fault"] { color: var(--color-text-danger); }
+.fleet-ind-axis[data-axis="warning"] { color: var(--color-text-warning); }
+.fleet-ind-total { font-family: var(--font-sans); color: var(--color-text-tertiary); }
+.fleet-ind-menu { top: calc(100% + 6px); right: 0; width: 380px; overflow: auto; }
+.fleet-ind-group + .fleet-ind-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--color-border-tertiary); }
+.fleet-ind-row { align-items: flex-start; }
+.fleet-ind-row > :first-child { margin-top: 4px; }
+.fleet-ind-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fleet-ind-reason { overflow-wrap: anywhere; font: 400 11px/15px var(--font-sans); color: var(--color-text-tertiary); }
+.fleet-ind-none { margin: 0; padding: 8px 10px; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.fleet-ind-menu .station-place, .station-menu .station-place { font-size: 12px; }
+
+/* the station switcher (slice 4 §2.1) */
+.station-menu { top: calc(100% + 6px); left: 0; width: 340px; overflow: auto; }
+.station-row .station-name { flex: 1; }
+.station-row[aria-current="page"] { background: var(--color-background-info); }
+.station-row-mark { width: 13px; flex-shrink: 0; display: inline-flex; justify-content: center; }
+.station-row-key { flex-shrink: 0; font: 400 10px/14px var(--font-mono); color: var(--color-text-tertiary); }
+
+/* Settings > Appearance */
+.appearance { margin: 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.appearance-choice { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: 400 12px/16px var(--font-sans); color: var(--color-text-primary); }
+.appearance-note { flex-basis: 100%; margin: 4px 0 0; font-size: 11px; color: var(--color-text-tertiary); }
 
 /* ---- fleet board (redesign spec §1, step 7d) ---- */
 .fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 480px)); gap: 8px; justify-content: start; align-items: stretch; min-width: 0; }

@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// The frontend's FleetSpine still ranks environments itself until slice 4
-// reads ranks from LineDTO: its ENV_RANK must match this table exactly.
+// The frontend ranks environments itself for station order (The Line slice 4
+// §2.2: the order must hold before the first LineDTO and for clusters with no
+// Observer). Its ENV_RANK must match this table exactly.
 func TestEnvRankMatchesTheFrontend(t *testing.T) {
-	src, err := os.ReadFile("../../cmd/klyx/frontend/src/chrome/FleetSpine.tsx")
+	src, err := os.ReadFile("../../cmd/klyx/frontend/src/nav/stationOrder.ts")
 	if err != nil {
 		t.Fatal(err)
 	}
