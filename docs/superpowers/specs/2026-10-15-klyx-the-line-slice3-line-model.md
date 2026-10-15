@@ -224,10 +224,14 @@ This note fixes the implementation shape the parent leaves open. The rules thems
   - **Capture order:**
     - Accepted row sets are installed and committed one at a time, in capture order, so distinct parts published in one drain cannot hide the composite state between them.
     - Gaps and overwritten rows are applied before any of the drain's commits.
+    - An overwrite keeps its part's kinds unread until that part's newer rows are installed. Its gap lasts until the commit after them, so retained pre-gap rows never re-establish continuity.
   - **Dating:**
     - A partition's commit is dated by the newest capture among its own input parts, never by an unrelated part or the worker's clock.
     - Only a real change moves that watermark.
-  - **Out of order:** a row set captured before a partition's last change but arriving after it is a break, as is another part captured at the same instant. Composite changes are ordered by the Observer's capture clock and nothing finer.
+  - **Out of order:**
+    - The fence is the partition's accepted-input order, quiet contributions included. A row set captured before an input already committed is a break, as is another part captured at the same instant.
+    - The lower bound moves only on a real change.
+    - Composite changes are ordered by the Observer's capture clock and nothing finer.
   - **Absence:** an absence is fenced by its version, like a recovery. Rows older than it read checking: their old objects are never known-empty.
 - **A reference change** (a new key, R changing, or the selector) is recorded as "reference changed", never as a deployment or a hold. It ends every held and state proof, because both are tied to the key and R. A changed attempted revision likewise restarts that unit's held evidence.
 - **Rule-proven `since`** (parent §8.1 as revised) dates a failing predicate only where the rule's role is exactly that predicate: a Flux source or Kustomization Ready=False with no overlay. Since no Flux role is proven today, line failure ages come from the line's own history. The deciding condition's age is shown beside them as evidence.

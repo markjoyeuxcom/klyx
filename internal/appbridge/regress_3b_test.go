@@ -350,3 +350,78 @@ func TestRegress3bBDStationStateStillEntersObservationLog(t *testing.T) {
 		t.Fatal("station state is no longer recorded by line history")
 	}
 }
+
+// Codex's review of 5755f84: quiet inputs take part in the capture-order
+// fence, and an overwrite gap lasts until its part's newer rows.
+
+func TestRegress3b5755QuietInputStillFencesCaptureOrder(t *testing.T) {
+	for _, mode := range []string{"late-earlier-capture", "simultaneous-captures"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Now()
+			base := now
+			s := regress3bSvc(&now)
+			s.recompute()
+			now = base.Add(time.Second)
+			s.tap.OnRows(regress3bSource(s, now, 2, true))
+			s.applyDrain()
+			s.recompute()
+			before, _ := stationIn(s.Line(), "c1")
+			if before.FailingSince == nil || before.FailingSince.Basis != obslog.ProofObserved {
+				t.Fatal("fixture lacks observed source fault")
+			}
+			if mode == "late-earlier-capture" {
+				// The unit's failure at t5 does not change the aggregate (source still fails).
+				now = base.Add(5 * time.Second)
+				s.tap.OnRows(regress3bRecon(now, 2, true))
+				s.applyDrain()
+				// A delayed bootstrap proves the source had healed at t3, before that unit failure.
+				s.applyResult(bootResult{att: s.stations["c1"].att.id, cluster: "c1", part: partRef{"flux", "sources"}, rows: regress3bSource(s, base.Add(3*time.Second), 3, false), ok: true})
+			} else {
+				// Source healing and unit failing have equal capture clocks: order is unknown.
+				now = base.Add(5 * time.Second)
+				s.tap.OnRows(regress3bSource(s, now, 3, false))
+				s.tap.OnRows(regress3bRecon(now, 2, true))
+				s.applyDrain()
+			}
+			s.recompute()
+			after, _ := stationIn(s.Line(), "c1")
+			p := after.FailingSince
+			if p != nil && p.Basis == obslog.ProofObserved && p.Since.Equal(*before.FailingSince.Since) {
+				t.Fatalf("old continuous source-failure proof survives an ambiguous or reversed handover to the unit: %+v", p)
+			}
+		})
+	}
+}
+
+func TestRegress3b5755OverwriteGapLastsUntilAffectedRows(t *testing.T) {
+	now := time.Now()
+	base := now
+	s := regress3bSvc(&now)
+	s.recompute()
+	// The first captured failed unit is overwritten before the worker drains.
+	s.tap.OnRows(regress3bRecon(base.Add(time.Second), 2, true))
+	// This other input is installed first, while the held unit is still healthy t0.
+	s.tap.OnRows(regress3bSource(s, base.Add(2*time.Second), 2, false))
+	s.tap.OnRows(regress3bRecon(base.Add(3*time.Second), 3, true))
+	now = base.Add(4 * time.Second)
+	s.applyDrain()
+	s.recompute()
+	ds, _ := stationIn(s.Line(), "c1")
+	p := ds.FailingSince
+	if p == nil {
+		t.Fatal("fixture lacks failure proof")
+	}
+	if p.Basis == obslog.ProofObserved {
+		t.Fatalf("overwrite gap consumed before the affected row: got observed (%v,%v], despite failed capture at %v having been discarded", p.NotBefore, p.Since, base.Add(time.Second))
+	}
+	// Continuity may resume after the final affected row, not before it.
+	s.tap.OnRows(regress3bRecon(base.Add(5*time.Second), 4, false))
+	s.applyDrain()
+	s.tap.OnRows(regress3bRecon(base.Add(6*time.Second), 5, true))
+	s.applyDrain()
+	s.recompute()
+	ds, _ = stationIn(s.Line(), "c1")
+	if ds.FailingSince == nil || ds.FailingSince.Basis != obslog.ProofObserved {
+		t.Fatalf("new clean transition must remain observable: %+v", ds.FailingSince)
+	}
+}

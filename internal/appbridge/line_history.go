@@ -72,11 +72,15 @@ func unitPredKey(u line.Unit) string {
 }
 
 type histPartition struct {
-	prev     map[string]string
-	live     bool
-	seen     bool
-	lastAt   time.Time // the evidence time of the last real change
-	lastPart string    // the input part whose row set made it ("" for a lifecycle commit)
+	prev   map[string]string
+	live   bool
+	seen   bool
+	lastAt time.Time // the evidence time of the last real change: the lower bound
+	// The accepted-input order, quiet contributions included: the newest
+	// input capture committed, and the part it came from ("" for a
+	// lifecycle commit's composite).
+	inputAt   time.Time
+	inputPart string
 }
 
 type histStation struct {
@@ -158,11 +162,17 @@ func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *
 	if at.Before(hp.lastAt) {
 		at = hp.lastAt // evidence times only move forward
 	}
-	// Evidence captured before the last change, arriving after it, shows
-	// that change was computed from superseded inputs; another part captured
-	// at the same instant has no order against it. Either way continuity is
-	// unproven.
-	broken := c.broken || (c.trigger != nil && (c.trigger.Before(hp.lastAt) || (c.trigger.Equal(hp.lastAt) && c.part != hp.lastPart)))
+	// An input captured before one already committed - quiet or not -
+	// shows the committed composites were computed from superseded inputs;
+	// another part captured at the same instant has no order against it.
+	// Either way continuity is unproven.
+	broken := c.broken || (c.trigger != nil && (c.trigger.Before(hp.inputAt) || (c.trigger.Equal(hp.inputAt) && c.part != hp.inputPart)))
+	switch {
+	case c.trigger != nil && c.trigger.After(hp.inputAt):
+		hp.inputAt, hp.inputPart = *c.trigger, c.part
+	case c.trigger == nil && c.at.After(hp.inputAt):
+		hp.inputAt, hp.inputPart = c.at, ""
+	}
 	b := observe.TransitionBatch{Cluster: cluster, Incarnation: inc, Task: lineTask, Part: part, Source: source, Mode: lineMode, At: at}
 	if hp.live && (!c.readable || broken) {
 		loss := b
@@ -193,10 +203,7 @@ func (h *lineHistory) step(cluster string, inc uint64, part, source string, hp *
 		return
 	}
 	h.apply(b)
-	hp.prev, hp.live, hp.seen, hp.lastAt, hp.lastPart = cur, true, true, at, ""
-	if c.trigger != nil {
-		hp.lastPart = c.part
-	}
+	hp.prev, hp.live, hp.seen, hp.lastAt = cur, true, true, at
 }
 
 func (h *lineHistory) apply(b observe.TransitionBatch) {

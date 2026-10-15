@@ -79,8 +79,12 @@ type lineStation struct {
 	// predicate partition (connection, Final, a new incarnation); gapKinds
 	// are the kinds whose continuity broke (a partition loss, overwritten
 	// rows), applied only to the partitions whose inputs need them.
-	allGap     bool
-	gapKinds   map[string]bool
+	allGap   bool
+	gapKinds map[string]bool
+	// pending are parts whose rows were overwritten unseen and whose newer
+	// rows this drain has not installed yet: their retained rows predate the
+	// gap, so the partitions reading them stay unread until then.
+	pending    map[string]bool
 	histDirty  bool // an accepted change awaits its history commit
 	lastOKAt   *time.Time
 	snapState  fleet.ConnState
@@ -438,6 +442,10 @@ func (s *LineService) applyDrain() {
 				for _, kind := range partKinds[k] {
 					st.gapKind(kind) // a discarded row set may have shown a flip (note §5)
 				}
+				if st.pending == nil {
+					st.pending = map[string]bool{}
+				}
+				st.pending[k] = true
 				st.histDirty, s.dirty = true, true
 			}
 		}
@@ -453,10 +461,17 @@ func (s *LineService) applyDrain() {
 		})
 		for _, k := range keys {
 			r := d.rows[k]
-			if s.applyRows(st, k, r) {
+			applied := s.applyRows(st, k, r)
+			delete(st.pending, k)
+			if applied {
 				s.dirty = true
 				s.commitStation(cluster, st, &rowTrigger{part: k, at: r.EvaluatedAt})
 			}
+		}
+		// A part whose newer rows were not accepted (the station already
+		// holds newer ones) leaves its gap for the next commit to break.
+		if len(st.pending) > 0 {
+			st.pending, st.histDirty = nil, true
 		}
 	}
 	s.commitDirty()
@@ -809,9 +824,17 @@ func (s *LineService) commitStation(cluster string, st *lineStation, trig *rowTr
 	in, read, _ := s.input(st)
 	attached := s.attached(st)
 	needed := neededByPartition(in)
+	// A pending part's retained rows predate its gap: its kinds are unread
+	// until its newer rows are installed.
+	pendingKind := map[string]bool{}
+	for p := range st.pending {
+		for _, k := range partKinds[p] {
+			pendingKind[k] = true
+		}
+	}
 	kindsOK := func(kinds []string) bool {
 		for _, k := range kinds {
-			if r := in.KindRead[k]; r != line.ReadOK && r != line.KindAbsent {
+			if r := in.KindRead[k]; pendingKind[k] || (r != line.ReadOK && r != line.KindAbsent) {
 				return false
 			}
 		}
@@ -857,13 +880,24 @@ func (s *LineService) commitStation(cluster string, st *lineStation, trig *rowTr
 	// Held and state are relative to the last build's key and R.
 	s.hist.reference(cluster, st.inc, lineRef(s.lastKey, s.lastR), evidenceAt(st, histInputs[linePartState], s.d.Now()))
 	whole := attached && read == line.ReadOK
+	for _, k := range all {
+		whole = whole && !pendingKind[k]
+	}
 	held := map[string]string{keyHeld: predOK}
 	if sl.Held {
 		held[keyHeld] = predHeld
 	}
 	s.hist.commit(cluster, st.inc, linePartHeld, lineTask, held, evidence(linePartHeld, all, whole))
 	s.hist.commit(cluster, st.inc, linePartState, lineTask, map[string]string{keyState: sl.State}, evidence(linePartState, all, whole))
-	st.allGap, st.gapKinds, st.histDirty = false, map[string]bool{}, false
+	// A gap lasts until the commit after its part's newer rows: a pending
+	// part's kinds keep theirs.
+	kept := map[string]bool{}
+	for k := range st.gapKinds {
+		if pendingKind[k] {
+			kept[k] = true
+		}
+	}
+	st.allGap, st.gapKinds, st.histDirty = false, kept, false
 }
 
 // neededByPartition is each unit partition's input kinds (note §2.4, §5): a
