@@ -157,7 +157,10 @@ This applies to InstanceDetail, which serves every kind without a bespoke lens.
     - "Not yet established", with NamesAccepted's state beside it, is a look-at.
     - "Names not accepted: <reason>" is a look-at. A later naming conflict can sit beside Established True.
     - "Non-structural schema: <message>" is a look-at. Existing resources can still be served.
-    - A condition that is missing or Unknown is checking.
+    - **Missing conditions, per type** (design review 2):
+      - A missing Established or NamesAccepted is checking. These are the expected positive conditions.
+      - NonStructuralSchema is an optional negative condition. Kubernetes leaves it absent and removes it once the schema is structural, so absent or False adds nothing.
+      - An explicitly recorded Unknown, of any type, is checking.
   - **Primary:** Open instances. **More:** Describe (`customresourcedefinition.apiextensions.k8s.io`), Copy name.
   - **Facts:**
     - group and scope;
@@ -215,7 +218,13 @@ This applies to InstanceDetail, which serves every kind without a bespoke lens.
     - conversion: None with differing schemas, a service webhook, a URL webhook;
     - printer columns;
     - the schema: flattening and its caps, escaped paths, `[]` and `{}`, named constraints, truncation markers;
-    - conditions: NamesAccepted True before establishment, Established True with a later naming conflict, NonStructuralSchema, missing and Unknown.
+    - conditions:
+      - the ordinary healthy CRD: Established True and NamesAccepted True, with no NonStructuralSchema;
+      - NamesAccepted True before establishment;
+      - Established True with a later naming conflict;
+      - NonStructuralSchema True;
+      - a missing positive condition;
+      - an explicitly Unknown NonStructuralSchema.
   - The discovery fallback.
 - **Frontend:**
   - the list's columns: priority split, numeric alignment, date titles, header descriptions;
