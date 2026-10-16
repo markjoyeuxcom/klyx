@@ -30,7 +30,7 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
   - `reconcilers[]{apiVersion, kind, stats{failing, running, suspended, totalSize}}`;
   - `sync{id, path, source, ready, status}`;
   - `cluster{serverVersion, platform, nodes}` and `operator{apiVersion, version, platform}`.
-- **Its Ready is set True after every run, even when the computation logged errors.** It means the report is fresh, never that Flux is healthy.
+- **Its Ready is set True after every run, even when the computation logged errors.** It means reporting succeeded, never that Flux is healthy (and, as below, not even that the report is recent).
 - **Refresh:** at operator start, when the FluxInstance changes, on request, and every reporting interval. That is 5 minutes by default, but it is set by the operator's `--reporting-interval` flag or `REPORTING_INTERVAL` (the Helm chart sets it from values), so Klyx cannot know it.
 - **The condition time is not a heartbeat.** The pinned conditions runtime (fluxcd/pkg `runtime` v0.111.0) keeps `lastTransitionTime` when status, reason and message are unchanged. The message carries a rounded duration that can repeat across runs. So a report can refresh without its condition time moving, and Ready=True persists when reporting is disabled.
 
@@ -100,9 +100,16 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - `secretRef` and `certSecretRef` named, never read.
 - **Detection (review 1, finding 4):**
   - **Flux is present** when either the kustomize-controller group or `fluxcd.controlplane.io` is served.
-  - **Operators are found by evidence.** A bounded, cluster-wide list of Deployments labelled `app.kubernetes.io/name: flux-operator` (limit 10) gives each operator's runtime namespace and readiness.
-    - A forbidden or failed list is "unverified", never absent.
-    - Several operators are each shown. Ambiguity is shown, never resolved by picking one.
+  - **Operators are found by evidence** (revision 2). A bounded, cluster-wide list of Deployments labelled `app.kubernetes.io/name: flux-operator` (limit 10) gives the candidates.
+    - **The runtime namespace is read from each candidate's manager container**, because the operator takes it from `RUNTIME_NAMESPACE`, not from its Deployment's metadata, and defaults to `flux-system`:
+      - `valueFrom.fieldRef: metadata.namespace` (the chart's form) gives the Deployment's namespace;
+      - a literal value gives that namespace;
+      - an unset variable gives `flux-system`;
+      - any other source (a ConfigMap or Secret reference) is unresolvable and reads "unverified".
+    - **The controller-enabled mode is read from its arguments.** A container run with `--web-server-only` runs no reconcilers: it is shown as the operator's web server, never as an operator, and binds no instance.
+    - **Failures:** a forbidden or failed list is "unverified", never absent.
+    - **Absence needs a complete scan.** A list that returns a continue token (more than 10 candidates) is incomplete, so no namespace is declared orphaned and nothing is counted as absent.
+    - **Several reconciling operators with the same runtime namespace** are an ambiguity: shown, never resolved by picking one, and their namespace's instance reads "ambiguous operator".
   - **Instances are bound by namespace:**
     - a FluxInstance or FluxReport `flux` in an operator's namespace is that operator's;
     - a `flux` in a namespace with no operator reads "no operator reconciles this namespace" and is not counted as a reconciled instance;
@@ -121,12 +128,18 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
 
 - **Versions:** `v1` only. A cluster serving an older operator API reads "unsupported operator version", never empty.
 - **Clocks:** none of these parts change with time alone. `nextSchedule` is shown, not evaluated, and no report-age claim is made (§1).
-- **The budget per cluster** (review 1, finding 5), with these as caps, not estimates:
+- **The budget** (revision 2): an aggregate byte budget, enforced and checked, with caps that agree with it.
   - **Watches:** four new list/watches. A watch still *receives* whole objects (inputs, inventories, templates) before projection: "not retained in the projected model", never "not watched".
-  - **Retained objects:** at most 10 FluxInstances, 10 FluxReports, 2,000 ResourceSets and 2,000 providers. Beyond a cap the kind's coverage reads "capped", counts are lower bounds, and a consumer or prerequisite lookup that crosses the cap says it is incomplete. A healthy chain is never claimed past a cap.
-  - **Retained bytes:** each projected object at most 8 KiB, by the per-field limits above. A field clipped by a limit is marked clipped in the inspector.
-  - **The fleet reservation:** for ten clusters, 40 MiB of retained projections for these kinds, recorded in the roadmap's "As built".
-  - **Transient memory** (one list page decoded before projection) is measured separately, by a benchmark over 2,000 ResourceSets each carrying a 64 KiB template, and recorded. The page size follows the observer's existing reflector paging.
+  - **Per object, checked:** each projection is measured, as its encoded size, after it is built, and must be at most **8 KiB**.
+    - **Over the limit:** the display strings (condition messages, `dependsOn` and `inputsFrom` entries) are clipped further, down to 256 bytes each and then dropped, until it fits. Each clip is marked in the inspector.
+    - **The classification facts** a rule needs (condition type, status and reason; generation and `observedGeneration`; the reconcile annotations and tokens of §4) are never clipped: at most about 1 KiB together. A projection whose required facts alone exceed 8 KiB is not retained, and its kind's coverage reads "capped".
+  - **Per cluster, admitted:** these four kinds together retain at most **4 MiB** of projections per cluster.
+    - **Admission is deterministic:** by namespace, then name. Past the budget, further objects are not retained.
+    - **Past the budget,** the kind's coverage reads "capped", counts are lower bounds, and a consumer or prerequisite lookup says it is incomplete. A healthy chain is never claimed past the budget.
+    - **The count follows from the bytes:** with the 8 KiB worst case, at least 512 objects are always admitted; typical 1-2 KiB projections admit 2,000 to 4,000.
+  - **Fleet:** ten clusters reserve **40 MiB**, the per-cluster budget times ten, recorded in the roadmap's "As built".
+  - **Calibration:** the budget counts encoded bytes. A benchmark measures actual heap (string backing storage included) for a full 4 MiB cluster, and the recorded ratio is applied to the reservation.
+  - **Transient memory,** one list page decoded before projection, is measured separately, by a benchmark over ResourceSets each carrying a 64 KiB template. The page size follows the observer's existing reflector paging.
 - **Bounded reads:** inventories and histories are read on demand (bounded: the first 500 inventory entries, the five history entries), with the omission said.
 - **Tests beyond parity (C1):**
   - projection equality for every field a rule reads;
@@ -134,24 +147,42 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - a frozen condition under a disabled reconcile, and each resume case of §4;
   - two report runs with identical Ready status, reason and message (the condition time does not move, and Klyx claims nothing from it);
   - a v1-less cluster;
-  - the caps (2,001 ResourceSets reads "capped");
-  - an operator in a custom namespace with no FluxInstance, an orphan `flux` in another namespace, and two operators.
+  - the budget: ten clusters at their worst-case admission together; one oversized projection (clipped, then refused if its required facts alone exceed the limit); "capped" coverage and incomplete lookups past the budget;
+  - detection: an operator in a custom namespace with no FluxInstance, an orphan `flux` in another namespace, `RUNTIME_NAMESPACE` mismatched with its Deployment's namespace, unset (defaulting to `flux-system`) and unresolvable, a `--web-server-only` Deployment, an incomplete list (a continue token), and two reconciling operators for one namespace.
 
 ## 4. Health rules
 
 - **The existing rule** (`fluxRole`, `readyBacked`) applies: Ready True is healthy; Ready False is a fault with its reason; Reconciling is checking; Stalled is a fault that will not retry; a generation lag reads Syncing.
 - **Suspension comes first.** `fluxcd.controlplane.io/reconcile: disabled` makes the object **Suspended**, an intended paused state (ratified 2026-07-02), never counted broken-first.
   - Because the operator freezes conditions while disabled, a frozen Ready (True or False) is shown as "last known before suspension", never as a live verdict.
-- **Resume (review 1, finding 2).** A handled request is not proof of an evaluation. The operator's finalizer copies `requestedAt` into `lastHandledReconcileAt` even when it returns early (outside a provider's schedule, or while disabled), and annotation edits do not advance `metadata.generation`.
-  - **The state:** a resumed object whose evaluation is not yet evidenced reads **"Resumed · awaiting evaluation"**. Its role is checking, it is not counted, and its last condition is shown as historical. It raises no fault and no recovery notification from the frozen condition.
-  - **The evidence of an actual evaluation:**
-    - **FluxInstance and ResourceSet:** the newest `history[].lastReconciled` is later than the resume's request token (Klyx writes `requestedAt` as an RFC 3339 time).
-    - **A provider with a schedule:** `status.nextSchedule.when` has advanced past the value it held at resume, so the scheduled run happened. Until then it reads "Resumed · waiting for its schedule (next <when>)". The separate "Fetch now, outside its schedule" verb (§5) is the user's way to run it sooner.
-    - **A provider without a schedule:** `lastHandledReconcileAt` equals the token. With no schedule and the reconcile enabled, the controller has no early return, so a handled request is an evaluation.
-  - **When freshness cannot be proven:**
-    - **Reconnects and external changes:** after a reconnect, or when someone else resumed the object, Klyx uses the `requestedAt` token on the object if there is one.
-    - **No token, and Klyx never saw the object suspended:** it is treated like any freshly observed object, with its conditions current.
-    - **No token, and Klyx did see the suspension end:** it reads "Resumed · awaiting evaluation" until the evidence above is newer than the moment Klyx observed the change.
+- **Resume (revision 2).** Resume evidence rests on identity and observed change, never on comparing timestamps.
+  - **Why timestamps cannot work:**
+    - Request tokens are opaque correlation ids.
+    - `metav1.Time` loses fractional seconds, so a run that finishes in the same second as a request never compares later.
+    - Controller and Klyx clocks can skew.
+  - **Why a handled request is not proof:**
+    - The operator's finalizer copies `requestedAt` into `lastHandledReconcileAt` even on an early return (outside a provider's schedule, or while disabled).
+    - Annotation edits do not advance `metadata.generation`.
+    - Some failures (`DependencyNotReady`, `InvalidCELExpression`, a FluxInstance fetch or preflight failure) update conditions without touching history.
+  - **The resume epoch:**
+    - It begins when Klyx observes, through its own watch, an object's reconcile annotation change from disabled to enabled, or when Klyx's own resume verb succeeds.
+    - Klyx records the object's UID, the moment it observed the change, and the request token current at that moment.
+    - Only a token **first observed within the epoch** counts as evidence: Klyx's own resume writes a fresh token atomically with `enabled`. A token left over from before the suspension never certifies anything, however its value compares.
+  - **The evidence of an actual evaluation, per controller path:**
+    - **FluxInstance and ResourceSet** (no schedule gating once enabled): `lastHandledReconcileAt` observed changing to an epoch token. With the reconcile enabled the reconciler runs past the disabled check, and every path after it, a `DependencyNotReady` or CEL failure included, is an evaluation. Also an observed change in any condition (type, status, reason, message or `observedGeneration`), or an increase in the summed `history[].totalReconciliations`, within the epoch.
+    - **A provider without a schedule:** `lastHandledReconcileAt` observed changing to an epoch token. There is no early return when enabled and unscheduled.
+    - **A provider with a schedule:** a skipped run advances `nextSchedule` and copies the token without fetching, so neither is evidence. The evidence is:
+      - `lastHandledForceAt` observed changing to an epoch token, which only the "Fetch now, outside its schedule" verb sets (paired with `requestedAt`); or
+      - an observed change in `lastExportedRevision` or in a condition within the epoch.
+
+      Until then the provider reads "Resumed · not yet evaluated: a scheduled run leaves no proof unless its inputs change; Fetch now to evaluate it". The verb is offered right there.
+  - **While awaiting evidence:**
+    - the object reads **"Resumed · awaiting evaluation"**;
+    - its role is checking, and it is not counted;
+    - its last condition is shown as "last known before suspension";
+    - it raises no fault or recovery notification from a frozen condition. When evidence arrives the object is evaluated normally, and a fault's onset is then.
+  - **When Klyx did not see the resume** (it was not running, or reconnected after it): there is no epoch, and the object is treated like any freshly observed object, with its conditions current. Klyx never infers a resume it did not see, and never certifies one from a token it cannot place in an epoch.
+
 - **ResourceSet reasons** keep the operator's words: `DependencyNotReady` names what it waits for; a failed step names the step; `InvalidCELExpression` names the `dependsOn` entry where the message does.
 - **A provider's failure** is its own fault. A ResourceSet whose provider failed reports whatever the operator records for it, and Klyx links the provider rather than re-deriving the failure.
 - **FluxReport** lights nothing (§2).
@@ -187,19 +218,30 @@ All of it goes through S0b (`2026-10-16-klyx-coverage-s0b-embedded-payloads.md`)
 On top of S0b, this slice adds only:
 - the projections of §3, which never carry those fields;
 - the AI field allowlist and chat projection for these kinds: kind, name, conditions, counts and references, never payloads;
-- in the inspector, an exported input's `id` and count; the other values stay omitted per S0b.
+- in the inspector, the number of exported input sets and each set's ordinal (1, 2, 3...). Every exported value, `id` included, stays omitted per S0b (an ExternalService provider accepts any string as `id`).
 
 S1a is built after S0b and depends on it.
 
 ## 7. Tests, lab and smoke
 
 - **Unit:**
-  - the parse and rule of each kind, including the frozen-condition suspension and resume;
-  - FluxReport parsing, and its "report fresh" wording;
+  - the parse and rule of each kind, including the frozen-condition suspension;
+  - **resume (§4):**
+    - a skipped scheduled run whose `nextSchedule` advances (not evidence);
+    - a forced fetch that leaves `nextSchedule` unchanged (evidence by `lastHandledForceAt`);
+    - a new failure without history (evidence by condition change);
+    - completion in the same second as the request;
+    - controller and Klyx clocks skewed;
+    - an external resume keeping an old `requestedAt` (no certificate);
+    - a resume Klyx did not observe (treated as current);
+  - FluxReport parsing, and its "reporting succeeded" wording (never "fresh", never a report age);
   - the verb matrix: each kind's GVR and annotations, the provider's paired `requestedAt`/`forceAt`, and the resume pair;
   - detection, with operator present or absent, with Flux present without the operator, and with an unreadable probe;
-  - masking of embedded Secrets in ResourceSet resources, steps and patches, the template collapse, and the editor's refusal;
-  - the bounded, masked inputs.
+  - S0b's behaviour on these kinds:
+    - the omitted bytes never cross the bridge, and there is no reveal;
+    - Describe follows S0b §13 (withheld while a payload is present);
+    - the backend edit guard refuses;
+  - a needle in an exported input's `id`, absent from the serialised inspector DTO and the AI and chat payloads.
 - **Parity:**
   - the four CRDs on `kind-klyx` and in `klyx-parity.sh`;
   - fixtures: a Ready FluxInstance, a Ready ResourceSet, a ResourceSet failing `DependencyNotReady`, a provider failing `ReconciliationFailed`, and a suspended ResourceSet with a frozen Ready=False;
@@ -209,7 +251,7 @@ S1a is built after S0b and depends on it.
   - the v0.61.0 CRDs;
   - the FluxInstance `flux` in `flux-system`, a FluxReport, the ResourceSets and providers above (with status written through the status subresource);
   - a ResourceSet embedding a Secret, to prove the masking live.
-- **Native smoke:** "Flux Operator" opens the Operator view, the FluxInstance card draws its verdict and components, and the report reads "as reported by the operator".
+- **Native smoke:** "Flux Operator" opens the Operator view, the FluxInstance card draws its verdict and components, and the report reads "as reported by the operator" with its two labelled times.
 - **Live captures:** the Operator view, a ResourceSet inspector with masked inline Secret data, and a suspended ResourceSet, night and day, at 1440 and 1024.
 
 ## 8. Not in S1a
@@ -227,4 +269,14 @@ S1a is built after S0b and depends on it.
 | 3 | FluxReport's condition time is not a heartbeat | §1 and §2: two labelled times, no report-age claim; the clock rule in §3 |
 | 4 | The singleton rule does not establish the operator's namespace | §1's identity by label (the Helm chart checked); §2's evidence-based detection; the Flux probe follows the instance |
 | 5 | The budget was an estimate, and understated what a watch reads | §3's caps, field-by-field projection, fleet reservation and transient benchmark |
+
+## 10. Revision 2: Codex's re-review of ceee3bd
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | §6 kept an exported input's `id`, against the accepted S0b; §7 described a template collapse | §6: ordinals and a count only; §7: S0b's actual behaviour, and an `id` needle |
+| 2 | The resume certificates admitted frozen evidence and suppressed genuine failures (a skipped run advances `nextSchedule`; failures without history; old tokens; same-second times; clock skew) | §4: the resume epoch, tokens first observed in it, evidence per controller path, no timestamp comparisons, "Fetch now" to evaluate a scheduled provider; §7: each case named |
+| 3 | The caps did not add up to the 40 MiB reservation | §3: a checked 8 KiB per object with required facts protected, a 4 MiB admitted per-cluster budget with deterministic admission, 40 MiB for ten clusters, and heap calibration |
+| 4 | A labelled Deployment's namespace is not the runtime namespace; `--web-server-only` runs no reconcilers | §2: `RUNTIME_NAMESPACE` read from the manager container (field ref, literal, unset default, unresolvable); web-server-only shown but never binding; absence only after a complete scan |
+| P3 | "Report fresh" wording remained | §1 and §7 corrected |
 
