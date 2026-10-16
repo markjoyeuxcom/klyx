@@ -6,8 +6,11 @@ import { CRDBrowser } from "./CRDBrowser";
 vi.mock("../bridge/crd", () => ({
   listCRDs: vi.fn(async () => {}),
   countKind: vi.fn(async () => {}),
+  copyText: vi.fn(async () => {}),
+  getCRDDefinition: vi.fn(async () => ({ error: "forbidden" })),
 }));
-import { countKind } from "../bridge/crd";
+vi.mock("../bridge/exec", () => ({ describeResource: vi.fn() }));
+import { countKind, getCRDDefinition } from "../bridge/crd";
 
 const groups: CRDGroupDTO[] = [
   { group: "cilium.io", category: "CNI", kinds: [
@@ -68,10 +71,14 @@ describe("CRDBrowser - CRD groups", () => {
     expect(getByText(/No custom resources/i)).toBeTruthy();
   });
 
-  it("clicking a kind opens the resource drill-in", () => {
+  it("a click inspects the definition; a double click opens the instances (slice 15c)", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "x", section: "crds" }, crd: { ...useFleet.getState().crd, expanded: ["cilium.io"] } });
-    const { getByText } = render(<CRDBrowser cluster="x" />);
+    const { getByText, getByTestId } = render(<CRDBrowser cluster="x" />);
     fireEvent.click(getByText("CiliumEndpoint"));
+    expect(useFleet.getState().crd.selected).toMatchObject({ group: "cilium.io", plural: "ciliumendpoints" });
+    expect(getByTestId("crd-definition-panel")).toBeTruthy();
+    expect(getCRDDefinition).toHaveBeenCalledWith("x", "ciliumendpoints.cilium.io", "");
+    fireEvent.doubleClick(getByText("CiliumEndpoint"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.resource?.kind).toBe("CiliumEndpoint");
     expect(r.name === "cluster" && r.resource?.plural).toBe("ciliumendpoints");
@@ -80,7 +87,7 @@ describe("CRDBrowser - CRD groups", () => {
   it("drill from crds section stays in crds section", () => {
     useFleet.setState({ route: { name: "cluster", cluster: "x", section: "crds" }, crd: { ...useFleet.getState().crd, expanded: ["cilium.io"] } });
     const { getByText } = render(<CRDBrowser cluster="x" />);
-    fireEvent.click(getByText("CiliumEndpoint"));
+    fireEvent.keyDown(getByText("CiliumEndpoint").closest(".lens-row")!, { key: "Enter" });
     const r = useFleet.getState().route;
     if (r.name === "cluster") {
       expect(r.section).toBe("crds");
@@ -106,5 +113,32 @@ describe("CRDBrowser - CRD groups", () => {
     const { queryByText, getByText } = render(<CRDBrowser cluster="x" />);
     expect(queryByText("0 instances")).toBeNull();
     expect(getByText(/\+\? instances/)).toBeTruthy();
+  });
+});
+
+// The Line slice 15c.
+describe("CRDBrowser - slice 15c", () => {
+  it("a search opens every section that holds a match", () => {
+    useFleet.setState({ crd: { ...useFleet.getState().crd, search: "ciliumnode" } });
+    const { getByText } = render(<CRDBrowser cluster="x" />);
+    expect(getByText("CiliumNode")).toBeTruthy();
+  });
+
+  it("says 1 kind, not 1 kinds", () => {
+    const { getByText } = render(<CRDBrowser cluster="x" />);
+    expect(getByText("1 kind")).toBeTruthy();
+    expect(getByText("2 kinds")).toBeTruthy();
+  });
+
+  it("says when the kinds come from discovery", () => {
+    useFleet.setState({ crd: { ...useFleet.getState().crd, fallback: "customresourcedefinitions is forbidden" } });
+    const { getByTestId } = render(<CRDBrowser cluster="x" />);
+    expect(getByTestId("crd-fallback").textContent).toBe("Definitions could not be read: customresourcedefinitions is forbidden. Kinds come from discovery.");
+  });
+
+  it("an unreadable definition says so in the inspector", async () => {
+    useFleet.setState({ crd: { ...useFleet.getState().crd, selected: { group: "cilium.io", plural: "ciliumendpoints", kind: "CiliumEndpoint", version: "v2", scope: "Namespaced" } } });
+    const { findByText } = render(<CRDBrowser cluster="x" />);
+    expect(await findByText("The definition could not be read")).toBeTruthy();
   });
 });

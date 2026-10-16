@@ -7,9 +7,9 @@ export async function listCRDs(cluster: string): Promise<void> {
   try {
     // A failed read comes back WITH error (empty groups are then unreadable,
     // not "no CRDs installed").
-    const r = (await CRDService.ListCRDs(cluster)) as { groups: CRDGroupDTO[]; error?: string };
+    const r = (await CRDService.ListCRDs(cluster)) as { groups: CRDGroupDTO[]; error?: string; fallback?: string };
     if (useFleet.getState().crd.cluster !== cluster) return; // stale: the browser moved on
-    useFleet.getState().setCRDs(cluster, r?.groups ?? [], r?.error);
+    useFleet.getState().setCRDs(cluster, r?.groups ?? [], r?.error, r?.fallback);
   } catch (e) {
     // Clear the loading flag AND record why: a rejected read must not render as
     // "no custom resources on this cluster" (Codex batch-2 review R7).

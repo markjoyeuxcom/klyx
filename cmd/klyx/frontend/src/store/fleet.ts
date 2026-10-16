@@ -728,6 +728,11 @@ export type CRDSlice = {
   groupBy: CRDGroupBy;
   search: string;
   builtinCategory: string | null;
+  // fallback: the CRD list failed with this error, and groups come from
+  // discovery (The Line slice 15c); selected: the kind whose definition the
+  // inspector shows.
+  fallback?: string | null;
+  selected?: { group: string; plural: string; kind: string; version: string; scope: string } | null;
 };
 
 // Counts are keyed by CLUSTER as well as GVR: a count still in flight when the
@@ -1066,7 +1071,8 @@ type FleetState = {
   forwards: ForwardDTO[];
   setForwards: (f: ForwardDTO[]) => void;
   crd: CRDSlice;
-  setCRDs: (cluster: string, groups: CRDGroupDTO[], error?: string) => void;
+  setCRDs: (cluster: string, groups: CRDGroupDTO[], error?: string, fallback?: string) => void;
+  selectCRD: (sel: { group: string; plural: string; kind: string; version: string; scope: string } | null) => void;
   setCRDLoading: (cluster: string) => void;
   clearCRDs: () => void;
   toggleCRDGroup: (group: string) => void;
@@ -1288,7 +1294,8 @@ export const useFleet = create<FleetState>((set) => ({
   forwards: [],
   setForwards: (forwards) => set({ forwards }),
   crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },
-  setCRDs: (cluster, groups, error) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false, error: error || null } })),
+  setCRDs: (cluster, groups, error, fallback) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false, error: error || null, fallback: fallback || null } })),
+  selectCRD: (sel) => set((s) => ({ crd: { ...s.crd, selected: sel } })),
   setCRDLoading: (cluster) => set((s) => ({ crd: { ...s.crd, cluster, groups: [], loading: true, expanded: [], counts: {} } })),
   clearCRDs: () => set({ crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null } }),
   toggleCRDGroup: (group) => set((s) => ({

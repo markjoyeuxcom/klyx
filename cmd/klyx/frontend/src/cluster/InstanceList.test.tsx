@@ -205,10 +205,11 @@ describe("InstanceList", () => {
     expect(head.closest(".lens-table")).toBeTruthy();
   });
 
-  it("breadcrumb back returns to the resource catalog", () => {
-    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "resources", resource: nsRef } });
+  it("breadcrumb back returns to the catalog: the API browser for a custom resource (slice 15c)", () => {
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "crds", resource: nsRef } });
     const { getByLabelText } = render(<InstanceList cluster="x" resource={nsRef} />);
-    fireEvent.click(getByLabelText("back to resources"));
+    expect(getByLabelText("back to the API browser").textContent).toBe("API browser");
+    fireEvent.click(getByLabelText("back to the API browser"));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.resource).toBeUndefined();
   });

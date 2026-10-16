@@ -5,6 +5,7 @@ import { listCRDs, countKind } from "../bridge/crd";
 import { EmptyState, SkeletonRows } from "../chrome/primitives";
 import { LensLayout, LensTable, type DatasetState } from "../layout/LensLayout";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
+import { CRDDefinitionInspector } from "./CRDDefinition";
 
 type FlatKind = CRDKindDTO & { group: string; category: string };
 
@@ -95,32 +96,54 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
           </label>
         </>
       }
-      notice={crd.error && groups.length > 0 ? <WatchErrorBanner tool="Custom resources" failure="read failed - showing the last good read" error={crd.error} /> : undefined}
+      notice={crd.error && groups.length > 0 ? <WatchErrorBanner tool="Custom resources" failure="read failed - showing the last good read" error={crd.error} />
+        : crd.fallback ? (
+          <div role="status" data-testid="crd-fallback" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+            <span>Definitions could not be read: {crd.fallback}. Kinds come from discovery.</span>
+          </div>
+        ) : undefined}
       state={state}
       stateView={stateView}
       body={
         <LensTable minWidth={520}>
           <div data-testid="crd-resource-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             {sections.map((sec) => (
-              <Section key={sec.label} cluster={cluster} label={sec.label} category={sec.category} kinds={sec.kinds} grouped={crd.groupBy === "group"} />
+              <Section key={sec.label} cluster={cluster} label={sec.label} category={sec.category} kinds={sec.kinds} grouped={crd.groupBy === "group"} searching={crd.search.trim() !== ""} />
             ))}
           </div>
         </LensTable>
       }
-      footer={<span className="t-legend">↵ open · counts are live reads; ? = unreadable, never zero</span>}
+      footer={<span className="t-legend">click inspect · ↵ or double-click open · counts are live reads; ? = unreadable, never zero</span>}
       footerEnd={<span className="t-secondary">{shownKinds} of {totalKinds} kinds{crd.search ? " · filter: search" : ""}</span>}
+      inspector={crd.selected && crd.cluster === cluster ? (
+        <CRDDefinitionInspector key={`${cluster}/${crd.selected.plural}.${crd.selected.group}`} cluster={cluster} sel={crd.selected}
+          count={countText(crd.counts[crdCountKey(cluster, crd.selected.group, crd.selected.version, crd.selected.plural)])}
+          onClose={() => useFleet.getState().selectCRD(null)}
+          onOpen={() => { const sel = crd.selected!; useFleet.getState().openResource({ group: sel.group, version: sel.version, plural: sel.plural, kind: sel.kind, scope: sel.scope }); }} />
+      ) : undefined}
+      inspectorLabel="Definition"
+      onCloseInspector={() => useFleet.getState().selectCRD(null)}
     />
   );
 }
 
 const CRD_GRID = "16px minmax(200px, 1fr) 96px 64px minmax(120px, 0.8fr)";
 
-function Section({ cluster, label, category, kinds, grouped }: { cluster: string; label: string; category: string; kinds: FlatKind[]; grouped: boolean }) {
+// countText: a kind's live count as the browser writes it; "?" is
+// unreadable, never zero.
+function countText(c: { count: number; capped: boolean; error?: string } | undefined): string | undefined {
+  if (!c) return undefined;
+  return c.error ? "? (could not be counted)" : c.capped ? `${c.count}+` : `${c.count}`;
+}
+
+function Section({ cluster, label, category, kinds, grouped, searching }: { cluster: string; label: string; category: string; kinds: FlatKind[]; grouped: boolean; searching: boolean }) {
   const expanded = useFleet((s) => s.crd.expanded);
   const counts = useFleet((s) => s.crd.counts);
   const toggle = useFleet((s) => s.toggleCRDGroup);
   const openResource = useFleet((s) => s.openResource);
-  const open = !grouped || expanded.includes(label);
+  const selected = useFleet((s) => s.crd.selected);
+  // A search opens every section that holds a match (slice 15c).
+  const open = !grouped || searching || expanded.includes(label);
 
   // Re-firing on `counts` is safe and convergent: the `!counts[key]` guard skips
   // already-fetched kinds, and countKind's in-flight Set dedupes the window
@@ -165,7 +188,7 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         <span className="t-identifier" style={{ color: "var(--color-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {label}{category ? <span className="t-secondary" style={{ marginLeft: 8, fontFamily: "var(--font-sans)" }}>{category}</span> : null}
         </span>
-        <span className="t-secondary">{kinds.length} kinds</span>
+        <span className="t-secondary">{kinds.length} kind{kinds.length === 1 ? "" : "s"}</span>
         <span />
         <span
           className="t-secondary"
@@ -180,10 +203,16 @@ function Section({ cluster, label, category, kinds, grouped }: { cluster: string
         // A failed count is "?" - never a zero (review 2026-10-03 #10).
         const display = c ? (c.error ? "?" : c.capped ? `${c.count}+` : `${c.count}`) : "…";
         const go = () => openResource({ group: k.group, version: k.version, plural: k.plural, kind: k.kind, scope: k.scope });
+        // a click inspects the definition; Enter and a double click open the
+        // instances (slice 15c)
+        const inspect = () => useFleet.getState().selectCRD({ group: k.group, plural: k.plural, kind: k.kind, version: k.version, scope: k.scope });
+        const isSel = selected?.group === k.group && selected?.plural === k.plural;
         return (
           <div key={`${k.group}/${k.kind}`} role="button" tabIndex={0} className="lens-row" style={{ gridTemplateColumns: CRD_GRID }}
-            onClick={go}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }}>
+            data-selected={isSel ? "true" : undefined}
+            onClick={inspect}
+            onDoubleClick={go}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } else if (e.key === " ") { e.preventDefault(); inspect(); } }}>
             <span />
             <span className="lens-cell-name">{k.kind} {k.shortNames[0] && <span style={{ color: "var(--color-text-tertiary)" }}>{k.shortNames[0]}</span>}</span>
             <span className="t-secondary">{k.scope === "Cluster" ? "cluster-scoped" : "namespaced"}</span>

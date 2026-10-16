@@ -34,6 +34,8 @@ const GROUPS: Record<string, string> = {
   ReplicaSet: "apps",
   Job: "batch",
   CronJob: "batch",
+  // the definitions themselves (the API browser's definition inspector)
+  CustomResourceDefinition: "apiextensions.k8s.io",
   // Karpenter
   NodePool: "karpenter.sh",
   NodeClaim: "karpenter.sh",

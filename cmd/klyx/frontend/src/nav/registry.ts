@@ -184,8 +184,8 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "api", label: "API browser", destinations: [
-      task("crds", "CRDs by API group", section("crds"), { keywords: ["custom resources", "crd"], indexLabel: "API browser" }),
-      task("builtins", "Built-in resources", section("resources"), { keywords: ["kinds", "gvr"], indexLabel: "Resources" }),
+      task("crds", "API browser", section("crds"), { keywords: ["custom resources", "crd", "crds by api group"], indexLabel: "API browser" }),
+      task("builtins", "Resources", section("resources"), { keywords: ["kinds", "gvr", "built-in resources"], indexLabel: "Resources" }),
     ],
   },
 ];

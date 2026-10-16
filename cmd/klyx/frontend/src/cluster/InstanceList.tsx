@@ -8,6 +8,7 @@ import { CopyButton } from "../chrome/CopyButton";
 import { Age, useReceivedAt } from "../chrome/Age";
 import { Aspect } from "../chrome/primitives/Aspect";
 import { columnTitle, columnWidth, fleetColumns, rowMark, splitColumns } from "./serverColumns";
+import { BUILTIN_GROUPS } from "./schemaTitles";
 import { EmptyState, SkeletonRows } from "../chrome/primitives";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconAlertTriangle, IconStack2 } from "@tabler/icons-react";
@@ -306,8 +307,10 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       label={`${resource.kind} resources`}
       title={
         <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
-          <button onClick={closeResource} aria-label="back to resources" className="t-control" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)" }}>
-            {resource.scope === "Cluster" ? "Cluster resources" : "Resources"}
+          {/* back to where a kind is browsed from: the API browser for a custom
+              resource, Resources for a built-in kind (slice 15c) */}
+          <button onClick={closeResource} aria-label={BUILTIN_GROUPS.has(resource.group) ? "back to resources" : "back to the API browser"} className="t-control" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)" }}>
+            {BUILTIN_GROUPS.has(resource.group) ? (resource.scope === "Cluster" ? "Cluster resources" : "Resources") : "API browser"}
           </button>
           <span style={{ color: "var(--color-text-tertiary)" }}>/</span>
           <span>{resource.kind}</span>
