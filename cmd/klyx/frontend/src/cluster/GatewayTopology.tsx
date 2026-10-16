@@ -484,15 +484,16 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The latest complete HTTPRoute list did not include it; this is its last evidence.</div>}
             {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current read.</span> The HTTPRoute list was incomplete, so its absence proves nothing; this is its last evidence.</div>}
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
-            <div style={{ display: "grid", gap: 4, marginTop: -4 }}>
+            <div className="verdict-evidence" style={{ display: "grid", gap: 4 }}>
               {issues.length > 0
-                ? issues.map((i) => <div key={i.short} className="t-body" style={{ color: ROLE_TEXT[i.severity], overflowWrap: "anywhere" }}>{i.text}</div>)
+                // the verdict's reasons read in ink-2; its mark carries the tone (slice 13c.2)
+                ? issues.map((i) => <div key={i.short} className="t-body" data-severity={i.severity} style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{i.text}</div>)
                 : (
                   <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>
                     Accepted by this Gateway with references resolved; {carrying.length > 1 ? "every backend that carries traffic has ready endpoints" : <>the backend {carrying[0]?.name} has {carrying[0]?.endpoints ? `${carrying[0].endpoints.ready}/${carrying[0].endpoints.total} endpoints ready` : "endpoints"}</>}. Klyx reads status and endpoints - it does not test the path end to end.
                   </div>
                 )}
-              {RANK[gwRole.kind] <= RANK.degraded && <div className="t-body" style={{ color: ROLE_TEXT[gwRole.kind] }}>The Gateway itself is {gwRole.label}.</div>}
+              {RANK[gwRole.kind] <= RANK.degraded && <div className="t-body" data-severity={gwRole.kind} style={{ color: "var(--color-text-secondary)" }}>The Gateway itself is {gwRole.label}.</div>}
             </div>
           </div>
         }
