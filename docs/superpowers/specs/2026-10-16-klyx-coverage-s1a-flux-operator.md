@@ -65,7 +65,7 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
 **The operator's Deployment:**
 - **The kustomize install:** `flux-operator` in `flux-system`.
 - **The Helm chart** (`controlplaneio-fluxcd/charts`, `charts/flux-operator`): the Deployment is named after the Helm release (its fullname), so the name varies. Its selector label is `app.kubernetes.io/name: flux-operator` unless the chart's `nameOverride` is set; a `nameOverride` is unsupported.
-- **The identity Klyx uses** is therefore the label `app.kubernetes.io/name: flux-operator`, never the name. The operator's runtime namespace is the namespace that Deployment runs in.
+- **The identity Klyx uses** is therefore the label `app.kubernetes.io/name: flux-operator`, never the name. Its runtime namespace is resolved from the manager container, as §2 sets out (`RUNTIME_NAMESPACE`), not from where the Deployment runs.
 - **Ownership is not readiness.** The Flux components the operator installs carry `app.kubernetes.io/managed-by: flux-operator`, which says who manages them, not whether they are ready.
 
 ## 2. What Klyx shows
@@ -122,8 +122,8 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
 
 | Part | Acquisition | Projection | Counted entity | Health | Notifications |
 |---|---|---|---|---|---|
-| `fluxinstance` (new, task `flux`) | observer watch `fluxinstances` | built field by field into a new object (no deep copy then delete): conditions (messages clipped at 1 KiB), generation, the reconcile annotations and `requestedAt`, `lastHandledReconcileAt`, the newest `history[].lastReconciled`, `distribution`, `components` (at most 20), `sync` (URL sanitised by S0b), and the revisions | the FluxInstance UID, counted only in an operator's namespace | §4 | eligible, like Kustomizations |
-| `resourcesets` (new, task `flux`) | observer watches `resourcesets` and `resourcesetinputproviders` | built the same way: conditions (clipped), generation, the reconcile annotations and `requestedAt`, `lastHandledReconcileAt`, the newest `history[].lastReconciled`, `dependsOn` (at most 50, without `readyExpr`), `inputsFrom` (at most 50), the step names (at most 20); for providers, `type`, `url` (sanitised), `schedule` (at most 10), `nextSchedule`, `lastExportedRevision`, `lastHandledReconcileAt`, and the count of `exportedInputs` | the ResourceSet or provider UID | §4 | eligible |
+| `fluxinstance` (new, task `flux`) | observer watch `fluxinstances` | built field by field into a new object (no deep copy then delete): the classification facts of §4 (the suspension state; Ready's status and reason, and its evaluation fingerprint; Reconciling and Stalled), condition messages for display (clipped at 1 KiB), generation, `distribution`, `components` (at most 20), `sync` (URL sanitised by S0b), and the revisions | the FluxInstance UID, counted only in an operator's namespace | §4 | eligible, like Kustomizations |
+| `resourcesets` (new, task `flux`) | observer watches `resourcesets` and `resourcesetinputproviders` | built the same way: the classification facts of §4 (for providers also `lastExportedRevision`), condition messages for display (clipped), generation, `dependsOn` (at most 50, without `readyExpr`), `inputsFrom` (at most 50), the step names (at most 20); for providers, `type`, `url` (sanitised), `schedule` (at most 10), `nextSchedule`, and the count of `exportedInputs` | the ResourceSet or provider UID | §4 | eligible |
 | FluxReport | observer watch `fluxreports` | built field by field: `distribution`, `components` (at most 20), `reconcilers` (at most 50), `sync` (sanitised), `cluster`, `operator`, Ready's status and transition time | none: evidence, not health | none | none |
 
 - **Versions:** `v1` only. A cluster serving an older operator API reads "unsupported operator version", never empty.
@@ -132,7 +132,7 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - **Watches:** four new list/watches. A watch still *receives* whole objects (inputs, inventories, templates) before projection: "not retained in the projected model", never "not watched".
   - **Per object, checked:** each projection is measured, as its encoded size, after it is built, and must be at most **8 KiB**.
     - **Over the limit:** the display strings (condition messages, `dependsOn` and `inputsFrom` entries) are clipped further, down to 256 bytes each and then dropped, until it fits. Each clip is marked in the inspector.
-    - **The classification facts** a rule needs (condition type, status and reason; generation and `observedGeneration`; the reconcile annotations and tokens of §4) are never clipped: at most about 1 KiB together. A projection whose required facts alone exceed 8 KiB is not retained, and its kind's coverage reads "capped".
+    - **The classification facts** a rule needs (§4's suspension state, Ready's status, reason and 32-byte evaluation fingerprint, Reconciling and Stalled, `lastExportedRevision`, generation and `observedGeneration`) are never clipped: at most about 1 KiB together. They are kept apart from the display strings: clipping a message for display never changes a fact a rule reads. A projection whose required facts alone exceed 8 KiB is not retained, and its kind's coverage reads "capped".
   - **Per cluster, admitted:** these four kinds together retain at most **4 MiB** of projections per cluster.
     - **Admission is deterministic:** by namespace, then name. Past the budget, further objects are not retained.
     - **Past the budget,** the kind's coverage reads "capped", counts are lower bounds, and a consumer or prerequisite lookup says it is incomplete. A healthy chain is never claimed past the budget.
@@ -155,33 +155,37 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
 - **The existing rule** (`fluxRole`, `readyBacked`) applies: Ready True is healthy; Ready False is a fault with its reason; Reconciling is checking; Stalled is a fault that will not retry; a generation lag reads Syncing.
 - **Suspension comes first.** `fluxcd.controlplane.io/reconcile: disabled` makes the object **Suspended**, an intended paused state (ratified 2026-07-02), never counted broken-first.
   - Because the operator freezes conditions while disabled, a frozen Ready (True or False) is shown as "last known before suspension", never as a live verdict.
-- **Resume (revision 2).** Resume evidence rests on identity and observed change, never on comparing timestamps.
-  - **Why timestamps cannot work:**
-    - Request tokens are opaque correlation ids.
-    - `metav1.Time` loses fractional seconds, so a run that finishes in the same second as a request never compares later.
-    - Controller and Klyx clocks can skew.
-  - **Why a handled request is not proof:**
-    - The operator's finalizer copies `requestedAt` into `lastHandledReconcileAt` even on an early return (outside a provider's schedule, or while disabled).
-    - Annotation edits do not advance `metadata.generation`.
-    - Some failures (`DependencyNotReady`, `InvalidCELExpression`, a FluxInstance fetch or preflight failure) update conditions without touching history.
-  - **The resume epoch:**
-    - It begins when Klyx observes, through its own watch, an object's reconcile annotation change from disabled to enabled, or when Klyx's own resume verb succeeds.
-    - Klyx records the object's UID, the moment it observed the change, and the request token current at that moment.
-    - Only a token **first observed within the epoch** counts as evidence: Klyx's own resume writes a fresh token atomically with `enabled`. A token left over from before the suspension never certifies anything, however its value compares.
-  - **The evidence of an actual evaluation, per controller path:**
-    - **FluxInstance and ResourceSet** (no schedule gating once enabled): `lastHandledReconcileAt` observed changing to an epoch token. With the reconcile enabled the reconciler runs past the disabled check, and every path after it, a `DependencyNotReady` or CEL failure included, is an evaluation. Also an observed change in any condition (type, status, reason, message or `observedGeneration`), or an increase in the summed `history[].totalReconciliations`, within the epoch.
-    - **A provider without a schedule:** `lastHandledReconcileAt` observed changing to an epoch token. There is no early return when enabled and unscheduled.
-    - **A provider with a schedule:** a skipped run advances `nextSchedule` and copies the token without fetching, so neither is evidence. The evidence is:
-      - `lastHandledForceAt` observed changing to an epoch token, which only the "Fetch now, outside its schedule" verb sets (paired with `requestedAt`); or
-      - an observed change in `lastExportedRevision` or in a condition within the epoch.
-
-      Until then the provider reads "Resumed · not yet evaluated: a scheduled run leaves no proof unless its inputs change; Fetch now to evaluate it". The verb is offered right there.
+- **Resume (revision 3).** Evidence that a resumed object was evaluated is a lossless change in its Ready condition, never a request token and never a timestamp comparison.
+  - **Why tokens cannot work** (Codex, reviews 2 and 3):
+    - the finalizer copies `requestedAt` into `lastHandledReconcileAt` even on an early return;
+    - `HandleAnnotationRequest` (`fluxcd/pkg/apis/meta` v1.31.0, which v0.61.0 pins) sets `lastHandledForceAt` whenever `forceAt` is present, before it checks the pair, so the acknowledgement can be published without a forced run;
+    - the external provider path publishes its in-progress status, acknowledgements included, before it fetches.
+  - **Why the Ready condition works** (v0.61.0 sources):
+    - Every evaluated FluxInstance and ResourceSet run, and every external provider fetch, first persists Ready=Unknown "Reconciliation in progress" (`fluxinstance_controller.go`, `resourceset_controller.go` `reconcile`; the provider's non-static branch). It then ends with Ready True or False, or Stalled.
+    - While disabled, the controller returns before any of this. Its deferred finalizer then touches only `lastHandledReconcileAt` and the Reconciling condition, never Ready.
+    - A run outside a provider's schedule returns before the in-progress status. It changes Ready only in one case, when it finds Reconciling with Ready Unknown, and then with reason `SkippedDueToSchedule`.
+  - **The evaluation fingerprint:** a SHA-256 over Ready's raw status, reason, full message and `lastTransitionTime`.
+    - It is computed in the projection from the raw object, before any clipping.
+    - It is kept in the backend: never serialised, never shown, never sent to AI.
+    - It compares only for equality. No time is compared with another.
+  - **The resume baseline:** the fingerprint of the last state Klyx observed with the reconcile annotation `disabled`, for that UID. A Ready change seen while still disabled updates the baseline.
+  - **Evidence:** a later observed state, with the annotation enabled, whose fingerprint differs from the baseline, unless that state's Ready reason is `SkippedDueToSchedule`. For providers, a changed `lastExportedRevision` is also evidence.
+    - The comparison is between states, not events, so a watch gap or relist loses nothing. A run that happened during a gap still shows a different fingerprint afterwards.
+    - Reconciling changes, handled tokens, `nextSchedule` and history are not evidence.
+    - **Begun and completed are distinct:**
+      - evidence with Ready Unknown and reason `Progressing` reads **"Resumed · evaluating"**;
+      - Ready True or False, or Stalled, after evidence is **evaluated**, and the object takes its normal verdict from then.
+  - **What stays unproven, and says so:**
+    - A ResourceSet blocked on `DependencyNotReady` returns before the in-progress status. If its message is unchanged, it leaves no evidence, and it reads "Resumed · awaiting evaluation (last known before suspension: DependencyNotReady)".
+    - A static provider persists no in-progress state; its evidence is the final message (which carries the run's duration) or a changed `lastExportedRevision`.
+    - A scheduled provider outside its window is not evaluated until the window opens. It reads "Resumed · awaiting its schedule; Fetch now to evaluate it", and the verb is offered there. "Fetch now" sets `requestedAt` and `forceAt` to one fresh value; its evidence is the same Ready change. A pair another client overwrote before the controller read it runs nothing, and so proves nothing.
+    - **Same second:** a run whose Ready ends with the same status, reason, message and second as the frozen condition would leave no evidence. That needs the suspension, resume and run within one second of the frozen transition, and its only effect is to stay "awaiting".
   - **While awaiting evidence:**
     - the object reads **"Resumed · awaiting evaluation"**;
     - its role is checking, and it is not counted;
     - its last condition is shown as "last known before suspension";
     - it raises no fault or recovery notification from a frozen condition. When evidence arrives the object is evaluated normally, and a fault's onset is then.
-  - **When Klyx did not see the resume** (it was not running, or reconnected after it): there is no epoch, and the object is treated like any freshly observed object, with its conditions current. Klyx never infers a resume it did not see, and never certifies one from a token it cannot place in an epoch.
+  - **When Klyx did not see the object disabled** (it was not running, or the suspension began and ended during a gap): there is no baseline. The object is treated like any freshly observed object, with its conditions current. Klyx never infers a resume it did not see.
 
 - **ResourceSet reasons** keep the operator's words: `DependencyNotReady` names what it waits for; a failed step names the step; `InvalidCELExpression` names the `dependsOn` entry where the message does.
 - **A provider's failure** is its own fault. A ResourceSet whose provider failed reports whatever the operator records for it, and Klyx links the provider rather than re-deriving the failure.
@@ -201,7 +205,7 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - a unique request token (an RFC 3339 time with nanoseconds);
   - ConfirmDialog, plus ProtectGuard on protected clusters.
 - **Honest outcomes:**
-  - a verb reports "requested", and only the evidence of §4 reports "completed";
+  - a verb reports "requested"; §4's evidence reports "evaluating", and then "evaluated" once Ready leaves its in-progress state;
   - a request made while an object is suspended is "requested; the object is suspended", never a completed reconciliation.
 - **Ownership consequences, for every target:** any of the four kinds owned by a Flux Kustomization or HelmRelease (Flux ownership labels), or by an Argo Application (Argo tracking), says that an annotation set from Klyx may be removed by its owner on the next apply. The FluxInstance's own sync Kustomization is a Flux object, with the existing verbs.
 - **The existing verb code** (`flux/actions.go` `ResourceForKind`, `gitopsactions.go` `fluxGroupForKind`, `gitopssource.go`) learns the four kinds and their annotation mechanics. Flux's `spec.suspend` is not assumed for them.
@@ -226,13 +230,18 @@ S1a is built after S0b and depends on it.
 
 - **Unit:**
   - the parse and rule of each kind, including the frozen-condition suspension;
-  - **resume (§4):**
-    - a skipped scheduled run whose `nextSchedule` advances (not evidence);
-    - a forced fetch that leaves `nextSchedule` unchanged (evidence by `lastHandledForceAt`);
-    - a new failure without history (evidence by condition change);
-    - completion in the same second as the request;
-    - controller and Klyx clocks skewed;
-    - an external resume keeping an old `requestedAt` (no certificate);
+  - **resume (§4), through the projected Observer path, not only the rule:**
+    - a skipped scheduled run whose `nextSchedule` and handled token advance (not evidence);
+    - a `SkippedDueToSchedule` Ready written over a stale in-progress state (not evidence);
+    - `lastHandledForceAt` set by a mismatched pair, by an already-handled request, and after an intervening `requestedAt` overwrite (none is evidence; no Ready change);
+    - a forced fetch through the in-progress state (evaluating, then evaluated);
+    - a new failure with no history change (evidence by Ready);
+    - two Ready messages that differ only beyond the display clip (evidence);
+    - an unchanged frozen condition whose display message is clipped further when unrelated fields grow (not evidence);
+    - a finalizer patch while disabled that changes only Reconciling (not evidence);
+    - a watch gap across which the run completed (evidence by state comparison);
+    - a blocked ResourceSet with an unchanged `DependencyNotReady` message (awaiting);
+    - controller and Klyx clocks skewed (no effect: nothing compares times);
     - a resume Klyx did not observe (treated as current);
   - FluxReport parsing, and its "reporting succeeded" wording (never "fresh", never a report age);
   - the verb matrix: each kind's GVR and annotations, the provider's paired `requestedAt`/`forceAt`, and the resume pair;
@@ -279,4 +288,14 @@ S1a is built after S0b and depends on it.
 | 3 | The caps did not add up to the 40 MiB reservation | §3: a checked 8 KiB per object with required facts protected, a 4 MiB admitted per-cluster budget with deterministic admission, 40 MiB for ten clusters, and heap calibration |
 | 4 | A labelled Deployment's namespace is not the runtime namespace; `--web-server-only` runs no reconcilers | §2: `RUNTIME_NAMESPACE` read from the manager container (field ref, literal, unset default, unresolvable); web-server-only shown but never binding; absence only after a complete scan |
 | P3 | "Report fresh" wording remained | §1 and §7 corrected |
+
+## 11. Revision 3: Codex's re-review of 044dfc4
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | `lastHandledForceAt` is set before the pair is checked, so it is not a certificate; begun is not completed | §4: tokens are no longer evidence at all. Evidence is a lossless change in Ready, which every evaluated run's persisted in-progress state guarantees, with "evaluating" and "evaluated" distinct; §5 wording; §7 names the mismatched, already-handled and overwritten pairs |
+| 2 | §3 did not retain §4's evidence | §3 retains exactly §4's classification facts (suspension state, Ready's status, reason and fingerprint, Reconciling, Stalled, `lastExportedRevision`) inside the budget; history and handled tokens are not retained and not used; §7 tests run through the projected Observer path |
+| 3 | Clipped messages used as evidence | The fingerprint is computed from the raw condition before clipping and kept apart from display strings; §7 has both clip cases |
+| P3 | Summed rolling history counters are not monotonic | History is no longer evidence |
+| minor | §1 named the Deployment's namespace | §1 defers to §2's `RUNTIME_NAMESPACE` resolution |
 
