@@ -92,6 +92,9 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
 | AI Explain and Suggest-fix bundles | `ai_service` (`redactManifestForAI`), `ai_evidence.go` | the manifest is the sanitised YAML; facts and evidence come from the sanitised copy |
 | Chat tools and CLI snapshots | `chat_project.go` | the sanitiser runs before the structural projection |
 | Cache diffs | `internal/cachediff` | §6 |
+| `flux diff` (M10's on-demand CLI diff) | `fluxcli.DiffKustomization` | *revision 5:* a payload kind's drift body is withheld (flux prints changed values); protected subjects' error text keeps only subject and reason; the URL rule on every other line |
+| The Line's Git sources | `gitSources` → `GitService` | *revision 5:* the raw URL is unexported, used only to match and to suggest a credential-free URL; shown scrubbed |
+| Argo projects | `ArgoService.ListProjects` | *revision 5:* the URL rule on `sourceRepos` and destinations |
 | Describe | `ExecService.Describe` | §4 |
 | Apply | `fleet.ApplyResourceYAML` | §5 |
 
@@ -104,7 +107,7 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
   - The sheet shows the reason and offers no Copy of a report.
 - **`url-scrubbed` (every other kind).** kubectl runs as today. Both stdout and stderr pass a conservative text policy before anything is returned. It treats an incomplete or ambiguous URL as credential-bearing, never as proof of safety (kubectl truncates annotation lines to 138 bytes plus `...`, so a URL can lose its `@`).
   - **A candidate** is either:
-    - a token starting with a scheme (`[A-Za-z][A-Za-z0-9+.-]*://`), whose authority runs to the first `/`, `?`, `#`, whitespace or end of line; or
+    - a token starting with a scheme (`[A-Za-z][A-Za-z0-9+.-]*://`), whose authority runs to the first `/`, `?`, `#`, whitespace or end of line. RFC 3986 user info may hold `'`, `,`, `;`, `(` and `)`, so none of those ends it (revision 5); or
     - an SCP-style token, `user@host:path`, with no scheme.
   - **Decoding:** the authority is percent-decoded before every check.
   - **A complete authority with `@`:** the user info is everything before the **last** `@`. It is removed, unless it is exactly the password-free `git` after decoding.
@@ -320,4 +323,24 @@ The design was accepted at 30147ae. The build is five commits: 9260be4 (stages 1
 - clean and unchanged: released;
 - `resourceVersion` changed, UID replaced, a payload appearing, or the second read failing: each discarded;
 - the first read failing, or a payload present: withheld, with kubectl not run.
+
+## 14. Revision 5: Codex's implementation review of 84de836
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | Sub-delimiters `' , ; ( )` ended the authority, so a valid credential URL passed | The authority runs to a hard end (`/ ? #`, space, characters a URL cannot hold). With an `@` anywhere in it, user info runs to the last one. Without one, the host ends at the first sub-delimiter, and a span that fails there or holds another `:` is redacted whole. A cut span is redacted whole | `TestUserinfoSubDelimiters` (Field, Text, kubectl cut), `TestSoftEndsWithoutUserinfo` |
+| 2 | The Line's Git sources and Argo projects carried raw URLs | The Line keeps the raw URL in an unexported field for matching; Argo projects apply the URL rule to repos and destinations | `TestS0bLineGitSourcesAndArgoProjects` |
+| 3 | A refused dry-run's text could echo a payload | For a payload kind or a Secret, `safeError` keeps only the status reason and code, each cause's type and field path, and a denying webhook's name. **Also, found while fixing this:** the M10 `flux diff` CLI path was missing from §3's matrix. Its output carries changed values, so a payload kind's block body is withheld and protected subjects' errors are reduced the same way | `TestDryRunErrorKeepsOnlyStructuredFacts`; `fluxcli` `TestSanitizeDiffWithholdsPayloadBlocks`, `TestSanitizeErrorWithholdsProtectedSubjects`, `TestDiffKustomizationSanitises` |
+| 4 | kubectl re-resolved the alias and read mutable kubeconfig files, so the bracket did not prove what kubectl read | A bracketed describe runs `DescribePinnedCmd`: the resolved `resource.version.group`, and a kubeconfig snapshot (this context, minified and flattened, `0600` in a private temp dir, removed afterwards) used only after it resolves to the same server, TLS trust, token, basic auth, impersonation, exec plugin, auth provider (ignoring cached tokens) and proxy as the bracket's connection. Drift withholds, naming the field, never a value. Empty UID or `resourceVersion` withholds before kubectl runs | `TestDescribeBracketIsPinned`, `TestDescribePinnedCmd`, `TestKubeconfigSnapshotRefusesDrift` |
+| 5 | The expected UID was optional | Required for dry-run and apply. The live UID must be non-empty and equal, and is set on the applied object | `TestApplyResourceYAML_S0bGuard` |
+| 6 | Discovery ignored cancellation | Discovery runs under the caller's context (a context-carrying transport when a REST config exists), and the caller returns at the context's end | `TestDescribeTargetHonoursCancellation` |
+| 7 | `directory.jsonnet` and `input.parameters` were joined as single keys | Segments are joined one at a time. Every recorded path must resolve against the input | `TestRecordedPathsResolveAgainstTheInput`, `TestOmittedChangesNestedSegments` |
+| 8 | Unexpected types returned raw, and there was no 1 MiB bound | Every step to and at a protected surface checks its type, and a non-empty value of another type is withheld in place. A surface over 1 MiB, measured by a walk that stops once over, is withheld whole. The whole-object copy is linear in what the caller already holds, which the API server's request limit bounds | `TestUnexpectedTypesAreWithheld` (17 shapes), `TestOversizedSurfaceWithheld` |
+| 9 | A Secret's policy was computed after masking | The sanitiser reads the original object; key info travels separately | `TestS0bSecretDetailPolicy` |
+| 10 | A withheld refresh kept the last report and its Copy | A withheld reply is never a failed refresh: the report goes, Copy is disabled, and Copy command stays | `DescribePane` "clears the last report when a refresh is withheld" |
+| note | Last-applied is excluded from eligibility, but the original was sent | The apply strips `kubectl.kubernetes.io/last-applied-configuration` before writing | `TestApplyResourceYAML_S0bGuard` |
+
+**Also fixed:** `child_test.go` ran the confined build's `RunChild` in-process, which replaces the process's default HTTP transport and resolver as the real child must. It now restores both, so later tests in the package can reach their local API servers. Production is unaffected: the override only ever runs in the separate child process.
+
+**Not adopted as written:** the probe `TestReviewS0bDescribePinsResolvedVersion` reads the pinned argument from `DescribeCmd`. The pinned run is now its own method, `DescribePinnedCmd`, because it also carries the kubeconfig snapshot; `TestDescribeBracketIsPinned` asserts the same pin on that method. The other twelve probes pass as written.
 

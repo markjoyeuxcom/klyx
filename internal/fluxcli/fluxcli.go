@@ -116,9 +116,9 @@ func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, pat
 	stdout, stderr, err := r.Run(ctx, args...)
 	out := strings.TrimSpace(string(stdout))
 	if out != "" {
-		res := DiffResult{Output: out, HasChanges: true}
+		res := DiffResult{Output: sanitizeDiff(out), HasChanges: true}
 		if err != nil && stderr != "" && !isDriftExit(stderr) {
-			res.Warning = stderr
+			res.Warning = sanitizeError(stderr)
 		}
 		return res
 	}
@@ -127,7 +127,7 @@ func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, pat
 		if msg == "" {
 			msg = err.Error()
 		}
-		return DiffResult{Err: msg}
+		return DiffResult{Err: sanitizeError(msg)}
 	}
 	return DiffResult{HasChanges: false}
 }

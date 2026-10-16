@@ -70,7 +70,9 @@ func TestDiffKustomizationPartialOutputWithError(t *testing.T) {
 	// was silently swallowed.
 	r := &fakeRunner{
 		stdout: "► Deployment/default/podinfo drifted\n",
-		stderr: "failed to dry-run Secret/default/creds: admission webhook denied",
+		// a Deployment: a protected subject's error text is withheld
+		// (sanitize_test.go), but still surfaces as a Warning
+		stderr: "failed to dry-run Deployment/default/web: admission webhook denied",
 		err:    errors.New("exit status 1"),
 	}
 	res := DiffKustomization(context.Background(), r, "", "flux-system", "apps", "./apps")

@@ -6,6 +6,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"net"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -175,6 +177,11 @@ func TestTheChildRefusesABadInput(t *testing.T) {
 		_ = tw.WriteHeader(&tar.Header{Name: "repo/k/link", Linkname: "/etc/passwd", Typeflag: tar.TypeSymlink})
 	}
 	req := file(requestName, `{"root":"k"}`)
+	// RunChild refuses the network for its whole process, as the confined
+	// child must; run in-process here, the test restores it afterwards so
+	// later tests in this package can still reach their local API servers.
+	transport, resolver := http.DefaultTransport, net.DefaultResolver
+	t.Cleanup(func() { http.DefaultTransport, net.DefaultResolver = transport, resolver })
 	for name, in := range map[string][]byte{
 		"a symlink":        tarOf(req, link),
 		"a parent path":    tarOf(req, file("repo/../etc/x", "x")),

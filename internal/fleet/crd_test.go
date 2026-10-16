@@ -88,7 +88,7 @@ func TestApplyResourceYAMLDryRun(t *testing.T) {
 	listKinds := map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]interface{}{"namespace": "default", "name": "app"},
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app", "uid": "u1"},
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds, obj)
 	patched := false
@@ -101,7 +101,7 @@ func TestApplyResourceYAMLDryRun(t *testing.T) {
 	})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\n", true)
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "u1", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\n", true)
 	if err != nil {
 		t.Fatalf("dry-run apply: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestApplyResourceYAMLSurfacesConflict(t *testing.T) {
 	// whole point (no silent drift against Flux/Argo).
 	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	live := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata": map[string]interface{}{"namespace": "default", "name": "app"}}}
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app", "uid": "u1"}}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}, live)
 	dyn.PrependReactor("patch", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "app",
@@ -124,7 +124,7 @@ func TestApplyResourceYAMLSurfacesConflict(t *testing.T) {
 	})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "",
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "u1",
 		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\ndata:\n  key: v\n", false)
 	if err == nil {
 		t.Fatal("want a conflict error, got nil")
@@ -962,8 +962,32 @@ func TestApplyResourceYAML_S0bGuard(t *testing.T) {
 	if err := apply(c, "u1", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err != nil {
 		t.Fatalf("clean apply: %v", err)
 	}
-	if !strings.Contains(sent, `"resourceVersion":"42"`) {
-		t.Fatalf("the live resourceVersion must ride along: %s", sent)
+	if !strings.Contains(sent, `"resourceVersion":"42"`) || !strings.Contains(sent, `"uid":"u1"`) {
+		t.Fatalf("the live resourceVersion and UID must ride along: %s", sent)
+	}
+	// Codex's S0b implementation review, finding 5: no expected UID, no
+	// write - dry-run or real - and an object with no UID cannot match
+	for _, dry := range []bool{true, false} {
+		sent = ""
+		err := c.ApplyResourceYAML(context.Background(), "source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepository", "Namespaced",
+			"flux-system", "platform", "", fmt.Sprintf(s0bDoc, "https://github.com/org/repo"), dry)
+		if err == nil || sent != "" {
+			t.Fatalf("dry=%v: an apply without an expected UID: %v (sent %q)", dry, err, sent)
+		}
+	}
+	noUID := gitRepo("https://github.com/org/repo", "")
+	if err := apply(s0bApplyConn(t, noUID, nil), "", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err == nil {
+		t.Fatal("an object without a UID cannot be matched")
+	}
+	// kubectl's last-applied annotation is never written back
+	sent = ""
+	doc := strings.Replace(fmt.Sprintf(s0bDoc, "https://github.com/org/repo"), "  name: platform\n",
+		"  name: platform\n  annotations:\n    kubectl.kubernetes.io/last-applied-configuration: '{}'\n    keep: me\n", 1)
+	if err := apply(c, "u1", doc); err != nil {
+		t.Fatalf("apply with last-applied: %v", err)
+	}
+	if strings.Contains(sent, "last-applied-configuration") || !strings.Contains(sent, `"keep":"me"`) {
+		t.Fatalf("last-applied must be stripped, other annotations kept: %s", sent)
 	}
 }
 

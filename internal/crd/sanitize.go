@@ -35,6 +35,13 @@ const (
 // sanitizeMaxDepth bounds every walk; deeper content is withheld.
 const sanitizeMaxDepth = 64
 
+// sanitizeMaxSurface bounds one protected surface: a larger one is withheld
+// whole, measured by a walk that stops as soon as it is over (S0b §2; Codex's
+// implementation review, finding 8). The deep copy of the whole object is
+// linear in what the caller already holds, which the API server bounds by
+// its request size limit; nothing beyond one copy is allocated.
+const sanitizeMaxSurface = 1 << 20
+
 // Sanitized is a sanitised copy and its policy metadata.
 type Sanitized struct {
 	Object map[string]any
@@ -132,6 +139,18 @@ func IsPayloadKind(group, kind string) bool {
 	return ok
 }
 
+// IsPayloadKindName reports whether kind names a registered payload kind in
+// any group. It serves text that prints a kind without its group (flux and
+// kubectl subjects read Kind/namespace/name), so it errs towards withholding.
+func IsPayloadKindName(kind string) bool {
+	for k := range payloadKinds {
+		if strings.HasSuffix(k, "/"+kind) {
+			return true
+		}
+	}
+	return false
+}
+
 // sanitizer carries one run's changes.
 type sanitizer struct {
 	paths   map[string]bool
@@ -216,57 +235,145 @@ func hasLastApplied(o map[string]any) bool {
 	return ok
 }
 
-// apply walks path inside v and transforms what it reaches by shape.
+// apply walks path inside v and transforms what it reaches by shape. A
+// present, non-empty value of an unexpected type on the way is withheld in
+// place, never returned raw (S0b §2; Codex's implementation review,
+// finding 8).
 func (s *sanitizer) apply(v any, path []string, sh shape, at string, depth int) {
-	if depth > sanitizeMaxDepth {
-		return
-	}
-	switch len(path) {
-	case 0:
-		return
-	case 1:
-		parent, ok := v.(map[string]any)
-		if !ok {
-			return
-		}
-		child, present := parent[path[0]]
-		if !present || child == nil {
-			return
-		}
-		parent[path[0]] = s.transform(child, sh, join(at, path[0]), depth+1)
+	if depth > sanitizeMaxDepth || len(path) == 0 {
 		return
 	}
 	if path[0] == "[]" {
 		list, ok := v.([]any)
 		if !ok {
-			return
+			return // the caller checked the type before descending
 		}
 		for i, item := range list {
-			s.apply(item, path[1:], sh, fmt.Sprintf("%s[%d]", at, i), depth+1)
+			ia := fmt.Sprintf("%s[%d]", at, i)
+			if len(path) > 1 && path[1] != "[]" {
+				if _, ok := item.(map[string]any); !ok {
+					list[i] = s.withhold(item, ia)
+					continue
+				}
+			}
+			s.apply(item, path[1:], sh, ia, depth+1)
 		}
 		return
 	}
-	m, ok := v.(map[string]any)
+	parent, ok := v.(map[string]any)
 	if !ok {
+		return // the root is a map, and the caller checked the rest
+	}
+	child, present := parent[path[0]]
+	if !present || child == nil {
 		return
 	}
-	if path[1] == "[]" && len(path) == 2 {
-		// every item of the list at path[0]
-		list, ok := m[path[0]].([]any)
+	ca := join(at, path[0])
+	if len(path) == 1 {
+		parent[path[0]] = s.transform(child, sh, ca, depth+1)
+		return
+	}
+	if path[1] == "[]" {
+		list, ok := child.([]any)
 		if !ok {
+			parent[path[0]] = s.withhold(child, ca)
 			return
 		}
-		for i, item := range list {
-			list[i] = s.transform(item, sh, fmt.Sprintf("%s[%d]", join(at, path[0]), i), depth+1)
+		if len(path) == 2 {
+			// every item of the list at path[0]
+			for i, item := range list {
+				list[i] = s.transform(item, sh, fmt.Sprintf("%s[%d]", ca, i), depth+1)
+			}
+			return
 		}
+		s.apply(list, path[1:], sh, ca, depth+1)
 		return
 	}
-	s.apply(m[path[0]], path[1:], sh, join(at, path[0]), depth+1)
+	if _, ok := child.(map[string]any); !ok {
+		parent[path[0]] = s.withhold(child, ca)
+		return
+	}
+	s.apply(child, path[1:], sh, ca, depth+1)
+}
+
+// withhold replaces a value of an unexpected type at a protected surface.
+// Empty values and placeholders stay as they are.
+func (s *sanitizer) withhold(v any, at string) any {
+	if empty(v) || isPlaceholder(v) {
+		return v
+	}
+	s.mark(at, true)
+	return WithheldValue
+}
+
+// mapAt returns parent[key] as a map. A present, non-empty value of another
+// type is withheld in place.
+func (s *sanitizer) mapAt(parent map[string]any, key, at string) (map[string]any, bool) {
+	v, ok := parent[key]
+	if !ok || v == nil {
+		return nil, false
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	parent[key] = s.withhold(v, join(at, key))
+	return nil, false
+}
+
+// listAt returns parent[key] as a list. A present, non-empty value of
+// another type is withheld in place.
+func (s *sanitizer) listAt(parent map[string]any, key, at string) ([]any, bool) {
+	v, ok := parent[key]
+	if !ok || v == nil {
+		return nil, false
+	}
+	if l, ok := v.([]any); ok {
+		return l, true
+	}
+	parent[key] = s.withhold(v, join(at, key))
+	return nil, false
+}
+
+// sizeOver reports whether v's encoded size exceeds limit. It stops walking
+// as soon as it does.
+func sizeOver(v any, limit int) bool {
+	n := 0
+	var walk func(any) bool
+	walk = func(v any) bool {
+		switch t := v.(type) {
+		case string:
+			n += len(t) + 2
+		case map[string]any:
+			n += 2
+			for k, c := range t {
+				n += len(k) + 3
+				if n > limit || walk(c) {
+					return true
+				}
+			}
+		case []any:
+			n += 2
+			for _, c := range t {
+				n++
+				if n > limit || walk(c) {
+					return true
+				}
+			}
+		default:
+			n += 8
+		}
+		return n > limit
+	}
+	return walk(v)
 }
 
 // transform applies one shape to a value.
 func (s *sanitizer) transform(v any, sh shape, at string, depth int) any {
 	if depth > sanitizeMaxDepth {
+		s.mark(at, true)
+		return WithheldValue
+	}
+	if !isPlaceholder(v) && sizeOver(v, sanitizeMaxSurface) {
 		s.mark(at, true)
 		return WithheldValue
 	}
@@ -293,30 +400,34 @@ func (s *sanitizer) transform(v any, sh shape, at string, depth int) any {
 	case shapeSource:
 		o, ok := v.(map[string]any)
 		if !ok {
-			return v
+			return s.withhold(v, at)
 		}
 		s.source(o, at, depth+1)
 		return o
 	case shapeTemplate:
 		o, ok := v.(map[string]any)
 		if !ok {
-			return v
+			return s.withhold(v, at)
 		}
 		s.template(o, at, depth+1)
 		return o
 	case shapeGenerators:
 		list, ok := v.([]any)
 		if !ok {
-			return v
+			return s.withhold(v, at)
 		}
 		for i, g := range list {
-			if gm, ok := g.(map[string]any); ok {
-				s.generator(gm, fmt.Sprintf("%s[%d]", at, i), depth+1)
+			ga := fmt.Sprintf("%s[%d]", at, i)
+			gm, ok := g.(map[string]any)
+			if !ok {
+				list[i] = s.withhold(g, ga)
+				continue
 			}
+			s.generator(gm, ga, depth+1)
 		}
 		return list
 	}
-	return v
+	return s.withhold(v, at)
 }
 
 // freeForm keeps the key structure and omits every leaf value. A list of
@@ -369,7 +480,7 @@ func (s *sanitizer) freeForm(v any, at string, depth int) any {
 // (repoURL, path, chart, targetRevision, valueFiles, fileParameters paths,
 // jsonnet libs) stay readable.
 func (s *sanitizer) source(o map[string]any, at string, depth int) {
-	if h, ok := o["helm"].(map[string]any); ok {
+	if h, ok := s.mapAt(o, "helm", at); ok {
 		ha := join(at, "helm")
 		if v, ok := h["values"]; ok && !empty(v) && !isPlaceholder(v) {
 			h["values"] = OmittedText
@@ -380,36 +491,46 @@ func (s *sanitizer) source(o map[string]any, at string, depth int) {
 		}
 		omitItemField(s, h, "parameters", "value", ha, depth)
 	}
-	if pl, ok := o["plugin"].(map[string]any); ok {
+	if pl, ok := s.mapAt(o, "plugin", at); ok {
 		pa := join(at, "plugin")
 		omitItemField(s, pl, "env", "value", pa, depth)
-		if params, ok := pl["parameters"].([]any); ok {
+		if params, ok := s.listAt(pl, "parameters", pa); ok {
 			for i, it := range params {
-				if m, ok := it.(map[string]any); ok {
-					for _, f := range []string{"string", "array", "map"} {
-						if v, ok := m[f]; ok && v != nil {
-							m[f] = s.freeForm(v, fmt.Sprintf("%s.parameters[%d].%s", pa, i, f), depth+1)
-						}
+				ia := fmt.Sprintf("%s.parameters[%d]", pa, i)
+				m, ok := it.(map[string]any)
+				if !ok {
+					params[i] = s.withhold(it, ia)
+					continue
+				}
+				for _, f := range []string{"string", "array", "map"} {
+					if v, ok := m[f]; ok && v != nil {
+						m[f] = s.freeForm(v, join(ia, f), depth+1)
 					}
 				}
 			}
 		}
 	}
-	if d, ok := o["directory"].(map[string]any); ok {
-		if j, ok := d["jsonnet"].(map[string]any); ok {
-			ja := join(at, "directory.jsonnet")
+	if d, ok := s.mapAt(o, "directory", at); ok {
+		da := join(at, "directory")
+		if j, ok := s.mapAt(d, "jsonnet", da); ok {
+			ja := join(da, "jsonnet")
 			omitItemField(s, j, "extVars", "value", ja, depth)
 			omitItemField(s, j, "tlas", "value", ja, depth)
 		}
 	}
-	if k, ok := o["kustomize"].(map[string]any); ok {
-		if patches, ok := k["patches"].([]any); ok {
+	if k, ok := s.mapAt(o, "kustomize", at); ok {
+		ka := join(at, "kustomize")
+		if patches, ok := s.listAt(k, "patches", ka); ok {
 			for i, it := range patches {
-				if m, ok := it.(map[string]any); ok {
-					if v, ok := m["patch"]; ok && !empty(v) && !isPlaceholder(v) {
-						m["patch"] = OmittedText
-						s.mark(fmt.Sprintf("%s.kustomize.patches[%d].patch", at, i), true)
-					}
+				ia := fmt.Sprintf("%s.patches[%d]", ka, i)
+				m, ok := it.(map[string]any)
+				if !ok {
+					patches[i] = s.withhold(it, ia)
+					continue
+				}
+				if v, ok := m["patch"]; ok && !empty(v) && !isPlaceholder(v) {
+					m["patch"] = OmittedText
+					s.mark(join(ia, "patch"), true)
 				}
 			}
 		}
@@ -418,34 +539,42 @@ func (s *sanitizer) source(o map[string]any, at string, depth int) {
 
 // omitItemField omits field f of every item of the list at key.
 func omitItemField(s *sanitizer, parent map[string]any, key, f, at string, depth int) {
-	list, ok := parent[key].([]any)
+	list, ok := s.listAt(parent, key, at)
 	if !ok {
 		return
 	}
 	for i, it := range list {
-		if m, ok := it.(map[string]any); ok {
-			if v, ok := m[f]; ok && v != nil {
-				m[f] = s.freeForm(v, fmt.Sprintf("%s.%s[%d].%s", at, key, i, f), depth+1)
-			}
+		ia := fmt.Sprintf("%s.%s[%d]", at, key, i)
+		m, ok := it.(map[string]any)
+		if !ok {
+			list[i] = s.withhold(it, ia)
+			continue
+		}
+		if v, ok := m[f]; ok && v != nil {
+			m[f] = s.freeForm(v, join(ia, f), depth+1)
 		}
 	}
 }
 
 // template sanitises an ApplicationSet template: its spec's sources.
 func (s *sanitizer) template(o map[string]any, at string, depth int) {
-	spec, ok := o["spec"].(map[string]any)
+	spec, ok := s.mapAt(o, "spec", at)
 	if !ok {
 		return
 	}
 	sa := join(at, "spec")
-	if src, ok := spec["source"].(map[string]any); ok {
+	if src, ok := s.mapAt(spec, "source", sa); ok {
 		s.source(src, join(sa, "source"), depth+1)
 	}
-	if list, ok := spec["sources"].([]any); ok {
+	if list, ok := s.listAt(spec, "sources", sa); ok {
 		for i, it := range list {
-			if src, ok := it.(map[string]any); ok {
-				s.source(src, fmt.Sprintf("%s.sources[%d]", sa, i), depth+1)
+			ia := fmt.Sprintf("%s.sources[%d]", sa, i)
+			src, ok := it.(map[string]any)
+			if !ok {
+				list[i] = s.withhold(it, ia)
+				continue
 			}
+			s.source(src, ia, depth+1)
 		}
 	}
 }
@@ -456,8 +585,8 @@ func (s *sanitizer) generator(g map[string]any, at string, depth int) {
 	if depth > sanitizeMaxDepth {
 		return
 	}
-	for typ, body := range g {
-		b, ok := body.(map[string]any)
+	for typ := range g {
+		b, ok := s.mapAt(g, typ, at)
 		if !ok {
 			continue
 		}
@@ -471,19 +600,23 @@ func (s *sanitizer) generator(g map[string]any, at string, depth int) {
 			b["elementsYaml"] = OmittedText
 			s.mark(join(ba, "elementsYaml"), true)
 		}
-		if in, ok := b["input"].(map[string]any); ok {
+		if in, ok := s.mapAt(b, "input", ba); ok {
 			if v, ok := in["parameters"]; ok && v != nil {
-				in["parameters"] = s.freeForm(v, join(ba, "input.parameters"), depth+1)
+				in["parameters"] = s.freeForm(v, join(join(ba, "input"), "parameters"), depth+1)
 			}
 		}
-		if t, ok := b["template"].(map[string]any); ok {
+		if t, ok := s.mapAt(b, "template", ba); ok {
 			s.template(t, join(ba, "template"), depth+1)
 		}
-		if list, ok := b["generators"].([]any); ok {
+		if list, ok := s.listAt(b, "generators", ba); ok {
 			for i, it := range list {
-				if gm, ok := it.(map[string]any); ok {
-					s.generator(gm, fmt.Sprintf("%s.generators[%d]", ba, i), depth+1)
+				ia := fmt.Sprintf("%s.generators[%d]", ba, i)
+				gm, ok := it.(map[string]any)
+				if !ok {
+					list[i] = s.withhold(it, ia)
+					continue
 				}
+				s.generator(gm, ia, depth+1)
 			}
 		}
 	}

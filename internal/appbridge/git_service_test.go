@@ -117,13 +117,13 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 	fetched := time.Date(2026, 10, 15, 20, 31, 0, 0, time.UTC)
 	h.store.status["git@github.com:acme/fleet.git"] = gitcache.Status{FetchedAt: fetched, AttemptedAt: fetched.Add(time.Minute), Error: "fetch failed"}
 	h.sources = []LineGitSource{
-		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "https://github.com/acme/fleet"},
-		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", URL: "ssh://git@github.com/acme/fleet.git"},
-		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "apps", URL: "https://github.com/acme/platform.git"},
-		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "http://git.internal/infra.git"},
-		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", URL: "https://deploy:s3cr3t@git.internal/infra.git"},
-		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", URL: "https://github.com/acme/tools.git"},
-		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "scp", URL: "scpuser:scp-cluster-secret@git.internal:infra.git"},
+		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", rawURL: "https://github.com/acme/fleet"},
+		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "fleet", rawURL: "ssh://git@github.com/acme/fleet.git"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "apps", rawURL: "https://github.com/acme/platform.git"},
+		{Cluster: "prd", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", rawURL: "http://git.internal/infra.git"},
+		{Cluster: "stg", Origin: "GitRepository", Namespace: "flux-system", Name: "infra", rawURL: "https://deploy:s3cr3t@git.internal/infra.git"},
+		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "tools", rawURL: "https://github.com/acme/tools.git"},
+		{Cluster: "stg", Origin: "Application", Namespace: "argocd", Name: "scp", rawURL: "scpuser:scp-cluster-secret@git.internal:infra.git"},
 	}
 	h.svc = NewGitService(context.Background(), GitDeps{
 		ConfigPath: path,
@@ -339,7 +339,7 @@ func TestGitSourcesAreFluxGitRepositoriesAndArgoGitSources(t *testing.T) {
 		if s.Cluster != "prd" {
 			t.Fatalf("cluster %+v", s)
 		}
-		urls = append(urls, s.Origin+" "+s.URL)
+		urls = append(urls, s.Origin+" "+s.rawURL)
 	}
 	want := []string{"GitRepository ssh://git@github.com/acme/fleet.git", "Application https://github.com/acme/apps.git",
 		"Application https://github.com/acme/values.git"}
@@ -357,10 +357,10 @@ func TestNoSentinelReachesTheSettingsDTO(t *testing.T) {
 `
 	h := newGitHarness(t, fleet, nil)
 	extra := []LineGitSource{
-		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "a", URL: "https://ghp_SENTINEL_D@github.com/acme/repo%zz"},
-		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "b", URL: "https://SENTINEL_E:pw@git.internal/r%zz?SENTINEL_F"},
-		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "c", URL: "SENTINEL_G@github.com/acme/bare"},
-		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "d", URL: "u:SENTINEL_H@git.internal:infra.git"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "a", rawURL: "https://ghp_SENTINEL_D@github.com/acme/repo%zz"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "b", rawURL: "https://SENTINEL_E:pw@git.internal/r%zz?SENTINEL_F"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "c", rawURL: "SENTINEL_G@github.com/acme/bare"},
+		{Cluster: "prd", Origin: "Application", Namespace: "argocd", Name: "d", rawURL: "u:SENTINEL_H@git.internal:infra.git"},
 	}
 	h.sources = append(h.sources, extra...)
 	h.push(LineDTO{Version: 2})

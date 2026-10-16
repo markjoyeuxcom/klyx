@@ -2,6 +2,7 @@ package crd
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -186,5 +187,94 @@ func TestValueAt(t *testing.T) {
 		if _, ok := ValueAt(raw, p); !ok {
 			t.Errorf("path %q does not read back", p)
 		}
+	}
+}
+
+// Codex's S0b implementation review, finding 7: every recorded path
+// resolves against the original input, so a cache diff compares the real
+// values. Dotted segments are joined one at a time.
+func TestRecordedPathsResolveAgainstTheInput(t *testing.T) {
+	const n = "PATHneedle5T"
+	cases := []struct{ g, k, raw string }{
+		{"argoproj.io", "Application", `{"spec":{"source":{"directory":{"jsonnet":{"extVars":[{"name":"x","value":"` + n + `"}],"tlas":[{"name":"t","value":"` + n + `"}]}},
+			"helm":{"values":"` + n + `","valuesObject":{"a":{"b":"` + n + `"}},"parameters":[{"name":"p","value":"` + n + `"}]},
+			"plugin":{"env":[{"name":"e","value":"` + n + `"}],"parameters":[{"name":"q","string":"` + n + `","map":{"k":"` + n + `"}}]},
+			"kustomize":{"patches":[{"patch":"` + n + `"}]}}}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"generators":[{"plugin":{"input":{"parameters":{"value":"` + n + `"}}}},
+			{"list":{"elements":[{"k":"` + n + `"}],"elementsYaml":"` + n + `"}},
+			{"matrix":{"generators":[{"list":{"elements":[{"k":"` + n + `"}]}}]}}],
+			"template":{"spec":{"sources":[{"helm":{"values":"` + n + `"}}]}},"templatePatch":"` + n + `"}}`},
+		{"helm.toolkit.fluxcd.io", "HelmRelease", `{"spec":{"values":{"a.b":{"c":"` + n + `"}},"postRenderers":[{"kustomize":{"patches":[{"patch":"` + n + `"}]}}]}}`},
+	}
+	for _, c := range cases {
+		raw := objOf(t, c.raw)
+		s := SanitizeEmbedded(c.g, c.k, raw)
+		if len(s.Paths) == 0 || strings.Contains(mustJSON(t, s.Object), n) {
+			t.Fatalf("%s: nothing sanitised, or the needle crossed: %v", c.k, s.Paths)
+		}
+		for _, p := range s.Paths {
+			if strings.Contains(p, "last-applied") {
+				continue
+			}
+			if _, ok := ValueAt(raw, p); !ok {
+				t.Errorf("%s: recorded path does not resolve against the input: %s", c.k, p)
+			}
+		}
+	}
+}
+
+// Codex's S0b implementation review, finding 8: an unexpected type at or
+// on the way to a protected surface is withheld, never returned raw.
+func TestUnexpectedTypesAreWithheld(t *testing.T) {
+	const n = "TYPEneedle6U"
+	cases := []struct{ g, k, raw string }{
+		{"argoproj.io", "Application", `{"spec":{"source":"` + n + `"}}`},
+		{"argoproj.io", "Application", `{"spec":{"sources":"` + n + `"}}`},
+		{"argoproj.io", "Application", `{"spec":{"sources":["` + n + `"]}}`},
+		{"argoproj.io", "Application", `{"spec":{"source":{"helm":"` + n + `"}}}`},
+		{"argoproj.io", "Application", `{"spec":{"source":{"helm":{"parameters":"` + n + `"}}}}`},
+		{"argoproj.io", "Application", `{"spec":{"source":{"helm":{"parameters":["` + n + `"]}}}}`},
+		{"argoproj.io", "Application", `{"spec":{"source":{"directory":{"jsonnet":"` + n + `"}}}}`},
+		{"argoproj.io", "Application", `{"spec":{"source":{"kustomize":{"patches":["` + n + `"]}}}}`},
+		{"argoproj.io", "Application", `{"status":{"history":"` + n + `"}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"generators":"` + n + `"}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"generators":["` + n + `"]}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"generators":[{"list":"` + n + `"}]}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"template":"` + n + `"}}`},
+		{"argoproj.io", "ApplicationSet", `{"spec":{"template":{"spec":{"sources":["` + n + `"]}}}}`},
+		{"helm.toolkit.fluxcd.io", "HelmRelease", `{"spec":{"postRenderers":"` + n + `"}}`},
+		{"helm.toolkit.fluxcd.io", "HelmRelease", `{"spec":{"postRenderers":["` + n + `"]}}`},
+		{"fluxcd.controlplane.io", "ResourceSet", `{"spec":{"resources":"` + n + `"}}`},
+	}
+	for _, c := range cases {
+		s := SanitizeEmbedded(c.g, c.k, objOf(t, c.raw))
+		if strings.Contains(mustJSON(t, s.Object), n) || s.EditEligible || !s.Payload || s.DescribeMode != DescribeWithheld {
+			t.Errorf("%s %s: not withheld: %+v", c.k, c.raw, s)
+		}
+	}
+	// empty values of an unexpected type stay as they are
+	if s := SanitizeEmbedded("argoproj.io", "Application", objOf(t, `{"spec":{"source":""}}`)); !s.EditEligible || s.Payload {
+		t.Errorf("an empty value is not a payload: %+v", s)
+	}
+}
+
+// A protected surface larger than 1 MiB is withheld whole; the size walk
+// stops once it is over.
+func TestOversizedSurfaceWithheld(t *testing.T) {
+	big := strings.Repeat("x", sanitizeMaxSurface+1)
+	s := SanitizeEmbedded("fluxcd.controlplane.io", "ResourceSet", map[string]any{"spec": map[string]any{"resourcesTemplate": big}})
+	if v, _ := ValueAt(s.Object, "spec.resourcesTemplate"); v != WithheldValue || !s.Payload {
+		t.Fatalf("an over-1MiB template: %v", v)
+	}
+	values := map[string]any{}
+	for i := 0; i < 20000; i++ {
+		values[fmt.Sprintf("k%05d", i)] = strings.Repeat("v", 64)
+	}
+	s = SanitizeEmbedded("helm.toolkit.fluxcd.io", "HelmRelease", map[string]any{"spec": map[string]any{"values": values}})
+	if v, _ := ValueAt(s.Object, "spec.values"); v != WithheldValue {
+		t.Fatalf("over-1MiB values: %T", v)
+	}
+	if !sizeOver(big, 1<<20) || sizeOver("small", 1<<20) {
+		t.Fatal("sizeOver")
 	}
 }

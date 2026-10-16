@@ -15,6 +15,9 @@ import (
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/argo"
+	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/line"
 )
 
 // The bridge needle (coverage S0b §7): a plain marker no scrubber knows, in
@@ -119,5 +122,41 @@ func TestS0b_BridgeNeedle_FixPrompt(t *testing.T) {
 	system, user := BuildFixPrompt(bundle, manifest)
 	if strings.Contains(system+user, s0bNeedle) {
 		t.Fatal("the needle reached the Suggest-fix prompt")
+	}
+}
+
+// Codex's S0b implementation review, finding 2: the Line's Git sources and
+// Argo projects never carry a credential URL across the bridge.
+func TestS0bLineGitSourcesAndArgoProjects(t *testing.T) {
+	const needle = "S0bLineNeedle7"
+	url := "https://bob:" + needle + "@host.example/repo"
+	noNeedle := func(name string, v any) {
+		t.Helper()
+		b, _ := json.Marshal(v)
+		if strings.Contains(string(b), needle) {
+			t.Errorf("%s: credential crossed: %s", name, b)
+		}
+	}
+	noNeedle("line git sources", gitSources(line.StationInput{Cluster: "c",
+		Sources: []line.Object[flux.Source]{{Data: flux.Source{Kind: flux.GitRepositoryKind, URL: url}}}}))
+	f := &fakeArgoConn{projects: []argo.Project{{SourceRepos: []string{url}, Destinations: []string{url + "/shop"}}}}
+	res := NewArgoService(func(string) (ArgoConn, bool) { return f, true }).ListProjects("c")
+	noNeedle("argo projects", res)
+	if len(res.Projects) != 1 || res.Projects[0].SourceRepos[0] != "https://host.example/repo" {
+		t.Fatalf("projects: %+v", res.Projects)
+	}
+}
+
+// Codex's S0b implementation review, finding 9: a Secret's policy is read
+// from its real data, so the editor is not offered and Describe is withheld.
+func TestS0bSecretDetailPolicy(t *testing.T) {
+	sec := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"namespace": "shop", "name": "s", "uid": "u"}, "data": map[string]any{"k": "YQ=="}}}
+	d, err := s0bConn(t, sec).GetInstanceDetail(context.Background(), "", "v1", "secrets", "shop", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.EditEligible || d.DescribeMode != "withheld" || len(d.SecretKeys) != 1 {
+		t.Fatalf("edit=%v mode=%s keys=%d", d.EditEligible, d.DescribeMode, len(d.SecretKeys))
 	}
 }

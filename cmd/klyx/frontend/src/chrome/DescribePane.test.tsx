@@ -101,6 +101,26 @@ describe("DescribePane", () => {
     expect((getByRole("button", { name: "Copy command" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  // Codex's S0b implementation review, finding 10: a withheld refresh after
+  // a good report clears that report and disables Copy; the command stays.
+  it("clears the last report when a refresh is withheld", async () => {
+    mocked().mockReset()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValueOnce({ ok: false, output: "", error: "", command: CMD, commandError: "", withheld: "Describe is withheld: this Kustomization changed while it was being described." })
+      .mockResolvedValueOnce({ ok: false, output: "", error: "kubectl failed", command: CMD, commandError: "" });
+    const r = sheet({ kind: "Kustomization", kindArg: "kustomizations.kustomize.toolkit.fluxcd.io" });
+    await r.findByTestId("describe-formatted");
+    fireEvent.click(r.getByRole("button", { name: "Refresh" }));
+    await r.findByTestId("describe-withheld");
+    expect(r.queryByTestId("describe-formatted")).toBeNull();
+    expect((r.getByRole("button", { name: /^Copy$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((r.getByRole("button", { name: "Copy command" }) as HTMLButtonElement).disabled).toBe(false);
+    // a failed refresh after it has no report to fall back to
+    fireEvent.click(r.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(r.queryByTestId("describe-withheld")).toBeNull());
+    expect(r.queryByTestId("describe-formatted")).toBeNull();
+  });
+
   it("labels a report whose URLs lost their user info as not kubectl's exact output", async () => {
     mocked().mockImplementation(() => Promise.resolve({ ...ok(), scrubbed: true, linesWithheld: 1 }));
     const { findByTestId } = sheet();

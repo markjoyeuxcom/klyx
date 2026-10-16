@@ -59,3 +59,28 @@ func TestOmittedChanges(t *testing.T) {
 		}
 	}
 }
+
+// Codex's S0b implementation review, finding 7: a value-only change under a
+// path with dotted segments (Jsonnet extVars, an ApplicationSet plugin's
+// input parameters) is still reported.
+func TestOmittedChangesNestedSegments(t *testing.T) {
+	app := func(v string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"spec": map[string]any{"source": map[string]any{"directory": map[string]any{"jsonnet": map[string]any{
+				"extVars": []any{map[string]any{"name": "x", "value": v}}}}}}}}
+	}
+	if got := omittedChanges(app("first"), app("other")); len(got) == 0 {
+		t.Error("a Jsonnet value-only change is invisible")
+	}
+	set := func(v string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
+			"spec": map[string]any{"generators": []any{map[string]any{"plugin": map[string]any{
+				"input": map[string]any{"parameters": map[string]any{"value": v}}}}}}}}
+	}
+	if got := omittedChanges(set("first"), set("other")); len(got) == 0 {
+		t.Error("a plugin input parameter change is invisible")
+	}
+	if got := omittedChanges(set("same"), set("same")); len(got) != 0 {
+		t.Errorf("no change reported as one: %v", got)
+	}
+}

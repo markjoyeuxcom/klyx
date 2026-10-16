@@ -2,9 +2,10 @@ package cachediff
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/moomora/klyx/internal/crd"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -17,6 +18,8 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
+
+	"github.com/moomora/klyx/internal/crd"
 )
 
 // Change is one object's diff result (slice 6 note §7.1 point 6): what a
@@ -72,13 +75,13 @@ func ServerSideDiff(ctx context.Context, cfg *rest.Config, objs []*unstructured.
 		live := &unstructured.Unstructured{}
 		live.SetGroupVersionKind(obj.GroupVersionKind())
 		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil && !apierrors.IsNotFound(err) {
-			ch.Action, ch.Error = ActionUnread, err.Error()
+			ch.Action, ch.Error = ActionUnread, safeError(obj, err)
 			out = append(out, ch)
 			continue
 		}
 		entry, existing, dryRun, err := rm.Diff(ctx, obj, ssa.DiffOptions{Exclusions: reconcileDisabled})
 		if err != nil {
-			ch.Action, ch.Error = ActionFailed, err.Error()
+			ch.Action, ch.Error = ActionFailed, safeError(obj, err)
 			out = append(out, ch)
 			continue
 		}
@@ -115,6 +118,43 @@ func ServerSideDiff(ctx context.Context, cfg *rest.Config, objs []*unstructured.
 		}
 	}
 	return out, nil
+}
+
+// webhookDenied names the admission webhook in an apiserver denial.
+var webhookDenied = regexp.MustCompile(`admission webhook "([^"]{1,253})" denied`)
+
+// safeError is the text kept for one object's failed read or dry-run (Codex's
+// S0b implementation review, finding 3). The API's and an admission
+// webhook's free text can echo the submitted value, so for a kind whose
+// values are protected - a registered payload kind, or a core Secret - only
+// structured facts are kept: the status reason and code, each cause's type
+// and field path (paths, never values), and a denying webhook's name.
+// Other kinds keep the message; the URL rule runs downstream.
+func safeError(obj *unstructured.Unstructured, err error) string {
+	gvk := obj.GroupVersionKind()
+	if !crd.IsPayloadKind(gvk.Group, gvk.Kind) && !(gvk.Group == "" && gvk.Kind == "Secret") {
+		return err.Error()
+	}
+	const withheld = "its message is withheld because this kind carries protected values"
+	var st apierrors.APIStatus
+	if !errors.As(err, &st) {
+		return "the request failed; " + withheld
+	}
+	s := st.Status()
+	parts := []string{fmt.Sprintf("refused: %s (%d)", s.Reason, s.Code)}
+	if s.Details != nil {
+		for i, c := range s.Details.Causes {
+			if i == 10 {
+				parts = append(parts, fmt.Sprintf("and %d more causes", len(s.Details.Causes)-10))
+				break
+			}
+			parts = append(parts, fmt.Sprintf("%s at %s", c.Type, c.Field))
+		}
+	}
+	if m := webhookDenied.FindStringSubmatch(s.Message); m != nil {
+		parts = append(parts, fmt.Sprintf("denied by admission webhook %q", m[1]))
+	}
+	return strings.Join(parts, "; ") + "; " + withheld
 }
 
 // inventoryID is Flux's inventory entry id: namespace_name_group_kind.

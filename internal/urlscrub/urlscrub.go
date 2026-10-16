@@ -40,13 +40,27 @@ var (
 	scp = regexp.MustCompile(`(^|[\s'"(\[<,;=])([A-Za-z0-9._%+~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9-]+):`)
 )
 
-// authorityEnd reports whether r ends a URL authority.
-func authorityEnd(r rune) bool {
+// hardEnd reports whether r ends a URL authority under any reading: the
+// path, query and fragment delimiters, space, and characters a URL can never
+// hold. RFC 3986 lets user info carry the sub-delimiters ' , ; ( ), so those
+// do not end it (Codex's S0b implementation review, finding 1).
+func hardEnd(r rune) bool {
 	switch r {
-	case '/', '?', '#', '\'', '"', '<', '>', '`', ',', ';', '(', ')', '{', '}', '|', '\\':
+	case '/', '?', '#', '"', '<', '>', '`', '{', '}', '|', '\\':
 		return true
 	}
 	return unicode.IsSpace(r)
+}
+
+// softEnd reports whether r ends a host[:port] in prose: a sub-delimiter
+// that cannot be part of a host name. It is used only when the span holds
+// no "@", so no user info can precede it.
+func softEnd(r rune) bool {
+	switch r {
+	case '\'', ',', ';', '(', ')':
+		return true
+	}
+	return false
 }
 
 // Text scrubs multi-line text, line by line.
@@ -92,18 +106,17 @@ func scrubLine(line string) (string, int, bool) {
 		}
 		b.WriteString(rest[:loc[1]])
 		after := rest[loc[1]:]
-		end := strings.IndexFunc(after, authorityEnd)
+		end := strings.IndexFunc(after, hardEnd)
 		if end < 0 {
 			end = len(after)
 		}
-		auth, tail := after[:end], after[end:]
-		safe, ok, n := authority(auth, tail)
+		safe, ok, n := span(after[:end], after[end:])
 		if !ok {
 			return WithheldLine, removed, true
 		}
 		removed += n
 		b.WriteString(safe)
-		rest = tail
+		rest = after[end:]
 	}
 	out := b.String()
 	// SCP-style user@host:path, outside any scheme URL already handled.
@@ -116,6 +129,39 @@ func scrubLine(line string) (string, int, bool) {
 		return sub[1] + sub[3] + ":"
 	})
 	return out, removed, false
+}
+
+// span returns what to print for the text between a scheme and the next
+// hard end. With an "@" (raw or encoded) anywhere in it, the user info runs to
+// the last one, whatever sub-delimiters it holds. Without one, the host[:port]
+// ends at the first soft end; a candidate that fails there, or whose rest
+// holds another ":", is redacted whole, never in part.
+func span(sp, tail string) (string, bool, int) {
+	if strings.Contains(sp, "@") || strings.Contains(strings.ToLower(sp), "%40") {
+		return authority(sp, tail)
+	}
+	if truncated(sp, tail) {
+		return Redacted, true, 1
+	}
+	soft := strings.IndexFunc(sp, softEnd)
+	if soft < 0 {
+		return authority(sp, tail)
+	}
+	safe, ok, n := authority(sp[:soft], sp[soft:]+tail)
+	if !ok {
+		return "", false, 0
+	}
+	if n > 0 || strings.Contains(sp[soft:], ":") {
+		return Redacted, true, 1
+	}
+	return safe + sp[soft:], true, 0
+}
+
+// truncated reports a span kubectl (or anything else) cut short: it ends in
+// an ellipsis, or one follows it.
+func truncated(raw, tail string) bool {
+	return strings.HasSuffix(raw, "...") || strings.HasSuffix(raw, "…") ||
+		strings.HasPrefix(tail, "...") || strings.HasPrefix(tail, "…")
 }
 
 // authority returns the authority to print. ok is false when it cannot be
@@ -133,8 +179,7 @@ func authority(raw, tail string) (string, bool, int) {
 	if err != nil {
 		return "", false, 0
 	}
-	cut := strings.HasSuffix(raw, "...") || strings.HasSuffix(raw, "…") ||
-		strings.HasPrefix(tail, "...") || strings.HasPrefix(tail, "…")
+	cut := truncated(raw, tail)
 	if at := strings.LastIndex(dec, "@"); at >= 0 {
 		user := dec[:at]
 		if user == "git" && !cut {

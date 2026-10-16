@@ -175,6 +175,12 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 	if crd.HasPlaceholder(yamlDoc) {
 		return fmt.Errorf("this %s carries values Klyx shows masked or omitted; edit it in Git", kind)
 	}
+	// The object the inspector opened, by UID, is required (Codex's S0b
+	// implementation review, finding 5): without it a recreated object of
+	// the same name could be overwritten by an edit of its predecessor.
+	if expectedUID == "" {
+		return fmt.Errorf("Klyx does not know which %s %s was opened; reopen it before editing", kind, name)
+	}
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
 	resource := c.dyn.Resource(gvr)
 	var live *unstructured.Unstructured
@@ -189,7 +195,7 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 		}
 		return fmt.Errorf("could not read the live %s before applying: %w", kind, err)
 	}
-	if expectedUID != "" && string(live.GetUID()) != expectedUID {
+	if live.GetUID() == "" || string(live.GetUID()) != expectedUID {
 		return fmt.Errorf("%s %s was deleted and created again since it was opened; reopen it before editing", kind, name)
 	}
 	for _, doc := range []map[string]interface{}{live.Object, u.Object} {
@@ -201,6 +207,15 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 		}
 	}
 	u.SetResourceVersion(live.GetResourceVersion())
+	u.SetUID(live.GetUID())
+	// The edit is classified without kubectl's last-applied annotation, so it
+	// is never written back either (Codex's S0b implementation review: the
+	// exception holds only if the write omits it). An apply that omits a
+	// field Klyx does not own leaves it as it is.
+	if a := u.GetAnnotations(); a != nil {
+		delete(a, "kubectl.kubernetes.io/last-applied-configuration")
+		u.SetAnnotations(a)
+	}
 
 	// Force:false is deliberate. Server-side apply with Force:true would STEAL
 	// field ownership from Flux/Argo on any object they manage, so the change
@@ -1262,16 +1277,19 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	// Mask secret values before producing YAML and building the DTO. The masking
 	// happens at the unstructured level so the raw object is never passed to
 	// ToYAML with live data, and secret key info travels separately.
-	obj := u.Object
 	var secretKeys []crd.SecretKeyInfo
 	if group == "" && version == "v1" && plural == "secrets" {
-		obj, secretKeys = crd.MaskSecretData(obj)
+		_, secretKeys = crd.MaskSecretData(u.Object)
 	}
 	// Coverage S0b: the embedded-payload sanitiser - templates, patches,
-	// inline values and embedded Secrets of the registered kinds, and URL
-	// user info on every kind - runs before any DTO field is made.
-	sz := crd.SanitizeEmbedded(group, u.GetKind(), obj)
-	obj = sz.Object
+	// inline values and embedded Secrets of the registered kinds, a core
+	// Secret's data, and URL user info on every kind - runs before any DTO
+	// field is made. It reads the ORIGINAL object, so its policy (edit
+	// eligibility, Describe mode) sees the Secret's real data, not an
+	// already-masked copy (Codex's implementation review, finding 9); the
+	// key info above travels separately.
+	sz := crd.SanitizeEmbedded(group, u.GetKind(), u.Object)
+	obj := sz.Object
 	// Every DTO field below is read from the SANITISED object, never from u:
 	// a client-side-applied Secret carries its full base64 data in the
 	// kubectl.kubernetes.io/last-applied-configuration annotation, which

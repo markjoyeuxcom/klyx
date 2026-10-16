@@ -230,14 +230,14 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	unapproved := map[string][]GitSourceDTO{}
 	raw := map[string][]string{}
 	for _, src := range sources {
-		key := line.NormalizeRepo(src.URL)
-		d := GitSourceDTO{Cluster: src.Cluster, Origin: src.Origin, Namespace: src.Namespace, Name: src.Name, URL: shownURL(src.URL)}
+		key := line.NormalizeRepo(src.rawURL)
+		d := GitSourceDTO{Cluster: src.Cluster, Origin: src.Origin, Namespace: src.Namespace, Name: src.Name, URL: shownURL(src.rawURL)}
 		if e, ok := owner[key]; ok {
 			byEntry[e] = append(byEntry[e], d)
 			continue
 		}
 		unapproved[key] = append(unapproved[key], d)
-		raw[key] = append(raw[key], src.URL)
+		raw[key] = append(raw[key], src.rawURL)
 	}
 	for _, r := range repos {
 		rd := GitRepoDTO{URL: r.URL, Web: r.Web, Key: line.NormalizeRepo(r.URL), Matches: append([]string{}, r.Matches...),

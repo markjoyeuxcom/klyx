@@ -217,7 +217,7 @@ func TestLineServiceHandsEveryLineToTheHook(t *testing.T) {
 		h.mu.Unlock()
 		if ver >= d.Version && len(srcs) == 2 {
 			for _, src := range srcs {
-				if src.URL != lineRepo || src.Origin != "GitRepository" || src.Name != "fleet" {
+				if src.rawURL != lineRepo || src.Origin != "GitRepository" || src.Name != "fleet" {
 					t.Fatalf("hook source %+v", src)
 				}
 			}

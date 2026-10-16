@@ -26,6 +26,10 @@ type ExecConn interface {
 	// kubectl's own read (coverage S0b §4, revision 4).
 	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
 	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
+	// DescribePinnedCmd is the bracketed describe: the resolved
+	// resource.version.group, against a kubeconfig snapshot verified to be
+	// the bracket's own connection. cleanup removes the snapshot.
+	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (cmd *exec.Cmd, cleanup func(), err error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -242,6 +246,8 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 			withheld = "Describe is withheld: Klyx could not read this " + gvk.Kind + " to check it for templates, patches or values that can carry secrets (" + err.Error() + ")."
 		case payload:
 			withheld = payloadWithheld(gvk.Kind)
+		case uid == "" || rv == "":
+			withheld = "Describe is withheld: the server did not report this " + gvk.Kind + "'s identity and version, so Klyx cannot bracket kubectl's read."
 		default:
 			preUID, preRV = uid, rv
 		}
@@ -260,7 +266,23 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 		res.Withheld = withheld
 		return res
 	}
-	cmd, err := conn.DescribeCmd(ctx, kindArg, namespace, name)
+	// A bracketed describe runs exactly what the bracket checks (Codex's S0b
+	// implementation review, finding 4): kubectl gets the resolved
+	// resource.version.group and a kubeconfig snapshot proven to be this
+	// connection. A snapshot that cannot be proven withholds.
+	var cmd *exec.Cmd
+	var err error
+	if payloadKind {
+		var cleanup func()
+		cmd, cleanup, err = conn.DescribePinnedCmd(ctx, gvr, namespace, name)
+		if err != nil {
+			res.Withheld = "Describe is withheld: Klyx could not bind kubectl to the connection it checks this " + gvk.Kind + " through (" + err.Error() + ")."
+			return res
+		}
+		defer cleanup()
+	} else {
+		cmd, err = conn.DescribeCmd(ctx, kindArg, namespace, name)
+	}
 	if err != nil {
 		return DescribeResultDTO{Error: err.Error(), Command: res.Command, CommandError: res.CommandError}
 	}
@@ -273,7 +295,7 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	runErr := cmd.Run()
 	if payloadKind {
 		uid, rv, payload, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
-		if err != nil || uid != preUID || rv != preRV || payload {
+		if err != nil || uid == "" || uid != preUID || rv != preRV || payload {
 			// discard both streams: the version kubectl read is not proven
 			stdout.Reset()
 			stderr.Reset()

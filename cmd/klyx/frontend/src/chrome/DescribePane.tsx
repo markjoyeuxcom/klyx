@@ -89,10 +89,13 @@ export function DescribePane({
       // A failed refresh with no stdout keeps the last report on screen,
       // labelled - through any number of failed refreshes; a reply with
       // output (partial or whole) is the newest evidence and replaces it.
+      // A withheld reply is not a failed refresh: the object now carries
+      // something Describe may not show, so the last report goes too
+      // (Codex's S0b implementation review, finding 10).
       const prev = shownRef.current?.id === id ? shownRef.current : null;
       const kept = priorRef.current?.id === id ? priorRef.current : null;
-      const last = prev && prev.dto.output !== "" ? prev : kept;
-      show(reply, !dto.ok && dto.output === "" ? last : null);
+      const last = prev && prev.dto.output !== "" && !prev.dto.withheld ? prev : kept;
+      show(reply, !dto.ok && dto.output === "" && !dto.withheld ? last : null);
       setRunning(false);
       call.current = null;
     };
@@ -126,7 +129,7 @@ export function DescribePane({
   // Only this identity's replies exist for the render.
   const mine = shown?.id === identity ? shown : null;
   const kept = prior?.id === identity ? prior : null;
-  const report = mine && !mine.dto.ok && mine.dto.output === "" && kept ? kept : mine;
+  const report = mine && !mine.dto.ok && mine.dto.output === "" && !mine.dto.withheld && kept ? kept : mine;
   // A new identity is loading from its first render, before its run starts.
   const busy = running || !mine;
   const output = report?.dto.output ?? "";

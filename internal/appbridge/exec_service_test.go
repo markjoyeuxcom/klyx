@@ -32,6 +32,22 @@ type fakeExecConn struct {
 	kindGroup, kindName string
 	kindErr             error
 	snaps               []fakeSnap
+	// gotPinned records DescribePinnedCmd's resource.version.group;
+	// pinnedErr is its refusal; cleanups counts snapshot removals.
+	gotPinned string
+	pinnedErr error
+	cleanups  int
+}
+
+func (f *fakeExecConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*exec.Cmd, func(), error) {
+	f.gotPinned = gvr.Resource + "." + gvr.Version + "." + gvr.Group
+	if f.pinnedErr != nil {
+		return nil, nil, f.pinnedErr
+	}
+	if f.describeCmd == nil {
+		return nil, nil, errors.New("no describe scripted")
+	}
+	return f.describeCmd(ctx), func() { f.cleanups++ }, nil
 }
 
 type fakeSnap struct {
@@ -553,6 +569,40 @@ func TestDescribe_PayloadKindBracket(t *testing.T) {
 		}
 		if r.Withheld == "" || r.Output != "" || r.OK {
 			t.Errorf("%s: %+v", c.name, r)
+		}
+	}
+}
+
+// Codex's S0b implementation review, finding 4: a bracketed describe runs
+// the resolved resource.version.group through the pinned command (never the
+// alias through the unpinned one), removes its snapshot, withholds when the
+// connection cannot be pinned, and needs an identity and version to bracket.
+func TestDescribeBracketIsPinned(t *testing.T) {
+	report := func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: apps") }
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization",
+		snaps: []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "7"}}, describeCmd: report}
+	s := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := s.Describe(context.Background(), "kind-klyx", "ks", "flux-system", "apps")
+	if !r.OK || r.Withheld != "" {
+		t.Fatalf("result: %+v", r)
+	}
+	if conn.gotPinned != "x.v1.kustomize.toolkit.fluxcd.io" || conn.gotDescribe != nil || conn.cleanups != 1 {
+		t.Fatalf("pinned %q, unpinned %v, cleanups %d", conn.gotPinned, conn.gotDescribe, conn.cleanups)
+	}
+
+	conn = &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization",
+		snaps: []fakeSnap{{uid: "u", rv: "7"}}, describeCmd: report, pinnedErr: errors.New("this cluster's kubeconfig changed since Klyx connected")}
+	s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	if r := s.Describe(context.Background(), "kind-klyx", "ks", "flux-system", "apps"); r.Withheld == "" || r.Output != "" || !strings.Contains(r.Withheld, "kubeconfig changed") {
+		t.Fatalf("an unpinnable connection withholds: %+v", r)
+	}
+
+	for _, snap := range []fakeSnap{{uid: "", rv: "7"}, {uid: "u", rv: ""}} {
+		conn = &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization",
+			snaps: []fakeSnap{snap, snap}, describeCmd: report}
+		s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+		if r := s.Describe(context.Background(), "kind-klyx", "ks", "flux-system", "apps"); r.Withheld == "" || r.Output != "" || conn.gotPinned != "" {
+			t.Fatalf("no identity or version withholds before kubectl runs (%+v): %+v", snap, r)
 		}
 	}
 }

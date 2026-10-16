@@ -179,6 +179,9 @@ func (f *fakeConn) DescribeTarget(_ context.Context, kindArg string) (schema.Gro
 func (f *fakeConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, bool, error) {
 	return "u", "1", false, nil
 }
+func (f *fakeConn) DescribePinnedCmd(context.Context, schema.GroupVersionResource, string, string) (*exec.Cmd, func(), error) {
+	return nil, nil, nil
+}
 
 func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil

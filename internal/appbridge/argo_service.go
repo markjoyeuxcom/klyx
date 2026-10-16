@@ -224,8 +224,8 @@ func (s *ArgoService) ListProjects(cluster string) ArgoProjectsResultDTO {
 			Namespace:                  p.Namespace,
 			Name:                       p.Name,
 			Description:                p.Description,
-			SourceRepos:                sliceOrEmpty(p.SourceRepos),
-			Destinations:               sliceOrEmpty(p.Destinations),
+			SourceRepos:                scrubAll(p.SourceRepos, true),
+			Destinations:               scrubAll(p.Destinations, false),
 			Roles:                      p.Roles,
 			RoleNames:                  sliceOrEmpty(p.RoleNames),
 			OrphanWarn:                 p.OrphanWarn,
@@ -236,6 +236,21 @@ func (s *ArgoService) ListProjects(cluster string) ArgoProjectsResultDTO {
 		})
 	}
 	return ArgoProjectsResultDTO{Available: true, Projects: out}
+}
+
+// scrubAll applies the URL rule to each entry at the backend boundary
+// (coverage S0b; Codex's implementation review finding 2): a repository URL
+// as a field, a destination ("server/namespace") as text. Never nil.
+func scrubAll(in []string, field bool) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if field {
+			out = append(out, urlscrub.Field(v).Text)
+		} else {
+			out = append(out, urlscrub.Text(v).Text)
+		}
+	}
+	return out
 }
 
 func sliceOrEmpty[T any](in []T) []T {

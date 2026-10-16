@@ -114,6 +114,7 @@ type Conn interface {
 	DescribeArgv(kindArg, namespace, name string) ([]string, error)
 	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
 	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
+	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*exec.Cmd, func(), error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error

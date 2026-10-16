@@ -1,6 +1,7 @@
 package urlscrub
 
 import (
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -124,5 +125,44 @@ func TestText_RealKubectlDescribe(t *testing.T) {
 	}
 	if !r.Changed() || !strings.Contains(r.Text, "https://github.com/org/fleet.git") {
 		t.Fatalf("scrubbed output: %s", r.Text)
+	}
+}
+
+// RFC 3986 user info may hold the sub-delimiters ' , ; ( ): none of them
+// ends it (Codex's S0b implementation review, finding 1).
+func TestUserinfoSubDelimiters(t *testing.T) {
+	for _, delim := range []string{";", ",", "'", "(", ")"} {
+		raw := "https://bob:123" + delim + needle + "@host.example/repo"
+		if _, err := url.Parse(raw); err != nil {
+			t.Fatalf("not a valid fixture: %v", err)
+		}
+		if r := Field(raw); r.Text != "https://host.example/repo" || !r.Changed() {
+			t.Errorf("Field with %q: %+v", delim, r)
+		}
+		line := "Url:  " + raw + "\nReady: True"
+		if r := Text(line); strings.Contains(r.Text, needle) || strings.Contains(r.Text, "bob") {
+			t.Errorf("Text with %q: %q", delim, r.Text)
+		}
+		// cut before the "@" by kubectl's shorten
+		cut := "https://bob:123" + delim + needle + "..."
+		if r := Text(cut); strings.Contains(r.Text, needle) || !r.Changed() {
+			t.Errorf("cut with %q: %q", delim, r.Text)
+		}
+	}
+}
+
+// Without an "@", a sub-delimiter ends the host in prose; an ambiguous rest
+// is redacted whole, never in part.
+func TestSoftEndsWithoutUserinfo(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"see (https://host.example:8443), then", "see (https://host.example:8443), then"},
+		{"clone 'https://host.example', next", "clone 'https://host.example', next"},
+		{"x https://bob:pa;" + needle + " y", "x https://" + Redacted + " y"},
+		{"x https://host.example;tok:" + needle + " y", "x https://" + Redacted + " y"},
+	}
+	for _, c := range cases {
+		if r := Text(c.in); r.Text != c.want {
+			t.Errorf("%q: got %q, want %q", c.in, r.Text, c.want)
+		}
 	}
 }

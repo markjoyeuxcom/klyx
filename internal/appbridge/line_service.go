@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"github.com/moomora/klyx/internal/urlscrub"
 	"sort"
 	"strings"
 	"sync"
@@ -989,12 +988,15 @@ func oldestEvaluated(st *lineStation) *time.Time {
 	return out
 }
 
-// LineGitSource is one Git repository URL a station's rows name, exactly as
-// the cluster holds it: a GitRepository's spec.url or an Argo Git source's
-// repoURL. Settings > Git only matches it to an approved entry and shows it
-// scrubbed; it is never executed (parent §7).
+// LineGitSource is one Git repository URL a station's rows name: a
+// GitRepository's spec.url or an Argo Git source's repoURL. The URL is kept
+// exactly as the cluster holds it, in an unexported field, because Settings >
+// Git matches it to an approved entry and suggests it only when it carries no
+// credential; it never crosses the bridge as written and is never executed
+// (parent §7; coverage S0b, Codex's implementation review finding 2).
 type LineGitSource struct {
-	Cluster, Origin, Namespace, Name, URL string
+	Cluster, Origin, Namespace, Name string
+	rawURL                           string
 }
 
 func gitSources(in line.StationInput) []LineGitSource {
@@ -1002,14 +1004,14 @@ func gitSources(in line.StationInput) []LineGitSource {
 	for _, o := range in.Sources {
 		if o.Data.Kind == flux.GitRepositoryKind && o.Data.URL != "" {
 			out = append(out, LineGitSource{Cluster: in.Cluster, Origin: string(o.Data.Kind), Namespace: o.Data.Namespace,
-				Name: o.Data.Name, URL: o.Data.URL})
+				Name: o.Data.Name, rawURL: o.Data.URL})
 		}
 	}
 	for _, o := range in.Apps {
 		for _, src := range o.Data.Sources {
 			if src.Chart == "" && src.RepoURL != "" {
 				out = append(out, LineGitSource{Cluster: in.Cluster, Origin: "Application", Namespace: o.Data.Namespace,
-					Name: o.Data.Name, URL: urlscrub.Field(src.RepoURL).Text})
+					Name: o.Data.Name, rawURL: src.RepoURL})
 			}
 		}
 	}
