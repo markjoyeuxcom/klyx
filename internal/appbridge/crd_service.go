@@ -13,8 +13,10 @@ import (
 // CRDConn is the per-cluster read surface CRDService needs.
 type CRDConn interface {
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
+	ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, error)
+	GetCRDDefinition(ctx context.Context, name, version string) (crd.Definition, error)
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
-	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
+	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult
@@ -50,9 +52,30 @@ func (s *CRDService) ListCRDs(cluster string) CRDListDTO {
 	defer cancel()
 	infos, err := conn.ListCRDs(ctx)
 	if err != nil {
+		// The discovery fallback (The Line slice 15c): the kinds still open
+		// from discovery, under the definitions' own failure - never "no CRDs".
+		if found, derr := conn.ListCRDsFromDiscovery(ctx); derr == nil {
+			return CRDListDTO{Groups: groupCRDs(found), Fallback: err.Error()}
+		}
 		return CRDListDTO{Groups: []CRDGroupDTO{}, Error: err.Error()}
 	}
 	return CRDListDTO{Groups: groupCRDs(infos)}
+}
+
+// GetCRDDefinition reads one CRD in full with the schema of version ("" for
+// the storage version). A failed read carries Error, never an empty CRD.
+func (s *CRDService) GetCRDDefinition(cluster, name, version string) CRDDefinitionDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return CRDDefinitionDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	defer cancel()
+	d, err := conn.GetCRDDefinition(ctx, name, version)
+	if err != nil {
+		return CRDDefinitionDTO{Error: err.Error(), NotFound: apierrors.IsNotFound(err)}
+	}
+	return definitionDTO(d)
 }
 
 // CountKind returns the hybrid instance count for one kind. A cluster miss or
@@ -101,7 +124,8 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	}
 	conds := make([]ConditionDTO, 0, len(d.Conditions))
 	for _, c := range d.Conditions {
-		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message, Scope: c.Scope})
+		conds = append(conds, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message, Scope: c.Scope,
+			LastTransition: rfc3339(c.LastTransition), ObservedGeneration: c.ObservedGeneration})
 	}
 	facts := make([]FactDTO, 0, len(d.Facts))
 	for _, f := range d.Facts {
@@ -173,7 +197,39 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 		HPAScaling:     hpaScaling,
 		Related:        related,
 		Facts:          facts,
+
+		Summary:            summaryDTOs(d.Summary),
+		ObservedGeneration: d.ObservedGeneration,
+		Deleting:           rfc3339(d.Deleting),
+		Finalizers:         d.Finalizers,
+		Managers:           managerDTOs(d.Managers),
+		FieldsJSON:         d.FieldsJSON,
+		FieldsOmitted:      d.FieldsOmitted,
 	}
+}
+
+func summaryDTOs(cells []crd.SummaryCell) []SummaryCellDTO {
+	if cells == nil {
+		return nil
+	}
+	cols := make([]crd.Column, 0, len(cells))
+	for _, c := range cells {
+		cols = append(cols, c.Column)
+	}
+	colDTOs := columnDTOs(cols)
+	out := make([]SummaryCellDTO, 0, len(cells))
+	for i, c := range cells {
+		out = append(out, SummaryCellDTO{InstanceColumnDTO: colDTOs[i], Value: c.Value})
+	}
+	return out
+}
+
+func managerDTOs(ms []crd.FieldManager) []FieldManagerDTO {
+	out := make([]FieldManagerDTO, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, FieldManagerDTO{Manager: m.Manager, Operation: m.Operation, Subresource: m.Subresource, Time: rfc3339(m.Time)})
+	}
+	return out
 }
 
 // ApplyResourceYAML validates and server-side-applies the YAML for the resource
@@ -330,7 +386,7 @@ func (s *CRDService) ListInstances(cluster, group, version, plural, continueToke
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
-	items, next, err := conn.ListInstances(ctx, group, version, plural, instancePageSize, continueToken)
+	page, err := conn.ListInstances(ctx, group, version, plural, instancePageSize, continueToken)
 	if err != nil {
 		// A cluster-wide list only 404s when the resource itself is not served
 		// (e.g. a CRD that is not installed): that is a definitive zero, not an
@@ -340,13 +396,26 @@ func (s *CRDService) ListInstances(cluster, group, version, plural, continueToke
 		}
 		return InstancePageDTO{Items: []InstanceDTO{}, Error: err.Error()}
 	}
-	dtos := make([]InstanceDTO, 0, len(items))
-	for _, m := range items {
+	dtos := make([]InstanceDTO, 0, len(page.Items))
+	for _, m := range page.Items {
 		created := ""
 		if !m.Created.IsZero() {
 			created = m.Created.Format(time.RFC3339)
 		}
-		dtos = append(dtos, InstanceDTO{Namespace: m.Namespace, Name: m.Name, Created: created, Fields: m.Fields})
+		dtos = append(dtos, InstanceDTO{Namespace: m.Namespace, Name: m.Name, Created: created, Fields: m.Fields, Cells: m.Cells})
 	}
-	return InstancePageDTO{Items: dtos, NextToken: next}
+	return InstancePageDTO{Items: dtos, NextToken: page.Continue, Columns: columnDTOs(page.Columns)}
+}
+
+// columnDTOs carries the server's printer columns; nil for a page read
+// without a table.
+func columnDTOs(cols []crd.Column) []InstanceColumnDTO {
+	if cols == nil {
+		return nil
+	}
+	out := make([]InstanceColumnDTO, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, InstanceColumnDTO{Name: c.Name, Type: c.Type, Format: c.Format, Description: c.Description, JSONPath: c.JSONPath, Priority: c.Priority, Numeric: c.Numeric, ConditionType: c.ConditionType})
+	}
+	return out
 }

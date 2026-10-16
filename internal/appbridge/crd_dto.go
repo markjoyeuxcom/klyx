@@ -29,6 +29,9 @@ type CRDGroupDTO struct {
 type CRDListDTO struct {
 	Groups []CRDGroupDTO `json:"groups"`
 	Error  string        `json:"error,omitempty"`
+	// Fallback: the CRD list failed with this error and Groups come from
+	// discovery instead - kinds without definitions (The Line slice 15c).
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // CRDCountDTO is a hybrid instance count for one kind. Error marks a failed
@@ -39,12 +42,31 @@ type CRDCountDTO struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// InstanceDTO is the metadata-only view of one instance.
+// InstanceDTO is the list view of one instance: its metadata, a hand-written
+// list's fields, or the server's printer-column cells (in the page's Columns
+// order).
 type InstanceDTO struct {
 	Namespace string            `json:"namespace"`
 	Name      string            `json:"name"`
 	Created   string            `json:"created"` // RFC3339; "" when unset
 	Fields    map[string]string `json:"fields,omitempty"`
+	Cells     []string          `json:"cells,omitempty"`
+}
+
+// InstanceColumnDTO is one of the server's printer columns (The Line slice
+// 15a). Priority 0 is kubectl's default view; 1 and above is -o wide.
+// JSONPath is set only when the server's description carries it.
+type InstanceColumnDTO struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Format      string `json:"format"`
+	Description string `json:"description"`
+	JSONPath    string `json:"jsonPath"`
+	Priority    int32  `json:"priority"`
+	Numeric     bool   `json:"numeric"`
+	// ConditionType is set only when the JSONPath proves the column is a
+	// condition's status; a list may mark rows from it (design review 1).
+	ConditionType string `json:"conditionType,omitempty"`
 }
 
 // InstancePageDTO is one page of instances plus the next continue token.
@@ -57,6 +79,9 @@ type InstancePageDTO struct {
 	// NotServed: the cluster does not serve this resource at all (e.g. a CRD
 	// that is not installed) - a definitive zero, distinct from a failed read.
 	NotServed bool `json:"notServed,omitempty"`
+	// Columns are the server's printer columns when the page was read as a
+	// table; absent for a hand-written list or a server without tables.
+	Columns []InstanceColumnDTO `json:"columns,omitempty"`
 }
 
 // EventDTO is a describe-style event.
@@ -209,12 +234,41 @@ type InstanceDetailDTO struct {
 	// Facts are per-kind salient summary values (the data path) for kinds with a
 	// registered builder; empty for kinds without one.
 	Facts []FactDTO `json:"facts,omitempty"`
+	// The Line slice 15b. Summary is the object's own table row at every
+	// priority, read in the same response as the object.
+	Summary []SummaryCellDTO `json:"summary,omitempty"`
+	// ObservedGeneration is status.observedGeneration; -1 when none.
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// Deleting is metadata.deletionTimestamp (RFC3339); "" when not deleting.
+	Deleting   string   `json:"deleting,omitempty"`
+	Finalizers []string `json:"finalizers,omitempty"`
+	// Managers summarise managedFields: manager, operation, subresource, time.
+	Managers []FieldManagerDTO `json:"managers,omitempty"`
+	// FieldsJSON is the sanitised object without apiVersion, kind and
+	// metadata, for the inspector's tree; "" with FieldsOmitted saying why
+	// ("secret", "too large", "unreadable").
+	FieldsJSON    string `json:"fieldsJSON,omitempty"`
+	FieldsOmitted string `json:"fieldsOmitted,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never an object.
 	Error string `json:"error,omitempty"`
 	// NotFound: the read failed because the object does not exist (an
 	// authoritative absence, The Line slice 9 note §4.2); any other failure
 	// proves nothing either way.
 	NotFound bool `json:"notFound,omitempty"`
+}
+
+// SummaryCellDTO is one printer column's value for an object.
+type SummaryCellDTO struct {
+	InstanceColumnDTO
+	Value string `json:"value"`
+}
+
+// FieldManagerDTO is one managedFields entry without its field set.
+type FieldManagerDTO struct {
+	Manager     string `json:"manager"`
+	Operation   string `json:"operation"`
+	Subresource string `json:"subresource,omitempty"`
+	Time        string `json:"time,omitempty"`
 }
 
 // RevealResultDTO is returned by RevealSecretKey. On success Value is the

@@ -15,10 +15,16 @@ import (
 )
 
 type fakeCRDConn struct {
-	infos      []crd.Info
-	counts     map[string]int
-	instances  []crd.InstanceMeta
-	nextToken  string
+	infos     []crd.Info
+	counts    map[string]int
+	instances []crd.InstanceMeta
+	nextToken string
+	columns   []crd.Column
+	// discovery fallback and definition reads (slice 15c)
+	discInfos  []crd.Info
+	discErr    error
+	def        crd.Definition
+	defErr     error
 	detail     crd.InstanceDetail
 	secretData map[string]string // key -> decoded value, for RevealSecretKey tests
 	apply      applyCall
@@ -55,8 +61,14 @@ func (f *fakeCRDConn) CountResource(ctx context.Context, group, version, plural 
 	}
 	return n, n >= crd.Cap, nil
 }
-func (f *fakeCRDConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error) {
-	return f.instances, f.nextToken, f.instErr
+func (f *fakeCRDConn) ListCRDsFromDiscovery(context.Context) ([]crd.Info, error) {
+	return f.discInfos, f.discErr
+}
+func (f *fakeCRDConn) GetCRDDefinition(_ context.Context, name, version string) (crd.Definition, error) {
+	return f.def, f.defErr
+}
+func (f *fakeCRDConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error) {
+	return crd.InstancePage{Items: f.instances, Continue: f.nextToken, Columns: f.columns}, f.instErr
 }
 func (f *fakeCRDConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return f.detail, f.detailErr
@@ -272,8 +284,11 @@ func TestListCRDsUnknownClusterEmpty(t *testing.T) {
 // forbidden count, page or detail is never shown as zero / empty / blank.
 func TestCRDReads_FailureCarriesError(t *testing.T) {
 	boom := errors.New("forbidden")
-	conn := &fakeCRDConn{listErr: boom, countErr: boom, instErr: boom, detailErr: boom}
+	conn := &fakeCRDConn{listErr: boom, countErr: boom, instErr: boom, detailErr: boom, discErr: boom, defErr: boom}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	if r := svc.GetCRDDefinition("c", "things.g", ""); r.Error != "forbidden" {
+		t.Errorf("GetCRDDefinition: %q", r.Error)
+	}
 	if r := svc.ListCRDs("c"); r.Error != "forbidden" {
 		t.Errorf("ListCRDs: %q", r.Error)
 	}
@@ -565,5 +580,31 @@ func TestGetInstanceDetailNotFound(t *testing.T) {
 	conn.detailErr = errors.New("connection refused")
 	if d := svc.GetInstanceDetail("x", "", "v1", "configmaps", "shop", "web"); d.Error == "" || d.NotFound {
 		t.Fatalf("another failure: %+v", d)
+	}
+}
+
+// The Line slice 15c: a CRD list that fails falls back to discovery, said.
+func TestListCRDs_DiscoveryFallback(t *testing.T) {
+	conn := &fakeCRDConn{listErr: errors.New("customresourcedefinitions is forbidden"),
+		discInfos: []crd.Info{{Group: "example.com", Kind: "Widget", Plural: "widgets", Scope: "Namespaced", Version: "v1"}}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	r := svc.ListCRDs("c")
+	if r.Error != "" || r.Fallback != "customresourcedefinitions is forbidden" || len(r.Groups) != 1 || r.Groups[0].Kinds[0].Kind != "Widget" {
+		t.Fatalf("fallback %+v", r)
+	}
+}
+
+func TestGetCRDDefinition_DTO(t *testing.T) {
+	conn := &fakeCRDConn{def: crd.Definition{Name: "widgets.example.com", Kind: "Widget", Versions: []crd.DefVersion{{Name: "v1", Served: true, Storage: true,
+		Columns: []crd.PrinterColumn{{Name: "Ready", Type: "string", JSONPath: ".status.x", Priority: 1}}}},
+		Conversion: crd.Conversion{Strategy: "Webhook", URL: "https://c.example/convert"},
+		Conditions: []crd.Condition{{Type: "Established", Status: "True", ObservedGeneration: -1}}}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	r := svc.GetCRDDefinition("c", "widgets.example.com", "")
+	if r.Error != "" || r.Kind != "Widget" || r.Versions[0].Columns[0].Priority != 1 || r.Conversion.URL == "" || r.Conditions[0].Type != "Established" {
+		t.Fatalf("dto %+v", r)
+	}
+	if r.Schema == nil || r.ShortNames == nil || r.StoredVersions == nil {
+		t.Error("empty lists cross the bridge as [], never null")
 	}
 }

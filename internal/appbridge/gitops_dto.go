@@ -180,6 +180,11 @@ type ConditionDTO struct {
 	// "listener https"); "" for a standard status.conditions[] entry. Populated by
 	// the generic inspector for Gateway API kinds; empty everywhere else.
 	Scope string `json:"scope,omitempty"`
+	// LastTransition (RFC3339) and ObservedGeneration as the condition
+	// records them; ""/-1 when it records none. Set by the generic inspector
+	// (The Line slice 15b).
+	LastTransition     string `json:"lastTransition,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 }
 
 type InventoryEntryDTO struct {

@@ -122,8 +122,12 @@ func (f *fakeConn) ScaleWorkload(context.Context, string, string, string, string
 func (f *fakeConn) CountResource(ctx context.Context, group, version, plural string) (int, bool, error) {
 	return 0, false, nil
 }
-func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error) {
-	return nil, "", nil
+func (f *fakeConn) ListCRDsFromDiscovery(context.Context) ([]crd.Info, error) { return nil, nil }
+func (f *fakeConn) GetCRDDefinition(context.Context, string, string) (crd.Definition, error) {
+	return crd.Definition{}, nil
+}
+func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error) {
+	return crd.InstancePage{}, nil
 }
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil

@@ -2,6 +2,8 @@ package crd
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"sort"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,6 +21,26 @@ type Condition struct {
 	// status.conditions[] entry. The real condition Type is never flattened
 	// into this - "Accepted" stays "Accepted".
 	Scope string
+	// LastTransition and ObservedGeneration as recorded (slice 15b); zero
+	// and -1 when the condition records none.
+	LastTransition     time.Time
+	ObservedGeneration int64
+}
+
+// conditionTimes reads a condition's lastTransitionTime and observedGeneration.
+func conditionTimes(cond *Condition, m map[string]interface{}) {
+	cond.ObservedGeneration = -1
+	if ts, ok := m["lastTransitionTime"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			cond.LastTransition = t
+		}
+	}
+	switch g := m["observedGeneration"].(type) {
+	case int64:
+		cond.ObservedGeneration = g
+	case float64:
+		cond.ObservedGeneration = int64(g)
+	}
 }
 
 // Fact is one salient, human-readable summary value pulled from a resource's
@@ -100,6 +122,99 @@ type InstanceDetail struct {
 	// registered builder (see facts.go). Empty for kinds without one, which then
 	// render metadata-only exactly as before.
 	Facts []Fact
+
+	// The Line slice 15b. Summary is the object's own table row at every
+	// priority, read in the same response as the object; nil without a table.
+	Summary []SummaryCell
+	// ObservedGeneration is status.observedGeneration; -1 when the object
+	// records none.
+	ObservedGeneration int64
+	// Deleting is metadata.deletionTimestamp; zero when not being deleted.
+	Deleting   time.Time
+	Finalizers []string
+	// Managers summarise metadata.managedFields: who wrote, how and when.
+	// Their field sets never leave Go.
+	Managers []FieldManager
+	// FieldsJSON is the sanitised object without apiVersion, kind and
+	// metadata; "" with FieldsOmitted saying why.
+	FieldsJSON    string
+	FieldsOmitted string
+}
+
+// SummaryCell is one printer column's value for the object.
+type SummaryCell struct {
+	Column
+	Value string
+}
+
+// FieldManager is one entry of metadata.managedFields, without its fields.
+type FieldManager struct {
+	Manager     string
+	Operation   string
+	Subresource string
+	Time        time.Time
+}
+
+// FieldsCap bounds the fields sent to the inspector's tree (slice 15b).
+const FieldsCap = 256 << 10
+
+// ManagersOf reads metadata.managedFields' entries, newest first.
+func ManagersOf(obj map[string]interface{}) []FieldManager {
+	raw, _, _ := unstructured.NestedSlice(obj, "metadata", "managedFields")
+	out := make([]FieldManager, 0, len(raw))
+	for _, e := range raw {
+		m, ok := e.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fm := FieldManager{}
+		fm.Manager, _ = m["manager"].(string)
+		fm.Operation, _ = m["operation"].(string)
+		fm.Subresource, _ = m["subresource"].(string)
+		if ts, ok := m["time"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				fm.Time = t
+			}
+		}
+		out = append(out, fm)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
+	return out
+}
+
+// FieldsJSONOf renders the object's own fields for the inspector's tree: the
+// SANITISED object without apiVersion, kind and metadata. Never for a Secret
+// (its masked section stands), and never past FieldsCap.
+func FieldsJSONOf(obj map[string]interface{}, secret bool) (string, string) {
+	if secret {
+		return "", "secret"
+	}
+	rest := make(map[string]interface{}, len(obj))
+	for k, v := range obj {
+		if k == "apiVersion" || k == "kind" || k == "metadata" {
+			continue
+		}
+		rest[k] = v
+	}
+	if len(rest) == 0 {
+		return "", ""
+	}
+	b, err := json.Marshal(rest)
+	if err != nil {
+		return "", "unreadable"
+	}
+	if len(b) > FieldsCap {
+		return "", "too large"
+	}
+	return string(b), ""
+}
+
+// ObservedGenerationOf is status.observedGeneration, or -1.
+func ObservedGenerationOf(obj map[string]interface{}) int64 {
+	if g, ok, _ := unstructured.NestedInt64(obj, "status", "observedGeneration"); ok {
+		return g
+	}
+	return -1
 }
 
 // ParseConditions maps status.conditions[] (a near-universal convention). Empty
@@ -117,6 +232,7 @@ func ParseConditions(obj map[string]interface{}) []Condition {
 		cond.Status, _ = m["status"].(string)
 		cond.Reason, _ = m["reason"].(string)
 		cond.Message, _ = m["message"].(string)
+		conditionTimes(&cond, m)
 		out = append(out, cond)
 	}
 	return out
@@ -181,6 +297,7 @@ func ParseConditionsDeep(group, plural string, obj map[string]interface{}) []Con
 			cond.Status, _ = cm["status"].(string)
 			cond.Reason, _ = cm["reason"].(string)
 			cond.Message, _ = cm["message"].(string)
+			conditionTimes(&cond, cm)
 			out = append(out, cond)
 		}
 	}

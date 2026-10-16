@@ -36,6 +36,9 @@ type InstanceMeta struct {
 	Name      string
 	Created   time.Time
 	Fields    map[string]string
+	// Cells are the server's printer-column values, in its page's Columns
+	// order; nil for a page read without a table (slice 15a).
+	Cells []string
 }
 
 // ParseCRD maps a CRD unstructured to Info. ok=false when group/kind/plural are

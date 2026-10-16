@@ -54,53 +54,28 @@ func (c *ClusterConn) CountResource(ctx context.Context, group, version, plural 
 	return count, capped, nil
 }
 
-// ListInstances returns one metadata-only page of instances of a kind plus the
-// next continue token ("" on the last page). A single list page; no watch.
-func (c *ClusterConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error) {
-	if c.typed != nil && group == "" && version == "v1" && plural == "services" {
-		return c.listServiceInstances(ctx, limit, continueToken)
+// ListInstances returns one page of instances of a kind plus the next
+// continue token ("" on the last page). A single list page; no watch.
+//
+// The hand-written lists (a few built-ins and CRD groups, which feed the risk
+// filter) come first. Every other kind asks the API server for its table
+// (The Line slice 15a): the kind's printer columns, evaluated by the server
+// exactly as kubectl get prints them. Without a table (no REST client, a
+// server that cannot render one, a failed table read) the metadata-only list
+// answers - its rows without columns, or its own error - never a guess.
+func (c *ClusterConn) ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error) {
+	if items, next, handled, err := c.listCurated(ctx, group, version, plural, limit, continueToken); handled {
+		return crd.InstancePage{Items: items, Continue: next}, err
 	}
-	if c.typed != nil && group == "" && version == "v1" && plural == "persistentvolumeclaims" {
-		return c.listPVCInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "" && version == "v1" && plural == "persistentvolumes" {
-		return c.listPVInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "" && version == "v1" && plural == "secrets" {
-		return c.listSecretInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "" && version == "v1" && plural == "configmaps" {
-		return c.listConfigMapInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "discovery.k8s.io" && version == "v1" && plural == "endpointslices" {
-		return c.listEndpointSliceInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "networking.k8s.io" && version == "v1" && plural == "ingresses" {
-		return c.listIngressInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "networking.k8s.io" && version == "v1" && plural == "networkpolicies" {
-		return c.listNetworkPolicyInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "autoscaling" && version == "v2" && plural == "horizontalpodautoscalers" {
-		return c.listHPAInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "policy" && version == "v1" && plural == "poddisruptionbudgets" {
-		return c.listPDBInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "batch" && version == "v1" && plural == "jobs" {
-		return c.listJobInstances(ctx, limit, continueToken)
-	}
-	if c.typed != nil && group == "batch" && version == "v1" && plural == "cronjobs" {
-		return c.listCronJobInstances(ctx, limit, continueToken)
-	}
-	if c.dyn != nil && usesUnstructuredListFields(group, plural) {
-		return c.listUnstructuredFieldInstances(ctx, group, version, plural, limit, continueToken)
-	}
-
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
+	if tbl, ok := c.readTable(ctx, gvr, "", "", limit, continueToken); ok {
+		if page, err := crd.FromTable(tbl, crd.BuiltinGroups[group]); err == nil {
+			return page, nil
+		}
+	}
 	list, err := c.meta.Resource(gvr).List(ctx, metav1.ListOptions{Limit: limit, Continue: continueToken})
 	if err != nil {
-		return nil, "", err
+		return crd.InstancePage{}, err
 	}
 	out := make([]crd.InstanceMeta, 0, len(list.Items))
 	for i := range list.Items {
@@ -111,7 +86,56 @@ func (c *ClusterConn) ListInstances(ctx context.Context, group, version, plural 
 			Created:   m.GetCreationTimestamp().Time,
 		})
 	}
-	return out, list.GetContinue(), nil
+	return crd.InstancePage{Items: out, Continue: list.GetContinue()}, nil
+}
+
+// listCurated answers the kinds with a hand-written list; handled=false for
+// every other kind.
+func (c *ClusterConn) listCurated(ctx context.Context, group, version, plural string, limit int64, continueToken string) (items []crd.InstanceMeta, next string, handled bool, err error) {
+	wrap := func(items []crd.InstanceMeta, next string, err error) ([]crd.InstanceMeta, string, bool, error) {
+		return items, next, true, err
+	}
+	if c.typed != nil && group == "" && version == "v1" && plural == "services" {
+		return wrap(c.listServiceInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "" && version == "v1" && plural == "persistentvolumeclaims" {
+		return wrap(c.listPVCInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "" && version == "v1" && plural == "persistentvolumes" {
+		return wrap(c.listPVInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "" && version == "v1" && plural == "secrets" {
+		return wrap(c.listSecretInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "" && version == "v1" && plural == "configmaps" {
+		return wrap(c.listConfigMapInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "discovery.k8s.io" && version == "v1" && plural == "endpointslices" {
+		return wrap(c.listEndpointSliceInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "networking.k8s.io" && version == "v1" && plural == "ingresses" {
+		return wrap(c.listIngressInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "networking.k8s.io" && version == "v1" && plural == "networkpolicies" {
+		return wrap(c.listNetworkPolicyInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "autoscaling" && version == "v2" && plural == "horizontalpodautoscalers" {
+		return wrap(c.listHPAInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "policy" && version == "v1" && plural == "poddisruptionbudgets" {
+		return wrap(c.listPDBInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "batch" && version == "v1" && plural == "jobs" {
+		return wrap(c.listJobInstances(ctx, limit, continueToken))
+	}
+	if c.typed != nil && group == "batch" && version == "v1" && plural == "cronjobs" {
+		return wrap(c.listCronJobInstances(ctx, limit, continueToken))
+	}
+	if c.dyn != nil && usesUnstructuredListFields(group, plural) {
+		return wrap(c.listUnstructuredFieldInstances(ctx, group, version, plural, limit, continueToken))
+	}
+
+	return nil, "", false, nil
 }
 
 // ApplyResourceYAML applies the YAML currently shown in the generic resource
@@ -1176,17 +1200,21 @@ func uniqueStrings(values []string) []string {
 // describe-style Events (filtered by involvedObject.uid). Snapshot; no watch.
 func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
-	var (
-		u   *unstructured.Unstructured
-		err error
-	)
-	if ns == "" {
-		u, err = c.dyn.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
-	} else {
-		u, err = c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
-	}
-	if err != nil {
-		return crd.InstanceDetail{}, err
+	// One read for the object and its table row (The Line slice 15b, design
+	// review 1): asked as a table with includeObject=Object, one response
+	// carries the printer-column cells and the whole object - one snapshot.
+	// Without a table, the plain GET answers and there is no summary.
+	u, summary := c.objectWithSummary(ctx, gvr, ns, name)
+	if u == nil {
+		var err error
+		if ns == "" {
+			u, err = c.dyn.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
+		} else {
+			u, err = c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		}
+		if err != nil {
+			return crd.InstanceDetail{}, err
+		}
 	}
 
 	// Mask secret values before producing YAML and building the DTO. The masking
@@ -1246,7 +1274,37 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	}
 	d.Facts = append(d.Facts, c.rbacDanglingFacts(ctx, group, plural, ns, u)...)
 	d.Events = c.instanceEvents(ctx, string(u.GetUID()))
+	// The Line slice 15b: everything below reads the sanitised object.
+	d.Summary = summary
+	d.ObservedGeneration = crd.ObservedGenerationOf(obj)
+	if ts := sanitised.GetDeletionTimestamp(); ts != nil {
+		d.Deleting = ts.Time
+	}
+	d.Finalizers = sanitised.GetFinalizers()
+	d.Managers = crd.ManagersOf(obj)
+	d.FieldsJSON, d.FieldsOmitted = crd.FieldsJSONOf(obj, group == "" && version == "v1" && plural == "secrets")
 	return d, nil
+}
+
+// objectWithSummary reads one object as its table with the whole object in
+// the row. nil when no table is to be had, or the row is not the named
+// object: the caller then reads it plainly.
+func (c *ClusterConn) objectWithSummary(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, []crd.SummaryCell) {
+	tbl, ok := c.readTable(ctx, gvr, ns, name, 0, "")
+	if !ok || len(tbl.Rows) != 1 || len(tbl.Rows[0].Object.Raw) == 0 {
+		return nil, nil
+	}
+	u := &unstructured.Unstructured{}
+	if err := u.UnmarshalJSON(tbl.Rows[0].Object.Raw); err != nil || u.GetName() != name || u.GetKind() == "" || u.GetKind() == "PartialObjectMetadata" {
+		return nil, nil
+	}
+	cols, keep := crd.TableColumns(tbl, crd.BuiltinGroups[gvr.Group])
+	cells := crd.RowCells(tbl.Rows[0], keep)
+	summary := make([]crd.SummaryCell, 0, len(cols))
+	for i, col := range cols {
+		summary = append(summary, crd.SummaryCell{Column: col, Value: cells[i]})
+	}
+	return u, summary
 }
 
 func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, ns, name string, u *unstructured.Unstructured) []crd.RelatedRef {

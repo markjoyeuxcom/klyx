@@ -220,7 +220,8 @@ func TestListInstances(t *testing.T) {
 	)
 	c := NewClusterConn("x", nil, mc, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	items, next, err := c.ListInstances(context.Background(), "example.com", "v1", "widgets", 100, "")
+	itemsPage, err := c.ListInstances(context.Background(), "example.com", "v1", "widgets", 100, "")
+	items, next := itemsPage.Items, itemsPage.Continue
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -255,7 +256,8 @@ func TestListServiceInstancesExposeNetworkFields(t *testing.T) {
 	typed := typedfake.NewSimpleClientset(svc)
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	items, _, err := c.ListInstances(context.Background(), "", "v1", "services", 100, "")
+	itemsPage, err := c.ListInstances(context.Background(), "", "v1", "services", 100, "")
+	items := itemsPage.Items
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -293,7 +295,8 @@ func TestListEndpointSliceInstancesExposeEndpointFields(t *testing.T) {
 	typed := typedfake.NewSimpleClientset(slice)
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	items, _, err := c.ListInstances(context.Background(), "discovery.k8s.io", "v1", "endpointslices", 100, "")
+	itemsPage, err := c.ListInstances(context.Background(), "discovery.k8s.io", "v1", "endpointslices", 100, "")
+	items := itemsPage.Items
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -335,7 +338,8 @@ func TestListStorageInstancesExposeBindingFields(t *testing.T) {
 	typed := typedfake.NewSimpleClientset(pvc, pv)
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	pvcs, _, err := c.ListInstances(context.Background(), "", "v1", "persistentvolumeclaims", 100, "")
+	pvcsPage, err := c.ListInstances(context.Background(), "", "v1", "persistentvolumeclaims", 100, "")
+	pvcs := pvcsPage.Items
 	if err != nil {
 		t.Fatalf("pvc list: %v", err)
 	}
@@ -343,7 +347,8 @@ func TestListStorageInstancesExposeBindingFields(t *testing.T) {
 		t.Fatalf("pvc fields: %+v", f)
 	}
 
-	pvs, _, err := c.ListInstances(context.Background(), "", "v1", "persistentvolumes", 100, "")
+	pvsPage, err := c.ListInstances(context.Background(), "", "v1", "persistentvolumes", 100, "")
+	pvs := pvsPage.Items
 	if err != nil {
 		t.Fatalf("pv list: %v", err)
 	}
@@ -383,7 +388,8 @@ func TestListIngressNetworkPolicyConfigAndSecretFields(t *testing.T) {
 	typed := typedfake.NewSimpleClientset(ing, np, secret, cm)
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	ings, _, err := c.ListInstances(context.Background(), "networking.k8s.io", "v1", "ingresses", 100, "")
+	ingsPage, err := c.ListInstances(context.Background(), "networking.k8s.io", "v1", "ingresses", 100, "")
+	ings := ingsPage.Items
 	if err != nil {
 		t.Fatalf("ingress list: %v", err)
 	}
@@ -391,7 +397,8 @@ func TestListIngressNetworkPolicyConfigAndSecretFields(t *testing.T) {
 		t.Fatalf("ingress fields: %+v", f)
 	}
 
-	nps, _, err := c.ListInstances(context.Background(), "networking.k8s.io", "v1", "networkpolicies", 100, "")
+	npsPage, err := c.ListInstances(context.Background(), "networking.k8s.io", "v1", "networkpolicies", 100, "")
+	nps := npsPage.Items
 	if err != nil {
 		t.Fatalf("networkpolicy list: %v", err)
 	}
@@ -399,7 +406,8 @@ func TestListIngressNetworkPolicyConfigAndSecretFields(t *testing.T) {
 		t.Fatalf("network policy fields: %+v", f)
 	}
 
-	secrets, _, err := c.ListInstances(context.Background(), "", "v1", "secrets", 100, "")
+	secretsPage, err := c.ListInstances(context.Background(), "", "v1", "secrets", 100, "")
+	secrets := secretsPage.Items
 	if err != nil {
 		t.Fatalf("secret list: %v", err)
 	}
@@ -407,7 +415,8 @@ func TestListIngressNetworkPolicyConfigAndSecretFields(t *testing.T) {
 		t.Fatalf("secret fields: %+v", f)
 	}
 
-	configMaps, _, err := c.ListInstances(context.Background(), "", "v1", "configmaps", 100, "")
+	configMapsPage, err := c.ListInstances(context.Background(), "", "v1", "configmaps", 100, "")
+	configMaps := configMapsPage.Items
 	if err != nil {
 		t.Fatalf("configmap list: %v", err)
 	}
@@ -448,7 +457,8 @@ func TestListAutoscalingDisruptionAndBatchFields(t *testing.T) {
 	typed := typedfake.NewSimpleClientset(hpa, pdb, job, cj)
 	c := NewClusterConn("x", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
 
-	hpas, _, err := c.ListInstances(context.Background(), "autoscaling", "v2", "horizontalpodautoscalers", 100, "")
+	hpasPage, err := c.ListInstances(context.Background(), "autoscaling", "v2", "horizontalpodautoscalers", 100, "")
+	hpas := hpasPage.Items
 	if err != nil {
 		t.Fatalf("hpa list: %v", err)
 	}
@@ -456,7 +466,8 @@ func TestListAutoscalingDisruptionAndBatchFields(t *testing.T) {
 		t.Fatalf("hpa fields: %+v", f)
 	}
 
-	pdbs, _, err := c.ListInstances(context.Background(), "policy", "v1", "poddisruptionbudgets", 100, "")
+	pdbsPage, err := c.ListInstances(context.Background(), "policy", "v1", "poddisruptionbudgets", 100, "")
+	pdbs := pdbsPage.Items
 	if err != nil {
 		t.Fatalf("pdb list: %v", err)
 	}
@@ -464,7 +475,8 @@ func TestListAutoscalingDisruptionAndBatchFields(t *testing.T) {
 		t.Fatalf("pdb fields: %+v", f)
 	}
 
-	jobs, _, err := c.ListInstances(context.Background(), "batch", "v1", "jobs", 100, "")
+	jobsPage, err := c.ListInstances(context.Background(), "batch", "v1", "jobs", 100, "")
+	jobs := jobsPage.Items
 	if err != nil {
 		t.Fatalf("job list: %v", err)
 	}
@@ -472,7 +484,8 @@ func TestListAutoscalingDisruptionAndBatchFields(t *testing.T) {
 		t.Fatalf("job fields: %+v", f)
 	}
 
-	cronJobs, _, err := c.ListInstances(context.Background(), "batch", "v1", "cronjobs", 100, "")
+	cronJobsPage, err := c.ListInstances(context.Background(), "batch", "v1", "cronjobs", 100, "")
+	cronJobs := cronJobsPage.Items
 	if err != nil {
 		t.Fatalf("cronjob list: %v", err)
 	}
@@ -516,7 +529,8 @@ func TestListUnstructuredOperatorInstancesExposeFields(t *testing.T) {
 	}, cert, cnp)
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	certs, _, err := c.ListInstances(context.Background(), "cert-manager.io", "v1", "certificates", 100, "")
+	certsPage, err := c.ListInstances(context.Background(), "cert-manager.io", "v1", "certificates", 100, "")
+	certs := certsPage.Items
 	if err != nil {
 		t.Fatalf("cert list: %v", err)
 	}
@@ -524,7 +538,8 @@ func TestListUnstructuredOperatorInstancesExposeFields(t *testing.T) {
 		t.Fatalf("certificate fields: %+v", f)
 	}
 
-	cnps, _, err := c.ListInstances(context.Background(), "cilium.io", "v2", "ciliumnetworkpolicies", 100, "")
+	cnpsPage, err := c.ListInstances(context.Background(), "cilium.io", "v2", "ciliumnetworkpolicies", 100, "")
+	cnps := cnpsPage.Items
 	if err != nil {
 		t.Fatalf("cnp list: %v", err)
 	}

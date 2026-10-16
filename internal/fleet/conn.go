@@ -66,6 +66,8 @@ type Conn interface {
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
+	ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, error)
+	GetCRDDefinition(ctx context.Context, name, version string) (crd.Definition, error)
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (WorkloadCompareInfo, error)
 	NodeDetail(ctx context.Context, name string) (NodeDetail, error)
 	DeletePod(ctx context.Context, namespace, name, uid string) error
@@ -85,7 +87,7 @@ type Conn interface {
 	RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
-	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) ([]crd.InstanceMeta, string, error)
+	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
 	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
