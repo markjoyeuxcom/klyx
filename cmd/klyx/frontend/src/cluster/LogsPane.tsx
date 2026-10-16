@@ -750,6 +750,8 @@ export function LogsPane({
     return (
       <div
         data-testid="logs-pane-expanded"
+        // an Escape layer: an expanded inspector beneath yields Escape to it
+        data-escape-layer=""
         style={{
           position: "fixed",
           // Start below the 40px TopBar: the titlebar (traffic lights, drag

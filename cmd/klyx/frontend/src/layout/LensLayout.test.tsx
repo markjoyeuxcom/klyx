@@ -186,6 +186,34 @@ describe("LensLayout resize and expand (slice 16)", () => {
     }
   });
 
+  it("an Escape layer above, or focus outside the inspector, keeps its Escape", () => {
+    const { getByLabelText, container } = render(<Harness open />);
+    fireEvent.click(getByLabelText("expand details"));
+    const lens = container.querySelector(".lens")!;
+    // an expanded logs pane (an Escape layer) collapses first
+    const logs = document.createElement("div");
+    logs.setAttribute("data-escape-layer", "");
+    document.body.appendChild(logs);
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(lens.hasAttribute("data-expanded")).toBe(true);
+    } finally {
+      logs.remove();
+    }
+    // focus in the chat drawer (outside the inspector) leaves Escape to it
+    const chat = document.createElement("button");
+    document.body.appendChild(chat);
+    try {
+      fireEvent.keyDown(chat, { key: "Escape" });
+      expect(lens.hasAttribute("data-expanded")).toBe(true);
+    } finally {
+      chat.remove();
+    }
+    // focus in the inspector: the expand's
+    fireEvent.keyDown(getByLabelText("restore details"), { key: "Escape" });
+    expect(lens.hasAttribute("data-expanded")).toBe(false);
+  });
+
   it("closing the inspector resets the expand: the next object opens beside the list", () => {
     const { getByLabelText, rerender, container } = render(<Harness open />);
     fireEvent.click(getByLabelText("expand details"));

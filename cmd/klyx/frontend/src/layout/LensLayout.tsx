@@ -61,10 +61,19 @@ export function splitGeometry(innerWidth: number, requested: number, bodyMin = B
 }
 
 // A surface above the inspector (a menu, a confirm, the console, Describe,
-// the chat) takes Escape before the expanded inspector does.
-const ABOVE = '[role="dialog"], [role="alertdialog"], [role="menu"], [data-testid="command-palette"]';
+// an expanded logs pane - anything marked data-escape-layer) takes Escape
+// before the expanded inspector does.
+const ABOVE = '[role="dialog"], [role="alertdialog"], [role="menu"], [data-testid="command-palette"], [data-escape-layer]';
 function surfaceAbove(aside: HTMLElement | null): boolean {
   return Array.from(document.querySelectorAll<HTMLElement>(ABOVE)).some((el) => el !== aside && !el.contains(aside ?? null));
+}
+
+// The expanded inspector owns Escape only when focus is in it, or nowhere:
+// focus in the chat, the mast or the nav leaves Escape to them.
+function ownsKey(aside: HTMLElement | null, t: EventTarget | null): boolean {
+  const el = t as Node | null;
+  if (!el || el === document || el === document.body || el === document.documentElement) return true;
+  return !!aside?.contains(el);
 }
 
 export function LensLayout({
@@ -200,7 +209,8 @@ export function LensLayout({
   useEffect(() => {
     if (!wide) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || inEditable(e.target) || surfaceAbove(asideRef.current)) return;
+      if (e.key !== "Escape" || e.defaultPrevented || inEditable(e.target)) return;
+      if (!ownsKey(asideRef.current, e.target) || surfaceAbove(asideRef.current)) return;
       e.preventDefault();
       setExpanded(false);
     };
