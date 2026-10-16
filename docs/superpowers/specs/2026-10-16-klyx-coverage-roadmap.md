@@ -118,6 +118,10 @@ Order: a small correctness fix that stands alone; the owner's two named prioriti
 - `ProjectPod` drops pod-level `spec.resources` and `spec.overhead`, while `podRequest` reads both, so observer pod rows under-report scheduled CPU and memory.
 - The fix keeps both, with a projection-equality test.
 - Resize-aware accounting is S6, not this fix.
+- *As built:*
+  - `ProjectPod` keeps `spec.resources` and `spec.overhead`, deep-copied.
+  - Two fixture pods join `TestProjectionParityPods`: one with pod-level requests (2 CPU, 1Gi) and one with a RuntimeClass overhead (250m, 120Mi).
+  - Before the fix the projection read 0.1 CPU for both, against 2 and 0.35 raw. After it, raw and projected summaries are equal.
 
 **S1. Flux, complete** (owner priority). Three reviews and builds:
 - **S1a. Flux Operator:** `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider` (`fluxcd.controlplane.io`), at supported per-kind versions.

@@ -116,6 +116,16 @@ func fixturePods() []corev1.Pod {
 			p.DeletionTimestamp = ptr(ago(10 * time.Minute))
 			p.DeletionGracePeriodSeconds = ptr(int64(30))
 		}),
+		// coverage S0: pod-level requests replace the container sum, and the
+		// RuntimeClass overhead adds to it - the scheduler's own accounting,
+		// which the projection must keep
+		pod("pod-level", ctrl("ReplicaSet", "bare", "uid-rs-bare"), readyStatus(), func(p *corev1.Pod) {
+			p.Spec.Resources = &corev1.ResourceRequirements{Requests: corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("1Gi")}}
+		}),
+		pod("overhead", ctrl("ReplicaSet", "bare", "uid-rs-bare"), readyStatus(), func(p *corev1.Pod) {
+			p.Spec.Overhead = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("120Mi")}
+		}),
 	}
 }
 
