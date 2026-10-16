@@ -25,7 +25,10 @@ Owner request, 2026-10-16, while trying slice 15 (a CRD definition inspector wit
   - in a drawer, the drawer becomes full width.
 - **Restore:** the same button, or Escape.
   - Escape runs on a capture listener ahead of the lists' and the drawer's own Escape, and marks the key handled, so restoring never also closes the inspector.
-  - A field being edited keeps its Escape, and so does a menu, dialog or the console above the inspector.
+  - The expand owns Escape only while focus is inside the inspector, or nowhere. Focus in the chat drawer, the mast or the nav leaves Escape to them.
+  - A field being edited keeps its Escape, and so does any surface above the inspector:
+    - a menu, a dialog or the console;
+    - an Escape layer: anything marked `data-escape-layer`, such as the expanded logs pane, which collapses first. Before this rule, one Escape with an expanded logs pane over an expanded pod inspector collapsed both, because the inspector's window capture listener ran before the logs pane's document capture listener.
 - **Reset:** closing the inspector resets the expand, so the next object opens beside the list. Following a link inside the inspector keeps it expanded, since the inspector stays mounted.
 - **Scope:** only an inspector inside a lens layout has the button. The layout owns the geometry and provides the toggle through a context (`layout/inspectorExpand.ts`).
 - **A readable measure:** expanded content stops at 1,280px. The identity row (copy, restore, close) keeps the full width.
