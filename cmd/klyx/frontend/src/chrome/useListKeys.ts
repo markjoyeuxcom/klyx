@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { inEditable } from "./inEditable";
+import { listHidden } from "../layout/inspectorExpand";
 import { getPaletteOpen } from "./CommandPalette";
 
 /**
@@ -75,6 +76,8 @@ export function useListKeys({
       if (inEditable(e.target)) return;
       if (e.defaultPrevented) return;
       if (e.key !== "Escape" && inOwnKeysSurface(e.target)) return;
+      // the list is hidden under an expanded inspector: no key moves it
+      if (e.key !== "Escape" && listHidden()) return;
 
       if (e.key === "j" || e.key === "ArrowDown") {
         if (count === 0) return;

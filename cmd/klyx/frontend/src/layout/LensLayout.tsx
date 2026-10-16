@@ -179,14 +179,19 @@ export function LensLayout({
     if (!drawerOpen) return;
     const main = mainRef.current;
     const aside = asideRef.current;
-    returnFocus.current = document.activeElement as HTMLElement | null;
+    // A split that became a drawer already holds focus in its inspector: it
+    // keeps that control and the row to return to (slice 16 review 1).
+    const already = !!aside && aside.contains(document.activeElement);
+    if (!already) returnFocus.current = document.activeElement as HTMLElement | null;
     main?.setAttribute("inert", "");
     // The command console, open over a drawer it opened beside, keeps focus:
     // the drawer takes it only when nothing above it holds it. The console's
     // own close then focuses the inspector (The Line slice 12 smoke).
-    if (!document.querySelector('[data-testid="command-palette"]')) (focusables(aside)[0] ?? aside)?.focus();
+    if (!already && !document.querySelector('[data-testid="command-palette"]')) (focusables(aside)[0] ?? aside)?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) { onCloseInspector?.(); return; }
+      // a field being edited keeps its Escape, as it does in the split
+      // (useListKeys ignores editable targets) - slice 16 review 1
+      if (e.key === "Escape" && !e.defaultPrevented && !inEditable(e.target)) { onCloseInspector?.(); return; }
       if (e.key !== "Tab" || !aside) return;
       const f = focusables(aside);
       if (f.length === 0) { e.preventDefault(); return; }
@@ -198,7 +203,13 @@ export function LensLayout({
     return () => {
       window.removeEventListener("keydown", onKey);
       main?.removeAttribute("inert");
+      // Return focus only when the drawer closed. A drawer that became a
+      // split keeps its inspector mounted, and focus stays in it (spec §2:
+      // crossing the breakpoint preserves the focused control).
+      const aside = asideRef.current;
+      if (aside && document.contains(aside) && aside.contains(document.activeElement)) return;
       const back = returnFocus.current;
+      returnFocus.current = null;
       if (back && document.contains(back)) back.focus();
     };
   }, [drawerOpen, onCloseInspector]);
@@ -254,35 +265,31 @@ export function LensLayout({
           )}
         </div>
       </section>
-      {inspectorEl && geo.mode === "split" && (
-        <>
-          {!wide && <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize details panel"
-            aria-valuenow={geo.width}
-            aria-valuemin={INSPECTOR_MIN}
-            aria-valuemax={geo.max}
-            tabIndex={0}
-            title="Drag to resize · double-click to reset"
-            className="lens-separator"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onKeyDown={onSeparatorKey}
-            onDoubleClick={() => commit(INSPECTOR_DEFAULT)}
-          >
-            <span aria-hidden="true" />
-          </div>}
-          {inspectorEl}
-        </>
-      )}
-      {inspectorEl && geo.mode === "drawer" && (
-        <>
-          <div className="lens-scrim" aria-hidden="true" onClick={onCloseInspector} />
-          {inspectorEl}
-        </>
-      )}
+      {/* The separator, the scrim and the inspector keep fixed places among
+          the children, so crossing the breakpoint never remounts the
+          inspector: its focus, scroll and tab survive (slice 16 review 1). */}
+      {inspectorEl && geo.mode === "split" && !wide ? (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize details panel"
+          aria-valuenow={geo.width}
+          aria-valuemin={INSPECTOR_MIN}
+          aria-valuemax={geo.max}
+          tabIndex={0}
+          title="Drag to resize · double-click to reset"
+          className="lens-separator"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onKeyDown={onSeparatorKey}
+          onDoubleClick={() => commit(INSPECTOR_DEFAULT)}
+        >
+          <span aria-hidden="true" />
+        </div>
+      ) : null}
+      {inspectorEl && geo.mode === "drawer" ? <div className="lens-scrim" aria-hidden="true" onClick={onCloseInspector} /> : null}
+      {inspectorEl}
     </div>
   );
 }

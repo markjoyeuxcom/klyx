@@ -7,3 +7,10 @@ import { createContext, useContext } from "react";
 export type InspectorExpandValue = { expanded: boolean; toggle: () => void };
 export const InspectorExpand = createContext<InspectorExpandValue | null>(null);
 export const useInspectorExpand = () => useContext(InspectorExpand);
+
+// listHidden: a lens's inspector is expanded over its list. A hidden list
+// takes no keys - a selection nobody can see must never move or act
+// (slice 16 review 1).
+export function listHidden(): boolean {
+  return typeof document !== "undefined" && document.querySelector('[data-testid="lens-layout"][data-expanded]') !== null;
+}
