@@ -321,7 +321,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
               Attention {attentionCount > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attentionCount}</span>}
             </button>
           )}
-          <label style={{ display: "flex", flex: "0 1 280px", minWidth: 160 }}>
+          <label className="lens-search">
             <span className="sr-only">Search {resource.kind}</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={instances.filter} onChange={(e) => setFilter(e.target.value)} placeholder={fleetMode ? "Search cluster, name, namespace" : "Search name, namespace, fields"} />
           </label>

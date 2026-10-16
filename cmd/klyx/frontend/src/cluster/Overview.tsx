@@ -1,3 +1,4 @@
+import { IconChevronRight } from "@tabler/icons-react";
 import { placeName } from "../line/place";
 import { useEffect, useState } from "react";
 import { useFleet, podsText } from "../store/fleet";
@@ -158,7 +159,7 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
   }
   return (
     <details className="ov-notice" role="status" style={{ color: tone }}>
-      <summary className="t-body">{headline}<span className="t-secondary"> · {notes.length === 1 ? "details" : `${notes.length} notes`}</span></summary>
+      <summary className="t-body">{headline}<span className="t-secondary"> · {notes.length === 1 ? "details" : `${notes.length} notes`}</span><Chevron /></summary>
       <ul className="ov-notice-notes t-secondary">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
     </details>
   );
@@ -192,9 +193,15 @@ function TopLink({ cluster, l, r }: { cluster: string; l: Line; r: Line["top"][n
     <button type="button" className="ov-top" data-testid="ov-top"
       onClick={() => reveal(cluster, l.task, l.part, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid, parent: r.parent })}
       title={`${selects ? `Open ${name}` : `Open ${l.label}`}${r.label ? ` - ${r.label}` : ""}${r.parent ? ` (via ${r.parent})` : ""}`}>
-      {selects ? name : `open ${l.label}`}{r.label ? <span className="t-secondary"> {r.label}</span> : null}
+      <span className="ov-top-name">{selects ? name : `open ${l.label}`}</span>{r.label ? <span className="ov-top-label"> {r.label}</span> : null}
     </button>
   );
+}
+
+// A disclosure's chevron sits after its words, as InspectorBlock's does; it
+// turns when the details open (slice 13d.4: no native ▶ marker).
+function Chevron() {
+  return <IconChevronRight className="ov-chev" size={12} stroke={1.8} aria-hidden="true" />;
 }
 
 function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention | null }) {
@@ -210,14 +217,15 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
         <div className="ov-areas">
           {m.areas.map((a) => (
             <div key={a.id} className="ov-area" data-state={a.state} data-testid={`ov-area-${a.id}`}>
-              <button type="button" className="ov-area-label" onClick={() => goArea(cluster, a)} title={`Open ${a.label}`}>{a.label}</button>
+              <button type="button" className="ov-area-label t-section-label" onClick={() => goArea(cluster, a)} title={`Open ${a.label}`}>{a.label}</button>
               {a.controller && (
                 // One line; the controller's reason is a click away, not a
-                // paragraph repeated in every area.
-                <span className="ov-area-text" style={{ color: a.controller.state === "not ready" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
+                // paragraph repeated in every area. An unverified controller
+                // is a gap, said quietly; one that is not ready is a fault.
+                <span className="ov-area-text ov-ctl" data-tone={a.controller.state === "not ready" ? "danger" : "gap"}>
                   {a.controller.reason ? (
                     <details className="ov-why">
-                      <summary>{a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}</summary>
+                      <summary>{a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}<Chevron /></summary>
                       <span className="t-secondary">{a.controller.reason}</span>
                     </details>
                   ) : a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}
@@ -225,8 +233,9 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
               )}
               {a.lines.map((l) => (
                 <span key={l.part} className="ov-area-text" title={provenance(a, l)}
-                  style={{ color: l.state === "attention" ? (l.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : l.state === "unreadable" || l.gaps.length > 0 ? "var(--color-text-warning)" : undefined }}>
-                  {a.lines.length > 1 ? `${l.label}: ` : ""}{l.state === "attention" && <><Aspect kind={l.tone === "danger" ? "fault" : "attention"} size={8} />{" "}</>}{lineText(l)}
+                  data-tone={l.state === "attention" ? (l.tone === "danger" ? "danger" : "warning") : l.state === "unreadable" || l.gaps.length > 0 ? "warning" : undefined}>
+                  {a.lines.length > 1 && <span className="ov-line-label">{`${l.label}: `}</span>}
+                  <span className="ov-line-words">{l.state === "attention" && <><Aspect kind={l.tone === "danger" ? "fault" : "attention"} size={8} />{" "}</>}{lineText(l)}</span>
                   {l.state === "attention" && l.top.length > 0 && (
                     <span className="ov-tops">{l.top.slice(0, 3).map((t) => <TopLink key={`${t.gvr}/${t.namespace ?? ""}/${t.name}`} cluster={cluster} l={l} r={t} />)}</span>
                   )}

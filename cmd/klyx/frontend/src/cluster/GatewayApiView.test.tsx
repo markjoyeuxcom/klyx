@@ -97,11 +97,11 @@ describe("GatewayApiView (redesign step 6)", () => {
       gw("lastseen", { accepted: false, programmed: false, generation: 3, acceptedCond: cond("False", "InvalidParameters", 2), programmedCond: cond("") }),
     ] });
     render(<GatewayApiView cluster="x" />);
-    const text = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra/${name}`))!.textContent;
+    const text = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra / ${name}`))!.textContent;
     expect(text("absent")).toContain("no status reported");
     expect(text("pending")).toContain("acceptance pending");
     expect(text("rejected")).toContain("not accepted");
-    const rejected = [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes("infra/rejected")) as HTMLElement;
+    const rejected = [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes("infra / rejected")) as HTMLElement;
     expect(rejected.querySelector('[data-aspect="fault"]')).toBeTruthy();
     expect(text("lastseen")).toContain("not accepted (last observed)");
     expect(text("lastseen")).not.toContain("▲");
@@ -114,7 +114,7 @@ describe("GatewayApiView (redesign step 6)", () => {
       gw("unprog", { programmed: false, generation: 3, acceptedCond: cond("True", "", 3), programmedCond: cond("False", "AddressNotAssigned", 0) }),
     ] });
     render(<GatewayApiView cluster="x" />);
-    const row = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra/${name}`)) as HTMLElement;
+    const row = (name: string) => [...document.querySelectorAll(".lens-row")].find((r) => r.textContent?.includes(`infra / ${name}`)) as HTMLElement;
     if (!screen.queryByTestId("gateway-panel")?.textContent?.includes("lastseen")) fireEvent.click(row("lastseen"));
     let panel = screen.getByTestId("gateway-panel");
     expect(within(panel).getByText("Accepted was False for generation 2 - InvalidParameters. The controller has not reported on generation 3; whether the current Gateway is accepted is unverified.")).toBeTruthy();

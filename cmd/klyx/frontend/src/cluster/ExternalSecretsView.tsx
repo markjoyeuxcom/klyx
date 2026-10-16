@@ -374,7 +374,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
             <button className="l-chip" aria-pressed={status === "attention"} onClick={() => setStatus("attention")}>{view === "stores" ? "Not ready" : "Not synced or refresh overdue"} {(view === "stores" ? storesNotReady : attention) > 0 && <span style={{ color: "var(--color-text-warning)" }}>{view === "stores" ? storesNotReady : attention}</span>}</button>
             {view === "secrets" && stale > 0 && <button className="l-chip" aria-pressed={status === "stale"} onClick={() => setStatus("stale")}>Stale <span style={{ color: "var(--color-text-warning)" }}>{stale}</span></button>}
           </div>
-          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+          <label className="lens-search">
             <span className="sr-only">Search External Secrets</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "stores" ? "Search stores" : "Search name, store, target"} />
           </label>

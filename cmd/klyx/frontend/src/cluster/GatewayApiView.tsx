@@ -231,7 +231,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
                 <button className="l-chip" aria-pressed={mode === "attention"} onClick={() => setMode("attention")}>Needs attention {attention > 0 && <span style={{ color: notAccepted > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{attention}</span>}</button>
                 <button className="l-chip" aria-pressed={mode === "programmed"} onClick={() => setMode("programmed")}>Programmed</button>
               </div>
-              <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+              <label className="lens-search">
                 <span className="sr-only">Search Gateways</span>
                 <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false}
                   value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, class, address, listener" />
@@ -260,7 +260,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
                   onDoubleClick={() => openGateway(g.namespace, g.name)}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("mark") && <VerdictMark health={role} stale={g.stale} />}
-                  {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{g.namespace}/</span>{g.name}</span>}
+                  {show("name") && <span className="lens-cell-name" title={`${g.namespace}/${g.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{g.namespace} / </span>{g.name}</span>}
                   {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}
                     title={g.stale ? `Observed Gen: ${g.observedGeneration ?? "?"} vs Current: ${g.generation ?? "?"}` : undefined}>{role.label}</span>}
                   {show("address") && <span style={{ ...cellStyle, color: address ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{address || "none"}</span>}

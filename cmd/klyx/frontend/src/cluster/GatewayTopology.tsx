@@ -295,7 +295,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
               </select>
             </label>
           )}
-          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+          <label className="lens-search">
             <span className="sr-only">Search routes</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false}
               value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search route, hostname, backend" />

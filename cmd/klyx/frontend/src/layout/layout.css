@@ -47,6 +47,10 @@
 .lens-header-end { margin-left: auto; align-self: center; display: flex; align-items: center; gap: 8px; flex-shrink: 0; font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
 .lens-controls { min-height: var(--workspace-controls-height); flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
   padding: 0 var(--workspace-inline-padding) 16px; min-width: 0; }
+/* A lens's search follows its filters (the mockup's header): on their row
+   while there is room, else first on the next one - never a lone box pushed
+   to the far edge (slice 13 polish). */
+.lens-search { display: flex; flex: 0 1 280px; min-width: 180px; }
 .lens-notice { min-height: var(--workspace-notice-height); flex-shrink: 0; margin: 0 var(--workspace-inline-padding) 12px; }
 /* The body is the ground; what it holds is a panel sized to its content (the
    mockup's table ends after its last row), scrolling inside once the rows are
@@ -542,27 +546,37 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 /* Areas flow in columns: a quiet area keeps its own height instead of
    stretching to a long neighbour's, and its label sits above its lines so the
    diagnosis gets the column's full width (UI review 2026-10-13). */
-.ov-areas { columns: 300px; column-gap: 12px; }
-.ov-area { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-items: baseline; break-inside: avoid; margin-bottom: 6px; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 4px;
-  background: transparent; cursor: pointer; text-align: left; font: 400 12px/16px var(--font-sans); color: var(--color-text-secondary); }
-.ov-area:hover, .ov-area:focus-visible { background: var(--color-background-secondary); outline: none; }
-div.ov-area { cursor: default; } /* a container: its label and links are the controls */
-.ov-area-label { color: var(--color-text-primary); font-weight: 600; }
-.ov-area-text { min-width: 0; overflow-wrap: anywhere; grid-column: 1; }
-/* an area's label is its lens link; its lines and Top links stack beside it */
-button.ov-area-label { grid-column: 1; justify-self: start; background: none; border: 0; padding: 0; text-align: left; font: inherit; font-weight: 600; cursor: pointer; }
-button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration: underline; outline: none; }
-.ov-tops { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; margin-left: 8px; }
+.ov-areas { columns: 280px; column-gap: 32px; }
+/* An area (slice 13d.4): its head in the section label, its lines in the body
+   face. Only the words that need you carry a tone, after their Aspect; a
+   line's own label stays ink-3 and its objects are mono names, not links in
+   the route colour. */
+.ov-area { display: flex; flex-direction: column; gap: 4px; break-inside: avoid; padding: 0 0 20px; min-width: 0;
+  font: 400 13px/20px var(--font-sans); color: var(--color-text-secondary); }
+button.ov-area-label { align-self: flex-start; margin-bottom: 2px; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+button.ov-area-label:hover, button.ov-area-label:focus-visible { color: var(--color-text-primary); text-decoration: underline; text-underline-offset: 3px; outline: none; }
+.ov-area-text { min-width: 0; overflow-wrap: anywhere; }
+.ov-line-label { color: var(--color-text-tertiary); }
+.ov-area-text[data-tone="danger"] .ov-line-words, .ov-ctl[data-tone="danger"] { color: var(--color-text-danger); }
+.ov-area-text[data-tone="warning"] .ov-line-words { color: var(--color-text-warning); }
+.ov-ctl[data-tone="gap"] { color: var(--color-text-tertiary); }
+/* its objects, one to a line under the words they explain */
+.ov-tops { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 4px 0 2px 14px; min-width: 0; max-width: calc(100% - 14px); }
 /* An object name never breaks mid-token: it truncates, its full name in the
    title (UI review 2026-10-13). */
-.ov-top { background: none; border: 0; padding: 0; font: inherit; font-size: 11px; color: var(--color-text-info); cursor: pointer; text-align: left;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.ov-tops { min-width: 0; max-width: 100%; }
-.ov-why > summary, .ov-notice > summary { cursor: pointer; }
-.ov-why > span { display: block; margin-top: 2px; font-size: 11px; overflow-wrap: anywhere; }
-.ov-notice-notes { margin: 4px 0 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
-.ov-top:hover, .ov-top:focus-visible { text-decoration: underline; outline: none; }
-.ov-area[data-state="quiet"] .ov-area-text, .ov-area[data-state="evidence"] .ov-area-text { color: var(--color-text-secondary); }
+.ov-top { max-width: 100%; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font: 400 12px/18px var(--font-sans); color: var(--color-text-tertiary); }
+.ov-top-name { font: 500 12px/18px var(--font-mono); color: var(--color-text-primary); }
+.ov-top:hover .ov-top-name, .ov-top:focus-visible .ov-top-name { text-decoration: underline; text-underline-offset: 3px; }
+.ov-top:focus-visible { outline: none; }
+/* a disclosure: its words, then a chevron that turns as it opens */
+.ov-why > summary, .ov-notice > summary { cursor: pointer; list-style: none; }
+.ov-why > summary::-webkit-details-marker, .ov-notice > summary::-webkit-details-marker { display: none; }
+.ov-chev { margin-left: 6px; vertical-align: -1px; color: var(--color-text-tertiary); transition: transform 120ms ease-out; }
+details[open] > summary > .ov-chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .ov-chev { transition: none; } }
+.ov-why > span { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.ov-notice-notes { margin: 6px 0 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
 .mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
   font: 600 11px/16px var(--font-sans); }
 .mast-attention:hover, .mast-attention:focus-visible { background: var(--color-background-secondary); outline: none; }
@@ -641,6 +655,9 @@ button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration
    between them; events and risks are each one panel of rows. */
 .ov-page { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 28px; padding: 4px 0 24px; }
 .ov-section-body { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+/* its sections are headed as "Needs you" is, so the page has one head size and
+   By area's own heads (the section label) sit a step under it */
+.ov-page .ov-section > h3.t-section-label { font: 600 14px/18px var(--font-label); letter-spacing: 0.16em; color: var(--color-text-primary); }
 .ov-section-body:has(> .ov-row) { gap: 0; }
 .ov-row { width: 100%; display: grid; gap: 12px; align-items: baseline; min-height: 36px; padding: 8px 14px; border: 0; cursor: pointer; text-align: left;
   font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); background: var(--color-background-primary);

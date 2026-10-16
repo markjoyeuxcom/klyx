@@ -89,7 +89,7 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
               <button key={g} className="l-chip" aria-pressed={crd.groupBy === g} onClick={() => setGroupBy(g)}>{GROUP_BY_LABEL[g]}</button>
             ))}
           </div>
-          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+          <label className="lens-search">
             <span className="sr-only">Search custom resources</span>
             <input className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={crd.search} onChange={(e) => setSearch(e.target.value)} placeholder="kind, group, operator…" />
           </label>

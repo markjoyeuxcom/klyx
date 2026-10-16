@@ -420,7 +420,7 @@ export function CertsView({ cluster }: { cluster: string }) {
               </>
             )}
           </div>
-          <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+          <label className="lens-search">
             <span className="sr-only">Search cert-manager</span>
             <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={view === "issuers" ? "Search issuers" : "Search name, issuer, DNS, secret"} />
           </label>

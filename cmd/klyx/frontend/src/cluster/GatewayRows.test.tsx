@@ -84,13 +84,13 @@ describe("Gateways rows, mounted end to end (slice 3 §5.6)", () => {
     open();
     applyRows("g", rowsDTO(1, 1, [gw("old")]));
     render(<GatewayApiView cluster="x" />);
-    expect(rowNames()).toEqual(["infra/old"]);
+    expect(rowNames()).toEqual(["infra / old"]);
     act(() => applySummary({ ...summary(1, 9, 1, 1, 0), final: true }));
     expect(rowNames()).toEqual([]);
     expect(screen.getByLabelText("reading Gateways")).toBeTruthy();
     act(() => applySummary(summary(2, 1, 1, 1, 0)));
     act(() => { open(2); applyRows("g", rowsDTO(2, 1, [gw("new")])); });
-    expect(rowNames()).toEqual(["infra/new"]);
+    expect(rowNames()).toEqual(["infra / new"]);
   });
 
   it("a confirmed absence is not installed; a stale empty read is last good; a discovery gap is named", () => {
@@ -203,7 +203,7 @@ describe("the Routes part view", () => {
     openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/a", "ok", "attached"), att("infra/b", "fault", "not accepted", true)])]));
     render(<GatewayApiView cluster="x" />);
     toRoutes();
-    expect(rowNames()).toEqual(["apps/web"]);
+    expect(rowNames()).toEqual(["apps / web"]);
     expect(headline()).toBe("1");
     fireEvent.click(screen.getByText("web").closest(".lens-row")!);
     const panel = within(screen.getByTestId("route-row-panel"));

@@ -208,7 +208,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                 <button className="l-chip" aria-pressed={mode === "all"} onClick={() => setMode("all")}>All {total}</button>
                 <button className="l-chip" aria-pressed={mode === "attention"} onClick={() => setMode("attention")}>Needs attention {attention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{attention}</span>}</button>
               </div>
-              <label style={{ display: "flex", flex: "0 1 260px", minWidth: 140, marginLeft: "auto" }}>
+              <label className="lens-search">
                 <span className="sr-only">Search HTTPRoutes</span>
                 <input ref={searchRef} className="l-input" style={{ width: "100%" }} type="search" autoCapitalize="off" autoCorrect="off" spellCheck={false}
                   value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, parent, status" />
@@ -235,7 +235,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelKey(k); } }}>
                   {show("mark") && <VerdictMark health={role} />}
-                  {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace}/</span>{r.name}</span>}
+                  {show("name") && <span className="lens-cell-name" title={`${r.namespace}/${r.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace} / </span>{r.name}</span>}
                   {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{verdictMark}</span>}
                   {show("parent") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.parent}</span>}
                   {show("parents") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.attachments.length}</span>}

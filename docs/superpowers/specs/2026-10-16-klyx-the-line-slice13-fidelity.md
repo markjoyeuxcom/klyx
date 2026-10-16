@@ -250,6 +250,20 @@ Dependency node lines are ink-2. Their tone stays as `data-tone`, and the mark a
 - **An unreachable station on the board** says "unreachable" (or "not connected"), then its reason on one line. The cell's name and title keep the full reading.
 - **The 2000px right-edge fragments** in the owner's screenshot do not reproduce in the walk at 2000×1228: no element extends past the viewport. They look like a window behind Klyx. This is re-checked in the native smoke.
 
+### As built (13d polish, after the lab came back)
+
+The first captures against the lab after 13d showed three leftovers. They are fixed here.
+
+- **By area** (13d.4 had replaced ▲ but not ▶):
+  - Each area's head is the section label (condensed caps, ink-3), a step under the page's own section heads.
+  - A line's label ("Reconciliations:") is ink-3. Only the words after its Aspect carry the tone.
+  - An unverified controller is a gap and reads in ink-3. A controller that is not ready keeps its Aspect and danger.
+  - Each line's objects stand one to a line under it: the name in mono 500 ink-1, its label in ink-3. They are no longer 11px links in the route colour.
+  - A disclosure (a controller's reason, Connection's notes) drops the native ▶ marker. Its chevron follows the words, as InspectorBlock's does, and turns as it opens.
+- **The station page's section heads** (Resources, Cluster, Recent warning events, Resource risks, By area, Connection) are headed like "Needs you": condensed caps 14px/600 in ink-1. The page then has one head size, with By area's heads under it.
+- **A lens's search** follows its filters, as the mockup's Filter does. One `lens-search` class replaces fifteen inline styles. The search shares the filters' row while there is room. Otherwise it leads the next row, rather than sitting alone at the far right.
+- **Gateway and route names** read "ns / name", as every other lens does.
+
 ## 3. Out of scope
 
 - New data or new claims: the mockup's synthesised "Held: …" sentence, "where the fix lives" advice beyond the existing supply facts, and "root cause".
