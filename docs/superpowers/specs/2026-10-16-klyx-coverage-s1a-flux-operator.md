@@ -162,14 +162,17 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
     - the external provider path publishes its in-progress status, acknowledgements included, before it fetches.
   - **Why the Ready condition works** (v0.61.0 sources):
     - Every enabled FluxInstance run, every ResourceSet run past its CEL and dependency checks, and every external provider fetch first persists Ready=Unknown "Reconciliation in progress" (`fluxinstance_controller.go` and `resourceset_controller.go` `reconcile`; the provider's non-static branch). It then ends with Ready True or False, or Stalled. A ResourceSet's two earlier checks write Ready False directly (`InvalidCELExpression`, `DependencyNotReady`).
-    - While disabled, the controller returns before any of this. Its deferred finalizer then touches only `lastHandledReconcileAt` and the Reconciling condition, never Ready.
+    - While disabled, the controller returns before any of this. Its deferred finalizer then touches only `lastHandledReconcileAt` and the Reconciling condition.
+    - **One exception writes Ready while disabled:** initialization. An object without its finalizer is initialized before the disabled check (`fluxinstance_controller.go` and `resourceset_controller.go` :101-104, the provider :115-118). A disabled one gets Ready=True, reason `ReconciliationDisabled`, "Initialized with reconciliation suspended" (`common.go` :38-44). The conditions patcher merges onto the latest object, so that write can land after a resume (Codex, review 4).
     - A run outside a provider's schedule returns before the in-progress status. It changes Ready only in one case, when it finds Reconciling with Ready Unknown, and then with reason `SkippedDueToSchedule`.
   - **The evaluation fingerprint:** a SHA-256 over Ready's raw status, reason, full message and `lastTransitionTime`.
     - It is computed in the projection from the raw object, before any clipping.
     - It is kept in the backend: never serialised, never shown, never sent to AI.
     - It compares only for equality. No time is compared with another.
   - **The resume baseline:** the fingerprint of the last state Klyx observed with the reconcile annotation `disabled`, for that UID. A Ready change seen while still disabled updates the baseline.
-  - **Evidence:** a later observed state, with the annotation enabled, whose fingerprint differs from the baseline, unless that state's Ready reason is `SkippedDueToSchedule`. For providers, a changed `lastExportedRevision` is also evidence.
+  - **Evidence:** a later observed state, with the annotation enabled, whose fingerprint differs from the baseline, unless that state's Ready reason is `SkippedDueToSchedule` or `ReconciliationDisabled`. Neither reason is ever evidence, whenever it arrives. For providers, a changed `lastExportedRevision` is also evidence.
+    - **An absent Ready** is a baseline of its own ("no Ready"). Ready appearing as `ReconciliationDisabled` is still not evidence; Ready appearing in progress is.
+    - **`ReconciliationDisabled` is never a verdict.** An enabled object whose Ready carries that reason reads "awaiting evaluation", with or without a baseline. A Klyx that starts after a resume therefore never shows initialization as health.
     - The comparison is between states, not events, so a watch gap or relist loses nothing. A run that happened during a gap still shows a different fingerprint afterwards.
     - Reconciling changes, handled tokens, `nextSchedule` and history are not evidence.
     - **Begun and completed are distinct:**
@@ -239,6 +242,10 @@ S1a is built after S0b and depends on it.
     - two Ready messages that differ only beyond the display clip (evidence);
     - an unchanged frozen condition whose display message is clipped further when unrelated fields grow (not evidence);
     - a finalizer patch while disabled that changes only Reconciling (not evidence);
+    - disabled and uninitialized, then a gap in which the object is initialized while disabled, then enabled with no run (still awaiting);
+    - a resume followed by a delayed initialization patch (still awaiting);
+    - then a genuine in-progress Ready and a final Ready (evaluating, then evaluated);
+    - an enabled object first seen with Ready `ReconciliationDisabled` and no baseline (awaiting, never healthy);
     - a watch gap across which the run completed (evidence by state comparison);
     - a blocked ResourceSet with an unchanged `DependencyNotReady` message (awaiting);
     - controller and Klyx clocks skewed (no effect: nothing compares times);
@@ -298,4 +305,10 @@ S1a is built after S0b and depends on it.
 | 3 | Clipped messages used as evidence | The fingerprint is computed from the raw condition before clipping and kept apart from display strings; §7 has both clip cases |
 | P3 | Summed rolling history counters are not monotonic | History is no longer evidence |
 | minor | §1 named the Deployment's namespace | §1 defers to §2's `RUNTIME_NAMESPACE` resolution |
+
+## 12. Revision 4: Codex's re-review of 92d8c27
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Initializing a disabled object writes Ready=True `ReconciliationDisabled`, which the fingerprint rule would take as evidence, including when the write lands after a resume | §4: the proof names the initialization exception; `ReconciliationDisabled`, like `SkippedDueToSchedule`, is never evidence; an absent Ready is its own baseline; and `ReconciliationDisabled` is never a verdict, even without a baseline. §7 adds your three Observer-path cases and the no-baseline case |
 
