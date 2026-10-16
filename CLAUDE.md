@@ -8,6 +8,8 @@ Built by a Senior Platform Engineer running six AKS clusters across West Europe 
 
 Also runs on a homelab k3s on AMD ROCm hardware and may end up on personal EKS labs. Provider-agnostic by design.
 
+**Update 2026-10-16 (owner):** the owner's own daily clusters are now mainly **EKS and on-prem** (plus the k3s ROCm homelab). AKS stays first-class because other people want to use Klyx with AKS. The first-class coverage programme (`docs/superpowers/specs/2026-10-16-klyx-coverage-roadmap.md`) covers Flux in full (Flux Operator, image automation), Velero, admission health, cloud-neutral workload identity, pod correctness, Gateway API currency, alerts and Loki, KEDA, node provisioning on every cloud, and GPUs/DRA. It comes before the extensions work (`2026-10-16-klyx-extensions-research.md`).
+
 ## What Klyx is
 
 A native desktop application (Go + Wails) that connects to one or more Kubernetes clusters via standard kubeconfig and provides:
