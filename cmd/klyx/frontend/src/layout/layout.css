@@ -261,7 +261,7 @@
 .crd-version-switch { margin-bottom: 8px; }
 .schema-tree { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 .schema-filter { margin-bottom: 8px; flex: none; width: min(320px, 100%); }
-.schema-row { cursor: default; }
+.schema-row { cursor: default; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); }
 .schema-name { font-family: var(--font-mono); color: var(--color-text-primary); }
 .schema-req { margin-left: 2px; color: var(--color-text-warning); }
 .schema-type { font-family: var(--font-sans); color: var(--color-text-secondary); white-space: normal; }
