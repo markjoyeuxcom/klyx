@@ -2,6 +2,9 @@ import { Call } from "@wailsio/runtime";
 import { NAV_GROUPS, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 import { setThemeChoice } from "../theme/ThemeProvider";
+import { describeResource } from "../bridge/exec";
+import { describeArg } from "../chrome/describe/targets";
+import { parseDescribe, printDescribe } from "../chrome/describe/parse";
 
 // The native WKWebView smoke's runner (The Line slice 12b, note §3): loaded
 // only by the smoke build's handshake (boot.ts). It walks every registry
@@ -269,6 +272,34 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
     (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
     sized(await within(10_000, "the data path", () => $("[data-testid='data-path']")), "the data path");
+  });
+
+  // ---- Describe (slice 14) ----
+  // From the Flux inspector's More: the sheet reads kubectl's report into
+  // sections, the Kustomization's conditions into a table, and the live
+  // report round-trips through the parser byte for byte.
+  await step(steps, "Describe from the Flux inspector", async () => {
+    await open("flux");
+    const panel = await within(10_000, "the Flux inspector", () => $("[data-testid='lens-inspector']"));
+    const sel = useFleet.getState().gitops.expandedKey ?? "";
+    const [kind, ns, name] = sel.split("/");
+    const arg = describeArg(kind);
+    if (!arg || !ns || !name) throw new Error(`no described Flux object (selection ${sel || "none"})`);
+    (await within(4000, "More", () => [...panel.querySelectorAll<HTMLElement>("button[aria-haspopup='menu']")].find((b) => /^More/.test(b.textContent ?? "")))).click();
+    (await within(4000, "Describe in More", () => byText<HTMLElement>("[role='menuitem']", /^Describe$/))).click();
+    const sheet = await within(30_000, "the formatted report", () => $("[data-testid='describe-formatted']"));
+    sized(sheet, "the formatted report");
+    const heads = [...sheet.querySelectorAll(".describe-section-head .t-section-label")].map((e) => e.textContent ?? "");
+    if (!heads.includes("Status")) throw new Error(`no Status section (sections ${heads.join(", ")})`);
+    const row = await within(4000, "a conditions table row", () => sheet.querySelector("table[data-kind='conditions'] tbody tr"));
+    const command = $(".describe-command")?.textContent ?? "";
+    if (!command.includes(`-- ${name}`)) throw new Error(`the command does not name ${name}: ${command}`);
+    const r = await describeResource(cluster, arg, ns, name);
+    if (!r.ok) throw new Error(`describe failed: ${r.error}`);
+    if (printDescribe(parseDescribe(r.output)) !== r.output) throw new Error("the live report does not round-trip");
+    key($("[data-testid='describe-sheet']")!, { key: "Escape" });
+    await within(4000, "the sheet to close", () => !$("[data-testid='describe-sheet']"));
+    return { object: sel, sections: heads.length, conditions: row.parentElement?.children.length ?? 0, bytes: r.output.length };
   });
 
   // ---- the console ----

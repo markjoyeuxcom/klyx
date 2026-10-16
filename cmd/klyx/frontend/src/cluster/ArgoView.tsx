@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { LensParts } from "../chrome/LensParts";
 import { useFleet } from "../store/fleet";
 import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, KindCoverageDTO, ResourceRef, RuleDTO } from "../store/fleet";
@@ -698,6 +699,9 @@ function ApplicationInspector({ cluster, app, removed, unverified, replaced, isP
   onSync: (a: ArgoAppDTO) => void;
 }) {
   const ai = useInspectorAI(app.uid ? { kind: "row" as const, task: "argo", part: "applications", uid: app.uid } : null, `Application/${app.namespace}/${app.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: "Application", namespace: app.namespace, name: app.name, uid: app.uid } : null);
   const crd = useFleet((s) => s.crd);
   const crdGroups = crd.cluster === cluster ? crd.groups : [];
   const conditions = arrayOf(app.conditions);
@@ -748,7 +752,7 @@ function ApplicationInspector({ cluster, app, removed, unverified, replaced, isP
         )}
         primary={live ? { label: "Refresh", kbd: "r", onSelect: () => onRefresh(app) } : undefined}
         secondary={live ? { label: "Sync", kbd: "s", onSelect: () => onSync(app) } : undefined}
-        more={[...(more), ...ai.menu]}
+        more={[...(more), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="Resources" count={resources.length} extra={badResources.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{badResources.length} need attention</span> : undefined}>
@@ -793,6 +797,8 @@ function ApplicationInspector({ cluster, app, removed, unverified, replaced, isP
           </div>
         </InspectorBlock>
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
@@ -873,6 +879,9 @@ function unverifiedAppSetConditions(appSet: ArgoApplicationSetDTO) {
 
 function ApplicationSetInspector({ cluster, appSet, removed, unverified: selectionUnverified, replaced, allApps, appsCov, project, onClose }: { cluster: string; appSet: ArgoApplicationSetDTO; removed: boolean; unverified: boolean; replaced?: () => void; allApps: ArgoAppDTO[]; appsCov: AppCoverage; project: ArgoProjectDTO | null; onClose: () => void }) {
   const ai = useInspectorAI(appSet.uid ? { kind: "row" as const, task: "argo", part: "applicationsets", uid: appSet.uid } : null, `ApplicationSet/${appSet.namespace}/${appSet.name}`, !removed && !selectionUnverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !selectionUnverified ? { kind: "ApplicationSet", namespace: appSet.namespace, name: appSet.name, uid: appSet.uid } : null);
   const known = appsCov !== "unknown";
   const adverse = adverseAppSetConditions(appSet);
   const unverified = unverifiedAppSetConditions(appSet);
@@ -906,7 +915,7 @@ function ApplicationSetInspector({ cluster, appSet, removed, unverified: selecti
             ))}
           </div>
         )}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorSection title="Generated drift">
@@ -939,6 +948,8 @@ function ApplicationSetInspector({ cluster, appSet, removed, unverified: selecti
           <div style={mutedLine}>Argo reported {appSet.generatedApps} generated resource{appSet.generatedApps === 1 ? "" : "s"} but did not include generated Application names.</div>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

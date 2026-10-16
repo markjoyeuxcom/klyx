@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act, within, screen } from "@testing-library/react";
 import { useFleet, FluxResourceDTO, FluxSourceDTO, ClusterDTO } from "../store/fleet";
 import { reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } from "../bridge/gitops";
+import { describeResource } from "../bridge/exec";
 import { GitOps } from "./GitOps";
 import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
@@ -39,6 +40,10 @@ depGraphCall.mockImplementation(() => cancellable(noGraph));
 
 // The reconcile composer (OperationDialog) registers protected-cluster grants
 // via the config bridge; mock it so no Wails runtime is needed.
+// Describe (slice 14c) runs kubectl through the exec bridge.
+vi.mock("../bridge/exec", () => ({
+  describeResource: vi.fn(() => Object.assign(Promise.resolve({ ok: true, output: "Name:  flux-system\n", error: "", command: "", commandError: "" }), { cancel: () => {} })),
+}));
 vi.mock("../bridge/configsvc", () => ({
   armProtected: vi.fn(async () => ({ ok: true, error: "" })),
 }));
@@ -275,6 +280,14 @@ describe("GitOps view", () => {
     render(<GitOps cluster="x" />);
     chooseMore("View in Git");
     expect(resolveGitLink).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "flux-system");
+  });
+
+  it("describes the selected Kustomization from More (slice 14c)", async () => {
+    useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail() });
+    render(<GitOps cluster="x" />);
+    chooseMore("Describe");
+    expect(await screen.findByTestId("describe-sheet")).toBeTruthy();
+    expect(describeResource).toHaveBeenCalledWith("x", "kustomization.kustomize.toolkit.fluxcd.io", "flux-system", "flux-system");
   });
 
   it("hides view-in-git for a HelmRelease", () => {

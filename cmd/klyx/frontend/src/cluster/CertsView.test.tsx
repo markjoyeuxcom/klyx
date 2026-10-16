@@ -12,12 +12,17 @@ vi.mock("../bridge/certmanager", () => ({
   getCertificateChain: async () => {},
 }));
 
+// Describe (slice 14c) runs kubectl through the exec bridge.
+vi.mock("../bridge/exec", () => ({
+  describeResource: vi.fn(() => Object.assign(Promise.resolve({ ok: true, output: "Name:  acme-demo\n", error: "", command: "", commandError: "" }), { cancel: () => {} })),
+}));
 vi.mock("../bridge/ai", () => ({
   aiAvailability: vi.fn(async () => ({ backend: "off", ready: false })),
   aiEgressAllowed: vi.fn(async () => false),
   explain: vi.fn(async () => ({ ok: true, explanation: "", model: "", backend: "", groundedOn: "", error: "" })),
 }));
 import { aiAvailability, aiEgressAllowed, explain } from "../bridge/ai";
+import { describeResource } from "../bridge/exec";
 import { certRule, issuerRule, withRule } from "../test/backendRules";
 
 // drawnBeforeActions: the element sits in the inspector's drawing slot, ahead
@@ -303,6 +308,17 @@ describe("CertsView", () => {
     expect(getByText(/verify before acting/)).toBeTruthy();
     // The shared, UID-fenced path anchored on the certificate's row.
     expect(vi.mocked(explain)).toHaveBeenCalledWith("x", { kind: "row", task: "certs", part: "certificates", uid: "cert-uid" });
+  });
+
+  it("describes the selected certificate from More, and never a removed one (slice 14c)", async () => {
+    const c = cert({ name: "acme-demo", ready: "Failed", reason: "DoesNotExist", uid: "cert-uid" });
+    setup("Healthy", [c], [issuer({})], "payments/acme-demo");
+    const { findByRole, findByTestId, unmount } = render(<CertsView cluster="x" />);
+    fireEvent.click(await findByRole("button", { name: /^More/ }));
+    fireEvent.click(await findByRole("menuitem", { name: "Describe" }));
+    expect(await findByTestId("describe-sheet")).toBeTruthy();
+    expect(vi.mocked(describeResource)).toHaveBeenCalledWith("x", "certificate.cert-manager.io", "payments", "acme-demo");
+    unmount();
   });
 
   it("disables Explain when hosted egress is refused on a protected cluster", async () => {

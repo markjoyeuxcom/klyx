@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconRoute } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
@@ -189,6 +190,9 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // Explain anchors on the route's captured attachment (its worst parent),
   // fenced by UID; a detached or unverified selection does not ask.
   const ai = useInspectorAI(selected?.uid ? { kind: "row" as const, task: "gateway", part: "routes", uid: selected.uid } : null, selected ? `HTTPRoute/${selected.namespace}/${selected.name}` : "", !!selected && !gone, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, selected && !gone ? { kind: "HTTPRoute", namespace: selected.namespace, name: selected.name, uid: selected.uid } : null);
   return (
     <LensLayout
       label="Gateways"
@@ -264,7 +268,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
               </div>
             )}
             primary={gone === "detached" ? undefined : { label: `Open topology (${selected.parent})`, onSelect: () => openTopology(selected) }}
-            more={ai.menu}>
+            more={[...describe.menu, ...ai.menu]}>
             {ai.block}
             <InspectorBlock title="Parents" count={selected.attachments.length}>
               {selected.attachments.map((a) => {
@@ -279,6 +283,8 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
               })}
             </InspectorBlock>
           </InspectorLayout>
+          {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+          {describe.sheet}
         </div>
       ) : selKey && pin.expected && pin.gone ? (
         <PinnedGone cluster={cluster} kind="HTTPRoute" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO } from "../store/fleet";
@@ -704,6 +705,9 @@ function WorkloadInspector({
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
   const ai = useInspectorAI(workload.uid ? { kind: "row" as const, task: "workloads", part: "workloads", uid: workload.uid } : null, `${workload.kind}/${workload.namespace}/${workload.name}`, !gone, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !gone ? { kind: workload.kind, namespace: workload.namespace, name: workload.name, uid: workload.uid } : null);
   const w = workload;
   const live = gone !== "removed";
   // Selector-matched pods carry no verdict of their own: native facts only.
@@ -756,7 +760,7 @@ function WorkloadInspector({
         />}
         primary={live ? { label: "Logs", kbd: "l", onSelect: () => onLogs(w) } : undefined}
         secondary={live ? { label: "Restart", onSelect: () => onRestart(w) } : undefined}
-        more={[...(live ? more : viewManifest ? [viewManifest] : []), ...ai.menu]}
+        more={[...(live ? more : viewManifest ? [viewManifest] : []), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
         {live && scaling && (
@@ -837,6 +841,8 @@ function WorkloadInspector({
           </div>
         </InspectorBlock>
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

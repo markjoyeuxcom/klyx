@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { formatAge } from "../chrome/Age";
 import { LensParts } from "../chrome/LensParts";
 import type { ReactNode } from "react";
@@ -728,6 +729,9 @@ function SourceInspector({ cluster, source, removed, unverified, replaced, usedB
   onOpenResource: (r: FluxResourceDTO) => void;
 }) {
   const ai = useInspectorAI(source.uid ? { kind: "row" as const, task: "flux", part: "sources", uid: source.uid } : null, `${source.kind}/${source.namespace}/${source.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: source.kind, namespace: source.namespace, name: source.name, uid: source.uid } : null);
   const s = source;
   const h = roleOf(s);
   const usage = usageQualifier(usageCov);
@@ -754,7 +758,7 @@ function SourceInspector({ cluster, source, removed, unverified, replaced, usedB
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="Used by" count={usage.mark ? undefined : usedBy.length} extra={usage.mark ? <span className="t-secondary" data-testid="used-by-count">{usage.allUnknown ? "?" : `${usedBy.length}${usage.mark}`}</span> : undefined}>
@@ -779,6 +783,8 @@ function SourceInspector({ cluster, source, removed, unverified, replaced, usedB
           </div>
         </InspectorBlock>
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
@@ -834,6 +840,9 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
   onToggleSuspend: (r: FluxResourceDTO, suspended: boolean) => void;
 }) {
   const ai = useInspectorAI(resource.uid ? { kind: "row" as const, task: "flux", part: "reconciliations", uid: resource.uid } : null, `${resource.kind}/${resource.namespace}/${resource.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: resource.kind, namespace: resource.namespace, name: resource.name, uid: resource.uid } : null);
   const r = resource;
   const role = roleOf(r);
   // A generation lag is evidence about the last observation, shown under the
@@ -896,7 +905,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
         drawing={r.uid && !removed ? <DependencyGraphSection cluster={cluster} kind={r.kind} namespace={r.namespace} name={r.name} uid={r.uid} /> : undefined}
         primary={live ? { label: "Reconcile", kbd: "r", onSelect: () => onReconcile(r) } : undefined}
         secondary={live ? { label: isSuspended ? "Resume" : "Suspend", kbd: "s", onSelect: () => onToggleSuspend(r, isSuspended) } : undefined}
-        more={[...(more), ...ai.menu]}
+        more={[...(more), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
         {detailError && !removed && (
@@ -937,6 +946,8 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
           </>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

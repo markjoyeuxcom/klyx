@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconRoute } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
@@ -284,6 +285,9 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
 
 function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; replaced?: () => void; onOpen: () => void; onClose: () => void }) {
   const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !gone ? { kind: "Gateway", namespace: g.namespace, name: g.name, uid: g.uid } : null);
   const role = gatewayRole(g);
   const open = (ref: typeof REFS.gateway | typeof REFS.gatewayClass, ns: string, name: string) => {
     const nav = useFleet.getState();
@@ -314,7 +318,7 @@ function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }
         more={[...([
           { label: "Open Gateway object", onSelect: () => open(REFS.gateway, g.namespace, g.name) },
           ...(g.className ? [{ label: `Open GatewayClass ${g.className}`, onSelect: () => open(REFS.gatewayClass, "", g.className) }] : []),
-        ]), ...ai.menu]}>
+        ]), ...describe.menu, ...ai.menu]}>
         {ai.block}
         <InspectorBlock title="Listeners" count={listeners.length}>
           {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : (
@@ -336,6 +340,8 @@ function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }
           )}
         </InspectorBlock>
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

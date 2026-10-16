@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // nothing out, which is exactly the hidden-window failure the runner must
 // call incomplete, never pass.
 const calls = vi.hoisted(() => ({ list: [] as { name: string; args: unknown[] }[] }));
+// the Describe step (slice 14) runs kubectl through the exec bridge
+vi.mock("../bridge/exec", () => ({ describeResource: vi.fn() }));
 vi.mock("@wailsio/runtime", () => ({
   Call: {
     ByName: vi.fn(async (name: string, ...args: unknown[]) => {

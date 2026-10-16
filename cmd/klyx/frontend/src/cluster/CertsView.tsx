@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { kindOfRef } from "../nav/reveal";
 import { useFleet } from "../store/fleet";
@@ -612,10 +613,14 @@ function CertInspector({ c, cluster, removed, unverified, replaced, issuer, issu
   // Explain anchors on Klyx's row verdict and adds the issuance chain
   // (spec 2026-10-13 §4.1), fenced by the certificate's UID.
   const ai = useInspectorAI(c.uid ? { kind: "row", task: "certs", part: "certificates", uid: c.uid } : null, `Certificate/${c.namespace}/${c.name}`, live, cluster)
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: "Certificate", namespace: c.namespace, name: c.name, uid: c.uid } : null);
   const manifestRef = wellKnownResourceRef("cert-manager.io", "Certificate");
   const more: MenuItem[] = [
     ...(manifestRef ? [{ label: "View manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(c.namespace, c.name); } }] : []),
     ...(c.secretName ? [{ label: `Open Secret ${c.secretName}`, onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(c.namespace, c.secretName); } }] : []),
+    ...describe.menu,
     ...(ai.readiness.ready ? [] : ai.menu),
   ];
 
@@ -718,12 +723,17 @@ function CertInspector({ c, cluster, removed, unverified, replaced, issuer, issu
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
 
 function IssuerInspector({ cluster, issuer, removed, unverified, replaced, certs, certsCov, onClose, onOpenCert }: { cluster: string; issuer: IssuerDTO; removed: boolean; unverified: boolean; replaced?: () => void; certs: CertificateDTO[]; certsCov: JoinCoverage; onClose: () => void; onOpenCert: (c: CertificateDTO) => void }) {
   const ai = useInspectorAI(issuer.uid ? { kind: "row" as const, task: "certs", part: "issuers", uid: issuer.uid } : null, `${issuer.kind}/${issuer.namespace ? `${issuer.namespace}/` : ""}${issuer.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: issuer.kind, namespace: issuer.namespace, name: issuer.name, uid: issuer.uid } : null);
   const role = roleOf(issuer);
   const ref = wellKnownResourceRef("cert-manager.io", issuer.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(issuer.kind === "ClusterIssuer" ? "" : issuer.namespace, issuer.name); } : null;
@@ -743,7 +753,7 @@ function IssuerInspector({ cluster, issuer, removed, unverified, replaced, certs
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="Certificates using it" count={certsCov === "unknown" ? undefined : certs.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not ready or expired</span> : undefined}>
@@ -767,6 +777,8 @@ function IssuerInspector({ cluster, issuer, removed, unverified, replaced, certs
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

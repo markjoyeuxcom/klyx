@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconServerBolt } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
@@ -402,6 +403,9 @@ function GoneNotice({ kind, gone }: { kind: string; gone: "removed" | "unverifie
 
 function ClaimInspector({ cluster, c, nowS, gone, replaced, onClose }: { cluster: string; c: KarpenterClaimDTO; nowS: number; gone: "removed" | "unverified" | null; replaced?: () => void; onClose: () => void }) {
   const ai = useInspectorAI(c.uid ? { kind: "row" as const, task: "karpenter", part: "nodeclaims", uid: c.uid } : null, `NodeClaim/${c.name}`, !gone, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !gone ? { kind: "NodeClaim", namespace: "", name: c.name, uid: c.uid } : null);
   const role = roleOf(c);
   const age = formatAge(ageOf(c, nowS));
   const openNode = () => { const nav = useFleet.getState(); nav.setSection("nodes"); nav.requestNavIntent({ kind: "select-node", cluster, node: c.nodeName }); };
@@ -427,7 +431,7 @@ function ClaimInspector({ cluster, c, nowS, gone, replaced, onClose }: { cluster
           </div>
         )}
         primary={c.nodeName && gone !== "removed" ? { label: "Open node", onSelect: openNode } : undefined}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="Claim">
@@ -447,12 +451,17 @@ function ClaimInspector({ cluster, c, nowS, gone, replaced, onClose }: { cluster
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
 
 function PoolInspector({ cluster, p, gone, replaced, claimsCov, onClose }: { cluster: string; p: KarpenterPoolDTO; gone: "removed" | "unverified" | null; replaced?: () => void; claimsCov: JoinCoverage; onClose: () => void }) {
   const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "karpenter", part: "nodepools", uid: p.uid } : null, `NodePool/${p.name}`, !gone, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !gone ? { kind: "NodePool", namespace: "", name: p.name, uid: p.uid } : null);
   const role = roleOf(p);
   const cpu = capText(p.cpuUsed, p.cpuLimit, fmtCpu);
   const mem = capText(p.memUsed, p.memLimit, fmtMem);
@@ -465,7 +474,7 @@ function PoolInspector({ cluster, p, gone, replaced, claimsCov, onClose }: { clu
             {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
           </div>
         )}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="Capacity vs limits">
@@ -476,6 +485,8 @@ function PoolInspector({ cluster, p, gone, replaced, claimsCov, onClose }: { clu
           {(cpu.near || mem.near) && <div className="t-body" style={{ color: "var(--color-text-warning)", marginTop: 6 }}>At 90% or more of a limit - Karpenter stops provisioning from this pool once a limit is reached.</div>}
         </InspectorBlock>
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { useFleet } from "../store/fleet";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { kindOfRef } from "../nav/reveal";
@@ -521,6 +522,9 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
   onOpenStore: (s: ExternalSecretStoreDTO) => void;
 }) {
   const ai = useInspectorAI(e.uid ? { kind: "row" as const, task: "eso", part: "externalsecrets", uid: e.uid } : null, `ExternalSecret/${e.namespace}/${e.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: "ExternalSecret", namespace: e.namespace, name: e.name, uid: e.uid } : null);
   // store surfaces derive from the store's rule: only CONFIRMED adverse store
   // health is a diagnosed root cause; Unknown is unverified evidence
   const storeRole = store ? roleOf(store) : null;
@@ -609,7 +613,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
         </InspectorBlock>
         )}
         primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
-        more={[...(more), ...ai.menu]}
+        more={[...(more), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
         {e.message && e.state === "Synced" && (
@@ -618,12 +622,17 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
 
 function StoreInspector({ cluster, store, removed, unverified, replaced, secrets, secretsCov, onClose, onOpenSecret }: { cluster: string; store: ExternalSecretStoreDTO; removed: boolean; unverified: boolean; replaced?: () => void; secrets: ExternalSecretDTO[]; secretsCov: JoinCoverage; onClose: () => void; onOpenSecret: (e: ExternalSecretDTO) => void }) {
   const ai = useInspectorAI(store.uid ? { kind: "row" as const, task: "eso", part: "stores", uid: store.uid } : null, `${store.kind}/${store.namespace ? `${store.namespace}/` : ""}${store.name}`, !removed && !unverified, cluster);
+  // Describe (slice 14c): kubectl's report for this object, read-only; never
+  // for a removed or unverified selection.
+  const describe = useDescribe(cluster, !removed && !unverified ? { kind: store.kind, namespace: store.namespace, name: store.name, uid: store.uid } : null);
   const role = roleOf(store);
   const ref = wellKnownResourceRef("external-secrets.io", store.kind);
   const view = ref ? () => { const nav = useFleet.getState(); nav.openResource(ref); nav.openInstance(store.kind === "ClusterSecretStore" ? "" : store.namespace, store.name); } : null;
@@ -643,7 +652,7 @@ function StoreInspector({ cluster, store, removed, unverified, replaced, secrets
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}
-        more={ai.menu}
+        more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
         <InspectorBlock title="ExternalSecrets using it" count={secretsCov === "unknown" ? undefined : secrets.length} extra={blocked.length > 0 ? <span className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{blocked.length} not synced or stale</span> : undefined}>
@@ -667,6 +676,8 @@ function StoreInspector({ cluster, store, removed, unverified, replaced, secrets
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
+      {describe.sheet}
     </div>
   );
 }
