@@ -63,8 +63,11 @@ type KindCoverage struct {
 	Class    string   `json:"class,omitempty"`
 	Error    string   `json:"error,omitempty"`
 	Objects  int      `json:"objects"`
-	// Truncated: a capped snapshot (Events); informers are never truncated.
-	Truncated bool `json:"truncated,omitempty"`
+	// Truncated: a capped snapshot (Events), or a budgeted informer kind
+	// that left objects out (KindSpec.Budget). Objects is then a lower
+	// bound; NotRetained counts what was left out, itself a lower bound.
+	Truncated   bool `json:"truncated,omitempty"`
+	NotRetained int  `json:"notRetained,omitempty"`
 	// AsOf is nil while live (current as of the summary's EvaluatedAt), the
 	// moment the kind left live when stale, and the read time for snapshots.
 	AsOf       *time.Time `json:"asOf,omitempty"`

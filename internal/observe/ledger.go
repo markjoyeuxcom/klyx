@@ -256,7 +256,7 @@ func (o *Observer) commitPartition(p *partState, lg *partLedger, src string, cp 
 	var membershipUnknown bool
 	if !capped && live {
 		var st entriesStatus
-		entries, st = o.entriesOf(src, id, c, roles, idx, all, sampled && cp.truncated[src])
+		entries, st = o.entriesOf(src, id, c, roles, idx, all, cp.truncated[src])
 		capped = st == entriesCapped
 		// Unknown membership cannot tell a deletion from a skipped object:
 		// continuity is not proven, so the partition is not live (review of
@@ -319,7 +319,7 @@ type entriesStatus int
 
 const (
 	entriesOK                entriesStatus = iota
-	entriesCapped                          // over the cap, or a truncated sampled read
+	entriesCapped                          // over the cap, a truncated sampled read, or a budgeted kind that left objects out
 	entriesMembershipUnknown               // a captured object has no readable UID
 )
 

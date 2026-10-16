@@ -28,6 +28,11 @@ type KindState struct {
 	// count is known, which is never zero.
 	CountKnown bool
 	Objects    int
+	// Truncated: a budgeted kind left objects out (KindSpec.Budget), so
+	// Objects is a lower bound; NotRetained counts them, itself a lower
+	// bound.
+	Truncated   bool
+	NotRetained int
 	// Tally is the kind's KindSpec.Tally over the same model as Objects
 	// (one capture: never a count from one read and a tally from another);
 	// set exactly when CountKnown and the kind has a tally hook.
@@ -149,6 +154,7 @@ func (o *Observer) kindStateWith(ks *kindState, tally bool) KindState {
 	st.Coverage, st.Class, st.Err = f.cov, f.class, f.err
 	if f.cov == Live || f.cov == Stale {
 		st.CountKnown, st.Objects = true, len(g.model)
+		st.Truncated, st.NotRetained = g.capped, g.notRetained
 		if tally && ks.spec.Tally != nil {
 			objs := make([]any, 0, len(g.model))
 			for _, o := range g.model {
