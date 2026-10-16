@@ -256,6 +256,52 @@ The design was accepted at bb3bf45. The build is five commits:
 - The inspector shows the Summary, the restyled conditions, the Object block (field managers) and the Spec and Status trees.
 - The definition inspector reads Established, with its facts, versions, conversion, printer columns and schema.
 
+### As built (review 1)
+
+Codex's implementation review at 7914372 found seven defects, each with a probe. The fixes are one commit, 6282e00. Every probe passes, and each is folded into the permanent tests.
+
+1. **The mark column** is the first condition column whose type has a known polarity (`polarityOf`). Before, a neutral vendor condition ahead of Ready took the mark and hid Ready's fault.
+2. **Read times:** each row carries `readAt`, the time its own page landed.
+   - The store stamps it in `setInstancePage` and `addInstancePage`, and the fleet read stamps each cluster's page.
+   - A date cell's title reads the row's own time, so an appended page never restamps the rows before it.
+3. **Exact numbers:** the Fields tree parses `fieldsJSON` with `chrome/losslessJSON.ts`.
+   - A number stays the server's text (`Num`), so an int64 past 2^53 is drawn as written, never rounded.
+   - Arrays are held as items (`Arr`) and objects as ordered entries (`Obj`). A key named `__proto__` is an ordinary entry.
+4. **Bounds before materialising:**
+   - `flattenTree` reads a container by index: a size is a length and a page is a slice. A 100,000-item list reads only the 100 children it draws.
+   - `FieldsBlocks` draws spec, status and up to 20 other top-level fields (`OWN_FIELD_BLOCKS`) as blocks. The rest share one paged "Other fields (N)" tree, and a note says so.
+5. **The discovery deadline:** `ListCRDsFromDiscovery` runs `ServerGroupsCtx` and `ServerResourcesForGroupVersionCtx` under the caller's context, and an already-cancelled context fails at once.
+6. **Partial discovery:**
+   - A group that cannot be read no longer disappears silently. The groups that were read come back together with a `*PartialDiscoveryError` naming each failure ("group: reason").
+   - `ListCRDs` returns those groups with `FallbackMissing`, and the notice names the missing groups (reasons in its title).
+   - A new CRD read clears the last read's fallback.
+7. **The schema root:**
+   - `FlattenSchema` emits the root first, with an empty path, carrying its type, description, preserve-unknown and constraints.
+   - `Definition.SchemaRecorded` tells a free-form schema from none. The definition view draws the root's facts, says "No fields declared" (and that unknown fields are kept, when they are) for a recorded schema without properties, and keeps "This version records no schema." for none.
+   - The Schema block's count excludes the root.
+
+**Tests:**
+- Go:
+  - the partial and cancelled discovery (`fleet/crddef_test.go`);
+  - the service's partial and failed fallback;
+  - the root node, `SchemaRecorded`, and the node and depth caps counting the root.
+- Frontend:
+  - the neutral-before-known mark;
+  - a date cell's read time across an appended page;
+  - the lossless parser (numbers, order, escapes, refusals);
+  - a page read only by index (Codex's Proxy probe on an `Arr`);
+  - exact numbers in the tree and in FieldsBlocks;
+  - 5,000 top-level fields bounded to 22 blocks;
+  - the named missing groups;
+  - the schema root and the three empty states.
+- Gate: vitest 2088 passed. The full Go suite passes.
+
+**Live** (`scratchpad/gen15r1`, kind lab): the GitRepository and Kustomization definitions draw their root ("Root · object", then the description) above the filter, and the Schema count excludes the root. The live look also found two small CSS faults, fixed in b94c682:
+- a wrapped field name in a tree toggle was centred, with the chevron floating mid-block; it is now left-aligned with the chevron on its first line;
+- the schema filter did not fill its label, so its placeholder was cut; it now fills it.
+
+**Native smoke** at 6282e00: 115/115, clean, in all four night/day × 1440/1024 runs.
+
 ## 4. Out of scope
 
 - Objects this object owns: a reverse owner lookup across kinds.
