@@ -141,11 +141,13 @@ export function partOf(): { shown: string | null; pressed: string | null } | nul
 
 // gatewayView: the Gateway lens's view (slice 13b review 1). Both views are
 // titled "Gateways and routes", so the title proves nothing: the view switch's
-// pressed button and the table's own first column must name the same view.
-// Null while they disagree or either is missing.
+// pressed button and the table's identity column must name the same view.
+// The identity column is chosen by its id - both tables lead with the row
+// mark's empty head (13b review 2). Null while they disagree or either is
+// missing.
 export function gatewayView(): "gateways" | "routes" | null {
   const pressed = document.querySelector<HTMLElement>('[data-testid="gateway-views"] [aria-pressed="true"]')?.dataset.view;
-  const head = document.querySelector(".lens-table-head > span")?.textContent?.trim();
+  const head = document.querySelector('.lens-table-head > [data-col="name"]')?.textContent?.trim();
   const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : null;
   return shown !== null && pressed === shown ? shown : null;
 }

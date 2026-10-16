@@ -246,7 +246,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       body={
         <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
           <div className="lens-table-head" role="row" style={gridStyle}>
-            {COLUMNS.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+            {COLUMNS.filter((c) => show(c.id)).map((c) => <span key={c.id} data-col={c.id}>{c.label}</span>)}
           </div>
           <VirtualList ref={listRef} items={visible} rowHeight={TABLE_ROW_HEIGHT} rowKey={keyOf} style={{ flex: 1, minHeight: 0 }}
             render={(g) => {

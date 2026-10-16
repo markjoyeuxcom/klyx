@@ -202,7 +202,7 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
 
 - **The part switch owns its keys** (`data-list-keys="ignore"`, as the index did). Enter on a focused part presses it. j, k and the row verbs never reach the list behind it.
 - **A part's count is never colour alone.** A count that needs you carries the index's Aspect (fault or look-at), and the button's name says it: "Reconciliation, 1 fault", "Sources, 1 to look at". A neutral count stays bare.
-- **The native smoke's Gateway data path** no longer waits for the retired "HTTPRoutes" title. Both Gateway views are titled "Gateways and routes", so `gatewayView()` requires the view switch's pressed button and the table's first column ("HTTPRoute" or "Gateway") to name the same view. Its tests cover both disagreements.
+- **The native smoke's Gateway data path** no longer waits for the retired "HTTPRoutes" title. Both Gateway views are titled "Gateways and routes", so `gatewayView()` requires the view switch's pressed button and the table's first column ("HTTPRoute" or "Gateway") to name the same view. Its tests cover both disagreements. Review 2: both tables lead with the row mark's empty head, so the identity column is chosen by its id (`data-col="name"` on every Gateway and Routes head cell), and a test mounts the real GatewayApiView and proves both views. The native smoke at 602f4bf, before this, failed exactly that step (112/113).
 - **The status typography reaches the cells 13b missed:**
   - Argo's Sync and Health, where a Degraded or Missing health is no longer bold;
   - Flux's Suspended;

@@ -156,7 +156,7 @@ describe("a destination's page", () => {
 
   it("the Gateway lens's view is its pressed switch and its own table, never the shared title (13b review 1)", () => {
     const at = (pressed: string, head: string) => {
-      document.body.innerHTML = `<div class="lens-header"><h1>Gateways and routes</h1></div><div data-testid="gateway-views"><button data-view="gateways" aria-pressed="${pressed === "gateways"}"></button><button data-view="routes" aria-pressed="${pressed === "routes"}"></button></div><div class="lens-table-head"><span>${head}</span><span>Status</span></div>`;
+      document.body.innerHTML = `<div class="lens-header"><h1>Gateways and routes</h1></div><div data-testid="gateway-views"><button data-view="gateways" aria-pressed="${pressed === "gateways"}"></button><button data-view="routes" aria-pressed="${pressed === "routes"}"></button></div><div class="lens-table-head"><span data-col="mark"></span><span data-col="name">${head}</span><span data-col="status">Status</span></div>`;
       return gatewayView();
     };
     expect(at("routes", "HTTPRoute")).toBe("routes");

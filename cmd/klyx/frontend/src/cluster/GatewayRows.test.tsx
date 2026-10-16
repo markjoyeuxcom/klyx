@@ -8,6 +8,7 @@ vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}) }));
 vi.mock("../bridge/ruleMetrics", () => ({ ruleMetrics: () => Object.assign(Promise.resolve({ status: { available: false, message: "", updatedAt: "" }, scope: "", start: "", end: "", stepSeconds: 30, rateSeconds: 60, routes: [], rules: [], backendSplit: "", notes: [] }), { cancel: () => {} }) }));
 vi.mock("../bridge/gateway", () => ({ getGatewayTopology: vi.fn(async () => {}), getRouteMetrics: vi.fn(async () => {}), abandonRouteMetrics: vi.fn() }));
 import { GatewayApiView } from "./GatewayApiView";
+import { gatewayView } from "../smoke/run";
 import { buildCommands } from "../chrome/commands";
 import { resetHealthStore, addSub, openStarted, openSucceeded, applyRows, applySummary, dueForBootstrap, bootstrapSettled, useHealth, type HealthPart, type HealthSummary, type KindCoverage, type RowsDTO } from "../store/health";
 import { useFleet, type CondDTO, type GatewayRefDTO, type GatewayRouteRowDTO } from "../store/fleet";
@@ -196,6 +197,18 @@ describe("the Routes part view", () => {
     expect(headline()).toBe("1");
     expect(screen.getByTestId("route-attention").textContent).toBe("1 with a failing attachment");
     expect(screen.getByRole("button", { name: /^Needs attention/ }).textContent?.trim()).toBe("Needs attention 1");
+  });
+
+  // the native smoke's proof of the view, on the mounted tables, row mark and
+  // all (slice 13b review 2)
+  it("the native smoke recognizes the mounted Gateway and Routes tables", () => {
+    open(); applyRows("g", rowsDTO(1, 1, [gw("eg")]));
+    openRoutes(); applyRows("r", routesDTO(1, 1, [route("web", [att("infra/eg", "ok", "attached")])]));
+    render(<GatewayApiView cluster="x" />);
+    expect(document.querySelector(".lens-table-head > span")?.textContent).toBe(""); // the row mark leads
+    expect(gatewayView()).toBe("gateways");
+    toRoutes();
+    expect(gatewayView()).toBe("routes");
   });
 
   it("healthy and rejecting parents: counted once, by the worst parent, and Open topology targets it", () => {
