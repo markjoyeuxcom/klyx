@@ -201,6 +201,18 @@ describe("InstanceDetail", () => {
     expect(getByText(/kind: Certificate/)).toBeTruthy();
   });
 
+  // coverage S0b: an object Klyx shows sanitised is read-only - its omitted
+  // values never reached the frontend, so an edit could only write
+  // placeholders back
+  it("shows a sanitised manifest read-only, with the reason and no editor", () => {
+    seed({ detail: { ...detail, editEligible: false, describeMode: "withheld" } });
+    render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
+    expect(screen.getByTestId("manifest-sanitised").textContent).toContain("cannot be edited here");
+    expect(screen.queryByLabelText("resource yaml")).toBeNull();
+    expect(screen.queryByText("Dry-run")).toBeNull();
+  });
+
   it("renders annotations as collapsed metadata", () => {
     const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     expect(getByText("Annotations · 1")).toBeTruthy();
@@ -353,7 +365,7 @@ describe("InstanceDetail", () => {
     fireEvent.click(getByText("Dry-run"));
 
     expect(await findByText("Server dry-run passed")).toBeTruthy();
-    expect(dryRunInstanceYAML).toHaveBeenCalledWith("x", resource, instance, `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`);
+    expect(dryRunInstanceYAML).toHaveBeenCalledWith("x", resource, instance, "web-tls-uid", `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`);
   });
 
   it("shows formatted server dry-run errors", async () => {
@@ -446,7 +458,7 @@ describe("InstanceDetail", () => {
     expect(getAllByText(/\+2 -0/).length).toBeGreaterThanOrEqual(1);
     fireEvent.click(getByText("Apply changes"));
 
-    await waitFor(() => expect(applyInstanceYAML).toHaveBeenCalledWith("x", resource, instance, next));
+    await waitFor(() => expect(applyInstanceYAML).toHaveBeenCalledWith("x", resource, instance, "web-tls-uid", next));
   });
 
   it("shows formatted server apply errors", async () => {

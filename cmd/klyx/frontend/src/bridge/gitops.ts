@@ -65,7 +65,9 @@ export async function setSuspend(cluster: string, kind: string, namespace: strin
 
 // via: "cache" - built from the Git cache at revision, dry-run on the
 // station's own connection (The Line slice 6e) - or "flux CLI".
-export type FluxDiffChangeDTO = { action: string; kind: string; namespace?: string; name: string; diff?: string; error?: string };
+// omittedChanged: sections that changed but are shown omitted because they
+// may carry secrets (coverage S0b §6).
+export type FluxDiffChangeDTO = { action: string; kind: string; namespace?: string; name: string; diff?: string; error?: string; omittedChanged?: string[] };
 export type FluxDiffDTO = {
   available: boolean; hasChanges: boolean; output: string; error: string;
   via?: string; revision?: string; notes?: string[]; changes?: FluxDiffChangeDTO[];

@@ -90,6 +90,23 @@ describe("DescribePane", () => {
     expect(pre.textContent).toBe(OUTPUT);
   });
 
+  // coverage S0b §4
+  it("shows why Describe was withheld, with no report to copy but the command still offered", async () => {
+    mocked().mockImplementation(() => Promise.resolve({ ok: false, output: "", error: "", command: CMD, commandError: "",
+      withheld: "Describe is withheld for a ResourceSet: kubectl's text would include its templates, patches or values, which can carry secrets." }));
+    const { findByTestId, getByRole, queryByTestId } = sheet({ kind: "ResourceSet", kindArg: "resourcesets.fluxcd.controlplane.io" });
+    expect((await findByTestId("describe-withheld")).textContent).toContain("withheld for a ResourceSet");
+    expect(queryByTestId("describe-formatted")).toBeNull();
+    expect((getByRole("button", { name: /^Copy$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((getByRole("button", { name: "Copy command" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("labels a report whose URLs lost their user info as not kubectl's exact output", async () => {
+    mocked().mockImplementation(() => Promise.resolve({ ...ok(), scrubbed: true, linesWithheld: 1 }));
+    const { findByTestId } = sheet();
+    expect((await findByTestId("describe-scrubbed")).textContent).toBe("User info removed from URLs; 1 line withheld. This is not kubectl's exact output.");
+  });
+
   it("copies kubectl's output and the pinned command", async () => {
     const { findByTestId, getByRole } = sheet();
     await findByTestId("describe-formatted");

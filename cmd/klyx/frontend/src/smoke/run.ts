@@ -322,6 +322,37 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   // The inspector expands over the workspace, and Escape restores it - the
   // layout's capture listener runs ahead of the list's own Escape, so the
   // inspector stays open (slice 16).
+  // Embedded payloads stay out (coverage S0b): the lab's ResourceSet, a
+  // patched Kustomization and a credential GitRepository carry plain
+  // markers; none may reach the page or a Describe report, Describe is
+  // withheld for the ResourceSet, and kubectl's real output for the
+  // GitRepository (its 138-byte annotation cut included) arrives scrubbed.
+  await step(steps, "embedded payloads stay out", async () => {
+    const markers = ["lab-only-inline-secret-value", "lab-only-not-a-real-secret", "lab-only-patch-marker", "lab-only-substitute-marker", "lab-only-url-token", "lab-only-annot-token"];
+    const leaked = (text: string) => markers.filter((m) => text.includes(m));
+    await open("crds");
+    useFleet.getState().openResource({ group: "fluxcd.controlplane.io", version: "v1", plural: "resourcesets", kind: "ResourceSet", scope: "Namespaced" });
+    useFleet.getState().openInstance("team-a", "with-secret");
+    await within(15_000, "the ResourceSet's inspector", () => $("#inspector-identity"));
+    await within(10_000, "its detail", () => useFleet.getState().instanceDetail.detail?.name === "with-secret");
+    const tab = [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest");
+    tab?.click();
+    await within(5000, "the sanitised manifest", () => $("[data-testid='manifest-sanitised']"));
+    if ($("textarea[aria-label='resource yaml']")) throw new Error("the editor is offered for a sanitised object");
+    const detailJSON = JSON.stringify(useFleet.getState().instanceDetail.detail);
+    const inPage = leaked(document.body.innerText + detailJSON);
+    useFleet.getState().closeResource();
+    const rs = await describeResource(cluster, "resourcesets.fluxcd.controlplane.io", "team-a", "with-secret");
+    if (!rs.withheld || rs.output !== "") throw new Error("Describe was not withheld for a ResourceSet");
+    const gr = await describeResource(cluster, "gitrepositories.source.toolkit.fluxcd.io", "flux-system", "creds-repo");
+    if (!gr.ok || !gr.scrubbed) throw new Error(`the GitRepository's report was not scrubbed: ${gr.error}`);
+    const ks = await describeResource(cluster, "kustomizations.kustomize.toolkit.fluxcd.io", "flux-system", "patched");
+    if (!ks.withheld) throw new Error("Describe was not withheld for a Kustomization");
+    const all = [...inPage, ...leaked(rs.output + rs.error + gr.output + gr.error + ks.output + ks.error)];
+    if (all.length) throw new Error(`markers crossed: ${all.join(", ")}`);
+    return { withheld: [rs.withheld.slice(0, 40), ks.withheld.slice(0, 40)], scrubbed: gr.scrubbed, linesWithheld: gr.linesWithheld ?? 0 };
+  });
+
   await step(steps, "the inspector expands and restores", async () => {
     await open("crds");
     useFleet.getState().openResource({ group: "source.toolkit.fluxcd.io", version: "v1", plural: "gitrepositories", kind: "GitRepository", scope: "Namespaced" });

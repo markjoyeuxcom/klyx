@@ -879,7 +879,9 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
         // (and any draft, pending confirm or dry-run/apply) unmounts with it.
         manifest={body ?? (d ? (removed
           ? <YamlBlock text={d.yaml} copyLabel={`${resource.kind} YAML (last evidence)`} />
-          : <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} />) : null)}
+          : d.editEligible === false
+            ? <SanitisedManifest kind={resource.kind} detail={d} />
+            : <YamlPanel cluster={cluster} resource={resource} instance={instance} detail={d} copied={copied} onCopy={onCopy} />) : null)}
       >
         {body ?? (d && (
           <>
@@ -1012,6 +1014,24 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
   );
 }
 
+// SanitisedManifest: the read-only manifest of an object Klyx shows
+// sanitised (coverage S0b). Its omitted and masked values never reached the
+// frontend, so an edit could only write placeholders back - Edit is not
+// offered, and the backend refuses an apply regardless.
+function SanitisedManifest({ kind, detail }: { kind: string; detail: InstanceDetailDTO }) {
+  const why = detail.describeMode === "withheld"
+    ? `Klyx shows this ${kind} sanitised: its templates, patches and values are omitted, and any embedded Secret is masked, because they can carry secrets.`
+    : `Klyx shows this ${kind} without the credentials in its URLs.`;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}>
+      <div role="status" className="evidence-panel" data-tone="neutral" data-testid="manifest-sanitised">
+        <div className="evidence-panel-text">{why} It cannot be edited here, so nothing sanitised is ever written back; edit it in Git.</div>
+      </div>
+      <YamlBlock text={detail.yaml} copyLabel={`${kind} YAML (sanitised)`} />
+    </div>
+  );
+}
+
 function YamlPanel({
   cluster,
   resource,
@@ -1113,7 +1133,7 @@ function YamlPanel({
     setBusy("dry-run");
     setStatus(null);
     setConfirmApply(false);
-    const r = await dryRunInstanceYAML(cluster, resource, instance, draft);
+    const r = await dryRunInstanceYAML(cluster, resource, instance, detail?.uid ?? "", draft);
     setStatus(r.ok ? { ok: true, error: "Server dry-run passed" } : { ok: false, error: formatKubernetesActionError(r.error) });
     setBusy(null);
   };
@@ -1124,7 +1144,7 @@ function YamlPanel({
     const startResourceVersion = liveResourceVersion ?? baselineResourceVersion;
     setBusy("apply");
     setStatus(null);
-    const r = await applyInstanceYAML(cluster, resource, instance, submittedYaml);
+    const r = await applyInstanceYAML(cluster, resource, instance, detail?.uid ?? "", submittedYaml);
     setConfirmApply(false);
     if (!r.ok) {
       setStatus({ ok: false, error: formatKubernetesActionError(r.error) });

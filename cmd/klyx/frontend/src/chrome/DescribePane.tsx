@@ -263,7 +263,7 @@ export function DescribePane({
               <button className="l-chip" aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>Formatted</button>
               <button className="l-chip" aria-pressed={view === "text"} onClick={() => setView("text")}>Text</button>
             </div>
-            <button className="l-btn" disabled={output === ""} onClick={() => copy("report", output)} title="Copy kubectl's output">
+            <button className="l-btn" disabled={output === ""} onClick={() => copy("report", output)} title={report?.dto.scrubbed ? "Copy the output shown (user info removed from URLs)" : "Copy kubectl's output"}>
               <IconCopy size={16} stroke={1.5} aria-hidden />{copied === "report" ? "Copied" : "Copy"}
             </button>
             <button className="l-btn" disabled={!command} onClick={() => copy("command", command)} title={command ? "Copy the command, with this cluster's kubeconfig" : commandError || "No command to copy"}>
@@ -304,6 +304,12 @@ export function DescribePane({
         </div>
 
         <div ref={bodyRef} className="describe-body" data-narrow={narrow ? "true" : undefined}>
+          {mine?.dto.withheld && (
+            <div role="status" className="evidence-panel" data-tone="neutral" data-testid="describe-withheld">
+              <div className="evidence-panel-head"><Aspect kind="attention" size={10} />Describe withheld</div>
+              <div className="evidence-panel-text">{mine.dto.withheld}</div>
+            </div>
+          )}
           {mine && mine.dto.error !== "" && (
             <div role="alert" className="evidence-panel describe-error" data-tone="danger">
               <div className="evidence-panel-head">
@@ -317,6 +323,11 @@ export function DescribePane({
             <div role="status" className="evidence-panel" data-tone="warning">
               <div className="evidence-panel-head"><Aspect kind="attention" size={10} />A different object</div>
               <div className="evidence-panel-text">This describes a different object at this name (UID {uidNotice}), not the one in the inspector.</div>
+            </div>
+          )}
+          {report?.dto.scrubbed && output !== "" && (
+            <div className="describe-caption" data-testid="describe-scrubbed">
+              User info removed from URLs{report.dto.linesWithheld ? `; ${report.dto.linesWithheld} ${report.dto.linesWithheld === 1 ? "line" : "lines"} withheld` : ""}. This is not kubectl's exact output.
             </div>
           )}
           {report && output !== "" && (report !== mine || !report.dto.ok) && (

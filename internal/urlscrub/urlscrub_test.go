@@ -1,6 +1,7 @@
 package urlscrub
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -100,5 +101,28 @@ func TestText_Idempotent(t *testing.T) {
 		if twice := Text(once); twice.Text != once || twice.Changed() {
 			t.Errorf("not idempotent for %q: %q then %q", in, once, twice.Text)
 		}
+	}
+}
+
+// Real kubectl output (captured from `kubectl describe gitrepository` on the
+// kind lab, kubectl v1.37): an annotation holding a credential URL longer
+// than 138 bytes is cut with "..." and loses its "@", and spec.url carries
+// a token. No credential byte may survive (coverage S0b §4).
+func TestText_RealKubectlDescribe(t *testing.T) {
+	raw, err := os.ReadFile("testdata/describe-gitrepository.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "lab-only-annot-token") || !strings.Contains(string(raw), "...") {
+		t.Fatal("fixture: the captured output must hold the truncated annotation")
+	}
+	r := Text(string(raw))
+	for _, m := range []string{"lab-only-annot-token", "lab-only-url-token", "x-access-token", "bob:"} {
+		if strings.Contains(r.Text, m) {
+			t.Errorf("%q survived:\n%s", m, r.Text)
+		}
+	}
+	if !r.Changed() || !strings.Contains(r.Text, "https://github.com/org/fleet.git") {
+		t.Fatalf("scrubbed output: %s", r.Text)
 	}
 }

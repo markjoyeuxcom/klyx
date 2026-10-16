@@ -151,7 +151,9 @@ export async function getInstanceDetail(cluster: string, resource: ResourceRef, 
   }
 }
 
-export async function dryRunInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, yaml: string): Promise<ActionResult> {
+// uid is the object the editor was opened on: the backend refuses if it was
+// replaced since, and never creates (coverage S0b §5).
+export async function dryRunInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, uid: string, yaml: string): Promise<ActionResult> {
   const r = (await CRDService.ApplyResourceYAML(
     cluster,
     resource.group,
@@ -161,13 +163,14 @@ export async function dryRunInstanceYAML(cluster: string, resource: ResourceRef,
     resource.scope,
     instance.namespace,
     instance.name,
+    uid,
     yaml,
     true,
   )) as ActionResult;
   return { ok: !!r.ok, error: r.error ?? "" };
 }
 
-export async function applyInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, yaml: string): Promise<ActionResult> {
+export async function applyInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, uid: string, yaml: string): Promise<ActionResult> {
   const r = (await CRDService.ApplyResourceYAML(
     cluster,
     resource.group,
@@ -177,6 +180,7 @@ export async function applyInstanceYAML(cluster: string, resource: ResourceRef, 
     resource.scope,
     instance.namespace,
     instance.name,
+    uid,
     yaml,
     false,
   )) as ActionResult;

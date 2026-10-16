@@ -683,7 +683,10 @@ export type SummaryCellDTO = InstanceColumnDTO & { value: string };
 export type FieldManagerDTO = { manager: string; operation: string; subresource?: string; time?: string };
 export type OwnerRefDTO = { apiVersion: string; kind: string; name: string; controller?: boolean };
 export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string; notFound?: boolean;
-  summary?: SummaryCellDTO[]; observedGeneration?: number; deleting?: string; finalizers?: string[]; owners?: OwnerRefDTO[]; managers?: FieldManagerDTO[]; fieldsJSON?: string; fieldsOmitted?: string };
+  summary?: SummaryCellDTO[]; observedGeneration?: number; deleting?: string; finalizers?: string[]; owners?: OwnerRefDTO[]; managers?: FieldManagerDTO[]; fieldsJSON?: string; fieldsOmitted?: string;
+  // coverage S0b: false when Klyx shows this object sanitised - Edit is
+  // hidden, and the backend refuses an apply whatever the frontend does.
+  editEligible?: boolean; describeMode?: "withheld" | "url-scrubbed" | string };
 // cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
 // share namespace/name, so ns/name alone let a late DEV detail render under the
 // PRD header (review 2026-10-03 #5).

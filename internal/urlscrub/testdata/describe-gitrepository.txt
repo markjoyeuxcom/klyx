@@ -1,0 +1,28 @@
+Name:         creds-repo
+Namespace:    flux-system
+Labels:       <none>
+Annotations:  example.com/mirror:
+                https://bob:lab-only-annot-tokenQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ...
+API Version:  source.toolkit.fluxcd.io/v1
+Kind:         GitRepository
+Metadata:
+  Creation Timestamp:  2026-10-16T22:44:13Z
+  Generation:          1
+  Resource Version:    1203662
+  UID:                 00dfc202-f4a5-4afb-bc7c-9054e722ce50
+Spec:
+  Interval:  5m
+  Ref:
+    Branch:  main
+  Timeout:   60s
+  URL:       https://x-access-token:lab-only-url-token@github.com/org/fleet.git
+Status:
+  Conditions:
+    Last Transition Time:  2026-10-16T12:00:00Z
+    Message:               stored artifact for revision 'main@sha1:abc'
+    Observed Generation:   1
+    Reason:                Succeeded
+    Status:                True
+    Type:                  Ready
+  Observed Generation:     -1
+Events:                    <none>

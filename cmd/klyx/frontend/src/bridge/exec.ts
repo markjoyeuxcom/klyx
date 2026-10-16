@@ -7,7 +7,12 @@ type ActionResultDTO = { ok: boolean; error: string };
 // output is kubectl's stdout exactly; command is the same describe for the
 // person's terminal with the cluster's kubeconfig pinned, commandError why
 // there is none.
-export type DescribeResultDTO = { ok: boolean; output: string; error: string; command: string; commandError: string };
+// withheld: Describe was not run (coverage S0b §4) - a kind that can carry
+// secrets in templates, patches or values, or a resource Klyx could not
+// classify. scrubbed: user info was removed from URLs, so the text is no
+// longer kubectl's exact output; linesWithheld counts lines it withheld.
+export type DescribeResultDTO = { ok: boolean; output: string; error: string; command: string; commandError: string;
+  withheld?: string; scrubbed?: boolean; linesWithheld?: number };
 
 // getExecCommand fetches the kubectl exec argv and display command string.
 // Returns null on bridge error (bridge-level throw).
