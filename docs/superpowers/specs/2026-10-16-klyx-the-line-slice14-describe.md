@@ -18,33 +18,59 @@ On 2026-10-16 the owner sent a screenshot of Describe on a Gateway (`infra/inter
 
 ## 2. What changes
 
-Describe stays **kubectl's own report, read-only**. Klyx never rewrites the report, and it never adds a word that kubectl didn't print, except where the note says so (ages, counts, a find count, the UID notice). A Text view shows kubectl's exact output, and Copy always copies that output.
+Describe stays **kubectl's own report, read-only**. Klyx never rewrites the report, and it never adds a word that kubectl didn't print, except where the note says so (ages, counts, a find count, the UID notice). A Text view shows kubectl's exact stdout, byte for byte, and Copy always copies it.
+
+**The Formatted view is a best-effort reading, and the Text view is the authority** (design review 1). kubectl's text is ambiguous in places:
+- a value's embedded newline can look like a field;
+- `[{alpha:1},{beta:2}]` and `[{alpha:1,beta:2}]` print identically.
+
+So the parser promotes structure only in contexts it recognises, and otherwise keeps lines as text, in kubectl's order. It never asserts a count of list items.
 
 ### 14a. The parser (pure, `chrome/describe/parse.ts`)
 
-`parseDescribe(text)` returns a tree, and `printDescribe(tree)` returns the input byte for byte. **The round trip is the invariant**: every input line lives in exactly one node, in order. A line the parser does not understand becomes a `text` node, so it is never dropped.
+`parseDescribe(text)` returns a tree, and `printDescribe(tree)` returns the input byte for byte. **The round trip is the invariant**: every input line lives in exactly one node, in order. A line the parser does not understand becomes a `text` node, so it is never dropped. The round trip proves that no text is lost. It does not prove the structure, so structural tests cover each rule and each ambiguity below.
 
 **Node types:**
 - `field`: indent, key and value, plus continuation lines and children.
-- `table`: indent, header, column offsets and rows.
+- `table`: indent, header, column offsets and rows. A row may carry extra lines.
 - `text`: one line.
 - `blank`: an empty line.
+- `item`: one certain list item (generic mode).
+- `opaque`: a region kept as raw lines.
+
+**Pre-scan:**
+- **Generic mode:** the top level has `API Version:`, `Kind:` and `Metadata:` at column 0. This is the CRD describer.
+- **The Events line:** the last column-0 `Events:` line. Every describer prints Events last, so only that line opens the Events field. Everything after it belongs to Events.
+- **Data regions:** a line underlined by a run of `=` opens an opaque region that runs to the Events line. This is ConfigMap and Secret data (`Data` / `====`), whose content is arbitrary text and is never parsed.
 
 **Line rules,** in order:
-1. **Table with a dash row.** A line followed by a line made only of dash runs and spaces is a table header. The dash runs give the column start offsets. Rows follow at the table's indent or deeper until a blank line or a shallower line. The last column takes the rest of the line. Examples: Events, node Conditions, a node's pods and allocated resources, a Deployment's Conditions.
-2. **Table without a dash row.** This is how the Pod Conditions table prints ("Type Status"). It is accepted only when:
-   - the header has two or more single capitalised words separated by two or more spaces;
-   - every following line at the same indent has text at each column start, with a space before it.
+1. **Table with a dash row.** The next line is only dash runs and spaces, with **two or more** runs. Every header cell is capitalised words (`Type`, `CPU Requests`, `LastHeartbeatTime`).
+   - The dash runs give the column starts.
+   - Rows follow at the table's indent or deeper, while their text never crosses a column start.
+   - In the Events table, a line after a row that is not a row continues that row's message: kubectl prints an event message's newlines raw.
 
-   Anything else is not a table.
-3. **Continuation.** A line indented exactly to the previous field's value column continues that field. Examples: Labels, Annotations and Tolerations.
-4. **Field.** `Key:` with a value or with nothing. The key must not begin with `-`, and the colon must be followed by whitespace or the end of the line. Nesting is relative: a deeper indent makes the line a child. Indents are not assumed to be multiples of two, because a Deployment's pod template prints `Containers:` children at three spaces.
-5. **List item.** A deeper line under a field that has no value, and that is not a field itself (Command, Mounts, Hostnames).
-6. **Multi-line value.** Any other line continues the previous field's value. kubectl prints a value's embedded newlines raw, at column 0.
+   A ConfigMap key's single `----` is never a table.
+2. **Pod Conditions.** In built-in mode, under a field keyed `Conditions` with no value, a header that is exactly `Type` and `Status` is a table. Its rows must have text at both column starts.
+3. **Continuation.** A line indented exactly to the open field's value column continues that field (Labels, Annotations, Tolerations). Only the field whose line, or continuation, was the last line read is open.
+4. **Field.** The line is `Key:` with a value or with nothing.
+   - The key must not begin with `-`, must have no run of spaces, and its colon must be followed by whitespace or the end of the line.
+   - Nesting is relative, because a Deployment's pod template prints `Containers:` children at three spaces.
+   - **Not a field**, in these cases:
+     - in built-in mode, the children of `Command` and `Args`: each argument is a text line, even `echo note: value`;
+     - a line at the indent of a field's earlier text children: a list of scalars stays text;
+     - in generic mode, a line deeper than a scalar field. A map or list prints with no value, so a field with a value never has children;
+     - in generic mode, a column-0 line whose key does not sort after the previous top-level key, unless it is the Events line.
 
-**Generic mode and list items.** Generic mode applies when the top level has `API Version`, `Kind` and `Metadata`; that is the CRD describer.
-- Below those keys, a field in a block starts a **new list item** when its key repeats, or sorts before the previous sibling. kubectl sorts map keys, and the comparison here lowercases them and removes spaces.
-- Each item is a child group. When the order rule misfires (mixed-case keys), the cost is a spurious item divider; no line is lost or moved.
+     Each such line continues the open value (rule 5), or is text (rule 6).
+5. **Multi-line value.** A line that is not a field, while the open field has a value, continues that value.
+6. **Text.** Any other line is a text line in its place: a list item (Command, Mounts, Hostnames) or prose ("(Total limits may be over 100 percent…)").
+
+**Generic mode and list items:**
+- A divider is drawn only where an item boundary is **certain**: a key repeats, or a key sorts before the previous one in kubectl's own order.
+  - The order is `sort.Strings` over the original names.
+  - For a `smartLabelFor` label, the original name is rebuilt: the first word in lower case, then the rest as printed ("Last Transition Time" becomes `lastTransitionTime`, "API Version" becomes `apiVersion`).
+  - A raw key (with dots or digits) compares as printed.
+- Keys that continue in order read as one block, exactly as the text does. The view never shows an item count.
 - Built-in describers are not sorted, so the rule never applies outside generic mode.
 
 ### 14b. The sheet (`DescribePane` rebuilt)
@@ -56,7 +82,7 @@ Describe stays **kubectl's own report, read-only**. Klyx never rewrites the repo
   - the kind in ink-3 sans 14;
   - the object as `ns / name` in `t-object-title` (mono 19/500).
 - **Meta line** (12/16, ink-3):
-  - the command as run (`kubectl --context kind-klyx describe gateways.gateway.networking.k8s.io -n infra -- internal`);
+  - the command as run, with its kubeconfig (see Go below);
   - "ran 12:04:31 · 3s ago".
 - **Actions,** all 36px:
   - a `Formatted | Text` segmented control;
@@ -74,12 +100,20 @@ Describe stays **kubectl's own report, read-only**. Klyx never rewrites the repo
   - Below 820px the rail becomes a wrapping row of the same buttons above the body.
 - **Sections:** a top-level field with children is a collapsible section. Its head uses `t-section-label` with a chevron, `aria-expanded`, and is open by default. Consecutive top-level scalar fields are a key/value grid with no head.
 - **Fields:** a grid with the key in sans 13/20 ink-3 and the value in mono 13/20 ink-1. A nested block indents 20px and has a hairline guide. A list item after the first gets 8px of space and a hairline above. Continuation and list lines stack in the value column. `<none>`, `<unset>` and `<unknown>` read in ink-3.
-- **Conditions shape.** A generic-mode list whose items all carry `Type` and `Status` renders as a table: Type, Status, Reason, Age (from Last Transition Time), Message, then any other keys in kubectl's order. Every value from the tree appears in a cell.
+- **Conditions shape** (review 1). Only a generic-mode field keyed `Conditions` becomes a table, and only when every certain item:
+  - is scalar fields alone;
+  - draws its keys from the standard set (Last Heartbeat Time, Last Probe Time, Last Transition Time, Last Update Time, Message, Observed Generation, Reason, Severity, Status, Type);
+  - carries Type and Status.
+
+  Its columns are Type, Status, Reason, the other keys in kubectl's order, then Message, with the keys as kubectl printed them. Every value appears in a cell. Anything else stays fields, so a non-condition list that happens to carry Type and Status is never reshaped.
 - **Tables:**
   - A real `<table>`, scrolling sideways inside its own box, never wrapped. The header is sans 12 ink-3.
   - Cells are mono 13, except a Message column, which wraps.
   - A fault or attention row carries an Aspect in its first cell, and the words stay ink-1 or ink-2 (slice 13c: the tone sits on the mark).
-  - Condition polarity uses the existing `conditionColor`, so MemoryPressure True is a fault and Ready False is a fault.
+  - **Condition marks** (review 1) use a polarity table that belongs to Describe. A mark describes the recorded condition, never the object's health, and the shared `conditionColor` is unchanged.
+    - **Positive types,** a fault when False: Ready, Available, Accepted, Programmed, ResolvedRefs, Synced, Established, NamesAccepted, Initialized, ContainersReady, PodScheduled, PodReadyToStartContainers, Progressing and Complete.
+    - **Negative types,** a fault when True: MemoryPressure, DiskPressure, PIDPressure, NetworkUnavailable, Stalled, ReplicaFailure and Failed.
+    - Any other type, and Unknown, carries no mark: Reconciling, Issuing and custom types alike.
   - An Events row of type Warning carries the attention Aspect.
 - **Times:** an RFC 3339 or RFC 1123Z value gets "· 6d ago" after it, in ink-3, with the local absolute time as its title. kubectl's own words stay as printed.
 
@@ -92,16 +126,32 @@ Describe stays **kubectl's own report, read-only**. Klyx never rewrites the repo
 - Sections that hold a match open while the query is active.
 - Matching runs over the view model's text runs, in render order, so the count and the ring always agree with what is on screen.
 
-**Refresh** keeps the last report on screen, with "refreshing…" in the meta. If the refresh fails, the error shows above the report, which is then labelled "Output from 12:04:31".
+**Runs, identity and cancellation** (review 1):
+- **A run's identity** is {cluster, kind argument, namespace, name, expected UID}, plus a generation number. Its output, command, run time, error and UID notice belong to one reply and change together.
+- **A changed identity** (A, then B, then A) clears the sheet to loading and cancels the run in flight. A reply applies only when both its identity and its generation are current.
+- **Closing the sheet cancels the run.** The Go method takes the call's `context.Context`, and the bridge returns the generated `CancellablePromise` unwrapped, so its `cancel()` reaches Go and `exec.CommandContext` stops kubectl. The 30s bound stays.
+- **Refresh is serialised.** It is disabled while a run is in flight. It keeps the last report on screen, with "refreshing…" in the meta.
+- **A refresh that fails:**
+  - with no stdout, the error shows above the last report, which is labelled "Output from 12:04:31, before the failed refresh";
+  - with partial stdout, the newest evidence wins. The partial output shows, labelled "Partial output: kubectl exited with an error", beside the error.
 
-**UID notice.** A caller that knows the object's UID passes it. If the report's Metadata UID differs, an attention evidence panel says: "This describes a newer object at this name (UID …), not the one in the inspector." A report with no UID claims nothing.
+**UID notice.** A caller that knows the object's UID passes it. If the report's Metadata UID differs, an attention evidence panel says: "This describes a different object at this name (UID …), not the one in the inspector." A report with no UID claims nothing.
 
 **Keys:**
 - Tab is trapped (`trapTab`), and focus returns to the opener when the sheet closes.
 - Escape clears a non-empty find, and otherwise closes the sheet.
 - Keys stop at the dialog, so lists behind it never act.
 
-**Go** (`appbridge.ExecService.Describe`): `DescribeResultDTO` gains `command`. It is the argv with `argv[0]` shown as `kubectl`, through the existing `displayCommand` quoting. The bindings are regenerated.
+**Go** (`appbridge.ExecService.Describe`), review 1:
+- **Stdout is returned unchanged:** no trailing-newline trim. Text and Copy are then exactly kubectl's stdout.
+- **The method takes `ctx context.Context`,** and the run derives its 30s timeout from it.
+- **`DescribeResultDTO` gains `command`,** built from `kubectlTerminalArgv()`, the same kubeconfig pinning the exec terminal uses, followed by the describe arguments. Under the host shell's quoting (`displayCommand`):
+  - one kubeconfig file becomes `--kubeconfig <file>`;
+  - a path list becomes `env KUBECONFIG=<list>`;
+  - on Windows a list is refused. Copy command is then disabled with that reason (`commandError`).
+
+  A context name shared by two kubeconfigs therefore can't resolve to another cluster in the person's terminal. No other environment value is shown.
+- The bindings are regenerated.
 
 ### 14c. Describe from every inspector
 
@@ -127,26 +177,42 @@ Describe stays **kubectl's own report, read-only**. Klyx never rewrites the repo
 
 ## 4. Testing
 
-- **Parser:** the round trip on real lab captures (Gateway, HTTPRoute, Kustomization, Certificate, ExternalSecret, Pod, Node, Deployment, Service). Fixtures also cover:
-  - a multi-line value at column 0;
-  - mixed-case keys;
-  - a table whose last column is ragged;
-  - a three-space pod template.
-
-  Structure asserts:
-  - the Gateway and route conditions split into two items;
-  - a Pod's Containers, Conditions (no dash row) and Events tables;
-  - a Node's pods table.
+- **Parser:**
+  - The round trip on real lab captures: Gateway, HTTPRoute, Kustomization, Certificate, ExternalSecret, Pod, Node, Deployment and Service.
+  - The round trip on trailing blank lines and on CRLF.
+  - **Structural tests** (review 1), because the round trip cannot catch a wrong structure:
+    - Command and Args with colon- and header-shaped arguments;
+    - a multi-line condition message whose second line reads "Status: …";
+    - a multi-line Event message;
+    - ConfigMap data with a `----` key underline and YAML-shaped content;
+    - `[{alpha:1},{beta:2}]` versus `[{alpha:1,beta:2}]`, which both read as one block with no divider;
+    - mixed-case keys;
+    - a ragged last column;
+    - the three-space pod template;
+    - the Gateway and route conditions as two certain items;
+    - a Pod's Containers, Conditions and Events;
+    - a Node's pods table.
+- **Marks:** Stalled True is a fault and Stalled False is unmarked. Reconciling carries no mark either way. A non-condition list that carries Type and Status stays fields.
 - **Sheet:**
   - the head, meta and command;
   - Formatted and Text;
   - the find count, cycling and section open;
-  - copy and copy command;
-  - refresh keeping the last report;
-  - the error and the UID notice;
+  - copy and copy command (and disabled with a reason);
+  - **runs:**
+    - A, then B, then A, with late replies;
+    - close during a read cancels it;
+    - Refresh is disabled in flight;
+    - a failed refresh, with and without partial stdout;
+  - the error, and the UID notice saying "different object";
   - Escape order and focus restore;
   - the rail at both widths.
+- **Go:**
+  - stdout is unchanged, including trailing newlines;
+  - the command for one kubeconfig, for a list, and for a Windows list (refused);
+  - quoting of spaces;
+  - two kubeconfigs that share a context name each yield their own pinned command;
+  - cancellation stops the run.
 - **14c:** each inspector's More carries Describe with the right argument, and nothing for an unknown kind, a removed object or a Helm release.
 - **Live:**
   - the headless walk captures the sheet for a Gateway, a Pod and a Node, night and day, at 1440 and 1024;
-  - the native smoke gains "Describe" steps: open it from the Flux inspector, and require a Status section and a conditions table row, and that the live report round-trips (`printDescribe(parseDescribe(output)) === output`).
+  - the native smoke gains "Describe" steps. It opens Describe from the Flux inspector and requires a Status section, a conditions table row, and a live report that round-trips (`printDescribe(parseDescribe(output)) === output`).
