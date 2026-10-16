@@ -61,9 +61,9 @@ function GatewayLists({ cluster }: { cluster: string }) {
     return "wait";
   }, [view]);
   const toggle = (
-    <div role="group" aria-label="Gateway API view" className="l-seg">
-      <button className="l-chip" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
-      <button className="l-chip" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes {routeAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{routeAttention}</span>}</button>
+    <div role="group" aria-label="Gateway API view" className="l-seg" data-testid="gateway-views">
+      <button className="l-chip" data-view="gateways" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
+      <button className="l-chip" data-view="routes" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes {routeAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{routeAttention}</span>}</button>
     </div>
   );
   return view === "routes"

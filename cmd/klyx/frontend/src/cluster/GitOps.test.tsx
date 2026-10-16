@@ -596,6 +596,10 @@ describe("GitOps workspace template (redesign)", () => {
     fireEvent.click(getByRole("button", { name: /^Suspended \d+$/ }));
     expect(getByText("paused")).toBeTruthy();
     expect(queryByText("ok")).toBeNull();
+    // its status word is in the interface face, as every status cell is (slice 13b review 1)
+    const row = getByText("paused").closest(".lens-row") as HTMLElement;
+    const word = [...row.querySelectorAll<HTMLElement>("span")].find((s) => s.textContent === "Suspended" && s.children.length === 0)!;
+    expect(word.style.fontFamily).toBe("var(--font-sans)");
   });
 
   it("a resource gone from a complete read is removed and cancels its pending reconcile", () => {

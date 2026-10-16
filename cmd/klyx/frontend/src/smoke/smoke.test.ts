@@ -16,7 +16,7 @@ vi.mock("@wailsio/runtime", () => ({
 }));
 
 import { startSmokeWhenAsked, _resetSmokeBootForTest } from "./boot";
-import { FACES, TITLES, Unmeasurable, checkFonts, checkTokens, destinations, page, runSmoke, sized, verdict, walk, within } from "./run";
+import { FACES, TITLES, Unmeasurable, checkFonts, checkTokens, destinations, gatewayView, page, runSmoke, sized, verdict, walk, within } from "./run";
 import { NAV_GROUPS } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 
@@ -152,6 +152,20 @@ describe("a destination's page", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("the Gateway lens's view is its pressed switch and its own table, never the shared title (13b review 1)", () => {
+    const at = (pressed: string, head: string) => {
+      document.body.innerHTML = `<div class="lens-header"><h1>Gateways and routes</h1></div><div data-testid="gateway-views"><button data-view="gateways" aria-pressed="${pressed === "gateways"}"></button><button data-view="routes" aria-pressed="${pressed === "routes"}"></button></div><div class="lens-table-head"><span>${head}</span><span>Status</span></div>`;
+      return gatewayView();
+    };
+    expect(at("routes", "HTTPRoute")).toBe("routes");
+    expect(at("gateways", "Gateway")).toBe("gateways");
+    // the switch says Routes over the Gateways table, and the reverse
+    expect(at("routes", "Gateway")).toBeNull();
+    expect(at("gateways", "HTTPRoute")).toBeNull();
+    document.body.innerHTML = '<div class="lens-header"><h1>Gateways and routes</h1></div>';
+    expect(gatewayView()).toBeNull();
   });
 
   it("a kind shortcut shows the page of the task that owns its section", async () => {

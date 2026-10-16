@@ -483,8 +483,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
                           {a.autoSync && <span style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }} title="automated sync policy">auto</span>}
                         </span>
                       )}
-                      {show("sync") && <span style={{ ...cell, color: a.syncStatus === "OutOfSync" ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{a.syncStatus || "-"}</span>}
-                      {show("health") && <span style={{ ...cell, color: ROLE_COLOR[a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "fault" : "ok"], fontWeight: a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? 600 : 400 }}>{a.healthStatus || "-"}</span>}
+                      {show("sync") && <span style={{ ...cell, color: a.syncStatus === "OutOfSync" ? "var(--color-text-warning)" : "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>{a.syncStatus || "-"}</span>}
+                      {show("health") && <span style={{ ...cell, color: ROLE_COLOR[a.healthStatus === "Degraded" || a.healthStatus === "Missing" ? "fault" : "ok"], fontFamily: "var(--font-sans)" }}>{a.healthStatus || "-"}</span>}
                       {show("dest") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.destNamespace || "-"}</span>}
                       {show("revision") && <span style={{ ...cell, color: "var(--color-text-tertiary)" }}>{a.revision ? short(a.revision) : "-"}</span>}
                       {show("reconciled") && <span style={{ color: "var(--color-text-tertiary)" }}><Age unixSeconds={a.reconciledUnix} suffix=" ago" fallback="never" /></span>}

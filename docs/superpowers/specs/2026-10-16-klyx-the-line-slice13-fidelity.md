@@ -198,6 +198,16 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
 - **Ages use the existing `formatAge`** ("42s", "5m", "3h", "2d", with days from 24h). Flux's private "127h ago" was the only outlier. A table cell says the age alone, and prose keeps "ago".
 - **The column fit counts 13a's 14px row padding** (`ROW_PADDING` 28). The Pods grid's container breakpoints move to match.
 
+### As built (13b review 1)
+
+- **The part switch owns its keys** (`data-list-keys="ignore"`, as the index did). Enter on a focused part presses it. j, k and the row verbs never reach the list behind it.
+- **A part's count is never colour alone.** A count that needs you carries the index's Aspect (fault or look-at), and the button's name says it: "Reconciliation, 1 fault", "Sources, 1 to look at". A neutral count stays bare.
+- **The native smoke's Gateway data path** no longer waits for the retired "HTTPRoutes" title. Both Gateway views are titled "Gateways and routes", so `gatewayView()` requires the view switch's pressed button and the table's first column ("HTTPRoute" or "Gateway") to name the same view. Its tests cover both disagreements.
+- **The status typography reaches the cells 13b missed:**
+  - Argo's Sync and Health, where a Degraded or Missing health is no longer bold;
+  - Flux's Suspended;
+  - Upgrade check's removal cell.
+
 ### As built (13c)
 
 **The verdict** (`InspectorStatus`, `VerdictStatus`):

@@ -50,6 +50,8 @@
 /* A lens's search follows its filters (the mockup's header): on their row
    while there is room, else first on the next one - never a lone box pushed
    to the far edge (slice 13 polish). */
+/* a part's count that needs you: the index's shape before the number */
+.lens-part-count { display: inline-flex; align-items: center; gap: 5px; }
 .lens-search { display: flex; flex: 0 1 280px; min-width: 180px; }
 .lens-notice { min-height: var(--workspace-notice-height); flex-shrink: 0; margin: 0 var(--workspace-inline-padding) 12px; }
 /* The body is the ground; what it holds is a panel sized to its content (the

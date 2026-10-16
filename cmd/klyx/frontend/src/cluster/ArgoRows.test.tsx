@@ -77,6 +77,17 @@ describe("Argo CD rows, mounted end to end (slice 3 §5.4)", () => {
     expect(rowNames()).toEqual(["z-broken", "a-ok", "b-ok"]);
   });
 
+  it("Sync and Health speak in the interface face, never bold (slice 13b review 1)", () => {
+    seed([brokenApp("bad"), app("ok")]);
+    render(<ArgoView cluster="x" />);
+    const row = [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.textContent?.includes("bad"))!;
+    const cell = (word: string) => [...row.querySelectorAll<HTMLElement>("span")].find((s) => s.textContent === word && s.children.length === 0)!;
+    for (const word of ["OutOfSync", "Degraded"]) {
+      expect(cell(word).style.fontFamily).toBe("var(--font-sans)");
+      expect(cell(word).style.fontWeight).toBe("");
+    }
+  });
+
   it("A4 moves the global counts with the notice, in both views, beside a read error", () => {
     vi.useFakeTimers({ now: 0 });
     try {

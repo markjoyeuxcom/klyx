@@ -139,6 +139,17 @@ export function partOf(): { shown: string | null; pressed: string | null } | nul
   return { shown: lens?.dataset.part ?? null, pressed: parts?.querySelector<HTMLElement>('[aria-pressed="true"]')?.dataset.part ?? null };
 }
 
+// gatewayView: the Gateway lens's view (slice 13b review 1). Both views are
+// titled "Gateways and routes", so the title proves nothing: the view switch's
+// pressed button and the table's own first column must name the same view.
+// Null while they disagree or either is missing.
+export function gatewayView(): "gateways" | "routes" | null {
+  const pressed = document.querySelector<HTMLElement>('[data-testid="gateway-views"] [aria-pressed="true"]')?.dataset.view;
+  const head = document.querySelector(".lens-table-head > span")?.textContent?.trim();
+  const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : null;
+  return shown !== null && pressed === shown ? shown : null;
+}
+
 // The DOM's own events: no OS key or pointer, as the note's ruling 2 asks.
 function key(target: EventTarget, init: KeyboardEventInit): void {
   target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
@@ -249,9 +260,9 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   await step(steps, "Gateway data path", async () => {
     await open("gateway");
     await closeDrawer();
-    (await within(4000, "the Routes view", () => byText(".lens-controls button", /^Routes/))).click();
-    // the routes list, not the Gateways list still on screen
-    await within(8000, "the HTTPRoutes page", () => title() === "HTTPRoutes" && !loading());
+    (await within(4000, "the Routes switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="routes"]'))).click();
+    // the routes list, pressed and on screen - not the Gateways list still there
+    await within(8000, "the Routes view", () => gatewayView() === "routes" && !loading());
     if (!$("[data-testid='route-row-panel']")) (await within(8000, "a route row", () => $<HTMLElement>(".lens-row"))).click();
     const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
     (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();

@@ -615,7 +615,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     )}
                     {show("status") && (
                       <span style={ellipsisCell} title={included(r) && r.message ? r.message : undefined}>
-                        {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)" }}>{h.label}</span>
+                        {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>{h.label}</span>
                           : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
                           : <span style={{ color: STATUS_COLOR[h.kind], fontFamily: "var(--font-sans)" }}>
                               {h.label}{included(r) && r.reason ? ` · ${r.reason}` : ""}

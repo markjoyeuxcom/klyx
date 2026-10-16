@@ -197,7 +197,7 @@ export function UpgradeView({ cluster }: { cluster: string }) {
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("mark") && <VerdictMark health={gone ? { kind: "fault", label: `removed in 1.${d.removedInMinor}` } : { kind: "degraded", label: d.removedInMinor === 0 ? "deprecated, removal unscheduled" : `removed in 1.${d.removedInMinor}, after the target` }} />}
                   {show("api") && <span className="lens-cell-name" title={`${d.group}/${d.version} ${d.kind}`}><span style={{ color: "var(--color-text-tertiary)" }}>{d.group}/{d.version} </span>{d.kind}</span>}
-                  {show("removal") && <span style={{ ...cellStyle, color: gone ? "var(--color-text-danger)" : "var(--color-text-secondary)", fontWeight: gone ? 600 : 400 }}>{d.removedInMinor === 0 ? "unscheduled" : `removed in 1.${d.removedInMinor}`}</span>}
+                  {show("removal") && <span style={{ ...cellStyle, color: gone ? "var(--color-text-danger)" : "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>{d.removedInMinor === 0 ? "unscheduled" : `removed in 1.${d.removedInMinor}`}</span>}
                   {show("objects") && <span style={{ color: "var(--color-text-secondary)" }} title={d.countKnown ? undefined : "count not readable"}>{objectsText(d)}</span>}
                   {show("replacement") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{d.replacedBy || "-"}</span>}
                 </div>
