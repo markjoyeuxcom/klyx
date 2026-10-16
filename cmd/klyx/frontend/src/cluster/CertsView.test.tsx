@@ -143,6 +143,11 @@ describe("CertsView", () => {
     const inspector = screen.getByTestId("lens-inspector");
     expect(within(inspector).getByText(/deepest stuck node flagged/i)).toBeTruthy();
     expect(within(inspector).getByText("propagation check failed: NXDOMAIN")).toBeTruthy();
+    // the chain's text roles (slice 13c review): names in the name role, no
+    // caller-sized text, the stuck node's tone kept on its mark and tag
+    const rail = inspector.querySelector("ol[aria-label='Issuance chain']") as HTMLElement;
+    expect(rail.querySelectorAll(".rail-name").length).toBeGreaterThan(0);
+    expect(rail.querySelectorAll('[style*="font-size"]')).toHaveLength(0);
   });
 
   it("headlines a failing bound issuer in the inspector", () => {

@@ -64,6 +64,13 @@ describe("DataPath", () => {
     expect(rail.querySelector('[data-step="backend-0-1"]')?.getAttribute("data-segment")).toBe("chain");
   });
 
+  it("names its steps in the Rail's roles and never sizes its own text (slice 13c review)", () => {
+    const { getByTestId } = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics()} />);
+    const path = getByTestId("data-path");
+    expect([...path.querySelectorAll(".rail-kind")].map((k) => k.textContent)).toEqual(expect.arrayContaining(["Gateway", "HTTPRoute"]));
+    expect(path.querySelectorAll('[style*="font-size"]')).toHaveLength(0);
+  });
+
   it("shows configured weights apart from what was measured", () => {
     const { getByRole } = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics()} />);
     const configured = getByRole("list", { name: "Data path" }).querySelector("[data-configured]") as HTMLElement;

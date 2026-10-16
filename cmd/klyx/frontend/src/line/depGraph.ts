@@ -24,6 +24,7 @@ export type DepStep = {
   segment: RailSegment;
   segmentWords?: string;
   name: string;
+  kind?: string; // the node's kind when its name leads with it (the drawing sets it apart)
   aspect: AspectKind;
   tags: string[];
   evidence: DepEvidence;
@@ -47,6 +48,11 @@ const INCOMPLETE = new Set(["depth", "node limit", "read limit", "unreadable", "
 
 export function nodeName(n: DepNode): string {
   return n.stub && !n.name ? n.note ?? n.stub : `${n.kind} ${n.namespace ? `${n.namespace}/` : ""}${n.name}`;
+}
+
+// kindOf: the kind nodeName leads with, when it leads with one.
+function kindOf(n: { kind: string; name: string; stub?: string }): string | undefined {
+  return n.stub && !n.name ? undefined : n.kind || undefined;
 }
 
 // writeText: the last recorded managed-field update, never an audit entry:
@@ -146,7 +152,7 @@ export function depTree(g: DepGraph): DepStep[] {
     const seg: RailSegment = incomplete ? "incomplete" : segment;
     const segWords = incomplete ? `incomplete: ${n.stub}` : words;
     if (drawn.has(id)) {
-      return { key, id, segment: seg, segmentWords: segWords, name: `${nodeName(n)} (see above)`, aspect: aspectOf(n), tags: [], evidence: { supply: [], proximity: [], writes: [] }, chainEnd: false, ref: true, branches: [] };
+      return { key, id, segment: seg, segmentWords: segWords, name: `${nodeName(n)} (see above)`, kind: kindOf(n), aspect: aspectOf(n), tags: [], evidence: { supply: [], proximity: [], writes: [] }, chainEnd: false, ref: true, branches: [] };
     }
     drawn.add(id);
     const start = id === g.start;
@@ -162,7 +168,7 @@ export function depTree(g: DepGraph): DepStep[] {
         : step(e.to, e.reported ? "reported" : e.type === "source" ? "source" : "dependsOn", e.reported ? `reported blocker (${e.type === "source" ? "source" : "depends on"})` : undefined, key),
     ]);
     return {
-      key, id, segment: seg, segmentWords: segWords, name: incomplete && n.name ? `${nodeName(n)}: ${n.note ?? n.stub}` : nodeName(n),
+      key, id, segment: seg, segmentWords: segWords, name: incomplete && n.name ? `${nodeName(n)}: ${n.note ?? n.stub}` : nodeName(n), kind: kindOf(n),
       aspect: aspectOf(n), tags: tagsOf(n, start), evidence, chainEnd: n.chainEnd, git: !!n.git, branches,
     };
   };

@@ -839,19 +839,17 @@ function ChainRail({ nodes, failKey }: { nodes: ChainNodeDTO[]; failKey: string 
       aspect: chainAspect[node.ready] ?? "checking",
       tags: isFail ? ["stuck here"] : undefined,
       label: (
-        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, fontSize: 11, minWidth: 0 }}>
-          <span style={{ color: "var(--color-text-tertiary)", width: 60, flexShrink: 0 }}>{kindWord}</span>
-          <span style={{ ...mono, overflowWrap: "anywhere", minWidth: 0, color: isFail ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>{node.name}</span>
+        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8, minWidth: 0, flexWrap: "wrap" }}>
+          <span className="rail-kind" style={{ width: 64, flexShrink: 0 }}>{kindWord}</span>
+          <span className="rail-name" data-tone={isFail ? "danger" : undefined} style={{ overflowWrap: "anywhere", minWidth: 0 }}>{node.name}</span>
           <span className="sr-only">, {node.ready || "Unknown"}</span>
           {(bad || issuing) && node.reason && !isFail && (
-            <span style={{ ...mono, fontSize: 10, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
+            <span className="rail-detail" style={{ ...mono, color: bad ? "var(--color-text-danger)" : "var(--color-text-warning)", flexShrink: 0 }} title={node.message}>{node.reason}</span>
           )}
         </span>
       ),
       body: isFail && stuckText ? (
-        <div style={{ marginTop: 1, padding: "6px 9px", borderRadius: 4, background: "var(--color-background-danger)", boxShadow: "inset 0 0 0 1px var(--color-border-danger)", fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>
-          {stuckText}
-        </div>
+        <div data-tone="danger" style={{ overflowWrap: "anywhere" }}>{stuckText}</div>
       ) : undefined,
     };
   });

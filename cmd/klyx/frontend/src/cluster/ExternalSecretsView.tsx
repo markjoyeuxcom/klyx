@@ -551,7 +551,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
             {
               key: "store", segment: "chain", name: `${e.storeKind} ${e.storeName}`,
               aspect: storeRole ? aspectOfVerdict(storeRole.kind) : "checking",
-              label: <span className="t-identifier">{e.storeKind}/{e.storeName}</span>,
+              label: <span><span className="rail-kind">{e.storeKind}</span> <span className="rail-name">{e.storeName}</span></span>,
               body: (
                 <>
                 {/* The store's evidence panel, as cert-manager's issuer panel
@@ -581,7 +581,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
             {
               key: "externalsecret", segment: "chain", name: `ExternalSecret ${e.namespace}/${e.name}`,
               aspect: aspectOfVerdict(role.kind),
-              label: <span className="t-identifier">ExternalSecret/{e.name}</span>,
+              label: <span><span className="rail-kind">ExternalSecret</span> <span className="rail-name">{e.name}</span></span>,
               body: (
                 <>
                 {cause && !storeBroken && (
@@ -603,7 +603,7 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
             },
             ...(e.targetSecret ? [{
               key: "target", segment: "chain" as const, name: `target Secret ${e.targetSecret}`,
-              label: <span><span>target Secret</span> <span className="t-identifier">{e.targetSecret}</span></span>,
+              label: <span><span className="rail-kind">target Secret</span> <span className="rail-name">{e.targetSecret}</span></span>,
             }] : []),
           ]} />
         </InspectorBlock>

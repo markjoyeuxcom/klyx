@@ -102,15 +102,19 @@ function railStep(s: DepStep, git: Map<string, NotHereYetResult>, paths: Map<str
     segment: s.segment,
     segmentWords: s.segmentWords,
     name: s.name,
-    label: <span className="t-identifier" style={{ fontSize: 11 }}>{s.name}</span>,
+    // the name line's roles (slice 13c review): the kind word in the
+    // interface face, the object in mono 500 - never a caller's 11px
+    label: s.kind && s.name.startsWith(`${s.kind} `)
+      ? <span><span className="rail-kind">{s.kind}</span> <span className="rail-name">{s.name.slice(s.kind.length + 1)}</span></span>
+      : <span className="rail-name">{s.name}</span>,
     aspect: s.aspect,
     tags: s.tags.length ? s.tags : undefined,
     body: lines.length || gitText ? (
-      <div data-evidence={s.chainEnd || undefined} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+      <div data-evidence={s.chainEnd || undefined} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {lines.map((l, i) => (
           // a node's lines read in ink-2 (the mockup's chain): its mark and its
           // reported-blocker segment carry the danger (slice 13c.6)
-          <div key={i} data-tone={l.tone} style={{ overflowWrap: "anywhere", color: l.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>{l.text}</div>
+          <div key={i} data-tone={l.tone} className={l.tone === "muted" ? "rail-detail" : undefined} style={{ overflowWrap: "anywhere" }}>{l.text}</div>
         ))}
         {gitText && <div data-git style={{ color: "var(--color-text-secondary)" }}>{gitText}</div>}
         {r?.state === "behind" && r.commits.length > 0 && (

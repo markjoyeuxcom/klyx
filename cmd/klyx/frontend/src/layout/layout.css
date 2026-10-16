@@ -578,6 +578,7 @@ button.ov-area-label:hover, button.ov-area-label:focus-visible { color: var(--co
 details[open] > summary > .ov-chev { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .ov-chev { transition: none; } }
 .ov-why > span { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.ov-notice-mark { display: inline-flex; margin-right: 8px; vertical-align: 1px; }
 .ov-notice-notes { margin: 6px 0 0; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
 .mast-attention { flex: 0 10 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; white-space: nowrap;
   font: 600 11px/16px var(--font-sans); }
@@ -650,7 +651,19 @@ details[open] > summary > .ov-chev { transform: rotate(90deg); }
 
 /* a Rail step's body (slice 13c.6): its lines in ink-2 at 13px - a step's
    mark and segment carry the danger, its words do not */
+/* A Rail step's text roles (slice 13c.5, review): callers name their parts
+   with these and never set a size. The name line is 14/20: the object in
+   mono 500 ink-1, a kind word before it in 12px ink-3. The body is 13/18
+   ink-2; an identifier in it stays mono at the body's size. A detail (a
+   reason beside a name, a muted write, a metrics note) is 12/16 ink-3. */
+.rail-head { font: 400 14px/20px var(--font-sans); color: var(--color-text-primary); }
+.rail-name, .rail-head .t-identifier { font: 500 14px/20px var(--font-mono); color: var(--color-text-primary); }
+.rail-kind { font: 400 12px/20px var(--font-sans); color: var(--color-text-tertiary); }
 .rail-body { font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.rail-body .t-identifier { font: 400 13px/18px var(--font-mono); }
+.rail-detail { font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+.rail-seg-words { font: 400 12px/20px var(--font-sans); flex-shrink: 0; }
+.rail-tag { font: 400 11px/16px var(--font-sans); padding: 0 6px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-hair, var(--color-border-tertiary)); color: var(--color-text-secondary); flex-shrink: 0; }
 
 /* ---- the station page (The Line slice 13d) ----
    A page on the ground, not a sunk well: its sections stack with room

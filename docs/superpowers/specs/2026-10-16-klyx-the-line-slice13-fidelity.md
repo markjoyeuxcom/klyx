@@ -274,6 +274,19 @@ The first captures against the lab after 13d showed three leftovers. They are fi
 - **A lens's search** follows its filters, as the mockup's Filter does. One `lens-search` class replaces fifteen inline styles. The search shares the filters' row while there is room. Otherwise it leads the next row, rather than sitting alone at the far right.
 - **Gateway and route names** read "ns / name", as every other lens does.
 
+### As built (13c and 13d review 1)
+
+- **The drawings name their text, never size it.** The Rail owns its text roles as classes, and its callers name their parts with them: Flux dependencies, cert-manager's issuance chain, the ESO chain and the Gateway data path. The roles are:
+  - `rail-head`: the name line, 14/20.
+  - `rail-name`: the object, mono 500 ink-1. This also applies to an identifier on the name line.
+  - `rail-kind`: a kind word before it, 12px ink-3.
+  - `rail-body`: 13/18 ink-2, with identifiers in mono at the body's size.
+  - `rail-detail`: 12/16 ink-3, for a reason beside a name, a muted write or a metrics note.
+
+  The Rail's own tags and segment words move to classes too. No text inside a drawing is sized inline, and tests assert that for all four. The dependency model carries a node's `kind`, so the drawing sets the kind word apart without parsing the name.
+- **The issuance chain's stuck node** keeps its tone on its mark and its "stuck here" tag. Its message is the step's body, in ink-2, not a danger wall: the same treatment as the issuer panel.
+- **The Connection summary** leads with a fault Aspect when it names a controller that is not ready, where the retired ▲ stood. An unverified-only summary carries no mark, and neither does a different problem that leads.
+
 ## 3. Out of scope
 
 - New data or new claims: the mockup's synthesised "Held: …" sentence, "where the fix lives" advice beyond the existing supply facts, and "root cause".

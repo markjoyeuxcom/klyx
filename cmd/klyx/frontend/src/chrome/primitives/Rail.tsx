@@ -113,12 +113,12 @@ function RailSteps({ steps, root, branch }: { steps: RailStep[]; root: boolean; 
             <span aria-hidden style={{ position: "absolute", left: 0, top: TOP }}>
               {s.aspect && s.aspect !== "none" ? <Aspect kind={s.aspect} size={MARK} /> : <span style={{ display: "inline-block", width: MARK, height: MARK, boxSizing: "border-box", borderRadius: 1, border: "2px solid var(--line-track, var(--color-border-secondary))" }} />}
             </span>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minHeight: 20, fontSize: 14, lineHeight: "20px" }}>
+            <div className="rail-head" style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minHeight: 20 }}>
               {w && !show && <span className="sr-only">{w}: </span>}
-              {show && incoming && <span data-seg-words style={{ fontSize: 12, color: segColor(incoming), flexShrink: 0 }}>{w}<span className="sr-only">: </span></span>}
+              {show && incoming && <span data-seg-words className="rail-seg-words" style={{ color: segColor(incoming) }}>{w}<span className="sr-only">: </span></span>}
               <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{s.label ?? s.name}</span>
               {s.tags?.map((t) => (
-                <span key={t} data-tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px", borderRadius: 4, boxShadow: "inset 0 0 0 1px var(--line-hair, var(--color-border-tertiary))", color: "var(--color-text-secondary)", flexShrink: 0 }}>{t}</span>
+                <span key={t} data-tag className="rail-tag">{t}</span>
               ))}
             </div>
             {s.body && <div className="rail-body" style={{ marginTop: 4 }}>{s.body}</div>}

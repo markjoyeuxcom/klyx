@@ -154,12 +154,16 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
   const unverified = named.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
   const controllerLine = [notReady.length > 0 ? `Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ");
   const headline = other.length > 0 ? other[0] : controllerLine || notes[0];
+  // the summary names a controller that is not ready: its fault mark, where
+  // the retired ▲ stood (13d review). An unverified-only summary stays
+  // unmarked, and a different problem that leads carries none.
+  const faultLeads = other.length === 0 && notReady.length > 0;
   if (notes.length <= 1 && other.length === notes.length) {
     return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.reason}</div>;
   }
   return (
     <details className="ov-notice" role="status" style={{ color: tone }}>
-      <summary className="t-body">{headline}<span className="t-secondary"> · {notes.length === 1 ? "details" : `${notes.length} notes`}</span><Chevron /></summary>
+      <summary className="t-body">{faultLeads && <span className="ov-notice-mark"><Aspect kind="fault" size={8} /></span>}{headline}<span className="t-secondary"> · {notes.length === 1 ? "details" : `${notes.length} notes`}</span><Chevron /></summary>
       <ul className="ov-notice-notes t-secondary">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
     </details>
   );

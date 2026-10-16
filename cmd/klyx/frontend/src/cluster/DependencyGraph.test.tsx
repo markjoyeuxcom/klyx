@@ -64,6 +64,12 @@ describe("DependencyGraphSection", () => {
     expect(text).toContain("M apps/web.yaml");
     expect(text).toContain("and 3 more files");
     expect(text).toContain("T main, fetched");
+    // the drawing's text roles (slice 13c review): the name in the name role,
+    // the kind word apart, and no caller sizes its own text
+    const rail = getByTestId("dep-graph");
+    expect(rail.querySelector(".rail-kind")?.textContent).toBe("Kustomization");
+    expect(rail.querySelector(".rail-name")?.textContent).toBe("flux-system/apps");
+    expect(rail.querySelectorAll('[style*="font-size"]')).toHaveLength(0);
   });
 
   it("re-walks on request, says incomplete evidence, and a failed read", async () => {

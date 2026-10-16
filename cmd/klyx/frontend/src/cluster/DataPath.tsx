@@ -21,9 +21,9 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
       segment: "chain",
       name: `Gateway ${gateway.namespace}/${gateway.name}`,
       aspect: aspectOfVerdict(gateway.rule.role),
-      label: <span className="t-identifier">Gateway {gateway.name}</span>,
+      label: <span><span className="rail-kind">Gateway</span> <span className="rail-name">{gateway.name}</span></span>,
       body: (
-        <div className="t-secondary" style={{ fontSize: 11 }}>
+        <div>
           {scoped.length === 0 ? "no listener matches the route's section" : scoped.map((l) => `${l.protocol}:${l.port}${l.hostname ? ` ${l.hostname}` : ""}`).join(" · ")}
           {gateway.policies.length > 0 && <> · {gateway.policies.length} polic{gateway.policies.length === 1 ? "y" : "ies"}</>}
         </div>
@@ -34,8 +34,8 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
       segment: "chain",
       name: `HTTPRoute ${route.namespace}/${route.name}`,
       aspect: aspectOfVerdict(route.rule.role),
-      label: <span className="t-identifier">HTTPRoute {route.name}</span>,
-      body: <div className="t-secondary" style={{ fontSize: 11 }}>{route.hostnames.length > 0 ? route.hostnames.join(", ") : "any host (from the listener)"}{route.policies.length > 0 ? ` · ${route.policies.length} polic${route.policies.length === 1 ? "y" : "ies"}` : ""}</div>,
+      label: <span><span className="rail-kind">HTTPRoute</span> <span className="rail-name">{route.name}</span></span>,
+      body: <div>{route.hostnames.length > 0 ? route.hostnames.join(", ") : "any host (from the listener)"}{route.policies.length > 0 ? ` · ${route.policies.length} polic${route.policies.length === 1 ? "y" : "ies"}` : ""}</div>,
       branches: rules.map((r) => [ruleStep(route, r, metrics)]),
     },
   ];
@@ -43,7 +43,7 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
     <div data-testid="data-path" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <Rail label="Data path" steps={steps} />
       {metrics && metrics.status.available && (
-        <div className="t-secondary" style={{ fontSize: 11 }}>
+        <div className="rail-detail">
           {[...metrics.notes, metrics.backendSplit ? `Per-backend split: ${metrics.backendSplit}.` : "", metrics.scopeNote ?? ""].filter(Boolean).map((n, i) => <div key={i}>{n}</div>)}
         </div>
       )}
@@ -60,10 +60,10 @@ function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | n
     segment: "chain",
     name: `rule ${r.index + 1}: ${matches}`,
     aspect: aspectOfVerdict(r.rule.role),
-    label: <span className="t-identifier" style={{ fontSize: 11 }}>rule {r.index + 1} · {matches}</span>,
+    label: <span><span className="rail-kind">rule {r.index + 1}</span> <span className="rail-name">{matches}</span></span>,
     tags: ok ? undefined : [r.rule.label],
     body: (
-      <div style={{ display: "grid", gap: 6, fontSize: 11 }}>
+      <div style={{ display: "grid", gap: 6 }}>
         {r.backends.length > 0 && (
           <div data-configured style={{ display: "grid", gap: 2 }}>
             <span className="t-legend">configured</span>
@@ -91,9 +91,9 @@ function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | n
         segmentWords: failing ? b.rule.label : undefined,
         name: `${b.kind} ${b.namespace}/${b.name}:${b.port}`,
         aspect: aspectOfVerdict(b.rule.role),
-        label: <span className="t-identifier" style={{ fontSize: 11 }}>{b.kind} {b.namespace}/{b.name}:{b.port}</span>,
+        label: <span><span className="rail-kind">{b.kind}</span> <span className="rail-name">{b.namespace}/{b.name}:{b.port}</span></span>,
         body: (
-          <div className="t-secondary" style={{ fontSize: 11 }}>
+          <div>
             {eps ? (eps.error ? `endpoints unreadable: ${eps.error}` : `${eps.ready}/${eps.total} endpoints ready`) : b.rule.label}
           </div>
         ),

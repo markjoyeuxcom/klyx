@@ -333,12 +333,23 @@ describe("Overview connection notes", () => {
     const notice = container.querySelector("details.ov-notice") as HTMLDetailsElement;
     expect(notice).toBeTruthy();
     expect(notice.querySelector("summary")?.textContent).toMatch(/^Controller health unverified: Certificates, Karpenter · 2 notes$/);
+    expect(notice.querySelector("summary [data-aspect]")).toBeNull(); // unverified is a gap, never a fault mark
     expect(notice.querySelectorAll("li")).toHaveLength(2);
     expect(notice.textContent).toContain("no Deployment kube-system/karpenter");
     // each area: one line, its reason behind a disclosure
     const why = screen.getByTestId("ov-area-certs").querySelector("details.ov-why") as HTMLDetailsElement;
     expect(why.querySelector("summary")?.textContent).toBe("controller health unverified");
     expect(why.textContent).toContain("no Deployment cert-manager/cert-manager");
+  });
+
+  it("a controller that is not ready leads the summary with its fault mark (13d review)", () => {
+    seed([...core(), task("flux", [native("reconciliations", { ok: 2 }, 0, "not ready", [kind("kustomizations")])],
+      { controller: { state: "not ready", reason: "Deployment flux-system/kustomize-controller 0/1 ready" } })]);
+    const reason = "Flux installed but kustomize-controller is not ready (Deployment flux-system/kustomize-controller 0/1 ready)";
+    const { container } = render(<Overview c={{ ...dto, state: "Degraded", reason, fluxPresent: true }} />);
+    const summary = container.querySelector("details.ov-notice > summary") as HTMLElement;
+    expect(summary.textContent).toBe("Controller not ready: Flux · details");
+    expect(summary.querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 
   it("a failed connection keeps its reason in full", () => {
@@ -369,6 +380,7 @@ describe("Overview connection notes keep the real problem first", () => {
     const { container } = render(<Overview c={{ ...dto, state: "Degraded", reason, fluxPresent: true }} />);
     const summary = container.querySelector("details.ov-notice > summary")?.textContent ?? "";
     expect(summary).toBe("pods watch failed: forbidden · 2 notes");
+    expect(container.querySelector("details.ov-notice > summary [data-aspect]")).toBeNull();
     expect(container.querySelectorAll("details.ov-notice li")).toHaveLength(2);
   });
 });

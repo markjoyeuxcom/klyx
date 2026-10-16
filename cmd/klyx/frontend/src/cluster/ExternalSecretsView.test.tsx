@@ -141,6 +141,9 @@ describe("ExternalSecretsView", () => {
     expect(steps[0].textContent).toMatch(/Store failed: InvalidProviderConfig/);
     expect(steps[1].textContent).toMatch(/refresh/);
     expect(steps[2].textContent).toContain("target Secret");
+    // the chain's text roles (slice 13c review): kind words apart, names in the name role, nothing sized inline
+    expect([...rail.querySelectorAll(".rail-kind")].map((k) => k.textContent)).toEqual(expect.arrayContaining(["ExternalSecret", "target Secret"]));
+    expect(rail.querySelectorAll('[style*="font-size"]')).toHaveLength(0);
     expect(steps[2].querySelector("[data-aspect]")).toBeNull(); // the target is not read: no state claimed
   });
 
