@@ -234,8 +234,9 @@
 .otree-index { font-family: var(--font-mono); font-size: 12px; }
 .otree-val { min-width: 0; font: 400 13px/20px var(--font-mono); color: var(--color-text-primary); overflow-wrap: break-word; word-break: break-word; white-space: pre-wrap; }
 .otree-num { font-variant-numeric: tabular-nums; }
-.otree-toggle { justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer; font: 400 13px/20px var(--font-sans); color: inherit; }
-.otree-chev { color: var(--color-text-tertiary); transition: transform 120ms ease; }
+/* a wrapped name stays left-aligned, its chevron on the first line */
+.otree-toggle { justify-self: start; display: inline-flex; align-items: flex-start; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer; font: 400 13px/20px var(--font-sans); color: inherit; text-align: left; min-width: 0; }
+.otree-chev { flex: none; margin-top: 3.5px; color: var(--color-text-tertiary); transition: transform 120ms ease; }
 .otree-toggle[aria-expanded="true"] .otree-chev { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .otree-chev { transition: none; } }
 .otree-more { grid-column: 1 / -1; justify-self: start; padding: 0 0 0 6px; border: 0; background: none; cursor: pointer; font: 400 12px/20px var(--font-sans); color: var(--color-text-info); }
@@ -262,6 +263,7 @@
 .crd-version-switch { margin-bottom: 8px; }
 .schema-tree { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 .schema-filter { margin-bottom: 8px; flex: none; width: min(320px, 100%); }
+.schema-filter .l-input { width: 100%; }
 .schema-row { cursor: default; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); }
 .schema-name { font-family: var(--font-mono); color: var(--color-text-primary); }
 .schema-req { margin-left: 2px; color: var(--color-text-warning); }
