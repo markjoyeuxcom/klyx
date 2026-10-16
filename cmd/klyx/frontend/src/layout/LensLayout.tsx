@@ -140,7 +140,6 @@ export function LensLayout({
   // next object opens beside the list; Escape restores it first.
   const open = !!inspector;
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => { if (!open) setExpanded(false); }, [open]);
   const wide = open && expanded;
   const expandValue = useMemo(() => ({ expanded: wide, toggle: () => setExpanded((v) => !v) }), [wide]);
 
@@ -173,8 +172,42 @@ export function LensLayout({
   // and focus returns to the element that opened it.
   const mainRef = useRef<HTMLElement>(null);
   const asideRef = useRef<HTMLElement>(null);
+  // returnFocus: where focus goes when the inspector closes - the element it
+  // was opened from, then the last place in the list focus visited while it
+  // was open. It belongs to the inspector, not to the drawer: it survives a
+  // change of mode, and is used and cleared when the inspector closes in
+  // either mode (slice 16 review 2).
   const returnFocus = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onCloseInspector);
+  useEffect(() => { closeRef.current = onCloseInspector; });
   const drawerOpen = !!inspector && geo.mode === "drawer";
+
+  // The inspector closed (in either mode): the expand resets, so the next
+  // object opens beside the list, and a pending return target is used and
+  // cleared, so no later inspector inherits it. Focus goes back only if it
+  // fell with the inspector; focus the user moved elsewhere stays.
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (!wasOpen.current && open) {
+      const el = document.activeElement as HTMLElement | null;
+      returnFocus.current = el && el !== document.body && !asideRef.current?.contains(el) ? el : null;
+    } else if (wasOpen.current && !open) {
+      setExpanded(false);
+      const back = returnFocus.current;
+      returnFocus.current = null;
+      const dropped = !document.activeElement || document.activeElement === document.body;
+      if (dropped && back && document.contains(back)) back.focus();
+    }
+    wasOpen.current = open;
+  }, [open]);
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!open || !main) return;
+    const onFocusIn = (e: FocusEvent) => { returnFocus.current = e.target as HTMLElement; };
+    main.addEventListener("focusin", onFocusIn);
+    return () => main.removeEventListener("focusin", onFocusIn);
+  }, [open]);
+
   useEffect(() => {
     if (!drawerOpen) return;
     const main = mainRef.current;
@@ -191,7 +224,7 @@ export function LensLayout({
     const onKey = (e: KeyboardEvent) => {
       // a field being edited keeps its Escape, as it does in the split
       // (useListKeys ignores editable targets) - slice 16 review 1
-      if (e.key === "Escape" && !e.defaultPrevented && !inEditable(e.target)) { onCloseInspector?.(); return; }
+      if (e.key === "Escape" && !e.defaultPrevented && !inEditable(e.target)) { closeRef.current?.(); return; }
       if (e.key !== "Tab" || !aside) return;
       const f = focusables(aside);
       if (f.length === 0) { e.preventDefault(); return; }
@@ -200,19 +233,14 @@ export function LensLayout({
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     };
     window.addEventListener("keydown", onKey);
+    // The drawer ending - closed, or become a split - only lifts the modal.
+    // Focus is the close handler's: a split keeps the inspector's focus
+    // (spec §2: crossing the breakpoint preserves the focused control).
     return () => {
       window.removeEventListener("keydown", onKey);
       main?.removeAttribute("inert");
-      // Return focus only when the drawer closed. A drawer that became a
-      // split keeps its inspector mounted, and focus stays in it (spec §2:
-      // crossing the breakpoint preserves the focused control).
-      const aside = asideRef.current;
-      if (aside && document.contains(aside) && aside.contains(document.activeElement)) return;
-      const back = returnFocus.current;
-      returnFocus.current = null;
-      if (back && document.contains(back)) back.focus();
     };
-  }, [drawerOpen, onCloseInspector]);
+  }, [drawerOpen]);
 
   // Escape restores an expanded inspector before anything else closes it: a
   // capture listener runs ahead of the lists' and the drawer's, and marks the

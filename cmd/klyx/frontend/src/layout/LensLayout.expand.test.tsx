@@ -130,4 +130,75 @@ describe("the expanded inspector with a real list (slice 16 review 1)", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(getByTestId("lens-layout").hasAttribute("data-expanded")).toBe(true);
   });
+
+  // review 2: the return target belongs to the inspector, not the drawer
+  function Rows() {
+    const [open, setOpen] = useState<string | null>(null);
+    return (
+      <LensLayout label="things" title="Things" state="ready"
+        body={<><button onClick={() => setOpen("A")}>row A</button><button onClick={() => setOpen("B")}>row B</button></>}
+        inspector={open ? <InspectorLayout pin={{ cluster: "review" }} kind="Thing" name={open} onClose={() => setOpen(null)}><input aria-label="field" /></InspectorLayout> : undefined}
+        onCloseInspector={() => setOpen(null)} />
+    );
+  }
+
+  it("closing in the split returns focus to the row the drawer was opened from", () => {
+    width = 900;
+    const { getByText, getByLabelText, queryByTestId } = render(<Rows />);
+    const row = getByText("row A");
+    row.focus();
+    fireEvent.click(row);
+    const expand = getByLabelText("expand details");
+    expand.focus();
+    fireEvent.click(expand);
+    resize(1600);
+    const close = getByLabelText("close details");
+    close.focus();
+    fireEvent.click(close);
+    expect(queryByTestId("lens-inspector")).toBeNull();
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("a closed inspector's target never passes to the next one", () => {
+    width = 900;
+    const { getByText, getByLabelText } = render(<Rows />);
+    const a = getByText("row A");
+    a.focus();
+    fireEvent.click(a);
+    getByLabelText("field").focus();
+    resize(1600);
+    fireEvent.click(getByLabelText("close details"));
+    const b = getByText("row B");
+    b.focus();
+    fireEvent.click(b);
+    getByLabelText("field").focus();
+    resize(900);
+    fireEvent.click(getByLabelText("close details"));
+    expect(document.activeElement).toBe(b);
+  });
+
+  it("the target follows focus in the list; focus the user moved elsewhere is not pulled back", () => {
+    const { getByText, getByLabelText } = render(<Rows />);
+    const a = getByText("row A");
+    a.focus();
+    fireEvent.click(a);
+    // in the split the list stays live: focus moves to row B, which opens B
+    const b = getByText("row B");
+    b.focus();
+    fireEvent.click(b);
+    getByLabelText("field").focus();
+    fireEvent.click(getByLabelText("close details"));
+    expect(document.activeElement).toBe(b);
+    // focus already elsewhere when the inspector closes stays there
+    fireEvent.click(a);
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    try {
+      elsewhere.focus();
+      fireEvent.click(getByLabelText("close details"));
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
 });
