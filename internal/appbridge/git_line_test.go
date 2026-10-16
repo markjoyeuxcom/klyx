@@ -58,7 +58,7 @@ func newHistory(t *testing.T) historyFixture {
 		c := exec.Command(g.Path, args...)
 		c.Dir = work
 		date := time.Date(2026, 10, 1, 10, n, 0, 0, time.UTC).Format(time.RFC3339)
-		c.Env = []string{"HOME=" + work, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		c.Env = []string{"HOME=" + work, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
 			"GIT_AUTHOR_NAME=Ada", "GIT_AUTHOR_EMAIL=ada@example.test", "GIT_COMMITTER_NAME=Ada", "GIT_COMMITTER_EMAIL=ada@example.test",
 			"GIT_AUTHOR_DATE=" + date, "GIT_COMMITTER_DATE=" + date}
 		out, err := c.CombinedOutput()
@@ -371,7 +371,7 @@ func TestLedgerContainmentIsExact(t *testing.T) {
 		c.Dir = work
 		// One timestamp for every commit: git's walk order and the Ledger's
 		// time-then-id order disagree at every tie.
-		c.Env = []string{"HOME=" + work, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		c.Env = []string{"HOME=" + work, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
 			"GIT_AUTHOR_NAME=Ada", "GIT_AUTHOR_EMAIL=ada@example.test", "GIT_COMMITTER_NAME=Ada", "GIT_COMMITTER_EMAIL=ada@example.test",
 			"GIT_AUTHOR_DATE=2026-10-01T10:00:00Z", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z"}
 		out, err := c.CombinedOutput()

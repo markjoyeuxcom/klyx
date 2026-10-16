@@ -24,8 +24,11 @@ import (
 // production transport - an HTTPS git http-backend fixture trusted through
 // a test CA in the generated config; file and plain-HTTP stay forbidden.
 
+// plainEnv isolates the test's own git. Auto gc and maintenance are off: a
+// newer git detaches them after a commit, and one still writing into a
+// fixture repo makes t.TempDir's cleanup fail (CI, 2026-10-16).
 func plainEnv(dir string) []string {
-	return []string{"HOME=" + dir, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+	return []string{"HOME=" + dir, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
 		"GIT_NO_LAZY_FETCH=1", "GIT_AUTHOR_NAME=Ada", "GIT_AUTHOR_EMAIL=ada@example.test", "GIT_COMMITTER_NAME=Ada",
 		"GIT_COMMITTER_EMAIL=ada@example.test", "GIT_AUTHOR_DATE=2026-10-01T10:00:00Z", "GIT_COMMITTER_DATE=2026-10-01T10:00:00Z"}
 }
