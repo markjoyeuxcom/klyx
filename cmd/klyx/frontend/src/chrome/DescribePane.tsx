@@ -24,7 +24,10 @@ import { buildModel, timeOf, type Run, type VNode, type VSection, type VTable } 
 // call's cancel() reaches Go and stops kubectl), and Refresh waits for the
 // run in flight.
 
-type Reply = { gen: number; at: number; dto: DescribeResultDTO };
+// A reply carries the identity it was run for (review 1): render shows only a
+// reply for the current identity, so the first render after a new object
+// never draws the old object's report under the new heading.
+type Reply = { id: string; gen: number; at: number; dto: DescribeResultDTO };
 
 const WIDE = [820] as const;
 
@@ -76,17 +79,19 @@ export function DescribePane({
   const run = useCallback(() => {
     call.current?.cancel?.();
     const mine = ++gen.current;
+    const id = identity;
     setRunning(true);
     const p = describeResource(cluster, kindArg, namespace, name);
     call.current = p as { cancel?: () => void };
     const settle = (dto: DescribeResultDTO) => {
       if (gen.current !== mine) return; // superseded, cancelled or closed
-      const reply: Reply = { gen: mine, at: Date.now(), dto };
+      const reply: Reply = { id, gen: mine, at: Date.now(), dto };
       // A failed refresh with no stdout keeps the last report on screen,
       // labelled - through any number of failed refreshes; a reply with
       // output (partial or whole) is the newest evidence and replaces it.
-      const prev = shownRef.current;
-      const last = prev && prev.dto.output !== "" ? prev : priorRef.current;
+      const prev = shownRef.current?.id === id ? shownRef.current : null;
+      const kept = priorRef.current?.id === id ? priorRef.current : null;
+      const last = prev && prev.dto.output !== "" ? prev : kept;
       show(reply, !dto.ok && dto.output === "" ? last : null);
       setRunning(false);
       call.current = null;
@@ -95,7 +100,9 @@ export function DescribePane({
       if (gen.current !== mine) return;
       settle({ ok: false, output: "", error: e instanceof Error ? e.message : String(e), command: "", commandError: "" });
     });
-  }, [cluster, kindArg, namespace, name]);
+    // identity carries cluster, kindArg, namespace, name and expectUid
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
 
   useEffect(() => {
     show(null, null);
@@ -116,16 +123,23 @@ export function DescribePane({
     dialogRef.current?.focus();
   }, []);
 
-  const report = shown && !shown.dto.ok && shown.dto.output === "" && prior ? prior : shown;
+  // Only this identity's replies exist for the render.
+  const mine = shown?.id === identity ? shown : null;
+  const kept = prior?.id === identity ? prior : null;
+  const report = mine && !mine.dto.ok && mine.dto.output === "" && kept ? kept : mine;
+  // A new identity is loading from its first render, before its run starts.
+  const busy = running || !mine;
   const output = report?.dto.output ?? "";
   const tree = useMemo(() => parseDescribe(output), [output]);
   const model = useMemo(() => buildModel(tree), [tree]);
-  const textRuns = useMemo<Run[]>(() => {
-    const lines = output.split("\n");
-    // kubectl ends its report with a newline: no empty last line to draw
-    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-    return lines.map((l, i) => ({ id: i, text: l.replace(/\r$/, "") }));
-  }, [output]);
+  // The Text view is stdout exactly (review 1): each line's own ending -
+  // "\n", "\r\n" or none at the end - is drawn after its run, so the view's
+  // text is byte for byte what kubectl printed.
+  const textLines = useMemo(() => (output.match(/[^\n]*\n|[^\n]+$/g) ?? []).map((seg, i) => {
+    const end = /\r?\n$/.exec(seg)?.[0] ?? "";
+    return { run: { id: i, text: seg.slice(0, seg.length - end.length) } as Run, end };
+  }), [output]);
+  const textRuns = useMemo(() => textLines.map((l) => l.run), [textLines]);
 
   // ---- view and find ----
   const [view, setView] = useState<"formatted" | "text">("formatted");
@@ -198,8 +212,8 @@ export function DescribePane({
 
   const qualified = namespace ? `${namespace} / ${name}` : name;
   const uidNotice = expectUid && model.uid && model.uid !== expectUid ? model.uid : null;
-  const command = shown?.dto.command ?? "";
-  const commandError = shown?.dto.commandError ?? "";
+  const command = mine?.dto.command ?? "";
+  const commandError = mine?.dto.commandError ?? "";
 
   return (
     <div className="l-dialog-scrim describe-scrim" onClick={onClose}>
@@ -240,7 +254,7 @@ export function DescribePane({
             <div className="describe-meta">
               {command ? <code className="describe-command">{command}</code> : <code className="describe-command">kubectl describe {kindArg}{namespace ? ` -n ${namespace}` : ""} {name}</code>}
               <span className="describe-when">
-                {running ? (shown ? "refreshing…" : "running…") : report ? <>ran {absoluteTime(report.at)} · <Age unixSeconds={report.at / 1000} suffix=" ago" /></> : null}
+                {busy ? (mine ? "refreshing…" : "running…") : report ? <>ran {absoluteTime(report.at)} · <Age unixSeconds={report.at / 1000} suffix=" ago" /></> : null}
               </span>
             </div>
           </div>
@@ -290,13 +304,13 @@ export function DescribePane({
         </div>
 
         <div ref={bodyRef} className="describe-body" data-narrow={narrow ? "true" : undefined}>
-          {shown && shown.dto.error !== "" && (
+          {mine && mine.dto.error !== "" && (
             <div role="alert" className="evidence-panel describe-error" data-tone="danger">
               <div className="evidence-panel-head">
                 <Aspect kind="fault" size={10} />
-                {report && report !== shown ? "The refresh failed" : "kubectl describe failed"}
+                {report && report !== mine ? "The refresh failed" : "kubectl describe failed"}
               </div>
-              <div className="evidence-panel-text describe-pre">{shown.dto.error}</div>
+              <div className="evidence-panel-text describe-pre">{mine.dto.error}</div>
             </div>
           )}
           {uidNotice && (
@@ -305,12 +319,12 @@ export function DescribePane({
               <div className="evidence-panel-text">This describes a different object at this name (UID {uidNotice}), not the one in the inspector.</div>
             </div>
           )}
-          {report && output !== "" && (report !== shown || !report.dto.ok) && (
+          {report && output !== "" && (report !== mine || !report.dto.ok) && (
             <div className="describe-caption">
-              {report !== shown ? `Output from ${absoluteTime(report.at)}, before the failed refresh` : "Partial output: kubectl exited with an error"}
+              {report !== mine ? `Output from ${absoluteTime(report.at)}, before the failed refresh` : "Partial output: kubectl exited with an error"}
             </div>
           )}
-          {!report && running ? (
+          {!report && busy ? (
             <div className="describe-state">Running kubectl describe…</div>
           ) : report && output === "" && report.dto.ok ? (
             <div className="describe-state">kubectl printed nothing.</div>
@@ -333,7 +347,7 @@ export function DescribePane({
                 </div>
               ) : (
                 <div ref={scrollRef} className="describe-scroll describe-text" data-testid="describe-text">
-                  <pre>{textRuns.map((r) => <span key={r.id}><Hl run={r} />{"\n"}</span>)}</pre>
+                  <pre>{textLines.map((l) => <span key={l.run.id}><Hl run={l.run} />{l.end}</span>)}</pre>
                 </div>
               )}
             </HitContext.Provider>

@@ -246,6 +246,17 @@ Built-in describers print prose before a table ("Allocated resources"), so a bui
 
 **The native smoke** gains "Describe from the Flux inspector".
 
+### As built (14b and 14c, review 1)
+
+- **Replies carry their identity.** A reply records the identity it ran for. Render shows only this identity's replies (`mine`, `kept`), so the first render after a new object shows "Running kubectl describe…" and never the old object's report, command, time or UID notice under the new heading. The generation check still drops late replies.
+- **The Text view is stdout, byte for byte.** Each line keeps its own ending (`\n`, `\r\n`, or none at the end) after its run. "Name:  old", "Name:  old\r\n\r\n" and a report ending in a newline all read back exactly.
+- **The topology's HTTPRoute inspector** (`GatewayTopology.tsx`, opened from a lane) gets Describe, by the route's UID. It gets none for a route the latest read no longer holds (gone) or cannot prove (unproven). The sheet sits beside its layout.
+- **Codex's probes are permanent tests:**
+  - the two Text cases and a third;
+  - the one-render fence;
+  - focus returning to More;
+  - the topology's Describe.
+
 ## 3. Out of scope
 
 - Links from values to objects ("Controlled By", "Node", parent refs).

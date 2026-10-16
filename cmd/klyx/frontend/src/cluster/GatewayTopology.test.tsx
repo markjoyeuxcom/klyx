@@ -58,6 +58,14 @@ function seed(t: TopologyDTO | null, over: Partial<ReturnType<typeof useFleet.ge
 }
 
 beforeEach(() => vi.clearAllMocks());
+it("the topology's HTTPRoute inspector offers Describe (slice 14c review 1)", () => {
+  seed(topo([route("apps", "share", { uid: "route-share" })]));
+  render(<GatewayTopology cluster="x" gateway={gateway} />);
+  fireEvent.click(screen.getByRole("button", { name: /HTTPRoute apps\/share/ }));
+  fireEvent.click(within(screen.getByTestId("route-panel")).getByRole("button", { name: "More" }));
+  expect(screen.queryByRole("menuitem", { name: "Describe" })).not.toBeNull();
+});
+
 
 describe("routeHealth (evidence, Codex review)", () => {
   const unknown: CondDTO = { status: "Unknown", reason: "Pending", message: "", observedGeneration: 1 };

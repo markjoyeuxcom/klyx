@@ -5,6 +5,7 @@ vi.mock("../../bridge/exec", () => ({ describeResource: vi.fn() }));
 vi.mock("../../bridge/crd", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 import { describeResource } from "../../bridge/exec";
 import { describeArg, useDescribe, type DescribeTarget } from "./useDescribe";
+import { InspectorLayout } from "../../layout/InspectorLayout";
 
 describe("describeArg (slice 14c)", () => {
   it("names each lens kind by singular.group, and nothing it does not know", () => {
@@ -46,6 +47,22 @@ describe("useDescribe", () => {
     fireEvent.click(getByRole("button", { name: "Describe" }));
     await findByTestId("describe-sheet");
     expect(describeResource).toHaveBeenCalledWith("prd", "kustomization.kustomize.toolkit.fluxcd.io", "flux-system", "apps");
+  });
+
+  it("returns focus to More when the sheet closes (review 1 probe)", async () => {
+    function Inspector() {
+      const d = useDescribe("a", { kind: "Kustomization", namespace: "shop", name: "old", uid: "u1" });
+      return <><InspectorLayout pin={{ cluster: "a", uid: "u1" }} kind="Kustomization" name="old" onClose={() => {}} more={d.menu}>evidence</InspectorLayout>{d.sheet}</>;
+    }
+    const r = render(<Inspector />);
+    const more = r.getByRole("button", { name: "More" });
+    fireEvent.click(more);
+    const item = r.getByRole("menuitem", { name: "Describe" });
+    item.focus();
+    fireEvent.click(item);
+    await r.findByTestId("describe-formatted");
+    fireEvent.click(r.getByRole("button", { name: "Close describe" }));
+    expect(document.activeElement).toBe(more);
   });
 
   it("offers nothing for no target or an unknown kind", () => {

@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import gateway from "./describe/fixtures/gateway.txt?raw";
@@ -235,6 +236,32 @@ describe("DescribePane", () => {
     const { findByTestId, queryByRole } = sheet({ kindArg: "pod", kind: "Pod", namespace: "default", name: "web", expectUid: "u-1" });
     await findByTestId("describe-formatted");
     expect(queryByRole("status")).toBeNull();
+  });
+
+  it.each(["Name:  old", "Name:  old\r\n\r\n", "Name:  old\nKind:  K\n"])("keeps the Text view byte for byte: %j (review 1)", async (output) => {
+    mocked().mockImplementation(() => Promise.resolve(ok(output)));
+    const { findByTestId, getByRole } = sheet();
+    await findByTestId("describe-formatted");
+    fireEvent.click(getByRole("button", { name: "Text" }));
+    expect((await findByTestId("describe-text")).querySelector("pre")?.textContent).toBe(output);
+  });
+
+  it("never draws another object's report under the new heading, not even for one render (review 1)", async () => {
+    mocked().mockImplementationOnce(() => Promise.resolve(ok("Name:  old\nAnnotation:  old-target-evidence\n")))
+      .mockImplementation(() => Object.assign(new Promise(() => {}), { cancel: vi.fn() }));
+    const seen: string[] = [];
+    function Read({ name }: { name: string }) {
+      useLayoutEffect(() => {
+        if (name === "new") seen.push(document.querySelector('[data-testid="describe-sheet"]')?.textContent ?? "");
+      });
+      return <DescribePane cluster="a" kindArg="pod" kind="Pod" namespace="shop" name={name} onClose={() => {}} />;
+    }
+    const r = render(<Read name="old" />);
+    await r.findByTestId("describe-formatted");
+    await act(async () => { r.rerender(<Read name="new" />); });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.some((t) => t.includes("old-target-evidence"))).toBe(false);
+    expect(r.getByText("Running kubectl describe…")).toBeTruthy();
   });
 
   it("moves find to the sheet's input on the find key", async () => {

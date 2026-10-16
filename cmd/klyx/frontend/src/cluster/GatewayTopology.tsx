@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useDescribe } from "../chrome/describe/useDescribe";
 import { useCertManagerRows } from "../health/useCertManagerRows";
 import { IconAlertTriangle, IconRoute } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -473,6 +474,10 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
   const openablePolicies = [...policies, ...cnps].filter((p) => POLICY_REFS[p.kind]);
   if (openablePolicies.length > 0) more.push({ kind: "choose", label: "Open policy", options: openablePolicies.map((p) => ({ label: `${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}`, onSelect: () => onOpenObject(POLICY_REFS[p.kind], p.namespace, p.name) })) });
   more.push({ label: "Copy route name", onSelect: () => void navigator.clipboard?.writeText(`${route.namespace}/${route.name}`) });
+  // Describe (slice 14c, review 1): kubectl's report for this route, by its
+  // UID; never for a route the latest read no longer holds, or cannot prove.
+  const describe = useDescribe(cluster, !gone && !unproven ? { kind: "HTTPRoute", namespace: route.namespace, name: route.name, uid: route.uid } : null);
+  more.push(...describe.menu);
 
   return (
     <div data-testid="route-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -581,6 +586,8 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
           </InspectorBlock>
         )}
       </InspectorLayout>
+      {/* the sheet sits beside the layout, so it shows on any tab */}
+      {describe.sheet}
     </div>
   );
 }
