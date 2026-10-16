@@ -59,6 +59,18 @@ Codex reviewed 77f1b33 and found two P2s; both are fixed in one commit:
 
 Codex's probes are now `layout/LensLayout.expand.test.tsx`, with one more case: a drawer opened from a row, round-tripped through the split, still returns focus to that row when closed.
 
+## 3b. As built (review 2)
+
+Codex reviewed 3e3bc8c and found one P2 in the return-focus lifecycle. The return target had been retained through a drawer becoming a split, but closing in the split never used or cleared it. Focus was therefore not returned, and a later inspector could inherit the old row.
+
+The return target now belongs to the inspector, not to the drawer:
+- **What it is:** the element the inspector was opened from (in either mode), then the last place in the list focus visited while the inspector was open. In the split the list stays live, so a row the user moves to becomes the target.
+- **When it is used:** one close handler, run when the inspector closes in either mode, resets the expand and uses and clears the target. Focus goes back only if it fell with the inspector; focus the user moved elsewhere stays where it is.
+- **The drawer's own ending,** whether it closed or became a split, only lifts the modal: `inert` and its key listener.
+- **The drawer effect** reads its close callback through a ref, so it runs when the drawer opens or ends, not on every render of a lens that passes an inline callback. A re-run while the console held focus would otherwise have replaced the target.
+
+Codex's two probes are in `layout/LensLayout.expand.test.tsx`: closing in the split after a drawer, and a closed inspector's target never reaching the next one. One more case covers the target following list focus.
+
 ## 4. Testing
 
 - **Unit** (`layout/LensLayout.test.tsx`):
