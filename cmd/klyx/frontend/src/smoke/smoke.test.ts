@@ -133,6 +133,27 @@ describe("a destination's page", () => {
     await expect(page(pods(), "lab")).resolves.toEqual({ title: "Pods", rows: 1 });
   });
 
+  it("a lens with parts shows the destination's part, pressed and on screen (slice 13b.1)", async () => {
+    const sources = destinations().find((x) => x.d.id === "flux-sources")!.d;
+    document.body.innerHTML = '<div class="lens" data-part="flux-sources"><div class="lens-header"><h1>Flux CD</h1></div><div data-testid="lens-parts"><button data-part="flux" aria-pressed="false"></button><button data-part="flux-sources" aria-pressed="true"></button></div><div class="lens-body"></div></div>';
+    await expect(page(sources, "lab")).resolves.toMatchObject({ title: "Flux CD", part: { shown: "flux-sources", pressed: "flux-sources" } });
+  });
+
+  it("a part switch that leaves the wrong part on screen fails (review 1's negative case)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const sources = destinations().find((x) => x.d.id === "flux-sources")!.d;
+      // the switch says Sources, the content is still Reconciliation
+      document.body.innerHTML = '<div class="lens" data-part="flux"><div class="lens-header"><h1>Flux CD</h1></div><div data-testid="lens-parts"><button data-part="flux" aria-pressed="false"></button><button data-part="flux-sources" aria-pressed="true"></button></div><div class="lens-body"></div></div>';
+      await expect(advance(page(sources, "lab"))).rejects.toThrow("waiting for Sources's part");
+      // the content is Sources, the switch still says Reconciliation
+      document.body.innerHTML = '<div class="lens" data-part="flux-sources"><div class="lens-header"><h1>Flux CD</h1></div><div data-testid="lens-parts"><button data-part="flux" aria-pressed="true"></button><button data-part="flux-sources" aria-pressed="false"></button></div><div class="lens-body"></div></div>';
+      await expect(advance(page(sources, "lab"))).rejects.toThrow("waiting for Sources's part");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a kind shortcut shows the page of the task that owns its section", async () => {
     document.body.innerHTML = '<div class="lens-header"><h1>Workloads</h1></div><div class="lens-body"></div>';
     const deployments = destinations().find((x) => x.d.id === "workloads:Deployment")!.d;

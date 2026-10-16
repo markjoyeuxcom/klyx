@@ -340,7 +340,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                 return row(c.name, <>
                   {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name" title={c.nodeName ? `node ${c.nodeName}` : "no node yet"}>{c.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{c.drifted ? " · drifted" : ""}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{c.drifted ? " · drifted" : ""}</span>}
                   {show("pool") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.pool || "-"}</span>}
                   {show("type") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{c.instanceType || "-"}</span>}
                   {show("capacity") && <span style={{ color: "var(--color-text-tertiary)" }}>{c.capacityType || "-"}</span>}
@@ -356,7 +356,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                 return row(p.name, <>
                   {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name">{p.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
                   {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }} title={claimsCov === "unknown" ? "NodeClaim read unavailable" : claimsCov === "stale" ? "from the last observed NodeClaim list" : undefined}>{countText(p.nodes, claimsCov)}</span>}
                   {show("cpu") && <span style={{ ...cellStyle, color: cpu.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{cpu.text}</span>}
                   {show("mem") && <span style={{ ...cellStyle, color: mem.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{mem.text}</span>}

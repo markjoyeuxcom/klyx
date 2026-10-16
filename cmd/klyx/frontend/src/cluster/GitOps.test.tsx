@@ -90,7 +90,7 @@ describe("GitOps view", () => {
     const { getByText, getByTitle } = render(<GitOps cluster="x" />);
     const row = getByText("edited").closest(".lens-row") as HTMLElement;
     // The status cell must not read as confirmed while changes are unrealized.
-    expect(getByText("Syncing…")).toBeTruthy();
+    expect(getByText("Syncing… generation 5, observed 4")).toBeTruthy();
     expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 4 vs Current: 5/)).toBeTruthy();
     // Dim = not yet realized.

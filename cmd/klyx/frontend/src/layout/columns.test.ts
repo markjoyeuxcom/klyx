@@ -11,13 +11,13 @@ const cols: ColumnDef[] = [
 
 describe("fitColumns", () => {
   it("keeps everything when it fits; the floor sum is exact", () => {
-    // 16+240+140+120+44 = 560, + 4 gaps x12 = 48, + 16 padding = 624
-    const r = fitColumns(cols, 624);
+    // 16+240+140+120+44 = 560, + 4 gaps x12 = 48, + 28 padding (14px a side, slice 13a) = 636
+    const r = fitColumns(cols, 636);
     expect([...r.visible].sort()).toEqual(["age", "lamp", "name", "status", "usage"]);
-    expect(r.minWidth).toBe(624);
+    expect(r.minWidth).toBe(636);
   });
   it("drops the lowest-priority column first, one px below the sum", () => {
-    const r = fitColumns(cols, 623);
+    const r = fitColumns(cols, 635);
     expect(r.visible.has("age")).toBe(false);
     expect(r.visible.has("usage")).toBe(true);
   });

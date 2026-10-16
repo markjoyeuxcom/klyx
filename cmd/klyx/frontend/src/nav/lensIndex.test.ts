@@ -31,18 +31,18 @@ describe("lens index entries (§4.1)", () => {
     expect(m.absent).toEqual([]);
   });
 
-  it("a tool lens opens its first task; its other tasks show as sub-entries only while it is open", () => {
+  it("a tool lens opens its first task; its quiet parts are the part switch's, so the open lens lists none and is current on any part (slice 13b.1)", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
     const closed = model(cl());
     const argoLens = closed.rest.find((e) => e.key === "lens:argo")!;
     expect(argoLens.destination.id).toBe("argo");
     expect(argoLens.subs).toEqual([]);
+    expect(argoLens.current).toBe(false);
     const open = model(cl(), at("argo", { argoView: "projects" }));
     const lens = open.rest.find((e) => e.key === "lens:argo")!;
-    expect(labels(lens.subs)).toEqual(["Projects", "ApplicationSets"]);
-    expect(lens.current).toBe(false);
-    expect(lens.subs.find((s) => s.label === "Projects")!.current).toBe(true);
-    expect(open.rest.find((e) => e.key === "lens:flux")!.subs).toEqual([]);
+    expect(lens.subs).toEqual([]);
+    expect(lens.current).toBe(true);
+    expect(open.rest.find((e) => e.key === "lens:flux")!.current).toBe(false);
   });
 
   it("checking and unknown capabilities stay listed with their word; a confirmed absence is hidden and named once", () => {
@@ -133,7 +133,12 @@ describe("the current entry (§4.3)", () => {
         const route = { name: "cluster", cluster: "dev", section: d.target.kind === "section" ? d.target.section : "resources",
           ...(d.target.kind === "section" ? { argoView: d.target.argoView, fluxView: d.target.fluxView } : {}) } as Route;
         const m = model(c, route);
-        for (const e of [...m.rest, ...m.needsYou]) { reach.add(e.destination.id); for (const s of e.subs) reach.add(s.destination.id); }
+        for (const e of [...m.rest, ...m.needsYou]) {
+          reach.add(e.destination.id);
+          for (const s of e.subs) reach.add(s.destination.id);
+          // a tool lens reaches each of its tasks through its part switch
+          if (e.kind === "lens") for (const t of NAV_GROUPS.find((x) => x.id === e.groupId)!.destinations.filter((x) => x.type === "task")) reach.add(t.id);
+        }
       }
     }
     const tasks = NAV_GROUPS.flatMap((g) => g.destinations.filter((d) => d.type === "task").map((d) => d.id));

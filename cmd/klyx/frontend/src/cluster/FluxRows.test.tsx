@@ -4,7 +4,7 @@ import { render, screen, act, within, fireEvent } from "@testing-library/react";
 // The Flux lens mounted on the REAL rows adapter (health/useFluxRows) and
 // health store - only the transport is stubbed (slice 3 §5.3, held to the
 // Certificates and External Secrets migrations' reviews).
-vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}) }));
+vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}), startSummaries: vi.fn() }));
 vi.mock("../bridge/depGraph", () => ({ dependencyGraph: () => Object.assign(Promise.resolve({ start: "", nodes: [], edges: [], incomplete: [], proximity: [], reads: 0 }), { cancel: () => {} }) }));
 vi.mock("../bridge/notHereYet", () => ({ notHereYet: () => Object.assign(Promise.resolve({ results: [] }), { cancel: () => {} }) }));
 vi.mock("../bridge/gitops", () => ({
@@ -150,9 +150,10 @@ describe("Flux rows, mounted end to end (slice 3 §5.3)", () => {
       seed([res("apps", { readySinceUnix: nowS - 120, readySinceSeconds: 120 })]);
       render(<GitOps cluster="x" />);
       const since = () => screen.getByText("apps").closest(".lens-row")!.textContent ?? "";
-      expect(since()).toContain("2m ago");
+      // a table cell says the compact age alone (slice 13b.4)
+      expect(since()).toMatch(/2m$/);
       act(() => { vi.advanceTimersByTime(30 * 60_000); });
-      expect(since()).toContain("32m ago"); // no new push: the age moved with the clock
+      expect(since()).toMatch(/32m$/); // no new push: the age moved with the clock
     } finally {
       vi.useRealTimers();
     }

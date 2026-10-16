@@ -29,7 +29,7 @@ export function CountSentence({ total, marker = "", noun, totalTestid, attention
 }) {
   return (
     <>
-      <span className="t-number" data-testid={totalTestid} style={{ color: "var(--color-text-secondary)" }}>
+      <span className="lens-count" data-testid={totalTestid}>
         {total}{marker} {total === 1 && !marker ? noun[0] : noun[1]}
       </span>
       {attention && attention.count > 0 ? (

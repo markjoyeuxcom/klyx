@@ -379,7 +379,7 @@ export function CertsView({ cluster }: { cluster: string }) {
   return (
     <LensLayout
       label="cert-manager"
-      title={view === "issuers" ? "cert-manager issuers" : "Certificates"}
+      title="cert-manager"
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "issuers" ? (
         <>
           <CountSentence total={issuerTotal} marker={partial} noun={["issuer", "issuers"]}
@@ -452,7 +452,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     {show("mark") && <VerdictMark health={role} />}
                     {show("name") && <span className="lens-cell-name" title={`${i.namespace ? `${i.namespace}/` : ""}${i.name}`}>{i.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{i.namespace} / </span>}{i.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{i.kind}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{included(i) && i.reason ? ` · ${i.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{included(i) && i.reason ? ` · ${i.reason}` : ""}</span>}
                     {show("certs") && <span title={certsCov === "unknown" ? "Certificate read unavailable" : certsCov === "stale" ? "from the last observed Certificate list" : undefined}>{certsCov === "unknown" ? "?" : `${certsFor(i).length}${certsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -484,7 +484,7 @@ export function CertsView({ cluster }: { cluster: string }) {
                     {show("status") && (
                       <span style={cellStyle}>
                         {c.stale && !expired(c) ? <SyncingChip generation={c.generation} observedGeneration={c.observedGeneration} />
-                          : <span style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{included(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
+                          : <span style={{ color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{included(c) && c.reason ? ` · ${c.reason}` : ""}</span>}
                       </span>
                     )}
                     {show("expiry") && <span style={{ color: expired(c) ? "var(--color-text-danger)" : soon ? "var(--color-text-warning)" : "var(--color-text-secondary)" }} title={c.notAfterUnix ? dateText(c.notAfterUnix) : undefined}>{expiryText(c)}</span>}

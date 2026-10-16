@@ -218,7 +218,7 @@ export function HelmView({ cluster }: { cluster: string }) {
   return (
     <LensLayout
       label="Helm"
-      title="Helm releases"
+      title="Helm"
       summary={state === "loading" || state === "unreadable" ? null : (
         <>
           <CountSentence total={releases.length} marker={marker} noun={["release", "releases"]}
@@ -284,7 +284,7 @@ export function HelmView({ cluster }: { cluster: string }) {
                       <CopyButton text={r.name} label={`copy release name ${r.name}`} appearOnRowHover />
                     </span>
                   )}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}</span>}
                   {show("chart") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.chart}</span>}
                   {show("app") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.appVersion || "-"}</span>}
                   {show("rev") && <span style={{ color: "var(--color-text-secondary)" }}>{r.revision}</span>}

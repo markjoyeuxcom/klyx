@@ -4,7 +4,7 @@ import { render, screen, act, within, fireEvent } from "@testing-library/react";
 // The Argo CD lens mounted on the REAL rows adapter (health/useArgoRows) and
 // health store - only the transport is stubbed (slice 3 §5.4, held to the
 // earlier migrations' reviews). AppProjects stay a fetch (stubbed empty).
-vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}) }));
+vi.mock("../bridge/healthRows", () => ({ openRows: vi.fn(() => () => {}), startSummaries: vi.fn() }));
 vi.mock("../bridge/argo", () => ({
   listArgoProjects: vi.fn(async () => {}),
   refreshArgoApp: vi.fn(async () => {}),

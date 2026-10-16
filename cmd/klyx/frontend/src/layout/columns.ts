@@ -16,7 +16,7 @@ export type ColumnDef = {
   grow?: number;
 };
 
-export const ROW_PADDING = 16; // 8px each side
+export const ROW_PADDING = 28; // 14px each side (slice 13a)
 export const COLUMN_GAP = 12;
 
 export function fitColumns(cols: readonly ColumnDef[], available: number): { visible: Set<string>; template: string; minWidth: number } {

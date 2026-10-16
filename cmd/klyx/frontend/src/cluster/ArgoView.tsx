@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LensParts } from "../chrome/LensParts";
 import { useFleet } from "../store/fleet";
 import type { ArgoApplicationSetDTO, ArgoAppDTO, ArgoProjectDTO, ArgoResourceDTO, ArgoResourceRuleDTO, ArgoViewMode, CRDGroupDTO, KindCoverageDTO, ResourceRef, RuleDTO } from "../store/fleet";
 import { listArgoProjects, refreshArgoApp, syncArgoApp } from "../bridge/argo";
@@ -383,7 +384,8 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
     <>
       <LensLayout
         label="Argo CD"
-        title={mode === "projects" ? "Argo CD projects" : mode === "applicationsets" ? "Argo CD ApplicationSets" : "Argo CD applications"}
+        title="Argo CD"
+        part={mode === "projects" ? "argo-projects" : mode === "applicationsets" ? "argo-appsets" : "argo"}
         summary={state === "loading" || state === "unreadable" ? null : mode === "applications" ? (
           <>
             <CountSentence total={appTotal} marker={partial} noun={["application", "applications"]}
@@ -413,9 +415,10 @@ export function ArgoView({ cluster, mode = "applications" }: { cluster: string; 
         }
         controls={
           <>
-            {/* The view (Applications, Projects, ApplicationSets) is chosen in
-                the navigation band - one switch, not two (UI review 2026-10-13);
-                this row holds only filters and search. */}
+            {/* The view (Applications, Projects, ApplicationSets) is chosen by
+                the part switch - the one switch; the lens index lists the lens
+                alone (slice 13b.1). */}
+            <LensParts cluster={cluster} groupId="argo" />
             {mode === "applications" && (
               <>
                 <div role="group" aria-label="Application status" className="l-seg">

@@ -415,7 +415,7 @@ function RouteLane({ route, role, ruleMetrics, selected, onSelect }: { route: Ro
           <span className="t-identifier gw-name"><span style={{ color: "var(--color-text-tertiary)" }}>{route.namespace}/</span>{route.name}</span>
         </span>
         <span className="t-secondary gw-line">{route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"} · {route.hostnames[0] ?? "any host"}{route.hostnames.length > 1 ? ` +${route.hostnames.length - 1}` : ""} · {route.matches[0]?.pathValue ?? "/"}{route.matches.length > 1 ? ` +${route.matches.length - 1}` : ""}</span>
-        <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}</span>
+        <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}</span>
         {route.policies.length > 0 && <PolicyList policies={route.policies} />}
       </button>
       <span className="gw-edge" aria-hidden="true">›</span>

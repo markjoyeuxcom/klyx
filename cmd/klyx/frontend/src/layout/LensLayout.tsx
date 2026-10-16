@@ -49,6 +49,7 @@ export function splitGeometry(innerWidth: number, requested: number, bodyMin = B
 
 export function LensLayout({
   variant = "table",
+  part,
   label,
   title,
   summary,
@@ -65,6 +66,7 @@ export function LensLayout({
   onCloseInspector,
 }: {
   variant?: "table" | "canvas"; // table-detail (default) or canvas-detail
+  part?: string;               // the task this page shows, when its lens has parts (data-part: the smoke's proof)
   label: string;               // landmark name, e.g. "Pods"
   title: ReactNode;
   summary?: ReactNode;         // total + attention, entity-scoped
@@ -179,7 +181,7 @@ export function LensLayout({
   ) : null;
 
   return (
-    <div ref={rootRef} className="lens" data-mode={geo.mode} data-variant={variant} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
+    <div ref={rootRef} className="lens" data-mode={geo.mode} data-variant={variant} data-part={part} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
       <section ref={mainRef} aria-label={label} className="lens-main">
         <div className="lens-header">
           <h1 className="t-workspace-title">{title}</h1>

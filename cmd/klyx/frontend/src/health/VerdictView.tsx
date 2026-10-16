@@ -42,7 +42,7 @@ export function VerdictLabel({ health, mono = false }: { health: HealthLike | nu
   return (
     <span
       title={health?.message || undefined}
-      style={{ color, fontWeight: k === "fault" ? 500 : undefined, fontFamily: mono ? "var(--font-mono)" : undefined }}
+      style={{ color, fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)" }}
     >
       {labelOf(health)}
     </span>

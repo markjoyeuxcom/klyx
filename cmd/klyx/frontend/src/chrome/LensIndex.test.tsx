@@ -48,7 +48,7 @@ describe("the lens index", () => {
     expect(entry("Pods").getAttribute("aria-current")).toBe("page");
   });
 
-  it("selecting a lens opens it; a tool lens opens its first task and shows its other tasks while open", () => {
+  it("selecting a lens opens it; a tool lens opens its first task, and its parts are switched in the lens, not here (slice 13b.1)", () => {
     at("overview");
     applySummary(sum([...core(), flux(0)]));
     const { rerender } = render(<LensIndex />);
@@ -58,9 +58,12 @@ describe("the lens index", () => {
     expect(r.name === "cluster" && r.section === "gitops" && (r.fluxView ?? "reconciliation")).toBe("reconciliation");
     rerender(<LensIndex />);
     expect(entry("Flux CD").getAttribute("aria-current")).toBe("page");
-    fireEvent.click(entry("Sources"));
-    const r2 = routeOf();
-    expect(r2.name === "cluster" && r2.fluxView).toBe("sources");
+    expect(screen.queryByRole("button", { name: /^Sources/ })).toBeNull();
+    // on another part the lens stays the current entry
+    at("gitops", { fluxView: "sources" });
+    rerender(<LensIndex />);
+    expect(entry("Flux CD").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("button", { name: /^Sources/ })).toBeNull();
   });
 
   it("checking stays listed and disabled; an absent tool is named once, not listed", () => {

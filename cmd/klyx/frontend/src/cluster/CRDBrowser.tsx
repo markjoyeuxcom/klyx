@@ -77,7 +77,7 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
   return (
     <LensLayout
       label="Custom resources"
-      title="Custom resources"
+      title="API browser"
       summary={groups.length > 0 ? (
         <span className="t-secondary"><b className="t-number" style={{ color: "var(--color-text-primary)" }}>{groups.length}</b> groups · <b className="t-number" style={{ color: "var(--color-text-primary)" }}>{totalKinds}</b> kinds</span>
       ) : null}

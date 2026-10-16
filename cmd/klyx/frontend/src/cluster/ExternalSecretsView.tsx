@@ -339,7 +339,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
   return (
     <LensLayout
       label="External secrets"
-      title={view === "stores" ? "Secret stores" : "External secrets"}
+      title="External Secrets"
       summary={state === "loading" || state === "unreadable" || absent ? null : view === "stores" ? (
         <>
           <CountSentence total={storeTotal} marker={partial} noun={["store", "stores"]}
@@ -407,7 +407,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                     {show("name") && <span className="lens-cell-name" title={`${s.namespace ? `${s.namespace}/` : ""}${s.name}`}>{s.namespace && <span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>}{s.name}</span>}
                     {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{s.kind}</span>}
                     {show("provider") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{s.provider || "-"}</span>}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind] }}>{role.label}{included(s) && s.reason ? ` · ${s.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{included(s) && s.reason ? ` · ${s.reason}` : ""}</span>}
                     {show("secrets") && <span title={secretsCov === "unknown" ? "ExternalSecret read unavailable" : secretsCov === "stale" ? "from the last observed ExternalSecret list" : undefined}>{secretsCov === "unknown" ? "?" : `${secretsFor(s).length}${secretsCov === "stale" ? "*" : ""}`}</span>}
                   </div>
                 );
@@ -437,7 +437,7 @@ export function ExternalSecretsView({ cluster }: { cluster: string }) {
                         <CopyButton text={e.name} label={`copy external secret name ${e.name}`} appearOnRowHover />
                       </span>
                     )}
-                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
+                    {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{e.state === "Failed" && e.reason ? ` · ${e.reason}` : ""}</span>}
                     {show("refreshed") && <span style={{ color: e.stale ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{refreshedText(e, nowS)}</span>}
                     {show("store") && <span style={{ ...cellStyle, color: storeCov !== "unknown" && (!st || st.rule.included) ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{e.storeName}</span>}
                     {show("target") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{e.targetSecret || "-"}</span>}

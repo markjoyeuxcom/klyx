@@ -21,22 +21,14 @@ export function staleProps(stale?: boolean): { "data-stale"?: "true" } {
   return stale ? { "data-stale": "true" } : {};
 }
 
-// SyncingChip replaces the status chip while the controller catches up.
+// SyncingChip replaces the status word while the controller catches up:
+// quiet ink-3 text naming both generations (slice 13b.4: no chip), so the
+// cell never reads as confidently healthy while changes are pending.
 export function SyncingChip({ generation, observedGeneration }: { generation?: number; observedGeneration?: number }) {
+  const gens = generation != null && observedGeneration != null ? ` generation ${generation}, observed ${observedGeneration}` : "";
   return (
-    <span
-      title={staleTitle(generation, observedGeneration)}
-      style={{
-        display: "inline-block",
-        padding: "1px 7px",
-        borderRadius: "var(--radius-sm)",
-        border: "0.5px solid var(--color-border-tertiary)",
-        background: "var(--color-background-secondary)",
-        color: "var(--color-text-secondary)",
-        fontSize: 10,
-      }}
-    >
-      Syncing…
+    <span title={staleTitle(generation, observedGeneration)} style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-sans)" }}>
+      Syncing…{gens}
     </span>
   );
 }

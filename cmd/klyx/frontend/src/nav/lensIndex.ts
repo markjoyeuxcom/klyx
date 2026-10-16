@@ -20,7 +20,7 @@ export type IndexEntry = {
   note: string | undefined;
   tone: "danger" | "warning" | undefined; // set only in "Needs you"
   current: boolean; // this entry is the page shown
-  subs: IndexEntry[]; // in "Needs you", a lens's lit tasks; while it is open, its other tasks after them
+  subs: IndexEntry[]; // in "Needs you", a lens's lit tasks
   context?: boolean; // a "Needs you" lens row whose only lit tasks are its subs: label only
 };
 
@@ -139,11 +139,15 @@ export function lensIndex(c: ClusterDTO | undefined, counts: NavCounts, route: R
     row.subs.push(e);
   }
 
-  const inNeeds = new Set([...needsYou.map((e) => e.key), ...needsYou.flatMap((e) => e.subs.map((s) => s.key))]);
-  // an open tool lens also lists its other tasks, after any lit ones
-  const withSubs = (e: IndexEntry): IndexEntry => (e.kind === "lens" && openGroup === e.groupId
-    ? { ...e, subs: [...e.subs, ...(subsByLens.get(e.key) ?? []).filter((s) => !inNeeds.has(s.key))] }
-    : e);
+  const inNeeds = new Set(needsYou.map((e) => e.key));
+  // The lens's part switch (LensParts) is the one switch between its tasks
+  // (slice 13b.1): an open lens lists no quiet parts here, and is itself the
+  // current entry whichever part it shows - unless that part is a lit row of
+  // its own in "Needs you", which then carries the mark.
+  const withSubs = (e: IndexEntry): IndexEntry => {
+    if (e.kind !== "lens" || openGroup !== e.groupId) return e;
+    return { ...e, current: !e.subs.some((s) => s.current) };
+  };
   return {
     needsYou: needsYou.map(withSubs),
     rest: entries.filter((e) => !inNeeds.has(e.key)).map(withSubs),

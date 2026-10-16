@@ -185,6 +185,19 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
    - Track labels use `placeName` plus the region code.
    - An unreachable station shows "unreachable" and a one-line reason, with the full error in its title. It is never a raw multi-line error.
 
+### As built (13a review 1 and 13b)
+
+- **The bar's breakpoints follow the app zoom.** Media and container queries both see the whole window under root CSS zoom, so the location bar measures its own width (`useBelow`) and sets `data-below`.
+  - Below 1180px, optional chrome steps out first: Recent places, Activity, Terminal and an idle forwards button, all reachable from the console. This station's compact box always stays (slice 4 §5.4).
+- **Segmented runs wrap** inside their group when too long for their row, with wrapped rows 10px apart.
+- **The part switch is the one switch** (the 2026-10-13 UI review's "one switch, not two").
+  - An open tool lens lists no quiet parts in the index, and is itself the current entry on any part.
+  - Lit parts stay in Needs you, under their lens.
+  - Every task stays reachable: the index reaches its lens, and the lens's part switch reaches each task.
+- **Healthy status words stay in ink-2:** parent §2.1 maps success to ink-2. This corrects 13b.4's "ink-3". Status cells drop mono and bold; their words are unchanged.
+- **Ages use the existing `formatAge`** ("42s", "5m", "3h", "2d", with days from 24h). Flux's private "127h ago" was the only outlier. A table cell says the age alone, and prose keeps "ago".
+- **The column fit counts 13a's 14px row padding** (`ROW_PADDING` 28). The Pods grid's container breakpoints move to match.
+
 ## 3. Out of scope
 
 - New data or new claims: the mockup's synthesised "Held: …" sentence, "where the fix lives" advice beyond the existing supply facts, and "root cause".

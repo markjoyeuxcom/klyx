@@ -192,7 +192,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   return (
     <LensLayout
       label="Gateways"
-      title="HTTPRoutes"
+      title="Gateways and routes"
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
           <CountSentence total={total} marker={mark} noun={["HTTPRoute", "HTTPRoutes"]}
@@ -236,7 +236,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelKey(k); } }}>
                   {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{r.namespace}/</span>{r.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}>{role.label}{verdictMark}</span>}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{verdictMark}</span>}
                   {show("parent") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{r.parent}</span>}
                   {show("parents") && <span style={{ color: "var(--color-text-tertiary)" }}>{r.attachments.length}</span>}
                 </div>

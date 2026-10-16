@@ -81,7 +81,7 @@ describe("CertsView", () => {
     setup("Healthy", [cert({ name: "edited-tls", ready: "Ready", stale: true, generation: 3, observedGeneration: 2 })], [issuer({})]);
     const { getByText, getByTitle } = render(<CertsView cluster="x" />);
     const row = getByText("edited-tls").closest(".lens-row") as HTMLElement;
-    expect(getByText("Syncing…")).toBeTruthy();
+    expect(getByText("Syncing… generation 3, observed 2")).toBeTruthy();
     expect(row.textContent).not.toContain("Ready");
     expect(getByTitle(/Observed Gen: 2 vs Current: 3/)).toBeTruthy();
     expect(row.dataset.stale).toBe("true"); // dims every cell but the row's identity (layout.css)

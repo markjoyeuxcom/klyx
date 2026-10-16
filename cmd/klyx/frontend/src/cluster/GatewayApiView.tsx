@@ -211,7 +211,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   return (
     <LensLayout
       label="Gateways"
-      title="Gateways"
+      title="Gateways and routes"
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <>
           <CountSentence total={total} marker={mark} noun={["gateway", "gateways"]}
@@ -261,7 +261,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("mark") && <VerdictMark health={role} stale={g.stale} />}
                   {show("name") && <span className="lens-cell-name"><span style={{ color: "var(--color-text-tertiary)" }}>{g.namespace}/</span>{g.name}</span>}
-                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontWeight: role.kind === "fault" ? 600 : 400 }}
+                  {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}
                     title={g.stale ? `Observed Gen: ${g.observedGeneration ?? "?"} vs Current: ${g.generation ?? "?"}` : undefined}>{role.label}</span>}
                   {show("address") && <span style={{ ...cellStyle, color: address ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{address || "none"}</span>}
                   {show("class") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{g.className || "-"}</span>}

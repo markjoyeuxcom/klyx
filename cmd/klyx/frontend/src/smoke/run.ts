@@ -117,14 +117,27 @@ const rows = () => document.querySelectorAll(".lens-row").length;
 const $ = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
 
 // Each task destination's own page title: a page that keeps an old or wrong
-// header never passes (slice 12 review).
+// header never passes (slice 12 review). A lens's title is its index label
+// (slice 13b.1), so a tool lens's parts share one title; their page is
+// proven by its part instead (partOf).
 export const TITLES: Record<string, string | ((cluster: string) => string)> = {
   overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
-  karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways", flows: "Hubble flows", access: "Access check",
-  flux: "Flux reconciliation", "flux-sources": "Flux sources", argo: "Argo CD applications", "argo-projects": "Argo CD projects",
-  "argo-appsets": "Argo CD ApplicationSets", certs: "Certificates", eso: "External secrets", helm: "Helm releases",
-  crds: "Custom resources", builtins: "Built-in resources",
+  karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
+  flux: "Flux CD", "flux-sources": "Flux CD", argo: "Argo CD", "argo-projects": "Argo CD",
+  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", helm: "Helm",
+  crds: "API browser", builtins: "Resources",
 };
+
+// partOf: the part a page shows and the part its switch has pressed (slice
+// 13b.1, review 1). Both must be the destination's: a switch that leaves the
+// wrong part on screen - or a pressed button over another part's content -
+// never passes. Null when the page has no parts.
+export function partOf(): { shown: string | null; pressed: string | null } | null {
+  const lens = document.querySelector<HTMLElement>(".lens[data-part]");
+  const parts = document.querySelector('[data-testid="lens-parts"]');
+  if (!lens && !parts) return null;
+  return { shown: lens?.dataset.part ?? null, pressed: parts?.querySelector<HTMLElement>('[aria-pressed="true"]')?.dataset.part ?? null };
+}
 
 // The DOM's own events: no OS key or pointer, as the note's ruling 2 asks.
 function key(target: EventTarget, init: KeyboardEventInit): void {
@@ -153,9 +166,12 @@ export async function page(d: Destination, cluster: string): Promise<Record<stri
   if (t.kind === "section" && want === undefined) throw new Error(`no expected title for ${d.id}`);
   const expected = typeof want === "function" ? want(cluster) : want;
   await within(8000, `${d.label}'s page`, () => header() && (t.kind === "resource" ? title().includes(t.ref.kind) || header()?.textContent?.includes(t.ref.kind) : title() === expected));
+  // a lens with parts: the content and the pressed part are both this task's
+  const groupHasParts = owner && NAV_GROUPS.some((g) => g.lens === "group" && g.destinations.filter((x) => x.type === "task").length > 1 && g.destinations.includes(owner));
+  if (owner && groupHasParts) await within(8000, `${d.label}'s part`, () => { const p = partOf(); return p && p.shown === owner.id && p.pressed === owner.id; });
   await within(15000, `${d.label} to settle`, () => !loading());
   sized($(".lens-body, .lens-canvas, [data-testid='overview']"), `${d.label}'s body`);
-  return { title: title(), rows: rows() };
+  return { title: title(), rows: rows(), ...(groupHasParts ? { part: partOf() } : {}) };
 }
 
 export async function walk(settings: SmokeSettings): Promise<Step[]> {

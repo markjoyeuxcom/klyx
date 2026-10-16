@@ -55,7 +55,7 @@ describe("ClusterDetail", () => {
       crd: { cluster: "x", groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },
     });
     const { getByRole } = render(<ClusterDetail />);
-    expect(getByRole("heading", { name: "Built-in resources" })).toBeTruthy();
+    expect(getByRole("heading", { name: "Resources" })).toBeTruthy();
   });
 
   it("renders CRDBrowser for the crds section", () => {

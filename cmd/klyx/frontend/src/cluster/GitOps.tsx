@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatAge } from "../chrome/Age";
+import { LensParts } from "../chrome/LensParts";
 import type { ReactNode } from "react";
 import { useFleet } from "../store/fleet";
 import type { EventRowDTO, FluxResourceDTO, FluxSourceDTO, InventoryEntryDTO, ResourceDetailDTO, RuleDTO } from "../store/fleet";
@@ -61,11 +63,10 @@ function shortRev(rev: string): string {
 // capture-relative age is the fallback for a payload without it.
 const sinceOf = (r: FluxResourceDTO, nowS: number) => (r.readySinceUnix ? Math.max(0, nowS - r.readySinceUnix) : r.readySinceSeconds);
 
+// ago is the shared compact age in prose ("5d ago"); a table cell says the
+// age alone, as every lens does (slice 13b.4)
 function ago(sec: number): string {
-  if (sec <= 0) return "";
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  return `${Math.floor(sec / 3600)}h ago`;
+  return sec <= 0 ? "" : `${formatAge(sec)} ago`;
 }
 
 
@@ -125,7 +126,7 @@ type PinnedVerb =
 
 const FLUX_COLUMNS: (ColumnDef & { label: string })[] = [
   ROW_MARK,
-  { id: "kind", label: "Kind", width: 32, priority: 2 },
+  { id: "kind", label: "Kind", width: 100, priority: 2 },
   { id: "name", label: "Resource", width: 240, priority: 0, flex: true },
   { id: "status", label: "Status", width: 200, priority: 1 },
   { id: "source", label: "Source", width: 170, priority: 3 },
@@ -472,7 +473,8 @@ export function GitOps({ cluster }: { cluster: string }) {
     <>
       <LensLayout
         label="Flux"
-        title={view === "sources" ? "Flux sources" : "Flux reconciliation"}
+        title="Flux CD"
+        part={view === "sources" ? "flux-sources" : "flux"}
         summary={state === "loading" || state === "unreadable" || absent ? null : view === "sources" ? (
           <>
             <CountSentence total={srcTotal} marker={partial} noun={["source", "sources"]}
@@ -495,6 +497,7 @@ export function GitOps({ cluster }: { cluster: string }) {
         )}
         controls={absent ? undefined : (
           <>
+            <LensParts cluster={cluster} groupId="flux" />
             {view === "reconciliation" ? (
               <label style={{ display: "flex" }}>
                 <span className="sr-only">Kind</span>
@@ -562,7 +565,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                   {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }}>{sourceKindLabel[s.kind] ?? s.kind}</span>}
                   {show("name") && <span className="lens-cell-name" title={`${s.namespace}/${s.name}`}><span style={{ color: "var(--color-text-tertiary)" }}>{s.namespace} / </span>{s.name}</span>}
                   {show("status") && (
-                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind], fontWeight: roleOf(s).kind === "fault" ? 600 : 400 }}>
+                    <span style={{ ...ellipsisCell, color: STATUS_COLOR[roleOf(s).kind], fontFamily: "var(--font-sans)" }}>
                       {roleOf(s).label}{included(s) && s.message ? ` · ${s.message}` : ""}
                     </span>
                   )}
@@ -600,7 +603,7 @@ export function GitOps({ cluster }: { cluster: string }) {
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                   >
                     {show("mark") && <VerdictMark health={roleOf(r)} stale={!r.suspended && r.stale} />}
-                    {show("kind") && <span style={{ color: "var(--color-text-tertiary)" }} title={r.kind}>{r.kind === "Kustomization" ? "ks" : "hr"}</span>}
+                    {show("kind") && <span style={{ ...ellipsisCell, color: "var(--color-text-tertiary)", fontFamily: "var(--font-sans)" }} title={r.kind}>{r.kind}</span>}
                     {show("name") && (
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                         <span className="lens-cell-name" title={`${r.namespace}/${r.name}`}>
@@ -614,14 +617,14 @@ export function GitOps({ cluster }: { cluster: string }) {
                       <span style={ellipsisCell} title={included(r) && r.message ? r.message : undefined}>
                         {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)" }}>{h.label}</span>
                           : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
-                          : <span style={{ color: STATUS_COLOR[h.kind], fontWeight: h.kind === "fault" ? 600 : 400 }}>
+                          : <span style={{ color: STATUS_COLOR[h.kind], fontFamily: "var(--font-sans)" }}>
                               {h.label}{included(r) && r.reason ? ` · ${r.reason}` : ""}
                             </span>}
                       </span>
                     )}
                     {show("source") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={sourceText(r)}>{sourceText(r) || "-"}</span>}
                     {show("revision") && <span style={{ ...ellipsisCell, color: "var(--color-text-secondary)" }} title={r.revision}>{shortRev(r.revision) || "-"}</span>}
-                    {show("since") && <span style={{ color: "var(--color-text-tertiary)" }}>{ago(sinceOf(r, nowS)) || "-"}</span>}
+                    {show("since") && <span style={{ color: "var(--color-text-tertiary)" }} title={ago(sinceOf(r, nowS)) || undefined}>{sinceOf(r, nowS) > 0 ? formatAge(sinceOf(r, nowS)) : "-"}</span>}
                   </div>
                 );
               }}

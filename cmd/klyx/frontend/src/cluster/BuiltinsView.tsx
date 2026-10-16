@@ -41,7 +41,7 @@ export function BuiltinsView({ cluster }: { cluster: string }) {
     <>
       <LensLayout
         label="Built-in resources"
-        title="Built-in resources"
+        title="Resources"
         summary={<span className="t-secondary">{totalKinds} kinds in {BUILTIN_CATALOG.length} categories · counts load per category</span>}
         headerEnd={
           <>
