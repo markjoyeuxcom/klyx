@@ -609,3 +609,29 @@ button.ov-area-label:hover, button.ov-area-label:focus-visible { text-decoration
 .md-pre { margin: 0; padding: 8px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px; background: var(--color-background-secondary); border-radius: 4px; white-space: pre; }
 .md-link { background: none; border: 0; padding: 0; font: inherit; color: var(--color-text-info); text-decoration: underline; cursor: pointer; }
 .chat-small { font-size: 11px; line-height: 1.45; color: var(--color-text-secondary); }
+
+/* ---- the inspector's verdict (The Line slice 13c.2) ----
+   The mark, then the evaluated label as a 20px headline in ink-1 - only the
+   mark carries the danger or look-at colour - then reasons and qualifiers,
+   whole, and the controller's words in ink-2. */
+.verdict-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px; min-width: 0; }
+.verdict-mark { flex-shrink: 0; display: inline-flex; height: 26px; align-items: center; }
+.verdict-text { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.verdict-headline { margin: 0; font: 600 20px/26px var(--font-sans); letter-spacing: -0.005em; color: var(--color-text-primary); text-wrap: balance; overflow-wrap: anywhere; }
+.verdict-sub { font: 400 13px/18px var(--font-mono); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.verdict-message { font: 400 14px/20px var(--font-sans); color: var(--color-text-secondary); }
+.verdict-note { font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
+/* a lens's own evidence under the verdict lines up with the headline's text */
+.verdict-head ~ .verdict-message, .verdict-head ~ div.t-body { margin: 6px 0 0 24px !important; }
+
+/* an inset evidence panel (the mockup's "where the fix lives"): sunk, a hair
+   ring, its mark and words - never a coloured wall (slice 13c.7) */
+.evidence-panel { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin-bottom: 14px; border-radius: 8px;
+  background: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); font: 400 13px/18px var(--font-sans); }
+.evidence-panel-head { display: flex; align-items: center; gap: 8px; font: 600 14px/20px var(--font-sans); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.evidence-panel-link { align-self: flex-start; background: none; border: 0; padding: 0; cursor: pointer; color: var(--color-text-info); }
+.evidence-panel-text { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+
+/* a Rail step's body (slice 13c.6): its lines in ink-2 at 13px - a step's
+   mark and segment carry the danger, its words do not */
+.rail-body { font: 400 13px/18px var(--font-sans); color: var(--color-text-secondary); overflow-wrap: anywhere; }

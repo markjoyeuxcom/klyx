@@ -399,10 +399,10 @@ function ReleaseInspector({ cluster, release: r, role, removed, stale, history, 
         verdict={removed ? <RemovedNotice /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={stale ? "last snapshot" : undefined} />
-            {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
+            {detail && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
             {(role.kind === "fault" || role.kind === "degraded" || role.kind === "progressing") && (
               current?.description
-                ? <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: detail ? 4 : -4 }}>{current.description}</div>
+                ? <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: detail ? 4 : -4 }}>{current.description}</div>
                 : detailLoading ? <div className="t-secondary" style={{ marginTop: -4 }}>Reading the release history for helm's account of it…</div>
                 : historyError ? <div className="t-secondary" style={{ marginTop: -4 }}>helm's account is unavailable: the history read failed.</div>
                 : null

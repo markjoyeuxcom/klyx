@@ -749,7 +749,7 @@ function SourceInspector({ cluster, source, removed, unverified, replaced, usedB
           <div>
             <InspectorStatus tone={roleTone(h.kind)} kind={h.kind} label={h.label} reason={included(s) ? s.reason || undefined : undefined} detail={shortRev(s.revision) || undefined} />
             {s.message && included(s) && (
-              <div className="t-body" style={{ color: h.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{s.message}</div>
+              <div className="verdict-message" style={{ overflowWrap: "anywhere" }}>{s.message}</div>
             )}
           </div>
         )}
@@ -874,7 +874,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
         </div>
       )}
       {r.message && included(r) && !lagging && (
-        <ClampedText key={r.message} className="t-body" text={r.message} style={{ color: role.kind === "fault" ? "var(--color-text-danger)" : "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }} />
+        <ClampedText key={r.message} className="verdict-message" text={r.message} style={{ overflowWrap: "anywhere" }} />
       )}
     </div>
   );
@@ -893,6 +893,7 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
         }
         onClose={onClose}
         verdict={verdict}
+        drawing={r.uid && !removed ? <DependencyGraphSection cluster={cluster} kind={r.kind} namespace={r.namespace} name={r.name} uid={r.uid} /> : undefined}
         primary={live ? { label: "Reconcile", kbd: "r", onSelect: () => onReconcile(r) } : undefined}
         secondary={live ? { label: isSuspended ? "Resume" : "Suspend", kbd: "s", onSelect: () => onToggleSuspend(r, isSuspended) } : undefined}
         more={[...(more), ...ai.menu]}
@@ -921,7 +922,6 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
                   <div data-testid="source-warning" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{detail.sourceWarning}</div>
                 </InspectorBlock>
               ) : null}
-            {r.uid && !removed && <DependencyGraphSection cluster={cluster} kind={r.kind} namespace={r.namespace} name={r.name} uid={r.uid} />}
             {detail.events && <EventsSection events={detail.events} />}
             <InspectorBlock title="Conditions" count={detail.conditions.length} defaultOpen={included(r)}>
               <InspectorConditions conditions={detail.conditions} />

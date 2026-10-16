@@ -53,17 +53,16 @@ function elbowStyle(seg: RailSegment): CSSProperties {
 function lineStyle(seg: RailSegment): CSSProperties {
   switch (seg) {
     case "reported":
-      return { borderLeft: "2px solid var(--line-danger, var(--color-text-danger))" };
     case "failed":
-      return { borderLeft: "1px solid var(--line-danger, var(--color-text-danger))" };
+      return { borderLeft: "2px solid var(--line-danger, var(--color-text-danger))" };
     case "incomplete":
     case "cancelled":
-      return { borderLeft: "1px dashed var(--color-text-tertiary)" };
+      return { borderLeft: "2px dashed var(--color-text-tertiary)" };
     case "chain":
     case "completed":
-      return { borderLeft: "1px solid var(--line-route, var(--color-text-info))" };
+      return { borderLeft: "2px solid var(--line-route, var(--color-text-info))" };
     default:
-      return { borderLeft: "1px solid var(--line-track, var(--color-border-secondary))" };
+      return { borderLeft: "2px solid var(--line-track, var(--color-border-secondary))" };
   }
 }
 
@@ -77,8 +76,11 @@ function segColor(seg: RailSegment): string {
   }
 }
 
-const MARK = 8; // the marker box, and so the line's x
+// The mockup's cause chain (slice 13c.6): 12px marks on 2px lines, a step's
+// name at 14px with its line beneath.
+const MARK = 12; // the marker box, and so the line's x
 const LINE_X = MARK / 2;
+const TOP = 4; // the mark's offset: centred on the 20px name line
 
 // leadIn keeps the root step's segment: a ledger whose every step has its
 // own outcome (the chat's reads) starts with a segment too.
@@ -91,7 +93,7 @@ export function Rail({ steps, label, className, leadIn = false }: { steps: RailS
 }
 
 // INDENT is how far a branch sits in from its parent's line.
-const INDENT = MARK + 8;
+const INDENT = MARK + 12;
 
 function RailSteps({ steps, root, branch }: { steps: RailStep[]; root: boolean; branch: boolean }) {
   return (
@@ -102,26 +104,26 @@ function RailSteps({ steps, root, branch }: { steps: RailStep[]; root: boolean; 
         const w = incoming ? s.segmentWords ?? words[incoming] : "";
         const show = !!incoming && !!shown[incoming] && !!w;
         return (
-          <li key={s.key} data-step={s.key} data-segment={incoming ?? undefined} style={{ position: "relative", paddingLeft: INDENT, paddingBottom: next ? 6 : 0 }}>
+          <li key={s.key} data-step={s.key} data-segment={incoming ?? undefined} style={{ position: "relative", paddingLeft: INDENT, paddingBottom: next ? 16 : 0 }}>
             {incoming && (branch && i === 0
-              ? <span aria-hidden data-seg-in data-elbow style={{ position: "absolute", left: LINE_X - INDENT, top: 5 + MARK / 2, width: INDENT - LINE_X, ...elbowStyle(incoming) }} />
-              : <span aria-hidden data-seg-in style={{ position: "absolute", left: LINE_X - 0.5, top: 0, height: 5, ...lineStyle(incoming) }} />)}
-            {next && <span aria-hidden data-seg-out style={{ position: "absolute", left: LINE_X - 0.5, top: 5 + MARK, bottom: 0, ...lineStyle(next.segment) }} />}
-            {!next && s.branches?.length ? <span aria-hidden data-trunk style={{ position: "absolute", left: LINE_X - 0.5, top: 5 + MARK, bottom: 0, ...lineStyle("source") }} /> : null}
-            <span aria-hidden style={{ position: "absolute", left: 0, top: 5 }}>
-              {s.aspect && s.aspect !== "none" ? <Aspect kind={s.aspect} size={MARK} /> : <span style={{ display: "inline-block", width: MARK, height: MARK, boxSizing: "border-box", borderRadius: 1, border: "1px solid var(--line-track, var(--color-border-secondary))" }} />}
+              ? <span aria-hidden data-seg-in data-elbow style={{ position: "absolute", left: LINE_X - INDENT, top: TOP + MARK / 2, width: INDENT - LINE_X, ...elbowStyle(incoming) }} />
+              : <span aria-hidden data-seg-in style={{ position: "absolute", left: LINE_X - 1, top: 0, height: TOP, ...lineStyle(incoming) }} />)}
+            {next && <span aria-hidden data-seg-out style={{ position: "absolute", left: LINE_X - 1, top: TOP + MARK + 3, bottom: 0, ...lineStyle(next.segment) }} />}
+            {!next && s.branches?.length ? <span aria-hidden data-trunk style={{ position: "absolute", left: LINE_X - 1, top: TOP + MARK + 3, bottom: 0, ...lineStyle("source") }} /> : null}
+            <span aria-hidden style={{ position: "absolute", left: 0, top: TOP }}>
+              {s.aspect && s.aspect !== "none" ? <Aspect kind={s.aspect} size={MARK} /> : <span style={{ display: "inline-block", width: MARK, height: MARK, boxSizing: "border-box", borderRadius: 1, border: "2px solid var(--line-track, var(--color-border-secondary))" }} />}
             </span>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", minHeight: 18, fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minHeight: 20, fontSize: 14, lineHeight: "20px" }}>
               {w && !show && <span className="sr-only">{w}: </span>}
-              {show && incoming && <span data-seg-words style={{ fontSize: 10, color: segColor(incoming), flexShrink: 0 }}>{w}<span className="sr-only">: </span></span>}
+              {show && incoming && <span data-seg-words style={{ fontSize: 12, color: segColor(incoming), flexShrink: 0 }}>{w}<span className="sr-only">: </span></span>}
               <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{s.label ?? s.name}</span>
               {s.tags?.map((t) => (
-                <span key={t} data-tag style={{ fontSize: 10, padding: "0 5px", borderRadius: 3, boxShadow: "inset 0 0 0 1px var(--line-hair, var(--color-border-tertiary))", color: "var(--color-text-secondary)", flexShrink: 0 }}>{t}</span>
+                <span key={t} data-tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px", borderRadius: 4, boxShadow: "inset 0 0 0 1px var(--line-hair, var(--color-border-tertiary))", color: "var(--color-text-secondary)", flexShrink: 0 }}>{t}</span>
               ))}
             </div>
-            {s.body && <div style={{ marginTop: 3 }}>{s.body}</div>}
+            {s.body && <div className="rail-body" style={{ marginTop: 4 }}>{s.body}</div>}
             {s.branches?.map((b, bi) => (
-              <ol key={bi} data-branch style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
+              <ol key={bi} data-branch style={{ listStyle: "none", margin: "12px 0 0", padding: 0 }}>
                 <RailSteps steps={b} root={false} branch />
               </ol>
             ))}

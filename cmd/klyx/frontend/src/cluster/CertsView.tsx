@@ -7,7 +7,7 @@ import { getCertificateChain } from "../bridge/certmanager";
 import { useCertManagerRows } from "../health/useCertManagerRows";
 import { useInspectorAI } from "../ai/AIExplain";
 import { useListKeys } from "../chrome/useListKeys";
-import { mono, Rail, type AspectKind, type RailStep, type Tone } from "../chrome/primitives";
+import { Aspect, aspectOfVerdict, mono, Rail, type AspectKind, type RailStep, type Tone } from "../chrome/primitives";
 import { InspectorStatus } from "./ResourceInspector";
 import { CopyButton } from "../chrome/CopyButton";
 import { EmptyState } from "../chrome/EmptyState";
@@ -645,20 +645,43 @@ function CertInspector({ c, cluster, removed, unverified, replaced, issuer, issu
                 Spec generation {c.generation} not yet observed (observed {c.observedGeneration}) - the expiry above is current regardless.
               </div>
             )}
-            {c.message && included(c) && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: c.stale && expired(c) ? 2 : -4 }}>{c.message}</div>}
+            {c.message && included(c) && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: c.stale && expired(c) ? 2 : -4 }}>{c.message}</div>}
           </div>
+        )}
+        drawing={(
+          <>
+          {/* The bound issuer's health heads the chain (M11): a sunk evidence
+              panel led by its mark - no triangle, no danger wall (slice 13c.7). */}
+          {issuerBroken && (
+            <div className="evidence-panel" data-tone={issuerRole!.kind === "fault" ? "danger" : "warning"}>
+              <div className="evidence-panel-head">
+                <Aspect kind={aspectOfVerdict(issuerRole!.kind)} size={10} />
+                <span>{issuerRole!.kind === "fault" ? "Issuer failed" : "Issuer not ready"}{issuerCov === "stale" ? " (last observed - the issuer watch is failing)" : ""}: {boundIssuer!.reason || "unknown"}</span>
+              </div>
+              <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier evidence-panel-link">{boundIssuer!.kind}/{boundIssuer!.name}</button>
+              {boundIssuer!.message && <div className="evidence-panel-text">{boundIssuer!.message}</div>}
+            </div>
+          )}
+          <InspectorBlock title={failing ? "Issuance chain - deepest stuck node flagged" : "Issuance chain"} count={chain ? requests.length : undefined}>
+            {chainError && !removed && (
+              <div role="alert" data-testid="chain-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", marginBottom: 4, overflowWrap: "anywhere" }}>
+                <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>Chain read failed: {chainError}{chain ? "" : " - the chain is unverified, not empty."}</span>
+              </div>
+            )}
+            {chain && chainPrior && <div className="t-secondary" style={{ marginBottom: 3 }}>{chain.asOfUnix ? `Last resolved ${new Date(chain.asOfUnix * 1000).toLocaleTimeString()}` : "Last resolved chain"}{removed ? " - before it was removed." : "."}</div>}
+            {chainLoading ? <span className="t-secondary">Resolving chain…</span>
+              : !chain ? (chainError && !removed ? null : <span className="t-secondary" data-testid="chain-unresolved">{removed ? "No chain was resolved before it was removed." : chainOfOther ? "Chain not resolved for this object - the last read was of an earlier object with this name." : "Chain not resolved."}</span>)
+              : requests.length > 0 ? <ChainRail nodes={requests} failKey={failKey} />
+              : <span className="t-secondary">No active issuance request.</span>}
+            {warnings.map((w) => <div key={w} className="t-body" style={{ color: "var(--color-text-warning)", marginTop: 3, overflowWrap: "anywhere" }}>{w}</div>)}
+          </InspectorBlock>
+          </>
         )}
         primary={live ? { label: chainLoading ? "Resolving chain…" : "Re-resolve chain", onSelect: onResolve } : undefined}
         secondary={live && ai.readiness.ready && c.uid ? { label: ai.state.status === "loading" ? "Explaining…" : "Explain", onSelect: () => { if (ai.state.status !== "loading") ai.run(); } } : undefined}
         more={more}
       >
-        {issuerBroken && (
-          <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: issuerRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${issuerRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
-            <div style={{ color: ROLE_TEXT[issuerRole!.kind], fontWeight: 600 }}>{issuerRole!.kind === "fault" ? "▲ Issuer failed" : "Issuer not ready"}{issuerCov === "stale" ? " (last observed - the issuer watch is failing)" : ""}: {boundIssuer!.reason || "unknown"}</div>
-            <button onClick={() => onOpenIssuer(boundIssuer!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{boundIssuer!.kind}/{boundIssuer!.name}</button>
-            {boundIssuer!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{boundIssuer!.message}</div>}
-          </div>
-        )}
         {cause && !issuerBroken && (
           <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
             <div style={{ color: "var(--color-text-warning)", fontWeight: 600 }}>Likely cause</div>
@@ -666,20 +689,6 @@ function CertInspector({ c, cluster, removed, unverified, replaced, issuer, issu
           </div>
         )}
         {ai.block}
-        <InspectorBlock title={failing ? "Issuance chain - deepest stuck node flagged" : "Issuance chain"} count={chain ? requests.length : undefined}>
-          {chainError && !removed && (
-            <div role="alert" data-testid="chain-error" className="t-body" style={{ display: "flex", alignItems: "flex-start", gap: 5, color: "var(--color-text-danger)", marginBottom: 4, overflowWrap: "anywhere" }}>
-              <IconAlertTriangle size={12} stroke={1.5} style={{ flexShrink: 0, marginTop: 2 }} />
-              <span>Chain read failed: {chainError}{chain ? "" : " - the chain is unverified, not empty."}</span>
-            </div>
-          )}
-          {chain && chainPrior && <div className="t-secondary" style={{ marginBottom: 3 }}>{chain.asOfUnix ? `Last resolved ${new Date(chain.asOfUnix * 1000).toLocaleTimeString()}` : "Last resolved chain"}{removed ? " - before it was removed." : "."}</div>}
-          {chainLoading ? <span className="t-secondary">Resolving chain…</span>
-            : !chain ? (chainError && !removed ? null : <span className="t-secondary" data-testid="chain-unresolved">{removed ? "No chain was resolved before it was removed." : chainOfOther ? "Chain not resolved for this object - the last read was of an earlier object with this name." : "Chain not resolved."}</span>)
-            : requests.length > 0 ? <ChainRail nodes={requests} failKey={failKey} />
-            : <span className="t-secondary">No active issuance request.</span>}
-          {warnings.map((w) => <div key={w} className="t-body" style={{ color: "var(--color-text-warning)", marginTop: 3, overflowWrap: "anywhere" }}>{w}</div>)}
-        </InspectorBlock>
         <InspectorBlock title="Issuer">
           <div className="insp-kv">
             <span>ref</span><span className="t-identifier">{c.issuerKind}/{c.issuerName}</span>
@@ -730,7 +739,7 @@ function IssuerInspector({ cluster, issuer, removed, unverified, replaced, certs
         verdict={removed ? <RemovedNotice kind={issuer.kind} /> : unverified ? <UnverifiedNotice kind={issuer.kind} /> : (
           <div>
             <InspectorStatus tone={role.kind === "fault" ? "danger" : role.kind === "degraded" ? "warning" : role.kind === "ok" ? "success" : "muted"} kind={role.kind} label={role.label} reason={issuer.ready !== "Ready" ? issuer.reason || undefined : undefined} />
-            {issuer.message && issuer.ready !== "Ready" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{issuer.message}</div>}
+            {issuer.message && issuer.ready !== "Ready" && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{issuer.message}</div>}
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}

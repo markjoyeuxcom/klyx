@@ -306,7 +306,7 @@ function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }
         ) : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
-            <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{gatewayVerdictDetail(g)}</div>
+            <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{gatewayVerdictDetail(g)}</div>
             {stale && <div className="t-secondary" style={{ marginTop: 4 }}>From the last good list - the latest read failed.</div>}
           </div>
         )}

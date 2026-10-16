@@ -20,6 +20,14 @@ vi.mock("../bridge/ai", () => ({
 import { aiAvailability, aiEgressAllowed, explain } from "../bridge/ai";
 import { certRule, issuerRule, withRule } from "../test/backendRules";
 
+// drawnBeforeActions: the element sits in the inspector's drawing slot, ahead
+// of its action band (The Line slice 13c.3, parent §4).
+function drawnBeforeActions(el: HTMLElement): boolean {
+  const panel = el.closest('[data-testid="lens-inspector"]') ?? document.body;
+  const actions = panel.querySelector('[role="group"][aria-label="actions"]');
+  return !!el.closest(".insp-drawing") && !!actions && !!(el.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
 const cluster = (tier: string): ClusterDTO => ({
   name: "x", state: "Synced", reason: "", nodesReady: 1, nodesTotal: 1, pods: 1, version: "v1",
   gitopsTier: "Absent", gitopsReason: "", networkTier: "Absent", networkReason: "",
@@ -112,6 +120,7 @@ describe("CertsView", () => {
     expect(insp().getByText("Failed")).toBeTruthy();
     expect(insp().getAllByText(/DoesNotExist/).length).toBeGreaterThan(0);
     expect(insp().getByText(/^Issuance chain/)).toBeTruthy();
+    expect(drawnBeforeActions(insp().getByText(/^Issuance chain/))).toBe(true);
   });
 
   it("renders the deepest stuck node's message in the flagged box", () => {
@@ -430,9 +439,12 @@ describe("CertsView Codex review corrections (cert-manager)", () => {
     // degraded issuer: amber card; degraded certificate: amber headline
     setup("Healthy", [cert({ name: "d", ready: "Pending", message: "waiting on request" })], [issuer({ ready: "Pending", reason: "Verifying" })], "payments/d");
     render(<CertsView cluster="x" />);
-    const card = insp().getByText(/Issuer not ready: Verifying/) as HTMLElement;
-    expect(card.style.color).toBe("var(--color-text-warning)");
-    expect((insp().getByText("waiting on request") as HTMLElement).style.color).toBe("var(--color-text-warning)");
+    // the issuer's panel carries its tone on the panel and its mark (slice 13c.7)
+    const card = (insp().getByText(/Issuer not ready: Verifying/) as HTMLElement).closest(".evidence-panel") as HTMLElement;
+    expect(card.getAttribute("data-tone")).toBe("warning");
+    expect(card.querySelector('[data-aspect="attention"]')).toBeTruthy();
+    // the controller's words are ink-2; the tone is the verdict's mark (slice 13c.2)
+    expect((insp().getByText("waiting on request") as HTMLElement).style.color).toBe("var(--color-text-secondary)");
     expect(screen.getAllByRole("img", { name: "Pending" }).length).toBeGreaterThan(0);
   });
 });

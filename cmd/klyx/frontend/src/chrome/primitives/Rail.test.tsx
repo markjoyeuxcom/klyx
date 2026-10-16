@@ -83,7 +83,7 @@ describe("Rail", () => {
     const elbowA = container.querySelector('[data-step="dep-a"] > [data-elbow]') as HTMLElement;
     const elbowB = container.querySelector('[data-step="dep-b"] > [data-elbow]') as HTMLElement;
     expect(elbowA.style.borderTop).toContain("2px solid");
-    expect(elbowB.style.borderTop).toContain("1px solid");
+    expect(elbowB.style.borderTop).toContain("2px solid"); // 2px lines throughout (slice 13c.6)
     // a top-level step keeps its stub, never an elbow
     const { container: flat } = render(<Rail label="r2" steps={[step("a", "chain"), step("b", "source")]} />);
     expect(flat.querySelector("[data-elbow]")).toBeNull();

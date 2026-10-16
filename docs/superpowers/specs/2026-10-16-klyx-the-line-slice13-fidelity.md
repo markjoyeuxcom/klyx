@@ -198,6 +198,38 @@ Nothing changes a count, a verdict, a gate or a data path. Each item is a presen
 - **Ages use the existing `formatAge`** ("42s", "5m", "3h", "2d", with days from 24h). Flux's private "127h ago" was the only outlier. A table cell says the age alone, and prose keeps "ago".
 - **The column fit counts 13a's 14px row padding** (`ROW_PADDING` 28). The Pods grid's container breakpoints move to match.
 
+### As built (13c)
+
+**The verdict** (`InspectorStatus`, `VerdictStatus`):
+- The mark comes first, at 12px, then the evaluated label as the 20px headline in ink-1, so only the mark carries the tone.
+- Under the headline sit the lens's reasons and qualifiers, whole: mono 13px in ink-2, never cut to a tooltip. They include a Flux reason, a generation lag and a revision.
+- Then the controller's words, in ink-2 14px, clamped with "Show full message".
+- The headline is the label alone, not "label · reason": a reason can be a qualifier sentence (a generation lag), which reads as evidence, not as a headline.
+- Lens-specific evidence lines under the verdict move from the role colour to ink-2, so there are no red walls.
+
+**Order:** these move into InspectorLayout's `drawing` slot, ahead of the actions:
+- Flux Dependencies;
+- the cert-manager issuer panel and issuance chain;
+- the ESO chain;
+- the Gateway data path.
+
+Each renders once, with its fences unchanged. A test per lens proves each one sits in `.insp-drawing`, before the action group.
+
+**Actions:** a key hint leaves the button face for its title ("Reconcile (R)") and `aria-keyshortcuts`.
+
+**`Rail`:**
+- 12px marks on 2px lines (a failed read's line was 1px);
+- a 14px name line;
+- 16px between steps;
+- the body in ink-2 13px.
+
+Dependency node lines are ink-2. Their tone stays as `data-tone`, and the mark and the reported-blocker segment carry the danger.
+
+**cert-manager's issuer panel** is a sunk evidence panel:
+- its tone on the panel (`data-tone`) and its mark;
+- its heading in ink-1, with no ▲;
+- its message in ink-2.
+
 ## 3. Out of scope
 
 - New data or new claims: the mockup's synthesised "Held: …" sentence, "where the fix lives" advice beyond the existing supply facts, and "root cause".

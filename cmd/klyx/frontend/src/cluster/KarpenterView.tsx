@@ -422,8 +422,8 @@ function ClaimInspector({ cluster, c, nowS, gone, replaced, onClose }: { cluster
         verdict={gone ? <GoneNotice kind="NodeClaim" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
-            {detail && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
-            {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
+            {detail && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{detail}</div>}
+            {role.kind === "fault" && link && c.failingMessage && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: 4 }}>{c.failingMessage}</div>}
           </div>
         )}
         primary={c.nodeName && gone !== "removed" ? { label: "Open node", onSelect: openNode } : undefined}
@@ -462,7 +462,7 @@ function PoolInspector({ cluster, p, gone, replaced, claimsCov, onClose }: { clu
         verdict={gone ? <GoneNotice kind="NodePool" gone={gone} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={p.ready === "not-ready" ? p.reason || undefined : undefined} />
-            {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
+            {p.ready === "not-ready" && p.message && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{p.message}</div>}
           </div>
         )}
         more={ai.menu}

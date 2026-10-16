@@ -1,7 +1,7 @@
 import { Fragment, useContext, useState } from "react";
 import { InspectorBlock, InspectorTemplate } from "../layout/InspectorLayout";
 import { IconChevronRight } from "@tabler/icons-react";
-import { Aspect, aspectOfVerdict, StatusDot, toneBg, toneBorder, toneColor, type Tone } from "../chrome/primitives";
+import { Aspect, aspectOfVerdict, StatusDot, toneColor, type Tone } from "../chrome/primitives";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
 import type { ConditionDTO, EventDTO } from "../store/fleet";
@@ -254,12 +254,13 @@ export function InspectorIdle({ subject, attention, hint, width }: {
   );
 }
 
-// InspectorStatus is the inspector's verdict: ONE element - mark + state word
-// in a toned box with an inset ring - and a mono sub-line joining reason and
-// detail. `kind` is the verdict's role kind when the caller has one: it picks
-// the mark (The Line aspects), so a pause or work in progress keeps its own
-// shape beside its row instead of collapsing into the text tone's "muted"
-// (Codex review of f2e47cc). The tone still colours the box and the word.
+// InspectorStatus is the inspector's verdict (The Line slice 13c.2): its
+// mark, then the evaluated label as the headline in ink-1 - the mark alone
+// carries the danger or look-at colour - and under it every reason and
+// qualifier the lens passes, whole, never cut to a tooltip. `kind` is the
+// verdict's role kind when the caller has one: it picks the mark (The Line
+// aspects), so a pause or work in progress keeps its own shape (Codex
+// review of f2e47cc).
 export function InspectorStatus({ tone, kind, label, reason, detail }: {
   tone: Tone;
   kind?: string;
@@ -269,29 +270,12 @@ export function InspectorStatus({ tone, kind, label, reason, detail }: {
 }) {
   const sub = [reason, detail].filter(Boolean).join(" · ");
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", marginBottom: 12 }}>
-      <span style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        fontFamily: "var(--font-mono)",
-        fontSize: 12,
-        fontWeight: 700,
-        padding: "5px 10px",
-        borderRadius: 4,
-        color: toneColor[tone],
-        background: toneBg[tone],
-        boxShadow: `inset 0 0 0 1px ${toneBorder[tone]}`,
-        whiteSpace: "nowrap",
-      }}>
-        {kind ? <Aspect kind={aspectOfVerdict(kind)} size={8} /> : <StatusDot size={8} tone={tone} />}
-        <span>{label}</span>
-      </span>
-      {sub && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--color-text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={sub}>
-          {sub}
-        </span>
-      )}
+    <div className="verdict-head" data-tone={tone}>
+      <span className="verdict-mark">{kind ? <Aspect kind={aspectOfVerdict(kind)} size={12} /> : <StatusDot size={10} tone={tone} />}</span>
+      <div className="verdict-text">
+        <p className="verdict-headline">{label}</p>
+        {sub && <span className="verdict-sub">{sub}</span>}
+      </div>
     </div>
   );
 }

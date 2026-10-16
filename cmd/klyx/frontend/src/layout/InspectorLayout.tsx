@@ -142,10 +142,12 @@ function ActionButton({ action, primary }: { action: InspectorAction; primary?: 
       />
     );
   }
+  // the key leaves the button's face for its title (slice 13c.4); the
+  // lens's caption and the ? overlay still list it
   return (
-    <button className={primary ? "l-btn l-btn-primary" : "l-btn"} onClick={action.onSelect}>
+    <button className={primary ? "l-btn l-btn-primary" : "l-btn"} onClick={action.onSelect} title={action.kbd ? `${action.label} (${action.kbd.toUpperCase()})` : undefined}
+      aria-keyshortcuts={action.kbd ? action.kbd.toLowerCase() : undefined}>
       {action.label}
-      {action.kbd && <kbd className="t-legend" aria-hidden="true" style={{ fontFamily: "var(--font-mono)" }}>{action.kbd.toUpperCase()}</kbd>}
     </button>
   );
 }

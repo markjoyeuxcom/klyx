@@ -176,6 +176,11 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     expect(screen.queryByText(/the lane shows the primary/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /HTTPRoute apps\/share/ }));
     expect(within(screen.getByTestId("route-panel")).getByText("Has 2 backends; the lane shows the primary.")).toBeTruthy();
+    // the data path is the inspector's drawing: ahead of its actions (slice 13c.3, parent §4)
+    const path = within(screen.getByTestId("route-panel")).getByTestId("data-path");
+    const actions = within(screen.getByTestId("route-panel")).getByRole("group", { name: "actions" });
+    expect(path.closest(".insp-drawing")).toBeTruthy();
+    expect(path.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
   it("lanes read the Go-computed route rule, never their own (1c §2)", () => {
     seed(topo([route("apps", "share", { rule: { included: true, role: "fault", label: "Flagged by backend" } }), route("apps", "cart")]));

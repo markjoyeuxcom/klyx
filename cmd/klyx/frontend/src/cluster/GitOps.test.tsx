@@ -5,6 +5,14 @@ import { reconcile, reconcileWithSource, setSuspend, resolveGitLink, fluxDiff } 
 import { GitOps } from "./GitOps";
 import { fluxRule, fluxSourceRule, withRule } from "../test/backendRules";
 
+// drawnBeforeActions: the element sits in the inspector's drawing slot, ahead
+// of its action band (The Line slice 13c.3, parent §4).
+function drawnBeforeActions(el: HTMLElement): boolean {
+  const panel = el.closest('[data-testid="lens-inspector"]') ?? document.body;
+  const actions = panel.querySelector('[role="group"][aria-label="actions"]');
+  return !!el.closest(".insp-drawing") && !!actions && !!(el.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
 // The rows hook is the transport; these tests seed the gitops slice it fills.
 vi.mock("../health/useFluxRows", async (orig) => ({ ...(await orig<typeof import("../health/useFluxRows")>()), useFluxRows: () => {} }));
 vi.mock("../bridge/gitops", () => ({
@@ -337,6 +345,7 @@ describe("GitOps view", () => {
     });
     const { findByRole } = render(<GitOps cluster="x" />);
     const rail = await findByRole("list", { name: "Dependencies" });
+    expect(drawnBeforeActions(rail)).toBe(true);
     expect(depGraphCall).toHaveBeenCalledWith("x", "Kustomization", "flux-system", "apps", "u-apps");
     expect(rail.textContent).toContain("reported blocker (depends on): Kustomization flux-system/infra");
     expect(rail.textContent).toContain("reported chain ends here");
@@ -497,7 +506,10 @@ describe("GitOps workspace template (redesign)", () => {
 
   // The inspectors' headlines are the rule too (Codex 2b-2 #1): a fixture
   // whose native fields contradict its rule shows the rule's word and tone.
-  const headline = (label: string) => inspector().getByText(label).parentElement as HTMLElement;
+  // the verdict's tone rides on its head and its mark; the headline itself is
+  // ink-1 (slice 13c.2)
+  const tone = (label: string) => (inspector().getByText(label).closest(".verdict-head") as HTMLElement).getAttribute("data-tone");
+  const neutral = (el: HTMLElement) => { const m = el.closest(".verdict-message") as HTMLElement | null; return !!m && m.style.color === "" && el.style.color === ""; };
   const detail = (over: Partial<import("../store/fleet").ResourceDetailDTO> = {}) => ({ kind: "Kustomization", namespace: "flux-system", name: "a",
     suspended: false, appliedRevision: "main@a", attemptedRevision: "main@a", applyFailed: false, conditions: [], inventory: [], ...over });
   const seedOpen = (r: FluxResourceDTO, d = detail({ name: r.name })) =>
@@ -506,13 +518,13 @@ describe("GitOps workspace template (redesign)", () => {
   it("the reconciliation inspector's verdict, reason and message follow the rule, not native ready", () => {
     seedOpen(res({ name: "a", ready: "Ready", reason: "Flagged", message: "flagged by the backend", rule: { included: true, role: "fault", label: "Flagged by backend" } }));
     const { unmount } = render(<GitOps cluster="x" />);
-    expect(headline("Flagged by backend").style.color).toBe("var(--color-text-danger)");
+    expect(tone("Flagged by backend")).toBe("danger");
     expect(inspector().getByText(/^Flagged ·/)).toBeTruthy(); // reason gated by rule.included
-    expect(inspector().getByText("flagged by the backend").style.color).toBe("var(--color-text-danger)");
+    expect(neutral(inspector().getByText("flagged by the backend"))).toBe(true); // the controller's words in ink-2, never a red wall
     unmount();
     seedOpen(res({ name: "a", ready: "Failed", reason: "BuildFailed", message: "kustomize build failed", rule: { included: false, role: "ok", label: "Ready" } }));
     render(<GitOps cluster="x" />);
-    expect(headline("Ready").style.color).toBe("var(--color-text-success)");
+    expect(tone("Ready")).toBe("success");
     expect(inspector().queryByText(/BuildFailed/)).toBeNull();
     expect(inspector().queryByText("kustomize build failed")).toBeNull();
   });
@@ -522,14 +534,14 @@ describe("GitOps workspace template (redesign)", () => {
     render(<GitOps cluster="x" />);
     const row = screen.getAllByText("a").map((e) => e.closest(".lens-row")).find(Boolean) as HTMLElement;
     expect(row.textContent).toContain("Progressing");
-    expect(headline("Progressing").style.color).toBe("var(--color-text-tertiary)");
+    expect(tone("Progressing")).toBe("muted");
     expect(inspector().queryByText("Unknown")).toBeNull();
   });
 
   it("a generation lag stays evidence under the rule's verdict", () => {
     seedOpen(res({ name: "a", ready: "Ready", stale: true, generation: 5, observedGeneration: 4, message: "Applied revision main@a" }));
     render(<GitOps cluster="x" />);
-    expect(headline("Syncing…").style.color).toBe("var(--color-text-tertiary)"); // the ratified grey Syncing…
+    expect(tone("Syncing…")).toBe("muted"); // the ratified grey Syncing…
     expect(inspector().getByText(/generation 5 not yet observed \(observed 4\)/)).toBeTruthy();
     expect(inspector().getByText(/Last observed \(generation 4\)/)).toBeTruthy();
   });
@@ -555,11 +567,11 @@ describe("GitOps workspace template (redesign)", () => {
     render(<GitOps cluster="x" />);
     openSources();
     fireEvent.click(screen.getByText("src-flagged"));
-    expect(headline("Flagged by backend").style.color).toBe("var(--color-text-warning)");
+    expect(tone("Flagged by backend")).toBe("warning");
     expect(inspector().getByText(/^Flagged ·/)).toBeTruthy();
-    expect(inspector().getByText("flagged by the backend").style.color).toBe("var(--color-text-warning)");
+    expect(neutral(inspector().getByText("flagged by the backend"))).toBe(true);
     fireEvent.click(screen.getByText("src-cleared"));
-    expect(headline("Ready").style.color).toBe("var(--color-text-success)");
+    expect(tone("Ready")).toBe("success");
     expect(inspector().queryByText(/GitOperationFailed/)).toBeNull();
     expect(inspector().queryByText("auth required")).toBeNull();
   });
@@ -789,11 +801,14 @@ describe("GitOps live-pass fixes (2026-10-10)", () => {
     expect(inspector().getByRole("button", { name: "Inventory · 1" }).getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("action key hints read as letters", () => {
+  it("action key hints read as letters, in the title and as the key shortcut, off the button's face (slice 13c.4)", () => {
     const d = { kind: "Kustomization", namespace: "flux-system", name: "flux-system", suspended: false, appliedRevision: "", attemptedRevision: "", applyFailed: false, conditions: [], inventory: [] };
     seedOne(res({}), d);
     render(<GitOps cluster="x" />);
-    expect(inspector().getByRole("button", { name: /^Reconcile/ }).querySelector("kbd")?.textContent).toBe("R");
+    const reconcile = inspector().getByRole("button", { name: "Reconcile" });
+    expect(reconcile.querySelector("kbd")).toBeNull();
+    expect(reconcile.getAttribute("title")).toBe("Reconcile (R)");
+    expect(reconcile.getAttribute("aria-keyshortcuts")).toBe("r");
   });
 });
 

@@ -1,5 +1,5 @@
 import { Aspect, aspectOfVerdict } from "../chrome/primitives/Aspect";
-import { toneBg, toneBorder, toneColor } from "../chrome/primitives/styles";
+import { toneColor } from "../chrome/primitives/styles";
 import { type HealthLike, kindOf, labelOf, verdictTone } from "./verdict";
 import { ClampedText } from "../chrome/ClampedText";
 
@@ -59,38 +59,23 @@ export function VerdictStatus({ health, detail, pendingMessage }: { health: Heal
   const tone = verdictTone[k];
   const lit = k === "fault" || k === "degraded";
   const secondary = [health?.native, detail].filter(Boolean).join(" · ");
+  // The Line slice 13c.2: the mark, then the evaluated label as the
+  // headline in ink-1 (the mark carries the tone); the controller's own
+  // words follow in ink-2, clamped with "Show full message"; the native
+  // state and any note stay visible under it.
   return (
-    <div data-testid="verdict-status" style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-      <span
-        style={{
-          alignSelf: "flex-start",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          fontWeight: 700,
-          padding: "5px 10px",
-          borderRadius: 4,
-          color: lit ? toneColor[tone] : "var(--color-text-primary)",
-          background: lit ? toneBg[tone] : "var(--color-background-secondary)",
-          boxShadow: `inset 0 0 0 1px ${lit ? toneBorder[tone] : "var(--color-border-tertiary)"}`,
-        }}
-      >
-        <VerdictLamp health={health} size={8} />
-        <span>{labelOf(health)}</span>
-      </span>
-      {health?.message ? (
-        <ClampedText key={health.message} text={health.message} style={{ fontSize: 12, lineHeight: 1.45, color: lit ? toneColor[tone] : "var(--color-text-primary)", overflowWrap: "anywhere", userSelect: "text" }} />
-      ) : pendingMessage ? (
-        <span data-testid="verdict-message-pending" style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{pendingMessage}</span>
-      ) : null}
-      {secondary && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{secondary}</span>
-      )}
-      {health?.note && (
-        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{health.note}</span>
-      )}
+    <div data-testid="verdict-status" className="verdict-head" data-tone={lit ? tone : undefined}>
+      <span className="verdict-mark"><VerdictLamp health={health} size={12} /></span>
+      <div className="verdict-text">
+        <p className="verdict-headline">{labelOf(health)}</p>
+        {health?.message ? (
+          <ClampedText key={health.message} className="verdict-message" text={health.message} style={{ overflowWrap: "anywhere", userSelect: "text" }} />
+        ) : pendingMessage ? (
+          <span data-testid="verdict-message-pending" className="verdict-message" style={{ color: "var(--color-text-tertiary)" }}>{pendingMessage}</span>
+        ) : null}
+        {secondary && <span className="verdict-sub">{secondary}</span>}
+        {health?.note && <span className="verdict-note">{health.note}</span>}
+      </div>
     </div>
   );
 }

@@ -5,6 +5,14 @@ import type { ExternalSecretDTO, ExternalSecretStoreDTO, ClusterDTO } from "../s
 import { ExternalSecretsView } from "./ExternalSecretsView";
 import { secretRule, storeRule, withRule } from "../test/backendRules";
 
+// drawnBeforeActions: the element sits in the inspector's drawing slot, ahead
+// of its action band (The Line slice 13c.3, parent §4).
+function drawnBeforeActions(el: HTMLElement): boolean {
+  const panel = el.closest('[data-testid="lens-inspector"]') ?? document.body;
+  const actions = panel.querySelector('[role="group"][aria-label="actions"]');
+  return !!el.closest(".insp-drawing") && !!actions && !!(el.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
 // The rows hook is the transport; these tests seed the externalsecrets slice it fills.
 vi.mock("../health/useExternalSecretsRows", () => ({ useExternalSecretsRows: () => {} }));
 
@@ -126,6 +134,7 @@ describe("ExternalSecretsView", () => {
     setup("Healthy", [e], [store({ state: "Failed", reason: "InvalidProviderConfig" })], "payments/stripe-api");
     render(<ExternalSecretsView cluster="x" />);
     const rail = insp().getByRole("list", { name: "Store, ExternalSecret and target Secret" });
+    expect(drawnBeforeActions(rail)).toBe(true);
     const steps = [...rail.querySelectorAll(":scope > li")];
     expect(steps.map((li) => li.getAttribute("data-step"))).toEqual(["store", "externalsecret", "target"]);
     expect(steps[0].querySelector('[data-aspect="fault"]')).not.toBeNull();

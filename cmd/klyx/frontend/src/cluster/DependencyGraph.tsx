@@ -108,7 +108,9 @@ function railStep(s: DepStep, git: Map<string, NotHereYetResult>, paths: Map<str
     body: lines.length || gitText ? (
       <div data-evidence={s.chainEnd || undefined} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
         {lines.map((l, i) => (
-          <div key={i} style={{ overflowWrap: "anywhere", color: l.tone === "danger" ? "var(--line-danger, var(--color-text-danger))" : l.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>{l.text}</div>
+          // a node's lines read in ink-2 (the mockup's chain): its mark and its
+          // reported-blocker segment carry the danger (slice 13c.6)
+          <div key={i} data-tone={l.tone} style={{ overflowWrap: "anywhere", color: l.tone === "muted" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>{l.text}</div>
         ))}
         {gitText && <div data-git style={{ color: "var(--color-text-secondary)" }}>{gitText}</div>}
         {r?.state === "behind" && r.commits.length > 0 && (

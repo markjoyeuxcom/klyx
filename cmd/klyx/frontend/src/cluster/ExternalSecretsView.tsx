@@ -541,14 +541,11 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
         verdict={removed ? <RemovedNotice kind="ExternalSecret" /> : unverified ? <UnverifiedNotice kind="ExternalSecret" /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={e.state === "Failed" ? e.reason || undefined : e.stale ? "refresh stopped - last sync ok" : undefined} />
-            {e.message && e.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{e.message}</div>}
+            {e.message && e.state !== "Synced" && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{e.message}</div>}
             {e.stale && <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere", marginTop: -4 }}>{staleTitle(e, nowS)}</div>}
           </div>
         )}
-        primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
-        more={[...(more), ...ai.menu]}
-      >
-        {ai.block}
+        drawing={(
         <InspectorBlock title="Chain">
           <Rail label="Store, ExternalSecret and target Secret" steps={[
             {
@@ -607,6 +604,11 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
             }] : []),
           ]} />
         </InspectorBlock>
+        )}
+        primary={live && e.targetSecret ? { label: "Open target Secret", onSelect: () => { const nav = useFleet.getState(); nav.openResource(SECRET_REF); nav.openInstance(e.namespace, e.targetSecret); } } : undefined}
+        more={[...(more), ...ai.menu]}
+      >
+        {ai.block}
         {e.message && e.state === "Synced" && (
           <InspectorBlock title="Message" defaultOpen={false}>
             <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{e.message}</div>
@@ -634,7 +636,7 @@ function StoreInspector({ cluster, store, removed, unverified, replaced, secrets
         verdict={removed ? <RemovedNotice kind={store.kind} /> : unverified ? <UnverifiedNotice kind={store.kind} /> : (
           <div>
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} reason={store.state !== "Synced" ? store.reason || undefined : undefined} />
-            {store.message && store.state !== "Synced" && <div className="t-body" style={{ color: ROLE_TEXT[role.kind], overflowWrap: "anywhere", marginTop: -4 }}>{store.message}</div>}
+            {store.message && store.state !== "Synced" && <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>{store.message}</div>}
           </div>
         )}
         primary={view ? { label: "View manifest in Resources", onSelect: view } : undefined}

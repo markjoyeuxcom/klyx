@@ -496,6 +496,11 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             </div>
           </div>
         }
+        drawing={(
+          <InspectorBlock title="Data path" count={route.rules?.length}>
+            <DataPath gateway={gateway} route={route} listeners={listeners} metrics={ruleM} />
+          </InspectorBlock>
+        )}
         primary={gone ? undefined : { label: "Open HTTPRoute", onSelect: () => onOpenObject(REFS.httpRoute, route.namespace, route.name) }}
         secondary={!gone && primary?.state === "resolved" ? { label: "Open Service", onSelect: () => onOpenObject(REFS.service, primary.namespace, primary.name) } : undefined}
         more={gone ? undefined : more}>
@@ -504,9 +509,6 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             {notes.map((n, i) => <div key={i} className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{n.charAt(0).toUpperCase() + n.slice(1)}.</div>)}
           </InspectorBlock>
         )}
-        <InspectorBlock title="Data path" count={route.rules?.length}>
-          <DataPath gateway={gateway} route={route} listeners={listeners} metrics={ruleM} />
-        </InspectorBlock>
         <InspectorBlock title="Matches" count={route.matches.length}>
           <div className="insp-kv">
             {route.matches.map((m, i) => <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>)}
