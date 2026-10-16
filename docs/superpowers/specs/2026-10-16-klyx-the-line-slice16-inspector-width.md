@@ -46,6 +46,19 @@ Owner request, 2026-10-16, while trying slice 15 (a CRD definition inspector wit
 
 The expand covers reading wide content without that cost. A true pop-out window is worth building only if the owner wants an inspector beside another lens or on a second monitor.
 
+## 3a. As built (review 1)
+
+Codex reviewed 77f1b33 and found two P2s; both are fixed in one commit:
+
+1. **Focus across the breakpoint.**
+   - The aside was rendered in two different branches (split and drawer), so crossing the breakpoint remounted it. Focus fell to the body, the drawer's cleanup tried to return it to a row in the hidden list, and the next `j` moved a selection nobody could see.
+   - Now the separator, scrim and inspector keep fixed places among the layout's children: the inspector is never remounted, and keeps its focus, scroll and tab.
+   - The drawer returns focus only when it actually closed. A drawer that becomes a split keeps focus in its inspector, and a split that becomes a drawer keeps both its focused control and the row to return to. The return target is cleared once used.
+   - `useListKeys` ignores every key but Escape while its lens's inspector is expanded (`listHidden()`), so a hidden list can never move, whatever has focus.
+2. **Escape in a field in a drawer.** The expanded inspector yielded the Escape to the field, but the drawer's own closer then closed the inspector. The drawer's Escape now leaves an editable target alone, which is what the split already did through `useListKeys`. This is a deliberate change for plain drawers too: a field keeps its Escape there, and Escape from any other control still closes the drawer.
+
+Codex's probes are now `layout/LensLayout.expand.test.tsx`, with one more case: a drawer opened from a row, round-tripped through the split, still returns focus to that row when closed.
+
 ## 4. Testing
 
 - **Unit** (`layout/LensLayout.test.tsx`):
