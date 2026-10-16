@@ -71,6 +71,12 @@ The return target now belongs to the inspector, not to the drawer:
 
 Codex's two probes are in `layout/LensLayout.expand.test.tsx`: closing in the split after a drawer, and a closed inspector's target never reaching the next one. One more case covers the target following list focus.
 
+## 3c. As built (review 3)
+
+Codex reviewed 4582d00 and found one P2. The drawer effect still wrote the return target itself whenever focus was outside the inspector. A split that became a drawer while focus had dropped to the body therefore replaced the row to return to with the body.
+
+The drawer no longer sets the target at all; opening, closing and list focus own it. The drawer effect only decides whether to move focus in, which it does when focus is not already in the inspector. Codex's case is in `layout/LensLayout.expand.test.tsx`.
+
 ## 4. Testing
 
 - **Unit** (`layout/LensLayout.test.tsx`):
