@@ -9,7 +9,7 @@ import { UpdatedAt } from "../chrome/Age";
 import { listInstancePage } from "../bridge/crd";
 import { fetchEventsSnapshot } from "../bridge/events";
 import { CLUSTER_RISK_REFS, riskFor } from "./resourceRisk";
-import { ellipsis } from "../chrome/primitives";
+import { Aspect, ellipsis } from "../chrome/primitives";
 import { LensLayout } from "../layout/LensLayout";
 import { NAV_GROUPS, navigate } from "../nav/registry";
 import { useHealth } from "../store/health";
@@ -84,7 +84,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
         // its "Needs you" rows, then the Overview's sections in the parent's
         // order - utilisation, monitoring, warning events, risks, the areas,
         // and the connection's notes last.
-        <div className="lens-canvas" data-testid="overview">
+        <div className="ov-page" data-testid="overview">
           <StationVerdict c={c} m={model} />
           <NeedsYou station clusters={[c]} models={model ? { [c.name]: model } : {}} />
           <div className="ov-columns">
@@ -111,9 +111,9 @@ export function Overview({ c }: { c: ClusterDTO }) {
                 <span>nodes</span><span>{c.nodesReady}/{c.nodesTotal} ready</span>
                 <span>pods</span><span>{podsText(c)}</span>
                 <span>namespaces</span><span>{summary?.namespaces != null ? summary.namespaces : "—"}</span>
-                <span>flux</span><span>{toolFact(model, "flux")}</span>
-                <span>argo cd</span><span>{toolFact(model, "argo")}</span>
-                <span>gateway</span><span>{toolFact(model, "gateway")}</span>
+                <span>flux</span><ToolFact m={model} task="flux" />
+                <span>argo cd</span><ToolFact m={model} task="argo" />
+                <span>gateway</span><ToolFact m={model} task="gateway" />
               </div>
             </section>
           </div>
@@ -141,7 +141,7 @@ export function Overview({ c }: { c: ClusterDTO }) {
 // summary never stands in for a different problem (Codex review of da40ac6).
 function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention | null; tone: string }) {
   if (c.state !== "Degraded") {
-    return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.state === "Failed" ? "▲ " : ""}{c.reason}</div>;
+    return <div className="t-body ov-marked" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.state === "Failed" && <Aspect kind="fault" size={8} />}<span>{c.reason}</span></div>;
   }
   const notes = c.reason.split(/;\s+/).map((n) => n.trim()).filter(Boolean);
   const areas = m?.areas.filter((a) => a.controller) ?? [];
@@ -151,7 +151,7 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
   const named = areas.filter((a) => notes.some((n) => isControllerNote(n) && (!a.controller?.reason || n.includes(a.controller.reason) || a.controller.reason.includes(n))));
   const notReady = named.filter((a) => a.controller?.state === "not ready").map((a) => a.label);
   const unverified = named.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
-  const controllerLine = [notReady.length > 0 ? `▲ Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ");
+  const controllerLine = [notReady.length > 0 ? `Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ");
   const headline = other.length > 0 ? other[0] : controllerLine || notes[0];
   if (notes.length <= 1 && other.length === notes.length) {
     return <div className="t-body" role="status" style={{ color: tone, overflowWrap: "anywhere" }}>{c.reason}</div>;
@@ -217,16 +217,16 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
                 <span className="ov-area-text" style={{ color: a.controller.state === "not ready" ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>
                   {a.controller.reason ? (
                     <details className="ov-why">
-                      <summary>{a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unverified"}</summary>
+                      <summary>{a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}</summary>
                       <span className="t-secondary">{a.controller.reason}</span>
                     </details>
-                  ) : a.controller.state === "not ready" ? "▲ controller not ready" : "controller health unverified"}
+                  ) : a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}
                 </span>
               )}
               {a.lines.map((l) => (
                 <span key={l.part} className="ov-area-text" title={provenance(a, l)}
                   style={{ color: l.state === "attention" ? (l.tone === "danger" ? "var(--color-text-danger)" : "var(--color-text-warning)") : l.state === "unreadable" || l.gaps.length > 0 ? "var(--color-text-warning)" : undefined }}>
-                  {a.lines.length > 1 ? `${l.label}: ` : ""}{l.state === "attention" && l.tone === "danger" ? "▲ " : ""}{lineText(l)}
+                  {a.lines.length > 1 ? `${l.label}: ` : ""}{l.state === "attention" && <><Aspect kind={l.tone === "danger" ? "fault" : "attention"} size={8} />{" "}</>}{lineText(l)}
                   {l.state === "attention" && l.top.length > 0 && (
                     <span className="ov-tops">{l.top.slice(0, 3).map((t) => <TopLink key={`${t.gvr}/${t.namespace ?? ""}/${t.name}`} cluster={cluster} l={l} r={t} />)}</span>
                   )}
@@ -291,26 +291,13 @@ function CriticalEvents({ cluster }: { cluster: string }) {
       ) : events.map((event, i) => (
         <button
           key={`${event.namespace}/${event.kind}/${event.name}/${event.reason}/${i}`}
+          className="ov-row ov-event"
           onClick={() => openEvents(event)}
           title={`${event.namespace} ${event.kind}/${event.name}: ${event.message}`}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "44px minmax(110px, 0.7fr) minmax(120px, 0.8fr) minmax(0, 1.4fr)",
-            gap: 10,
-            alignItems: "baseline",
-            border: "0.5px solid var(--color-border-tertiary)",
-            background: "var(--color-background-primary)",
-            color: "var(--color-text-secondary)",
-            padding: "5px 8px",
-            cursor: "pointer",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            textAlign: "left",
-          }}
         >
-          <span style={{ color: "var(--color-text-secondary)" }}>{event.count > 1 ? `×${event.count}` : "warning"}</span>
-          <span style={{ ...ellipsis }}>{event.reason}</span>
-          <span style={{ color: "var(--color-text-tertiary)", ...ellipsis }}>{event.namespace}/{event.name}</span>
+          <span className="ov-num">{event.count > 1 ? `×${event.count}` : "warning"}</span>
+          <span style={{ ...ellipsis, color: "var(--color-text-warning)" }}>{event.reason}</span>
+          <span className="ov-mono" style={{ ...ellipsis, color: "var(--color-text-tertiary)" }}>{event.namespace}/{event.name}</span>
           <span style={{ minWidth: 0, ...ellipsis }}>{event.message}</span>
         </button>
       ))}
@@ -381,27 +368,14 @@ function ClusterRisks({ cluster }: { cluster: string }) {
       ) : risks.slice(0, 6).map((r) => (
         <button
           key={`${r.ref.group}/${r.ref.plural}`}
+          className="ov-row ov-risk"
           onClick={() => openRisk(r.ref)}
           title={`${r.ref.kind}: ${r.count} - ${r.reason} - ${r.sample}`}
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 10,
-            alignItems: "baseline",
-            border: "0.5px solid var(--color-border-tertiary)",
-            background: "var(--color-background-primary)",
-            color: "var(--color-text-secondary)",
-            padding: "5px 8px",
-            cursor: "pointer",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            textAlign: "left",
-          }}
         >
-          <span style={{ flex: "0 0 150px", color: "var(--color-text-warning)", ...ellipsis }}>{r.ref.kind}</span>
-          <span style={{ flex: "0 0 28px", color: "var(--color-text-primary)" }}>{r.count}</span>
-          <span style={{ flex: "0 1 190px", minWidth: 120, ...ellipsis }}>{r.reason}</span>
-          <span style={{ flex: "1 1 220px", minWidth: 0, color: "var(--color-text-tertiary)", ...ellipsis }}>{r.sample}</span>
+          <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }}>{r.ref.kind}</span>
+          <span className="ov-num" style={{ color: "var(--color-text-primary)" }}>{r.count}</span>
+          <span style={{ ...ellipsis }}>{r.reason}</span>
+          <span className="ov-mono" style={{ minWidth: 0, color: "var(--color-text-tertiary)", ...ellipsis }}>{r.sample}</span>
         </button>
       ))}
       {risks !== null && risks.length > 6 && <span className="t-secondary">+{risks.length - 6} more kinds with risks</span>}
@@ -425,7 +399,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section aria-label={title} className="ov-section">
       <h3 className="t-section-label">{title}</h3>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>
+      <div className="ov-section-body">{children}</div>
     </section>
   );
 }
@@ -450,18 +424,26 @@ function formatAge(seconds: number): string {
 // capability detection has not established the tool - unknown is never
 // "installed"), and "not detected" only when the model confirms the
 // absence - never from a presence flag that may lag.
-function toolFact(m: ClusterAttention | null, task: string): string {
-  if (!m) return "checking…";
-  if (m.ended) return `observation ended at ${new Date(m.ended).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+// Short words in the facts (slice 13d.3): the tool's lines, then its
+// controller's state; the controller's reason stays one hover away here and
+// in By area and Connection, where it is written out.
+function toolFact(m: ClusterAttention | null, task: string): { text: string; title?: string } {
+  if (!m) return { text: "checking…" };
+  if (m.ended) return { text: `observation ended at ${new Date(m.ended).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` };
   const a = m.areas.find((x) => x.id === task);
   if (a) {
     const checking = checkingText(a);
-    if (checking) return checking;
+    if (checking) return { text: checking };
     const lines = a.lines.map((l) => `${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`);
-    const ctl = a.controller ? [`controller ${a.controller.state}${a.controller.reason ? ` (${a.controller.reason})` : ""}`] : [];
-    return [...ctl, ...lines].join(" · ");
+    const ctl = a.controller ? [`controller ${a.controller.state === "unknown" ? "unverified" : a.controller.state}`] : [];
+    return { text: [...lines, ...ctl].join(" · "), title: a.controller?.reason ? `controller ${a.controller.state}: ${a.controller.reason}` : undefined };
   }
-  return "not detected";
+  return { text: "not detected" };
+}
+
+function ToolFact({ m, task }: { m: ClusterAttention | null; task: string }) {
+  const f = toolFact(m, task);
+  return <span title={f.title}>{f.text}</span>;
 }
 
 function Usage({ frac }: { frac: number | null }) {
@@ -471,7 +453,7 @@ function Usage({ frac }: { frac: number | null }) {
   const color = pct >= 90 ? "var(--color-text-danger)" : pct >= 75 ? "var(--color-text-warning)" : "var(--color-text-tertiary)";
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <span>{pct >= 90 ? "▲ " : ""}{pct}%</span>
+      <span className="ov-marked">{pct >= 90 && <Aspect kind="attention" size={8} />}<span>{pct}%</span></span>
       <span style={{ width: 80, height: 4, background: "var(--color-background-secondary)", borderRadius: 2, overflow: "hidden" }}>
         <span style={{ display: "block", height: "100%", width: `${Math.min(100, Math.max(0, pct))}%`, background: color }} />
       </span>

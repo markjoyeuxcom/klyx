@@ -82,7 +82,11 @@ describe("the fleet screen (slice 5a)", () => {
     render(<FleetView />);
     const p = screen.getByRole("button", { name: /^p, prd on West Europe/ });
     expect(p.hasAttribute("data-unreachable")).toBe(true);
-    expect(p.textContent).toContain("failed: dial tcp");
+    // its connection word, then the reason on one line; the full reading is
+    // in its name and title (slice 13d.8)
+    expect(p.querySelector("[data-unreachable-word]")?.textContent).toBe("unreachable");
+    expect(p.querySelector(".station-cell-reason")?.textContent).toBe("dial tcp");
+    expect(p.getAttribute("title")).toContain("failed: dial tcp");
     expect(p.querySelector(".station-cell-rev")).toBeNull();
   });
 

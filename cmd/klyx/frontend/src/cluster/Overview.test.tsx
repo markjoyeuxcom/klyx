@@ -66,7 +66,10 @@ describe("Overview on the workspace template (redesign step 7e)", () => {
     expect(verdict.querySelector("h2")?.textContent).toBe("failed: connect timed out");
     expect(verdict.querySelector('h2 [data-aspect="checking"]')).toBeTruthy();
     const connection = screen.getByTestId("ov-connection");
-    expect(connection.textContent).toContain("▲ connect timed out");
+    // the Aspect carries the fault's shape; the ▲ is retired (slice 13d)
+    expect(connection.textContent).toContain("connect timed out");
+    expect(connection.textContent).not.toContain("▲");
+    expect(connection.querySelector('[data-aspect="fault"]')).toBeTruthy();
     const kids = [...screen.getByTestId("overview").children];
     expect(kids[kids.length - 1]).toBe(connection);
   });
@@ -92,9 +95,12 @@ describe("Overview attention reads the cluster's summary (health 1c slice 4)", (
       task("events", [evidence(9, [kind("events")])])),
       task("flux", [native("reconciliations", { fault: 2 }, 2, "not ready", [kind("kustomizations")]), native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])])]);
     const { container } = render(<Overview c={{ ...dto, fluxPresent: true }} />);
-    expect(area("workloads").textContent).toContain("▲ 3 need attention");
-    expect(area("helm").textContent).toContain("▲ 1 failed or pending");
-    expect(area("flux").textContent).toContain("Reconciliations: ▲ 2 not ready");
+    expect(area("workloads").textContent).toContain("3 need attention");
+    expect(area("workloads").querySelector('[data-aspect="fault"]')).toBeTruthy();
+    expect(area("helm").textContent).toContain("1 failed or pending");
+    expect(area("flux").textContent).toContain("Reconciliations:  2 not ready");
+    expect(area("flux").querySelector('[data-aspect="fault"]')).toBeTruthy();
+    for (const a of ["workloads", "helm", "flux"]) expect(area(a).textContent).not.toContain("▲");
     expect(area("flux").textContent).toContain("Sources: none not ready");
     expect(area("events").textContent).toContain("9 warning events");
     expect(screen.queryByTestId("ov-area-argo")).toBeNull();
@@ -198,7 +204,8 @@ describe("Overview metrics", () => {
     setMetrics({ available: true, mode: "discovered-service", source: "monitoring/prometheus-operated:9090", warning: "", reason: "", cpuFraction: 0.38, memFraction: 0.92 });
     const { container } = render(<Overview c={blue} />);
     expect(screen.getByText("38%")).toBeTruthy();
-    expect(screen.getByText("▲ 92%")).toBeTruthy();
+    expect(screen.getByText("92%")).toBeTruthy();
+    expect(screen.getByText("92%").parentElement?.querySelector('[data-aspect="attention"]')).toBeTruthy();
     expect(screen.getByText(/monitoring: discovered · svc monitoring\/prometheus-operated:9090/)).toBeTruthy();
     expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
@@ -266,7 +273,10 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
     seed([...core(), task("flux", [native("reconciliations", { ok: 2 }, 0, "not ready", [kind("kustomizations")]), native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")])],
       { controller: { state: "unknown", reason: "kustomize-controller unreadable" } })]);
     render(<Overview c={c} />);
-    expect(fact("flux")).toMatch(/^controller unknown \(kustomize-controller unreadable\) · reconciliations /);
+    // short words in the facts (slice 13d.3): the lines, then the controller's
+    // state; its reason stays in the fact's title
+    expect(fact("flux")).toMatch(/^reconciliations .* · controller unverified$/);
+    expect(screen.getByTitle("controller unknown: kustomize-controller unreadable")).toBeTruthy();
   });
 
   it("the Observer's confirmed absence wins over a lagging present flag", () => {
@@ -303,7 +313,8 @@ describe("Overview names what the summary does not carry (slice 6 §4)", () => {
   it("a dependency gap is named beside a known fault", () => {
     seed(replace(core(), task("pods", [verdict("pods", { fault: 2 }, [kind("pods"), dep("replicasets", { coverage: "unreadable" })])])));
     render(<Overview c={dto} />);
-    expect(area("pods").textContent).toContain("▲ 2 need attention · ReplicaSets could not be read - a dependency");
+    expect(area("pods").textContent).toContain("2 need attention · ReplicaSets could not be read - a dependency");
+    expect(area("pods").querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 });
 
@@ -333,7 +344,8 @@ describe("Overview connection notes", () => {
   it("a failed connection keeps its reason in full", () => {
     seed();
     render(<Overview c={{ ...dto, state: "Failed", reason: "connect timed out" }} />);
-    expect(screen.getByText("▲ connect timed out")).toBeTruthy();
+    expect(screen.getByText("connect timed out")).toBeTruthy();
+    expect(screen.getByText("connect timed out").parentElement?.querySelector('[data-aspect="fault"]')).toBeTruthy();
   });
 });
 

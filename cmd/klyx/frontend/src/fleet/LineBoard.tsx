@@ -66,7 +66,14 @@ export function StationCell({ s, dto, git = null, c, m, peers }: { s: LineStatio
       </span>
       <span className="station-cell-name">{clusterDisplayName(s.cluster)}</span>
       {comparison && <span className="station-cell-rev">{comparison}</span>}
-      <span className="station-cell-reading" data-tone={reading.tone}>{reading.text}</span>
+      {reading.unreachable && c ? (
+        // its connection word, then the reason on one line - the cell's
+        // name and title hold it whole (slice 13d.8)
+        <>
+          <span className="station-cell-reading" data-unreachable-word="">{c.state === "Unconnected" ? "not connected" : "unreachable"}</span>
+          {c.reason && <span className="station-cell-reason">{c.reason}</span>}
+        </>
+      ) : <span className="station-cell-reading" data-tone={reading.tone}>{reading.text}</span>}
       {times.map((t) => <span key={t} className="station-cell-time">{t}</span>)}
       {peers.length > 0 && <span className="station-cell-mesh">mesh: {peers.map(clusterDisplayName).join(", ")}</span>}
     </button>

@@ -230,6 +230,26 @@ Dependency node lines are ink-2. Their tone stays as `data-tone`, and the mark a
 - its heading in ink-1, with no ▲;
 - its message in ink-2.
 
+### As built (13d)
+
+- **The station page is a page on the ground**, not a sunk well. Its sections are 28px apart.
+- **The station verdict** is a 28px/600 headline in ink-1. Its mark carries the tone.
+- **▲ is gone from the Overview.** An Aspect replaces it on:
+  - a failed connection;
+  - a By area line that needs attention;
+  - a controller that is not ready;
+  - usage at 90% or more.
+
+  The words stay word for word.
+- **Tool facts read short:** the lines, then "controller unverified" or "controller not ready". The controller's reason stays in the fact's title, and in By area and Connection as before.
+- **Recent warning events and Resource risks** are each one panel of rows with fixed columns, the message taking the rest. A risk's kind is ink-2, not amber.
+- **Needs-you rows:**
+  - the kind in ink-3;
+  - the reason on one line (the row's title holds it whole);
+  - the time in the interface face.
+- **An unreachable station on the board** says "unreachable" (or "not connected"), then its reason on one line. The cell's name and title keep the full reading.
+- **The 2000px right-edge fragments** in the owner's screenshot do not reproduce in the walk at 2000×1228: no element extends past the viewport. They look like a window behind Klyx. This is re-checked in the native smoke.
+
 ## 3. Out of scope
 
 - New data or new claims: the mockup's synthesised "Held: …" sentence, "where the fix lives" advice beyond the existing supply facts, and "root cause".
