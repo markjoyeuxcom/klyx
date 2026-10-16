@@ -69,12 +69,12 @@ Controls: scope, status filter, search in that order, with 8px gaps. Search flex
 | --- | ---: |
 | `--inspector-default-width` | 400px |
 | `--inspector-min-width` | 360px |
-| `--inspector-max-width` | 560px |
+| `--inspector-max-width` | 560px (the drawer only, since The Line slice 16) |
 | `--table-body-min-width` | 600px |
 | `--canvas-body-min-width` | 640px |
 | `--detail-drawer-breakpoint` | 1040px workspace inner width |
 
-Measure the workspace content width **after** spine and 16px inline padding, using ResizeObserver/container sizing. At inner width below 1040px, selection opens a drawer; otherwise split mode is allowed. For split mode, compute maximum width as `min(560, innerWidth - bodyMinimum - 8)`. Clamp the stored requested width to `[360, maximum]`; if maximum is below 360, use drawer. Store requested width separately from effective clamped width, so resizing the window does not destroy the user's preference.
+Measure the workspace content width **after** spine and 16px inline padding, using ResizeObserver/container sizing. At inner width below 1040px, selection opens a drawer; otherwise split mode is allowed. For split mode, compute maximum width as `min(560, innerWidth - bodyMinimum - 8)`. *Revised 2026-10-16 by The Line slice 16 (owner request): the split maximum is `innerWidth - bodyMinimum - 8`, with no fixed ceiling; End sets that maximum; and the inspector can expand over the whole workspace. See `2026-10-16-klyx-the-line-slice16-inspector-width.md`.* Clamp the stored requested width to `[360, maximum]`; if maximum is below 360, use drawer. Store requested width separately from effective clamped width, so resizing the window does not destroy the user's preference.
 
 Persist a single app-local preference `klyx.layout.v1.inspectorWidth` (number in CSS px) across all lenses and restarts, default 400; reject non-finite/out-of-range values. Persist spine expansion separately under the same versioned layout namespace. No per-lens width overrides. Double-click separator resets width to 400. Separator is keyboard focusable (`role=separator`, vertical orientation, min/max/current value); arrows change 16px, Home/End set bounds. Pointer resizing has an 8px hit target. Selecting a different object or loading details never changes width.
 
