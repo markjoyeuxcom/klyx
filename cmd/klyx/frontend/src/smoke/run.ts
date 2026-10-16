@@ -302,6 +302,23 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { object: sel, sections: heads.length, conditions: row.parentElement?.children.length ?? 0, bytes: r.output.length };
   });
 
+  // ---- the generic browser (slice 15) ----
+  // A CRD's printer columns, evaluated by the API server: the GitRepository
+  // list shows URL and Ready with their cells.
+  await step(steps, "a CRD's printer columns", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "source.toolkit.fluxcd.io", version: "v1", plural: "gitrepositories", kind: "GitRepository", scope: "Namespaced" });
+    const head = await within(15_000, "the GitRepository list's printer columns", () => {
+      const h = $("[data-testid='instance-list-header']");
+      const names = h ? [...h.querySelectorAll("span")].map((s) => s.textContent ?? "") : [];
+      return names.includes("URL") && names.includes("Ready") ? h : null;
+    });
+    sized(head, "the list header");
+    const row = await within(8000, "a row with a URL cell", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /:\/\//.test(r.textContent ?? "")));
+    useFleet.getState().closeResource();
+    return { columns: [...head.querySelectorAll("span")].map((s) => s.textContent).filter(Boolean), row: row.textContent?.slice(0, 80) };
+  });
+
   // ---- the console ----
   await step(steps, "console: search the fleet", async () => {
     await open("pods");

@@ -198,7 +198,6 @@ export function SchemaTree({ nodes, truncated }: { nodes: SchemaNodeDTO[]; trunc
             <span className="otree-val schema-type">
               {[n.type || (n.intOrString ? "int-or-string" : ""), n.format].filter(Boolean).join(", ")}
               {n.enum?.length ? <span className="gen-dim"> · {n.enum.length}{n.enumMore ? `+${n.enumMore}` : ""} values</span> : null}
-              {n.constraints?.length ? <span className="gen-dim"> · constraints not shown</span> : null}
               {n.description ? <span className="schema-desc">{n.description.split("\n")[0]}</span> : null}
             </span>
           </div>
