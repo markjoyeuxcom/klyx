@@ -36,6 +36,10 @@ real-cluster smoke is on the v1.0.0 gate below.
 
 - [ ] Eyeball checklist: **2026-07-04 GUI pass** (0/50) — `docs/eyeball-checklist-2026-07-04-gui-pass.md`
 - [ ] Eyeball checklist: **2026-07-05 Signal Bench** (0/42) — `docs/eyeball-checklist-2026-07-05-signal-bench.md`
+      (its visual language is retired by The Line in v0.14.0: only its behaviour items still apply)
+- [ ] Eyeball checklist: **2026-10-15 The Line** (0/31) — `docs/eyeball-checklist-2026-10-15-the-line.md`.
+      The owner walked slices 13 and 14 on the kind lab on 2026-10-16 ("looking nicely polished");
+      the checklist itself is still unticked
 - [ ] Eyeball the UI merged **since** those checklists (not yet on any list):
       quota meter bars, the Reloader "reloads on" well, pods/workloads truncation
       banners, the AI Explain / Suggest-fix panels, and the whole editable
@@ -232,6 +236,29 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-10-16 — The Line (v0.14.0, spec
+`docs/superpowers/specs/2026-10-14-klyx-the-line-redesign.md` and its slice
+notes, notes `docs/release-notes-0.14.0.md`):**
+- The redesign from the owner's "Klyx redesign" mockups: night and day
+  themes with bundled type and shape-coded marks (slice 1); the fleet drawn
+  as a railway line with Needs you, the Ledger and the Horizon (3, 5); the
+  location bar, lens index, station strip and UID-pinned inspectors (4);
+  the lens sweep and the station page (11); design fidelity against the
+  mockups (13)
+- New data (2, 7): rule-backed since/reason, the transition stream and
+  observation log, the last managed-field update, route metrics per rule
+- Read-only Git history through the system git (6): Settings > Git, the
+  line ordered against its history, and Flux diffs built from the cache
+- Drawings (8): the Flux dependency graph, the issuance and ESO chains, the
+  Gateway data path, the chat read ledger
+- The fleet metadata index and the command console (9); health
+  notifications, off by default (10); the native WKWebView smoke (12)
+- Describe (14): a Formatted view of kubectl's report (a conservative
+  parser; the Text view is stdout byte for byte), find, copy, a
+  kubeconfig-pinned copy command, and Describe in every lens inspector
+- Every slice Codex-reviewed; native smoke 114/114 four ways on the kind lab.
+  v0.13.1 was written up but never published: its changes ship in v0.14.0
 
 **2026-10-14 — Claude Code any build, chat chips (v0.13.1, notes
 `docs/release-notes-0.13.1.md`):**
