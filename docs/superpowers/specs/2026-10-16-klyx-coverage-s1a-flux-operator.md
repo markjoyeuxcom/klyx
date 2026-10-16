@@ -161,7 +161,7 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
     - `HandleAnnotationRequest` (`fluxcd/pkg/apis/meta` v1.31.0, which v0.61.0 pins) sets `lastHandledForceAt` whenever `forceAt` is present, before it checks the pair, so the acknowledgement can be published without a forced run;
     - the external provider path publishes its in-progress status, acknowledgements included, before it fetches.
   - **Why the Ready condition works** (v0.61.0 sources):
-    - Every evaluated FluxInstance and ResourceSet run, and every external provider fetch, first persists Ready=Unknown "Reconciliation in progress" (`fluxinstance_controller.go`, `resourceset_controller.go` `reconcile`; the provider's non-static branch). It then ends with Ready True or False, or Stalled.
+    - Every enabled FluxInstance run, every ResourceSet run past its CEL and dependency checks, and every external provider fetch first persists Ready=Unknown "Reconciliation in progress" (`fluxinstance_controller.go` and `resourceset_controller.go` `reconcile`; the provider's non-static branch). It then ends with Ready True or False, or Stalled. A ResourceSet's two earlier checks write Ready False directly (`InvalidCELExpression`, `DependencyNotReady`).
     - While disabled, the controller returns before any of this. Its deferred finalizer then touches only `lastHandledReconcileAt` and the Reconciling condition, never Ready.
     - A run outside a provider's schedule returns before the in-progress status. It changes Ready only in one case, when it finds Reconciling with Ready Unknown, and then with reason `SkippedDueToSchedule`.
   - **The evaluation fingerprint:** a SHA-256 over Ready's raw status, reason, full message and `lastTransitionTime`.
@@ -176,7 +176,7 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
       - evidence with Ready Unknown and reason `Progressing` reads **"Resumed · evaluating"**;
       - Ready True or False, or Stalled, after evidence is **evaluated**, and the object takes its normal verdict from then.
   - **What stays unproven, and says so:**
-    - A ResourceSet blocked on `DependencyNotReady` returns before the in-progress status. If its message is unchanged, it leaves no evidence, and it reads "Resumed · awaiting evaluation (last known before suspension: DependencyNotReady)".
+    - A ResourceSet that fails its CEL or dependency check returns before the in-progress status. If its Ready is unchanged it leaves no evidence, and it reads "Resumed · awaiting evaluation (last known before suspension: DependencyNotReady)" (or `InvalidCELExpression`). A blocked or misconfigured ResourceSet is therefore shown as unproven rather than as a fresh fault.
     - A static provider persists no in-progress state; its evidence is the final message (which carries the run's duration) or a changed `lastExportedRevision`.
     - A scheduled provider outside its window is not evaluated until the window opens. It reads "Resumed · awaiting its schedule; Fetch now to evaluate it", and the verb is offered there. "Fetch now" sets `requestedAt` and `forceAt` to one fresh value; its evidence is the same Ready change. A pair another client overwrote before the controller read it runs nothing, and so proves nothing.
     - **Same second:** a run whose Ready ends with the same status, reason, message and second as the frozen condition would leave no evidence. That needs the suspension, resume and run within one second of the frozen transition, and its only effect is to stay "awaiting".
