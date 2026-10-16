@@ -290,3 +290,15 @@ Pushing, PRs and releases are the owner's call.
 | 8 | C1/C6 lacked a source contract, tests beyond parity, and a budget | C1's source contract, tests and budget; C6's limits and the owner-authorised homelab check |
 
 Rulings adopted: C3's three-state gate, C4's verb matrix, C5 as a separate preparatory change, and the per-slice splits. Load balancing is S4 rather than beside Gateway API: the owner asked for it after admission, and it needs C3.
+
+**Accepted at 8281c6e** (Codex, revision 1). Two details are carried into their slice notes:
+- **S4:**
+  - Controller selection is evidence-qualified: a requested class does not prove its controller is installed, and an unclassified Service need not belong to every detected controller.
+  - Cover class and default settings, a disabled k3s ServiceLB, pool selectors, hostname allocation and the required IP families.
+  - The shared Services projection keeps the new reader's fields.
+  - Pending time has an explicit baseline when an old Service turns into a LoadBalancer or loses its allocation; object creation is not the start of the current pending episode.
+- **S2a:**
+  - Formalise the overdue opportunity, and its reset after a later success.
+  - An in-progress run during the grace period, and incomplete retained history.
+  - The exact classifier and its fake-clock cases.
+
