@@ -674,3 +674,81 @@ describe("an instance opened by UID", () => {
     expect(r.queryByRole("button", { name: "Describe" })).toBeTruthy();
   });
 });
+
+// The Line slice 15a: the server's printer columns.
+describe("InstanceList printer columns", () => {
+  const gitRef: ResourceRef = { group: "source.toolkit.fluxcd.io", version: "v1", plural: "gitrepositories", kind: "GitRepository", scope: "Namespaced" };
+  const columns = [
+    { name: "URL", type: "string", format: "", description: "Custom resource definition column (in JSONPath format): .spec.url", jsonPath: ".spec.url", priority: 0, numeric: false },
+    { name: "Ready", type: "string", format: "", description: "", jsonPath: `.status.conditions[?(@.type=="Ready")].status`, priority: 0, numeric: false, conditionType: "Ready" },
+    { name: "Size", type: "integer", format: "", description: "", jsonPath: ".status.size", priority: 0, numeric: true },
+    { name: "Wide", type: "string", format: "", description: "", jsonPath: ".spec.wide", priority: 1, numeric: false },
+  ];
+  const gitRows: InstanceDTO[] = [
+    { namespace: "flux-system", name: "platform", created: "", cells: ["ssh://git@example/fleet.git", "False", "12", "w1"] },
+    { namespace: "team-a", name: "apps", created: "", cells: ["https://example/apps.git", "True", "3", "w2"] },
+  ];
+  const seedGit = () => useFleet.setState({ instances: { cluster: "x", ref: gitRef, rows: gitRows, nextToken: "tok", loading: false, filter: "", riskOnly: false, columns } });
+
+  it("draws priority-0 columns with their cells, keeps wide ones out, and titles headers", () => {
+    seedGit();
+    const { getByTestId, getByText, queryByText } = render(<InstanceList cluster="x" resource={gitRef} />);
+    const head = getByTestId("instance-list-header");
+    expect([...head.querySelectorAll("span")].map((s) => s.textContent)).toEqual(["", "Namespace", "Name", "URL", "Ready", "Size", "Age"]);
+    expect(head.querySelector('span[title="JSONPath .spec.url"]')).toBeTruthy();
+    expect(getByText("ssh://git@example/fleet.git")).toBeTruthy();
+    expect(queryByText("w1")).toBeNull();
+    expect(getByText("12").className).toContain("lens-cell-num");
+  });
+
+  it("marks the recorded Ready False row and puts it first", () => {
+    seedGit();
+    const { container } = render(<InstanceList cluster="x" resource={gitRef} />);
+    const first = container.querySelector(".lens-row")!;
+    expect(first.textContent).toContain("platform");
+    expect(first.querySelector('[aria-label="Ready False (from .status.conditions[Ready])"]')).toBeTruthy();
+    expect(container.querySelectorAll(".lens-row")[1].querySelector("[data-aspect]")).toBeNull();
+  });
+
+  it("searches the cells", () => {
+    seedGit();
+    useFleet.setState((s) => ({ instances: { ...s.instances, filter: "apps.git" } }));
+    const { queryByText, getByText } = render(<InstanceList cluster="x" resource={gitRef} />);
+    expect(getByText("apps")).toBeTruthy();
+    expect(queryByText("platform")).toBeNull();
+  });
+
+  it("drops every column when a continuation page was read with other columns (design review 1)", () => {
+    seedGit();
+    act(() => useFleet.getState().addInstancePage([{ namespace: "z", name: "late", created: "", cells: ["x", "y"] }], "", [columns[1], columns[0]]));
+    const { getByTestId, queryByText } = render(<InstanceList cluster="x" resource={gitRef} />);
+    expect(getByTestId("columns-mismatch").textContent).toContain("pages were read with different printer columns");
+    expect([...getByTestId("instance-list-header").querySelectorAll("span")].map((s) => s.textContent)).toEqual(["Namespace", "Name", "Age"]);
+    expect(queryByText("ssh://git@example/fleet.git")).toBeNull();
+  });
+
+  it("in fleet mode, draws columns only when every cluster read the same ones", async () => {
+    useFleet.setState({ clusters: [cluster("blue"), cluster("orange")] });
+    const same = (target: string) => ({ items: [{ namespace: "a", name: `r-${target}`, created: "", cells: [`url-${target}`, "True", "1", "w"] }], nextToken: "", columns });
+    vi.mocked(listInstancePage).mockImplementation(async (target) => same(target));
+    const ok = render(<InstanceList cluster="blue" resource={gitRef} />);
+    fireEvent.click(ok.getByRole("button", { name: "Fleet" }));
+    await waitFor(() => expect(ok.getByText("url-orange")).toBeTruthy());
+    expect(ok.queryByTestId("columns-mismatch")).toBeNull();
+    ok.unmount();
+
+    vi.mocked(listInstancePage).mockImplementation(async (target) => (target === "blue" ? same(target) : { ...same(target), columns: [columns[1], columns[0]] }));
+    const differ = render(<InstanceList cluster="blue" resource={gitRef} />);
+    fireEvent.click(differ.getByRole("button", { name: "Fleet" }));
+    await waitFor(() => expect(differ.getByText("r-orange")).toBeTruthy());
+    expect(differ.getByTestId("columns-mismatch").textContent).toContain("clusters were read with different printer columns");
+    expect(differ.queryByText("url-blue")).toBeNull();
+  });
+
+  it("fails closed when a continuation page came without a table", () => {
+    seedGit();
+    act(() => useFleet.getState().addInstancePage([{ namespace: "z", name: "late", created: "" }], "", null));
+    expect(useFleet.getState().instances.columns).toBeNull();
+    expect(useFleet.getState().instances.columnsMismatch).toBe(true);
+  });
+});

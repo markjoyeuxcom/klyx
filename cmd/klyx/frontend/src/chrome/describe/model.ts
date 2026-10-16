@@ -1,5 +1,6 @@
 import type { AspectKind } from "../primitives/Aspect";
 import { CONDITION_KEYS, type DField, type DNode, type DTable, type DTree } from "./parse";
+import { conditionFault } from "../conditions";
 
 // The Describe sheet's view model (The Line slice 14b). It lays the parse
 // tree out as the Formatted view draws it - sections, key/value rows, items,
@@ -39,15 +40,11 @@ export type VSection = {
 };
 export type VModel = { sections: VSection[]; runs: Run[]; uid: string | null };
 
-// Condition marks belong to Describe (review 1): a mark describes the
-// recorded condition, never the object's health, and only for types whose
-// polarity is known. Every other type, and Unknown, carries no mark.
-const POSITIVE = new Set(["Ready", "Available", "Accepted", "Programmed", "ResolvedRefs", "Synced", "Established", "NamesAccepted",
-  "Initialized", "ContainersReady", "PodScheduled", "PodReadyToStartContainers", "Progressing", "Complete"]);
-const NEGATIVE = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable", "Stalled", "ReplicaFailure", "Failed"]);
-export function conditionFault(type: string, status: string): boolean {
-  return (POSITIVE.has(type) && status === "False") || (NEGATIVE.has(type) && status === "True");
-}
+// Condition marks come from the shared polarity registry (chrome/conditions):
+// a mark describes the recorded condition, never the object's health, and
+// only for types whose polarity is known. Every other type, and Unknown,
+// carries no fault mark.
+export { conditionFault };
 
 const MONTHS: Record<string, number> = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 // timeOf: an RFC 3339 value, or kubectl's RFC 1123Z ("Sat, 10 Oct 2026

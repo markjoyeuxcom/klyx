@@ -376,8 +376,9 @@ describe("NodesView", () => {
     seedWithDetail(healthy, fakeDetail);
     const { getByText } = render(<NodesView cluster="homelab" />);
     fireEvent.click(getByText(/^Conditions · /));
-    const row = getByText("MemoryPressure").parentElement!;
-    expect(row.querySelector("span")?.style.background).toBe("var(--color-text-success)");
+    // a healthy condition carries no mark (slice 15b)
+    const row = getByText("MemoryPressure").closest(".cond")!;
+    expect(row.getAttribute("data-aspect")).toBe("none");
   });
 
   it("detail panel shows pods-on-node list", () => {

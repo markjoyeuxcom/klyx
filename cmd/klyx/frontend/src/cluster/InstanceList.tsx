@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceDTO, type InstanceColumnDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
-import { Age } from "../chrome/Age";
+import { Age, useReceivedAt } from "../chrome/Age";
+import { Aspect } from "../chrome/primitives/Aspect";
+import { columnTitle, columnWidth, fleetColumns, rowMark, splitColumns } from "./serverColumns";
 import { EmptyState, SkeletonRows } from "../chrome/primitives";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
 import { IconAlertTriangle, IconStack2 } from "@tabler/icons-react";
@@ -32,11 +34,14 @@ type FleetInstanceRow = InstanceDTO & { cluster: string };
 // A cluster that does not serve the kind is capability evidence (not an
 // error, not an empty read). A failed continuation keeps its token so it can
 // be retried without rereading the whole fleet.
+// answers: the printer columns every page that answered was read with - one
+// entry per cluster's first page and per continuation; columns draw only
+// when they all agree (The Line slice 15a, design review 1).
 type FleetInstanceState = {
   rows: FleetInstanceRow[]; loading: boolean; errors: string[]; tokens: Record<string, string>; loadingMore: boolean;
-  notServed: string[]; continued: boolean; continuationErrors: string[];
+  notServed: string[]; continued: boolean; continuationErrors: string[]; answers: (InstanceColumnDTO[] | null)[];
 };
-const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], tokens: {}, loadingMore: false, notServed: [], continued: false, continuationErrors: [] };
+const FLEET_IDLE: FleetInstanceState = { rows: [], loading: false, errors: [], tokens: {}, loadingMore: false, notServed: [], continued: false, continuationErrors: [], answers: [] };
 
 const keyOfRow = (r: { cluster: string; namespace: string; name: string }) => `${r.cluster}/${r.namespace}/${r.name}`;
 
@@ -93,9 +98,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(fleetTargets.map(async (target) => {
       try {
         const page = await listInstancePage(target, resource);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "", notServed: !!page.notServed };
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "", notServed: !!page.notServed, columns: page.columns ?? null };
       } catch {
-        return { target, rows: [] as FleetInstanceRow[], token: "", error: target, notServed: false };
+        return { target, rows: [] as FleetInstanceRow[], token: "", error: target, notServed: false, columns: null };
       }
     })).then((results) => {
       if (gen !== fleetGen.current) return;
@@ -105,6 +110,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
         errors: results.filter((r) => r.error).map((r) => r.error),
         tokens: Object.fromEntries(results.filter((r) => r.token).map((r) => [r.target, r.token])),
         notServed: results.filter((r) => r.notServed).map((r) => r.target),
+        answers: results.filter((r) => !r.error && !r.notServed).map((r) => r.columns),
       });
     });
     // Bumping the generation invalidates this read and any continuation.
@@ -122,9 +128,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(pending.map(async ([target, token]) => {
       try {
         const page = await listInstancePage(target, resource, token);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, failed: false };
+        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, failed: false, columns: page.columns ?? null };
       } catch {
-        return { target, rows: [] as FleetInstanceRow[], token, failed: true };
+        return { target, rows: [] as FleetInstanceRow[], token, failed: true, columns: null };
       }
     })).then((results) => {
       if (gen !== fleetGen.current) return;
@@ -138,6 +144,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           loadingMore: false,
           continued: st.continued || results.some((r) => !r.failed),
           continuationErrors: results.filter((r) => r.failed).map((r) => r.target),
+          answers: [...st.answers, ...results.filter((r) => !r.failed).map((r) => r.columns)],
           tokens,
         };
       });
@@ -159,20 +166,32 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   );
   const fleetCounts = fleetState.rows.reduce<Record<string, number>>((acc, row) => { acc[row.cluster] = (acc[row.cluster] ?? 0) + 1; return acc; }, {});
   const q = instances.filter.toLowerCase();
-  const rowsWithRisk = useMemo(() => all.map((row) => ({ row, risk: riskFor(resource, row) })), [all, resource]);
+  // The server's printer columns (The Line slice 15a): one set for the whole
+  // displayed list, or none when its pages - or the fleet's clusters - were
+  // read with different ones (design review 1).
+  const fleetCols = useMemo(() => fleetColumns(fleetState.answers), [fleetState.answers]);
+  const serverCols = fleetMode ? fleetCols.columns : (isCurrent ? instances.columns ?? null : null);
+  const columnsMismatch = fleetMode ? fleetCols.mismatch : !!(isCurrent && instances.columnsMismatch);
+  const { list: listCols, mark: markCol } = useMemo(() => splitColumns(serverCols), [serverCols]);
+  const readAt = useReceivedAt(fleetMode ? fleetState.rows : instances.rows);
+  const rowsWithRisk = useMemo(() => all.map((row) => ({ row, risk: riskFor(resource, row), mark: rowMark(row, markCol) })), [all, resource, markCol]);
   const attentionCount = rowsWithRisk.filter((r) => r.risk.bad).length;
   const rows = useMemo(() => rowsWithRisk
     .filter(({ row, risk }) => {
       if (instances.riskOnly && !risk.bad) return false;
       if (!q) return true;
       return row.name.toLowerCase().includes(q) || row.cluster.toLowerCase().includes(q) || row.namespace.toLowerCase().includes(q) ||
-        risk.reason.toLowerCase().includes(q) || Object.values(row.fields ?? {}).some((v) => v.toLowerCase().includes(q));
+        risk.reason.toLowerCase().includes(q) || Object.values(row.fields ?? {}).some((v) => v.toLowerCase().includes(q)) ||
+        (serverCols ? (row.cells ?? []).some((v) => v.toLowerCase().includes(q)) : false);
     })
     .sort((a, b) => {
-      if (a.risk.bad !== b.risk.bad) return a.risk.bad ? -1 : 1;
+      // broken first: a risk, or a recorded fault in a proven condition column
+      const ab = a.risk.bad || a.mark?.aspect === "fault";
+      const bb = b.risk.bad || b.mark?.aspect === "fault";
+      if (ab !== bb) return ab ? -1 : 1;
       if (a.row.cluster !== b.row.cluster) return a.row.cluster.localeCompare(b.row.cluster);
       return a.row.namespace === b.row.namespace ? a.row.name.localeCompare(b.row.name) : a.row.namespace.localeCompare(b.row.namespace);
-    }), [rowsWithRisk, instances.riskOnly, q]);
+    }), [rowsWithRisk, instances.riskOnly, q, serverCols]);
   const loading = fleetMode ? fleetState.loading : instances.loading;
   const fleetCapped = Object.keys(fleetState.tokens);
   const fleetAllFailed = fleetMode && !fleetState.loading && fleetTargets.length > 0 && fleetState.errors.length === fleetTargets.length;
@@ -249,14 +268,15 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
 
   // Columns: identity keeps its floor; scope and kind-specific columns join by
   // priority; age last.
-  const columns: (ColumnDef & { label: string })[] = useMemo(() => [
-    ...(riskSupported ? [ROW_MARK] : []),
+  const columns: (ColumnDef & { label: string; title?: string; numeric?: boolean })[] = useMemo(() => [
+    ...(riskSupported || markCol ? [ROW_MARK] : []),
     ...(fleetMode ? [{ id: "cluster", label: "Cluster", width: 120, priority: 1 }] : []),
     ...(namespaced ? [{ id: "namespace", label: "Namespace", width: 140, priority: 1 }] : []),
     { id: "name", label: "Name", width: 240, priority: 0, flex: true },
     ...extraColumns.map((c, i) => ({ id: `f:${c.key}`, label: titleCase(c.label), width: floorOf(c.width), grow: growOf(c.width), priority: 2 + i })),
-    { id: "age", label: "Age", width: 56, priority: 2 + extraColumns.length },
-  ], [riskSupported, fleetMode, namespaced, extraColumns]);
+    ...listCols.map(({ col, idx }, i) => ({ id: `c:${idx}`, label: col.name, title: columnTitle(col), numeric: col.numeric, ...columnWidth(col), priority: 2 + extraColumns.length + i })),
+    { id: "age", label: "Age", width: 56, priority: 2 + extraColumns.length + listCols.length },
+  ], [riskSupported, markCol, fleetMode, namespaced, extraColumns, listCols]);
   const fitted = useMemo(() => fitColumns(columns, bodyWidth), [columns, bodyWidth]);
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
@@ -327,8 +347,13 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
           </label>
         </>
       }
-      notice={(readError && all.length > 0) || (fleetMode && !fleetAllFailed && (fleetState.errors.length > 0 || fleetCapped.length > 0 || fleetState.notServed.length > 0)) ? (
+      notice={(readError && all.length > 0) || columnsMismatch || (fleetMode && !fleetAllFailed && (fleetState.errors.length > 0 || fleetCapped.length > 0 || fleetState.notServed.length > 0)) ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {columnsMismatch && (
+            <div role="status" data-testid="columns-mismatch" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
+              <span>Columns are not shown: the {fleetMode ? "clusters" : "pages"} were read with different printer columns{fleetMode ? " (CRD versions?)" : ""}.</span>
+            </div>
+          )}
           {readError && all.length > 0 && <WatchErrorBanner tool={resource.kind} failure="read failed - showing the last good read" error={readError} />}
           {fleetMode && !fleetAllFailed && fleetCapped.length > 0 && (
             <div role="status" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
@@ -359,7 +384,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
       body={
         <LensTable minWidth={fitted.minWidth} onWidth={setBodyWidth}>
           <div className="lens-table-head" role="row" data-testid="instance-list-header" style={gridStyle}>
-            {columns.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
+            {columns.filter((c) => show(c.id)).map((c) => <span key={c.id} title={c.title} className={c.numeric ? "lens-cell-num" : undefined}>{c.label}</span>)}
           </div>
           <VirtualList
             ref={listRef}
@@ -367,7 +392,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
             rowHeight={TABLE_ROW_HEIGHT}
             rowKey={({ row }) => keyOfRow(row)}
             style={{ flex: 1, minHeight: 0 }}
-            render={({ row: r, risk }) => {
+            render={({ row: r, risk, mark }) => {
               const k = keyOfRow(r);
               return (
                 <div
@@ -383,7 +408,9 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                   onClick={() => { setCursorKey(k); openRow(r); }}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(r); } }}
                 >
-                  {show("mark") && <VerdictMark health={risk.bad ? { kind: "degraded", label: "needs attention" } : { kind: "ok", label: "" }} label={risk.bad ? `needs attention: ${risk.reason}` : undefined} />}
+                  {show("mark") && (riskSupported
+                    ? <VerdictMark health={risk.bad ? { kind: "degraded", label: "needs attention" } : { kind: "ok", label: "" }} label={risk.bad ? `needs attention: ${risk.reason}` : undefined} />
+                    : mark ? <span className="row-mark" role="img" aria-label={mark.label} title={mark.label}><Aspect kind={mark.aspect} size={10} /></span> : <span className="row-mark" aria-hidden="true" />)}
                   {show("cluster") && <span className="t-identifier" style={{ color: "var(--color-text-info)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.cluster}</span>}
                   {show("namespace") && <span style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.namespace}</span>}
                   {show("name") && (
@@ -394,6 +421,12 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                   )}
                   {extraColumns.map((c) => show(`f:${c.key}`) && (
                     <span key={c.key} className="t-identifier" style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.fields?.[c.key] || "-"}>{r.fields?.[c.key] || "-"}</span>
+                  ))}
+                  {listCols.map(({ col, idx }) => show(`c:${idx}`) && (
+                    <span key={idx} className={col.numeric ? "lens-cell-num" : undefined} style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={col.type === "date" && readAt ? `${r.cells?.[idx] ?? ""} as of the read at ${new Date(readAt).toLocaleTimeString()}` : (r.cells?.[idx] || undefined)}>
+                      {r.cells?.[idx] || "-"}
+                    </span>
                   ))}
                   {show("age") && <span style={{ color: "var(--color-text-tertiary)" }}><Age iso={r.created} fallback="" /></span>}
                 </div>

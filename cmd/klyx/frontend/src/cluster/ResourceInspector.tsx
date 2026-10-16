@@ -2,6 +2,9 @@ import { Fragment, useContext, useState } from "react";
 import { InspectorBlock, InspectorTemplate } from "../layout/InspectorLayout";
 import { IconChevronRight } from "@tabler/icons-react";
 import { Aspect, aspectOfVerdict, StatusDot, toneColor, type Tone } from "../chrome/primitives";
+import type { AspectKind } from "../chrome/primitives/Aspect";
+import { ClampedText } from "../chrome/ClampedText";
+import { conditionAspect, conditionState, NEGATIVE_CONDITIONS } from "../chrome/conditions";
 import { Age } from "../chrome/Age";
 import { compactCount } from "../chrome/format";
 import type { ConditionDTO, EventDTO } from "../store/fleet";
@@ -280,63 +283,66 @@ export function InspectorStatus({ tone, kind, label, reason, detail }: {
   );
 }
 
-// Conditions where True means trouble and False is the healthy state - the
-// inverse of the usual Ready-style polarity (HPA ScalingLimited, node
-// pressure conditions). Without this a healthy HPA renders a red dot.
-export const NEGATIVE_POLARITY = new Set([
-  "ScalingLimited",
-  "MemoryPressure",
-  "DiskPressure",
-  "PIDPressure",
-  "NetworkUnavailable",
-]);
+// Condition polarity lives in one registry (chrome/conditions.ts, The Line
+// slice 15 design review 1): a known type in its bad state is danger, in its
+// good state success, and Unknown or an unknown type is info - never assumed
+// positive. NEGATIVE_POLARITY stays exported for older callers.
+export const NEGATIVE_POLARITY = NEGATIVE_CONDITIONS;
 
 export function conditionColor(status: string, type?: string): string {
-  const negative = type !== undefined && NEGATIVE_POLARITY.has(type);
-  const healthy = negative ? status === "False" : status === "True";
-  const unhealthy = negative ? status === "True" : status === "False";
-  return healthy ? "var(--color-text-success)" : unhealthy ? "var(--color-text-danger)" : "var(--color-text-info)";
+  const s = conditionState(type ?? "", status);
+  return s === "good" ? "var(--color-text-success)" : s === "bad" ? "var(--color-text-danger)" : "var(--color-text-info)";
+}
+
+// aspectOfColor reads a caller's colour override as a mark: a caller with
+// stricter semantics (a node treats Unknown pressure as a problem) keeps its
+// rule, and only the presentation changes.
+function aspectOfColor(color: string): AspectKind {
+  if (color.includes("danger")) return "fault";
+  if (color.includes("warning")) return "attention";
+  if (color.includes("tertiary")) return "checking";
+  return "none";
 }
 
 /**
- * InspectorConditions — one conditions rendering for every panel. `colorOf`
- * overrides the polarity rule where a kind has stricter semantics (nodes
- * treat Unknown pressure as a problem, not merely indeterminate).
+ * InspectorConditions - one conditions rendering for every panel, at the
+ * slice-13 scale (The Line slice 15b). Each condition is a row: its mark,
+ * type, status word, reason and the age of its last transition; the message
+ * sits below and wraps, clamped past three lines. A condition recorded for
+ * an older generation says so. Marks come from the polarity registry;
+ * `colorOf` overrides it where a kind has stricter semantics.
  */
-export function InspectorConditions({ conditions, colorOf }: { conditions: ConditionDTO[]; colorOf?: (c: ConditionDTO) => string }) {
+export function InspectorConditions({ conditions, colorOf, generation }: { conditions: ConditionDTO[]; colorOf?: (c: ConditionDTO) => string; generation?: number }) {
   if (conditions.length === 0) {
-    return <span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>No conditions reported.</span>;
+    return <span className="cond-empty">No conditions reported.</span>;
   }
-  const dotColor = colorOf ?? ((c: ConditionDTO) => conditionColor(c.status, c.type));
+  const aspectOf = (c: ConditionDTO): AspectKind => (colorOf ? aspectOfColor(colorOf(c)) : conditionAspect(c.type, c.status));
   return (
-    <>
-      {conditions.map((c, i) => (
-        <div key={`${c.scope ?? ""}/${c.type}/${i}`} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11, padding: "1px 0" }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor(c), display: "inline-block", flexShrink: 0, alignSelf: "center" }} />
-          <span style={{ fontWeight: 500, flexShrink: 0, whiteSpace: "nowrap" }}>{c.type}</span>
-          {/* Scope attributes a nested condition to its sub-object (Gateway API
-              parent/listener) so two "Accepted" blocks are distinguishable. */}
-          {c.scope && (
-            <span style={{ flexShrink: 0, fontSize: 9, color: "var(--color-text-tertiary)", background: "var(--color-background-tertiary, var(--color-background-secondary))", padding: "0 5px", borderRadius: 3, fontFamily: "var(--font-mono)" }}>
-              {c.scope}
-            </span>
-          )}
-          {/* The status value itself, not just its dot encoding - "Ready False"
-              must be readable, colour stays the severity channel. */}
-          {c.status && (
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, flexShrink: 0, color: dotColor(c) }}>{c.status}</span>
-          )}
-          {c.reason && (
-            <span style={{ flexShrink: 0, fontSize: 10, color: "var(--color-text-tertiary)", background: "var(--color-background-secondary)", padding: "0 5px", borderRadius: 3, fontFamily: "var(--font-mono)" }}>
-              {c.reason}
-            </span>
-          )}
-          <span style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.message}>
-            {c.message}
-          </span>
-        </div>
-      ))}
-    </>
+    <ul className="conds">
+      {conditions.map((c, i) => {
+        const aspect = aspectOf(c);
+        const og = c.observedGeneration ?? 0;
+        const behind = generation !== undefined && generation > 0 && og > 0 && og < generation;
+        return (
+          <li key={`${c.scope ?? ""}/${c.type}/${i}`} className="cond" data-aspect={aspect}>
+            <span className="cond-mark"><Aspect kind={aspect} label={aspect === "none" ? undefined : `${c.type} ${c.status}`} /></span>
+            <div className="cond-main">
+              <div className="cond-line">
+                <span className="cond-type">{c.type}</span>
+                {/* Scope attributes a nested condition to its sub-object (Gateway API
+                    parent/listener) so two "Accepted" blocks are distinguishable. */}
+                {c.scope && <span className="cond-scope">{c.scope}</span>}
+                {c.status && <span className="cond-status">{c.status}</span>}
+                {c.reason && <span className="cond-reason">{c.reason}</span>}
+                {c.lastTransition && <span className="cond-age"><Age iso={c.lastTransition} suffix=" ago" /></span>}
+                {behind && <span className="cond-gen" title="The condition was last written for an older generation than the object's.">for generation {og} of {generation}</span>}
+              </div>
+              {c.message && <ClampedText className="cond-msg" text={c.message} lines={3} />}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

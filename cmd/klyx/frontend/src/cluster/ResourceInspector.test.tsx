@@ -37,6 +37,11 @@ describe("conditionColor", () => {
     // HPA ScalingLimited=False means "within range" - never a red dot.
     expect(conditionColor("False", "ScalingLimited")).toContain("success");
     expect(conditionColor("Unknown", "Ready")).toContain("info");
+    // the registry (slice 15 review 1): Stalled is negative, and a type it
+    // does not know is neutral, never assumed positive
+    expect(conditionColor("True", "Stalled")).toContain("danger");
+    expect(conditionColor("False", "Stalled")).toContain("success");
+    expect(conditionColor("False", "Frobbed")).toContain("info");
   });
 });
 
@@ -60,8 +65,28 @@ describe("InspectorConditions", () => {
         colorOf={() => "var(--color-text-danger)"}
       />,
     );
-    const dot = container.querySelector("span");
-    expect((dot as HTMLElement).style.background).toContain("danger");
+    // the override keeps its rule; the mark is its presentation
+    expect(container.querySelector(".cond")?.getAttribute("data-aspect")).toBe("fault");
+  });
+
+  it("marks by the shared polarity registry: Stalled is negative, an unknown type is neutral (slice 15 review 1)", () => {
+    const { container } = render(
+      <InspectorConditions conditions={[
+        { type: "Stalled", status: "True", reason: "", message: "" },
+        { type: "Stalled", status: "False", reason: "", message: "" },
+        { type: "Frobbed", status: "False", reason: "", message: "" },
+        { type: "Ready", status: "Unknown", reason: "", message: "" },
+        { type: "Ready", status: "True", reason: "", message: "" },
+      ]} />,
+    );
+    expect([...container.querySelectorAll(".cond")].map((c) => c.getAttribute("data-aspect"))).toEqual(["fault", "none", "none", "checking", "none"]);
+  });
+
+  it("says when a condition was recorded for an older generation, and how old it is", () => {
+    const at = new Date(Date.now() - 3.5 * 86400_000).toISOString();
+    const { getByText } = render(<InspectorConditions generation={4} conditions={[{ type: "Ready", status: "False", reason: "Broken", message: "", lastTransition: at, observedGeneration: 3 }]} />);
+    expect(getByText("for generation 3 of 4")).toBeTruthy();
+    expect(getByText("3d ago")).toBeTruthy();
   });
 
   it("says so when there are no conditions", () => {

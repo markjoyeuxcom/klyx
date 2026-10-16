@@ -121,7 +121,9 @@ export type ArgoAppDTO = {
 // error = the kind is not served. Never render a failed read as "not installed".
 export type ArgoProjectsResultDTO = { available: boolean; message?: string; error?: string; projects: ArgoProjectDTO[] };
 
-export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string };
+// lastTransition (RFC3339) and observedGeneration as the condition records
+// them - set by the generic inspector (The Line slice 15b); absent elsewhere.
+export type ConditionDTO = { type: string; status: string; reason: string; message: string; scope?: string; lastTransition?: string; observedGeneration?: number };
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
 export type FluxSourceDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
@@ -542,11 +544,27 @@ export type EventsSlice = {
 };
 
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
-export type InstanceDTO = { namespace: string; name: string; created: string; fields?: Record<string, string> };
+// cells: the server's printer-column values, in the page's columns order
+// (The Line slice 15a).
+export type InstanceDTO = { namespace: string; name: string; created: string; fields?: Record<string, string>; cells?: string[] };
+// One of the server's printer columns. priority 0 is kubectl's default view,
+// 1 and above is -o wide; conditionType is set only when the JSONPath proves
+// the column is a condition's status (design review 1).
+export type InstanceColumnDTO = { name: string; type: string; format: string; description: string; jsonPath: string; priority: number; numeric: boolean; conditionType?: string };
+// columnsSignature: what makes two pages' cells comparable - cells are
+// positional, so a page drawn under another page's columns would mislabel
+// its values (design review 1).
+export function columnsSignature(cols: InstanceColumnDTO[] | null | undefined): string {
+  return cols ? JSON.stringify(cols.map((c) => [c.name, c.type, c.format, c.priority, c.jsonPath])) : "none";
+}
 // error: the last page read FAILED - rows are then not "no instances".
 // cluster + ref identify the list a page belongs to; a late page for any other
 // cluster/GVR is dropped (review 2026-10-03 #5).
-export type InstancesSlice = { cluster: string | null; ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null };
+// columns: the list's printer columns, from its first page; null when it was
+// read without a table, or when a later page's columns differed
+// (columnsMismatch) - the whole list then draws no columns.
+export type InstancesSlice = { cluster: string | null; ref: ResourceRef | null; rows: InstanceDTO[]; nextToken: string; loading: boolean; filter: string; riskOnly: boolean; error?: string | null;
+  columns?: InstanceColumnDTO[] | null; columnsMismatch?: boolean };
 
 // expectUid: the object meant, by UID (The Line slice 9 note §4.2) - the
 // inspector says replaced, removed or unverified rather than show another.
@@ -970,8 +988,8 @@ type FleetState = {
   closeResource: () => void;
   instances: InstancesSlice;
   setInstancesLoading: (cluster: string, ref: ResourceRef) => void;
-  setInstancePage: (items: InstanceDTO[], nextToken: string) => void;
-  addInstancePage: (items: InstanceDTO[], nextToken: string) => void;
+  setInstancePage: (items: InstanceDTO[], nextToken: string, columns?: InstanceColumnDTO[] | null) => void;
+  addInstancePage: (items: InstanceDTO[], nextToken: string, columns?: InstanceColumnDTO[] | null) => void;
   setInstanceFilter: (s: string) => void;
   setInstanceRiskOnly: (v: boolean) => void;
   toggleInstanceRiskOnly: () => void;
@@ -1154,8 +1172,13 @@ export const useFleet = create<FleetState>((set) => ({
     const sameRef = s.instances.cluster === cluster && s.instances.ref?.group === ref.group && s.instances.ref?.version === ref.version && s.instances.ref?.plural === ref.plural;
     return { instances: { cluster, ref, rows: [], nextToken: "", loading: true, filter: sameRef ? s.instances.filter : "", riskOnly: sameRef ? s.instances.riskOnly : false } };
   }),
-  setInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false, error: null } })),
-  addInstancePage: (items, nextToken) => set((s) => ({ instances: { ...s.instances, rows: [...s.instances.rows, ...items], nextToken, loading: false } })),
+  setInstancePage: (items, nextToken, columns = null) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false, error: null, columns: columns ?? null, columnsMismatch: false } })),
+  addInstancePage: (items, nextToken, columns = null) => set((s) => {
+    // A continuation read with other columns (or none) fails closed: the
+    // whole list stops drawing columns, never values under the wrong ones.
+    const mismatch = !!s.instances.columnsMismatch || columnsSignature(s.instances.columns) !== columnsSignature(columns);
+    return { instances: { ...s.instances, rows: [...s.instances.rows, ...items], nextToken, loading: false, columns: mismatch ? null : s.instances.columns, columnsMismatch: mismatch } };
+  }),
   setInstanceFilter: (filter) => set((s) => ({ instances: { ...s.instances, filter } })),
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
   toggleInstanceRiskOnly: () => set((s) => ({ instances: { ...s.instances, riskOnly: !s.instances.riskOnly } })),
