@@ -16,6 +16,7 @@
 # Stray build artifacts under cmd/klyx (go build / npm run from the wrong dir)
 /cmd/klyx/klyx
 /cmd/klyx/node_modules/
+/cmd/klyx/frontend/src/node_modules/
 
 # Task runner cache
 .task/
