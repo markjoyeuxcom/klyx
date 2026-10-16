@@ -91,8 +91,8 @@ func TestSanitizeEmbedded_Registry(t *testing.T) {
 		if s.EditEligible {
 			t.Errorf("%s: an object with a payload must not be edit-eligible", c.name)
 		}
-		if s.DescribeMode != DescribeWithheld {
-			t.Errorf("%s: Describe must be withheld, got %q", c.name, s.DescribeMode)
+		if s.DescribeMode != DescribeWithheld || !s.Payload {
+			t.Errorf("%s: a payload, Describe withheld; got %q payload=%v", c.name, s.DescribeMode, s.Payload)
 		}
 		if mustJSON(t, in) != before {
 			t.Errorf("%s: the input was mutated", c.name)
@@ -114,8 +114,8 @@ func TestSanitizeEmbedded_URLOnlyKind(t *testing.T) {
 	if strings.Contains(out, ndl) || !strings.Contains(out, "https://github.com/org/repo") {
 		t.Fatalf("url: %s", out)
 	}
-	if s.EditEligible || s.DescribeMode != DescribeURLScrubbed {
-		t.Fatalf("metadata: %+v", s)
+	if s.EditEligible || s.DescribeMode != DescribeURLScrubbed || s.Payload {
+		t.Fatalf("a URL is not a payload: %+v", s)
 	}
 	clean := SanitizeEmbedded("source.toolkit.fluxcd.io", "GitRepository", objOf(t, `{"spec":{"url":"https://github.com/org/repo","interval":"1m"}}`))
 	if !clean.EditEligible || len(clean.Paths) != 0 {
@@ -127,8 +127,8 @@ func TestSanitizeEmbedded_URLOnlyKind(t *testing.T) {
 // last-applied snapshot is removed but that does not block an edit.
 func TestSanitizeEmbedded_RegisteredKindWithoutPayload(t *testing.T) {
 	s := SanitizeEmbedded("kustomize.toolkit.fluxcd.io", "Kustomization", objOf(t, `{"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{}"}},"spec":{"path":"./apps","interval":"10m"}}`))
-	if !s.EditEligible {
-		t.Fatalf("no payload: editable, got %+v", s)
+	if !s.EditEligible || s.Payload || s.DescribeMode != DescribeURLScrubbed {
+		t.Fatalf("no payload: editable and describable, got %+v", s)
 	}
 	if strings.Contains(mustJSON(t, s.Object), "last-applied-configuration") {
 		t.Fatal("the snapshot is stripped for a registered kind")

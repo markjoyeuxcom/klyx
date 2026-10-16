@@ -112,7 +112,8 @@ type Conn interface {
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	DescribeArgv(kindArg, namespace, name string) ([]string, error)
-	DescribeKind(ctx context.Context, kindArg string) (string, string, error)
+	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
+	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error

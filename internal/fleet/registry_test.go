@@ -6,6 +6,7 @@ import (
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/observe"
 	"io"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os/exec"
 	"strings"
 	"testing"
@@ -171,8 +172,12 @@ func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, 
 func (f *fakeConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "true"), nil
 }
-func (f *fakeConn) DescribeKind(_ context.Context, kindArg string) (string, string, error) {
-	return "", "Pod", nil
+func (f *fakeConn) DescribeTarget(_ context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error) {
+	return schema.GroupVersionResource{Version: "v1", Resource: "pods"}, schema.GroupVersionKind{Version: "v1", Kind: "Pod"}, nil
+}
+
+func (f *fakeConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, bool, error) {
+	return "u", "1", false, nil
 }
 
 func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {

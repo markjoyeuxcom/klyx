@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"io"
 	"reflect"
 	"regexp"
@@ -860,7 +861,7 @@ func (t *chatTools) list(ctx context.Context, kind, group, ns, selector string, 
 	var refs []ChatRef
 	for i := range l.Items {
 		u := &l.Items[i]
-		row := chatRow{Namespace: u.GetNamespace(), Name: u.GetName(), Status: p.str(statusSummary(k.GVR, u), chatStringMax)}
+		row := chatRow{Namespace: u.GetNamespace(), Name: u.GetName(), Status: p.str(urlscrub.Text(statusSummary(k.GVR, u)).Text, chatStringMax)}
 		if ts := u.GetCreationTimestamp(); !ts.IsZero() {
 			row.Age = ageText(now.Sub(ts.Time))
 		}

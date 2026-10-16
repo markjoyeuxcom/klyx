@@ -1019,9 +1019,11 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
 // frontend, so an edit could only write placeholders back - Edit is not
 // offered, and the backend refuses an apply regardless.
 function SanitisedManifest({ kind, detail }: { kind: string; detail: InstanceDetailDTO }) {
-  const why = detail.describeMode === "withheld"
-    ? `Klyx shows this ${kind} sanitised: its templates, patches and values are omitted, and any embedded Secret is masked, because they can carry secrets.`
-    : `Klyx shows this ${kind} without the credentials in its URLs.`;
+  const why = kind === "Secret"
+    ? "Klyx shows this Secret with its values masked."
+    : detail.describeMode === "withheld"
+      ? `Klyx shows this ${kind} sanitised: its templates, patches and values are omitted, and any embedded Secret is masked, because they can carry secrets.`
+      : `Klyx shows this ${kind} without the credentials in its URLs.`;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}>
       <div role="status" className="evidence-panel" data-tone="neutral" data-testid="manifest-sanitised">

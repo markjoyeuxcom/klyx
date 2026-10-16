@@ -97,8 +97,8 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
 
 ## 4. Describe
 
-Two modes, chosen by kind with no pre-read, so no race:
-- **`withheld` (registered payload kinds), regardless of the object's current content.**
+*Revision 4 (found by the native smoke) replaces the first mode below; see §13.* Two modes, chosen by kind:
+- **`withheld` (registered payload kinds), regardless of the object's current content.** *Superseded by §13: a payload kind is now described inside a version bracket, and withheld only when it carries a payload or the bracket fails.*
   - kubectl is not run, and neither stdout nor stderr is returned.
   - The result carries `Withheld` with the reason, for example: "Describe is withheld for a ResourceSet: kubectl's text would include its templates, patches or values, which can carry secrets. The Manifest view shows a sanitised copy."
   - The sheet shows the reason and offers no Copy of a report.
@@ -224,4 +224,100 @@ Also adopted from the review's other rulings: user info removed rather than mask
 |---|---|---|
 | 1 | An `@`-dependent matcher is not fail-closed: kubectl truncates annotation lines at 138 bytes, so a credential URL can lose its `@` | §4's conservative text policy: candidate delimiting; truncated, port-less-colon and end-of-line authorities redacted; undelimitable lines withheld; real-truncation regression tests |
 | 2 | Cached CRD columns are not bound to a later Table's selector | §3: for protected kinds, server cell text is never released. Cells are evaluated locally over the sanitised object (`includeObject=Object`), so a stale definition can only show safe values |
+
+## 12. As built
+
+The design was accepted at 30147ae. The build is five commits: 9260be4 (stages 1-2), b310576 (3-5), bfce835 (6-7), 87bc1df (8), and a follow-up putting the URL rule on chat list rows.
+
+**Stages 1-2: the policy and the sanitiser.**
+- `internal/urlscrub` is the text policy of §4.
+  - Candidates are scheme tokens, with the authority ending at `/ ? #`, whitespace, a quote, a comma, a semicolon or a bracket, and SCP-style tokens.
+  - The authority is percent-decoded, and the user info is everything before the last `@`, kept only when it is exactly `git`.
+  - Redacted: a truncation marker, a port-less colon, an unbalanced IPv6 authority. An undelimitable candidate withholds its line.
+  - `Field` withholds a whole URL value that cannot be delimited. The policy is idempotent.
+- `crd.SanitizeEmbedded` is the registry of §1 and §1.1 plus the URL rule over every string leaf.
+  - `EditEligible` ignores only the removal of the last-applied snapshot (an apply never sends it).
+  - Paths quote keys holding `.`, `[` or `"`, and `crd.ValueAt` reads them back.
+  - Placeholders: `<omitted: may carry secrets>`, `<omitted>`, `<omitted> × n` for a list of scalars, `<withheld>` and `<masked>`.
+- **A correction to §1.1:** Argo's `helm.fileParameters` entries are `{name, path}`, and `path` is a file reference, so it stays readable (not free-form).
+
+**Stages 3-5: the detail, Describe and the apply.**
+- **`GetInstanceDetail`:**
+  - sanitises before any DTO field, with conditions now read from the sanitised object;
+  - passes event messages through the URL rule;
+  - carries `EditEligible` and `DescribeMode`.
+- **Protected kinds' lists:**
+  - `readTable(..., wholeObjects)` asks for `includeObject=Object`;
+  - `crd.LocalPage` evaluates each printer column with client-go `util/jsonpath` over the sanitised row object, using the server's own coercions (`cellForJSONValue`, `ConvertToHumanReadableDateType`);
+  - the server's cells are discarded unread.
+- **Printer columns** are cached for one minute per CRD and version (`payloadColumns`), for presentation only.
+- **Protected kinds' Summary** is evaluated the same way. Other kinds' cells pass the URL rule.
+- **Describe:**
+  - `DescribeKind` resolves the resource argument through a discovery RESTMapper with the short-name expander, trying `resource.version.group` and then `resource.group`, as kubectl does;
+  - a failure, or a payload kind, is withheld before any command is built;
+  - otherwise both streams are scrubbed, and `Scrubbed` and `LinesWithheld` label the result.
+- **The apply,** `ApplyResourceYAML(…, expectedUID, …)`:
+  - refuses placeholders and a failed or missing read (it never creates), and refuses a replaced UID;
+  - refuses unless both documents are edit-eligible;
+  - sets the live `resourceVersion` as the apply's precondition;
+  - a precondition conflict reads "changed since it was opened".
+
+**Stages 6-7: diffs, DTOs and chat.**
+- **Cache diffs:** `omittedChanges` compares raw values at every sanitiser path of either side before the diff of sanitised copies, and `OmittedChanged` reaches the DTO and the rendered text.
+- **The URL rule** now also covers:
+  - `FluxSourceDTO.URL`, Flux condition messages, Git links (the remote is scrubbed before `normalizeRemote`, which cut at the first `@`);
+  - Argo repo URLs, condition and operation messages;
+  - The Line's chart URLs and promotion source names;
+  - every event message across the bridge (generic, pods, nodes, events lens, Karpenter, ESO).
+- **Chat:** the get tool sanitises before its projection, and list rows pass the URL rule.
+
+**Stage 8: the frontend.**
+- An object that is not edit-eligible opens a read-only `SanitisedManifest` with the reason; dry-run and apply send the inspector's UID.
+- The Describe sheet shows a withheld reason (Copy disabled, the command offered), and a scrubbed caption.
+
+**Tests:**
+- **Bridge needles:** the serialised detail DTO (a ResourceSet; a credential GitRepository; an Argo Application with a pending operation, inline manifests, a historical source and Jsonnet `extVars`), the chat get result, and the full Suggest-fix prompt.
+- **Protected-kind local cells:** a needle only in the server Table, and a column changed to a protected path.
+- **Cache-diff omitted changes:** the same-length template change, a Secret value-only change, and an unchanged section beside a visible change.
+- **The apply guard:** the credential-URL interval edit, placeholders, a replaced UID, a missing object, the `resourceVersion` precondition, and a payload kind with a stale baseline.
+- **Describe:** withheld for a payload kind and when unclassified, both streams scrubbed, exact when clean.
+- **The URL policy:** units, kubectl's 138-byte cut at four points, and **kubectl's real describe output** captured from the lab (`urlscrub/testdata/describe-gitrepository.txt`).
+- **The gate:** vitest 2110 passed; `go test ./internal/...` passes.
+
+**Lab and smoke:**
+- **Fixtures** (`scratchpad/lab-s0b/apply.sh`, `lab-s1a/apply.sh`): the `with-secret` ResourceSet, a Kustomization `patched` with a patch and a substitute, and a GitRepository `creds-repo` with a token URL and a 150-byte credential annotation.
+- **The native smoke step "embedded payloads stay out":**
+  - no marker reaches the page or the detail;
+  - the Manifest is read-only;
+  - Describe is withheld for the ResourceSet and the Kustomization;
+  - the GitRepository's real report is scrubbed.
+
+## 13. Revision 4: payload kinds are described inside a version bracket
+
+**Found by the native smoke after the build.** Withholding Describe for every registered kind, whatever its content, removed Describe from every Flux Kustomization, HelmRelease and Argo Application. Those are the GitOps objects Klyx shows most, and slice 14's Describe-in-every-inspector lost them. The smoke step "Describe from the Flux inspector" failed on a Kustomization that carries no patch at all.
+
+**The protocol** is the fail-closed snapshot Codex named as acceptable in its review of 2961228 ("specify and prove a fail-closed snapshot/version protocol that buffers and discards BOTH stdout and stderr on uncertainty"). For a registered payload kind:
+1. Read the object through the API (`DescribeSnapshot`). Withhold if the read fails, or if the sanitiser finds a payload (`Sanitized.Payload`: a non-empty registered surface; URL user info alone is not a payload).
+2. Run kubectl describe, buffering stdout and stderr.
+3. Read the object again. Release the report only if the UID and `resourceVersion` are unchanged and there is still no payload. Otherwise both buffers are discarded and Describe is withheld, saying the object changed while it was described.
+
+**Why it holds:**
+- Every write to an object changes its `resourceVersion`, and a deletion followed by re-creation changes its UID.
+- Equal UID and `resourceVersion` before and after mean no write happened in between, so kubectl's own read saw exactly the payload-free version Klyx checked.
+- kubectl's generic describer, used for these CRDs, prints the object and its events. The events, like the rest, pass the URL text policy.
+- The `last-applied-configuration` annotation is skipped by kubectl describe itself.
+
+**Unchanged:**
+- non-payload kinds are URL-scrubbed;
+- an unclassifiable resource is withheld;
+- the copy command is offered in every case.
+
+**Also:**
+- **The detail's `DescribeMode`** now follows the object: `withheld` when it carries a payload, else `url-scrubbed`.
+- **Secrets:** a Secret with data counts as a payload, so its Manifest is read-only, with "Klyx shows this Secret with its values masked." The apply already refused masked Secret YAML, so nothing changes in practice except that the editor is no longer offered.
+
+**Tests** (`TestDescribe_PayloadKindBracket`):
+- clean and unchanged: released;
+- `resourceVersion` changed, UID replaced, a payload appearing, or the second read failing: each discarded;
+- the first read failing, or a payload present: withheld, with kubectl not run.
 

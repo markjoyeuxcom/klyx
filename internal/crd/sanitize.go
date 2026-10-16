@@ -44,8 +44,13 @@ type Sanitized struct {
 	// round-trip edit could write back (a payload or a URL's user info). The
 	// last-applied snapshot's removal does not count: an apply never sends it.
 	EditEligible bool
-	// DescribeMode is DescribeWithheld for a registered payload kind,
-	// DescribeURLScrubbed for every other kind.
+	// Payload is true when a registered payload surface was non-empty
+	// (masked, omitted or withheld) - URL user info and the last-applied
+	// snapshot do not count. Describe of a payload kind is released only
+	// for a version without one (S0b revision 4).
+	Payload bool
+	// DescribeMode is DescribeWithheld when the object carries a payload,
+	// DescribeURLScrubbed otherwise.
 	DescribeMode string
 }
 
@@ -129,8 +134,10 @@ func IsPayloadKind(group, kind string) bool {
 
 // sanitizer carries one run's changes.
 type sanitizer struct {
-	paths map[string]bool
-	edit  bool // a change that blocks a round-trip edit
+	paths   map[string]bool
+	edit    bool // a change that blocks a round-trip edit
+	payload bool // a registered surface was non-empty
+	inURLs  bool // marks made by the URL rule
 }
 
 func (s *sanitizer) mark(path string, blocksEdit bool) {
@@ -140,6 +147,9 @@ func (s *sanitizer) mark(path string, blocksEdit bool) {
 	s.paths[path] = true
 	if blocksEdit {
 		s.edit = true
+		if !s.inURLs {
+			s.payload = true
+		}
 	}
 }
 
@@ -158,10 +168,10 @@ func SanitizeEmbedded(group, kind string, obj map[string]any) Sanitized {
 	}
 	sort.Strings(paths)
 	mode := DescribeURLScrubbed
-	if IsPayloadKind(group, kind) {
+	if s.payload {
 		mode = DescribeWithheld
 	}
-	return Sanitized{Object: out, Paths: paths, EditEligible: !s.edit, DescribeMode: mode}
+	return Sanitized{Object: out, Paths: paths, EditEligible: !s.edit, Payload: s.payload, DescribeMode: mode}
 }
 
 // object sanitises one object in place (a copy already): its registered
@@ -479,11 +489,15 @@ func (s *sanitizer) generator(g map[string]any, at string, depth int) {
 	}
 }
 
-// urls applies the URL rule to every string leaf.
+// urls applies the URL rule to every string leaf. Its marks block an edit
+// but are not a payload.
 func (s *sanitizer) urls(v any, at string, depth int) {
 	if depth > sanitizeMaxDepth {
 		return
 	}
+	prev := s.inURLs
+	s.inURLs = true
+	defer func() { s.inURLs = prev }()
 	switch t := v.(type) {
 	case map[string]any:
 		for k, child := range t {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,9 +21,11 @@ type ExecConn interface {
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	DescribeArgv(kindArg, namespace, name string) ([]string, error)
-	// DescribeKind resolves the resource argument to group and kind through
-	// discovery (coverage S0b §4).
-	DescribeKind(ctx context.Context, kindArg string) (group, kind string, err error)
+	// DescribeTarget resolves the resource argument through discovery, and
+	// DescribeSnapshot reads the object for the version bracket around
+	// kubectl's own read (coverage S0b §4, revision 4).
+	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
+	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -218,16 +221,30 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	}
 	ctx, cancel := context.WithTimeout(ctx, describeTimeout)
 	defer cancel()
-	// Coverage S0b §4: classify before anything runs. A registered payload
-	// kind is withheld whatever its content (a pre-read could race kubectl's
-	// own read); a resource that cannot be classified is withheld too.
-	group, kind, cerr := conn.DescribeKind(ctx, kindArg)
+	// Coverage S0b §4 (revision 4): classify before anything runs. A
+	// resource that cannot be classified is withheld. A registered payload
+	// kind is described only inside a version bracket: the object is read
+	// before and after kubectl, and the report is released only when both
+	// reads show the same UID and resourceVersion with no payload - every
+	// write changes the resourceVersion, so kubectl's read in between saw
+	// that payload-free version. Anything else discards both streams.
+	gvr, gvk, cerr := conn.DescribeTarget(ctx, kindArg)
 	withheld := ""
+	payloadKind := cerr == nil && crd.IsPayloadKind(gvk.Group, gvk.Kind)
+	var preUID, preRV string
 	switch {
 	case cerr != nil:
 		withheld = "Describe is withheld: Klyx could not tell what kind of object this is (" + cerr.Error() + "), so it cannot rule out templates, patches or values that can carry secrets."
-	case crd.IsPayloadKind(group, kind):
-		withheld = "Describe is withheld for a " + kind + ": kubectl's text would include its templates, patches or values, which can carry secrets. The Manifest view shows a sanitised copy."
+	case payloadKind:
+		uid, rv, payload, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
+		switch {
+		case err != nil:
+			withheld = "Describe is withheld: Klyx could not read this " + gvk.Kind + " to check it for templates, patches or values that can carry secrets (" + err.Error() + ")."
+		case payload:
+			withheld = payloadWithheld(gvk.Kind)
+		default:
+			preUID, preRV = uid, rv
+		}
 	}
 	var res DescribeResultDTO
 	if argv, err := conn.DescribeArgv(kindArg, namespace, name); err != nil {
@@ -254,6 +271,20 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
+	if payloadKind {
+		uid, rv, payload, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
+		if err != nil || uid != preUID || rv != preRV || payload {
+			// discard both streams: the version kubectl read is not proven
+			stdout.Reset()
+			stderr.Reset()
+			if payload {
+				res.Withheld = payloadWithheld(gvk.Kind)
+			} else {
+				res.Withheld = "Describe is withheld: this " + gvk.Kind + " changed while it was being described, so Klyx cannot prove the report carries no templates, patches or values. Try again."
+			}
+			return res
+		}
+	}
 	// Coverage S0b §4: both streams pass the URL text policy before anything
 	// is returned; a transformed report is labelled, never called exact.
 	out := urlscrub.Text(stdout.String())
@@ -282,4 +313,8 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 // external-terminal escape hatch. Same platform behavior as OpenExecTerminal.
 func (s *ExecService) OpenTerminal() ActionResultDTO {
 	return launchTerminal(nil)
+}
+
+func payloadWithheld(kind string) string {
+	return "Describe is withheld for this " + kind + ": it carries templates, patches or values that can carry secrets, and kubectl's text would include them. The Manifest view shows a sanitised copy."
 }

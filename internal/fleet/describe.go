@@ -3,6 +3,9 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"github.com/moomora/klyx/internal/crd"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/restmapper"
 	"os"
@@ -140,17 +143,18 @@ func (c *ClusterConn) describeArgs(kindArg, namespace, name string) ([]string, e
 	return append(args, "--", name), nil
 }
 
-// DescribeKind resolves a describe's resource argument to its group and
-// kind through discovery, the way kubectl will (a resource, a short name,
+// DescribeTarget resolves a describe's resource argument to its resource
+// and kind through discovery, the way kubectl will (a resource, a short name,
 // resource.group or resource.version.group), so an alias cannot slip past
 // the payload classification (coverage S0b §4). An error means it could not
 // be classified, and the caller withholds.
-func (c *ClusterConn) DescribeKind(ctx context.Context, kindArg string) (string, string, error) {
+func (c *ClusterConn) DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error) {
+	var none schema.GroupVersionResource
 	if c.typed == nil {
-		return "", "", fmt.Errorf("discovery unavailable")
+		return none, schema.GroupVersionKind{}, fmt.Errorf("discovery unavailable")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", "", err
+		return none, schema.GroupVersionKind{}, err
 	}
 	dc := c.typed.Discovery()
 	grs, err := restmapper.GetAPIGroupResources(dc)
@@ -158,21 +162,49 @@ func (c *ClusterConn) DescribeKind(ctx context.Context, kindArg string) (string,
 		if err == nil {
 			err = fmt.Errorf("discovery returned no groups")
 		}
-		return "", "", err
+		return none, schema.GroupVersionKind{}, err
 	}
 	m := restmapper.NewShortcutExpander(restmapper.NewDiscoveryRESTMapper(grs), dc, nil)
 	gvr, gr := schema.ParseResourceArg(kindArg)
 	if gvr != nil {
-		if gvk, err := m.KindFor(*gvr); err == nil && !gvk.Empty() {
-			return gvk.Group, gvk.Kind, nil
+		if full, err := m.ResourceFor(*gvr); err == nil {
+			if gvk, err := m.KindFor(full); err == nil && !gvk.Empty() {
+				return full, gvk, nil
+			}
 		}
 	}
-	gvk, kerr := m.KindFor(gr.WithVersion(""))
+	full, rerr := m.ResourceFor(gr.WithVersion(""))
+	if rerr != nil {
+		return none, schema.GroupVersionKind{}, rerr
+	}
+	gvk, kerr := m.KindFor(full)
 	if kerr != nil || gvk.Empty() {
 		if kerr == nil {
 			kerr = fmt.Errorf("unknown resource %q", kindArg)
 		}
-		return "", "", kerr
+		return none, schema.GroupVersionKind{}, kerr
 	}
-	return gvk.Group, gvk.Kind, nil
+	return full, gvk, nil
+}
+
+// DescribeSnapshot reads the object a describe names, for the version
+// bracket around kubectl's own read (S0b revision 4): its UID, its
+// resourceVersion and whether it carries a registered payload.
+func (c *ClusterConn) DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (string, string, bool, error) {
+	if c.dyn == nil {
+		return "", "", false, fmt.Errorf("dynamic client unavailable")
+	}
+	res := c.dyn.Resource(gvr)
+	var u *unstructured.Unstructured
+	var err error
+	if ns != "" {
+		u, err = res.Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	} else {
+		u, err = res.Get(ctx, name, metav1.GetOptions{})
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	s := crd.SanitizeEmbedded(gvk.Group, gvk.Kind, u.Object)
+	return string(u.GetUID()), u.GetResourceVersion(), s.Payload, nil
 }

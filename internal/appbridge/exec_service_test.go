@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os/exec"
 	"strings"
 	"testing"
@@ -25,20 +26,37 @@ type fakeExecConn struct {
 	describeArgvErr error
 	armErr          error    // CheckPodArmed's answer
 	armChecks       []string // ns/name@uid the arm check was asked about
-	// kindGroup/kindName/kindErr are DescribeKind's answer (coverage S0b);
-	// the default is a core Pod.
+	// kindGroup/kindName/kindErr are DescribeTarget's answer (coverage S0b);
+	// the default is a core Pod. snaps are DescribeSnapshot's answers, in
+	// order.
 	kindGroup, kindName string
 	kindErr             error
+	snaps               []fakeSnap
 }
 
-func (f *fakeExecConn) DescribeKind(_ context.Context, kindArg string) (string, string, error) {
+type fakeSnap struct {
+	uid, rv string
+	payload bool
+	err     error
+}
+
+func (f *fakeExecConn) DescribeTarget(_ context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error) {
 	if f.kindErr != nil {
-		return "", "", f.kindErr
+		return schema.GroupVersionResource{}, schema.GroupVersionKind{}, f.kindErr
 	}
 	if f.kindName == "" {
-		return "", "Pod", nil
+		return schema.GroupVersionResource{Version: "v1", Resource: "pods"}, schema.GroupVersionKind{Version: "v1", Kind: "Pod"}, nil
 	}
-	return f.kindGroup, f.kindName, nil
+	return schema.GroupVersionResource{Group: f.kindGroup, Version: "v1", Resource: "x"}, schema.GroupVersionKind{Group: f.kindGroup, Version: "v1", Kind: f.kindName}, nil
+}
+
+func (f *fakeExecConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, bool, error) {
+	if len(f.snaps) == 0 {
+		return "", "", false, errors.New("no snapshot scripted")
+	}
+	s := f.snaps[0]
+	f.snaps = f.snaps[1:]
+	return s.uid, s.rv, s.payload, s.err
 }
 
 func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
@@ -459,6 +477,7 @@ func TestOpenDebugTerminal_RefusesAReplacedPod(t *testing.T) {
 func TestDescribe_WithheldForPayloadKind(t *testing.T) {
 	ran := false
 	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "fluxcd.controlplane.io", kindName: "ResourceSet",
+		snaps: []fakeSnap{{uid: "u", rv: "1", payload: true}},
 		describeCmd: func(ctx context.Context) *exec.Cmd {
 			ran = true
 			return exec.CommandContext(ctx, "echo", "PAYLOADmarker4X")
@@ -504,5 +523,36 @@ func TestDescribe_ExactWhenClean(t *testing.T) {
 	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
 	if r := svc.Describe(context.Background(), "c", "pods", "shop", "web"); r.Scrubbed || r.Output != "Name: web\n" || !r.OK {
 		t.Fatalf("a clean report is exact: %+v", r)
+	}
+}
+
+// S0b revision 4: a payload kind is described only inside a version bracket.
+func TestDescribe_PayloadKindBracket(t *testing.T) {
+	report := func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: platform") }
+	cases := []struct {
+		name     string
+		snaps    []fakeSnap
+		released bool
+	}{
+		{"clean and unchanged: released", []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "7"}}, true},
+		{"changed while described: discarded", []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "8"}}, false},
+		{"replaced while described: discarded", []fakeSnap{{uid: "u", rv: "7"}, {uid: "u2", rv: "7"}}, false},
+		{"a payload appeared: discarded", []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "7", payload: true}}, false},
+		{"the second read failed: discarded", []fakeSnap{{uid: "u", rv: "7"}, {err: errors.New("timeout")}}, false},
+		{"the first read failed: withheld", []fakeSnap{{err: errors.New("forbidden")}}, false},
+	}
+	for _, c := range cases {
+		conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization", snaps: c.snaps, describeCmd: report}
+		svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+		r := svc.Describe(context.Background(), "c", "kustomizations.kustomize.toolkit.fluxcd.io", "flux-system", "apps")
+		if c.released {
+			if !r.OK || r.Withheld != "" || r.Output != "Name: platform\n" {
+				t.Errorf("%s: %+v", c.name, r)
+			}
+			continue
+		}
+		if r.Withheld == "" || r.Output != "" || r.OK {
+			t.Errorf("%s: %+v", c.name, r)
+		}
 	}
 }
