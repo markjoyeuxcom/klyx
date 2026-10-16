@@ -180,11 +180,11 @@ describe("InstanceDetail", () => {
   });
 
   it("describe button opens the read-only describe pane via the bridge", async () => {
-    const { getByRole, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    const { getByRole } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
     fireEvent.click(getByRole("button", { name: "Describe" }));
     // typed instances describe by the unambiguous plural.group resource arg
     expect(describeResource).toHaveBeenCalledWith("x", "certificates.cert-manager.io", "default", "web-tls");
-    expect(await findByText(/Name:\s+web-tls/)).toBeTruthy();
+    expect((await screen.findByTestId("describe-formatted")).textContent).toContain("web-tls");
     fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });

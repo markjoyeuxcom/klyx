@@ -20,6 +20,8 @@ type fakeExecConn struct {
 	describeErr error
 	// gotDescribe records the arguments DescribeCmd was called with.
 	gotDescribe []string
+	// describeArgvErr, when set, is DescribeArgv's refusal.
+	describeArgvErr error
 	armErr      error    // CheckPodArmed's answer
 	armChecks   []string // ns/name@uid the arm check was asked about
 }
@@ -33,6 +35,13 @@ func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name
 		return f.describeCmd(ctx), nil
 	}
 	return exec.CommandContext(ctx, "true"), nil
+}
+
+func (f *fakeExecConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
+	if f.describeArgvErr != nil {
+		return nil, f.describeArgvErr
+	}
+	return []string{"/fake/kubectl", "--kubeconfig", "/k/my config", "--context", f.kubeContext, "describe", kindArg, "-n", namespace, "--", name}, nil
 }
 
 func (f *fakeExecConn) CheckPodArmed(_ context.Context, namespace, name, uid string) error {
@@ -252,11 +261,12 @@ func TestDescribe_Success(t *testing.T) {
 		},
 	}
 	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
-	r := svc.Describe("prod", "pod", "default", "web-abc")
+	r := svc.Describe(context.Background(), "prod", "pod", "default", "web-abc")
 	if !r.OK || r.Error != "" {
 		t.Fatalf("expected ok, got ok=%v error=%q", r.OK, r.Error)
 	}
-	if r.Output != "Name:  web-abc" {
+	// kubectl's stdout exactly, trailing newline and all (slice 14 review 1)
+	if r.Output != "Name:  web-abc\n" {
 		t.Errorf("output: got %q", r.Output)
 	}
 	// stderr noise (deprecation warnings) must NOT corrupt the report text
@@ -279,7 +289,7 @@ func TestDescribe_NonZeroExitReportsStderr(t *testing.T) {
 		},
 	}
 	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
-	r := svc.Describe("prod", "pod", "default", "gone")
+	r := svc.Describe(context.Background(), "prod", "pod", "default", "gone")
 	if r.OK {
 		t.Fatal("expected failure")
 	}
@@ -287,7 +297,7 @@ func TestDescribe_NonZeroExitReportsStderr(t *testing.T) {
 		t.Errorf("error should carry stderr, got %q", r.Error)
 	}
 	// partial stdout still comes back so the pane can show what kubectl printed
-	if r.Output != "partial output" {
+	if r.Output != "partial output\n" {
 		t.Errorf("output: got %q", r.Output)
 	}
 }
@@ -295,7 +305,7 @@ func TestDescribe_NonZeroExitReportsStderr(t *testing.T) {
 func TestDescribe_CmdBuildErrorIsHonest(t *testing.T) {
 	conn := &fakeExecConn{kubeContext: "ctx", describeErr: errEmptyContext}
 	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
-	r := svc.Describe("prod", "pod", "default", "web-abc")
+	r := svc.Describe(context.Background(), "prod", "pod", "default", "web-abc")
 	if r.OK || r.Error == "" {
 		t.Fatalf("expected error result, got ok=%v error=%q", r.OK, r.Error)
 	}
@@ -303,9 +313,69 @@ func TestDescribe_CmdBuildErrorIsHonest(t *testing.T) {
 
 func TestDescribe_ClusterMiss(t *testing.T) {
 	svc := NewExecService(func(string) (ExecConn, bool) { return nil, false })
-	r := svc.Describe("nope", "pod", "default", "web-abc")
+	r := svc.Describe(context.Background(), "nope", "pod", "default", "web-abc")
 	if r.OK || !strings.Contains(r.Error, "cluster not connected") {
 		t.Fatalf("expected cluster-miss error, got ok=%v error=%q", r.OK, r.Error)
+	}
+}
+
+func TestDescribe_KeepsStdoutExactly(t *testing.T) {
+	conn := &fakeExecConn{
+		kubeContext: "ctx",
+		describeCmd: func(ctx context.Context) *exec.Cmd {
+			return exec.CommandContext(ctx, "printf", "Name:  a\r\nEvents:  <none>\n\n\n")
+		},
+	}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe(context.Background(), "prod", "pod", "default", "a")
+	if r.Output != "Name:  a\r\nEvents:  <none>\n\n\n" {
+		t.Errorf("output must be stdout unchanged, got %q", r.Output)
+	}
+}
+
+func TestDescribe_CommandPinsTheKubeconfig(t *testing.T) {
+	prev := hostGOOS
+	t.Cleanup(func() { hostGOOS = prev })
+	hostGOOS = "darwin"
+	conn := &fakeExecConn{kubeContext: "shared"}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe(context.Background(), "prod", "gateways.gateway.networking.k8s.io", "infra", "internal")
+	want := "/fake/kubectl --kubeconfig '/k/my config' --context shared describe gateways.gateway.networking.k8s.io -n infra -- internal"
+	if r.Command != want || r.CommandError != "" {
+		t.Errorf("command: got %q (error %q), want %q", r.Command, r.CommandError, want)
+	}
+
+	hostGOOS = "windows"
+	r = svc.Describe(context.Background(), "prod", "pod", "default", "web")
+	if !strings.HasPrefix(r.Command, "& '/fake/kubectl' '--kubeconfig' '/k/my config'") {
+		t.Errorf("windows command: got %q", r.Command)
+	}
+}
+
+func TestDescribe_CommandRefusalIsSaid(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "ctx", describeArgvErr: fmt.Errorf("cluster kubeconfig is a path list, which cannot be passed to a Windows terminal: point kubeconfig at a single file")}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe(context.Background(), "prod", "pod", "default", "web")
+	if !r.OK || r.Command != "" || !strings.Contains(r.CommandError, "path list") {
+		t.Errorf("want the report with a command refusal, got ok=%v command=%q commandError=%q", r.OK, r.Command, r.CommandError)
+	}
+}
+
+func TestDescribe_CancelStopsTheRun(t *testing.T) {
+	conn := &fakeExecConn{
+		kubeContext: "ctx",
+		describeCmd: func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "sleep", "20") },
+	}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	start := time.Now()
+	r := svc.Describe(ctx, "prod", "pod", "default", "web")
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("a cancelled describe must stop kubectl, took %s", took)
+	}
+	if r.OK || r.Error != "kubectl describe was cancelled" {
+		t.Errorf("want the cancellation said, got ok=%v error=%q", r.OK, r.Error)
 	}
 }
 

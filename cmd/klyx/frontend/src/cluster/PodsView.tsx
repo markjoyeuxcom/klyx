@@ -763,7 +763,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
             onClose={() => setForwarding(false)}
           />
         )}
-        {describing && live && <DescribePane cluster={cluster} kindArg="pod" namespace={namespace} name={name} onClose={() => setDescribing(false)} />}
+        {describing && live && <DescribePane cluster={cluster} kindArg="pod" kind="Pod" namespace={namespace} name={name} expectUid={uid || undefined} onClose={() => setDescribing(false)} />}
 
         <InspectorBlock title="Containers" count={p.containers.length}>
           {ctUsage !== null && !ctUsage.available && (

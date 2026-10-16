@@ -85,6 +85,38 @@ func isObjectNameAlnum(ch byte) bool {
 // kubectl would silently fall back to the kubeconfig's current-context and
 // describe an object on whatever cluster the user's terminal points at.
 func (c *ClusterConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
+	args, err := c.describeArgs(kindArg, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	bin, ok := kubectlBin.Resolve()
+	if !ok {
+		return nil, fmt.Errorf("kubectl not found: install kubectl or point KLYX_KUBECTL_PATH at the binary")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // argv validated above, binary resolved via clibin
+	cmd.Env = execenv.Environ(c.cliEnv())
+	return cmd, nil
+}
+
+// DescribeArgv is the same describe as a command for a terminal (The Line
+// slice 14, design review 1): the cluster's kubeconfig selection travels in
+// the argv (kubectlTerminalArgv - --kubeconfig for one file, env KUBECONFIG
+// for a list, a list refused on Windows), so a copied command can never
+// resolve the context through another file to another cluster.
+func (c *ClusterConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
+	args, err := c.describeArgs(kindArg, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	argv, err := c.kubectlTerminalArgv()
+	if err != nil {
+		return nil, err
+	}
+	return append(argv, args...), nil
+}
+
+// describeArgs validates one describe and returns its kubectl arguments.
+func (c *ClusterConn) describeArgs(kindArg, namespace, name string) ([]string, error) {
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("cluster has no kubeconfig context")
 	}
@@ -99,16 +131,9 @@ func (c *ClusterConn) DescribeCmd(ctx context.Context, kindArg, namespace, name 
 	if err := validateObjectName("object", name); err != nil {
 		return nil, err
 	}
-	bin, ok := kubectlBin.Resolve()
-	if !ok {
-		return nil, fmt.Errorf("kubectl not found: install kubectl or point KLYX_KUBECTL_PATH at the binary")
-	}
 	args := []string{"--context", c.kubeContext, "describe", kindArg}
 	if namespace != "" {
 		args = append(args, "-n", namespace)
 	}
-	args = append(args, "--", name)
-	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // argv validated above, binary resolved via clibin
-	cmd.Env = execenv.Environ(c.cliEnv())
-	return cmd, nil
+	return append(args, "--", name), nil
 }

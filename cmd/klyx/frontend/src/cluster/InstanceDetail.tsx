@@ -885,6 +885,8 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
                 // kubectl's unambiguous resource argument: plural.group for CRDs
                 // and any grouped kind, plural alone for the core "" group.
                 kindArg={resource.group ? `${resource.plural}.${resource.group}` : resource.plural}
+                kind={resource.kind}
+                expectUid={d.uid || undefined}
                 namespace={instance.namespace}
                 name={instance.name}
                 onClose={() => setDescribing(false)}

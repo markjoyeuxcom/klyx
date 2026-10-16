@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -156,5 +157,54 @@ func TestValidateObjectName(t *testing.T) {
 		if err := validateObjectName("object", name); err == nil {
 			t.Errorf("expected %q invalid", name)
 		}
+	}
+}
+
+// The Line slice 14 (design review 1): the copied describe carries the
+// cluster's kubeconfig selection, so a context name shared by two files
+// cannot resolve to another cluster in the person's terminal.
+func TestDescribeArgv_PinsTheKubeconfig(t *testing.T) {
+	fakeKubectl(t, true)
+	sep := string(os.PathListSeparator)
+
+	dev := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/dev.yaml")
+	prd := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/prd.yaml")
+	for conn, file := range map[*ClusterConn]string{dev: "/k/dev.yaml", prd: "/k/prd.yaml"} {
+		argv, err := conn.DescribeArgv("gateways.gateway.networking.k8s.io", "infra", "internal")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"/fake/kubectl", "--kubeconfig", file, "--context", "shared", "describe", "gateways.gateway.networking.k8s.io", "-n", "infra", "--", "internal"}
+		if !reflect.DeepEqual(argv, want) {
+			t.Errorf("got %v\nwant %v", argv, want)
+		}
+	}
+
+	prev := terminalGOOS
+	t.Cleanup(func() { terminalGOOS = prev })
+	terminalGOOS = "linux"
+	list := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/a.yaml" + sep + "/k/b.yaml")
+	argv, err := list.DescribeArgv("node", "", "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"env", "KUBECONFIG=/k/a.yaml" + sep + "/k/b.yaml", "/fake/kubectl", "--context", "shared", "describe", "node", "--", "n1"}; !reflect.DeepEqual(argv, want) {
+		t.Errorf("path list: got %v want %v", argv, want)
+	}
+
+	terminalGOOS = "windows"
+	if _, err := list.DescribeArgv("node", "", "n1"); err == nil || !strings.Contains(err.Error(), "path list") {
+		t.Errorf("want the Windows path-list refusal, got %v", err)
+	}
+}
+
+func TestDescribeArgv_ValidatesLikeTheRun(t *testing.T) {
+	fakeKubectl(t, true)
+	conn := &ClusterConn{kubeContext: "ctx"}
+	if _, err := conn.DescribeArgv("pod", "default", "--all"); err == nil {
+		t.Error("a flag-shaped name must be refused")
+	}
+	if _, err := (&ClusterConn{}).DescribeArgv("pod", "default", "web"); err == nil {
+		t.Error("an empty context must be refused")
 	}
 }

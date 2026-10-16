@@ -167,6 +167,9 @@ func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, 
 func (f *fakeConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "true"), nil
 }
+func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
+	return []string{"kubectl", "describe", kindArg, "--", name}, nil
+}
 func (f *fakeConn) CheckPodArmed(context.Context, string, string, string) error { return nil }
 func (f *fakeConn) DebugCommand(namespace, pod, container string) ([]string, error) {
 	return nil, nil

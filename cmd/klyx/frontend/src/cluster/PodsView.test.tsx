@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act, within } from "@testing-library/react";
+import { render, fireEvent, act, within, screen } from "@testing-library/react";
 import { PodsView, imageShort } from "./PodsView";
 import { useFleet } from "../store/fleet";
 import type { PodSummaryDTO, PodDetailDTO } from "../store/fleet";
@@ -197,11 +197,11 @@ describe("PodsView", () => {
         detailLoading: false,
       },
     }));
-    const { getByRole, findByText } = render(<PodsView cluster="homelab" />);
+    const { getByRole } = render(<PodsView cluster="homelab" />);
     chooseMore("Describe", getByRole);
     expect(describeResource).toHaveBeenCalledWith("homelab", "pod", "monitoring", "grafana-xyz");
     // the kubectl output lands in the pane
-    expect(await findByText(/Name:\s+grafana-xyz/)).toBeTruthy();
+    expect((await screen.findByTestId("describe-formatted")).textContent).toContain("grafana-xyz");
     // Escape closes it again
     fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();

@@ -109,6 +109,7 @@ type Conn interface {
 	CheckNodeArmed(ctx context.Context, nodeName, uid string) error
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
+	DescribeArgv(kindArg, namespace, name string) ([]string, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error

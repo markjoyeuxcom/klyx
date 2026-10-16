@@ -1,134 +1,461 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { IconX } from "@tabler/icons-react";
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { IconChevronDown, IconChevronRight, IconChevronUp, IconCopy, IconRefresh, IconX } from "@tabler/icons-react";
 import { describeResource, type DescribeResultDTO } from "../bridge/exec";
-import { CopyButton } from "./CopyButton";
-import { well } from "./primitives";
-import { vh, vw } from "../app/zoom";
+import { copyText } from "../bridge/crd";
+import { Aspect } from "./primitives/Aspect";
+import { Age, absoluteTime } from "./Age";
+import { useBelow } from "./useBelow";
+import { useRestoreFocus } from "./useRestoreFocus";
+import { trapTab } from "./modalFocus";
+import { vh } from "../app/zoom";
+import { parseDescribe } from "./describe/parse";
+import { buildModel, timeOf, type Run, type VNode, type VSection, type VTable } from "./describe/model";
 
-// DescribePane is the read-only `kubectl describe` overlay shared by the pod,
-// node, and generic instance panels. Same module shell as OperationDialog but
-// with no verb to dispatch: title, copy-all, an inset well holding the raw
-// kubectl output, Escape/✕ to close. Errors (kubectl missing, object gone,
-// RBAC denial) render in the pane, never as silently empty output.
+// DescribePane is the Describe sheet (The Line slice 14b): kubectl describe
+// for one object, read-only, on the shared wide dialog. The Formatted view is
+// a best-effort reading of kubectl's text (chrome/describe/parse.ts); the
+// Text view is that text exactly, and Copy always copies it.
+//
+// Runs (design review 1): a run belongs to its identity - cluster, kind
+// argument, namespace, name and expected UID - and a generation. Its output,
+// command, time, error and UID notice change together; a reply for another
+// identity or an older generation never shows. A changed identity clears the
+// sheet and cancels the run in flight, closing cancels it too (the generated
+// call's cancel() reaches Go and stops kubectl), and Refresh waits for the
+// run in flight.
+
+type Reply = { gen: number; at: number; dto: DescribeResultDTO };
+
+const WIDE = [820] as const;
+
 export function DescribePane({
   cluster,
   kindArg,
   namespace,
   name,
+  kind,
+  expectUid,
   onClose,
 }: {
   cluster: string;
   // kindArg is the kubectl resource argument: "pod"/"node" for the core
-  // panels, plural.group (plural alone when group is "") for typed instances.
+  // panels, plural.group for typed instances, singular.group from a lens.
   kindArg: string;
   // namespace is "" for cluster-scoped objects (nodes, clusterroles, ...).
   namespace: string;
   name: string;
+  // kind names the object in the head ("Gateway"); kindArg when absent.
+  kind?: string;
+  // expectUid is the inspected object's UID: a report naming another UID
+  // describes a different object at this name.
+  expectUid?: string;
   onClose: () => void;
 }) {
-  const [result, setResult] = useState<DescribeResultDTO | null>(null);
+  useRestoreFocus();
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const findRef = useRef<HTMLInputElement | null>(null);
   const titleId = useId();
 
-  useEffect(() => {
-    let cancelled = false;
-    void describeResource(cluster, kindArg, namespace, name).then((r) => {
-      if (!cancelled) setResult(r);
-    });
-    return () => {
-      cancelled = true;
+  // ---- runs ----
+  const identity = [cluster, kindArg, namespace, name, expectUid ?? ""].join("\u0000");
+  const [shown, setShown] = useState<Reply | null>(null);
+  const [prior, setPrior] = useState<Reply | null>(null);
+  const [running, setRunning] = useState(false);
+  const gen = useRef(0);
+  const call = useRef<{ cancel?: () => void } | null>(null);
+
+  const run = useCallback(() => {
+    call.current?.cancel?.();
+    const mine = ++gen.current;
+    setRunning(true);
+    const p = describeResource(cluster, kindArg, namespace, name);
+    call.current = p as { cancel?: () => void };
+    const settle = (dto: DescribeResultDTO) => {
+      if (gen.current !== mine) return; // superseded, cancelled or closed
+      const reply: Reply = { gen: mine, at: Date.now(), dto };
+      setShown((prev) => {
+        // A failed refresh with no stdout keeps the last report on screen,
+        // labelled; a reply with output (partial or whole) is the newest
+        // evidence and replaces it.
+        setPrior(!dto.ok && dto.output === "" ? (prev && prev.dto.output !== "" ? prev : null) : null);
+        return reply;
+      });
+      setRunning(false);
+      call.current = null;
     };
+    Promise.resolve(p).then(settle, (e: unknown) => {
+      if (gen.current !== mine) return;
+      settle({ ok: false, output: "", error: e instanceof Error ? e.message : String(e), command: "", commandError: "" });
+    });
   }, [cluster, kindArg, namespace, name]);
 
-  // Focus the dialog so Escape works immediately; restore focus to whatever
-  // opened the pane once it closes (same discipline as OperationDialog).
   useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
+    setShown(null);
+    setPrior(null);
+    run();
     return () => {
-      prev?.focus?.();
+      gen.current++;
+      call.current?.cancel?.();
+      call.current = null;
     };
+    // identity carries expectUid too: a new expected object is a new run
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
+
+  // Initial focus on the sheet, so Escape and the find key work at once.
+  useEffect(() => {
+    dialogRef.current?.focus();
   }, []);
 
-  const qualified = namespace ? `${namespace}/${name}` : name;
+  const report = shown && !shown.dto.ok && shown.dto.output === "" && prior ? prior : shown;
+  const output = report?.dto.output ?? "";
+  const tree = useMemo(() => parseDescribe(output), [output]);
+  const model = useMemo(() => buildModel(tree), [tree]);
+  const textRuns = useMemo<Run[]>(() => {
+    const lines = output.split("\n");
+    // kubectl ends its report with a newline: no empty last line to draw
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    return lines.map((l, i) => ({ id: i, text: l.replace(/\r$/, "") }));
+  }, [output]);
+
+  // ---- view and find ----
+  const [view, setView] = useState<"formatted" | "text">("formatted");
+  const [query, setQuery] = useState("");
+  const [cur, setCur] = useState(0);
+  const runs = view === "formatted" ? model.runs : textRuns;
+  const hits = useMemo(() => findHits(runs, query), [runs, query]);
+  // Re-index atomically: a new query, view or report starts at its first hit.
+  useEffect(() => setCur(0), [hits]);
+  const step = (d: number) => hits.list.length && setCur((c) => (c + d + hits.list.length) % hits.list.length);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  useEffect(() => setCollapsed(new Set()), [identity]);
+  const forcedOpen = useMemo(() => {
+    const open = new Set<string>();
+    if (view !== "formatted" || hits.list.length === 0) return open;
+    for (const s of model.sections) if (hits.list.some((h) => h.run >= s.from && h.run < s.to)) open.add(s.id);
+    return open;
+  }, [view, hits, model]);
+  const isOpen = (id: string) => forcedOpen.has(id) || !collapsed.has(id);
+  const toggle = (id: string) => setCollapsed((c) => {
+    const next = new Set(c);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current?.querySelector<HTMLElement>('mark[data-cur="true"]');
+    el?.scrollIntoView?.({ block: "center", inline: "nearest" });
+  }, [cur, hits, view]);
+
+  // ---- the index ----
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const narrow = useBelow(bodyRef, WIDE).includes("820");
+  const [here, setHere] = useState<string | null>(null);
+  const onScroll = () => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const top = box.getBoundingClientRect().top;
+    const all = [...box.querySelectorAll<HTMLElement>("[data-section]")];
+    let at: string | null = all[0]?.dataset.section ?? null;
+    for (const el of all) if (el.getBoundingClientRect().top - top <= 24) at = el.dataset.section ?? null;
+    // At the end, the last section is the one being read, however short.
+    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2 && box.scrollTop > 0) at = [...all].reverse().find((el) => model.sections.some((s) => s.id === el.dataset.section && s.label))?.dataset.section ?? at;
+    setHere(at);
+  };
+  useEffect(() => setHere(model.sections[0]?.id ?? null), [model]);
+  const jump = (id: string) => {
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-section="${id}"]`);
+    if (!el) return;
+    setCollapsed((c) => {
+      const next = new Set(c);
+      next.delete(id);
+      return next;
+    });
+    el.scrollIntoView?.({ block: "start" });
+    setHere(id);
+  };
+
+  // ---- copy ----
+  const [copied, setCopied] = useState<"report" | "command" | null>(null);
+  const copy = (what: "report" | "command", text: string) => {
+    void copyText(text).then(() => {
+      setCopied(what);
+      setTimeout(() => setCopied(null), 1200);
+    });
+  };
+
+  const qualified = namespace ? `${namespace} / ${name}` : name;
+  const uidNotice = expectUid && model.uid && model.uid !== expectUid ? model.uid : null;
+  const command = shown?.dto.command ?? "";
+  const commandError = shown?.dto.commandError ?? "";
 
   return (
-    <div
-      onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.48)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
-    >
+    <div className="l-dialog-scrim describe-scrim" onClick={onClose}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        className="l-dialog l-dialog-wide describe"
+        style={{ height: `min(${vh(88)}, 1000px)` }}
+        data-testid="describe-sheet"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          // Swallow keys at the dialog boundary so list navigation never acts
-          // behind the overlay; Escape closes.
+          // Keys stop at the sheet, so lists behind it never act.
           e.stopPropagation();
-          if (e.key === "Escape") onClose();
-        }}
-        style={{
-          width: `min(760px, calc(${vw(100)} - 48px))`,
-          height: `min(560px, calc(${vh(100)} - 64px))`,
-          display: "flex",
-          flexDirection: "column",
-          background: "var(--color-background-primary)",
-          border: "0.5px solid var(--color-border-secondary)",
-          borderRadius: 6,
-          boxShadow: "0 18px 50px rgba(0,0,0,0.35)",
-          color: "var(--color-text-primary)",
-          outline: "none",
+          trapTab(e, dialogRef.current);
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+            e.preventDefault();
+            findRef.current?.focus();
+            findRef.current?.select();
+            return;
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            if (query !== "") setQuery("");
+            else onClose();
+          }
         }}
       >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", borderBottom: "0.5px solid var(--color-border-tertiary)", flexShrink: 0 }}>
-          <span
-            id={titleId}
-            title={`describe · ${qualified}`}
-            style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          >
-            <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}>describe · </span>
-            {qualified}
-          </span>
-          <div style={{ flex: 1 }} />
-          {result && result.output !== "" && <CopyButton text={result.output} label={`copy describe output for ${qualified}`} />}
-          <button
-            aria-label="close describe"
-            onClick={onClose}
-            style={{ border: "0.5px solid var(--color-border-tertiary)", background: "transparent", color: "var(--color-text-secondary)", borderRadius: 4, width: 24, height: 24, cursor: "pointer", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
-          >
-            <IconX size={14} stroke={1.5} />
-          </button>
+        <header className="describe-head">
+          <div className="describe-id">
+            <div className="t-section-label">Describe</div>
+            <h2 id={titleId} className="describe-title">
+              <span className="describe-kind">{kind ?? kindArg}</span>
+              <span className="t-object-title">{qualified}</span>
+            </h2>
+            <div className="describe-meta">
+              {command ? <code className="describe-command">{command}</code> : <code className="describe-command">kubectl describe {kindArg}{namespace ? ` -n ${namespace}` : ""} {name}</code>}
+              <span className="describe-when">
+                {running ? (shown ? "refreshing…" : "running…") : report ? <>ran {absoluteTime(report.at)} · <Age unixSeconds={report.at / 1000} suffix=" ago" /></> : null}
+              </span>
+            </div>
+          </div>
+          <div className="describe-actions">
+            <div className="l-seg" role="group" aria-label="Describe view">
+              <button className="l-chip" aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>Formatted</button>
+              <button className="l-chip" aria-pressed={view === "text"} onClick={() => setView("text")}>Text</button>
+            </div>
+            <button className="l-btn" disabled={output === ""} onClick={() => copy("report", output)} title="Copy kubectl's output">
+              <IconCopy size={16} stroke={1.5} aria-hidden />{copied === "report" ? "Copied" : "Copy"}
+            </button>
+            <button className="l-btn" disabled={!command} onClick={() => copy("command", command)} title={command ? "Copy the command, with this cluster's kubeconfig" : commandError || "No command to copy"}>
+              {copied === "command" ? "Copied" : "Copy command"}
+            </button>
+            <button className="l-btn" aria-label="Refresh" title="Run kubectl describe again" disabled={running} onClick={run}>
+              <IconRefresh size={16} stroke={1.5} aria-hidden />
+            </button>
+            <button className="l-btn" aria-label="Close describe" onClick={onClose}>
+              <IconX size={16} stroke={1.5} aria-hidden />
+            </button>
+          </div>
+        </header>
+
+        <div className="describe-find">
+          <input
+            ref={findRef}
+            className="l-input"
+            type="search"
+            placeholder="Find in report"
+            aria-label="Find in report"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                step(e.shiftKey ? -1 : 1);
+              }
+            }}
+          />
+          {query.trim() !== "" && (
+            <span className="describe-count" aria-live="polite">
+              {hits.list.length === 0 ? "No matches" : `${Math.min(cur, hits.list.length - 1) + 1} of ${hits.list.length}`}
+            </span>
+          )}
+          <button className="l-btn l-btn-sm" aria-label="Previous match" disabled={hits.list.length === 0} onClick={() => step(-1)}><IconChevronUp size={16} stroke={1.5} aria-hidden /></button>
+          <button className="l-btn l-btn-sm" aria-label="Next match" disabled={hits.list.length === 0} onClick={() => step(1)}><IconChevronDown size={16} stroke={1.5} aria-hidden /></button>
         </div>
 
-        {/* Body: the kubectl output in an inset well */}
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: 12 }}>
-          {!result ? (
-            <div style={{ ...well, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>
-              running kubectl describe…
-            </div>
-          ) : (
-            <div style={{ ...well, flex: 1, minHeight: 0, overflow: "auto", padding: 10 }}>
-              {result.error !== "" && (
-                <div role="alert" style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-danger)", whiteSpace: "pre-wrap", marginBottom: result.output ? 8 : 0 }}>
-                  {result.error}
-                </div>
-              )}
-              {result.output !== "" && (
-                <pre style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", userSelect: "text", color: "var(--color-text-primary)" }}>
-                  {result.output}
-                </pre>
-              )}
-              {result.error === "" && result.output === "" && (
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--color-text-tertiary)" }}>kubectl produced no output.</div>
-              )}
+        <div ref={bodyRef} className="describe-body" data-narrow={narrow ? "true" : undefined}>
+          {shown && shown.dto.error !== "" && (
+            <div role="alert" className="evidence-panel describe-error" data-tone="danger">
+              <div className="evidence-panel-head">
+                <Aspect kind="fault" size={10} />
+                {report && report !== shown ? "The refresh failed" : "kubectl describe failed"}
+              </div>
+              <div className="evidence-panel-text describe-pre">{shown.dto.error}</div>
             </div>
           )}
+          {uidNotice && (
+            <div role="status" className="evidence-panel" data-tone="warning">
+              <div className="evidence-panel-head"><Aspect kind="attention" size={10} />A different object</div>
+              <div className="evidence-panel-text">This describes a different object at this name (UID {uidNotice}), not the one in the inspector.</div>
+            </div>
+          )}
+          {report && output !== "" && (report !== shown || !report.dto.ok) && (
+            <div className="describe-caption">
+              {report !== shown ? `Output from ${absoluteTime(report.at)}, before the failed refresh` : "Partial output: kubectl exited with an error"}
+            </div>
+          )}
+          {!report && running ? (
+            <div className="describe-state">Running kubectl describe…</div>
+          ) : report && output === "" && report.dto.ok ? (
+            <div className="describe-state">kubectl printed nothing.</div>
+          ) : output !== "" ? (
+            <HitContext.Provider value={hits.byRun.size ? { byRun: hits.byRun, cur: Math.min(cur, hits.list.length - 1) } : NO_HITS}>
+              {view === "formatted" ? (
+                <div className="describe-split">
+                  <nav className="describe-index" aria-label="Sections">
+                    {model.sections.filter((s) => s.label).map((s) => (
+                      <button key={s.id} className="describe-index-item" aria-current={here === s.id ? "true" : undefined} onClick={() => jump(s.id)}>
+                        {s.aspect ? <Aspect kind={s.aspect} label={s.aspectLabel} /> : <span className="describe-index-gap" aria-hidden />}
+                        <span className="describe-index-label">{s.label}</span>
+                        {s.count !== undefined && <span className="describe-index-count">{s.count}</span>}
+                      </button>
+                    ))}
+                  </nav>
+                  <div ref={scrollRef} className="describe-scroll" onScroll={onScroll} data-testid="describe-formatted">
+                    {model.sections.map((s) => <Section key={s.id} s={s} open={isOpen(s.id)} onToggle={() => toggle(s.id)} />)}
+                  </div>
+                </div>
+              ) : (
+                <div ref={scrollRef} className="describe-scroll describe-text" data-testid="describe-text">
+                  <pre>{textRuns.map((r) => <span key={r.id}><Hl run={r} />{"\n"}</span>)}</pre>
+                </div>
+              )}
+            </HitContext.Provider>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---- find ----
+
+type Hit = { run: number; start: number; end: number };
+type Hits = { list: Hit[]; byRun: Map<number, { start: number; end: number; i: number }[]> };
+
+export function findHits(runs: Run[], query: string): Hits {
+  const q = query.trim().toLowerCase();
+  const list: Hit[] = [];
+  const byRun = new Map<number, { start: number; end: number; i: number }[]>();
+  if (!q) return { list, byRun };
+  for (const r of runs) {
+    const t = r.text.toLowerCase();
+    for (let at = t.indexOf(q); at >= 0; at = t.indexOf(q, at + q.length)) {
+      const h = { run: r.id, start: at, end: at + q.length };
+      const mine = byRun.get(r.id) ?? [];
+      mine.push({ start: h.start, end: h.end, i: list.length });
+      byRun.set(r.id, mine);
+      list.push(h);
+    }
+  }
+  return { list, byRun };
+}
+
+const NO_HITS = { byRun: new Map<number, { start: number; end: number; i: number }[]>(), cur: -1 };
+const HitContext = createContext(NO_HITS);
+
+function Hl({ run }: { run: Run }) {
+  const { byRun, cur } = useContext(HitContext);
+  const mine = byRun.get(run.id);
+  if (!mine) return <>{run.text}</>;
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const h of mine) {
+    if (h.start > at) out.push(run.text.slice(at, h.start));
+    out.push(<mark key={h.i} className="describe-hit" data-cur={h.i === cur ? "true" : undefined}>{run.text.slice(h.start, h.end)}</mark>);
+    at = h.end;
+  }
+  if (at < run.text.length) out.push(run.text.slice(at));
+  return <>{out}</>;
+}
+
+// Value: one of kubectl's values, with an age beside a time - the sheet's
+// own words, outside the runs, so find never counts them.
+function Value({ run }: { run: Run }) {
+  const ms = run.timeMs ?? timeOf(run.text);
+  return (
+    <>
+      <span className={run.muted ? "describe-muted" : undefined}><Hl run={run} /></span>
+      {ms !== undefined && <span className="describe-age"> · <Age unixSeconds={ms / 1000} suffix=" ago" /></span>}
+    </>
+  );
+}
+
+// ---- the formatted report ----
+
+function Section({ s, open, onToggle }: { s: VSection; open: boolean; onToggle: () => void }) {
+  return (
+    <section className="describe-section" data-section={s.id} aria-label={s.label ?? undefined}>
+      {s.title && (
+        <button className="describe-section-head" aria-expanded={open} onClick={onToggle}>
+          {s.aspect && <Aspect kind={s.aspect} label={s.aspectLabel} />}
+          <span className="t-section-label"><Hl run={s.title} /></span>
+          {s.value.length > 0 && <span className="describe-section-value">{s.value.map((v) => <Value key={v.id} run={v} />)}</span>}
+          <IconChevronRight className="describe-chevron" size={14} stroke={1.5} aria-hidden />
+        </button>
+      )}
+      {open && <div className="describe-grid">{s.nodes.map((n, i) => <Node key={i} n={n} />)}</div>}
+    </section>
+  );
+}
+
+function Node({ n }: { n: VNode }) {
+  switch (n.k) {
+    case "kv":
+      return (
+        <>
+          <div className="describe-key"><Hl run={n.key} /></div>
+          <div className="describe-val">
+            {n.values.map((v) => <div key={v.id}><Value run={v} /></div>)}
+          </div>
+          {n.children.length > 0 && <div className="describe-nest describe-grid">{n.children.map((c, i) => <Node key={i} n={c} />)}</div>}
+        </>
+      );
+    case "item":
+      return <div className="describe-item describe-grid" data-first={n.first ? "true" : undefined}>{n.children.map((c, i) => <Node key={i} n={c} />)}</div>;
+    case "line":
+      return <div className="describe-line"><Value run={n.run} /></div>;
+    case "table":
+      return <Table t={n} />;
+    case "opaque":
+      return <pre className="describe-opaque">{n.lines.map((r) => <span key={r.id}><Hl run={r} />{"\n"}</span>)}</pre>;
+    default:
+      return null;
+  }
+}
+
+function Table({ t }: { t: VTable }) {
+  const marked = t.rows.some((r) => r.aspect);
+  return (
+    <div className="describe-table-wrap">
+      <table className="describe-table" data-kind={t.kind}>
+        <thead>
+          <tr>
+            {marked && <th aria-hidden className="describe-mark-col" />}
+            {t.head.map((h) => <th key={h.id} scope="col"><Hl run={h} /></th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {t.rows.map((r, i) => (
+            <tr key={i}>
+              {marked && <td className="describe-mark-col">{r.aspect ? <Aspect kind={r.aspect} label={r.aspectLabel} /> : null}</td>}
+              {r.cells.map((c, j) => (
+                <td key={c.id} data-wrap={j === t.wrapCol ? "true" : undefined}>
+                  <Value run={c} />
+                  {j === t.extraCol && r.extra.map((x) => <div key={x.id}><Hl run={x} /></div>)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

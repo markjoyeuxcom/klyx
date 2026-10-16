@@ -3,6 +3,7 @@ package appbridge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -15,6 +16,7 @@ type ExecConn interface {
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
+	DescribeArgv(kindArg, namespace, name string) ([]string, error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -169,13 +171,18 @@ func shellQuoteArg(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
-// DescribeResultDTO is the outcome of a kubectl describe run. Output carries
-// whatever kubectl printed to stdout (possibly partial on a failed run);
-// Error is set when the run could not happen or exited non-zero.
+// DescribeResultDTO is the outcome of a kubectl describe run. Output is
+// kubectl's stdout exactly as printed - never trimmed - possibly partial on
+// a failed run (The Line slice 14, review 1). Error is set when the run could
+// not happen or exited non-zero. Command is the same describe as a command
+// for the person's terminal, with the cluster's kubeconfig pinned in it;
+// CommandError says why there is none (a Windows kubeconfig path list).
 type DescribeResultDTO struct {
-	OK     bool   `json:"ok"`
-	Output string `json:"output"`
-	Error  string `json:"error"`
+	OK           bool   `json:"ok"`
+	Output       string `json:"output"`
+	Error        string `json:"error"`
+	Command      string `json:"command"`
+	CommandError string `json:"commandError"`
 }
 
 // describeTimeout bounds one kubectl describe run. Same 30s budget as the
@@ -185,20 +192,29 @@ const describeTimeout = 30 * time.Second
 // Describe runs `kubectl describe <kindArg> <name>` against the cluster's
 // kubeconfig context and returns the raw output. Read-only: describe never
 // mutates, so no protected-cluster gate applies. kindArg is "pod"/"node" for
-// the core panels and plural.group (plural alone when group is "") for typed
-// instances; the fleet layer validates every argument and resolves the
-// kubectl binary, so a missing kubectl comes back as an actionable Error -
-// never as silently empty output.
-func (s *ExecService) Describe(cluster, kindArg, namespace, name string) DescribeResultDTO {
+// the core panels and plural.group or singular.group for typed objects; the
+// fleet layer validates every argument and resolves the kubectl binary, so a
+// missing kubectl comes back as an actionable Error - never as silently
+// empty output. ctx is the call's: the sheet cancels a run it no longer
+// shows (a closed sheet, another object), which stops kubectl.
+func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace, name string) DescribeResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return DescribeResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), describeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, describeTimeout)
 	defer cancel()
 	cmd, err := conn.DescribeCmd(ctx, kindArg, namespace, name)
 	if err != nil {
 		return DescribeResultDTO{Error: err.Error()}
+	}
+	var res DescribeResultDTO
+	if argv, err := conn.DescribeArgv(kindArg, namespace, name); err != nil {
+		res.CommandError = err.Error()
+	} else if line, err := displayCommand(hostGOOS, argv); err != nil {
+		res.CommandError = err.Error()
+	} else {
+		res.Command = line
 	}
 	// Stdout and stderr stay separate: describe writes the report to stdout and
 	// real errors to stderr. Combining them would let a deprecation warning
@@ -207,17 +223,22 @@ func (s *ExecService) Describe(cluster, kindArg, namespace, name string) Describ
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
-	out := strings.TrimRight(stdout.String(), "\n")
+	res.Output = stdout.String()
 	if runErr != nil {
 		msg := strings.TrimSpace(stderr.String())
-		if ctx.Err() == context.DeadlineExceeded {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			msg = fmt.Sprintf("kubectl describe timed out after %s", describeTimeout)
-		} else if msg == "" {
+		case errors.Is(ctx.Err(), context.Canceled):
+			msg = "kubectl describe was cancelled"
+		case msg == "":
 			msg = runErr.Error()
 		}
-		return DescribeResultDTO{Output: out, Error: msg}
+		res.Error = msg
+		return res
 	}
-	return DescribeResultDTO{OK: true, Output: out}
+	res.OK = true
+	return res
 }
 
 // OpenTerminal opens a plain OS terminal window (no command) - the sidebar's

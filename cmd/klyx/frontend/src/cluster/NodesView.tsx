@@ -1082,7 +1082,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="node YAML" /> : null}
       >
         {ai.block}
-        {describing && live && <DescribePane cluster={cluster} kindArg="node" namespace="" name={name} onClose={() => setDescribing(false)} />}
+        {describing && live && <DescribePane cluster={cluster} kindArg="node" kind="Node" namespace="" name={name} expectUid={uid || undefined} onClose={() => setDescribing(false)} />}
         {!shown ? (
           detailError && !loading ? (
             <div role="alert" className="t-body" style={{ color: "var(--color-text-danger)" }}>Could not load node detail: {detailError}</div>

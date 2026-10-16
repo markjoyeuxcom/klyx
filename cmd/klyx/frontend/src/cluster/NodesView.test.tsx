@@ -363,11 +363,11 @@ describe("NodesView", () => {
 
   it("describe button opens the read-only describe pane via the bridge", async () => {
     seedWithDetail(healthy, fakeDetail);
-    const { getByRole, findByText } = render(<NodesView cluster="homelab" />);
+    const { getByRole } = render(<NodesView cluster="homelab" />);
     fireEvent.click((fireEvent.click(screen.getByRole("button", { name: /^More/ })), screen.getByRole("menuitem", { name: "Describe" })));
     // nodes are cluster-scoped: namespace is ""
     expect(describeResource).toHaveBeenCalledWith("homelab", "node", "", "node-healthy");
-    expect(await findByText(/Name:\s+node-healthy/)).toBeTruthy();
+    expect((await screen.findByTestId("describe-formatted")).textContent).toContain("node-healthy");
     fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
