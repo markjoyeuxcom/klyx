@@ -156,7 +156,7 @@ export function FleetPromotion() {
       state={state}
       stateView={stateView}
       body={
-        <div className="lens-canvas">
+        <div className="ov-page">
           {quiet}
           <div style={{ overflowX: "auto" }}>
             <div style={{ display: "grid", gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${ordered.length}, minmax(170px, 1fr))`, gap: "4px 10px", fontFamily: "var(--font-mono)", fontSize: 12, alignItems: "baseline" }}>

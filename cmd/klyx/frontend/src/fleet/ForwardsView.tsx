@@ -51,7 +51,7 @@ export function ForwardsView() {
         />
       }
       body={
-        <div className="lens-canvas" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+        <div className="ov-page" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 10, padding: "0 8px 6px", borderBottom: "1px solid var(--color-border-tertiary)" }}>
             <span /><span className="t-section-label">Cluster</span><span className="t-section-label">Kind</span><span className="t-section-label">Target</span><span className="t-section-label">Tunnel</span><span className="t-section-label">Started</span><span />
           </div>

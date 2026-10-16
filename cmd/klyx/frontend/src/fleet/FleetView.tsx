@@ -59,7 +59,7 @@ export function FleetView() {
         />
       }
       body={
-        <div className="lens-canvas fleet-screen" data-testid="fleet-board">
+        <div className="ov-page fleet-screen" data-testid="fleet-board">
           {dto ? (
             <>
               <LineVerdictView dto={dto} git={git} />

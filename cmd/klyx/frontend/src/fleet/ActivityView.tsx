@@ -44,7 +44,7 @@ export function ActivityView() {
         />
       }
       body={
-        <div className="lens-canvas" style={{ fontFamily: "var(--font-mono)", fontSize: 12, gap: 0 }}>
+        <div className="ov-page" style={{ fontFamily: "var(--font-mono)", fontSize: 12, gap: 0 }}>
           {log.map((e) => (
             <div key={e.id} data-testid="activity-row" style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 8px", borderBottom: "1px solid var(--color-border-tertiary)" }}>
               <span aria-label={e.kind === "error" ? "failed" : e.kind === "info" ? "noted" : "succeeded"} style={{ width: 12, flexShrink: 0, color: e.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-tertiary)" }}>

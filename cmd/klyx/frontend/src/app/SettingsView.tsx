@@ -75,7 +75,7 @@ export function SettingsView() {
 
   // Step 7d: an app route on the workspace template.
   return frame("ready", null, (
-    <div className="lens-canvas" style={{ fontSize: 12, maxWidth: 900 }}>
+    <div className="ov-page" style={{ fontSize: 12, maxWidth: 900 }}>
 
       <Section title="Appearance">
         <AppearancePanel />
