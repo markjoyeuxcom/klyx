@@ -554,11 +554,14 @@ function SecretInspector({ cluster, e, nowS, removed, unverified, replaced, stor
               label: <span className="t-identifier">{e.storeKind}/{e.storeName}</span>,
               body: (
                 <>
+                {/* The store's evidence panel, as cert-manager's issuer panel
+                    (slice 13c.7): no triangle, no danger wall. The rail's
+                    step mark already carries the shape. */}
                 {storeBroken && (
-                  <div className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: storeRole!.kind === "fault" ? "var(--color-background-danger)" : "var(--color-background-warning)", boxShadow: `inset 0 0 0 1px ${storeRole!.kind === "fault" ? "var(--color-border-danger)" : "var(--color-border-warning)"}` }}>
-                    <div style={{ color: ROLE_TEXT[storeRole!.kind], fontWeight: 600 }}>{storeRole!.kind === "fault" ? "▲ Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
-                    <button onClick={() => onOpenStore(store!)} className="t-identifier" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", marginTop: 2 }}>{store!.kind}/{store!.name}</button>
-                    {store!.message && <div style={{ color: "var(--color-text-secondary)", marginTop: 3, overflowWrap: "anywhere" }}>{store!.message}</div>}
+                  <div className="evidence-panel" data-tone={storeRole!.kind === "fault" ? "danger" : "warning"}>
+                    <div className="evidence-panel-head">{storeRole!.kind === "fault" ? "Store failed" : "Store not ready"}{storeCov === "stale" ? " (last observed - the store watch is failing)" : ""}: {store!.reason || "unknown"}</div>
+                    <button onClick={() => onOpenStore(store!)} className="t-identifier evidence-panel-link">{store!.kind}/{store!.name}</button>
+                    {store!.message && <div className="evidence-panel-text">{store!.message}</div>}
                   </div>
                 )}
                   <div className="insp-kv">
