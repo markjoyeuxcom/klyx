@@ -36,6 +36,9 @@ export type DField = {
   // listAt: the indent of this field's text children - a list of scalars
   // stays text at that indent (review 1).
   listAt?: number;
+  // list: the known list this field is, by its object's kind and its path
+  // (review 3) - "conditions" or another KNOWN list name.
+  list?: string;
 };
 
 export type DRow = { cells: string[]; raw: string; extra: string[] };
@@ -65,7 +68,7 @@ const UNDERLINE = /^=+ *$/;
 // A field: "Key:" then whitespace and a value, or nothing. The key never
 // starts with whitespace, ":" or "-", and the colon must be followed by
 // whitespace or the end of the line.
-const FIELD = /^( *)([^\s:\-][^:]*?):(?:([ \t]+)(.*))?$/;
+const FIELD = /^( *)([^\s:-][^:]*?):(?:([ \t]+)(.*))?$/;
 // A column title: capitalised words ("Type", "CPU Requests").
 const TITLE = /^[A-Z][A-Za-z]*(?: [A-Za-z]+)*$/;
 
@@ -121,20 +124,41 @@ function rootField(f: DField, seen: Set<string>): boolean {
   return true;
 }
 
-// eventsOpener finds the Events section by its shape, never by its words
-// alone: an event message prints its newlines raw, so a message line can
-// read "Events: …" (review 2). The opener is a column-0 "Events:" followed
-// by the events table's header and dash row, or "Events:  <none>" as the
-// last line with text. -1 when neither is there.
-function eventsOpener(S: string[]): number {
-  for (let i = 0; i + 2 < S.length; i++) {
-    if (!/^Events: *$/.test(S[i]) || !DASH_ROW.test(S[i + 2]) || indentOf(S[i + 1]) === 0) continue;
-    const head = cellsOf(S[i + 1], dashCols(S[i + 2]));
-    if (head.every((h) => TITLE.test(h)) && ["Type", "Reason", "Message"].every((h) => head.includes(h))) return i;
-  }
+// eventsCandidate: a column-0 line that has the Events section's shape -
+// "Events:" followed by the events table's header and dash row, or
+// "Events:  <none>" as the last line with text. An event message prints its
+// newlines raw, so the words alone prove nothing (review 2).
+function eventsCandidates(S: string[], from: number): number[] {
+  const out: number[] = [];
   let last = S.length - 1;
   while (last >= 0 && S[last].trim() === "") last--;
-  return last >= 0 && /^Events: +<none> *$/.test(S[last]) ? last : -1;
+  for (let i = from; i < S.length; i++) {
+    if (i === last && /^Events: +<none> *$/.test(S[i])) { out.push(i); continue; }
+    if (i + 2 >= S.length || !/^Events: *$/.test(S[i]) || !DASH_ROW.test(S[i + 2]) || indentOf(S[i + 1]) === 0) continue;
+    const head = cellsOf(S[i + 1], dashCols(S[i + 2]));
+    if (head.every((h) => TITLE.test(h)) && ["Type", "Reason", "Message"].every((h) => head.includes(h))) out.push(i);
+  }
+  return out;
+}
+
+// layout settles the report's two footers before anything is parsed (review
+// 3): ConfigMap and Secret data, and Events.
+//   - Data: a line underlined by "====" opens data. ConfigMap prints Data
+//     and then BinaryData, whose lines are sizes, so the real Events follows
+//     the LAST underline; an Events-shaped block inside the data comes
+//     before it and is never chosen.
+//   - Events: exactly one candidate (after the last underline, if any) is
+//     the opener. Several cannot be told apart, so everything from the data
+//     (or the first candidate) on stays opaque - never a guess.
+function layout(S: string[]): { opaqueAt: number; opaqueEnd: number; eventsAt: number } {
+  const unders: number[] = [];
+  for (let i = 0; i + 1 < S.length; i++) if (S[i].trim() !== "" && UNDERLINE.test(S[i + 1]) && indentOf(S[i]) === 0) unders.push(i);
+  const from = unders.length ? unders[unders.length - 1] + 2 : 0;
+  const cands = eventsCandidates(S, from);
+  if (cands.length === 1) return { opaqueAt: unders.length ? unders[0] : -1, opaqueEnd: cands[0], eventsAt: cands[0] };
+  if (unders.length) return { opaqueAt: unders[0], opaqueEnd: S.length, eventsAt: -1 };
+  if (cands.length > 1) return { opaqueAt: cands[0], opaqueEnd: S.length, eventsAt: -1 };
+  return { opaqueAt: -1, opaqueEnd: S.length, eventsAt: -1 };
 }
 
 export function parseDescribe(text: string): DTree {
@@ -143,11 +167,7 @@ export function parseDescribe(text: string): DTree {
   const n = lines.length;
   const atRoot = (k: string) => S.some((l) => l.startsWith(`${k}:`) && FIELD.test(l));
   const generic = atRoot("API Version") && atRoot("Kind") && atRoot("Metadata");
-  const eventsAt = eventsOpener(S);
-  const end = eventsAt >= 0 ? eventsAt : n;
-  // ConfigMap and Secret data: a "====" underline opens an opaque region.
-  let dataAt = -1;
-  for (let i = 0; i + 1 < end; i++) if (S[i].trim() !== "" && UNDERLINE.test(S[i + 1])) { dataAt = i; break; }
+  const { opaqueAt, opaqueEnd, eventsAt } = layout(S);
 
   const root: DNode[] = [];
   const stack: DField[] = [];
@@ -163,16 +183,29 @@ export function parseDescribe(text: string): DTree {
     return stack.length ? stack[stack.length - 1].children : root;
   };
   const topOf = () => (stack.length ? stack[stack.length - 1] : null);
+  const continueValue = (f: DField, raw: string, s: string, indent: number) => {
+    // Relative to the value column when indented that far, so a long
+    // annotation's value keeps its own shape.
+    const rel = f.valueCol >= 0 && indent >= f.valueCol ? s.slice(f.valueCol) : s;
+    f.cont.push({ raw, text: rel.trimEnd(), kind: "multiline" });
+  };
+  const textLine = (raw: string, s: string, indent: number) => {
+    const into = containerFor(indent);
+    const owner = topOf();
+    if (owner && owner.listAt === undefined && into === owner.children) owner.listAt = indent;
+    into.push({ t: "text", raw, text: s.trim() });
+    open = null;
+  };
 
   for (let i = 0; i < n; i++) {
     const raw = lines[i];
     const s = S[i];
 
-    if (i === dataAt) {
+    if (i === opaqueAt) {
       stack.length = 0;
-      root.push({ t: "opaque", title: s.trim(), raw: lines.slice(i, end) });
+      root.push({ t: "opaque", title: s.trim(), raw: lines.slice(i, opaqueEnd) });
       open = null;
-      i = end - 1;
+      i = opaqueEnd - 1;
       continue;
     }
     if (s.trim() === "") {
@@ -183,6 +216,32 @@ export function parseDescribe(text: string): DTree {
     const indent = indentOf(s);
     const top = topOf();
     const inEvents = eventsAt >= 0 && i > eventsAt;
+
+    // Value context first (review 3): a line the context says belongs to a
+    // value or a list is never promoted to a table or a field.
+    //   - aligned to the open field's value column: a continuation
+    //     (Labels, Annotations, Tolerations);
+    //   - indented past it: the value's own next line (a long annotation
+    //     prints its value under its key);
+    //   - generic: deeper than a scalar field - a map or list prints with
+    //     no value, so a field with one never has children.
+    if (open && open.valueCol >= 0 && indent === open.valueCol) {
+      open.cont.push({ raw, text: s.trim(), kind: "aligned" });
+      continue;
+    }
+    if (open && open.value !== "" && (indent > open.valueCol || (generic && indent > open.indent))) {
+      continueValue(open, raw, s, indent);
+      continue;
+    }
+    //   - Command and Args print one argument per line, whatever it says;
+    //   - in generic mode a list of scalars is arbitrary strings: it stays
+    //     text once it starts. (Built-in describers print prose before a
+    //     table - "Allocated resources" - so there only fields are barred.)
+    const listed = top !== null && top.listAt !== undefined && indent === top.listAt;
+    if (top && ((!generic && (top.key === "Command" || top.key === "Args") && indent > top.indent) || (generic && listed))) {
+      textLine(raw, s, indent);
+      continue;
+    }
 
     // 1. A table with a dash row of two or more runs and titled columns.
     const next = i + 1 < n ? S[i + 1] : "";
@@ -235,26 +294,13 @@ export function parseDescribe(text: string): DTree {
       }
     }
 
-    // 3. A continuation aligned to the open field's value column.
-    if (open && open.valueCol >= 0 && indent === open.valueCol) {
-      open.cont.push({ raw, text: s.trim(), kind: "aligned" });
-      continue;
-    }
-
-    // 4. A field - unless the context says the line cannot be one.
+    // 3. A field - unless the context says the line cannot be one.
     const f = asField(raw);
     const notField =
+      // a list of scalars stays text once it starts
+      listed ||
       // everything after the Events line belongs to Events
       (inEvents && indent === 0) ||
-      // Command and Args print one argument per line, whatever it says
-      (!generic && top !== null && (top.key === "Command" || top.key === "Args") && indent > top.indent) ||
-      // a list of scalars stays text
-      (top !== null && top.listAt !== undefined && indent === top.listAt) ||
-      // a line indented past the open field's value column continues it: a
-      // long annotation prints its value indented under the key
-      (open !== null && open.valueCol >= 0 && indent > open.valueCol) ||
-      // generic: a scalar field never has children - deeper lines continue it
-      (generic && open !== null && open.value !== "" && indent > open.indent) ||
       // generic: a top-level key after the prelude that cannot be one
       (generic && f !== null && indent === 0 && i !== eventsAt && rootKeys !== null && !rootField(f, rootKeys));
     if (f && !notField) {
@@ -268,68 +314,93 @@ export function parseDescribe(text: string): DTree {
       continue;
     }
 
-    // 5. A value's own next line: kubectl prints a value's embedded
+    // 4. A value's own next line: kubectl prints a value's embedded
     // newlines raw, at any indent (often column 0).
     if (open && open.value !== "") {
-      // Relative to the value column when indented that far, so a long
-      // annotation's value keeps its own shape.
-      const rel = open.valueCol >= 0 && indent >= open.valueCol ? s.slice(open.valueCol) : s;
-      open.cont.push({ raw, text: rel.trimEnd(), kind: "multiline" });
+      continueValue(open, raw, s, indent);
       continue;
     }
 
-    // 6. A text line in its place: a list item (Command, Mounts,
+    // 5. A text line in its place: a list item (Command, Mounts,
     // Hostnames) or prose.
-    const into = containerFor(indent);
-    const owner = topOf();
-    if (owner && owner.listAt === undefined && into === owner.children) owner.listAt = indent;
-    into.push({ t: "text", raw, text: s.trim() });
-    open = null;
+    textLine(raw, s, indent);
   }
 
-  if (generic) for (const node of root) if (node.t === "field") splitItems(node);
+  if (generic) {
+    const value = (k: string) => root.find((x): x is DField => x.t === "field" && x.indent === 0 && x.key === k)?.value ?? "";
+    const apiVersion = value("API Version");
+    const family = knownLists(apiVersion.includes("/") ? apiVersion.slice(0, apiVersion.indexOf("/")) : "", value("Kind"));
+    for (const node of root) if (node.t === "field") markLists(node, [], family);
+  }
   return { generic, nodes: root };
 }
 
-// KNOWN_LISTS: the list fields whose items Describe separates, each with its
-// item's keys - label as printed, and the field name kubectl sorted (review
-// 2). smartLabelFor is not invertible ("URL" and "a" print URL, A; "Foo" and
-// "foo" both print Foo), so a boundary is certain only where the schema is
-// known: every key of the block is one of the list's own fields. Any other
-// list reads as one block, exactly as the text does.
-const CONDITION_KEYS: Record<string, string> = {
-  "Last Heartbeat Time": "lastHeartbeatTime", "Last Probe Time": "lastProbeTime", "Last Transition Time": "lastTransitionTime",
-  "Last Update Time": "lastUpdateTime", Message: "message", "Observed Generation": "observedGeneration", Reason: "reason",
-  Severity: "severity", Status: "status", Type: "type",
-};
-const keys = (...names: string[]): Record<string, string> => Object.fromEntries(names.map((n) => [n.replace(/^./, (c) => c.toUpperCase()).replace(/([a-z])([A-Z])/g, "$1 $2"), n]));
-export const KNOWN_LISTS: Record<string, Record<string, string>> = {
-  Conditions: CONDITION_KEYS,
-  "Owner References": { "API Version": "apiVersion", "Block Owner Deletion": "blockOwnerDeletion", Controller: "controller", Kind: "kind", Name: "name", UID: "uid" },
-  // Gateway API
-  Listeners: keys("allowedRoutes", "attachedRoutes", "conditions", "hostname", "name", "port", "protocol", "supportedKinds", "tls"),
-  "Supported Kinds": keys("group", "kind"),
-  "Parent Refs": keys("group", "kind", "name", "namespace", "port", "sectionName"),
-  Parents: keys("conditions", "controllerName", "parentRef"),
-  Rules: keys("backendRefs", "filters", "matches", "name", "sessionPersistence", "timeouts"),
-  "Backend Refs": keys("filters", "group", "kind", "name", "namespace", "port", "weight"),
-  Matches: keys("headers", "method", "path", "queryParams"),
-  Addresses: keys("type", "value"),
-  // Flux
-  "Depends On": keys("name", "namespace"),
-  "Health Checks": { "API Version": "apiVersion", Kind: "kind", Name: "name", Namespace: "namespace" },
-  // External Secrets
-  Data: keys("remoteRef", "secretKey", "sourceRef"),
-};
+// Known lists (review 3): a property name is not a schema. A list splits
+// into items only at a path whose schema is known for the object's own
+// group and kind - every key of the block one of that list's fields, each
+// recorded as printed and as the name kubectl sorted. smartLabelFor is not
+// invertible ("URL" and "a" print URL, A; "Foo" and "foo" both print Foo),
+// so anywhere else - an unknown kind, a values map, a same-named property
+// elsewhere - a list reads as one block, exactly as the text does.
+type Keys = Record<string, string>;
+const keys = (...names: string[]): Keys => Object.fromEntries(names.map((n) => [n.replace(/^./, (c) => c.toUpperCase()).replace(/([a-z])([A-Z])/g, "$1 $2"), n]));
+export const CONDITION_KEYS: Keys = keys("lastHeartbeatTime", "lastProbeTime", "lastTransitionTime", "lastUpdateTime", "message", "observedGeneration", "reason", "severity", "status", "type");
+const OWNER_REFS: Keys = { "API Version": "apiVersion", "Block Owner Deletion": "blockOwnerDeletion", Controller: "controller", Kind: "kind", Name: "name", UID: "uid" };
+const PARENT_REF = keys("group", "kind", "name", "namespace", "port", "sectionName");
+const ADDRESSES = keys("type", "value");
+type Family = { group: string; kinds: string[]; lists: Record<string, Keys> };
+const FAMILIES: Family[] = [
+  { group: "gateway.networking.k8s.io", kinds: ["Gateway"], lists: {
+    "Spec/Listeners": keys("allowedRoutes", "hostname", "name", "port", "protocol", "tls"),
+    "Spec/Addresses": ADDRESSES,
+    "Status/Addresses": ADDRESSES,
+    "Status/Conditions": CONDITION_KEYS,
+    "Status/Listeners": keys("attachedRoutes", "conditions", "name", "supportedKinds"),
+    "Status/Listeners/Conditions": CONDITION_KEYS,
+    "Status/Listeners/Supported Kinds": keys("group", "kind"),
+  } },
+  { group: "gateway.networking.k8s.io", kinds: ["HTTPRoute", "GRPCRoute"], lists: {
+    "Spec/Parent Refs": PARENT_REF,
+    "Spec/Rules": keys("backendRefs", "filters", "matches", "name", "retry", "sessionPersistence", "timeouts"),
+    "Spec/Rules/Backend Refs": keys("filters", "group", "kind", "name", "namespace", "port", "weight"),
+    "Spec/Rules/Matches": keys("headers", "method", "path", "queryParams"),
+    "Status/Parents": keys("conditions", "controllerName", "parentRef"),
+    "Status/Parents/Conditions": CONDITION_KEYS,
+  } },
+  { group: "kustomize.toolkit.fluxcd.io", kinds: ["Kustomization"], lists: {
+    "Status/Conditions": CONDITION_KEYS,
+    "Spec/Depends On": keys("name", "namespace"),
+    "Spec/Health Checks": { "API Version": "apiVersion", Kind: "kind", Name: "name", Namespace: "namespace" },
+  } },
+  { group: "helm.toolkit.fluxcd.io", kinds: ["HelmRelease"], lists: { "Status/Conditions": CONDITION_KEYS, "Spec/Depends On": keys("name", "namespace") } },
+  { group: "source.toolkit.fluxcd.io", kinds: ["GitRepository", "OCIRepository", "HelmRepository", "HelmChart", "Bucket"], lists: { "Status/Conditions": CONDITION_KEYS } },
+  { group: "cert-manager.io", kinds: ["Certificate", "CertificateRequest", "Issuer", "ClusterIssuer"], lists: { "Status/Conditions": CONDITION_KEYS } },
+  { group: "external-secrets.io", kinds: ["ExternalSecret"], lists: { "Status/Conditions": CONDITION_KEYS, "Spec/Data": keys("remoteRef", "secretKey", "sourceRef") } },
+  { group: "external-secrets.io", kinds: ["SecretStore", "ClusterSecretStore"], lists: { "Status/Conditions": CONDITION_KEYS } },
+  { group: "argoproj.io", kinds: ["Application", "ApplicationSet"], lists: { "Status/Conditions": CONDITION_KEYS } },
+  { group: "karpenter.sh", kinds: ["NodePool", "NodeClaim"], lists: { "Status/Conditions": CONDITION_KEYS } },
+];
 
-// splitItems: in generic mode, the field children of a known list start a
-// new item where the boundary is certain - a key repeats, or sorts before
-// the previous one in kubectl's own order.
-function splitItems(f: DField): void {
-  for (const c of f.children) if (c.t === "field") splitItems(c);
-  const known = KNOWN_LISTS[f.key];
+function knownLists(group: string, kind: string): Record<string, Keys> {
+  const fam = FAMILIES.find((f) => f.group === group && f.kinds.includes(kind));
+  // Every object's metadata is ObjectMeta.
+  return { "Metadata/Owner References": OWNER_REFS, ...(fam?.lists ?? {}) };
+}
+
+// markLists names each known list by its path, and splits its field
+// children into items where the boundary is certain - a key repeats, or
+// sorts before the previous one by the recorded names.
+function markLists(f: DField, parent: string[], lists: Record<string, Keys>): void {
+  const path = [...parent, f.key];
+  for (const c of f.children) {
+    if (c.t === "field") markLists(c, path, lists);
+    if (c.t === "item") for (const g of c.children) if (g.t === "field") markLists(g, path, lists);
+  }
+  const known = lists[path.join("/")];
+  if (!known) return;
   const kids = f.children;
-  if (!known || kids.length === 0 || !kids.every((c) => c.t === "blank" || (c.t === "field" && c.key in known))) return;
+  if (kids.length === 0 || !kids.every((c) => c.t === "blank" || (c.t === "field" && c.key in known))) return;
+  f.list = known === CONDITION_KEYS ? "conditions" : path[path.length - 1];
   const items: DItem[] = [{ t: "item", children: [] }];
   let prev: string | null = null;
   let seen = new Set<string>();

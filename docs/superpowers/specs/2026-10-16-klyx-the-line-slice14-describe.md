@@ -38,14 +38,26 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
 - `item`: one certain list item (generic mode).
 - `opaque`: a region kept as raw lines.
 
-**Pre-scan:**
+**Pre-scan** (review 3: the footers are settled before anything is parsed):
 - **Generic mode:** the top level has `API Version:`, `Kind:` and `Metadata:` at column 0. This is the CRD describer.
 - **The Events line,** recognised by its shape, never by its words alone. An event message prints its newlines raw, so a message line can read "Events: …" (review 2). The opener is either:
   - a column-0 `Events:` followed by the events table's header (titled cells that include Type, Reason and Message) and its dash row;
   - or `Events:  <none>` as the last line with text.
 
   Everything after the opener belongs to Events. An Event row starts with its type (`Normal` or `Warning`) and has a reason. Any other line continues the last row's message, so a message line that reads like a header or "Events: …" stays inside that message.
-- **Data regions:** a line underlined by a run of `=` opens an opaque region that runs to the Events line. This is ConfigMap and Secret data (`Data` / `====`), whose content is arbitrary text and is never parsed.
+- **Data regions:** a column-0 line underlined by a run of `=` opens data. This is ConfigMap and Secret data (`Data` / `====`). It is arbitrary text and is never parsed.
+  - ConfigMap prints Data and then BinaryData, whose lines are sizes. So Events candidates are sought only after the **last** underline. An Events-shaped block inside the data comes before it and is never chosen.
+  - With exactly one candidate there, the data region runs from the first underline to the opener.
+  - Otherwise, everything from the first underline to the end stays opaque.
+- **No data:** exactly one candidate is the opener. Several can't be told apart, so everything from the first candidate on stays opaque. Klyx never guesses.
+
+**Value context comes first** (review 3). Before any table or field rule, a line the context gives to a value or a list keeps that role:
+- aligned to the open field's value column: a continuation;
+- indented past it, or, in generic mode, deeper than a scalar field: the value's own next line;
+- under built-in `Command` or `Args`: a text line;
+- at a generic-mode scalar list's indent: a text line.
+
+Built-in describers print prose before a table ("Allocated resources"), so a built-in scalar list bars only fields, never the dash table.
 
 **Line rules,** in order:
 1. **Table with a dash row.** The next line is only dash runs and spaces, with **two or more** runs. Every header cell is capitalised words (`Type`, `CPU Requests`, `LastHeartbeatTime`).
@@ -76,14 +88,17 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
 
 **Generic mode and list items** (review 2):
 - **Labels can't be turned back into names.** `smartLabelFor` is not invertible: "URL" and "a" print as URL and A, and "Foo" and "foo" both print as Foo. So a boundary is certain only where the schema is known.
-- **Items split only in a known list** (`KNOWN_LISTS`):
-  - Conditions, with the standard condition keys;
-  - Owner References;
-  - Gateway API: Listeners, Supported Kinds, Parent Refs, Parents, Rules, Backend Refs, Matches and Addresses;
-  - Flux: Depends On and Health Checks;
-  - External Secrets: Data.
+- **A property name is not a schema** (review 3). Items split only at a path whose schema is known for the object's own group and kind (`FAMILIES`), read from its API Version and Kind:
+  - `Metadata/Owner References` on every object;
+  - Gateway: `Spec/Listeners`, `Spec/Addresses`, `Status/Addresses`, `Status/Conditions`, `Status/Listeners`, `Status/Listeners/Conditions` and `Status/Listeners/Supported Kinds`;
+  - HTTPRoute and GRPCRoute: `Spec/Parent Refs`, `Spec/Rules`, `Spec/Rules/Backend Refs`, `Spec/Rules/Matches`, `Status/Parents` and `Status/Parents/Conditions`;
+  - Kustomization: `Status/Conditions`, `Spec/Depends On` and `Spec/Health Checks`;
+  - HelmRelease: `Status/Conditions` and `Spec/Depends On`;
+  - for the Flux sources, Certificate, CertificateRequest, Issuer, ClusterIssuer, SecretStore, ClusterSecretStore, Application, ApplicationSet, NodePool and NodeClaim: `Status/Conditions`;
+  - ExternalSecret: `Status/Conditions` and `Spec/Data`.
 - **Each known list records its items' keys,** both the label as printed and the field name kubectl sorted. A block splits only when **every** key in it is one of the list's own. A new item starts where a key repeats, or where a key sorts before the previous one, compared by the recorded names.
-- **Any other list reads as one block,** exactly as the text does. The view never shows an item count.
+- **The field records which list it is** (`list`). The conditions table in 14b reads only that.
+- **Any other list reads as one block,** exactly as the text does. This covers an unknown kind, a values map, and a same-named property at another path. The view never shows an item count.
 - Built-in describers are not sorted, so the rule never applies outside generic mode.
 
 ### 14b. The sheet (`DescribePane` rebuilt)
@@ -113,7 +128,7 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
   - Below 820px the rail becomes a wrapping row of the same buttons above the body.
 - **Sections:** a top-level field with children is a collapsible section. Its head uses `t-section-label` with a chevron, `aria-expanded`, and is open by default. Consecutive top-level scalar fields are a key/value grid with no head.
 - **Fields:** a grid with the key in sans 13/20 ink-3 and the value in mono 13/20 ink-1. A nested block indents 20px and has a hairline guide. A list item after the first gets 8px of space and a hairline above. Continuation and list lines stack in the value column. `<none>`, `<unset>` and `<unknown>` read in ink-3.
-- **Conditions shape** (review 1). Only a generic-mode field keyed `Conditions` becomes a table, and only when every certain item:
+- **Conditions shape** (reviews 1 and 3). Only a field the parser marked as a known conditions list (`list === "conditions"`, by kind and path) becomes a table, and only when every certain item:
   - is scalar fields alone;
   - draws its keys from the standard set (Last Heartbeat Time, Last Probe Time, Last Transition Time, Last Update Time, Message, Observed Generation, Reason, Severity, Status, Type);
   - carries Type and Status.

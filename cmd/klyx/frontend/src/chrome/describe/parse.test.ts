@@ -84,11 +84,29 @@ describe("parseDescribe: the generic (CRD) describer", () => {
     expect(items(v)).toHaveLength(0);
     expect(fields(v.children).map((f) => f.key)).toEqual(["URL", "A", "Foo", "Foo"]);
   });
-  it("splits a known list only when every key is the list's own", () => {
-    const own = "Name:  x\nAPI Version:  a/v1\nKind:  K\nMetadata:\n  UID:  u\nSpec:\n  Parent Refs:\n    Name:  a\n    Name:  b";
+  it("splits a known list only for its own kind and path, and only when every key is the list's own (review 3)", () => {
+    const own = "Name:  x\nAPI Version:  gateway.networking.k8s.io/v1\nKind:  HTTPRoute\nMetadata:\n  UID:  u\nSpec:\n  Parent Refs:\n    Name:  a\n    Name:  b";
     expect(items(at(parseDescribe(own), "Spec", "Parent Refs"))).toHaveLength(2);
+    expect(at(parseDescribe(own), "Spec", "Parent Refs").list).toBe("Parent Refs");
     const foreign = own.replace("    Name:  b", "    Name:  b\n    Weird Key:  c");
     expect(items(at(parseDescribe(foreign), "Spec", "Parent Refs"))).toHaveLength(0);
+    // the same property on another kind, or at another path, is not that schema
+    const otherKind = own.replace("gateway.networking.k8s.io/v1", "example.com/v1").replace("HTTPRoute", "Widget");
+    expect(items(at(parseDescribe(otherKind), "Spec", "Parent Refs"))).toHaveLength(0);
+    const otherPath = own.replace("Spec:\n  Parent Refs:", "Spec:\n  Values:\n    Parent Refs:").replace(/\n {4}Name:/g, "\n      Name:");
+    expect(items(at(parseDescribe(otherPath), "Spec", "Values", "Parent Refs"))).toHaveLength(0);
+  });
+  it("does not infer a schema from a property name: a Widget's Rules with Name and name (review 3)", () => {
+    const s = "Name:  x\nAPI Version:  example.com/v1\nKind:  Widget\nMetadata:\n  UID:  u\nSpec:\n  Rules:\n    Name:  upper\n    Name:  lower\nEvents:  <none>\n";
+    const t = parseDescribe(s);
+    expect(printDescribe(t)).toBe(s);
+    expect(items(at(t, "Spec", "Rules"))).toHaveLength(0);
+    const cond = s.replace("Rules:", "Conditions:").replace("Spec:", "Status:");
+    expect(at(parseDescribe(cond), "Status", "Conditions").list).toBeUndefined();
+  });
+  it("marks a known kind's conditions, and a Gateway listener's own conditions", () => {
+    expect(at(parseDescribe(gateway), "Status", "Conditions").list).toBe("conditions");
+    expect(at(parseDescribe(ks), "Status", "Conditions").list).toBe("conditions");
   });
   it("keeps a multi-line condition message whose next line reads 'Status: …' inside the message (review 1)", () => {
     const text = [
@@ -210,6 +228,37 @@ describe("parseDescribe: built-in describers", () => {
     const ev = tableIn(at(t, "Events"))!;
     expect(ev.rows.map((r) => r.cells[0])).toEqual(["Warning", "Normal"]);
     expect(ev.rows[0].extra).toEqual(["Events: retry history follows", "  Type  Reason", "  ----  ------"]);
+  });
+  it("keeps a dashed, header-shaped Command as text (review 3)", () => {
+    const s = "Name:  p\nContainers:\n  app:\n    Command:\n      sh\n      Type   Status\n      ----   ------\n      Ready  False\n    Image:  busybox\n";
+    const t = parseDescribe(s);
+    expect(printDescribe(t)).toBe(s);
+    expect(at(t, "Containers", "app", "Command").children.map((c) => c.t)).toEqual(["text", "text", "text", "text"]);
+    expect(at(t, "Containers", "app", "Image").value).toBe("busybox");
+  });
+  it("keeps table-shaped annotation content with its annotation (review 3)", () => {
+    const s = "Name:         x\nAnnotations:  note:\n                Type   Status\n                ----   ------\n                Ready  False\nStatus:       Running";
+    const t = parseDescribe(s);
+    expect(printDescribe(t)).toBe(s);
+    expect(at(t, "Annotations").cont).toHaveLength(3);
+    expect(at(t, "Annotations").children).toHaveLength(0);
+  });
+  it("keeps an Events-shaped block inside ConfigMap data opaque, and finds the real Events after BinaryData (review 3)", () => {
+    const s = "Name:  cm\nNamespace:  default\n\nData\n====\nconfig.txt:\n----\nEvents:\n  Type     Reason  Message\n  ----     ------  -------\n  Warning  Fake    config content\n\nBinaryData\n====\n\nEvents:  <none>\n";
+    const t = parseDescribe(s);
+    expect(printDescribe(t)).toBe(s);
+    const op = t.nodes.find((n) => n.t === "opaque");
+    expect(op && op.t === "opaque" && op.raw.includes("  Warning  Fake    config content")).toBe(true);
+    expect(at(t, "Events").value).toBe("<none>");
+    expect(t.nodes.some((n) => n.t === "table")).toBe(false);
+  });
+  it("keeps the suffix opaque when two Events openers cannot be told apart", () => {
+    const block = "Events:\n  Type     Reason  Age  From  Message\n  ----     ------  ---  ----  -------\n  Warning  A       1m   k     m";
+    const s = `Name:  p\nStatus:  Running\n${block}\n${block}`;
+    const t = parseDescribe(s);
+    expect(printDescribe(t)).toBe(s);
+    expect(rootKeys(t)).toEqual(["Name", "Status"]);
+    expect(t.nodes[t.nodes.length - 1]).toMatchObject({ t: "opaque", title: "Events:" });
   });
   it("reads a ragged last column", () => {
     const text = "Events:\n  Type    Reason  Message\n  ----    ------  -------\n  Normal  A       short\n  Normal  B       a much longer message than the header";
