@@ -25,7 +25,7 @@ import { INSPECTOR_IDENTITY_ID, useInspectorPin } from "../nav/inspectorPin";
 // or in Settings (the parity table). Crumbs outrank utilities: the well's
 // words give up width first; the protected tag never shrinks.
 // The widths below which the bar steps things out (layout.css, data-below).
-const BAR_BREAKS = [1680, 1600, 1440, 1280, 1180] as const;
+const BAR_BREAKS = [1680, 1600, 1440, 1280, 1180, 900] as const;
 
 export function LocationBar() {
   const barRef = useRef<HTMLElement>(null);

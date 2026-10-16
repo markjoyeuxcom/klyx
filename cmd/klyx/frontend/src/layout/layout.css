@@ -231,7 +231,7 @@ select.l-input { padding-right: 28px; }
    never floated as modules (slice 13a.2). */
 .shell-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
   background: var(--color-background-tertiary); }
-.mast { height: var(--mast-height); flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 80px; box-sizing: border-box; min-width: 0;
+.mast { height: var(--mast-height); flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 calc(80px / var(--app-zoom, 1)); /* the window's traffic lights do not zoom */ box-sizing: border-box; min-width: 0;
   background: var(--color-background-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
 .mast *, .mast *::before, .mast *::after { box-sizing: border-box; }
 .mast-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
@@ -372,6 +372,17 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .mast[data-below~="1180"] .locbar-ask > span { display: none; }
 /* "(inferred)" stays in the title and for assistive tech */
 .mast[data-below~="1180"] .locbar-protected-why { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Below 900px (a narrow window, or a wide one at 200% zoom) the bar keeps
+   only what places you: this station's rank and protected cue, the lens,
+   this station's comparison state, the fleet indicator, active forwards,
+   the console and Settings. Back and Forward stay on mod+[ and mod+], the
+   Fleet crumb on the mark beside it, the cluster's code in the station
+   crumb's name and title (slice 13a review 2). */
+.mast[data-below~="900"] .mast-history, .mast[data-below~="900"] .locbar-fleet, .mast[data-below~="900"] .locbar-fleet + .locbar-sep,
+.mast[data-below~="900"] .locbar-station .station-cluster { display: none !important; }
+.mast[data-below~="900"] .locbar-crumbs > .locbar-pop { min-width: 0; }
+.mast[data-below~="900"] .strip-box { max-width: 16ch; }
+.mast[data-below~="900"] .strip-stop[data-here] .strip-box .strip-label { display: none; } /* the station crumb beside it names the rank */
 
 /* ---- The Line lens index (slice 4 §4) ---- */
 .lens-index { width: 232px; flex-shrink: 0; min-height: 0; overflow: auto; box-sizing: border-box; padding: 22px 14px 22px 18px; display: flex; flex-direction: column; gap: 22px;
