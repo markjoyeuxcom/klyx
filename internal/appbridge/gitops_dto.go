@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"github.com/moomora/klyx/internal/urlscrub"
 	"time"
 
 	"github.com/moomora/klyx/internal/gitops/flux"
@@ -80,7 +81,7 @@ func fluxResourceFields(r flux.Resource, now time.Time) FluxResourceDTO {
 		Name:                  r.Name,
 		Ready:                 string(r.Ready),
 		Reason:                r.Reason,
-		Message:               r.Message,
+		Message:               urlscrub.Text(r.Message).Text,
 		Revision:              r.Revision,
 		ReadySinceSeconds:     age,
 		ReadySinceUnix:        since,
@@ -160,9 +161,9 @@ func sourceFields(s flux.Source) FluxSourceDTO {
 		Name:                s.Name,
 		Ready:               string(s.Ready),
 		Reason:              s.Reason,
-		Message:             s.Message,
+		Message:             urlscrub.Text(s.Message).Text,
 		Revision:            s.Revision,
-		URL:                 s.URL,
+		URL:                 urlscrub.Field(s.URL).Text,
 		Suspended:           s.Suspended,
 		RefKind:             s.RefKind,
 		RefName:             s.RefName,
@@ -226,6 +227,9 @@ type FluxDiffChangeDTO struct {
 	Name      string `json:"name"`
 	Diff      string `json:"diff,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// OmittedChanged names sections that changed but are shown omitted
+	// because they may carry secrets (coverage S0b §6).
+	OmittedChanged []string `json:"omittedChanged,omitempty"`
 }
 
 type ResourceDetailDTO struct {
@@ -271,7 +275,7 @@ func toDetailDTO(d flux.Detail) ResourceDetailDTO {
 		ApplyFailed: d.Kind == flux.KustomizationKind && d.AttemptedRevision != "" && d.AttemptedRevision != d.AppliedRevision,
 	}
 	for _, c := range d.Conditions {
-		out.Conditions = append(out.Conditions, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+		out.Conditions = append(out.Conditions, ConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: urlscrub.Text(c.Message).Text})
 	}
 	for _, e := range d.Inventory {
 		out.Inventory = append(out.Inventory, InventoryEntryDTO{Group: e.Group, Version: e.Version, Kind: e.Kind, Namespace: e.Namespace, Name: e.Name})

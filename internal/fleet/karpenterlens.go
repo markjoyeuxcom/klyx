@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"sort"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 				last = e.CreationTimestamp.Time
 			}
 			out.Events = append(out.Events, workloads.EventSummary{
-				Type: e.Type, Reason: e.Reason, Message: e.Message, Count: e.Count,
+				Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: e.Count,
 				Namespace: e.Namespace, Kind: e.InvolvedObject.Kind, Name: e.InvolvedObject.Name,
 				LastSeenUnix: last.Unix(),
 			})

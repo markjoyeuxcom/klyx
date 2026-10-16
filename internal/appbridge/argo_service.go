@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -174,7 +175,7 @@ func argoSourceDTOs(ss []argo.Source) []ArgoSourceDTO {
 	}
 	out := make([]ArgoSourceDTO, 0, len(ss))
 	for _, s := range ss {
-		out = append(out, ArgoSourceDTO{RepoURL: s.RepoURL, Path: s.Path, Chart: s.Chart, TargetRevision: s.TargetRevision, Ref: s.Ref})
+		out = append(out, ArgoSourceDTO{RepoURL: urlscrub.Field(s.RepoURL).Text, Path: s.Path, Chart: s.Chart, TargetRevision: s.TargetRevision, Ref: s.Ref})
 	}
 	return out
 }
@@ -340,7 +341,7 @@ func argoAppFields(a argo.App) ArgoAppDTO {
 		HealthStatus:   a.HealthStatus,
 		Broken:         a.Broken(),
 		Revision:       a.Revision,
-		RepoURL:        a.RepoURL,
+		RepoURL:        urlscrub.Field(a.RepoURL).Text,
 		Path:           a.Path,
 		Chart:          a.Chart,
 		TargetRevision: a.TargetRevision,
@@ -351,12 +352,12 @@ func argoAppFields(a argo.App) ArgoAppDTO {
 		ApplicationSet: a.ApplicationSet,
 		AutoSync:       a.AutoSync,
 		OpPhase:        a.OpPhase,
-		OpMessage:      a.OpMessage,
+		OpMessage:      urlscrub.Text(a.OpMessage).Text,
 		Conditions:     make([]ArgoConditionDTO, 0, len(a.Conditions)),
 		Resources:      make([]ArgoResourceDTO, 0, len(a.Resources)),
 	}
 	for _, c := range a.Conditions {
-		dto.Conditions = append(dto.Conditions, ArgoConditionDTO{Type: c.Type, Message: c.Message})
+		dto.Conditions = append(dto.Conditions, ArgoConditionDTO{Type: c.Type, Message: urlscrub.Text(c.Message).Text})
 	}
 	for _, r := range a.Resources {
 		dto.Resources = append(dto.Resources, ArgoResourceDTO{
@@ -376,7 +377,7 @@ func argoAppFields(a argo.App) ArgoAppDTO {
 	for _, h := range a.History {
 		dto.History = append(dto.History, ArgoHistoryDTO{ID: h.ID, DeployedAtUnix: unixOrZero(h.DeployedAt), ArgoRevisionsDTO: argoRevisionsDTO(h.Revisions)})
 	}
-	dto.Operation = ArgoOperationDTO{Phase: a.Operation.Phase, Message: a.Operation.Message,
+	dto.Operation = ArgoOperationDTO{Phase: a.Operation.Phase, Message: urlscrub.Text(a.Operation.Message).Text,
 		StartedAtUnix: unixOrZero(a.Operation.StartedAt), FinishedAtUnix: unixOrZero(a.Operation.FinishedAt), Sync: argoRevisionsDTO(a.Operation.Sync)}
 	return dto
 }
@@ -395,7 +396,7 @@ func argoAppSetFields(a argo.ApplicationSet) ArgoApplicationSetDTO {
 		Generators:     a.Generators,
 		TemplateName:   a.TemplateName,
 		Project:        a.Project,
-		RepoURL:        a.RepoURL,
+		RepoURL:        urlscrub.Field(a.RepoURL).Text,
 		Path:           a.Path,
 		TargetRevision: a.TargetRevision,
 		DestNamespace:  a.DestNamespace,
@@ -406,7 +407,7 @@ func argoAppSetFields(a argo.ApplicationSet) ArgoApplicationSetDTO {
 		Conditions:     make([]ArgoAppSetConditionDTO, 0, len(a.Conditions)),
 	}
 	for _, c := range a.Conditions {
-		dto.Conditions = append(dto.Conditions, ArgoAppSetConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+		dto.Conditions = append(dto.Conditions, ArgoAppSetConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: urlscrub.Text(c.Message).Text})
 	}
 	return dto
 }

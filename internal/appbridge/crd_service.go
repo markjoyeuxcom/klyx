@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -140,7 +141,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 	}
 	events := make([]EventDTO, 0, len(d.Events))
 	for _, e := range d.Events {
-		events = append(events, EventDTO{Type: e.Type, Reason: e.Reason, Message: e.Message, Count: int(e.Count), LastSeen: rfc3339(e.Last)})
+		events = append(events, EventDTO{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: int(e.Count), LastSeen: rfc3339(e.Last)})
 	}
 	secretKeys := make([]SecretKeyDTO, 0, len(d.SecretKeys))
 	for _, sk := range d.SecretKeys {

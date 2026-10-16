@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -137,7 +138,7 @@ func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, e
 			}
 			out.Units = append(out.Units, PromotionUnit{
 				Kind: "Application", Namespace: a.Namespace, Name: a.Name,
-				SourceKind: "Repo", SourceName: a.RepoURL,
+				SourceKind: "Repo", SourceName: urlscrub.Field(a.RepoURL).Text,
 				Revision: a.Revision, Ready: ready,
 				Suspended: a.HealthStatus == "Suspended",
 				Message:   a.SyncStatus + "/" + a.HealthStatus,

@@ -1,0 +1,123 @@
+package appbridge
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/fleet"
+)
+
+// The bridge needle (coverage S0b §7): a plain marker no scrubber knows, in
+// every payload leaf of varied types; the serialised DTO the frontend
+// receives must not carry it anywhere.
+const s0bNeedle = "BRIDGEneedle9K"
+
+func s0bConn(t *testing.T, objs ...runtime.Object) *fleet.ClusterConn {
+	t.Helper()
+	kinds := map[schema.GroupVersionResource]string{
+		{Group: "fluxcd.controlplane.io", Version: "v1", Resource: "resourcesets"}:      "ResourceSetList",
+		{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}: "GitRepositoryList",
+		{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}:           "ApplicationList",
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, objs...)
+	return fleet.NewClusterConn("x", kubefake.NewSimpleClientset(), nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+}
+
+func TestS0b_BridgeNeedle_Detail(t *testing.T) {
+	rs := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]any{"name": "with-secret", "namespace": "team-a", "uid": "u1",
+			"annotations": map[string]any{"kubectl.kubernetes.io/last-applied-configuration": `{"spec":{"inputs":[{"t":"` + s0bNeedle + `"}]}}`}},
+		"spec": map[string]any{
+			"inputs":            []any{map[string]any{"db_password": s0bNeedle, "port": int64(5432), "flag": true, "list": []any{s0bNeedle}}},
+			"resources":         []any{map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": "db"}, "stringData": map[string]any{"password": s0bNeedle}}},
+			"resourcesTemplate": "kind: Secret\nstringData:\n  t: " + s0bNeedle,
+		},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed",
+			"message": "fetch https://bob:" + s0bNeedle + "@git.example.com/x failed"}}},
+	}}
+	gr := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository",
+		"metadata": map[string]any{"name": "platform", "namespace": "flux-system", "uid": "u2"},
+		"spec":     map[string]any{"url": "https://x-access-token:" + s0bNeedle + "@github.com/org/repo", "interval": "1m"},
+	}}
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "shop", "namespace": "argocd", "uid": "u3"},
+		"spec":     map[string]any{"source": map[string]any{"repoURL": "https://github.com/org/shop", "path": "deploy"}},
+		"operation": map[string]any{"sync": map[string]any{"manifests": []any{"kind: Secret\ndata: " + s0bNeedle},
+			"source": map[string]any{"helm": map[string]any{"values": s0bNeedle}}}},
+		"status": map[string]any{"history": []any{map[string]any{"source": map[string]any{
+			"repoURL": "https://github.com/org/shop", "helm": map[string]any{"parameters": []any{map[string]any{"name": "p", "value": s0bNeedle}}},
+			"directory": map[string]any{"jsonnet": map[string]any{"extVars": []any{map[string]any{"name": "e", "value": s0bNeedle}}}}}}}},
+	}}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return s0bConn(t, rs, gr, app), true })
+	for _, c := range []struct{ group, version, plural, ns, name, mode string }{
+		{"fluxcd.controlplane.io", "v1", "resourcesets", "team-a", "with-secret", "withheld"},
+		{"source.toolkit.fluxcd.io", "v1", "gitrepositories", "flux-system", "platform", "url-scrubbed"},
+		{"argoproj.io", "v1alpha1", "applications", "argocd", "shop", "withheld"},
+	} {
+		d := svc.GetInstanceDetail("x", c.group, c.version, c.plural, c.ns, c.name)
+		if d.Error != "" {
+			t.Fatalf("%s: %s", c.plural, d.Error)
+		}
+		b, _ := json.Marshal(d)
+		if strings.Contains(string(b), s0bNeedle) {
+			t.Errorf("%s: the needle crossed the bridge:\n%s", c.plural, b)
+		}
+		if d.EditEligible || d.DescribeMode != c.mode {
+			t.Errorf("%s: edit %v describe %q", c.plural, d.EditEligible, d.DescribeMode)
+		}
+	}
+}
+
+// Chat (coverage S0b §3): a registered surface never reaches a model, by the
+// complete serialised tool result.
+func TestS0b_BridgeNeedle_ChatGet(t *testing.T) {
+	f := newFakeChat()
+	rsGVR := schema.GroupVersionResource{Group: "fluxcd.controlplane.io", Version: "v1", Resource: "resourcesets"}
+	f.kinds["resourceset"] = []fleet.ChatKind{{GVR: rsGVR, Kind: "ResourceSet", Namespaced: true}}
+	f.objects[key(rsGVR, "team-a", "rs")] = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]any{"name": "rs", "namespace": "team-a", "uid": "u1"},
+		"spec": map[string]any{"resourcesTemplate": "x: " + s0bNeedle, "inputs": []any{map[string]any{"v": s0bNeedle}},
+			"resources": []any{map[string]any{"apiVersion": "v1", "kind": "Secret", "stringData": map[string]any{"p": s0bNeedle}}}},
+	}}
+	res := newChatTools(f, fixedNow).Run(context.Background(), toolGet, json.RawMessage(`{"kind":"resourceset","namespace":"team-a","name":"rs"}`))
+	if strings.Contains(string(res.JSON), s0bNeedle) {
+		t.Fatalf("the needle reached the chat result: %s", res.JSON)
+	}
+}
+
+// AI Suggest-fix (coverage S0b §3): the full prompt bundle, after every
+// cap and scrubber, carries no payload.
+func TestS0b_BridgeNeedle_FixPrompt(t *testing.T) {
+	rs := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]any{"name": "rs", "namespace": "team-a", "uid": "u1"},
+		"spec":     map[string]any{"resourcesTemplate": "x: " + s0bNeedle, "inputs": []any{map[string]any{"region": s0bNeedle}}},
+	}}
+	conn := s0bConn(t, rs)
+	bundle, root, err := buildResourceBundle(context.Background(), conn, "fluxcd.controlplane.io", "v1", "resourcesets", "team-a", "rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := redactManifestForAI(root.YAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, user := BuildFixPrompt(bundle, manifest)
+	if strings.Contains(system+user, s0bNeedle) {
+		t.Fatal("the needle reached the Suggest-fix prompt")
+	}
+}

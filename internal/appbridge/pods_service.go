@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
@@ -66,7 +67,7 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	}
 	events := make([]EventDTO, 0, len(d.Events))
 	for _, e := range d.Events {
-		events = append(events, EventDTO{Type: e.Type, Reason: e.Reason, Message: e.Message, Count: int(e.Count), LastSeen: rfc3339(e.Last)})
+		events = append(events, EventDTO{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: int(e.Count), LastSeen: rfc3339(e.Last)})
 	}
 	return PodDetailDTO{
 		Summary:        toPodSummaryDTO(d.Summary),

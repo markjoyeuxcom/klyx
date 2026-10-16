@@ -164,3 +164,27 @@ func TestHasPlaceholder(t *testing.T) {
 		t.Error("a clean document has no placeholder")
 	}
 }
+
+func TestValueAt(t *testing.T) {
+	obj := objOf(t, `{"metadata":{"annotations":{"a.b/c":"v1"}},"spec":{"list":[{"x":"y"}],"k[1]":"q"}}`)
+	for path, want := range map[string]any{
+		`metadata.annotations["a.b/c"]`: "v1",
+		`spec.list[0].x`:                "y",
+		`spec["k[1]"]`:                  "q",
+	} {
+		if got, ok := ValueAt(obj, path); !ok || got != want {
+			t.Errorf("%s: got %v %v", path, got, ok)
+		}
+	}
+	if _, ok := ValueAt(obj, "spec.missing"); ok {
+		t.Error("a missing path reads not found")
+	}
+	// every path the sanitiser reports reads back
+	s := SanitizeEmbedded("fluxcd.controlplane.io", "ResourceSet", objOf(t, `{"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{}"}},"spec":{"inputs":[{"a.b":"x"}],"resourcesTemplate":"t"}}`))
+	raw := objOf(t, `{"metadata":{"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{}"}},"spec":{"inputs":[{"a.b":"x"}],"resourcesTemplate":"t"}}`)
+	for _, p := range s.Paths {
+		if _, ok := ValueAt(raw, p); !ok {
+			t.Errorf("path %q does not read back", p)
+		}
+	}
+}

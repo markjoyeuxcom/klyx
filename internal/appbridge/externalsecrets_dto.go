@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"github.com/moomora/klyx/internal/urlscrub"
 	"time"
 
 	"github.com/moomora/klyx/internal/externalsecrets"
@@ -60,7 +61,7 @@ func externalSecretFields(e externalsecrets.ExternalSecret, now time.Time) Exter
 		Name:                   e.Name,
 		State:                  string(e.State),
 		Reason:                 e.Reason,
-		Message:                e.Message,
+		Message:                urlscrub.Text(e.Message).Text,
 		StoreKind:              string(e.StoreKind),
 		StoreName:              e.StoreName,
 		TargetSecret:           e.TargetSecret,

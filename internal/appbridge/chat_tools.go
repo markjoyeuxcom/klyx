@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/moomora/klyx/internal/crd"
 	"io"
 	"reflect"
 	"regexp"
@@ -1156,6 +1157,9 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	if wantUID != "" && string(u.GetUID()) != wantUID {
 		return t.refuse(toolGet, gvr.Resource+" "+target, errors.New("the object was replaced since you asked about it (its UID changed); nothing about the new object was read"))
 	}
+	// coverage S0b §3: the sanitiser runs before the structural projection,
+	// so a registered surface never reaches a model, scrubbed or not
+	u = &unstructured.Unstructured{Object: crd.SanitizeEmbedded(gvr.Group, u.GetKind(), u.Object).Object}
 	o := chatProject(gvr, u)
 	p := &projector{redacted: o.Redacted}
 	data := chatGetData{Object: o}

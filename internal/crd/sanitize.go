@@ -3,6 +3,7 @@ package crd
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/moomora/klyx/internal/urlscrub"
@@ -179,7 +180,7 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 	if surfaces, ok := payloadKinds[group+"/"+kind]; ok {
 		if hasLastApplied(o) {
 			o = stripLastAppliedConfig(o)
-			s.mark(join(at, "metadata.annotations."+lastAppliedConfigAnnotation), false)
+			s.mark(join(join(at, "metadata"), "annotations")+"["+strconv.Quote(lastAppliedConfigAnnotation)+"]", false)
 		}
 		for _, sf := range surfaces {
 			s.apply(o, sf.path, sf.shape, at, depth)
@@ -542,11 +543,77 @@ func empty(v any) bool {
 	return false
 }
 
+// join appends a key to a path. A key with a dot, bracket or quote is
+// written ["quoted"], so ValueAt can read the path back unambiguously.
 func join(at, k string) string {
+	if strings.ContainsAny(k, ".[]\"") {
+		return at + "[" + strconv.Quote(k) + "]"
+	}
 	if at == "" {
 		return k
 	}
 	return at + "." + k
+}
+
+// ValueAt reads the value at a path written by the sanitiser: dotted keys,
+// [n] indexes and ["quoted"] keys.
+func ValueAt(obj map[string]any, path string) (any, bool) {
+	var cur any = obj
+	for len(path) > 0 {
+		switch {
+		case path[0] == '.':
+			path = path[1:]
+		case strings.HasPrefix(path, "[\""):
+			end := strings.Index(path, "\"]")
+			for end > 0 && path[end-1] == '\\' {
+				next := strings.Index(path[end+1:], "\"]")
+				if next < 0 {
+					return nil, false
+				}
+				end += next + 1
+			}
+			if end < 0 {
+				return nil, false
+			}
+			key, err := strconv.Unquote(path[1 : end+1])
+			if err != nil {
+				return nil, false
+			}
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			if cur, ok = m[key]; !ok {
+				return nil, false
+			}
+			path = path[end+2:]
+		case path[0] == '[':
+			end := strings.IndexByte(path, ']')
+			if end < 0 {
+				return nil, false
+			}
+			i, err := strconv.Atoi(path[1:end])
+			l, ok := cur.([]any)
+			if err != nil || !ok || i < 0 || i >= len(l) {
+				return nil, false
+			}
+			cur, path = l[i], path[end+1:]
+		default:
+			end := strings.IndexAny(path, ".[")
+			if end < 0 {
+				end = len(path)
+			}
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			if cur, ok = m[path[:end]]; !ok {
+				return nil, false
+			}
+			path = path[end:]
+		}
+	}
+	return cur, true
 }
 
 // deepCopyBounded copies maps and lists; beyond the depth bound it withholds.

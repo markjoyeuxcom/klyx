@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"sort"
 	"strings"
 	"sync"
@@ -1008,7 +1009,7 @@ func gitSources(in line.StationInput) []LineGitSource {
 		for _, src := range o.Data.Sources {
 			if src.Chart == "" && src.RepoURL != "" {
 				out = append(out, LineGitSource{Cluster: in.Cluster, Origin: "Application", Namespace: o.Data.Namespace,
-					Name: o.Data.Name, URL: src.RepoURL})
+					Name: o.Data.Name, URL: urlscrub.Field(src.RepoURL).Text})
 			}
 		}
 	}

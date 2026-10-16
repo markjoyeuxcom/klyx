@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/karpenter"
@@ -120,7 +121,7 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 	out.EventsTruncated = snap.EventsTruncated
 	for _, e := range snap.Events {
 		out.Events = append(out.Events, KarpenterEventDTO{
-			Type: e.Type, Reason: e.Reason, Message: e.Message,
+			Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text,
 			Kind: e.Kind, Name: e.Name, LastSeenUnix: e.LastSeenUnix,
 		})
 	}

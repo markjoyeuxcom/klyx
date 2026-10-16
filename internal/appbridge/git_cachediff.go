@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"fmt"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"os"
 	"strings"
 
@@ -150,21 +151,25 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 	}
 	var out strings.Builder
 	for _, c := range changes {
+		errText := urlscrub.Text(c.Error).Text
 		d.Changes = append(d.Changes, FluxDiffChangeDTO{Action: c.Action, Kind: c.Kind, Namespace: c.Namespace, Name: c.Name,
-			Diff: c.Diff, Error: c.Error})
+			Diff: c.Diff, Error: errText, OmittedChanged: c.OmittedChanged})
 		if c.Action == "unchanged" || c.Action == "skipped" {
 			continue
 		}
 		d.HasChanges = true
 		fmt.Fprintf(&out, "► %s %s %s\n", c.Kind, objectName(c.Namespace, c.Name), c.Action)
-		if c.Error != "" {
-			fmt.Fprintf(&out, "  %s\n", c.Error)
+		if errText != "" {
+			fmt.Fprintf(&out, "  %s\n", errText)
 		}
 		if c.Diff != "" {
 			out.WriteString(c.Diff)
 			if !strings.HasSuffix(c.Diff, "\n") {
 				out.WriteByte('\n')
 			}
+		}
+		if len(c.OmittedChanged) > 0 {
+			fmt.Fprintf(&out, "  these sections changed (omitted: may carry secrets): %s\n", strings.Join(c.OmittedChanged, ", "))
 		}
 	}
 	d.Output = out.String()

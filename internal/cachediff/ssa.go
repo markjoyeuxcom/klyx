@@ -3,6 +3,8 @@ package cachediff
 import (
 	"context"
 	"fmt"
+	"github.com/moomora/klyx/internal/crd"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -27,6 +29,10 @@ type Change struct {
 	Name      string `json:"name"`
 	Diff      string `json:"diff,omitempty"`  // configured: the live object against the dry-run, Secret values masked
 	Error     string `json:"error,omitempty"` // unread, failed
+	// OmittedChanged names the sanitised sections (coverage S0b §6) whose
+	// raw values differ between live and dry-run: a change the diff text
+	// cannot show, because both sides read "<omitted…>".
+	OmittedChanged []string `json:"omittedChanged,omitempty"`
 }
 
 // Diff actions beyond ssa's own.
@@ -78,10 +84,19 @@ func ServerSideDiff(ctx context.Context, cfg *rest.Config, objs []*unstructured.
 		}
 		ch.Action = string(entry.Action)
 		if entry.Action == ssa.ConfiguredAction && existing != nil && dryRun != nil {
+			// Coverage S0b §6: compare the raw sections first, inside the
+			// backend - only whether each changed is kept, never a digest or a
+			// length - then sanitise both sides and diff the copies. The
+			// dry-run above already ran on the real desired object, and ssa's
+			// action stands as it is.
+			ch.OmittedChanged = omittedChanges(existing, dryRun)
 			if err := ssa.SanitizeUnstructuredData(existing, dryRun); err != nil {
 				return nil, fmt.Errorf("masking %s: %w", ssautil.FmtUnstructured(obj), err)
 			}
-			if ch.Diff, err = unifiedDiff(existing, dryRun); err != nil {
+			gk := existing.GroupVersionKind()
+			ls := crd.SanitizeEmbedded(gk.Group, gk.Kind, existing.Object)
+			ds := crd.SanitizeEmbedded(gk.Group, gk.Kind, dryRun.Object)
+			if ch.Diff, err = unifiedDiff(&unstructured.Unstructured{Object: ls.Object}, &unstructured.Unstructured{Object: ds.Object}); err != nil {
 				return nil, err
 			}
 		}
@@ -127,4 +142,29 @@ func unifiedDiff(live, dryRun *unstructured.Unstructured) (string, error) {
 	}
 	return difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: difflib.SplitLines(string(a)), B: difflib.SplitLines(string(b)),
 		FromFile: "live", ToFile: "from Git (dry-run)", Context: 3})
+}
+
+// omittedChanges reports which sanitised paths (on either side) hold
+// different raw values in live and dry-run. The last-applied snapshot is not
+// reported: Flux never applies it.
+func omittedChanges(live, dryRun *unstructured.Unstructured) []string {
+	gk := live.GroupVersionKind()
+	paths := map[string]bool{}
+	for _, s := range []crd.Sanitized{crd.SanitizeEmbedded(gk.Group, gk.Kind, live.Object), crd.SanitizeEmbedded(gk.Group, gk.Kind, dryRun.Object)} {
+		for _, p := range s.Paths {
+			if !strings.Contains(p, "last-applied-configuration") {
+				paths[p] = true
+			}
+		}
+	}
+	var out []string
+	for p := range paths {
+		a, aok := crd.ValueAt(live.Object, p)
+		b, bok := crd.ValueAt(dryRun.Object, p)
+		if aok != bok || !reflect.DeepEqual(a, b) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

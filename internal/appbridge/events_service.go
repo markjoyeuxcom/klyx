@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"sort"
 	"time"
 
@@ -110,7 +111,7 @@ func toEventRowDTO(e workloads.EventSummary) EventRowDTO {
 	return EventRowDTO{
 		Type:          e.Type,
 		Reason:        e.Reason,
-		Message:       e.Message,
+		Message:       urlscrub.Text(e.Message).Text,
 		Count:         e.Count,
 		Namespace:     e.Namespace,
 		Kind:          e.Kind,

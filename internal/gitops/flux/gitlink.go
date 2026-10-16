@@ -1,6 +1,7 @@
 package flux
 
 import (
+	"github.com/moomora/klyx/internal/urlscrub"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,7 +20,9 @@ type GitLink struct {
 // revision into a browsable web URL for known hosts, degrading to a copyable
 // reference for unrecognised hosts or unparseable remotes.
 func ResolveGitLink(remote, path, revision string) GitLink {
-	copyText := strings.TrimSpace(remote)
+	// coverage S0b §3: a remote's user info never reaches a link or a copy
+	remote = urlscrub.Field(strings.TrimSpace(remote)).Text
+	copyText := remote
 	if cp := cleanPath(path); cp != "" {
 		copyText += " " + cp
 	}
