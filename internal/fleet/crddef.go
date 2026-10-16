@@ -25,20 +25,33 @@ func (c *ClusterConn) GetCRDDefinition(ctx context.Context, name, version string
 	return crd.ParseDefinition(u, version), nil
 }
 
+// PartialDiscoveryError: some groups could not be read. The kinds that were
+// read still list, and the failures are named (implementation review 1).
+type PartialDiscoveryError struct {
+	Failed []string // "group: reason"
+}
+
+func (e *PartialDiscoveryError) Error() string {
+	return "discovery could not read " + strings.Join(e.Failed, "; ")
+}
+
 // ListCRDsFromDiscovery is the API browser's fallback when the CRD list
 // itself cannot be read (slice 15c): the served groups the kube-apiserver
 // does not serve itself, in their preferred version, from the cached
-// discovery. Kinds carry no operator - discovery does not say.
+// discovery, bounded by ctx. Kinds carry no operator - discovery does not
+// say. A group that cannot be read never hides the others, and never goes
+// unsaid: the rows come back with a *PartialDiscoveryError naming it.
 func (c *ClusterConn) ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, error) {
-	if c.typed == nil {
+	if c.typed == nil && c.disc == nil {
 		return nil, errors.New("discovery unavailable")
 	}
-	disc := c.discovery()
-	groups, err := disc.ServerGroups()
+	disc := c.probeDiscovery()
+	groups, err := disc.ServerGroupsCtx(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out []crd.Info
+	var failed []string
 	for _, g := range groups.Groups {
 		if crd.BuiltinGroups[g.Name] || g.PreferredVersion.GroupVersion == "" {
 			continue
@@ -46,9 +59,13 @@ func (c *ClusterConn) ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, er
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		list, err := disc.ServerResourcesForGroupVersion(g.PreferredVersion.GroupVersion)
+		list, err := disc.ServerResourcesForGroupVersionCtx(ctx, g.PreferredVersion.GroupVersion)
 		if err != nil {
-			continue // one unreadable group never hides the others
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			failed = append(failed, g.Name+": "+err.Error())
+			continue
 		}
 		gv, _ := schema.ParseGroupVersion(g.PreferredVersion.GroupVersion)
 		for _, r := range list.APIResources {
@@ -68,6 +85,9 @@ func (c *ClusterConn) ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, er
 		}
 		return out[i].Kind < out[j].Kind
 	})
+	if len(failed) > 0 {
+		return out, &PartialDiscoveryError{Failed: failed}
+	}
 	return out, nil
 }
 

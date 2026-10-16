@@ -46,8 +46,9 @@ const def: CRDDefinitionDTO = {
     { name: "v1", served: true, storage: true, deprecated: false, columns: [{ name: "Ready", type: "string", jsonPath: ".status.x", priority: 0 }] },
   ],
   storedVersions: ["v1beta1", "v1"], conversion: { strategy: "None" }, conditions: [c("Established", "True"), c("NamesAccepted", "True")],
-  schemaVersion: "v1",
+  schemaVersion: "v1", schemaRecorded: true,
   schema: [
+    { path: [], type: "object", description: "A widget." },
     { path: [{ k: "p", n: "spec" }], type: "object" },
     { path: [{ k: "p", n: "spec" }, { k: "p", n: "mode" }], type: "string", required: true, description: "How fast." },
     { path: [{ k: "p", n: "spec" }, { k: "p", n: "deep" }], type: "object" },
@@ -71,7 +72,7 @@ describe("CRDDefinitionInspector", () => {
 
 describe("SchemaTree", () => {
   it("opens the top level, hides deeper levels until opened, and filters by path with ancestors", () => {
-    const { getByText, queryByText, getByLabelText, getByPlaceholderText } = render(<SchemaTree nodes={def.schema} truncated={false} />);
+    const { getByText, queryByText, getByLabelText, getByPlaceholderText } = render(<SchemaTree nodes={def.schema} recorded truncated={false} />);
     expect(getByText("mode")).toBeTruthy();
     expect(queryByText("leaf")).toBeNull();
     fireEvent.click(getByLabelText("Expand deep"));
@@ -83,7 +84,29 @@ describe("SchemaTree", () => {
   });
 
   it("says when the schema was cut short", () => {
-    const { getByText } = render(<SchemaTree nodes={def.schema} truncated />);
+    const { getByText } = render(<SchemaTree nodes={def.schema} recorded truncated />);
     expect(getByText(/more fields than this view keeps/)).toBeTruthy();
+  });
+
+  // implementation review 1: the root's own facts are drawn, and a recorded
+  // schema with no properties is not "no schema".
+  it("draws the root's facts above the fields", () => {
+    const { getByTestId } = render(<SchemaTree nodes={def.schema} recorded truncated={false} />);
+    expect(getByTestId("crd-schema-root").textContent).toBe("RootobjectA widget.");
+  });
+
+  it("a free-form schema declares no fields, and keeps unknown ones", () => {
+    const root = { path: [], type: "object", preserveUnknown: true, constraints: ["maxProperties"], description: "Free-form payload" };
+    const { getByTestId, queryByText, queryByPlaceholderText } = render(<SchemaTree nodes={[root]} recorded truncated={false} />);
+    expect(getByTestId("crd-schema-root").textContent).toBe("Rootobject · keeps unknown fields · constraints not shown: maxPropertiesFree-form payload");
+    expect(getByTestId("crd-schema-nofields").textContent).toBe("No fields declared. Unknown fields are kept, so the object's fields are not pruned.");
+    expect(queryByText("This version records no schema.")).toBeNull();
+    expect(queryByPlaceholderText("Filter fields (spec.mode)")).toBeNull();
+  });
+
+  it("a version with no schema says so", () => {
+    const { getByText, queryByTestId } = render(<SchemaTree nodes={[]} recorded={false} truncated={false} />);
+    expect(getByText("This version records no schema.")).toBeTruthy();
+    expect(queryByTestId("crd-schema-nofields")).toBeNull();
   });
 });

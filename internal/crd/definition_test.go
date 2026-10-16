@@ -80,7 +80,7 @@ func TestParseDefinition(t *testing.T) {
 	if !byPath["p:spec/p:port"].IntOrString {
 		t.Error("int-or-string")
 	}
-	if old := ParseDefinition(defCRD(nil), "v1beta1"); old.SchemaVersion != "v1beta1" || len(old.Schema) != 1 {
+	if old := ParseDefinition(defCRD(nil), "v1beta1"); old.SchemaVersion != "v1beta1" || !old.SchemaRecorded || len(old.Schema) != 2 || len(old.Schema[0].Path) != 0 {
 		t.Errorf("the requested version's schema: %+v", old.Schema)
 	}
 }
@@ -116,12 +116,36 @@ func TestFlattenSchema_Bounds(t *testing.T) {
 		deep = map[string]interface{}{"type": "object", "properties": map[string]interface{}{"n": deep}}
 	}
 	nodes, _ = FlattenSchema(deep)
-	if len(nodes) != SchemaMaxDepth || !nodes[len(nodes)-1].Deeper {
+	// the root, then one node per level down to the cap
+	if len(nodes) != SchemaMaxDepth+1 || !nodes[len(nodes)-1].Deeper {
 		t.Fatalf("depth cap: %d nodes, last %+v", len(nodes), nodes[len(nodes)-1])
 	}
 	long := strings.Repeat("d", schemaDescribeMax+10)
 	nodes, _ = FlattenSchema(map[string]interface{}{"properties": map[string]interface{}{"x": map[string]interface{}{"description": long, "enum": make([]interface{}, schemaEnumMax+3)}}})
-	if !nodes[0].DescriptionTruncated || nodes[0].EnumMore != 3 || len(nodes[0].Enum) != schemaEnumMax {
-		t.Fatalf("truncation markers %+v", nodes[0])
+	if !nodes[1].DescriptionTruncated || nodes[1].EnumMore != 3 || len(nodes[1].Enum) != schemaEnumMax {
+		t.Fatalf("truncation markers %+v", nodes[1])
+	}
+}
+
+// The root's own facts are kept: a free-form schema with no properties is a
+// recorded schema, not none (implementation review 1).
+func TestFlattenSchema_Root(t *testing.T) {
+	nodes, truncated := FlattenSchema(map[string]interface{}{"type": "object", "description": "Free-form payload",
+		"x-kubernetes-preserve-unknown-fields": true, "maxProperties": int64(4)})
+	if truncated || len(nodes) != 1 {
+		t.Fatalf("the root alone: %+v truncated=%v", nodes, truncated)
+	}
+	r := nodes[0]
+	if len(r.Path) != 0 || r.Type != "object" || r.Description != "Free-form payload" || !r.PreserveUnknown || strings.Join(r.Constraints, ",") != "maxProperties" {
+		t.Fatalf("root %+v", r)
+	}
+	none := defCRD(nil)
+	vs, _, _ := unstructured.NestedSlice(none.Object, "spec", "versions")
+	for _, v := range vs {
+		delete(v.(map[string]interface{}), "schema")
+	}
+	_ = unstructured.SetNestedSlice(none.Object, vs, "spec", "versions")
+	if d := ParseDefinition(none, ""); d.SchemaRecorded || len(d.Schema) != 0 {
+		t.Fatalf("a version with no schema records none: %+v", d)
 	}
 }

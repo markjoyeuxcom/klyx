@@ -546,7 +546,16 @@ export type EventsSlice = {
 export type ResourceRef = { group: string; version: string; plural: string; kind: string; scope: string };
 // cells: the server's printer-column values, in the page's columns order
 // (The Line slice 15a).
-export type InstanceDTO = { namespace: string; name: string; created: string; fields?: Record<string, string>; cells?: string[] };
+export type InstanceDTO = {
+  namespace: string; name: string; created: string; fields?: Record<string, string>; cells?: string[];
+  // readAt: when this row's page landed (ms). A date cell is relative to its
+  // own read, so an appended page never restamps earlier rows (slice 15,
+  // implementation review 1). Frontend-only.
+  readAt?: number;
+};
+// stampRead marks a page's rows with the time it landed, keeping a stamp
+// the rows already carry.
+export const stampRead = <T extends InstanceDTO>(items: T[], at = Date.now()): T[] => items.map((r) => (r.readAt ? r : { ...r, readAt: at }));
 // One of the server's printer columns. priority 0 is kubectl's default view,
 // 1 and above is -o wide; conditionType is set only when the JSONPath proves
 // the column is a condition's status (design review 1).
@@ -662,7 +671,9 @@ export type CRDVersionDTO = { name: string; served: boolean; storage: boolean; d
 export type CRDConversionDTO = { strategy: string; url?: string; serviceNamespace?: string; serviceName?: string; servicePort?: number; servicePath?: string; reviewVersions?: string[] };
 export type CRDDefinitionDTO = { name: string; group: string; kind: string; plural: string; singular: string; listKind: string; scope: string; shortNames: string[]; categories: string[];
   operator: string; uid: string; created: string; versions: CRDVersionDTO[]; storedVersions: string[]; conversion: CRDConversionDTO; conditions: ConditionDTO[];
-  schemaVersion: string; schema: SchemaNodeDTO[]; schemaTruncated?: boolean; error?: string; notFound?: boolean };
+  // schemaRecorded: the version records a schema; schema[0] is then its root
+  // (an empty path) and the fields follow.
+  schemaVersion: string; schemaRecorded?: boolean; schema: SchemaNodeDTO[]; schemaTruncated?: boolean; error?: string; notFound?: boolean };
 
 // The Line slice 15b: summary is the object's own table row (every
 // priority), read in the same response as the object; observedGeneration is
@@ -730,8 +741,10 @@ export type CRDSlice = {
   builtinCategory: string | null;
   // fallback: the CRD list failed with this error, and groups come from
   // discovery (The Line slice 15c); selected: the kind whose definition the
-  // inspector shows.
+  // inspector shows. fallbackMissing names the groups discovery could not
+  // read ("group: reason") - a partial fallback says so.
   fallback?: string | null;
+  fallbackMissing?: string[];
   selected?: { group: string; plural: string; kind: string; version: string; scope: string } | null;
 };
 
@@ -1071,7 +1084,7 @@ type FleetState = {
   forwards: ForwardDTO[];
   setForwards: (f: ForwardDTO[]) => void;
   crd: CRDSlice;
-  setCRDs: (cluster: string, groups: CRDGroupDTO[], error?: string, fallback?: string) => void;
+  setCRDs: (cluster: string, groups: CRDGroupDTO[], error?: string, fallback?: string, fallbackMissing?: string[]) => void;
   selectCRD: (sel: { group: string; plural: string; kind: string; version: string; scope: string } | null) => void;
   setCRDLoading: (cluster: string) => void;
   clearCRDs: () => void;
@@ -1199,12 +1212,12 @@ export const useFleet = create<FleetState>((set) => ({
     const sameRef = s.instances.cluster === cluster && s.instances.ref?.group === ref.group && s.instances.ref?.version === ref.version && s.instances.ref?.plural === ref.plural;
     return { instances: { cluster, ref, rows: [], nextToken: "", loading: true, filter: sameRef ? s.instances.filter : "", riskOnly: sameRef ? s.instances.riskOnly : false } };
   }),
-  setInstancePage: (items, nextToken, columns = null) => set((s) => ({ instances: { ...s.instances, rows: items, nextToken, loading: false, error: null, columns: columns ?? null, columnsMismatch: false } })),
+  setInstancePage: (items, nextToken, columns = null) => set((s) => ({ instances: { ...s.instances, rows: stampRead(items), nextToken, loading: false, error: null, columns: columns ?? null, columnsMismatch: false } })),
   addInstancePage: (items, nextToken, columns = null) => set((s) => {
     // A continuation read with other columns (or none) fails closed: the
     // whole list stops drawing columns, never values under the wrong ones.
     const mismatch = !!s.instances.columnsMismatch || columnsSignature(s.instances.columns) !== columnsSignature(columns);
-    return { instances: { ...s.instances, rows: [...s.instances.rows, ...items], nextToken, loading: false, columns: mismatch ? null : s.instances.columns, columnsMismatch: mismatch } };
+    return { instances: { ...s.instances, rows: [...s.instances.rows, ...stampRead(items)], nextToken, loading: false, columns: mismatch ? null : s.instances.columns, columnsMismatch: mismatch } };
   }),
   setInstanceFilter: (filter) => set((s) => ({ instances: { ...s.instances, filter } })),
   setInstanceRiskOnly: (riskOnly) => set((s) => ({ instances: { ...s.instances, riskOnly } })),
@@ -1294,9 +1307,10 @@ export const useFleet = create<FleetState>((set) => ({
   forwards: [],
   setForwards: (forwards) => set({ forwards }),
   crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null },
-  setCRDs: (cluster, groups, error, fallback) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false, error: error || null, fallback: fallback || null } })),
+  setCRDs: (cluster, groups, error, fallback, fallbackMissing) => set((s) => ({ crd: { ...s.crd, cluster, groups, loading: false, error: error || null, fallback: fallback || null, fallbackMissing: fallbackMissing ?? [] } })),
   selectCRD: (sel) => set((s) => ({ crd: { ...s.crd, selected: sel } })),
-  setCRDLoading: (cluster) => set((s) => ({ crd: { ...s.crd, cluster, groups: [], loading: true, expanded: [], counts: {} } })),
+  // a new read owes its own fallback: the last read's never carries over
+  setCRDLoading: (cluster) => set((s) => ({ crd: { ...s.crd, cluster, groups: [], loading: true, expanded: [], counts: {}, fallback: null, fallbackMissing: [] } })),
   clearCRDs: () => set({ crd: { cluster: null, groups: [], loading: false, expanded: [], counts: {}, groupBy: "group", search: "", builtinCategory: null } }),
   toggleCRDGroup: (group) => set((s) => ({
     crd: { ...s.crd, expanded: s.crd.expanded.includes(group) ? s.crd.expanded.filter((g) => g !== group) : [...s.crd.expanded, group] },

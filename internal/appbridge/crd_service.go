@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,8 +55,14 @@ func (s *CRDService) ListCRDs(cluster string) CRDListDTO {
 	if err != nil {
 		// The discovery fallback (The Line slice 15c): the kinds still open
 		// from discovery, under the definitions' own failure - never "no CRDs".
-		if found, derr := conn.ListCRDsFromDiscovery(ctx); derr == nil {
+		found, derr := conn.ListCRDsFromDiscovery(ctx)
+		var partial *fleet.PartialDiscoveryError
+		switch {
+		case derr == nil:
 			return CRDListDTO{Groups: groupCRDs(found), Fallback: err.Error()}
+		case errors.As(derr, &partial):
+			// the groups that were read still list; the missing ones are named
+			return CRDListDTO{Groups: groupCRDs(found), Fallback: err.Error(), FallbackMissing: partial.Failed}
 		}
 		return CRDListDTO{Groups: []CRDGroupDTO{}, Error: err.Error()}
 	}

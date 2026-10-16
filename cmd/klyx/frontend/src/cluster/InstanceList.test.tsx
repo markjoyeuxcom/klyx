@@ -64,6 +64,26 @@ beforeEach(() => {
 });
 
 describe("InstanceList", () => {
+  // implementation review 1: a date cell is relative to its own page's read,
+  // so an appended page never restamps the rows before it.
+  it("titles a date cell with its own page's read time", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-16T12:00:00Z"));
+    try {
+      const columns = [{ name: "Changed", type: "date", format: "", description: "", jsonPath: ".status.changedAt", priority: 0, numeric: false }];
+      useFleet.setState({ instances: { cluster: "x", ref: nsRef, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false } });
+      act(() => useFleet.getState().setInstancePage([{ namespace: "a", name: "first", created: "", cells: ["6d"] }], "next", columns));
+      const { getByText } = render(<InstanceList cluster="x" resource={nsRef} />);
+      const first = getByText("6d").getAttribute("title");
+      expect(first).toContain(new Date(Date.parse("2026-10-16T12:00:00Z")).toLocaleTimeString());
+      now.mockReturnValue(Date.parse("2026-10-16T13:00:00Z"));
+      act(() => useFleet.getState().addInstancePage([{ namespace: "a", name: "second", created: "", cells: ["1d"] }], "", columns));
+      expect(getByText("6d").getAttribute("title")).toBe(first);
+      expect(getByText("1d").getAttribute("title")).toContain(new Date(Date.parse("2026-10-16T13:00:00Z")).toLocaleTimeString());
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("renders rows with namespace for a namespaced kind", () => {
     const { getByText } = render(<InstanceList cluster="x" resource={nsRef} />);
     expect(getByText("coredns-abc")).toBeTruthy();

@@ -3,7 +3,8 @@ import { InspectorBlock } from "../layout/InspectorLayout";
 import { Age, absoluteTime } from "../chrome/Age";
 import { Aspect } from "../chrome/primitives/Aspect";
 import { CopyButton } from "../chrome/CopyButton";
-import { ObjectTree, type TitleOf } from "../chrome/ObjectTree";
+import { ObjectTree, ScalarValue, type PathSeg, type TitleOf } from "../chrome/ObjectTree";
+import { Arr, Obj, parseLossless, type JValue } from "../chrome/losslessJSON";
 import { useFleet, type InstanceDetailDTO, type RelatedRefDTO } from "../store/fleet";
 import { detectGitOwner } from "./InstanceDetail";
 
@@ -114,33 +115,55 @@ function ObjRow({ label, children }: { label: string; children: ReactNode }) {
 
 const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// Top-level fields beyond spec and status that get a block of their own;
+// the rest share one tree (implementation review 1).
+export const OWN_FIELD_BLOCKS = 20;
+
 // FieldsBlocks: spec, status and the other top-level fields as trees, in
 // that order. A Secret never sends its fields; a large object says why.
+// Numbers are drawn as the server wrote them (losslessJSON), and however
+// many top-level fields an object has, at most OWN_FIELD_BLOCKS + 2 blocks
+// are drawn - the rest are one paged tree.
 export function FieldsBlocks({ d, titleOf }: { d: InstanceDetailDTO; titleOf?: TitleOf }) {
-  const fields = useMemo<Record<string, unknown> | null>(() => {
+  const fields = useMemo<Obj | null>(() => {
     if (!d.fieldsJSON) return null;
     try {
-      return JSON.parse(d.fieldsJSON) as Record<string, unknown>;
+      const v = parseLossless(d.fieldsJSON);
+      return v instanceof Obj ? v : null;
     } catch {
       return null;
     }
   }, [d.fieldsJSON]);
+  const parts = useMemo(() => {
+    if (!fields) return null;
+    const named = (k: string) => fields.entries.filter(([key]) => key === k);
+    const others = fields.entries.filter(([k]) => k !== "spec" && k !== "status");
+    const rest = others.slice(OWN_FIELD_BLOCKS);
+    return { own: [...named("spec"), ...named("status"), ...others.slice(0, OWN_FIELD_BLOCKS)], rest: rest.length > 0 ? new Obj(rest) : null };
+  }, [fields]);
   if (d.fieldsOmitted === "too large") return <div className="gen-note">Too large to draw here; see Manifest.</div>;
   if (d.fieldsOmitted === "unreadable" || (d.fieldsJSON && !fields)) return <div className="gen-note">The fields could not be drawn; see Manifest.</div>;
-  if (!fields) return null;
-  const keys = Object.keys(fields);
-  const order = [...keys.filter((k) => k === "spec"), ...keys.filter((k) => k === "status"), ...keys.filter((k) => k !== "spec" && k !== "status")];
+  if (!parts) return null;
   return (
     <>
-      {order.map((k) => {
-        const v = fields[k];
-        const container = typeof v === "object" && v !== null;
-        return (
-          <InspectorBlock key={k} title={titleCase(k)}>
-            {container ? <ObjectTree value={v} base={[{ k: "p", n: k }]} titleOf={titleOf} /> : <div className="otree-val">{String(v)}</div>}
-          </InspectorBlock>
-        );
-      })}
+      {parts.own.map(([k, v], i) => (
+        <InspectorBlock key={`${i}:${k}`} title={titleCase(k)}>
+          <FieldValue value={v} base={[{ k: "p", n: k }]} titleOf={titleOf} />
+        </InspectorBlock>
+      ))}
+      {parts.rest && (
+        <InspectorBlock title={`Other fields (${parts.rest.entries.length.toLocaleString()})`}>
+          <div className="gen-note" data-testid="fields-rest">
+            {OWN_FIELD_BLOCKS} top-level fields have blocks of their own; the other {parts.rest.entries.length.toLocaleString()} share this tree.
+          </div>
+          <ObjectTree value={parts.rest} titleOf={titleOf} />
+        </InspectorBlock>
+      )}
     </>
   );
+}
+
+function FieldValue({ value, base, titleOf }: { value: JValue; base: PathSeg[]; titleOf?: TitleOf }) {
+  if (value instanceof Arr || value instanceof Obj) return <ObjectTree value={value} base={base} titleOf={titleOf} />;
+  return <div className="otree-val"><ScalarValue value={value} /></div>;
 }

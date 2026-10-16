@@ -1,0 +1,38 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/react";
+import { FieldsBlocks, OWN_FIELD_BLOCKS } from "./genericInspector";
+import type { InstanceDetailDTO } from "../store/fleet";
+
+afterEach(cleanup);
+
+const detail = (fieldsJSON: string) => ({ fieldsJSON }) as InstanceDetailDTO;
+
+describe("FieldsBlocks (implementation review 1)", () => {
+  it("draws an int64 exactly as the server wrote it", () => {
+    const { container } = render(<FieldsBlocks d={detail('{"spec":{"offset":9007199254740993},"weight":0.10}')} />);
+    expect(container.textContent).toContain("9007199254740993");
+    expect(container.textContent).toContain("0.10");
+  });
+
+  it("draws spec and status first, then the other fields, each in a block", () => {
+    const { container } = render(<FieldsBlocks d={detail('{"data":{"a":"1"},"status":{"phase":"Ready"},"spec":{"mode":"fast"}}')} />);
+    expect(container.querySelectorAll(".insp-block").length).toBe(3);
+    const text = container.textContent!;
+    expect(text.indexOf("mode")).toBeLessThan(text.indexOf("phase"));
+    expect(text.indexOf("phase")).toBeLessThan(text.indexOf("Data"));
+  });
+
+  it("bounds the blocks however many top-level fields an object has, and says so", () => {
+    const many = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`field${i}`, i]));
+    const { container, getByTestId } = render(<FieldsBlocks d={detail(JSON.stringify({ spec: { a: 1 }, ...many }))} />);
+    // spec, OWN_FIELD_BLOCKS others, and one shared tree
+    expect(container.querySelectorAll(".insp-block").length).toBe(1 + OWN_FIELD_BLOCKS + 1);
+    expect(getByTestId("fields-rest").textContent).toContain((5000 - OWN_FIELD_BLOCKS).toLocaleString());
+    expect(container.textContent).toMatch(/not shown/);
+  });
+
+  it("says when the fields cannot be drawn", () => {
+    const { container } = render(<FieldsBlocks d={detail("{not json")} />);
+    expect(container.textContent).toContain("could not be drawn");
+  });
+});

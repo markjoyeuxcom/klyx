@@ -32,6 +32,9 @@ type CRDListDTO struct {
 	// Fallback: the CRD list failed with this error and Groups come from
 	// discovery instead - kinds without definitions (The Line slice 15c).
 	Fallback string `json:"fallback,omitempty"`
+	// FallbackMissing names the groups discovery could not read ("group:
+	// reason"): the fallback is partial, and says so.
+	FallbackMissing []string `json:"fallbackMissing,omitempty"`
 }
 
 // CRDCountDTO is a hybrid instance count for one kind. Error marks a failed

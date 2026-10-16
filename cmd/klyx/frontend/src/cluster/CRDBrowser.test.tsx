@@ -136,6 +136,15 @@ describe("CRDBrowser - slice 15c", () => {
     expect(getByTestId("crd-fallback").textContent).toBe("Definitions could not be read: customresourcedefinitions is forbidden. Kinds come from discovery.");
   });
 
+  it("names the groups a partial discovery could not read (implementation review 1)", () => {
+    useFleet.setState({ crd: { ...useFleet.getState().crd, fallback: "customresourcedefinitions is forbidden",
+      fallbackMissing: ["failed.example.com: 403 forbidden", "slow.example.com: context deadline exceeded"] } });
+    const { getByTestId } = render(<CRDBrowser cluster="x" />);
+    const missing = getByTestId("crd-fallback-missing");
+    expect(missing.textContent).toBe(" Discovery could not read 2 groups, so their kinds are missing: failed.example.com, slow.example.com.");
+    expect(missing.getAttribute("title")).toBe("failed.example.com: 403 forbidden\nslow.example.com: context deadline exceeded");
+  });
+
   it("an unreadable definition says so in the inspector", async () => {
     useFleet.setState({ crd: { ...useFleet.getState().crd, selected: { group: "cilium.io", plural: "ciliumendpoints", kind: "CiliumEndpoint", version: "v2", scope: "Namespaced" } } });
     const { findByText } = render(<CRDBrowser cluster="x" />);

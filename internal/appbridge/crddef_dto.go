@@ -22,6 +22,8 @@ type CRDDefinitionDTO struct {
 	Conversion     CRDConversionDTO `json:"conversion"`
 	Conditions     []ConditionDTO   `json:"conditions"`
 	SchemaVersion  string           `json:"schemaVersion"`
+	// SchemaRecorded: the version records a schema; Schema[0] is its root.
+	SchemaRecorded bool             `json:"schemaRecorded"`
 	Schema         []crd.SchemaNode `json:"schema"`
 	// SchemaTruncated: the schema has more fields than the flattening keeps.
 	SchemaTruncated bool   `json:"schemaTruncated,omitempty"`
@@ -64,7 +66,7 @@ func definitionDTO(d crd.Definition) CRDDefinitionDTO {
 	out := CRDDefinitionDTO{
 		Name: d.Name, Group: d.Group, Kind: d.Kind, Plural: d.Plural, Singular: d.Singular, ListKind: d.ListKind, Scope: d.Scope,
 		ShortNames: nonNil(d.ShortNames), Categories: nonNil(d.Categories), Operator: d.Operator, UID: d.UID, Created: rfc3339(d.Created),
-		StoredVersions: nonNil(d.StoredVersions), SchemaVersion: d.SchemaVersion, Schema: d.Schema, SchemaTruncated: d.SchemaTruncated,
+		StoredVersions: nonNil(d.StoredVersions), SchemaVersion: d.SchemaVersion, SchemaRecorded: d.SchemaRecorded, Schema: d.Schema, SchemaTruncated: d.SchemaTruncated,
 		Conversion: CRDConversionDTO{Strategy: d.Conversion.Strategy, URL: d.Conversion.URL, ServiceNS: d.Conversion.ServiceNS,
 			ServiceName: d.Conversion.ServiceName, ServicePort: d.Conversion.ServicePort, ServicePath: d.Conversion.ServicePath,
 			ReviewVersions: d.Conversion.ReviewVersions},

@@ -1,5 +1,5 @@
 import { columnsSignature, type InstanceColumnDTO, type InstanceDTO } from "../store/fleet";
-import { conditionAspect } from "../chrome/conditions";
+import { conditionAspect, polarityOf } from "../chrome/conditions";
 import type { AspectKind } from "../chrome/primitives/Aspect";
 
 // The server's printer columns in the generic list (The Line slice 15a).
@@ -9,13 +9,15 @@ export type IndexedColumn = { col: InstanceColumnDTO; idx: number };
 
 // splitColumns: priority 0 is kubectl's default view and joins the list;
 // 1 and above is -o wide, shown in the inspector's summary. The mark column
-// is the first column whose JSONPath proves it is a condition's status.
+// is the first column whose JSONPath proves it is a condition's status and
+// whose type has a known polarity - a neutral type never takes the mark from
+// a known one after it (implementation review 1).
 export function splitColumns(cols: InstanceColumnDTO[] | null | undefined): { list: IndexedColumn[]; mark: IndexedColumn | null } {
   if (!cols) return { list: [], mark: null };
   const indexed = cols.map((col, idx) => ({ col, idx }));
   return {
     list: indexed.filter((c) => c.col.priority === 0),
-    mark: indexed.find((c) => !!c.col.conditionType) ?? null,
+    mark: indexed.find((c) => !!c.col.conditionType && polarityOf(c.col.conditionType) !== "neutral") ?? null,
   };
 }
 

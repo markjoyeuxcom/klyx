@@ -592,6 +592,17 @@ func TestListCRDs_DiscoveryFallback(t *testing.T) {
 	if r.Error != "" || r.Fallback != "customresourcedefinitions is forbidden" || len(r.Groups) != 1 || r.Groups[0].Kinds[0].Kind != "Widget" {
 		t.Fatalf("fallback %+v", r)
 	}
+	// a partial discovery lists what it read and names what it could not
+	conn.discErr = &fleet.PartialDiscoveryError{Failed: []string{"failed.example.com: 403 forbidden"}}
+	r = svc.ListCRDs("c")
+	if r.Error != "" || len(r.Groups) != 1 || len(r.FallbackMissing) != 1 || r.FallbackMissing[0] != "failed.example.com: 403 forbidden" {
+		t.Fatalf("partial fallback %+v", r)
+	}
+	// a discovery that fails outright is the list's own error
+	conn.discErr = errors.New("discovery timed out")
+	if r = svc.ListCRDs("c"); r.Error != "customresourcedefinitions is forbidden" || len(r.Groups) != 0 {
+		t.Fatalf("no fallback %+v", r)
+	}
 }
 
 func TestGetCRDDefinition_DTO(t *testing.T) {

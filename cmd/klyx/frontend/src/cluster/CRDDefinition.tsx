@@ -133,7 +133,7 @@ function DefinitionBody({ def, count, onVersion }: { def: CRDDefinitionDTO; coun
           </div>
         </InspectorBlock>
       )}
-      <InspectorBlock title="Schema" count={def.schema.length}>
+      <InspectorBlock title="Schema" count={def.schema.filter((n) => n.path.length > 0).length}>
         {def.versions.length > 1 && (
           <div role="group" aria-label="Schema version" className="l-seg crd-version-switch">
             {def.versions.map((v) => (
@@ -141,7 +141,7 @@ function DefinitionBody({ def, count, onVersion }: { def: CRDDefinitionDTO; coun
             ))}
           </div>
         )}
-        <SchemaTree nodes={def.schema} truncated={!!def.schemaTruncated} />
+        <SchemaTree nodes={def.schema} recorded={def.schemaRecorded ?? def.schema.length > 0} truncated={!!def.schemaTruncated} />
       </InspectorBlock>
     </>
   );
@@ -151,10 +151,14 @@ function FactRow({ k, v }: { k: string; v: string }) {
   return <><span>{k}</span><span className="gen-val">{v}</span></>;
 }
 
-// SchemaTree draws the flattened schema: depth from the path, children
-// shown once their parent is open (the first two levels open), a filter on
-// the field path that shows matches and their ancestors.
-export function SchemaTree({ nodes, truncated }: { nodes: SchemaNodeDTO[]; truncated: boolean }) {
+// SchemaTree draws the flattened schema: the root's own facts, then the
+// fields - depth from the path, children shown once their parent is open
+// (the first two levels open), a filter on the field path that shows
+// matches and their ancestors. A recorded schema with no properties says
+// "no fields declared", never "no schema" (implementation review 1).
+export function SchemaTree({ nodes: all, recorded, truncated }: { nodes: SchemaNodeDTO[]; recorded: boolean; truncated: boolean }) {
+  const root = all[0]?.path.length === 0 ? all[0] : null;
+  const nodes = useMemo(() => (root ? all.slice(1) : all), [all, root]);
   const [filter, setFilter] = useState("");
   // toggles override the default: the top level (spec, status) is open.
   const [toggles, setToggles] = useState<Map<string, boolean>>(() => new Map());
@@ -176,11 +180,19 @@ export function SchemaTree({ nodes, truncated }: { nodes: SchemaNodeDTO[]; trunc
   const toggle = (key: string, depth: number) => setToggles((m) => new Map(m).set(key, !(m.get(key) ?? depth < 1)));
   return (
     <div className="schema-tree" data-testid="crd-schema">
-      <label className="lens-search schema-filter">
-        <span className="sr-only">Filter fields</span>
-        <input className="l-input" type="search" placeholder="Filter fields (spec.mode)" value={filter} onChange={(e) => setFilter(e.target.value)} />
-      </label>
-      {nodes.length === 0 && <div className="gen-note">This version records no schema.</div>}
+      {root && <SchemaRoot n={root} />}
+      {nodes.length > 0 && (
+        <label className="lens-search schema-filter">
+          <span className="sr-only">Filter fields</span>
+          <input className="l-input" type="search" placeholder="Filter fields (spec.mode)" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </label>
+      )}
+      {!recorded && <div className="gen-note">This version records no schema.</div>}
+      {recorded && nodes.length === 0 && (
+        <div className="gen-note" data-testid="crd-schema-nofields">
+          No fields declared.{root?.preserveUnknown ? " Unknown fields are kept, so the object's fields are not pruned." : ""}
+        </div>
+      )}
       {visible.map(({ n, key, depth }) => {
         const container = parents.has(key);
         const last = n.path[n.path.length - 1];
@@ -204,6 +216,28 @@ export function SchemaTree({ nodes, truncated }: { nodes: SchemaNodeDTO[]; trunc
         );
       })}
       {truncated && <div className="gen-note">The schema has more fields than this view keeps; kubectl explain reads the rest.</div>}
+    </div>
+  );
+}
+
+// SchemaRoot: what the schema says of the object as a whole - its type,
+// whether it keeps unknown fields, the constraints the tree does not draw
+// and its description.
+function SchemaRoot({ n }: { n: SchemaNodeDTO }) {
+  const facts = [
+    n.type || (n.intOrString ? "int-or-string" : ""),
+    n.preserveUnknown ? "keeps unknown fields" : "",
+    n.embeddedResource ? "an embedded resource" : "",
+    n.constraints?.length ? `constraints not shown: ${n.constraints.join(", ")}` : "",
+  ].filter(Boolean);
+  if (facts.length === 0 && !n.description) return null;
+  return (
+    <div className="schema-root" data-testid="crd-schema-root" title={schemaTitle(n)}>
+      <span className="schema-root-k">Root</span>
+      <span className="schema-root-v">
+        {facts.join(" · ")}
+        {n.description ? <span className="schema-desc">{n.description.split("\n")[0]}</span> : null}
+      </span>
     </div>
   );
 }

@@ -28,6 +28,14 @@ describe("server columns (slice 15a)", () => {
     expect(rowMark({ namespace: "a", name: "b", created: "", cells: ["False"] }, stalled.mark)).toBeNull();
   });
 
+  it("takes the mark from the first condition column of known polarity - a neutral one never hides it (implementation review 1)", () => {
+    const vendor = col({ name: "VendorState", conditionType: "VendorState" });
+    const { mark } = splitColumns([vendor, READY]);
+    expect(mark?.idx).toBe(1);
+    expect(rowMark({ namespace: "a", name: "b", created: "", cells: ["True", "False"] }, mark)?.aspect).toBe("fault");
+    expect(splitColumns([vendor]).mark).toBeNull();
+  });
+
   it("titles a generated column by its JSONPath, an author's by its words", () => {
     expect(columnTitle(READY)).toBe(`JSONPath .status.conditions[?(@.type=="Ready")].status`);
     expect(columnTitle(col({ description: "How fast it goes." }))).toBe("How fast it goes.");

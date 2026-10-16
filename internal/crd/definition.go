@@ -90,7 +90,11 @@ type Definition struct {
 	Conversion                                           Conversion
 	Conditions                                           []Condition
 	SchemaVersion                                        string
-	Schema                                               []SchemaNode
+	// SchemaRecorded: the version records an openAPIV3Schema at all - a
+	// schema with no properties is not "no schema" (implementation review 1).
+	SchemaRecorded bool
+	// Schema starts with the root (an empty path), then its fields.
+	Schema []SchemaNode
 	// SchemaTruncated: the flattening stopped at SchemaMaxNodes.
 	SchemaTruncated bool
 }
@@ -153,6 +157,7 @@ func ParseDefinition(u *unstructured.Unstructured, version string) Definition {
 	}
 	d.SchemaVersion = version
 	if s, ok := schemas[version]; ok {
+		d.SchemaRecorded = true
 		d.Schema, d.SchemaTruncated = FlattenSchema(s)
 	}
 	return d
@@ -189,8 +194,10 @@ var unsupported = []string{"allOf", "anyOf", "oneOf", "not", "pattern", "minimum
 	"minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "multipleOf", "uniqueItems", "x-kubernetes-validations"}
 
 // FlattenSchema walks an openAPIV3Schema depth first, properties in name
-// order, into nodes. It stops at SchemaMaxNodes (truncated=true) and does
-// not descend past SchemaMaxDepth (the node says Deeper).
+// order, into nodes - the root first, with an empty path, so its own facts
+// (type, description, preserve-unknown, constraints) are never lost. It
+// stops at SchemaMaxNodes (truncated=true) and does not descend past
+// SchemaMaxDepth (the node says Deeper).
 func FlattenSchema(root map[string]interface{}) ([]SchemaNode, bool) {
 	var out []SchemaNode
 	truncated := false
@@ -199,13 +206,11 @@ func FlattenSchema(root map[string]interface{}) ([]SchemaNode, bool) {
 		if truncated {
 			return
 		}
-		if len(path) > 0 {
-			if len(out) >= SchemaMaxNodes {
-				truncated = true
-				return
-			}
-			out = append(out, nodeOf(s, path, required))
+		if len(out) >= SchemaMaxNodes {
+			truncated = true
+			return
 		}
+		out = append(out, nodeOf(s, path, required))
 		children := childrenOf(s)
 		if len(children) == 0 {
 			return

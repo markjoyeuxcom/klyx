@@ -99,7 +99,13 @@ export function CRDBrowser({ cluster }: { cluster: string }) {
       notice={crd.error && groups.length > 0 ? <WatchErrorBanner tool="Custom resources" failure="read failed - showing the last good read" error={crd.error} />
         : crd.fallback ? (
           <div role="status" data-testid="crd-fallback" className="t-control" style={{ minHeight: 32, display: "flex", alignItems: "center", gap: 8, padding: "0 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-secondary)" }}>
-            <span>Definitions could not be read: {crd.fallback}. Kinds come from discovery.</span>
+            <span>Definitions could not be read: {crd.fallback}. Kinds come from discovery.
+              {(crd.fallbackMissing?.length ?? 0) > 0 && (
+                <span data-testid="crd-fallback-missing" title={crd.fallbackMissing!.join("\n")} style={{ color: "var(--color-text-warning)" }}>
+                  {" "}Discovery could not read {crd.fallbackMissing!.length === 1 ? "1 group" : `${crd.fallbackMissing!.length} groups`}, so their kinds are missing: {crd.fallbackMissing!.map((m) => m.split(": ")[0]).join(", ")}.
+                </span>
+              )}
+            </span>
           </div>
         ) : undefined}
       state={state}

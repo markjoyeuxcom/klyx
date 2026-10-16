@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFleet, ResourceRef, InstanceDTO, type InstanceColumnDTO } from "../store/fleet";
+import { useFleet, ResourceRef, InstanceDTO, stampRead, type InstanceColumnDTO } from "../store/fleet";
 import { loadInstances, listInstancePage } from "../bridge/crd";
 import { VirtualList } from "../chrome/VirtualList";
 import type { VirtualListHandle } from "../chrome/VirtualList";
 import { useListKeys } from "../chrome/useListKeys";
 import { CopyButton } from "../chrome/CopyButton";
-import { Age, useReceivedAt } from "../chrome/Age";
+import { Age } from "../chrome/Age";
 import { Aspect } from "../chrome/primitives/Aspect";
 import { columnTitle, columnWidth, fleetColumns, rowMark, splitColumns } from "./serverColumns";
 import { BUILTIN_GROUPS } from "./schemaTitles";
@@ -99,7 +99,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(fleetTargets.map(async (target) => {
       try {
         const page = await listInstancePage(target, resource);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, error: "", notServed: !!page.notServed, columns: page.columns ?? null };
+        return { target, rows: stampRead(page.items.map((row) => ({ ...row, cluster: target }))), token: page.nextToken, error: "", notServed: !!page.notServed, columns: page.columns ?? null };
       } catch {
         return { target, rows: [] as FleetInstanceRow[], token: "", error: target, notServed: false, columns: null };
       }
@@ -129,7 +129,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
     void Promise.all(pending.map(async ([target, token]) => {
       try {
         const page = await listInstancePage(target, resource, token);
-        return { target, rows: page.items.map((row) => ({ ...row, cluster: target })), token: page.nextToken, failed: false, columns: page.columns ?? null };
+        return { target, rows: stampRead(page.items.map((row) => ({ ...row, cluster: target }))), token: page.nextToken, failed: false, columns: page.columns ?? null };
       } catch {
         return { target, rows: [] as FleetInstanceRow[], token, failed: true, columns: null };
       }
@@ -174,7 +174,6 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
   const serverCols = fleetMode ? fleetCols.columns : (isCurrent ? instances.columns ?? null : null);
   const columnsMismatch = fleetMode ? fleetCols.mismatch : !!(isCurrent && instances.columnsMismatch);
   const { list: listCols, mark: markCol } = useMemo(() => splitColumns(serverCols), [serverCols]);
-  const readAt = useReceivedAt(fleetMode ? fleetState.rows : instances.rows);
   const rowsWithRisk = useMemo(() => all.map((row) => ({ row, risk: riskFor(resource, row), mark: rowMark(row, markCol) })), [all, resource, markCol]);
   const attentionCount = rowsWithRisk.filter((r) => r.risk.bad).length;
   const rows = useMemo(() => rowsWithRisk
@@ -427,7 +426,7 @@ export function InstanceList({ cluster, resource }: { cluster: string; resource:
                   ))}
                   {listCols.map(({ col, idx }) => show(`c:${idx}`) && (
                     <span key={idx} className={col.numeric ? "lens-cell-num" : undefined} style={{ color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      title={col.type === "date" && readAt ? `${r.cells?.[idx] ?? ""} as of the read at ${new Date(readAt).toLocaleTimeString()}` : (r.cells?.[idx] || undefined)}>
+                      title={col.type === "date" && r.readAt ? `${r.cells?.[idx] ?? ""} as of the read at ${new Date(r.readAt).toLocaleTimeString()}` : (r.cells?.[idx] || undefined)}>
                       {r.cells?.[idx] || "-"}
                     </span>
                   ))}
