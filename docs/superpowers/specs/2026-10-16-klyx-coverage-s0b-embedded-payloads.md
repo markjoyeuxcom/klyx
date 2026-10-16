@@ -1,6 +1,6 @@
 # Coverage S0b: embedded payloads
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md`. A preparatory fix before S1a, from Codex's S1a design review (finding 1, 2026-10-16): "do the common sanitization/editability invariant now, preferably as a preparatory fix, with adapters/tests for the known embedding surfaces." Revision 1 answers Codex's design review of this note at 2961228 (§9). Revision 2 answers the re-review at 64ddecf (§10).
+Parent: `2026-10-16-klyx-coverage-roadmap.md`. A preparatory fix before S1a, from Codex's S1a design review (finding 1, 2026-10-16): "do the common sanitization/editability invariant now, preferably as a preparatory fix, with adapters/tests for the known embedding surfaces." Revision 1 answers Codex's design review of this note at 2961228 (§9). Revision 2 answers the re-review at 64ddecf (§10); revision 3 the re-review at 9c3a1d9 (§11).
 
 ## 1. The hole
 
@@ -81,8 +81,8 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
 | Path | Code | Treatment |
 |---|---|---|
 | Generic detail: YAML, `fieldsJSON`, annotations, labels, facts, managers, owners | `fleet.GetInstanceDetail` | built from the sanitised copy only |
-| Generic detail: Summary cells | `objectWithSummary` from the server's Table | each cell passes the cell rule below |
-| Generic list cells | `ListInstances` → `crd.FromTable` | **the cell rule.** For every kind, string cells pass the URL rule. For a registered payload kind, each cell additionally needs proven provenance:<br>• **Where the selector comes from:** the authoritative printer columns of the served version, from the CRD itself (the definition reader of The Line slice 15c, cached per cluster, CRD and version), matched to the Table's columns by name and position. Never the Table's description text, which a CRD author can override verbatim.<br>• **When a cell is kept:** only when its selector is a simple field path proven **disjoint** from every protected subtree, so that it is neither a descendant nor an **ancestor** of one (a column selecting `.spec` would serialise the whole subtree).<br>• **When a cell is omitted:** wildcard, recursive, union or filter selectors (except the generated condition-status selector); a definition that cannot be read; and any cell whose provenance is not proven. All omit as `<omitted>`, failing closed |
+| Generic detail: Summary cells | `objectWithSummary` | for a registered payload kind, computed locally from the detail's own sanitised object, by the same rule as list cells; server cell text is discarded. Other kinds pass the URL rule |
+| Generic list cells | `ListInstances` → `crd.FromTable` | **the cell rule.** For every kind, string cells pass the URL rule. For a registered payload kind, **server cell text is never released**:<br>• the list requests its page with `includeObject=Object`;<br>• each row's object passes the sanitiser first;<br>• the cells are computed locally, by evaluating each printer column's JSONPath (client-go `util/jsonpath`) against the **sanitised** object, and formatted by the column's type;<br>• the column definitions come from the CRD for the served version, through the slice 15c definition reader, cached. They choose presentation (name, type, priority, description) and the selector, but authorise no bytes. A definition that is stale, or changed between reads, can at worst show a wrong value, never protected data, because every value is read from sanitised data.<br>• **Fallbacks:** an unreadable definition, a selector that fails to evaluate, or a page without objects gives no custom cells for that kind (name, namespace and age only). The server's cells for these kinds are discarded unread |
 | Condition messages and reasons, event messages | the generic detail, the Flux and Argo rows and inspectors, the events lens | the URL rule (a controller can echo `unable to clone 'https://user:token@…'`) |
 | Flux source rows | `FluxSourceDTO.URL` from `sourceFields` | the URL rule |
 | Flux Git links | `GitLinkDTO.URL`/`CopyText` from `ResolveGitLink` | built from the sanitised remote |
@@ -102,10 +102,19 @@ Two modes, chosen by kind with no pre-read, so no race:
   - kubectl is not run, and neither stdout nor stderr is returned.
   - The result carries `Withheld` with the reason, for example: "Describe is withheld for a ResourceSet: kubectl's text would include its templates, patches or values, which can carry secrets. The Manifest view shows a sanitised copy."
   - The sheet shows the reason and offers no Copy of a report.
-- **`url-scrubbed` (every other kind).** kubectl runs as today, and **both stdout and stderr** pass the URL rule as text before anything is returned.
-  - Every `scheme://userinfo@` in the text loses its user info (except the exact `git`).
-  - The rule matches the pattern in prose and does not need to parse the URL, so it fails closed.
-  - When anything was removed, the result says "user info removed from URLs" and is no longer called kubectl's exact output. When nothing was removed, the existing exact-output contract is unchanged.
+- **`url-scrubbed` (every other kind).** kubectl runs as today. Both stdout and stderr pass a conservative text policy before anything is returned. It treats an incomplete or ambiguous URL as credential-bearing, never as proof of safety (kubectl truncates annotation lines to 138 bytes plus `...`, so a URL can lose its `@`).
+  - **A candidate** is either:
+    - a token starting with a scheme (`[A-Za-z][A-Za-z0-9+.-]*://`), whose authority runs to the first `/`, `?`, `#`, whitespace or end of line; or
+    - an SCP-style token, `user@host:path`, with no scheme.
+  - **Decoding:** the authority is percent-decoded before every check.
+  - **A complete authority with `@`:** the user info is everything before the **last** `@`. It is removed, unless it is exactly the password-free `git` after decoding.
+  - **An SCP-style token:** a user other than `git` is removed.
+  - **Treated as credential-bearing, with the authority replaced by `<redacted>`:**
+    - a token cut by a truncation marker (`...` or `…`) at or before the end of its authority;
+    - an authority without `@` but with `:` followed by anything other than a numeric port;
+    - a token that reaches the end of a line where kubectl wraps or truncates.
+  - **A candidate that cannot be safely delimited** (unbalanced brackets in an IPv6 authority, control characters) withholds its whole line, replaced by `<line withheld: possible credential>`. There is no raw fallback.
+  - **Labels:** when anything was removed or withheld, the result says "user info removed from URLs" (with the count of lines withheld), and it is no longer called kubectl's exact output. When nothing was, the existing exact-output contract is unchanged.
 
 **Classification** uses the group and kind that the existing validated discovery path resolves from the requested resource, so a singular, plural or short-name alias cannot slip past it. A failed or forbidden classification withholds; it never falls through to raw output.
 
@@ -162,6 +171,8 @@ The frontend hides Edit for an object whose sanitiser metadata says it is not ed
 - **Describe:**
   - withheld by kind for every registered payload kind and alias, and when classification fails or is forbidden, with no stdout or stderr returned;
   - url-scrubbed for a credential-bearing GitRepository: the marker user info is absent from both stdout and stderr, and the result is labelled;
+  - kubectl's real annotation truncation: an annotation holding a credential URL longer than 138 bytes, described by the pinned kubectl and scrubbed, with no credential byte left;
+  - malformed and truncated authorities, SCP-style user info, multiple `@`, percent-encoded user info, an IPv6 authority, and each of these on stderr as well as stdout;
   - unchanged output for an object without credentials.
 - **Apply,** calling the backend directly:
   - placeholders submitted under a registered field;
@@ -172,13 +183,12 @@ The frontend hides Edit for an object whose sanitiser metadata says it is not ed
   - an interval-only edit of a GitRepository whose URL carries credentials (refused, so the credentials survive);
   - a ResourceSetInputProvider whose only sensitive field is its URL (refused).
 - **Cache diffs:** a changed omitted section with identical sanitised text; an unchanged omitted section beside a visible change; ssa's action preserved.
-- **Cells:**
-  - a CRD column whose author-written description mimics the generated JSONPath text for `.status.phase` while selecting `.spec.inputs[0].value` (omitted, because provenance comes from the CRD, not the description);
-  - an ancestor selector (`.spec`) (omitted);
-  - a wildcard selector (omitted);
-  - a known-safe scalar column (kept);
-  - a definition that cannot be read (every cell omitted for that kind);
-  - the same set in the detail's Summary.
+- **Cells** (for a protected kind, list and Summary alike):
+  - a column whose definition changes between the definition read and the Table read, from `.status.phase` to `.spec.inputs[0].value`, keeping the same name, position, type, priority and a custom description: no payload marker appears, because cells come from the sanitised object;
+  - an ancestor selector (`.spec`): it evaluates over sanitised data, so the omitted placeholders show, never the payload;
+  - a known-safe scalar column, which shows its value;
+  - a definition that cannot be read: no custom cells;
+  - the server's cells for a protected kind are never read into the DTO (a needle placed only in the server Table does not appear).
 - **Lab:** the `with-secret` ResourceSet and a Kustomization with a patch on `kind-klyx` carry markers. A native smoke step asserts no marker in the inspector's DOM, Describe withheld and Edit absent. The DOM check is supplementary; the bridge needles are the proof.
 
 ## 8. Not in this slice
@@ -207,4 +217,11 @@ Also adopted from the review's other rulings: user info removed rather than mask
 | 1 | URL-only kinds escaped the edit and Describe guards (a GitRepository's credential URL would be erased by an unrelated edit, and printed by raw Describe) | §2: `EditEligible` is false whenever the sanitiser changes anything, the URL rule runs on every kind's string leaves; §5: apply covers every kind; §4: Describe is `url-scrubbed` text for every non-payload kind, both streams, without a pre-read |
 | 2 | Argo's top-level `operation`, inline `manifests[]`, and Jsonnet `extVars`/`tlas` | §1.1 |
 | 3 | A Table description is not JSONPath provenance; an ancestor selector serialises protected subtrees | §3's cell rule: authoritative CRD printer columns per served version, disjointness that excludes ancestors, fail-closed selectors and unreadable definitions |
+
+## 11. Revision 3: Codex's re-review of 9c3a1d9
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | An `@`-dependent matcher is not fail-closed: kubectl truncates annotation lines at 138 bytes, so a credential URL can lose its `@` | §4's conservative text policy: candidate delimiting; truncated, port-less-colon and end-of-line authorities redacted; undelimitable lines withheld; real-truncation regression tests |
+| 2 | Cached CRD columns are not bound to a later Table's selector | §3: for protected kinds, server cell text is never released. Cells are evaluated locally over the sanitised object (`includeObject=Object`), so a stale definition can only show safe values |
 
