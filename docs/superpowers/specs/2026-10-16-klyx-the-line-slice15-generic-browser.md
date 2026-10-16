@@ -193,6 +193,69 @@ This applies to InstanceDetail, which serves every kind without a bespoke lens.
   - It caps at 3,000 nodes or depth 12, with a truncation note.
   - The list's discovery fallback reuses the cached discovery.
 
+### As built (15a, 15b and 15c)
+
+The design was accepted at bb3bf45. The build is five commits:
+- 7fcefe6, the backend;
+- 7abf95a, 15a;
+- f1ed9ff, 15b;
+- bcf6d86, 15c;
+- one fix commit.
+
+**Backend:**
+- `internal/crd/table.go`:
+  - `DecodeTable` keeps numbers exact with `UseNumber`.
+  - `TableColumns` drops the name column, and the creation-time Age where it is proven: by JSONPath for a CRD, by name for a group in the fixed `BuiltinGroups`.
+  - It sets `ConditionType` only from a `.status.conditions[?(@.type=="T")].status` path.
+- `fleet.readTable` reads a list with `includeObject=Metadata`, or one object with `includeObject=Object`. A failed table read falls back to the plain read, whose answer is the list's or the detail's (design review 1).
+- `GetInstanceDetail` builds the whole detail from the table response's object when there is one, so the summary and the object come from one snapshot. It adds:
+  - observed generation, deletion, finalizers;
+  - recorded owners;
+  - field managers (no field sets);
+  - `fieldsJSON`.
+- Conditions carry `lastTransitionTime` and `observedGeneration`.
+- `crd.ParseDefinition` and `FlattenSchema` read one CRD and flatten one version's schema:
+  - segment paths;
+  - capped at 3,000 nodes and depth 12;
+  - enum, default and description truncations marked;
+  - unsupported keywords named.
+- `ListCRDsFromDiscovery` is the fallback. It lists the non-built-in groups' preferred versions and listable resources.
+
+**15a:**
+- `cluster/serverColumns.ts` splits the columns by priority, finds the proven condition column, titles headers and checks fleet agreement.
+- The store keeps the first page's column signature. A continuation page with another signature, or without a table, sets `columnsMismatch`, and the whole list stops drawing columns.
+- `chrome/conditions.ts` is the one polarity registry:
+  - `conditionColor` and Describe read it;
+  - Stalled and ScalingLimited are negative;
+  - an unknown type is neutral.
+
+**15b:**
+- `cluster/genericInspector.tsx` holds the Summary, Object and Fields blocks.
+- `chrome/ObjectTree.tsx` computes the visible rows in one pure pass (`flattenTree`), with the toggles and pages held at the root. The row budget is therefore exact however the tree is expanded. Pages hold 100 children, the tree stops at 2,000 rows and at depth 12, and each omission is said.
+- Owners Related resolves are links. The rest are named, never dropped, and owners leave Related.
+- `MetadataChips` collapses `last-applied-configuration` everywhere it is used, reading only the sanitised annotations.
+
+**15c:**
+- `cluster/CRDDefinition.tsx` holds `definitionFindings` (the per-type rule of design review 2), `conversionWords`, and `SchemaTree` (the top level open, a path filter that keeps ancestors, constraints named in the row's title).
+- `cluster/schemaTitles.ts` titles a custom resource's tree fields from its CRD's schema at the instance's version, cached per cluster, CRD and version.
+- **Interaction:** a click on a kind in the API browser inspects its definition, while Enter and a double click open its instances.
+
+**Tests:**
+- Go: tables over httptest (exact numbers, the Age rules, provenance, fallbacks), the one-snapshot detail, the definition and schema bounds, the discovery fallback.
+- Frontend:
+  - the list's columns, mark provenance, page and fleet signatures;
+  - the shared conditions (Stalled, unknown types, the older generation);
+  - the tree's bounds (100,000 items, 2,000 rows, depth 12);
+  - the inspector blocks;
+  - the definition's findings and conversion words;
+  - the API browser's interaction and fallback.
+- Gate: vitest 2074 passed.
+
+**Live** (`scratchpad/gen15b`, kind lab):
+- The GitRepository list shows URL and Ready, with the recorded fault marked.
+- The inspector shows the Summary, the restyled conditions, the Object block (field managers) and the Spec and Status trees.
+- The definition inspector reads Established, with its facts, versions, conversion, printer columns and schema.
+
 ## 4. Out of scope
 
 - Objects this object owns: a reverse owner lookup across kinds.
