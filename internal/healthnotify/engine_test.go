@@ -753,7 +753,7 @@ func TestAWindowStartsWithTheFirstOwedItem(t *testing.T) {
 	r.e.Apply(batch(observe.BatchChanges, item("a", "ok", "fault")))
 	r.now = r.now.Add(time.Second)
 	r.e.Apply(batch(observe.BatchChanges, item("a", "fault", "ok"))) // a's onset is no longer owed
-	r.now = r.now.Add(49 * time.Second) // no flush between: a's dead item is still queued
+	r.now = r.now.Add(49 * time.Second)                              // no flush between: a's dead item is still queued
 	r.e.Apply(batch(observe.BatchChanges, item("b", "ok", "fault")))
 	r.step(10 * time.Second) // 60s after a, 10s after b
 	if len(r.sent) != 0 {

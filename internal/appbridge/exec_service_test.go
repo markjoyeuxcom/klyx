@@ -22,8 +22,8 @@ type fakeExecConn struct {
 	gotDescribe []string
 	// describeArgvErr, when set, is DescribeArgv's refusal.
 	describeArgvErr error
-	armErr      error    // CheckPodArmed's answer
-	armChecks   []string // ns/name@uid the arm check was asked about
+	armErr          error    // CheckPodArmed's answer
+	armChecks       []string // ns/name@uid the arm check was asked about
 }
 
 func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
