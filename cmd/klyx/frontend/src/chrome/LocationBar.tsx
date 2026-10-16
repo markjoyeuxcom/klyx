@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useBelow } from "./useBelow";
 import { IconArrowLeft, IconArrowRight, IconArrowsLeftRight, IconClock, IconHistory, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconMessageChatbot, IconSearch, IconSettings, IconTerminal2 } from "@tabler/icons-react";
 import { openChat } from "../ai/chatStore";
 import { useFleet, type ClusterDTO } from "../store/fleet";
@@ -23,7 +24,12 @@ import { INSPECTOR_IDENTITY_ID, useInspectorPin } from "../nav/inspectorPin";
 // utilities. Every function of the retired mast and spine has a home here
 // or in Settings (the parity table). Crumbs outrank utilities: the well's
 // words give up width first; the protected tag never shrinks.
+// The widths below which the bar steps things out (layout.css, data-below).
+const BAR_BREAKS = [1680, 1600, 1440, 1280, 1180] as const;
+
 export function LocationBar() {
+  const barRef = useRef<HTMLElement>(null);
+  const below = useBelow(barRef, BAR_BREAKS);
   const route = useFleet((s) => s.route);
   const kindFilter = useFleet((s) => s.workloads.kindFilter);
   const current = useFleet((s) => (s.route.name === "cluster" ? s.clusters.find((c) => c.name === (s.route as { cluster: string }).cluster) : undefined));
@@ -37,7 +43,7 @@ export function LocationBar() {
   const lens = object ? where.place.split(" › ")[0] : where.place;
   return (
     // data-list-keys="ignore": a focused bar control keeps its keys (useListKeys).
-    <header className="mast locbar" style={drag} data-list-keys="ignore">
+    <header ref={barRef} className="mast locbar" data-below={below || undefined} style={drag} data-list-keys="ignore">
       <div className="locbar-left">
         <IndexToggle />
         <HistoryControls />
@@ -85,10 +91,10 @@ export function LocationBar() {
         </button>
         <ForwardsIndicator />
         <AskButton cluster={route.name === "cluster" ? route.cluster : null} />
-        <UtilityButton label="Activity" title="Activity - recent action outcomes" current={route.name === "activity"} onClick={() => useFleet.getState().openActivity()}>
+        <UtilityButton label="Activity" title="Activity - recent action outcomes" optional current={route.name === "activity"} onClick={() => useFleet.getState().openActivity()}>
           <IconHistory size={15} stroke={1.5} />
         </UtilityButton>
-        <UtilityButton label="Terminal" title="Open a terminal with this fleet's kubeconfig" onClick={() => void openTerminal()}>
+        <UtilityButton label="Terminal" title="Open a terminal with this fleet's kubeconfig" optional onClick={() => void openTerminal()}>
           <IconTerminal2 size={15} stroke={1.5} />
         </UtilityButton>
         <SettingsButton current={route.name === "settings"} />
@@ -203,9 +209,11 @@ const utilityBtn = (current: boolean): React.CSSProperties => ({
   boxShadow: current ? "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))" : undefined,
 });
 
-function UtilityButton({ label, title, current = false, onClick, children }: { label: string; title: string; current?: boolean; onClick: () => void; children: React.ReactNode }) {
+// optional: a utility the console also reaches, which a narrow bar may step
+// out to keep the crumbs and this station's box (slice 13a review 1)
+function UtilityButton({ label, title, current = false, optional = false, onClick, children }: { label: string; title: string; current?: boolean; optional?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" aria-label={label} title={title} aria-current={current ? "page" : undefined} onClick={onClick} style={utilityBtn(current)}>
+    <button type="button" className={optional && !current ? "locbar-optional" : undefined} aria-label={label} title={title} aria-current={current ? "page" : undefined} onClick={onClick} style={utilityBtn(current)}>
       {children}
     </button>
   );
@@ -247,7 +255,7 @@ function ForwardsIndicator() {
 
   if (forwards.length === 0) {
     return (
-      <UtilityButton label="Port-forwards" title="Port-forwards - none active" current={current} onClick={() => useFleet.getState().openForwards()}>
+      <UtilityButton label="Port-forwards" title="Port-forwards - none active" optional current={current} onClick={() => useFleet.getState().openForwards()}>
         <IconArrowsLeftRight size={15} stroke={1.5} />
       </UtilityButton>
     );

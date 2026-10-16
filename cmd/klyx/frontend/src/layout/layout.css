@@ -194,7 +194,10 @@
   box-shadow: inset 0 0 0 1px var(--line-control, var(--color-border-secondary)); }
 /* A run of filters is one segmented control (the mockup's): a sunk group, the
    pressed segment raised and ringed - never a lightness step alone. */
-.l-seg { display: inline-flex; align-items: center; gap: 2px; height: 36px; padding: 0 3px; border-radius: 8px; flex-shrink: 0;
+/* A run too long for its row wraps inside its group rather than run past
+   the workspace (review 1: the Resources categories at 150% zoom); wrapped
+   rows sit 10px apart, so their 40px hit areas never overlap. */
+.l-seg { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px 2px; min-height: 36px; max-width: 100%; padding: 3px; border-radius: 8px; box-sizing: border-box;
   background: var(--line-sunk, var(--color-background-secondary)); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
 .l-seg > .l-chip { height: 30px; border-radius: 5px; }
 .l-seg > .l-chip::after { inset: -5px -1px; }
@@ -254,7 +257,7 @@ select.l-input { padding-right: 28px; }
    Crumbs outrank utilities: the well's words give up width first, then the
    lens crumb, then the station; the protected tag never shrinks. */
 .locbar { gap: 6px; }
-.locbar-left { flex: 1 0.001 auto; min-width: 0; margin-right: 6px; display: flex; align-items: center; gap: 8px; } /* the well gives up width first */
+.locbar-left { flex: 1 1 auto; min-width: 0; margin-right: 6px; display: flex; align-items: center; gap: 8px; }
 .locbar-mark { display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 6px; flex-shrink: 0;
   border: 0; border-radius: 6px; background: transparent; cursor: pointer; color: var(--color-text-primary); }
 .locbar-wordmark { font: 600 16px/20px var(--font-label); letter-spacing: 0.16em; text-transform: uppercase; }
@@ -286,7 +289,7 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
 .locbar-right { display: contents; }
 .locbar-right > * { flex-shrink: 0; }
 .locbar-pop { position: relative; display: inline-flex; min-width: 0; }
-.locbar-right > .locbar-well { flex: 0 1000 420px; }
+.locbar-right > .locbar-well { flex: 0 1000000 420px; } /* gives up width before the crumbs: its share is a million times theirs */
 .locbar-well { min-width: 36px; height: 36px; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 0 12px;
   border: 0; border-radius: 6px; cursor: pointer; text-align: left; font: 400 13px/18px var(--font-sans); color: var(--color-text-tertiary);
   background: var(--line-sunk, var(--line-sunk, var(--color-background-secondary))); box-shadow: inset 0 0 0 1px var(--color-border-tertiary); }
@@ -343,31 +346,29 @@ button.locbar-crumb:hover { background: var(--color-background-secondary); }
    drawn; below 1180px it stays, compact - its words ellipsize and Ask keeps
    only its icon (its name is unchanged). The phrase (sr-only) always names
    the whole track. */
-/* The object crumb gives way first (slice 13a.4): below 1680px the inspector's
-   own title, right beside it, names the object, so the crumb steps out
-   rather than truncating to a stub. */
-@media (max-width: 1679px) {
-  .locbar-object, .locbar-sep:has(+ .locbar-object) { display: none; }
-}
-@media (max-width: 1599px) {
-  .strip-stop:not([data-here]) { display: none; }
-  .strip-stop[data-here] .strip-seg { display: none; }
-}
-@media (max-width: 1439px) {
-  .locbar-station .station-region { display: none; } /* the crumb's title names it */
-}
-@media (max-width: 1279px) {
-  .locbar-wordmark { display: none; }
-}
-/* Below 1180px the crumbs need the room: the strip steps out (the station
-   page states the line, the protected tag stays on the crumb) and so does
-   Recent places (the console's empty state lists them). */
-@media (max-width: 1179px) {
-  .locbar .strip, .mast-history .locbar-pop { display: none; }
-  .locbar-ask > span { display: none; }
-  /* "(inferred)" stays in the title and for assistive tech */
-  .locbar-protected-why { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-}
+/* The bar's breakpoints follow its own measured width (data-below, set by
+   LocationBar), so they follow the app zoom: CSS zoom shrinks what the mast
+   measures, where a media or container query still sees the whole window
+   (slice 13a review 1).
+   The object crumb gives way first (slice 13a.4): below 1680px the
+   inspector's own title, right beside it, names the object, so the crumb
+   steps out rather than truncating to a stub. */
+.mast[data-below~="1680"] .locbar-object, .mast[data-below~="1680"] .locbar-sep:has(+ .locbar-object) { display: none; }
+.mast[data-below~="1600"] .strip-stop:not([data-here]) { display: none; }
+.mast[data-below~="1600"] .strip-stop[data-here] .strip-seg { display: none; }
+.mast[data-below~="1440"] .locbar-station .station-region { display: none; } /* the crumb's title names it */
+.mast[data-below~="1280"] .locbar-wordmark { display: none; }
+/* Below 1180px optional chrome makes room first: Recent places (the
+   console's empty state lists them), Activity and Terminal (console entries
+   both) and an idle forwards button (§4: shown when any forward is active).
+   This station's compact box always stays (slice 4 §5.4). */
+.mast[data-below~="1180"] .mast-history .locbar-pop, .mast[data-below~="1180"] .locbar-optional { display: none !important; } /* over the utilities' inline display */
+.mast[data-below~="1180"] .strip { padding: 0; }
+.mast[data-below~="1180"] .strip-box { max-width: 22ch; overflow: hidden; }
+.mast[data-below~="1180"] .strip-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mast[data-below~="1180"] .locbar-ask > span { display: none; }
+/* "(inferred)" stays in the title and for assistive tech */
+.mast[data-below~="1180"] .locbar-protected-why { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---- The Line lens index (slice 4 §4) ---- */
 .lens-index { width: 232px; flex-shrink: 0; min-height: 0; overflow: auto; box-sizing: border-box; padding: 22px 14px 22px 18px; display: flex; flex-direction: column; gap: 22px;
