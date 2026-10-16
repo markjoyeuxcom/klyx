@@ -1281,6 +1281,9 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		d.Deleting = ts.Time
 	}
 	d.Finalizers = sanitised.GetFinalizers()
+	for _, o := range sanitised.GetOwnerReferences() {
+		d.Owners = append(d.Owners, crd.OwnerRef{APIVersion: o.APIVersion, Kind: o.Kind, Name: o.Name, Controller: o.Controller != nil && *o.Controller})
+	}
 	d.Managers = crd.ManagersOf(obj)
 	d.FieldsJSON, d.FieldsOmitted = crd.FieldsJSONOf(obj, group == "" && version == "v1" && plural == "secrets")
 	return d, nil

@@ -1,4 +1,4 @@
-import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO, AdhocInventoryDTO , InstanceColumnDTO } from "../store/fleet";
+import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO, AdhocInventoryDTO , InstanceColumnDTO , CRDDefinitionDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
 
@@ -233,4 +233,16 @@ export async function revealSecretKey(cluster: string, ns: string, name: string,
   const r = (await CRDService.RevealSecretKey(cluster, ns, name, key)) as RevealResultDTO;
   if (r.error) return null;
   return r.value;
+}
+
+// getCRDDefinition reads one CRD in full with the schema of version ("" for
+// the storage version) - the definition inspector and the field titles of
+// a custom resource's tree (The Line slice 15c). A failed read carries
+// error, never an empty CRD; a bridge failure is said the same way.
+export async function getCRDDefinition(cluster: string, name: string, version = ""): Promise<CRDDefinitionDTO> {
+  try {
+    return (await CRDService.GetCRDDefinition(cluster, name, version)) as CRDDefinitionDTO;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) } as CRDDefinitionDTO;
+  }
 }

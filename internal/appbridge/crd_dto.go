@@ -242,6 +242,8 @@ type InstanceDetailDTO struct {
 	// Deleting is metadata.deletionTimestamp (RFC3339); "" when not deleting.
 	Deleting   string   `json:"deleting,omitempty"`
 	Finalizers []string `json:"finalizers,omitempty"`
+	// Owners are metadata.ownerReferences as recorded.
+	Owners []OwnerRefDTO `json:"owners,omitempty"`
 	// Managers summarise managedFields: manager, operation, subresource, time.
 	Managers []FieldManagerDTO `json:"managers,omitempty"`
 	// FieldsJSON is the sanitised object without apiVersion, kind and
@@ -261,6 +263,14 @@ type InstanceDetailDTO struct {
 type SummaryCellDTO struct {
 	InstanceColumnDTO
 	Value string `json:"value"`
+}
+
+// OwnerRefDTO is one recorded owner reference.
+type OwnerRefDTO struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Controller bool   `json:"controller,omitempty"`
 }
 
 // FieldManagerDTO is one managedFields entry without its field set.

@@ -5,9 +5,11 @@ import { suggestFix } from "../bridge/ai";
 import { useInspectorAI } from "../ai/AIExplain";
 import { armProtected } from "../bridge/configsvc";
 import { ForwardPopover } from "./ForwardPopover";
-import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips, inspectorStateBox } from "./ResourceInspector";
+import { InspectorStatus, conditionColor, InspectorConditions, InspectorEvents, InspectorSection, InspectorFacts, InspectorKV, InspectorMeters, MetadataChips } from "./ResourceInspector";
 import { actionBtn, ellipsis, type Tone } from "../chrome/primitives";
 import { DescribePane } from "../chrome/DescribePane";
+import { FieldsBlocks, ObjectBlock, SummaryBlock } from "./genericInspector";
+import { useSchemaTitles } from "./schemaTitles";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { YamlBlock } from "../chrome/YamlBlock";
@@ -758,6 +760,8 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
   const live = !removed && !!d && !d.error;
   const target = d?.uid ? { kind: "object" as const, group: resource.group, version: resource.version, plural: resource.plural, namespace: instance.namespace, name: instance.name, uid: d.uid } : null;
   const ai = useInspectorAI(target, `${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`, live, cluster);
+  // Field titles from the CRD's schema for this version (slice 15c).
+  const titleOf = useSchemaTitles(cluster, resource);
   // A suggestion belongs to one object: its UID. A same-name recreation, a
   // removal or an unmount drops it, and a late reply for another UID never
   // shows (Codex review of f83c7cd).
@@ -920,19 +924,25 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
                 ) : null}
               </InspectorBlock>
             )}
+            <SummaryBlock d={d} />
             <FactsSummary facts={d.facts} />
             {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />}
             {d.serviceBacking != null && <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />}
             {d.secretKeys && d.secretKeys.length > 0 && !removed && <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />}
             {d.conditions.length > 0 && (
               <InspectorBlock title="Conditions" count={d.conditions.length}>
-                <InspectorConditions conditions={d.conditions} />
+                <InspectorConditions conditions={d.conditions} generation={d.generation} />
               </InspectorBlock>
             )}
-            <RelatedSection cluster={cluster} related={d.related ?? []} />
-            <InspectorBlock title="Recent events" count={d.events.length}>
-              <InspectorEvents events={d.events} emptyText="No events for this object." />
-            </InspectorBlock>
+            <ObjectBlock cluster={cluster} d={d} related={d.related ?? []} />
+            <FieldsBlocks d={d} titleOf={titleOf} />
+            {/* owners are in the Object block; an empty Related draws nothing (slice 15b) */}
+            <RelatedSection cluster={cluster} related={(d.related ?? []).filter((r) => r.relation !== "owner")} />
+            {d.events.length > 0 ? (
+              <InspectorBlock title="Recent events" count={d.events.length}>
+                <InspectorEvents events={d.events} emptyText="No events for this object." />
+              </InspectorBlock>
+            ) : <div className="gen-note">No events for this object.</div>}
             <MetadataChips title="Labels" values={d.labels} />
             <MetadataChips title="Annotations" values={d.annotations} defaultCollapsed />
           </>
@@ -959,9 +969,7 @@ function RelatedSection({ cluster, related }: { cluster: string; related: Relate
     useFleet.getState().openInstance(ref.namespace, ref.name);
   };
 
-  if (related.length === 0) {
-    return <div style={inspectorStateBox}>No direct related objects found.</div>;
-  }
+  if (related.length === 0) return null;
 
   const groups = related.reduce<Record<string, RelatedRefDTO[]>>((acc, ref) => {
     const key = ref.relation || "related";

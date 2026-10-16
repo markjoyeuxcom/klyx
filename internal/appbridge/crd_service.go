@@ -202,6 +202,7 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 		ObservedGeneration: d.ObservedGeneration,
 		Deleting:           rfc3339(d.Deleting),
 		Finalizers:         d.Finalizers,
+		Owners:             ownerDTOs(d.Owners),
 		Managers:           managerDTOs(d.Managers),
 		FieldsJSON:         d.FieldsJSON,
 		FieldsOmitted:      d.FieldsOmitted,
@@ -220,6 +221,14 @@ func summaryDTOs(cells []crd.SummaryCell) []SummaryCellDTO {
 	out := make([]SummaryCellDTO, 0, len(cells))
 	for i, c := range cells {
 		out = append(out, SummaryCellDTO{InstanceColumnDTO: colDTOs[i], Value: c.Value})
+	}
+	return out
+}
+
+func ownerDTOs(os []crd.OwnerRef) []OwnerRefDTO {
+	out := make([]OwnerRefDTO, 0, len(os))
+	for _, o := range os {
+		out = append(out, OwnerRefDTO{APIVersion: o.APIVersion, Kind: o.Kind, Name: o.Name, Controller: o.Controller})
 	}
 	return out
 }

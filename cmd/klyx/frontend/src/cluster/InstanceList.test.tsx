@@ -4,6 +4,7 @@ import { useFleet, ResourceRef, InstanceDTO, ClusterDTO } from "../store/fleet";
 import { InstanceList } from "./InstanceList";
 
 vi.mock("../bridge/crd", () => ({
+  getCRDDefinition: vi.fn(async () => ({ error: "not in this test" })),
   loadInstances: vi.fn(async () => {}),
   listInstancePage: vi.fn(async () => ({ items: [], nextToken: "" })),
   // The open instance now renders as a side panel inside the list, so the

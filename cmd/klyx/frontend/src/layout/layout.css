@@ -225,6 +225,36 @@
 /* a numeric printer column (slice 15a): right-aligned, tabular figures */
 .lens-cell-num { justify-self: end; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* ---- the Fields tree (The Line slice 15b) ------------------------------- */
+.otree { display: flex; flex-direction: column; min-width: 0; }
+.otree-row { display: grid; grid-template-columns: minmax(96px, 220px) minmax(0, 1fr); gap: 0 16px; align-items: baseline; min-height: 24px;
+  padding: 2px 0 2px calc(var(--depth, 0) * 16px);
+  background: repeating-linear-gradient(to right, var(--color-border-tertiary) 0 1px, transparent 1px 16px) no-repeat left top / calc(var(--depth, 0) * 16px) 100%; }
+.otree-key { font: 400 13px/20px var(--font-sans); color: var(--color-text-tertiary); overflow-wrap: anywhere; padding-left: 6px; }
+.otree-index { font-family: var(--font-mono); font-size: 12px; }
+.otree-val { min-width: 0; font: 400 13px/20px var(--font-mono); color: var(--color-text-primary); overflow-wrap: anywhere; white-space: pre-wrap; }
+.otree-toggle { justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer; font: 400 13px/20px var(--font-sans); color: inherit; }
+.otree-chev { color: var(--color-text-tertiary); transition: transform 120ms ease; }
+.otree-toggle[aria-expanded="true"] .otree-chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .otree-chev { transition: none; } }
+.otree-more { grid-column: 1 / -1; justify-self: start; padding: 0 0 0 6px; border: 0; background: none; cursor: pointer; font: 400 12px/20px var(--font-sans); color: var(--color-text-info); }
+.otree-note { grid-column: 1 / -1; padding-left: 6px; font: 400 12px/20px var(--font-sans); color: var(--color-text-tertiary); }
+
+/* ---- the generic inspector (The Line slice 15b) ------------------------- */
+.gen-kv { grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); }
+.gen-val { min-width: 0; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.gen-mono { font-family: var(--font-mono); }
+.gen-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.gen-dim { color: var(--color-text-tertiary); }
+.gen-copy { display: inline-flex; align-items: center; gap: 6px; }
+.gen-flag { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.gen-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.gen-link { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: var(--color-text-info); text-align: left; }
+.gen-note { font: 400 13px/18px var(--font-sans); color: var(--color-text-tertiary); }
+.last-applied { margin-top: 8px; font: 400 12px/18px var(--font-sans); }
+.last-applied-json { margin: 6px 0 0; max-height: 320px; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--line-sunk, var(--color-background-secondary));
+  font: 400 12px/18px var(--font-mono); color: var(--color-text-primary); white-space: pre; user-select: text; }
+
 /* ---- conditions (The Line slice 15b) ------------------------------------ */
 .conds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .cond { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 10px; align-items: baseline; }

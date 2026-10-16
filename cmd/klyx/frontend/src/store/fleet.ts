@@ -651,7 +651,28 @@ export type GitOpsOwnershipDTO = {
 // prompt went.
 export type AIResultDTO = { ok: boolean; explanation: string; model: string; backend: string; origin?: string; groundedOn: string; error: string; redacted?: number; scrubbed?: number };
 export type AIAvailabilityDTO = { backend: string; ready: boolean; model?: string; origin?: string; problem?: string };
-export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string; notFound?: boolean };
+// The Line slice 15c: one CRD read in full. schema is one version's,
+// flattened into bounded nodes whose paths are segment lists ("p" a
+// property, "i" an array's items, "m" a map's values).
+export type SchemaPathSeg = { k: "p" | "i" | "m"; n?: string };
+export type SchemaNodeDTO = { path: SchemaPathSeg[]; type?: string; format?: string; required?: boolean; enum?: string[]; enumMore?: number; default?: string; defaultTruncated?: boolean;
+  description?: string; descriptionTruncated?: boolean; preserveUnknown?: boolean; intOrString?: boolean; embeddedResource?: boolean; constraints?: string[]; deeper?: boolean };
+export type PrinterColumnDTO = { name: string; type: string; format?: string; jsonPath: string; description?: string; priority: number };
+export type CRDVersionDTO = { name: string; served: boolean; storage: boolean; deprecated: boolean; deprecationWarning?: string; columns: PrinterColumnDTO[] };
+export type CRDConversionDTO = { strategy: string; url?: string; serviceNamespace?: string; serviceName?: string; servicePort?: number; servicePath?: string; reviewVersions?: string[] };
+export type CRDDefinitionDTO = { name: string; group: string; kind: string; plural: string; singular: string; listKind: string; scope: string; shortNames: string[]; categories: string[];
+  operator: string; uid: string; created: string; versions: CRDVersionDTO[]; storedVersions: string[]; conversion: CRDConversionDTO; conditions: ConditionDTO[];
+  schemaVersion: string; schema: SchemaNodeDTO[]; schemaTruncated?: boolean; error?: string; notFound?: boolean };
+
+// The Line slice 15b: summary is the object's own table row (every
+// priority), read in the same response as the object; observedGeneration is
+// -1 when the object records none; fieldsJSON is the sanitised object
+// without apiVersion, kind and metadata ("" with fieldsOmitted saying why).
+export type SummaryCellDTO = InstanceColumnDTO & { value: string };
+export type FieldManagerDTO = { manager: string; operation: string; subresource?: string; time?: string };
+export type OwnerRefDTO = { apiVersion: string; kind: string; name: string; controller?: boolean };
+export type InstanceDetailDTO = { kind: string; namespace: string; name: string; uid?: string; generation?: number; created: string; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; secretKeys?: SecretKeyDTO[]; serviceBacking?: ServiceBackingDTO | null; hpaScaling?: HPAScalingDTO | null; related?: RelatedRefDTO[]; facts?: FactDTO[]; error?: string; notFound?: boolean;
+  summary?: SummaryCellDTO[]; observedGeneration?: number; deleting?: string; finalizers?: string[]; owners?: OwnerRefDTO[]; managers?: FieldManagerDTO[]; fieldsJSON?: string; fieldsOmitted?: string };
 // cluster + resource + ref identify the object a detail belongs to: DEV/STG/PRD
 // share namespace/name, so ns/name alone let a late DEV detail render under the
 // PRD header (review 2026-10-03 #5).

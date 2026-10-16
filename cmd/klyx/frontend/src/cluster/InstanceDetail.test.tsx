@@ -4,6 +4,7 @@ import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, AIResultDTO, Ser
 import { InstanceDetail, buildFoldedDiffRows, buildLineDiff, cursorPositionForOffset, detectGitOwner, formatDiffPlainText, formatKubernetesActionError, validateResourceYAML } from "./InstanceDetail";
 
 vi.mock("../bridge/crd", () => ({
+  getCRDDefinition: vi.fn(async () => ({ error: "not in this test" })),
   getInstanceDetail: vi.fn(async () => {}),
   copyText: vi.fn(async () => {}),
   revealSecretKey: vi.fn(async () => "hunter2"),
@@ -1045,5 +1046,76 @@ describe("an identical reopening", () => {
     expect(getInstanceDetail).toHaveBeenCalledTimes(2);
     expect(useFleet.getState().instanceDetail).toMatchObject({ loading: false, detail: { uid: "web-tls-uid" } });
     vi.mocked(getInstanceDetail).mockReset();
+  });
+});
+
+// The Line slice 15b: the generic inspector's own blocks.
+describe("InstanceDetail - the generic inspector (slice 15b)", () => {
+  const rich: InstanceDetailDTO = {
+    ...detail,
+    generation: 4,
+    observedGeneration: 3,
+    created: "2026-10-10T10:00:00Z",
+    deleting: "2026-10-16T09:00:00Z",
+    finalizers: ["finalizers.fluxcd.io", "example.com/custom"],
+    owners: [{ apiVersion: "apps/v1", kind: "ReplicaSet", name: "web-5f", controller: true }, { apiVersion: "example.com/v1", kind: "Widget", name: "w1" }],
+    related: [{ kind: "ReplicaSet", namespace: "default", name: "web-5f", group: "apps", version: "v1", plural: "replicasets", scope: "Namespaced", relation: "owner" }],
+    managers: [{ manager: "kustomize-controller", operation: "Apply", time: "2026-10-12T10:00:00Z" }, { manager: "cert-manager", operation: "Update", subresource: "status" }],
+    summary: [
+      { name: "Ready", type: "string", format: "", description: "Custom resource definition column (in JSONPath format): .status.x", jsonPath: ".status.x", priority: 0, numeric: false, value: "True" },
+      { name: "Secret", type: "string", format: "", description: "", jsonPath: "", priority: 1, numeric: false, value: "web-tls" },
+      { name: "Empty", type: "string", format: "", description: "", jsonPath: "", priority: 0, numeric: false, value: "" },
+    ],
+    fieldsJSON: JSON.stringify({ spec: { secretName: "web-tls", dnsNames: ["a.example", "b.example"] }, status: { notAfter: "2027-01-01T00:00:00Z" } }),
+    annotations: { owner: "platform", "kubectl.kubernetes.io/last-applied-configuration": "{\"kind\":\"Certificate\"}" },
+    conditions: [{ type: "Ready", status: "True", reason: "Issued", message: "ok", observedGeneration: 3 }],
+  };
+
+  it("draws the summary at every priority without empty values", () => {
+    seed({ detail: rich });
+    const { getByTestId } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    const s = getByTestId("instance-summary");
+    expect(s.textContent).toContain("Secretweb-tls");
+    expect(s.textContent).not.toContain("Empty");
+  });
+
+  it("states the object: generation behind, deletion waiting on finalizers, owners, managers", () => {
+    seed({ detail: rich });
+    const { getByTestId, getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    const o = getByTestId("instance-object");
+    expect(o.textContent).toContain("Not yet observed: generation 4, observed 3");
+    expect(o.textContent).toContain("waiting on its finalizers");
+    expect(o.textContent).toContain("finalizers.fluxcd.io · the owning Flux controller");
+    expect(o.textContent).toContain("kustomize-controller · Apply");
+    expect(o.textContent).toContain("cert-manager · Update · status");
+    // a resolvable owner links; an unresolvable one is named, never dropped
+    expect(getByText("web-5f").closest("button")).toBeTruthy();
+    expect(getByText("w1").closest("button")).toBeNull();
+    // the owner left Related, which draws nothing when empty
+    expect(document.body.textContent).not.toContain("No direct related objects found.");
+  });
+
+  it("draws spec and status as trees, and says a condition was recorded for an older generation", () => {
+    seed({ detail: rich });
+    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    expect(getByText("secretName")).toBeTruthy();
+    expect(getByText("2 items")).toBeTruthy();
+    expect(getByText("notAfter")).toBeTruthy();
+    expect(getByText("for generation 3 of 4")).toBeTruthy();
+  });
+
+  it("collapses last-applied-configuration behind Show", () => {
+    seed({ detail: rich });
+    const { getByText, queryByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(getByText(/^Annotations/));
+    expect(queryByText(/kubectl\.kubernetes\.io\/last-applied-configuration=/)).toBeNull();
+    fireEvent.click(getByText("Show"));
+    expect(getByText(/"kind": "Certificate"/)).toBeTruthy();
+  });
+
+  it("says why the fields are not drawn", () => {
+    seed({ detail: { ...rich, fieldsJSON: "", fieldsOmitted: "too large" } });
+    const { getByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    expect(getByText("Too large to draw here; see Manifest.")).toBeTruthy();
   });
 });

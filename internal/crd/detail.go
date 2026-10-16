@@ -132,6 +132,9 @@ type InstanceDetail struct {
 	// Deleting is metadata.deletionTimestamp; zero when not being deleted.
 	Deleting   time.Time
 	Finalizers []string
+	// Owners are metadata.ownerReferences as recorded; the inspector links
+	// those Related resolves and names the rest.
+	Owners []OwnerRef
 	// Managers summarise metadata.managedFields: who wrote, how and when.
 	// Their field sets never leave Go.
 	Managers []FieldManager
@@ -139,6 +142,14 @@ type InstanceDetail struct {
 	// metadata; "" with FieldsOmitted saying why.
 	FieldsJSON    string
 	FieldsOmitted string
+}
+
+// OwnerRef is one recorded owner reference.
+type OwnerRef struct {
+	APIVersion string
+	Kind       string
+	Name       string
+	Controller bool
 }
 
 // SummaryCell is one printer column's value for the object.

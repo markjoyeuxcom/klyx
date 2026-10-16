@@ -394,6 +394,12 @@ export function Kbd({ k }: { k: string }) {
   );
 }
 
+// kubectl's own record of the last client-side apply: a whole object as
+// JSON, never a useful chip (The Line slice 15b). It reads only the
+// sanitised annotations - a Secret's copy is removed before anything is
+// built (MaskSecretData), so this can never bring it back.
+const LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration";
+
 export function MetadataChips({
   title,
   values,
@@ -403,10 +409,12 @@ export function MetadataChips({
   values: Record<string, string> | undefined;
   defaultCollapsed?: boolean;
 }) {
-  const entries = Object.entries(values ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  if (entries.length === 0) return null;
+  const all = Object.entries(values ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const lastApplied = all.find(([k]) => k === LAST_APPLIED)?.[1];
+  const entries = all.filter(([k]) => k !== LAST_APPLIED);
+  if (all.length === 0) return null;
   return (
-    <InspectorSection title={title} count={entries.length} collapsible defaultCollapsed={defaultCollapsed}>
+    <InspectorSection title={title} count={all.length} collapsible defaultCollapsed={defaultCollapsed}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {entries.map(([k, v]) => (
           <span key={k} title={`${k}=${v}`} style={metadataChip}>
@@ -414,7 +422,25 @@ export function MetadataChips({
           </span>
         ))}
       </div>
+      {lastApplied !== undefined && <LastApplied json={lastApplied} />}
     </InspectorSection>
+  );
+}
+
+function LastApplied({ json }: { json: string }) {
+  const [open, setOpen] = useState(false);
+  let pretty = json;
+  try {
+    pretty = JSON.stringify(JSON.parse(json), null, 2);
+  } catch {
+    // not JSON: shown as written
+  }
+  return (
+    <div className="last-applied">
+      <span className="gen-dim">last-applied-configuration · {new TextEncoder().encode(json).length.toLocaleString()} bytes · </span>
+      <button className="gen-link" aria-expanded={open} onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Show"}</button>
+      {open && <pre className="last-applied-json">{pretty}</pre>}
+    </div>
   );
 }
 
