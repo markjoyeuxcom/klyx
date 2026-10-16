@@ -9,7 +9,7 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
 **Sources:** Flux Operator v0.61.0 (2026-10-01): its CRDs, `docs/api/v1/*.md`, and `api/v1` and `internal/controller` sources. The current Flux is v2.9.6. All four kinds are `fluxcd.controlplane.io/v1` (the only served version, also storage) and namespaced, and their conditions carry `observedGeneration`.
 
 **FluxInstance:**
-- A **singleton**: CEL requires `metadata.name == "flux"`, in the operator's namespace.
+- **Named `flux`**: CEL requires `metadata.name == "flux"`. CEL does not constrain the namespace. The operator restricts its FluxInstance and FluxReport cache to its own runtime namespace (`cmd/operator/main.go`), so a `flux` in another namespace exists but is not reconciled (review 1).
 - **spec:**
   - `distribution`: `version` (a semver range such as `2.9.x`), `registry`, `variant` (upstream-alpine or an enterprise variant), and `artifact` (an `oci://` URL the operator polls).
   - `components`: the controllers to run, from seven.
@@ -23,7 +23,7 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
 - **Conditions:** Ready=True `ReconciliationSucceeded`; Ready=False `ArtifactFailed`, `BuildFailed`, `HealthCheckFailed` or `ReconciliationFailed`; Stalled `BuildFailed`; Reconciling while it runs.
 
 **FluxReport:**
-- A singleton named `flux` that the operator writes.
+- Named `flux`, in the operator's namespace, and written by the operator.
 - **Its spec is its content:**
   - `distribution`: version, status (Installed, "Not Installed" or Unknown), entitlement, managedBy;
   - `components[]{name, image, ready, status}`;
@@ -31,7 +31,8 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
   - `sync{id, path, source, ready, status}`;
   - `cluster{serverVersion, platform, nodes}` and `operator{apiVersion, version, platform}`.
 - **Its Ready is set True after every run, even when the computation logged errors.** It means the report is fresh, never that Flux is healthy.
-- **Refresh:** at operator start, when the FluxInstance changes, on request, and every 5 minutes by default.
+- **Refresh:** at operator start, when the FluxInstance changes, on request, and every reporting interval. That is 5 minutes by default, but it is set by the operator's `--reporting-interval` flag or `REPORTING_INTERVAL` (the Helm chart sets it from values), so Klyx cannot know it.
+- **The condition time is not a heartbeat.** The pinned conditions runtime (fluxcd/pkg `runtime` v0.111.0) keeps `lastTransitionTime` when status, reason and message are unchanged. The message carries a rounded duration that can repeat across runs. So a report can refresh without its condition time moving, and Ready=True persists when reporting is disabled.
 
 **ResourceSet:**
 - **spec:**
@@ -61,7 +62,11 @@ The owner's direction: "flux should be fully supported, flux operator + flux ima
 - `reconcileEvery`, `reconcileTimeout` and `reconcileArtifactEvery` set the intervals. The defaults are 1h and 5m for FluxInstance and ResourceSet, with artifact polling every 10m, and 10m and 2m for providers.
 - **A scheduled provider ignores a plain request.** An out-of-schedule run needs `requestedAt` **and** `forceAt` with the same value; otherwise it emits `SkippedDueToSchedule` and leaves its status unchanged.
 
-**The operator's Deployment:** `flux-operator` in the operator's namespace (`flux-system` in the kustomize install), labelled `app.kubernetes.io/name: flux-operator`. The Helm chart's names are unverified. The Flux components it installs carry `app.kubernetes.io/managed-by: flux-operator`.
+**The operator's Deployment:**
+- **The kustomize install:** `flux-operator` in `flux-system`.
+- **The Helm chart** (`controlplaneio-fluxcd/charts`, `charts/flux-operator`): the Deployment is named after the Helm release (its fullname), so the name varies. Its selector label is `app.kubernetes.io/name: flux-operator` unless the chart's `nameOverride` is set; a `nameOverride` is unsupported.
+- **The identity Klyx uses** is therefore the label `app.kubernetes.io/name: flux-operator`, never the name. The operator's runtime namespace is the namespace that Deployment runs in.
+- **Ownership is not readiness.** The Flux components the operator installs carry `app.kubernetes.io/managed-by: flux-operator`, which says who manages them, not whether they are ready.
 
 ## 2. What Klyx shows
 
@@ -74,14 +79,14 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - its cluster settings: multitenant, network policy, size and sharding (with its shard Deployments named);
   - **its sync:** the kind, url, ref and path it declares, linked to the GitRepository/OCIRepository/Bucket and Kustomization it creates (named `spec.sync.name`, or the namespace), as rows in the Sources and Reconciliation views;
   - its history (the five most recent runs) and inventory, read on demand in the inspector (§3).
-- **The FluxReport,** labelled "as reported by the operator · <time>" (the time its Ready last transitioned):
+- **The FluxReport,** labelled "as reported by the operator", with two times kept apart: "condition last changed <lastTransitionTime>" and "read by Klyx <observation time>". It makes no claim of when the report was generated:
   - the per-kind reconciler stats (running, failing, suspended), with each kind's source sizes;
   - component readiness;
   - the sync's id, source and status;
   - the cluster and operator versions;
   - who manages the distribution.
 
-  **These are the operator's numbers, not Klyx's.** Klyx's own counts of Flux objects are the Reconciliation and Sources views; where the two disagree, both are shown, each labelled with its source. The report never lights a task, and its Ready is described as "report fresh".
+  **These are the operator's numbers, not Klyx's.** Klyx's own counts of Flux objects are the Reconciliation and Sources views; where the two disagree, both are shown, each labelled with its source. The report never lights a task. Its Ready is shown as "reporting succeeded", never as Flux's health or as proof of a recent run.
 - **ResourceSets, broken-first:**
   - Ready with its reason. A step failure names the step, and a step in progress reads "Applying step n/m".
   - `dependsOn` as named prerequisites, each linked when Klyx can resolve it. A `readyExpr` is shown as text.
@@ -93,40 +98,60 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
   - the number of exported input sets and `lastExportedRevision`;
   - the ResourceSets that consume them;
   - `secretRef` and `certSecretRef` named, never read.
-- **Detection:**
-  - Flux is present when either the kustomize-controller group or `fluxcd.controlplane.io` is served.
-  - The operator's controller probe looks for the Deployment `flux-operator` in the FluxInstance's namespace (the operator's, by the singleton rule), or `flux-system` when there is no FluxInstance, and accepts the `app.kubernetes.io/name: flux-operator` label as the identity.
-  - An unreadable probe is "unverified", never absent (roadmap C2's evidence rule).
-  - An operator with no FluxInstance says "the operator is installed; no FluxInstance".
-  - Flux installed by the operator is recognised by its components' `managed-by: flux-operator` label, and Flux's own controller probe (kustomize-controller) is unchanged.
+- **Detection (review 1, finding 4):**
+  - **Flux is present** when either the kustomize-controller group or `fluxcd.controlplane.io` is served.
+  - **Operators are found by evidence.** A bounded, cluster-wide list of Deployments labelled `app.kubernetes.io/name: flux-operator` (limit 10) gives each operator's runtime namespace and readiness.
+    - A forbidden or failed list is "unverified", never absent.
+    - Several operators are each shown. Ambiguity is shown, never resolved by picking one.
+  - **Instances are bound by namespace:**
+    - a FluxInstance or FluxReport `flux` in an operator's namespace is that operator's;
+    - a `flux` in a namespace with no operator reads "no operator reconciles this namespace" and is not counted as a reconciled instance;
+    - an operator with no FluxInstance in its namespace reads "the operator is installed; no FluxInstance".
+  - **Flux's own controller probe moves with the instance.** With an operator-managed instance, kustomize-controller is probed in that namespace, not the fixed `flux-system`.
+    - A sharded instance lists its shard Deployments (`<controller>-<shard>`), and readiness is read per Deployment.
+    - Without an operator, the existing probe is unchanged.
 
 ## 3. The source contract (roadmap C1)
 
 | Part | Acquisition | Projection | Counted entity | Health | Notifications |
 |---|---|---|---|---|---|
-| `fluxinstance` (new, task `flux`) | observer watch `fluxinstances` | keeps conditions (with `observedGeneration`), generation, reconcile annotations, `distribution`, `components`, `sync`, the revisions; drops `inventory`, `history`, `kustomize.patches` (read on demand) | the FluxInstance UID | §4 | eligible, like Kustomizations |
-| `resourcesets` (new, task `flux`) | observer watches `resourcesets` and `resourcesetinputproviders` | keeps conditions, generation, reconcile annotations, `dependsOn` (without `readyExpr`), `inputsFrom`, provider `type`/`url`/`schedule`, `nextSchedule`, `lastExportedRevision`, and the count of `exportedInputs`; drops inputs, resources, templates, steps' content (names and count kept), inventory, history, exported values | the ResourceSet or provider UID | §4 | eligible |
-| FluxReport | observer watch `fluxreports` | the whole spec (small) and Ready's transition time | none: evidence, not health | none | none |
+| `fluxinstance` (new, task `flux`) | observer watch `fluxinstances` | built field by field into a new object (no deep copy then delete): conditions (messages clipped at 1 KiB), generation, the reconcile annotations and `requestedAt`, `lastHandledReconcileAt`, the newest `history[].lastReconciled`, `distribution`, `components` (at most 20), `sync` (URL sanitised by S0b), and the revisions | the FluxInstance UID, counted only in an operator's namespace | §4 | eligible, like Kustomizations |
+| `resourcesets` (new, task `flux`) | observer watches `resourcesets` and `resourcesetinputproviders` | built the same way: conditions (clipped), generation, the reconcile annotations and `requestedAt`, `lastHandledReconcileAt`, the newest `history[].lastReconciled`, `dependsOn` (at most 50, without `readyExpr`), `inputsFrom` (at most 50), the step names (at most 20); for providers, `type`, `url` (sanitised), `schedule` (at most 10), `nextSchedule`, `lastExportedRevision`, `lastHandledReconcileAt`, and the count of `exportedInputs` | the ResourceSet or provider UID | §4 | eligible |
+| FluxReport | observer watch `fluxreports` | built field by field: `distribution`, `components` (at most 20), `reconcilers` (at most 50), `sync` (sanitised), `cluster`, `operator`, Ready's status and transition time | none: evidence, not health | none | none |
 
 - **Versions:** `v1` only. A cluster serving an older operator API reads "unsupported operator version", never empty.
-- **Clocks:** none of these parts change with time alone. `nextSchedule` is shown, not evaluated. A FluxReport older than three reporting intervals reads "report not refreshed since <time>", as evidence, not a fault.
-- **The budget per cluster:**
-  - four new watches;
-  - FluxInstance and FluxReport are singletons;
-  - ResourceSets and providers are expected in tens to hundreds, projected to about 1 KiB each;
-  - inventories, histories, inputs and templates are never watched.
+- **Clocks:** none of these parts change with time alone. `nextSchedule` is shown, not evaluated, and no report-age claim is made (§1).
+- **The budget per cluster** (review 1, finding 5), with these as caps, not estimates:
+  - **Watches:** four new list/watches. A watch still *receives* whole objects (inputs, inventories, templates) before projection: "not retained in the projected model", never "not watched".
+  - **Retained objects:** at most 10 FluxInstances, 10 FluxReports, 2,000 ResourceSets and 2,000 providers. Beyond a cap the kind's coverage reads "capped", counts are lower bounds, and a consumer or prerequisite lookup that crosses the cap says it is incomplete. A healthy chain is never claimed past a cap.
+  - **Retained bytes:** each projected object at most 8 KiB, by the per-field limits above. A field clipped by a limit is marked clipped in the inspector.
+  - **The fleet reservation:** for ten clusters, 40 MiB of retained projections for these kinds, recorded in the roadmap's "As built".
+  - **Transient memory** (one list page decoded before projection) is measured separately, by a benchmark over 2,000 ResourceSets each carrying a 64 KiB template, and recorded. The page size follows the observer's existing reflector paging.
+- **Bounded reads:** inventories and histories are read on demand (bounded: the first 500 inventory entries, the five history entries), with the omission said.
 - **Tests beyond parity (C1):**
   - projection equality for every field a rule reads;
   - UID replacement (a FluxInstance deleted and recreated);
-  - a frozen condition under a disabled reconcile;
-  - a v1-less cluster.
+  - a frozen condition under a disabled reconcile, and each resume case of §4;
+  - two report runs with identical Ready status, reason and message (the condition time does not move, and Klyx claims nothing from it);
+  - a v1-less cluster;
+  - the caps (2,001 ResourceSets reads "capped");
+  - an operator in a custom namespace with no FluxInstance, an orphan `flux` in another namespace, and two operators.
 
 ## 4. Health rules
 
 - **The existing rule** (`fluxRole`, `readyBacked`) applies: Ready True is healthy; Ready False is a fault with its reason; Reconciling is checking; Stalled is a fault that will not retry; a generation lag reads Syncing.
 - **Suspension comes first.** `fluxcd.controlplane.io/reconcile: disabled` makes the object **Suspended**, an intended paused state (ratified 2026-07-02), never counted broken-first.
-  - Because the operator freezes conditions while disabled, a frozen Ready=False is shown as "last known before suspension", not as a live fault.
-  - On resume, the verdict waits for the operator's next condition: Syncing until `observedGeneration` and `lastHandledReconcileAt` catch up.
+  - Because the operator freezes conditions while disabled, a frozen Ready (True or False) is shown as "last known before suspension", never as a live verdict.
+- **Resume (review 1, finding 2).** A handled request is not proof of an evaluation. The operator's finalizer copies `requestedAt` into `lastHandledReconcileAt` even when it returns early (outside a provider's schedule, or while disabled), and annotation edits do not advance `metadata.generation`.
+  - **The state:** a resumed object whose evaluation is not yet evidenced reads **"Resumed · awaiting evaluation"**. Its role is checking, it is not counted, and its last condition is shown as historical. It raises no fault and no recovery notification from the frozen condition.
+  - **The evidence of an actual evaluation:**
+    - **FluxInstance and ResourceSet:** the newest `history[].lastReconciled` is later than the resume's request token (Klyx writes `requestedAt` as an RFC 3339 time).
+    - **A provider with a schedule:** `status.nextSchedule.when` has advanced past the value it held at resume, so the scheduled run happened. Until then it reads "Resumed · waiting for its schedule (next <when>)". The separate "Fetch now, outside its schedule" verb (§5) is the user's way to run it sooner.
+    - **A provider without a schedule:** `lastHandledReconcileAt` equals the token. With no schedule and the reconcile enabled, the controller has no early return, so a handled request is an evaluation.
+  - **When freshness cannot be proven:**
+    - **Reconnects and external changes:** after a reconnect, or when someone else resumed the object, Klyx uses the `requestedAt` token on the object if there is one.
+    - **No token, and Klyx never saw the object suspended:** it is treated like any freshly observed object, with its conditions current.
+    - **No token, and Klyx did see the suspension end:** it reads "Resumed · awaiting evaluation" until the evidence above is newer than the moment Klyx observed the change.
 - **ResourceSet reasons** keep the operator's words: `DependencyNotReady` names what it waits for; a failed step names the step; `InvalidCELExpression` names the `dependsOn` entry where the message does.
 - **A provider's failure** is its own fault. A ResourceSet whose provider failed reports whatever the operator records for it, and Klyx links the provider rather than re-deriving the failure.
 - **FluxReport** lights nothing (§2).
@@ -141,25 +166,30 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
 | FluxReport | "Refresh the report": `requestedAt` | none |
 
 - **Every verb carries:**
-  - a UID precondition: the verb refuses if the object was replaced since the user saw it;
+  - a UID precondition, with the annotations written in one atomic update; the verb refuses if the object was replaced since the user saw it;
+  - a unique request token (an RFC 3339 time with nanoseconds);
   - ConfirmDialog, plus ProtectGuard on protected clusters.
-- **Ownership consequences:**
-  - A FluxInstance or ResourceSet applied by a Flux Kustomization (Flux ownership labels) says that a suspension set from Klyx is an annotation its owner may remove on the next apply.
-  - The FluxInstance's own sync Kustomization is a Flux object, with the existing verbs.
+- **Honest outcomes:**
+  - a verb reports "requested", and only the evidence of §4 reports "completed";
+  - a request made while an object is suspended is "requested; the object is suspended", never a completed reconciliation.
+- **Ownership consequences, for every target:** any of the four kinds owned by a Flux Kustomization or HelmRelease (Flux ownership labels), or by an Argo Application (Argo tracking), says that an annotation set from Klyx may be removed by its owner on the next apply. The FluxInstance's own sync Kustomization is a Flux object, with the existing verbs.
 - **The existing verb code** (`flux/actions.go` `ResourceForKind`, `gitopsactions.go` `fluxGroupForKind`, `gitopssource.go`) learns the four kinds and their annotation mechanics. Flux's `spec.suspend` is not assumed for them.
 - **Not offered:** `forceAt` on its own; `fluxcd.controlplane.io/force`, `prune` or `recreateOnFailure`; and suspending a single generated child.
 
 ## 6. Sensitive data
 
-- **A ResourceSet's `resources`, `steps[].resources` and `resourcesTemplate` can inline Secret data.** Its `inputs` are free-form, `readyExpr` can read a Secret in the namespace, and `copyFrom` copies Secrets.
-  - Klyx's Secret masking is keyed on `kind: Secret`, so the generic YAML view of a ResourceSet exposes inline Secret data **today**. This slice fixes that, for ResourceSets and FluxInstance patches:
-    - **The Manifest and Describe views:** embedded objects of kind Secret have their `data` and `stringData` values masked, through the existing masking.
-    - **Templates:** a `resourcesTemplate` is collapsed behind "Show template", with a note that it may contain secrets. FluxInstance `kustomize.patches` get the same treatment.
-    - **The guarded YAML editor** refuses to open a ResourceSet whose spec embeds a Secret, and says why. Editing it would round-trip masked values.
-  - **Inputs:** the inspector shows inputs and exported inputs bounded (the first 20 sets, values clipped at 200 characters, omissions said), with values under credential-like keys masked.
-- **Provider configuration:** a `secretRef` or `certSecretRef` is a name, never read. Change-request inputs carry author and title, and are shown, not sent anywhere.
-- **The AI fence:** the AI field allowlist and the chat projection carry kind, name, conditions, counts and references for these kinds, and never inputs, exported inputs, resources, templates, patches or `readyExpr`.
-- **FluxInstance:** `sync.url` is shown. A url carrying embedded credentials (`user:token@`) has them masked.
+All of it goes through S0b (`2026-10-16-klyx-coverage-s0b-embedded-payloads.md`), the preparatory slice Codex asked for in review 1. Its registry covers:
+- ResourceSet `resources`, `steps`, templates and inputs;
+- provider `defaultValues` and `exportedInputs`;
+- FluxInstance patches;
+- URLs in `sync.url`, provider `url` and the report's `sync.source`.
+
+On top of S0b, this slice adds only:
+- the projections of §3, which never carry those fields;
+- the AI field allowlist and chat projection for these kinds: kind, name, conditions, counts and references, never payloads;
+- in the inspector, an exported input's `id` and count; the other values stay omitted per S0b.
+
+S1a is built after S0b and depends on it.
 
 ## 7. Tests, lab and smoke
 
@@ -187,3 +217,14 @@ A new **Operator** view in the Flux lens (design principle 2), beside Reconcilia
 - **Image automation** is S1b. **ExternalArtifact and ArtifactGenerator, and the notification facts,** are S1c.
 - **Per-child suspension** inside a ResourceSet's inventory (`reconcile: disabled` on a generated object) is not read in this slice. The inventory lists objects, not their annotations.
 - **The operator's web UI and MCP server** are outside Klyx.
+
+## 9. Revision 1: Codex's design review of 20c7290
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | The sensitive-data policy did not close the disclosure or masked-edit paths, and the hole is cross-cutting | the preparatory slice S0b; §6 now refers to it |
+| 2 | A handled request is not proof of evaluation (the finalizer copies `requestedAt` on early returns) | §4's resume state and evidence per kind; §5's "requested" vs "completed" |
+| 3 | FluxReport's condition time is not a heartbeat | §1 and §2: two labelled times, no report-age claim; the clock rule in §3 |
+| 4 | The singleton rule does not establish the operator's namespace | §1's identity by label (the Helm chart checked); §2's evidence-based detection; the Flux probe follows the instance |
+| 5 | The budget was an estimate, and understated what a watch reads | §3's caps, field-by-field projection, fleet reservation and transient benchmark |
+
