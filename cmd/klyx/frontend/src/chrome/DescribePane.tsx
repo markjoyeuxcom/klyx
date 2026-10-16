@@ -60,6 +60,15 @@ export function DescribePane({
   const identity = [cluster, kindArg, namespace, name, expectUid ?? ""].join("\u0000");
   const [shown, setShown] = useState<Reply | null>(null);
   const [prior, setPrior] = useState<Reply | null>(null);
+  // The same two, for the reply handler: it decides from what is on screen.
+  const shownRef = useRef<Reply | null>(null);
+  const priorRef = useRef<Reply | null>(null);
+  const show = (next: Reply | null, keep: Reply | null) => {
+    shownRef.current = next;
+    priorRef.current = keep;
+    setShown(next);
+    setPrior(keep);
+  };
   const [running, setRunning] = useState(false);
   const gen = useRef(0);
   const call = useRef<{ cancel?: () => void } | null>(null);
@@ -73,13 +82,12 @@ export function DescribePane({
     const settle = (dto: DescribeResultDTO) => {
       if (gen.current !== mine) return; // superseded, cancelled or closed
       const reply: Reply = { gen: mine, at: Date.now(), dto };
-      setShown((prev) => {
-        // A failed refresh with no stdout keeps the last report on screen,
-        // labelled; a reply with output (partial or whole) is the newest
-        // evidence and replaces it.
-        setPrior(!dto.ok && dto.output === "" ? (prev && prev.dto.output !== "" ? prev : null) : null);
-        return reply;
-      });
+      // A failed refresh with no stdout keeps the last report on screen,
+      // labelled - through any number of failed refreshes; a reply with
+      // output (partial or whole) is the newest evidence and replaces it.
+      const prev = shownRef.current;
+      const last = prev && prev.dto.output !== "" ? prev : priorRef.current;
+      show(reply, !dto.ok && dto.output === "" ? last : null);
       setRunning(false);
       call.current = null;
     };
@@ -90,10 +98,11 @@ export function DescribePane({
   }, [cluster, kindArg, namespace, name]);
 
   useEffect(() => {
-    setShown(null);
-    setPrior(null);
+    show(null, null);
     run();
     return () => {
+      // gen is a counter, not a node: the cleanup must bump the latest value
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       gen.current++;
       call.current?.cancel?.();
       call.current = null;

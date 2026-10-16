@@ -163,6 +163,19 @@ describe("DescribePane", () => {
     expect(document.querySelector("[data-testid='describe-formatted']")).toBeTruthy();
   });
 
+  it("keeps the last report through two failed refreshes in a row", async () => {
+    const { findByTestId, getByRole, findByRole, getByText } = sheet();
+    await findByTestId("describe-formatted");
+    mocked().mockImplementation(() => Promise.resolve({ ok: false, output: "", error: "Unable to connect to the server", command: CMD, commandError: "" }));
+    fireEvent.click(getByRole("button", { name: "Refresh" }));
+    await findByRole("alert");
+    await waitFor(() => expect((getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect((getByRole("button", { name: "Refresh" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(getByText(/^Output from .*, before the failed refresh$/)).toBeTruthy();
+    expect((await findByTestId("describe-formatted")).textContent).toContain("69423343");
+  });
+
   it("shows a failed run's partial output as the newest evidence, labelled", async () => {
     const { findByTestId, getByRole, findByText } = sheet();
     await findByTestId("describe-formatted");

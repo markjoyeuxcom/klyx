@@ -197,6 +197,55 @@ Built-in describers print prose before a table ("Allocated resources"), so a bui
 - Helm releases are not Kubernetes objects and get none.
 - A removed or unverified object gets none either: Describe reads the live object by name.
 
+### As built (14a, 14b and 14c)
+
+**Design and parser.** Codex accepted the design and the 14a parser at 5563ee4, after three design reviews: 35 parser tests, plus its own three probes.
+
+**14b, the sheet** (17a5d72):
+- `chrome/describe/model.ts` lays the tree out as the Formatted view draws it. Every piece of kubectl's text is a run, numbered in draw order; the table rows' extra lines come right after their cell. Each section records its run range, so find opens the sections that hold a match. Ages, counts, marks and labels are outside the runs, so find never counts them.
+- **A top-level field earns a section** when it has a table, is Events or Conditions, or has four or more lines of nesting. Smaller nesting stays inline (a Pod's `IPs`). Top-level fields between sections form an unlabelled block, not listed in the index.
+- An Events `<none>` lists in the index with the count 0.
+- The conditions table's Message column, and an Events message, read in sans ink-2 and wrap. Every other cell is mono and never wraps; the table scrolls sideways in its own box.
+- **Find:** a hit is a route wash, and the current hit is ringed in route. Escape in the sheet clears a non-empty find first, then closes. ⌘F or Ctrl+F focuses find.
+- **The index** marks the section at the top of the scroll. It starts on the first section, and at the end of the scroll it marks the last listed section, however short.
+- **Copy** is disabled with no output. Copy command is disabled with `commandError` as its title.
+- Pods and Nodes pass `kind` and `expectUid`. Their reports print no UID, so they never raise the notice. InstanceDetail passes the instance's kind and UID.
+
+**14c, every inspector** (e5b44b9):
+- The kind table lives in `chrome/describe/targets.ts`, so the native smoke can use it without the sheet's imports. `useDescribe` keys the open sheet to one object: another object closes it for good, and coming back never reopens it.
+- Describe is added to these inspectors' More menus:
+  - Flux: reconciliations and sources;
+  - Argo: Applications and ApplicationSets;
+  - cert-manager: Certificates and issuers;
+  - External Secrets: ExternalSecrets and stores;
+  - Gateways and routes;
+  - workloads;
+  - Karpenter: NodeClaims and NodePools.
+- A removed, unverified or detached selection gets none.
+- **The sheet sits beside `InspectorLayout`,** not in its children, because the layout renders children only on the overview tab. It therefore shows on the Manifest tab too.
+
+**Tests:**
+- 35 parser, 11 model and 17 sheet tests;
+- 4 for the hook and the table;
+- Describe from More in the Flux and cert-manager inspector tests;
+- the three existing caller tests, now reading the Formatted view;
+- Go:
+  - stdout unchanged, CRLF and trailing blank lines;
+  - the pinned command, on POSIX and PowerShell, with a spaced kubeconfig path;
+  - the Windows path-list refusal stated;
+  - cancellation stops the run;
+  - `DescribeArgv` for one file, a list and Windows, and two kubeconfigs that share a context name.
+
+**Gate:** tsc, eslint, vitest (2032 passed) and the vite build; `go test` for appbridge, fleet and execenv.
+
+**Live,** in the server build against the kind lab (headless Chrome, `pw/desc.mjs`):
+- the sheet opens from Flux, cert-manager, External Secrets, Gateways, Workloads, Pods and Nodes;
+- each shows the pinned command `/opt/homebrew/bin/kubectl --kubeconfig /Users/markjoyeux/.kube/config --context kind-klyx describe …`;
+- no element sits outside the sheet;
+- it was captured night at 1440×900 and day at 1024×768 (`scratchpad/desc14`).
+
+**The native smoke** gains "Describe from the Flux inspector".
+
 ## 3. Out of scope
 
 - Links from values to objects ("Controlled By", "Node", parent refs).
