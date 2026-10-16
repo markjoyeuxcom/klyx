@@ -201,4 +201,20 @@ describe("the expanded inspector with a real list (slice 16 review 1)", () => {
       elsewhere.remove();
     }
   });
+
+  // review 3: a split becoming a drawer never replaces the target, even when
+  // focus has dropped to the body
+  it("a split that becomes a drawer with focus on the body keeps the row to return to", () => {
+    const { getByText, getByLabelText } = render(<Rows />);
+    const a = getByText("row A");
+    a.focus();
+    fireEvent.click(a);
+    const field = getByLabelText("field");
+    field.focus();
+    field.blur();
+    expect(document.activeElement).toBe(document.body);
+    resize(900);
+    fireEvent.click(getByLabelText("close details"));
+    expect(document.activeElement).toBe(a);
+  });
 });

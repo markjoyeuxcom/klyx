@@ -213,9 +213,9 @@ export function LensLayout({
     const main = mainRef.current;
     const aside = asideRef.current;
     // A split that became a drawer already holds focus in its inspector: it
-    // keeps that control and the row to return to (slice 16 review 1).
+    // keeps that control (slice 16 review 1). The return target is never
+    // the drawer's to set - opening, closing and list focus own it (review 3).
     const already = !!aside && aside.contains(document.activeElement);
-    if (!already) returnFocus.current = document.activeElement as HTMLElement | null;
     main?.setAttribute("inert", "");
     // The command console, open over a drawer it opened beside, keeps focus:
     // the drawer takes it only when nothing above it holds it. The console's
