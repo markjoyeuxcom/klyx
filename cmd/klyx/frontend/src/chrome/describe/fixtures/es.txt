@@ -1,0 +1,35 @@
+Name:         observability-grafana-oauth-client-production-west-europe
+Namespace:    shop
+Labels:       <none>
+Annotations:  <none>
+API Version:  external-secrets.io/v1beta1
+Kind:         ExternalSecret
+Metadata:
+  Creation Timestamp:  2026-10-10T16:24:08Z
+  Generation:          1
+  Resource Version:    28084
+  UID:                 a9eed6a3-bac8-4383-ad79-ddf8c93b7eda
+Spec:
+  Data:
+    Remote Ref:
+      Conversion Strategy:  Default
+      Decoding Strategy:    None
+      Key:                  grafana-oauth-client-secret
+      Metadata Policy:      None
+    Secret Key:             client-secret
+  Refresh Interval:         1h
+  Secret Store Ref:
+    Kind:  ClusterSecretStore
+    Name:  azure-keyvault-prd
+  Target:
+    Creation Policy:  Owner
+    Deletion Policy:  Retain
+    Name:             grafana-oauth
+Status:
+  Conditions:
+    Last Transition Time:  2026-10-10T16:24:08Z
+    Message:               could not get secret data from provider
+    Reason:                SecretSyncedError
+    Status:                False
+    Type:                  Ready
+Events:                    <none>

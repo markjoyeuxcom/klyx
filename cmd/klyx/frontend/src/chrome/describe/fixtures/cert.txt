@@ -1,0 +1,31 @@
+Name:         observability-grafana-ingress-production-west-europe-tls
+Namespace:    shop
+Labels:       <none>
+Annotations:  <none>
+API Version:  cert-manager.io/v1
+Kind:         Certificate
+Metadata:
+  Creation Timestamp:  2026-10-10T16:09:15Z
+  Generation:          1
+  Resource Version:    26749
+  UID:                 e7f451d0-1e83-4118-a721-8ee91d0406a0
+Spec:
+  Dns Names:
+    grafana.prd-weu.example.com
+  Issuer Ref:
+    Kind:       ClusterIssuer
+    Name:       letsencrypt-prod
+  Secret Name:  grafana-tls
+Status:
+  Conditions:
+    Last Transition Time:  2026-10-10T16:09:27Z
+    Message:               Issuing certificate as Secret does not exist
+    Reason:                DoesNotExist
+    Status:                False
+    Type:                  Ready
+    Last Transition Time:  2026-10-10T16:09:27Z
+    Message:               Issuing certificate as Secret does not exist
+    Reason:                DoesNotExist
+    Status:                True
+    Type:                  Issuing
+Events:                    <none>

@@ -1,0 +1,16 @@
+Name:                     web
+Namespace:                shop
+Labels:                   app=web
+Annotations:              <none>
+Selector:                 app=web
+Type:                     ClusterIP
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.96.41.61
+IPs:                      10.96.41.61
+Port:                     <unset>  80/TCP
+TargetPort:               80/TCP
+Endpoints:                10.244.0.6:80,10.244.0.7:80,10.244.0.5:80
+Session Affinity:         None
+Internal Traffic Policy:  Cluster
+Events:                   <none>

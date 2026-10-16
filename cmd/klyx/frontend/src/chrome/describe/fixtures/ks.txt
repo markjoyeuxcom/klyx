@@ -1,0 +1,30 @@
+Name:         legacy-paused
+Namespace:    flux-system
+Labels:       <none>
+Annotations:  <none>
+API Version:  kustomize.toolkit.fluxcd.io/v1
+Kind:         Kustomization
+Metadata:
+  Creation Timestamp:  2026-10-10T15:30:38Z
+  Generation:          1
+  Resource Version:    23031
+  UID:                 2493245b-cb33-45d2-a29e-902fca452722
+Spec:
+  Force:     false
+  Interval:  5m
+  Path:      ./legacy
+  Prune:     true
+  Source Ref:
+    Kind:   GitRepository
+    Name:   platform
+  Suspend:  true
+Status:
+  Conditions:
+    Last Transition Time:  2026-10-10T15:30:38Z
+    Message:               kustomize build failed: accumulating resources: missing file ./legacy/old-ingress.yaml
+    Observed Generation:   1
+    Reason:                BuildFailed
+    Status:                False
+    Type:                  Ready
+  Observed Generation:     1
+Events:                    <none>

@@ -1,0 +1,77 @@
+Name:               klyx-control-plane
+Roles:              control-plane
+Labels:             beta.kubernetes.io/arch=arm64
+                    beta.kubernetes.io/os=linux
+                    kubernetes.io/arch=arm64
+                    kubernetes.io/hostname=klyx-control-plane
+                    kubernetes.io/os=linux
+                    node-role.kubernetes.io/control-plane=
+Annotations:        node.alpha.kubernetes.io/ttl: 0
+                    volumes.kubernetes.io/controller-managed-attach-detach: true
+CreationTimestamp:  Sat, 10 Oct 2026 12:13:26 +0100
+Taints:             <none>
+Unschedulable:      false
+Lease:
+  HolderIdentity:  klyx-control-plane
+  AcquireTime:     <unset>
+  RenewTime:       Fri, 16 Oct 2026 11:43:26 +0100
+Conditions:
+  Type             Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
+  ----             ------  -----------------                 ------------------                ------                       -------
+  MemoryPressure   False   Fri, 16 Oct 2026 11:39:59 +0100   Sat, 10 Oct 2026 12:13:26 +0100   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure     False   Fri, 16 Oct 2026 11:39:59 +0100   Sat, 10 Oct 2026 12:13:26 +0100   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure      False   Fri, 16 Oct 2026 11:39:59 +0100   Sat, 10 Oct 2026 12:13:26 +0100   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready            True    Fri, 16 Oct 2026 11:39:59 +0100   Thu, 15 Oct 2026 07:53:35 +0100   KubeletReady                 kubelet is posting ready status
+Addresses:
+  InternalIP:  192.168.97.2
+  Hostname:    klyx-control-plane
+Capacity:
+  cpu:                14
+  ephemeral-storage:  806245892096
+  memory:             16424784Ki
+  pods:               110
+Allocatable:
+  cpu:                14
+  ephemeral-storage:  806245892096
+  memory:             16424784Ki
+  pods:               110
+System Info:
+  Machine ID:                 267ac2f3fbac468b9259fa599c2b85b6
+  System UUID:                267ac2f3fbac468b9259fa599c2b85b6
+  Boot ID:                    cd6db02c-a7c2-4a5c-a0bb-b7aa7f6844db
+  Kernel Version:             7.0.14-orbstack-00380-ga7e0a2dc9535
+  OS Image:                   Debian GNU/Linux 13 (trixie)
+  Operating System:           linux
+  Architecture:               arm64
+  Container Runtime Version:  containerd://2.3.4
+  Kubelet Version:            v1.37.0
+PodCIDR:                      10.244.0.0/24
+PodCIDRs:                     10.244.0.0/24
+ProviderID:                   kind://docker/klyx/klyx-control-plane
+Non-terminated Pods:          (16 in total)
+  Namespace                   Name                                          CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----                                          ------------  ----------  ---------------  -------------  ---
+  kube-system                 coredns-559f6c778d-7dkcv                      100m (0%)     0 (0%)      70Mi (0%)        170Mi (1%)     5d23h
+  kube-system                 coredns-559f6c778d-pz8ch                      100m (0%)     0 (0%)      70Mi (0%)        170Mi (1%)     5d23h
+  kube-system                 etcd-klyx-control-plane                       100m (0%)     0 (0%)      100Mi (0%)       0 (0%)         5d23h
+  kube-system                 kindnet-7jdp6                                 100m (0%)     0 (0%)      50Mi (0%)        0 (0%)         5d23h
+  kube-system                 kube-apiserver-klyx-control-plane             250m (1%)     0 (0%)      0 (0%)           0 (0%)         5d23h
+  kube-system                 kube-controller-manager-klyx-control-plane    200m (1%)     0 (0%)      0 (0%)           0 (0%)         5d23h
+  kube-system                 kube-proxy-hrsnn                              0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  kube-system                 kube-scheduler-klyx-control-plane             100m (0%)     0 (0%)      0 (0%)           0 (0%)         5d23h
+  local-path-storage          local-path-provisioner-75f7fc7dc5-w9lpz       0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        api-6b46cb6f95-p5r82                          0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d14h
+  shop                        api-86446cb77c-gg7mg                          0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        batch-56d4869bd-n9tkv                         0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        web-69c6f74b8b-gbrsm                          0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        web-69c6f74b8b-hvbjs                          0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        web-69c6f74b8b-k7kbn                          0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+  shop                        worker-5bfb7b9d46-ds48l                       0 (0%)        0 (0%)      0 (0%)           0 (0%)         5d23h
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests    Limits
+  --------           --------    ------
+  cpu                950m (6%)   0 (0%)
+  memory             290Mi (1%)  340Mi (2%)
+  ephemeral-storage  0 (0%)      0 (0%)
+Events:              <none>

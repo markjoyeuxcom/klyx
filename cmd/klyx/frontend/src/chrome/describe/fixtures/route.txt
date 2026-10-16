@@ -1,0 +1,54 @@
+Name:         checkout
+Namespace:    shop
+Labels:       <none>
+Annotations:  <none>
+API Version:  gateway.networking.k8s.io/v1
+Kind:         HTTPRoute
+Metadata:
+  Creation Timestamp:  2026-10-10T18:34:32Z
+  Generation:          1
+  Resource Version:    38865
+  UID:                 310941aa-eb90-4b73-9ca0-53445e28354f
+Spec:
+  Hostnames:
+    shop.example.com
+  Parent Refs:
+    Group:         gateway.networking.k8s.io
+    Kind:          Gateway
+    Name:          eg
+    Namespace:     infra
+    Section Name:  https
+  Rules:
+    Backend Refs:
+      Group:   
+      Kind:    Service
+      Name:    checkout
+      Port:    80
+      Weight:  1
+    Matches:
+      Path:
+        Type:   PathPrefix
+        Value:  /checkout
+Status:
+  Parents:
+    Conditions:
+      Last Transition Time:  2026-10-10T18:34:40Z
+      Message:               x
+      Observed Generation:   1
+      Reason:                Accepted
+      Status:                True
+      Type:                  Accepted
+      Last Transition Time:  2026-10-10T18:34:40Z
+      Message:               y
+      Observed Generation:   1
+      Reason:                BackendNotFound
+      Status:                False
+      Type:                  ResolvedRefs
+    Controller Name:         lab.klyx.dev/fake
+    Parent Ref:
+      Group:         gateway.networking.k8s.io
+      Kind:          Gateway
+      Name:          eg
+      Namespace:     infra
+      Section Name:  https
+Events:              <none>

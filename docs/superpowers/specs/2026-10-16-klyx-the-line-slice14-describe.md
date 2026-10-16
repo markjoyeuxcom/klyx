@@ -40,7 +40,11 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
 
 **Pre-scan:**
 - **Generic mode:** the top level has `API Version:`, `Kind:` and `Metadata:` at column 0. This is the CRD describer.
-- **The Events line:** the last column-0 `Events:` line. Every describer prints Events last, so only that line opens the Events field. Everything after it belongs to Events.
+- **The Events line,** recognised by its shape, never by its words alone. An event message prints its newlines raw, so a message line can read "Events: …" (review 2). The opener is either:
+  - a column-0 `Events:` followed by the events table's header (titled cells that include Type, Reason and Message) and its dash row;
+  - or `Events:  <none>` as the last line with text.
+
+  Everything after the opener belongs to Events. An Event row starts with its type (`Normal` or `Warning`) and has a reason. Any other line continues the last row's message, so a message line that reads like a header or "Events: …" stays inside that message.
 - **Data regions:** a line underlined by a run of `=` opens an opaque region that runs to the Events line. This is ConfigMap and Secret data (`Data` / `====`), whose content is arbitrary text and is never parsed.
 
 **Line rules,** in order:
@@ -59,18 +63,27 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
      - in built-in mode, the children of `Command` and `Args`: each argument is a text line, even `echo note: value`;
      - a line at the indent of a field's earlier text children: a list of scalars stays text;
      - in generic mode, a line deeper than a scalar field. A map or list prints with no value, so a field with a value never has children;
-     - in generic mode, a column-0 line whose key does not sort after the previous top-level key, unless it is the Events line.
+     - a line indented past the open field's value column: a long annotation prints its value indented under its key;
+     - in generic mode, a column-0 line after the prelude that can't be a top-level key (review 2). The prelude is Name, Namespace, Labels and Annotations, which print on their own before `API Version`. Two cases:
+       - a key already seen: an object's top-level keys are distinct, so a repeat is a value's own line ("Status: …" inside a message);
+       - Metadata, Spec or Status with a value, or API Version or Kind without one.
+
+       Key order proves nothing here, because `smartLabelFor` is not invertible.
 
      Each such line continues the open value (rule 5), or is text (rule 6).
 5. **Multi-line value.** A line that is not a field, while the open field has a value, continues that value.
 6. **Text.** Any other line is a text line in its place: a list item (Command, Mounts, Hostnames) or prose ("(Total limits may be over 100 percent…)").
 
-**Generic mode and list items:**
-- A divider is drawn only where an item boundary is **certain**: a key repeats, or a key sorts before the previous one in kubectl's own order.
-  - The order is `sort.Strings` over the original names.
-  - For a `smartLabelFor` label, the original name is rebuilt: the first word in lower case, then the rest as printed ("Last Transition Time" becomes `lastTransitionTime`, "API Version" becomes `apiVersion`).
-  - A raw key (with dots or digits) compares as printed.
-- Keys that continue in order read as one block, exactly as the text does. The view never shows an item count.
+**Generic mode and list items** (review 2):
+- **Labels can't be turned back into names.** `smartLabelFor` is not invertible: "URL" and "a" print as URL and A, and "Foo" and "foo" both print as Foo. So a boundary is certain only where the schema is known.
+- **Items split only in a known list** (`KNOWN_LISTS`):
+  - Conditions, with the standard condition keys;
+  - Owner References;
+  - Gateway API: Listeners, Supported Kinds, Parent Refs, Parents, Rules, Backend Refs, Matches and Addresses;
+  - Flux: Depends On and Health Checks;
+  - External Secrets: Data.
+- **Each known list records its items' keys,** both the label as printed and the field name kubectl sorted. A block splits only when **every** key in it is one of the list's own. A new item starts where a key repeats, or where a key sorts before the previous one, compared by the recorded names.
+- **Any other list reads as one block,** exactly as the text does. The view never shows an item count.
 - Built-in describers are not sorted, so the rule never applies outside generic mode.
 
 ### 14b. The sheet (`DescribePane` rebuilt)
@@ -186,7 +199,10 @@ So the parser promotes structure only in contexts it recognises, and otherwise k
     - a multi-line Event message;
     - ConfigMap data with a `----` key underline and YAML-shaped content;
     - `[{alpha:1},{beta:2}]` versus `[{alpha:1,beta:2}]`, which both read as one block with no divider;
-    - mixed-case keys;
+    - URL then A, and Foo twice, in an unknown map: no divider;
+    - a known list with a foreign key: no divider;
+    - the prelude, then API Version through Events, with Metadata UID, read from the real reports;
+    - a multi-line Event message holding "Events: …" and a header-looking line;
     - a ragged last column;
     - the three-space pod template;
     - the Gateway and route conditions as two certain items;
