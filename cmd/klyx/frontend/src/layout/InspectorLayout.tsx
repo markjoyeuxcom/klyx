@@ -1,9 +1,12 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { IconChevronDown, IconChevronRight, IconX } from "@tabler/icons-react";
+import { IconArrowsDiagonal, IconArrowsDiagonalMinimize, IconChevronDown, IconChevronRight, IconX } from "@tabler/icons-react";
 import { CopyButton } from "../chrome/CopyButton";
 import { Aspect, type AspectKind } from "../chrome/primitives/Aspect";
 import { INSPECTOR_IDENTITY_ID, publishPin, type InspectorPinValue } from "../nav/inspectorPin";
+import { useInspectorExpand } from "./inspectorExpand";
 import "./layout.css";
+
+const ICON_BTN = { width: 28, padding: 0, justifyContent: "center", background: "transparent", boxShadow: "none", borderTop: 0 } as const;
 
 // InspectorLayout owns the detail panel's anatomy (spec §3): sticky identity,
 // one verdict, an action band (one primary, at most one secondary, More),
@@ -76,6 +79,7 @@ export function InspectorLayout({
   children: ReactNode;
 }) {
   const full: InspectorPinValue = { cluster: pin.cluster, uid: pin.uid, kind, namespace, name };
+  const expand = useInspectorExpand();
   useEffect(() => publishPin({ cluster: pin.cluster, uid: pin.uid, kind, namespace, name }), [pin.cluster, pin.uid, kind, namespace, name]);
   return (
     <InspectorPin.Provider value={full}>
@@ -86,7 +90,15 @@ export function InspectorLayout({
           {meta && <div className="insp-meta" style={{ marginTop: 2 }}>{meta}</div>}
         </div>
         <CopyButton text={name} label={`copy ${kind.toLowerCase()} name`} />
-        <button className="l-btn" style={{ width: 28, padding: 0, justifyContent: "center", background: "transparent", boxShadow: "none", borderTop: 0 }} onClick={onClose} aria-label="close details">
+        {/* expand over the whole workspace, when a layout offers it (slice 16) */}
+        {expand && (
+          <button className="l-btn" style={ICON_BTN} onClick={expand.toggle} data-testid="inspector-expand"
+            aria-label={expand.expanded ? "restore details" : "expand details"}
+            title={expand.expanded ? "Restore beside the list (Esc)" : "Expand to the whole workspace"}>
+            {expand.expanded ? <IconArrowsDiagonalMinimize size={14} stroke={1.6} /> : <IconArrowsDiagonal size={14} stroke={1.6} />}
+          </button>
+        )}
+        <button className="l-btn" style={ICON_BTN} onClick={onClose} aria-label="close details">
           <IconX size={14} stroke={1.6} />
         </button>
       </div>

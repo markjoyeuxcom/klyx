@@ -101,17 +101,21 @@ function DefinitionBody({ def, count, onVersion }: { def: CRDDefinitionDTO; coun
         </div>
       </InspectorBlock>
       <InspectorBlock title="Versions" count={def.versions.length}>
-        <table className="describe-table crd-versions" data-testid="crd-versions">
-          <thead><tr><th>Version</th><th>Served</th><th>Storage</th><th>Deprecated</th></tr></thead>
-          <tbody>
-            {def.versions.map((v) => (
-              <tr key={v.name}>
-                <td>{v.name}</td><td>{v.served ? "yes" : "no"}</td><td>{v.storage ? "yes" : "no"}</td>
-                <td data-wrap="true">{v.deprecated ? (v.deprecationWarning || "yes") : "no"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {/* a well like the printer columns: a long deprecation warning wraps
+            (and only then takes the wrap column's width) or scrolls inside it */}
+        <div className="describe-table-wrap">
+          <table className="describe-table crd-versions" data-testid="crd-versions">
+            <thead><tr><th>Version</th><th>Served</th><th>Storage</th><th>Deprecated</th></tr></thead>
+            <tbody>
+              {def.versions.map((v) => (
+                <tr key={v.name}>
+                  <td>{v.name}</td><td>{v.served ? "yes" : "no"}</td><td>{v.storage ? "yes" : "no"}</td>
+                  <td data-wrap={v.deprecated && v.deprecationWarning ? "true" : undefined}>{v.deprecated ? (v.deprecationWarning || "yes") : "no"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {storedNotServed.map((v) => (
           <div key={v} className="gen-flag crd-stored"><Aspect kind="attention" label="stored but not served" /> Objects may still be stored as {v}, which is no longer served.</div>
         ))}

@@ -319,6 +319,29 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { columns: [...head.querySelectorAll("span")].map((s) => s.textContent).filter(Boolean), row: row.textContent?.slice(0, 80) };
   });
 
+  // The inspector expands over the workspace, and Escape restores it - the
+  // layout's capture listener runs ahead of the list's own Escape, so the
+  // inspector stays open (slice 16).
+  await step(steps, "the inspector expands and restores", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "source.toolkit.fluxcd.io", version: "v1", plural: "gitrepositories", kind: "GitRepository", scope: "Namespaced" });
+    const row = await within(15_000, "a GitRepository row", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /:\/\//.test(r.textContent ?? "")));
+    row.click();
+    (await within(10_000, "the expand button", () => $<HTMLButtonElement>("[data-testid='inspector-expand']"))).click();
+    const lens = await within(2000, "the expanded layout", () => $("[data-testid='lens-layout'][data-expanded]"));
+    const main = lens.querySelector<HTMLElement>(".lens-main");
+    if (main && getComputedStyle(main).display !== "none") throw new Error("the list is still drawn behind the expanded inspector");
+    const wide = sized($("[data-testid='lens-inspector']"), "the expanded inspector").width;
+    const whole = sized(lens, "the lens").width;
+    if (wide < whole - 2) throw new Error(`the expanded inspector is ${Math.round(wide)} of ${Math.round(whole)}`);
+    key(document.body, { key: "Escape" });
+    await within(2000, "restored beside the list", () => !$("[data-testid='lens-layout'][data-expanded]"));
+    if (!$("#inspector-identity")) throw new Error("Escape closed the inspector instead of restoring it");
+    const restored = sized($("[data-testid='lens-inspector']"), "the restored inspector").width;
+    useFleet.getState().closeResource();
+    return { expanded: Math.round(wide), lens: Math.round(whole), restored: Math.round(restored) };
+  });
+
   // ---- the console ----
   await step(steps, "console: search the fleet", async () => {
     await open("pods");

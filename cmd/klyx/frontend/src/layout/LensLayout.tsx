@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { unzoom } from "../app/zoom";
+import { inEditable } from "../chrome/inEditable";
+import { InspectorExpand } from "./inspectorExpand";
 import "./layout.css";
 
 // LensLayout owns the workspace geometry for a list + detail lens: header,
 // controls, an optional notice, the body well, the footer, and the split with
 // the inspector (resizable, persisted, drawer below the breakpoint). Lenses
 // fill slots; they never set outer padding, heights or the inspector width.
-// Spec: docs/superpowers/specs/2026-10-10-klyx-redesign-layout-nav.md §2.
+// Spec: docs/superpowers/specs/2026-10-10-klyx-redesign-layout-nav.md §2,
+// revised by The Line slice 16: the split has no fixed ceiling (the
+// inspector may take everything but the body's minimum), and the inspector
+// can expand over the whole workspace.
 
 export type DatasetState = "loading" | "unreadable" | "empty" | "no-match" | "ready";
 
@@ -18,7 +23,10 @@ export const TABLE_ROW_HEIGHT = 40; // parent §2.3: 40px rows
 export const INSPECTOR_WIDTH_KEY = "klyx.layout.v1.inspectorWidth";
 export const INSPECTOR_DEFAULT = 400;
 export const INSPECTOR_MIN = 360;
-export const INSPECTOR_MAX = 560;
+// The drawer overlays a narrow workspace and keeps the redesign's ceiling.
+export const DRAWER_MAX = 560;
+// A stored request above this is not a width anyone dragged to.
+const REQUEST_CEILING = 4096;
 const BODY_MIN = 600;        // table-detail
 const CANVAS_BODY_MIN = 640; // canvas-detail: a graph needs more room before it yields to the inspector
 const DRAWER_BREAKPOINT = 1040; // workspace inner width
@@ -28,7 +36,7 @@ const KEY_STEP = 16;
 function readRequestedWidth(): number {
   try {
     const n = Number(localStorage.getItem(INSPECTOR_WIDTH_KEY));
-    if (Number.isFinite(n) && n >= INSPECTOR_MIN && n <= INSPECTOR_MAX) return n;
+    if (Number.isFinite(n) && n >= INSPECTOR_MIN && n <= REQUEST_CEILING) return n;
   } catch { /* storage unavailable: default */ }
   return INSPECTOR_DEFAULT;
 }
@@ -37,14 +45,26 @@ function writeRequestedWidth(n: number) {
   try { localStorage.setItem(INSPECTOR_WIDTH_KEY, String(n)); } catch { /* best effort */ }
 }
 
-/** splitGeometry decides split vs drawer and the effective inspector width. */
-export function splitGeometry(innerWidth: number, requested: number, bodyMin = BODY_MIN): { mode: "split" | "drawer"; width: number } {
-  if (innerWidth < DRAWER_BREAKPOINT) {
-    return { mode: "drawer", width: Math.min(INSPECTOR_MAX, Math.max(INSPECTOR_MIN, requested), innerWidth) };
-  }
-  const max = Math.min(INSPECTOR_MAX, innerWidth - bodyMin - SPLIT_GAP);
-  if (max < INSPECTOR_MIN) return { mode: "drawer", width: Math.min(requested, innerWidth) };
-  return { mode: "split", width: Math.max(INSPECTOR_MIN, Math.min(requested, max)) };
+/**
+ * splitGeometry decides split vs drawer, the effective inspector width and
+ * the widest it may be dragged to (max). In the split the body keeps its
+ * minimum and the inspector may take the rest (slice 16); the drawer keeps
+ * DRAWER_MAX. The requested width is stored apart from the effective one,
+ * so a narrower window never destroys the preference.
+ */
+export function splitGeometry(innerWidth: number, requested: number, bodyMin = BODY_MIN): { mode: "split" | "drawer"; width: number; max: number } {
+  const drawer = () => ({ mode: "drawer" as const, width: Math.min(DRAWER_MAX, Math.max(INSPECTOR_MIN, requested), innerWidth), max: Math.min(DRAWER_MAX, innerWidth) });
+  if (innerWidth < DRAWER_BREAKPOINT) return drawer();
+  const max = innerWidth - bodyMin - SPLIT_GAP;
+  if (max < INSPECTOR_MIN) return drawer();
+  return { mode: "split", width: Math.max(INSPECTOR_MIN, Math.min(requested, max)), max };
+}
+
+// A surface above the inspector (a menu, a confirm, the console, Describe,
+// the chat) takes Escape before the expanded inspector does.
+const ABOVE = '[role="dialog"], [role="alertdialog"], [role="menu"], [data-testid="command-palette"]';
+function surfaceAbove(aside: HTMLElement | null): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>(ABOVE)).some((el) => el !== aside && !el.contains(aside ?? null));
 }
 
 export function LensLayout({
@@ -99,11 +119,21 @@ export function LensLayout({
   }, []);
 
   const geo = splitGeometry(innerWidth, requested, variant === "canvas" ? CANVAS_BODY_MIN : BODY_MIN);
-  const commit = useCallback((n: number) => {
-    const v = Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, Math.round(n)));
+  const clamp = (n: number) => Math.max(INSPECTOR_MIN, Math.min(geo.max, Math.round(n)));
+  const commit = (n: number) => {
+    const v = clamp(n);
     setRequested(v);
     writeRequestedWidth(v);
-  }, []);
+  };
+
+  // Expanded: the inspector takes the whole workspace and the list behind it
+  // is hidden, not unmounted. It resets when the inspector closes, so the
+  // next object opens beside the list; Escape restores it first.
+  const open = !!inspector;
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { if (!open) setExpanded(false); }, [open]);
+  const wide = open && expanded;
+  const expandValue = useMemo(() => ({ expanded: wide, toggle: () => setExpanded((v) => !v) }), [wide]);
 
   // pointer resize on the separator (it sits LEFT of the inspector)
   const drag = useRef<{ x: number; w: number } | null>(null);
@@ -114,7 +144,7 @@ export function LensLayout({
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    setRequested(Math.max(INSPECTOR_MIN, Math.min(INSPECTOR_MAX, drag.current.w + unzoom(drag.current.x - e.clientX))));
+    setRequested(clamp(drag.current.w + unzoom(drag.current.x - e.clientX)));
   };
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
@@ -126,7 +156,7 @@ export function LensLayout({
     if (e.key === "ArrowLeft") { e.preventDefault(); commit(geo.width + KEY_STEP); }
     else if (e.key === "ArrowRight") { e.preventDefault(); commit(geo.width - KEY_STEP); }
     else if (e.key === "Home") { e.preventDefault(); commit(INSPECTOR_MIN); }
-    else if (e.key === "End") { e.preventDefault(); commit(INSPECTOR_MAX); }
+    else if (e.key === "End") { e.preventDefault(); commit(geo.max); }
   };
 
   // Drawer = modal dialog: the list behind is inert, focus moves in on open,
@@ -164,6 +194,20 @@ export function LensLayout({
     };
   }, [drawerOpen, onCloseInspector]);
 
+  // Escape restores an expanded inspector before anything else closes it: a
+  // capture listener runs ahead of the lists' and the drawer's, and marks the
+  // key handled. A field being edited, or a surface above, keeps its Escape.
+  useEffect(() => {
+    if (!wide) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || inEditable(e.target) || surfaceAbove(asideRef.current)) return;
+      e.preventDefault();
+      setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [wide]);
+
   const inspectorEl = inspector ? (
     <aside
       ref={asideRef}
@@ -173,15 +217,15 @@ export function LensLayout({
       role={geo.mode === "drawer" ? "dialog" : undefined}
       aria-modal={geo.mode === "drawer" ? true : undefined}
       tabIndex={-1}
-      className={`lens-inspector${geo.mode === "drawer" ? " lens-drawer" : ""}`}
-      style={{ width: geo.width }}
+      className={`lens-inspector${geo.mode === "drawer" ? " lens-drawer" : ""}${wide ? " lens-inspector-wide" : ""}`}
+      style={wide ? undefined : { width: geo.width }}
     >
-      {inspector}
+      <InspectorExpand.Provider value={expandValue}>{inspector}</InspectorExpand.Provider>
     </aside>
   ) : null;
 
   return (
-    <div ref={rootRef} className="lens" data-mode={geo.mode} data-variant={variant} data-part={part} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
+    <div ref={rootRef} className="lens" data-mode={geo.mode} data-variant={variant} data-part={part} data-expanded={wide ? "" : undefined} data-testid="lens-layout" style={{ "--table-row-height": `${TABLE_ROW_HEIGHT}px` } as React.CSSProperties}>
       <section ref={mainRef} aria-label={label} className="lens-main">
         <div className="lens-header">
           <h1 className="t-workspace-title">{title}</h1>
@@ -202,14 +246,15 @@ export function LensLayout({
       </section>
       {inspectorEl && geo.mode === "split" && (
         <>
-          <div
+          {!wide && <div
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize details panel"
             aria-valuenow={geo.width}
             aria-valuemin={INSPECTOR_MIN}
-            aria-valuemax={INSPECTOR_MAX}
+            aria-valuemax={geo.max}
             tabIndex={0}
+            title="Drag to resize · double-click to reset"
             className="lens-separator"
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -218,7 +263,7 @@ export function LensLayout({
             onDoubleClick={() => commit(INSPECTOR_DEFAULT)}
           >
             <span aria-hidden="true" />
-          </div>
+          </div>}
           {inspectorEl}
         </>
       )}

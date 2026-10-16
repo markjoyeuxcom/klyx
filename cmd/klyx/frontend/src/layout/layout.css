@@ -67,15 +67,24 @@
   font: 400 12px/16px var(--font-sans); color: var(--color-text-tertiary); }
 .lens-footer-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
-/* split separator: 8px hit target, visible grip */
+/* split separator: 8px hit target, a grip that is visible at rest, so the
+   panel reads as resizable (slice 16) */
 .lens-separator { width: var(--split-gap); margin-right: calc(-1 * var(--split-gap)); position: relative; z-index: 1; flex-shrink: 0; display: flex; align-items: center; justify-content: center; cursor: col-resize; outline: none; }
-.lens-separator > span { opacity: 0; }
+.lens-separator > span { width: 2px; height: 28px; border-radius: 1px; background: var(--color-border-secondary); opacity: 0.7; }
 .lens-separator:hover > span, .lens-separator:focus-visible > span { opacity: 1; }
-.lens-separator > span { width: 2px; height: 28px; border-radius: 1px; background: var(--color-border-secondary); }
 .lens-separator:hover > span, .lens-separator:focus-visible > span { background: var(--color-text-info); }
 
 .lens-inspector { flex-shrink: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--color-background-primary); border-left: 1px solid var(--color-border-tertiary); }
+
+/* expanded (slice 16): the inspector takes the whole workspace; the list
+   stays mounted behind it, hidden */
+.lens[data-expanded] > .lens-main { display: none; }
+.lens-inspector-wide { flex: 1 1 auto; min-width: 0; border-left: 0; }
+.lens-drawer.lens-inspector-wide { left: 0; }
+/* a readable measure: on a wide monitor the content stops at 1280px, while
+   the identity row (copy, restore, close) keeps the full width */
+.lens-inspector-wide .insp-scroll > * { width: 100%; max-width: 1280px; box-sizing: border-box; }
 
 /* drawer: below the breakpoint the inspector overlays the body */
 .lens-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 30; }
@@ -227,7 +236,7 @@
 
 /* ---- the Fields tree (The Line slice 15b) ------------------------------- */
 .otree { display: flex; flex-direction: column; min-width: 0; }
-.otree-row { display: grid; grid-template-columns: minmax(64px, 34%) minmax(0, 1fr); gap: 0 12px; align-items: baseline; min-height: 24px;
+.otree-row { display: grid; grid-template-columns: minmax(64px, min(34%, 320px)) minmax(0, 1fr); gap: 0 12px; align-items: baseline; min-height: 24px;
   padding: 2px 0 2px calc(var(--depth, 0) * 16px);
   background: repeating-linear-gradient(to right, var(--color-border-tertiary) 0 1px, transparent 1px 16px) no-repeat left top / calc(var(--depth, 0) * 16px) 100%; }
 .otree-key { font: 400 13px/20px var(--font-sans); color: var(--color-text-tertiary); overflow-wrap: anywhere; padding-left: 6px; }
@@ -264,7 +273,8 @@
 .schema-tree { display: flex; flex-direction: column; gap: 0; min-width: 0; }
 .schema-filter { margin-bottom: 8px; flex: none; width: min(320px, 100%); }
 .schema-filter .l-input { width: 100%; }
-.schema-row { cursor: default; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); }
+/* the key column is a share of a narrow panel, never of a wide one (slice 16) */
+.schema-row { cursor: default; grid-template-columns: minmax(96px, min(46%, 420px)) minmax(0, 1fr); }
 .schema-name { font-family: var(--font-mono); color: var(--color-text-primary); }
 .schema-req { margin-left: 2px; color: var(--color-text-warning); }
 .schema-type { font-family: var(--font-sans); color: var(--color-text-secondary); white-space: normal; }
