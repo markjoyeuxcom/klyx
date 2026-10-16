@@ -142,6 +142,12 @@ type InstanceDetail struct {
 	// metadata; "" with FieldsOmitted saying why.
 	FieldsJSON    string
 	FieldsOmitted string
+	// EditEligible is false when the sanitiser changed anything an edit could
+	// write back (coverage S0b): the inspector hides Edit, and the backend
+	// apply refuses whatever the frontend does. DescribeMode is withheld for a
+	// registered payload kind, url-scrubbed for every other kind.
+	EditEligible bool
+	DescribeMode string
 }
 
 // OwnerRef is one recorded owner reference.

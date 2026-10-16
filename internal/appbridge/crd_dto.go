@@ -254,6 +254,11 @@ type InstanceDetailDTO struct {
 	// ("secret", "too large", "unreadable").
 	FieldsJSON    string `json:"fieldsJSON,omitempty"`
 	FieldsOmitted string `json:"fieldsOmitted,omitempty"`
+	// EditEligible is false when Klyx shows this object sanitised (coverage
+	// S0b): Edit is hidden, and the backend apply refuses regardless.
+	// DescribeMode is "withheld" or "url-scrubbed".
+	EditEligible bool   `json:"editEligible"`
+	DescribeMode string `json:"describeMode,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never an object.
 	Error string `json:"error,omitempty"`
 	// NotFound: the read failed because the object does not exist (an

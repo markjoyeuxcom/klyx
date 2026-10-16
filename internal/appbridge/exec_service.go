@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // ExecConn is the per-cluster surface ExecService needs (lookup seam).
@@ -17,6 +20,9 @@ type ExecConn interface {
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	DescribeArgv(kindArg, namespace, name string) ([]string, error)
+	// DescribeKind resolves the resource argument to group and kind through
+	// discovery (coverage S0b §4).
+	DescribeKind(ctx context.Context, kindArg string) (group, kind string, err error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -183,6 +189,14 @@ type DescribeResultDTO struct {
 	Error        string `json:"error"`
 	Command      string `json:"command"`
 	CommandError string `json:"commandError"`
+	// Withheld, when set, is why Describe was not run for this object
+	// (coverage S0b §4): a registered payload kind, or a resource that could
+	// not be classified. No stdout or stderr is returned with it.
+	Withheld string `json:"withheld,omitempty"`
+	// Scrubbed: user info was removed from URLs in the output (or lines
+	// withheld); the text is no longer kubectl's exact output.
+	Scrubbed      bool `json:"scrubbed,omitempty"`
+	LinesWithheld int  `json:"linesWithheld,omitempty"`
 }
 
 // describeTimeout bounds one kubectl describe run. Same 30s budget as the
@@ -204,9 +218,16 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	}
 	ctx, cancel := context.WithTimeout(ctx, describeTimeout)
 	defer cancel()
-	cmd, err := conn.DescribeCmd(ctx, kindArg, namespace, name)
-	if err != nil {
-		return DescribeResultDTO{Error: err.Error()}
+	// Coverage S0b §4: classify before anything runs. A registered payload
+	// kind is withheld whatever its content (a pre-read could race kubectl's
+	// own read); a resource that cannot be classified is withheld too.
+	group, kind, cerr := conn.DescribeKind(ctx, kindArg)
+	withheld := ""
+	switch {
+	case cerr != nil:
+		withheld = "Describe is withheld: Klyx could not tell what kind of object this is (" + cerr.Error() + "), so it cannot rule out templates, patches or values that can carry secrets."
+	case crd.IsPayloadKind(group, kind):
+		withheld = "Describe is withheld for a " + kind + ": kubectl's text would include its templates, patches or values, which can carry secrets. The Manifest view shows a sanitised copy."
 	}
 	var res DescribeResultDTO
 	if argv, err := conn.DescribeArgv(kindArg, namespace, name); err != nil {
@@ -216,6 +237,16 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	} else {
 		res.Command = line
 	}
+	if withheld != "" {
+		// the copy command stays: the user may run kubectl themselves,
+		// knowingly; Klyx does not
+		res.Withheld = withheld
+		return res
+	}
+	cmd, err := conn.DescribeCmd(ctx, kindArg, namespace, name)
+	if err != nil {
+		return DescribeResultDTO{Error: err.Error(), Command: res.Command, CommandError: res.CommandError}
+	}
 	// Stdout and stderr stay separate: describe writes the report to stdout and
 	// real errors to stderr. Combining them would let a deprecation warning
 	// corrupt the report text.
@@ -223,9 +254,15 @@ func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace,
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
-	res.Output = stdout.String()
+	// Coverage S0b §4: both streams pass the URL text policy before anything
+	// is returned; a transformed report is labelled, never called exact.
+	out := urlscrub.Text(stdout.String())
+	errText := urlscrub.Text(stderr.String())
+	res.Output = out.Text
+	res.Scrubbed = out.Changed() || errText.Changed()
+	res.LinesWithheld = out.Withheld + errText.Withheld
 	if runErr != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(errText.Text)
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			msg = fmt.Sprintf("kubectl describe timed out after %s", describeTimeout)

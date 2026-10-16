@@ -135,7 +135,7 @@ func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural
 func (f *fakeConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
 	return observe.Rows{}, false
 }
-func (f *fakeConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
+func (f *fakeConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, expectedUID, yaml string, dryRun bool) error {
 	return nil
 }
 func (f *fakeConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
@@ -171,6 +171,10 @@ func (f *fakeConn) DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, 
 func (f *fakeConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "true"), nil
 }
+func (f *fakeConn) DescribeKind(_ context.Context, kindArg string) (string, string, error) {
+	return "", "Pod", nil
+}
+
 func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil
 }

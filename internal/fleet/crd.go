@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // ListCRDs lists the cluster's CustomResourceDefinitions and parses them. A
@@ -68,8 +69,15 @@ func (c *ClusterConn) ListInstances(ctx context.Context, group, version, plural 
 		return crd.InstancePage{Items: items, Continue: next}, err
 	}
 	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
-	if tbl, ok := c.readTable(ctx, gvr, "", "", limit, continueToken); ok {
-		if page, err := crd.FromTable(tbl, crd.BuiltinGroups[group]); err == nil {
+	payload := crd.IsPayloadResource(group, plural)
+	if tbl, ok := c.readTable(ctx, gvr, "", "", limit, continueToken, payload); ok {
+		if payload {
+			// coverage S0b §3: the server's cells are discarded unread
+			if page, err := crd.LocalPage(tbl, c.payloadColumns(ctx, group, plural, version)); err == nil {
+				return page, nil
+			}
+		} else if page, err := crd.FromTable(tbl, crd.BuiltinGroups[group]); err == nil {
+			crd.ScrubCells(&page)
 			return page, nil
 		}
 	}
@@ -141,7 +149,7 @@ func (c *ClusterConn) listCurated(ctx context.Context, group, version, plural st
 // ApplyResourceYAML applies the YAML currently shown in the generic resource
 // detail. The expected GVR/GVK/name/namespace checks prevent a sidebar detail
 // edit from silently creating or mutating a different object.
-func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yamlDoc string, dryRun bool) error {
+func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, expectedUID, yamlDoc string, dryRun bool) error {
 	if c.dyn == nil {
 		return errors.New("dynamic client unavailable")
 	}
@@ -160,6 +168,39 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 	if kind == "Secret" && strings.Contains(yamlDoc, "<masked>") {
 		return errors.New("masked Secret YAML cannot be applied - reveal or edit secret data outside Klyx")
 	}
+	// Coverage S0b §5: the inspector's apply never creates, never writes a
+	// sanitised copy back, and never races a change. Both documents - the
+	// submitted one and the live one - must be edit-eligible, and the live
+	// resourceVersion rides along as an atomic precondition.
+	if crd.HasPlaceholder(yamlDoc) {
+		return fmt.Errorf("this %s carries values Klyx shows masked or omitted; edit it in Git", kind)
+	}
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
+	resource := c.dyn.Resource(gvr)
+	var live *unstructured.Unstructured
+	if ns != "" {
+		live, err = resource.Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	} else {
+		live, err = resource.Get(ctx, name, metav1.GetOptions{})
+	}
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%s %s no longer exists; Klyx's editor does not create objects", kind, name)
+		}
+		return fmt.Errorf("could not read the live %s before applying: %w", kind, err)
+	}
+	if expectedUID != "" && string(live.GetUID()) != expectedUID {
+		return fmt.Errorf("%s %s was deleted and created again since it was opened; reopen it before editing", kind, name)
+	}
+	for _, doc := range []map[string]interface{}{live.Object, u.Object} {
+		if s := crd.SanitizeEmbedded(group, kind, doc); !s.EditEligible {
+			if crd.IsPayloadKind(group, kind) {
+				return fmt.Errorf("this %s carries templates, patches or values that Klyx shows sanitised; edit it in Git", kind)
+			}
+			return fmt.Errorf("this %s has a URL with credentials, which Klyx shows without them; edit it in Git", kind)
+		}
+	}
+	u.SetResourceVersion(live.GetResourceVersion())
 
 	// Force:false is deliberate. Server-side apply with Force:true would STEAL
 	// field ownership from Flux/Argo on any object they manage, so the change
@@ -171,14 +212,15 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 	if dryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	}
-	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: plural}
-	resource := c.dyn.Resource(gvr)
 	if ns != "" {
 		_, err = resource.Namespace(ns).Apply(ctx, name, u, opts)
 	} else {
 		_, err = resource.Apply(ctx, name, u, opts)
 	}
 	if err != nil {
+		if apierrors.IsConflict(err) && strings.Contains(err.Error(), "has been modified") {
+			return fmt.Errorf("%s %s changed since it was opened; reopen it and try again", kind, name)
+		}
 		if apierrors.IsConflict(err) {
 			// The SSA conflict message already lists the conflicting fields +
 			// managers; prefix it so the cause is unmistakable.
@@ -1225,6 +1267,11 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	if group == "" && version == "v1" && plural == "secrets" {
 		obj, secretKeys = crd.MaskSecretData(obj)
 	}
+	// Coverage S0b: the embedded-payload sanitiser - templates, patches,
+	// inline values and embedded Secrets of the registered kinds, and URL
+	// user info on every kind - runs before any DTO field is made.
+	sz := crd.SanitizeEmbedded(group, u.GetKind(), obj)
+	obj = sz.Object
 	// Every DTO field below is read from the SANITISED object, never from u:
 	// a client-side-applied Secret carries its full base64 data in the
 	// kubectl.kubernetes.io/last-applied-configuration annotation, which
@@ -1262,7 +1309,7 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		Created:        u.GetCreationTimestamp().Time,
 		Labels:         sanitised.GetLabels(),
 		Annotations:    sanitised.GetAnnotations(),
-		Conditions:     crd.ParseConditionsDeep(group, plural, u.Object),
+		Conditions:     crd.ParseConditionsDeep(group, plural, obj),
 		YAML:           y,
 		SecretKeys:     secretKeys,
 		ServiceBacking: serviceBacking,
@@ -1275,7 +1322,22 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	d.Facts = append(d.Facts, c.rbacDanglingFacts(ctx, group, plural, ns, u)...)
 	d.Events = c.instanceEvents(ctx, string(u.GetUID()))
 	// The Line slice 15b: everything below reads the sanitised object.
+	// Coverage S0b §3: a registered payload kind's Summary is evaluated here
+	// over the sanitised object - the server's cells are discarded - and
+	// every other kind's cells pass the URL rule.
+	if crd.IsPayloadResource(group, plural) {
+		summary = nil
+		if cols := c.payloadColumns(ctx, group, plural, version); cols != nil {
+			summary = crd.LocalSummary(cols, obj)
+		}
+	} else {
+		for i := range summary {
+			summary[i].Value = urlscrub.Text(summary[i].Value).Text
+		}
+	}
 	d.Summary = summary
+	d.EditEligible = sz.EditEligible
+	d.DescribeMode = sz.DescribeMode
 	d.ObservedGeneration = crd.ObservedGenerationOf(obj)
 	if ts := sanitised.GetDeletionTimestamp(); ts != nil {
 		d.Deleting = ts.Time
@@ -1293,7 +1355,7 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 // the row. nil when no table is to be had, or the row is not the named
 // object: the caller then reads it plainly.
 func (c *ClusterConn) objectWithSummary(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, []crd.SummaryCell) {
-	tbl, ok := c.readTable(ctx, gvr, ns, name, 0, "")
+	tbl, ok := c.readTable(ctx, gvr, ns, name, 0, "", true)
 	if !ok || len(tbl.Rows) != 1 || len(tbl.Rows[0].Object.Raw) == 0 {
 		return nil, nil
 	}
@@ -1595,7 +1657,8 @@ func (c *ClusterConn) instanceEvents(ctx context.Context, uid string) []crd.Even
 		if last.IsZero() {
 			last = e.EventTime.Time
 		}
-		out = append(out, crd.Event{Type: e.Type, Reason: e.Reason, Message: e.Message, Count: e.Count, Last: last})
+		// coverage S0b §3: a controller can echo a credential-bearing URL
+		out = append(out, crd.Event{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: e.Count, Last: last})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Last.After(out[b].Last) })
 	return out

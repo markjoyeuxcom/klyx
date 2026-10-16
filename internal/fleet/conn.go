@@ -90,7 +90,7 @@ type Conn interface {
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
 	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
-	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
+	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, expectedUID, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []AdhocResult
 	LaunchDiagnosticPod(ctx context.Context, name, image string, ttlSeconds int64) AdhocResult
 	ListAdhocObjects(ctx context.Context) (AdhocInventory, error)
@@ -112,6 +112,7 @@ type Conn interface {
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	DescribeArgv(kindArg, namespace, name string) ([]string, error)
+	DescribeKind(ctx context.Context, kindArg string) (string, string, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
@@ -138,6 +139,11 @@ const defaultResync = 5 * time.Minute
 const defaultConnectTimeout = 30 * time.Second
 
 type ClusterConn struct {
+	// payloadCols caches the registered payload kinds' printer columns
+	// (coverage S0b §3); guarded by payloadColMu.
+	payloadColMu sync.Mutex
+	payloadCols  map[string]payloadColEntry
+
 	name        string
 	kubeContext string // kubeconfig context name for kubectl exec (e.g. drain)
 	// kubeconfigPaths is the EFFECTIVE kubeconfig selection client-go resolved

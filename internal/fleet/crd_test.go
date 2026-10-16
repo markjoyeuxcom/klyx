@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -100,7 +101,7 @@ func TestApplyResourceYAMLDryRun(t *testing.T) {
 	})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\n", true)
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\n", true)
 	if err != nil {
 		t.Fatalf("dry-run apply: %v", err)
 	}
@@ -114,14 +115,16 @@ func TestApplyResourceYAMLSurfacesConflict(t *testing.T) {
 	// surfaced with an actionable message, not forced through - Force:false is the
 	// whole point (no silent drift against Flux/Argo).
 	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"})
+	live := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}, live)
 	dyn.PrependReactor("patch", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "app",
 			errors.New(`Apply failed with 1 conflict: conflict with "kustomize-controller": .data.key`))
 	})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app",
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "",
 		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\ndata:\n  key: v\n", false)
 	if err == nil {
 		t.Fatal("want a conflict error, got nil")
@@ -136,7 +139,7 @@ func TestApplyResourceYAMLRejectsTargetMismatch(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\n", true)
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\n", true)
 	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
 		t.Fatalf("want target mismatch, got %v", err)
 	}
@@ -147,7 +150,7 @@ func TestApplyResourceYAMLRejectsMaskedSecret(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "SecretList"})
 	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 
-	err := c.ApplyResourceYAML(context.Background(), "", "v1", "secrets", "Secret", "Namespaced", "default", "app", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\ndata:\n  password: <masked>\n", true)
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "secrets", "Secret", "Namespaced", "default", "app", "", "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: default\n  name: app\ndata:\n  password: <masked>\n", true)
 	if err == nil || !strings.Contains(err.Error(), "masked Secret") {
 		t.Fatalf("want masked secret rejection, got %v", err)
 	}
@@ -890,5 +893,92 @@ func partialMeta(group, version, kind, ns, name string) *metav1.PartialObjectMet
 	return &metav1.PartialObjectMetadata{
 		TypeMeta:   metav1.TypeMeta{APIVersion: group + "/" + version, Kind: kind},
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+	}
+}
+
+// Coverage S0b §5: the guarded apply, called directly.
+func s0bApplyConn(t *testing.T, live *unstructured.Unstructured, onPatch func()) *ClusterConn {
+	t.Helper()
+	gvr := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+	sch := runtime.NewScheme()
+	objs := []runtime.Object{}
+	if live != nil {
+		objs = append(objs, live)
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(sch, map[schema.GroupVersionResource]string{gvr: "GitRepositoryList"}, objs...)
+	dyn.PrependReactor("patch", "gitrepositories", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if onPatch != nil {
+			onPatch()
+		}
+		return true, live, nil
+	})
+	return NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+}
+
+func gitRepo(url, uid string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository",
+		"metadata": map[string]interface{}{"namespace": "flux-system", "name": "platform", "uid": uid, "resourceVersion": "42"},
+		"spec":     map[string]interface{}{"url": url, "interval": "1m"}}}
+}
+
+const s0bDoc = "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  namespace: flux-system\n  name: platform\nspec:\n  url: %s\n  interval: 5m\n"
+
+func TestApplyResourceYAML_S0bGuard(t *testing.T) {
+	apply := func(c *ClusterConn, uid, doc string) error {
+		return c.ApplyResourceYAML(context.Background(), "source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepository", "Namespaced",
+			"flux-system", "platform", uid, doc, true)
+	}
+	// an interval-only edit of a GitRepository whose live URL carries
+	// credentials is refused, so the credentials survive
+	patched := false
+	c := s0bApplyConn(t, gitRepo("https://bob:PAYLOADmarker4X@github.com/org/repo", "u1"), func() { patched = true })
+	if err := apply(c, "u1", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err == nil || !strings.Contains(err.Error(), "URL with credentials") || patched {
+		t.Fatalf("credential URL edit: %v (patched %v)", err, patched)
+	}
+	// placeholders in the submitted document refuse, whatever the live object
+	c = s0bApplyConn(t, gitRepo("https://github.com/org/repo", "u1"), nil)
+	if err := apply(c, "u1", fmt.Sprintf(s0bDoc, "https://<redacted>/org/repo")); err == nil {
+		t.Fatal("a placeholder must refuse")
+	}
+	// a replaced UID refuses
+	if err := apply(c, "old-uid", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err == nil || !strings.Contains(err.Error(), "created again") {
+		t.Fatalf("replaced UID: %v", err)
+	}
+	// a missing object refuses: the editor never creates
+	c = s0bApplyConn(t, nil, nil)
+	if err := apply(c, "u1", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err == nil || !strings.Contains(err.Error(), "does not create") {
+		t.Fatalf("missing object: %v", err)
+	}
+	// a clean object applies, with the live resourceVersion as a precondition
+	var sent string
+	gvr := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+	live := gitRepo("https://github.com/org/repo", "u1")
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "GitRepositoryList"}, live)
+	dyn.PrependReactor("patch", "gitrepositories", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		sent = string(a.(k8stesting.PatchAction).GetPatch())
+		return true, live, nil
+	})
+	c = NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+	if err := apply(c, "u1", fmt.Sprintf(s0bDoc, "https://github.com/org/repo")); err != nil {
+		t.Fatalf("clean apply: %v", err)
+	}
+	if !strings.Contains(sent, `"resourceVersion":"42"`) {
+		t.Fatalf("the live resourceVersion must ride along: %s", sent)
+	}
+}
+
+func TestApplyResourceYAML_S0bPayloadKind(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "fluxcd.controlplane.io", Version: "v1", Resource: "resourcesets"}
+	live := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]interface{}{"namespace": "team-a", "name": "rs", "uid": "u1", "resourceVersion": "7"},
+		"spec":     map[string]interface{}{"resourcesTemplate": "secret: PAYLOADmarker4X"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ResourceSetList"}, live)
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+	// the live template is gone from the submitted copy (a stale sanitised
+	// baseline without placeholders): still refused, the live object decides
+	doc := "apiVersion: fluxcd.controlplane.io/v1\nkind: ResourceSet\nmetadata:\n  namespace: team-a\n  name: rs\nspec:\n  wait: true\n"
+	err := c.ApplyResourceYAML(context.Background(), "fluxcd.controlplane.io", "v1", "resourcesets", "ResourceSet", "Namespaced", "team-a", "rs", "u1", doc, false)
+	if err == nil || !strings.Contains(err.Error(), "edit it in Git") {
+		t.Fatalf("a payload kind with a live payload: %v", err)
 	}
 }

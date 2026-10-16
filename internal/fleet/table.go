@@ -23,7 +23,7 @@ import (
 // read's answer is the plain read's to give - forbidden, not found, a
 // timeout - with the server's own message, which the table request's
 // decoding loses (it reports "unknown").
-func (c *ClusterConn) readTable(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, limit int64, continueToken string) (*metav1.Table, bool) {
+func (c *ClusterConn) readTable(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, limit int64, continueToken string, wholeObjects bool) (*metav1.Table, bool) {
 	if c.restConfig == nil {
 		return nil, false
 	}
@@ -38,8 +38,11 @@ func (c *ClusterConn) readTable(ctx context.Context, gvr schema.GroupVersionReso
 	if err != nil {
 		return nil, false
 	}
+	// A list of a registered payload kind asks for whole objects too: its
+	// cells are evaluated locally over each sanitised object, never released
+	// from the server's text (coverage S0b §3).
 	include := "Metadata"
-	if name != "" {
+	if name != "" || wholeObjects {
 		include = "Object"
 	}
 	req := rc.Get().Resource(gvr.Resource).SetHeader("Accept", crd.TableAccept).Param("includeObject", include)

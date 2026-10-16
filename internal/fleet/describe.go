@@ -3,6 +3,8 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/restmapper"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,4 +138,41 @@ func (c *ClusterConn) describeArgs(kindArg, namespace, name string) ([]string, e
 		args = append(args, "-n", namespace)
 	}
 	return append(args, "--", name), nil
+}
+
+// DescribeKind resolves a describe's resource argument to its group and
+// kind through discovery, the way kubectl will (a resource, a short name,
+// resource.group or resource.version.group), so an alias cannot slip past
+// the payload classification (coverage S0b §4). An error means it could not
+// be classified, and the caller withholds.
+func (c *ClusterConn) DescribeKind(ctx context.Context, kindArg string) (string, string, error) {
+	if c.typed == nil {
+		return "", "", fmt.Errorf("discovery unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	dc := c.typed.Discovery()
+	grs, err := restmapper.GetAPIGroupResources(dc)
+	if len(grs) == 0 {
+		if err == nil {
+			err = fmt.Errorf("discovery returned no groups")
+		}
+		return "", "", err
+	}
+	m := restmapper.NewShortcutExpander(restmapper.NewDiscoveryRESTMapper(grs), dc, nil)
+	gvr, gr := schema.ParseResourceArg(kindArg)
+	if gvr != nil {
+		if gvk, err := m.KindFor(*gvr); err == nil && !gvk.Empty() {
+			return gvk.Group, gvk.Kind, nil
+		}
+	}
+	gvk, kerr := m.KindFor(gr.WithVersion(""))
+	if kerr != nil || gvk.Empty() {
+		if kerr == nil {
+			kerr = fmt.Errorf("unknown resource %q", kindArg)
+		}
+		return "", "", kerr
+	}
+	return gvk.Group, gvk.Kind, nil
 }

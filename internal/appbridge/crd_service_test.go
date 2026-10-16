@@ -73,7 +73,7 @@ func (f *fakeCRDConn) ListInstances(ctx context.Context, group, version, plural 
 func (f *fakeCRDConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return f.detail, f.detailErr
 }
-func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error {
+func (f *fakeCRDConn) ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, expectedUID, yaml string, dryRun bool) error {
 	f.apply = applyCall{group: group, version: version, plural: plural, kind: kind, scope: scope, ns: ns, name: name, yaml: yaml, dryRun: dryRun}
 	return f.applyErr
 }
@@ -228,7 +228,7 @@ func TestApplyResourceYAMLMapsToConn(t *testing.T) {
 	conn := &fakeCRDConn{}
 	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
 
-	r := svc.ApplyResourceYAML("x", "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "kind: ConfigMap\n", true)
+	r := svc.ApplyResourceYAML("x", "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "", "kind: ConfigMap\n", true)
 
 	if !r.OK || r.Error != "" {
 		t.Fatalf("apply result: %+v", r)

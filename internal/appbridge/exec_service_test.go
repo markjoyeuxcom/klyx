@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -24,6 +25,20 @@ type fakeExecConn struct {
 	describeArgvErr error
 	armErr          error    // CheckPodArmed's answer
 	armChecks       []string // ns/name@uid the arm check was asked about
+	// kindGroup/kindName/kindErr are DescribeKind's answer (coverage S0b);
+	// the default is a core Pod.
+	kindGroup, kindName string
+	kindErr             error
+}
+
+func (f *fakeExecConn) DescribeKind(_ context.Context, kindArg string) (string, string, error) {
+	if f.kindErr != nil {
+		return "", "", f.kindErr
+	}
+	if f.kindName == "" {
+		return "", "Pod", nil
+	}
+	return f.kindGroup, f.kindName, nil
 }
 
 func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
@@ -437,5 +452,57 @@ func TestOpenDebugTerminal_RefusesAReplacedPod(t *testing.T) {
 	}
 	if len(conn.armChecks) != 1 || conn.armChecks[0] != "ns/web-0@uid-old" {
 		t.Fatalf("the armed UID must be checked: %v", conn.armChecks)
+	}
+}
+
+// Coverage S0b §4: Describe's two modes.
+func TestDescribe_WithheldForPayloadKind(t *testing.T) {
+	ran := false
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "fluxcd.controlplane.io", kindName: "ResourceSet",
+		describeCmd: func(ctx context.Context) *exec.Cmd {
+			ran = true
+			return exec.CommandContext(ctx, "echo", "PAYLOADmarker4X")
+		}}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe(context.Background(), "c", "resourcesets.fluxcd.controlplane.io", "team-a", "with-secret")
+	if r.Withheld == "" || r.Output != "" || r.Error != "" || r.OK {
+		t.Fatalf("withheld: %+v", r)
+	}
+	if ran {
+		t.Fatal("kubectl must not run for a withheld kind")
+	}
+	if r.Command == "" {
+		t.Fatal("the copy command stays")
+	}
+}
+
+func TestDescribe_WithheldWhenUnclassified(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindErr: errors.New("forbidden")}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	if r := svc.Describe(context.Background(), "c", "widgets", "ns", "w"); r.Withheld == "" || r.Output != "" {
+		t.Fatalf("an unclassified resource is withheld: %+v", r)
+	}
+}
+
+func TestDescribe_URLScrubbedBothStreams(t *testing.T) {
+	script := `echo "Url: https://bob:PAYLOADmarker4X@github.com/org/repo"; echo "warn https://x:PAYLOADmarker4X@h/x" 1>&2; exit 1`
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "source.toolkit.fluxcd.io", kindName: "GitRepository",
+		describeCmd: func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "sh", "-c", script) }}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.Describe(context.Background(), "c", "gitrepositories.source.toolkit.fluxcd.io", "flux-system", "platform")
+	if strings.Contains(r.Output, "PAYLOADmarker4X") || strings.Contains(r.Error, "PAYLOADmarker4X") {
+		t.Fatalf("a credential crossed: %+v", r)
+	}
+	if !strings.Contains(r.Output, "https://github.com/org/repo") || !r.Scrubbed {
+		t.Fatalf("scrubbed and labelled: %+v", r)
+	}
+}
+
+func TestDescribe_ExactWhenClean(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "kind-klyx",
+		describeCmd: func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: web") }}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	if r := svc.Describe(context.Background(), "c", "pods", "shop", "web"); r.Scrubbed || r.Output != "Name: web\n" || !r.OK {
+		t.Fatalf("a clean report is exact: %+v", r)
 	}
 }

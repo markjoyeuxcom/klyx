@@ -19,7 +19,7 @@ type CRDConn interface {
 	CountResource(ctx context.Context, group, version, plural string) (int, bool, error)
 	ListInstances(ctx context.Context, group, version, plural string, limit int64, continueToken string) (crd.InstancePage, error)
 	GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error)
-	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, yaml string, dryRun bool) error
+	ApplyResourceYAML(ctx context.Context, group, version, plural, kind, scope, ns, name, expectedUID, yaml string, dryRun bool) error
 	CreateResourceYAML(ctx context.Context, yamlDocs string, dryRun bool) []fleet.AdhocResult
 	ListAdhocObjects(ctx context.Context) (fleet.AdhocInventory, error)
 	DeleteAdhocObject(ctx context.Context, group, version, plural, ns, name, uid string) error
@@ -213,6 +213,8 @@ func (s *CRDService) GetInstanceDetail(cluster, group, version, plural, namespac
 		Managers:           managerDTOs(d.Managers),
 		FieldsJSON:         d.FieldsJSON,
 		FieldsOmitted:      d.FieldsOmitted,
+		EditEligible:       d.EditEligible,
+		DescribeMode:       d.DescribeMode,
 	}
 }
 
@@ -251,7 +253,7 @@ func managerDTOs(ms []crd.FieldManager) []FieldManagerDTO {
 // ApplyResourceYAML validates and server-side-applies the YAML for the resource
 // currently open in the generic resource detail. dryRun=true asks the apiserver
 // to validate/admit without persisting.
-func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, scope, namespace, name, yaml string, dryRun bool) ActionResultDTO {
+func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, scope, namespace, name, expectedUID, yaml string, dryRun bool) ActionResultDTO {
 	// Dry-run mutates nothing; only a real apply consumes the protection grant.
 	if !dryRun {
 		if err := checkProtected(cluster); err != nil {
@@ -264,7 +266,7 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
-	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, yaml, dryRun); err != nil {
+	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, expectedUID, yaml, dryRun); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

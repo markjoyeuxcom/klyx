@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -98,4 +99,47 @@ func hasVerb(verbs []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// payloadColTTL bounds how long a registered payload kind's printer columns
+// are reused. They choose presentation only (coverage S0b §3): a stale
+// definition can at worst show a wrong value over sanitised data.
+const payloadColTTL = time.Minute
+
+type payloadColEntry struct {
+	cols []crd.Column
+	at   time.Time
+}
+
+// payloadColumns returns a registered payload kind's printer columns for the
+// served version, from its CRD, cached briefly. nil when the definition
+// cannot be read: the list then carries no custom cells.
+func (c *ClusterConn) payloadColumns(ctx context.Context, group, plural, version string) []crd.Column {
+	key := group + "/" + plural + "/" + version
+	c.payloadColMu.Lock()
+	if e, ok := c.payloadCols[key]; ok && time.Since(e.at) < payloadColTTL {
+		c.payloadColMu.Unlock()
+		return e.cols
+	}
+	c.payloadColMu.Unlock()
+	def, err := c.GetCRDDefinition(ctx, plural+"."+group, version)
+	if err != nil {
+		return nil
+	}
+	var cols []crd.Column
+	for _, v := range def.Versions {
+		if v.Name == version {
+			cols = crd.LocalColumns(v.Columns)
+		}
+	}
+	if cols == nil {
+		cols = []crd.Column{}
+	}
+	c.payloadColMu.Lock()
+	if c.payloadCols == nil {
+		c.payloadCols = map[string]payloadColEntry{}
+	}
+	c.payloadCols[key] = payloadColEntry{cols: cols, at: time.Now()}
+	c.payloadColMu.Unlock()
+	return cols
 }
