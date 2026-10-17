@@ -79,17 +79,26 @@ Read from source-controller v1.9.6, source-watcher v2.2.4, notification-controll
     - Ready False, from a third-party producer that writes it, is a fault;
     - an artifact present is healthy;
     - no artifact is a fault: "no artifact yet: its consumers cannot apply".
-  - **Its producer is its headline** when `spec.sourceRef` or the generator label names one, as a separate block (S1b's rule: the selected object's own verdict first). A failing generator reads "the producer is failing; this artifact is its last good one (<age>)".
+  - **Its producer is a separate block** after its own verdict (S1b's rule: the selected object's own verdict first). A failing generator reads "the producer is failing; this artifact is its last good one (<age>)".
+  - **Who the producer is (revision 1).** There are two pieces of evidence: the label `source.extensions.fluxcd.io/generator=<UID>` (an identity), and `spec.sourceRef` (a name, of any kind).
+    - **`sourceRef`'s kind is read as declared.** Only `source.extensions.fluxcd.io` `ArtifactGenerator` is resolved as a generator. Any other kind is shown as declared ("produced by <kind> <ns>/<name>; Klyx does not read that kind's health"), never matched to a same-named generator. Its namespace defaults to the artifact's.
+    - **Both present:** the generator found by name must carry the labelled UID. A mismatch reads "replaced: the generator that produced this artifact no longer exists; <ns>/<name> is a different object", with no health attributed.
+    - **The label alone:** a UID lookup among the watched generators (the part's rows are keyed by UID). None found reads "producer gone".
+    - **A generator `sourceRef` alone:** resolved by name, labelled "named by the artifact; its identity is not recorded".
+    - **Capped or unreadable generator evidence** reads "incomplete" or "not readable", never a health.
   - The inspector shows the revision, the digest, the origin revision from metadata (labelled "origin revision, as the producer recorded it"), the artifact's age, and the consumers.
 - **The dependency graph** (`internal/gitops/depgraph`) gains three edges:
   - Kustomization → ExternalArtifact, by `sourceRef`;
   - HelmRelease → ExternalArtifact, by `chartRef`;
-  - ExternalArtifact → ArtifactGenerator, by `spec.sourceRef` or the generator label, and then ArtifactGenerator → each of its sources.
+  - ExternalArtifact → ArtifactGenerator, under the identity rules above. A replaced, ambiguous or unverified producer is drawn as such, never as a verified edge. Then ArtifactGenerator → each of its sources.
 
   A generator's chain to another ExternalArtifact is followed with the graph's existing cycle and depth bounds.
 - **The bound-source panel** of a Kustomization or HelmRelease bound to an ExternalArtifact shows the artifact, then its producer's verdict as its own line.
   - A Kustomization failing `AccessDenied` with the feature-gate message names the cause: "kustomize-controller runs without its ExternalArtifact feature gate".
-- **The Line:** a Kustomization bound to an ExternalArtifact has its last applied revision as an artifact value (`AppliedArtifact`, the full revision string, compared exactly as OCI and Bucket revisions are). `TestAppliedValue`'s "unsupported source" case becomes this case. The origin revision is shown beside it as a hint, never compared.
+- **The Line (revision 1, scope stated):**
+  - **Applied history only.** A Kustomization bound to an ExternalArtifact records its last applied revision as an artifact value (`AppliedArtifact`, the full revision string) in the applied-history records (`appbridge/applied_history.go`), as OCI and Bucket revisions are. `TestAppliedValue`'s "unsupported source" case becomes this case.
+  - **The fleet board is unchanged:** its units already exclude artifact sources (OCI, Bucket) with their own source-identity contract, and ExternalArtifact joins that exclusion with the same "artifact source" reason. A board comparison for artifact sources is a separate scope.
+  - The origin revision is shown as a hint, never compared.
 
 **Notification facts, in the Flux lens:**
 - **A Notifications view,** beside Sources and Operator, listing Providers, Alerts and Receivers.
@@ -159,8 +168,12 @@ Read from source-controller v1.9.6, source-watcher v2.2.4, notification-controll
   - there is no suspension and no generation lag (no `observedGeneration`).
 - **Receiver:**
   - `spec.suspend` is Suspended;
-  - otherwise the shared Flux rule with Stage 0: `TokenNotFound` is a fault ("its Secret has no token: webhooks are refused"), and Stalled is a fault that will not retry;
-  - Ready True is labelled "Ready: token found, spec valid".
+  - otherwise the shared Flux rule with Stage 0:
+    - `TokenNotFound` is a fault, with Klyx's own fixed wording: "token unavailable: its Secret could not be read or has no token; webhooks are refused". The reason covers a missing key and a failed Secret read alike (`receiver_controller.go` 381-390), so the cause is never claimed beyond that;
+    - Stalled is a fault that will not retry;
+  - **Ready True is worded by type (revision 1):**
+    - for a Receiver with a `secretRef`: "Ready: configuration accepted, token read";
+    - for `generic-oidc` without one: "Ready: configuration accepted (OIDC, no token Secret)". `generic-oidc` needs no Secret (359-365).
 - **Providers and Alerts:** no verdict, no count, no notification. A suspended Provider or Alert is shown as such.
 
 ## 5. Verbs (roadmap C4)
@@ -181,28 +194,51 @@ Read from source-controller v1.9.6, source-watcher v2.2.4, notification-controll
 - `Receiver` `status.webhookPath`: opaque. The path is the bearer credential: a `generic` Receiver authenticates nothing but the path (`receiver_handlers.go` 262-263).
 - `Provider` `spec.address` and `spec.proxy`: opaque. For Slack, Teams, Discord, Rocket, Webex, Lark and generic forwarders the address is the credential, its secret in the path. `spec.proxy` can carry `user:password@`.
 - `ExternalArtifact` `status.artifact.metadata`: free-form, with only `org.opencontainers.image.revision` shown. Producer metadata is arbitrary text.
+- `ExternalArtifact` `status.artifact.url`: opaque, shown only as its scheme and host (revision 1). A producer may publish a signed URL with a bearer token in its path or query; source-watcher's own is in-cluster.
 
 S0b's machinery then applies to them on every path: the generic detail, Describe (withheld while a value is present), the editor guard, diffs, chat and AI.
 
 **Messages fail closed, as S1b §6's rule does:**
-- **Receiver condition and event messages.** The Ready message names the webhook path. The allowlist is `Receiver initialized for path: <withheld>` (the path replaced), the `TokenNotFound` reason with its fixed message, and the Stalled reasons. Anything else is withheld, keeping the reason.
+- **Receiver condition and event messages.** The Ready message names the webhook path. The allowlist is `Receiver initialized for path: <withheld>` (the path replaced). `TokenNotFound` shows Klyx's fixed wording (§4), never the upstream text, which is not one fixed string. The Stalled reasons are kept. Anything else is withheld, keeping the reason.
 - **Alert and Provider event messages.** Notifier errors print the webhook URL, unmasked (`slack.go` 72, `teams.go` 127, `forwarder.go` 49 and others). The asynchronous path masks only the Secret's `token`. retryablehttp's "giving up" message redacts only a user-info password, so path and query tokens survive. Non-2xx response bodies are echoed verbatim.
   - These messages are **withheld whole on every path,** keeping the reason (`NotificationDispatchFailed`, and so on), the involved object and the time.
   - `InvalidConfig` messages name regular expressions and label selectors, which are configuration. They pass the URL rule.
-- **ArtifactGenerator messages** carry fetch and build errors: in-cluster artifact URLs, paths from Git content, pathPattern captures. They pass the URL rule and are clipped, and are not withheld. They hold no credentials by construction.
+- **Fetch errors reduce every URL to its origin (revision 1).** An ExternalArtifact's URL is copied into its consumers' fetches, and the fetcher prints the full URL in its errors (`http/fetch/archive_fetcher.go` 190-194).
+  - **Where the error lands:**
+    - source-watcher writes it into an ArtifactGenerator's `SourceFetchFailed` condition and events;
+    - kustomize-controller writes it into a consuming Kustomization's `ArtifactFailed` condition and events (`kustomization_controller.go` 371-373).
+  - **A new urlscrub mode,** `Origins`, replaces every URL in a text with its scheme and host, keeping no path or query. A candidate it cannot delimit withholds its line, as the URL rule does.
+  - **It applies to every condition and event message of:**
+    - an ArtifactGenerator;
+    - any Kustomization or HelmRelease whose source or chart reference is an ExternalArtifact.
 
-**AI facts:** kinds, verdicts, reasons, names, revisions and digests, types and channels. Never addresses, webhook paths, producer metadata, or Alert or Provider event messages.
+    It runs on every path that carries such text: detail, events lens, chat, AI and health reasons.
+  - **The resume fingerprint** (S1a §4) is computed from the raw condition before this reduction, as it is before display clipping.
+  - Build errors, paths from Git content and pathPattern captures keep their text under this rule.
+
+**Describe (revision 1).** kubectl describe appends the object's events, and S0b's version bracket fences the object, not its events. A payload-free Alert can therefore still print a webhook token from a `NotificationDispatchFailed` event. The policy is by kind, and holds whatever the object's current fields:
+- **Run with `--show-events=false`** for every message-sensitive kind: Alert, Provider, Receiver, ArtifactGenerator, ExternalArtifact, S1b's ImageUpdateAutomation, and a Kustomization or HelmRelease bound to an ExternalArtifact. Their events are read through Klyx's own events surface, under the message rules above. The sheet says "events are shown in the inspector, under Klyx's message rules".
+- **The rest of the report:**
+  - a payload still present withholds it, through S0b's bracket;
+  - for an ExternalArtifact consumer, the report's text passes `Origins` (condition messages can carry the fetched URL), labelled as transformed.
+- **Classification is read inside the bracket's snapshot:** the kind, and for a Kustomization or HelmRelease its reference kind. A consumer whose reference changes between the two reads is withheld.
+
+**AI facts:** kinds, verdicts, reasons, names, revisions and digests, types and channels. Never addresses, webhook paths, artifact URL paths, producer metadata, or Alert or Provider event messages.
 
 **The fix for existing exposure lands first,** as Stage 0 of this slice with its own needle tests across the generic detail, Describe, the events lens, chat and AI:
 - the three registry entries;
-- the Receiver and Alert/Provider message rules.
+- the Receiver and Alert/Provider message rules;
+- the `Origins` rule for fetch errors, and the Describe policy above.
 
 ## 7. Tests, lab and smoke
 
 - **Stage 0 (§6):**
   - needles in a Receiver's `webhookPath` and Ready message, in a Provider's `address` (a Slack-style path token) and `proxy` (user info), and in an Alert's `NotificationDispatchFailed` message (a URL with a path token, and a response body);
   - each absent from the serialised generic detail, Describe, the events lens, the chat tools and AI evidence;
-  - the allowlisted Receiver message keeps its fixed text with the path replaced.
+  - the allowlisted Receiver message keeps its fixed text with the path replaced;
+  - signed-path and signed-query needles in an ExternalArtifact's URL, absent from the generator's `SourceFetchFailed` message, a consuming Kustomization's `ArtifactFailed` message, their events, Describe, chat and AI;
+  - Describe of an otherwise empty Alert whose only credential is in a `NotificationDispatchFailed` event, and of a payload-free object with an older sensitive event: no token in either report;
+  - Receivers: `generic-oidc` without a Secret (Ready wording), a forbidden Secret read and a missing token key (both "token unavailable").
 - **Unit:**
   - **parsing and rules** for each kind;
   - **resume:**
@@ -213,9 +249,16 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
     - the three new edges;
     - a chained generator (ExternalArtifact → generator → ExternalArtifact);
     - a cycle bounded;
-    - a generator label without `sourceRef`;
+    - **producer identity:**
+      - a generator label without `sourceRef`;
+      - both fields agreeing;
+      - a generator deleted and recreated under the same name (the label's UID absent, so "replaced");
+      - a third-party `sourceRef` kind (never a generator);
+      - a `sourceRef` without a namespace;
+      - capped generator evidence (incomplete);
   - **The Line:**
-    - a Kustomization bound to an ExternalArtifact giving an `AppliedArtifact`;
+    - a Kustomization bound to an ExternalArtifact giving an `AppliedArtifact` in the applied history;
+    - the board's unit excluded as an artifact source;
     - the origin revision never compared;
   - **the bound-source panel,** with the feature-gate `AccessDenied` named;
   - **the Notifications view:**
@@ -249,3 +292,14 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
 - **Whether webhooks arrive at a Receiver.** Nothing records it.
 - **helm-controller's handling of ExternalArtifact chart references,** beyond showing the reference. Its source was not read for this note, and the HelmRelease rule is unchanged.
 - **Evaluating Alert event-source selectors** against live objects.
+
+## 9. Revision 1: Codex's design review of f630ac7
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | An ExternalArtifact's URL can be signed, and fetch errors print it in full into generator and consumer messages | §6: the URL is registered (scheme and host only); a new `Origins` rule reduces every URL in generator and ExternalArtifact-consumer messages, on every path; the fingerprint is computed from raw; §7 adds signed-path and signed-query needles, including a consuming Kustomization |
+| 2 | kubectl describe prints events, which the version bracket does not fence | §6: message-sensitive kinds are described with `--show-events=false`, by kind and whatever the object holds; consumers' reports pass `Origins`; classification read inside the bracket; §7 tests the event-only Alert and an older sensitive event |
+| 3 | The producer join lacked identity and type rules | §2: `sourceRef`'s kind read as declared; label UID and name must agree; replaced, gone, unverified and incomplete results; the graph draws the same; §7 names each case |
+| 4 | Receiver Ready and `TokenNotFound` were overstated | §4: type-qualified Ready wording; "token unavailable" in Klyx's fixed words; §6 drops the upstream text; §7 tests `generic-oidc`, a forbidden read and a missing key |
+| P3 | The Line's scope | §2: the applied history only; the board keeps excluding artifact sources, ExternalArtifact among them |
+
