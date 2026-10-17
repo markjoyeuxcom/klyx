@@ -417,3 +417,21 @@ Codex asked for changes on three findings. Each is fixed as below, with the desi
 **3. `InvalidConfig` was not proven safe.** notification-controller v1.9.4 quotes the expression that failed to compile (event_handlers.go:212, :232), and that expression can be a webhook URL. The exception is removed. Alert and Provider messages are withheld whole under every reason, as §6 already said; the reason is kept.
 
 Tests: `urlscrub.TestOriginsMalformedURLs`; `crd.TestFetchFailures`, with Codex's two `http.NewRequest` shapes; `crd.TestEventObjects`; `fleet.TestEventDetailUsesSubjectRule` and `fleet.TestApplyRefusesASanitisedEvent`, for both APIs; and `appbridge.TestDescribe_EventObjects`.
+
+## 14. Stage 0 review 2: Codex at 64dba4e
+
+Codex accepted the fetch and `InvalidConfig` changes and asked for two more on Events.
+
+**1. The typed event readers kept the old rule.** `workloads.SummarizeEvents` (the events lens, the Flux drift surface, the Warning-events snapshot, chat and AI), the inspector's `instanceEvents` and the Karpenter lens applied only `involvedObject`'s rule. So an Event about a Pod with a related Provider kept its text in those rows, while the generic sanitiser withheld it.
+- There is now one classifier, `crd.EventMessage(reason, msg, subjects)`, and every adapter passes the references that are present.
+- The typed adapter, `workloads.EventMessage`, passes `involvedObject`, and `related` when set. The generic sanitiser passes whichever of `involvedObject`, `regarding` and `related` the object carries.
+- The events watch only signals that the list changed and carries no text, so it needs nothing.
+
+**2. A present subject without a usable kind passed.**
+- A reference that is present without a non-empty string kind is now an unreadable subject. So is an Event with neither primary reference.
+- Either one withholds the text (`EventWithheld`), blocks the editor and holds Describe.
+- An absent or null `related` stays harmless.
+
+**Found while fixing:** the gated load test (`KLYX_LOAD=1`, health 1c §7) serves every group. It had not registered the kinds S1a and S1b watch, so it could not run since S1a. Every coverage kind is now registered.
+
+Tests: `crd.TestEventObjects` covers no kind, an empty kind, an empty related kind, no subject, a null related, and the classifier table. `workloads.TestSummarizeEventsSharesTheEventClassifier`, `appbridge.TestListEventsRelatedSubjectRule` (the serialised bridge result) and `fleet.TestEventDetailUsesSubjectRule` (now with the inspector's typed events) cover the readers.

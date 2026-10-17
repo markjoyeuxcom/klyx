@@ -31,18 +31,17 @@ type EventSummary struct {
 // set, else lastTimestamp/count, else eventTime; never invent a timestamp - 0
 // means unknown).
 //
-// A message of a kind with a message rule passes it here, at the one place
-// every event row is made (coverage S1b §6): the events lens, the
-// inspectors, chat and AI all read these rows.
+// A message passes EventMessage here, at the one place every event row is
+// made (coverage S1b §6): the events lens, the inspectors, chat and AI all
+// read these rows.
 func SummarizeEvents(events []corev1.Event) []EventSummary {
 	out := make([]EventSummary, 0, len(events))
 	for i := range events {
 		e := &events[i]
-		msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Reason, e.Message)
 		out = append(out, EventSummary{
 			Type:          e.Type,
 			Reason:        e.Reason,
-			Message:       msg,
+			Message:       EventMessage(e),
 			Count:         eventCount(e),
 			Namespace:     e.Namespace,
 			Kind:          e.InvolvedObject.Kind,
@@ -80,6 +79,18 @@ func typeOrder(t string) int {
 
 // eventCount returns the best-effort count for an event.
 // Prefer series.count (newer API) when set, else e.Count when >0, else 1.
+// EventMessage is a typed Event's text under crd.EventMessage: its
+// involvedObject's rule, and its related object's when set (Codex's Stage 0
+// review 2: every event reader shares the one classifier).
+func EventMessage(e *corev1.Event) string {
+	subjects := []crd.EventSubject{{Kind: e.InvolvedObject.Kind}}
+	if e.Related != nil {
+		subjects = append(subjects, crd.EventSubject{Kind: e.Related.Kind})
+	}
+	msg, _ := crd.EventMessage(e.Reason, e.Message, subjects)
+	return msg
+}
+
 func eventCount(e *corev1.Event) int32 {
 	if e.Series != nil && e.Series.Count > 0 {
 		return e.Series.Count

@@ -465,6 +465,18 @@ func init() {
 	add("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClassList")
 	add("gateway.networking.k8s.io", "v1", "gateways", "GatewayList")
 	add("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRouteList")
+	// coverage S1a-S1c: every group is served here, so every watched kind
+	// is registered
+	add("fluxcd.controlplane.io", "v1", "fluxinstances", "FluxInstanceList")
+	add("fluxcd.controlplane.io", "v1", "fluxreports", "FluxReportList")
+	add("fluxcd.controlplane.io", "v1", "resourcesets", "ResourceSetList")
+	add("fluxcd.controlplane.io", "v1", "resourcesetinputproviders", "ResourceSetInputProviderList")
+	add("image.toolkit.fluxcd.io", "v1", "imagerepositories", "ImageRepositoryList")
+	add("image.toolkit.fluxcd.io", "v1", "imagepolicies", "ImagePolicyList")
+	add("image.toolkit.fluxcd.io", "v1", "imageupdateautomations", "ImageUpdateAutomationList")
+	add("source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", "ArtifactGeneratorList")
+	add("source.toolkit.fluxcd.io", "v1", "externalartifacts", "ExternalArtifactList")
+	add("notification.toolkit.fluxcd.io", "v1", "receivers", "ReceiverList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {

@@ -52,3 +52,26 @@ func TestSummarizeEventsNotificationAndOrigins(t *testing.T) {
 		}
 	}
 }
+
+// Codex's Stage 0 review 2, finding 1: a typed Event row shares the generic
+// Event classifier - its related object's rule applies, and a subject with
+// no kind withholds the text.
+func TestSummarizeEventsSharesTheEventClassifier(t *testing.T) {
+	const needle = "EVENTneedle2R"
+	evs := []corev1.Event{
+		{Reason: "NotificationDispatchFailed", Message: "failed to send to https://hooks.example/T/" + needle,
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p"}, Related: &corev1.ObjectReference{Kind: "Provider", Name: "slack"}},
+		{Reason: "Succeeded", Message: "Receiver initialized for path: /hook/" + needle, InvolvedObject: corev1.ObjectReference{Name: "gh"}},
+		{Reason: "Succeeded", Message: "Receiver initialized for path: /hook/" + needle,
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod"}, Related: &corev1.ObjectReference{Name: "gh"}},
+		{Reason: "Pulled", Message: "Successfully pulled image", InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p"}},
+	}
+	for _, e := range SummarizeEvents(evs) {
+		if strings.Contains(e.Message, needle) {
+			t.Fatalf("%s: %q", e.Reason, e.Message)
+		}
+		if e.Reason == "Pulled" && e.Message != "Successfully pulled image" {
+			t.Fatalf("a pod event without a related object is unchanged: %q", e.Message)
+		}
+	}
+}

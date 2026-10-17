@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,13 +39,18 @@ func TestEventDetailUsesSubjectRule(t *testing.T) {
 			"type":     "Normal"}}
 		gvr := schema.GroupVersionResource{Group: c.group, Version: "v1", Resource: "events"}
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "EventList"}, obj)
-		conn := NewClusterConn("c", typedfake.NewSimpleClientset(), nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+		// the inspector's typed events of the same object share the
+		// classifier (Codex's Stage 0 review 2): a related Provider's rule
+		typed := typedfake.NewSimpleClientset(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "p.1", Namespace: "flux-system"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p", UID: "e-1"}, Related: &corev1.ObjectReference{Kind: "Provider", Name: "slack"},
+			Reason: "NotificationDispatchFailed", Message: "failed to send to https://hooks.example/T/" + n})
+		conn := NewClusterConn("c", typed, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
 		d, err := conn.GetInstanceDetail(context.Background(), c.group, "v1", "events", "flux-system", "gh.1")
 		if err != nil {
 			t.Fatal(err)
 		}
 		b, _ := json.Marshal(d)
-		if strings.Contains(string(b), n) || d.EditEligible || d.DescribeMode != crd.DescribeWithheld {
+		if strings.Contains(string(b), n) || d.EditEligible || d.DescribeMode != crd.DescribeWithheld || len(d.Events) != 1 {
 			t.Fatalf("%s: %s", c.group, b)
 		}
 		var text string

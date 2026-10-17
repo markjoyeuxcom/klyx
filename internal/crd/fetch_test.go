@@ -115,14 +115,41 @@ func TestEventObjects(t *testing.T) {
 			t.Fatalf("%s cells: %s", c.group, cells)
 		}
 	}
-	// a related object's rule applies too; a subject that cannot be read
-	// withholds the text
-	related := map[string]any{"kind": "Event", "involvedObject": map[string]any{"kind": "Pod", "name": "p"},
-		"related": map[string]any{"kind": "Provider", "name": "slack"}, "message": "posted to https://hooks.example/T/" + n}
-	unreadable := map[string]any{"kind": "Event", "involvedObject": map[string]any{"kind": int64(3)}, "message": n}
-	for _, ev := range []map[string]any{related, unreadable} {
-		if s := SanitizeEmbedded("", "Event", ev); strings.Contains(fmt.Sprint(s.Object), n) || s.EditEligible {
-			t.Fatalf("withheld: %+v", s)
+	// a related object's rule applies too; a present subject without a
+	// usable kind, or no subject, withholds the text (Codex's Stage 0
+	// review 2, finding 2)
+	recv := "Receiver initialized for path: /hook/" + n
+	for name, ev := range map[string]map[string]any{
+		"related": {"kind": "Event", "involvedObject": map[string]any{"kind": "Pod", "name": "p"},
+			"related": map[string]any{"kind": "Provider", "name": "slack"}, "message": "posted to https://hooks.example/T/" + n},
+		"a kind of another type": {"kind": "Event", "involvedObject": map[string]any{"kind": int64(3)}, "message": recv},
+		"no kind":                {"kind": "Event", "involvedObject": map[string]any{"name": "gh"}, "message": recv},
+		"an empty kind":          {"kind": "Event", "involvedObject": map[string]any{"kind": "", "name": "gh"}, "message": recv},
+		"an empty related kind":  {"kind": "Event", "involvedObject": map[string]any{"kind": "Pod"}, "related": map[string]any{"name": "x"}, "message": recv},
+		"no subject":             {"kind": "Event", "message": recv},
+		"note, no subject":       {"kind": "Event", "related": map[string]any{"kind": "Pod"}, "note": recv},
+	} {
+		if s := SanitizeEmbedded("", "Event", ev); strings.Contains(fmt.Sprint(s.Object), n) || s.EditEligible || s.Hold() != HoldMessages {
+			t.Fatalf("%s: withheld: %+v", name, s)
+		}
+	}
+	// an absent or null related reference is harmless
+	nullRelated := map[string]any{"kind": "Event", "involvedObject": map[string]any{"kind": "Pod", "name": "p"}, "related": nil, "message": "Pulled"}
+	if s := SanitizeEmbedded("", "Event", nullRelated); s.Hold() != "" || !s.EditEligible {
+		t.Fatalf("a null related reference: %+v", s)
+	}
+	for _, c := range []struct {
+		subjects []EventSubject
+		want     string
+	}{
+		{nil, EventWithheld},
+		{[]EventSubject{{}}, EventWithheld},
+		{[]EventSubject{{Kind: "Pod"}, {}}, EventWithheld},
+		{[]EventSubject{{Kind: "Pod"}, {Kind: "Provider"}}, NotificationWithheld},
+		{[]EventSubject{{Kind: "Pod"}}, recv},
+	} {
+		if out, _ := EventMessage("Succeeded", recv, c.subjects); out != c.want {
+			t.Errorf("%+v: got %q, want %q", c.subjects, out, c.want)
 		}
 	}
 	// an Event about another kind is untouched and editable

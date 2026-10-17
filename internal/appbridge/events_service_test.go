@@ -2,7 +2,11 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -139,5 +143,19 @@ func TestEventsService_Error_ReturnsEmpties(t *testing.T) {
 	// Review 2026-10-03 #10: a failed read must say so, never pass as "no events".
 	if dto.Error == "" {
 		t.Error("a failed list must carry Error - empty must not read as quiet")
+	}
+}
+
+// Codex's Stage 0 review 2, finding 1: the serialised Events bridge result
+// carries a related object's text under that object's rule.
+func TestListEventsRelatedSubjectRule(t *testing.T) {
+	const needle = "EVENTneedle2B"
+	ev := corev1.Event{InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p"}, Related: &corev1.ObjectReference{Kind: "Provider", Name: "slack"},
+		Reason: "NotificationDispatchFailed", Message: "failed to send to https://hooks.example/T/" + needle}
+	conn := &fakeEventsConn{events: workloads.SummarizeEvents([]corev1.Event{ev})}
+	svc := NewEventsService(func(string) (EventsConn, bool) { return conn, true }, nil)
+	b, _ := json.Marshal(svc.ListEvents("c", ""))
+	if strings.Contains(string(b), needle) {
+		t.Fatalf("a related subject's text crossed the bridge: %s", b)
 	}
 }

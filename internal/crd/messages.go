@@ -390,54 +390,79 @@ func MessageBracketed(group, kind string) bool {
 	return MessageSensitive(kind) || IsEventKind(group, kind)
 }
 
-// eventMessages applies the message rule of the object an Event is about to
-// the Event's own text (Codex's Stage 0 review, finding 1): core/v1 calls
-// its subject involvedObject and its text message, events.k8s.io/v1
-// regarding and note, and either API serves every Event. Both texts pass
-// the rule of every subject the Event names, related included. A subject
-// that cannot be read withholds the text. The text is a writable top-level
-// field, so a change blocks a round-trip edit as well as Describe.
-func (s *sanitizer) eventMessages(o map[string]any, at string) {
-	var kinds []string
-	known := true
-	for _, f := range []string{"involvedObject", "regarding", "related"} {
-		switch ref := o[f].(type) {
-		case nil:
-		case map[string]any:
-			switch k := ref["kind"].(type) {
-			case nil:
-			case string:
-				kinds = append(kinds, k)
-			default:
-				known = false
-			}
-		default:
-			if !empty(ref) {
-				known = false
-			}
+// EventWithheld replaces an Event's text when Klyx cannot tell which object
+// it is about.
+const EventWithheld = "the event's message is withheld: Klyx cannot tell which object it is about, so cannot apply that object's message rules"
+
+// EventSubject is a reference an Event carries, by its kind: "" when the
+// reference is present without a usable kind.
+type EventSubject struct{ Kind string }
+
+// EventMessage is an Event's text under the rules of the objects it names
+// (Codex's Stage 0 reviews 1 and 2). Every adapter - the generic sanitiser
+// and each typed event reader - passes the references that are present:
+// the subject (involvedObject or regarding), which every Event has, and
+// related when set. Every subject's rule applies; a subject without a
+// usable kind, or no subject at all, withholds the text.
+func EventMessage(reason, msg string, subjects []EventSubject) (string, bool) {
+	if msg == "" {
+		return msg, false
+	}
+	if len(subjects) == 0 {
+		return EventWithheld, true
+	}
+	for _, s := range subjects {
+		if s.Kind == "" {
+			return EventWithheld, true
 		}
 	}
+	out, changed := msg, false
+	for _, s := range subjects {
+		if r, c := MessageRule(s.Kind, reason, out); c {
+			out, changed = r, true
+		}
+	}
+	return out, changed
+}
+
+// eventSubjects reads the references an Event object carries, in either
+// API: involvedObject (core/v1) or regarding (events.k8s.io/v1), and related.
+// A reference that is present without a non-empty string kind counts as an
+// unreadable subject; an Event with neither primary reference has none.
+func eventSubjects(o map[string]any) []EventSubject {
+	var out []EventSubject
+	primary := false
+	for _, f := range []string{"involvedObject", "regarding", "related"} {
+		v, ok := o[f]
+		if !ok || v == nil {
+			continue
+		}
+		if f != "related" {
+			primary = true
+		}
+		ref, _ := v.(map[string]any)
+		k, _ := ref["kind"].(string)
+		out = append(out, EventSubject{Kind: k})
+	}
+	if !primary {
+		out = append(out, EventSubject{})
+	}
+	return out
+}
+
+// eventMessages applies EventMessage to an Event object's own text,
+// message (core/v1) and note (events.k8s.io/v1), in either API: each API
+// serves every Event. The text is a writable top-level field, so a change
+// blocks a round-trip edit as well as Describe.
+func (s *sanitizer) eventMessages(o map[string]any, at string) {
+	subjects := eventSubjects(o)
 	reason, _ := o["reason"].(string)
 	for _, f := range []string{"message", "note"} {
 		path := join(at, f)
 		switch m := o[f].(type) {
 		case nil:
 		case string:
-			if m == "" {
-				continue
-			}
-			if !known {
-				o[f] = WithheldValue
-				s.markEventMessage(path)
-				continue
-			}
-			out, changed := m, false
-			for _, k := range kinds {
-				if r, c := MessageRule(k, reason, out); c {
-					out, changed = r, true
-				}
-			}
-			if changed {
+			if out, changed := EventMessage(reason, m, subjects); changed {
 				o[f] = out
 				s.markEventMessage(path)
 			}
