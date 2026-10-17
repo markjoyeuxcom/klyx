@@ -4,7 +4,7 @@ Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2a. 
 
 The owner's direction: "velero should be supported also". The roadmap's S2a asks for background evidence independent of any list being open, three faults (an unavailable storage location, a missed schedule, recent failed and partially failed backups, distinct from each other), named schedule states, and Velero's phases kept as they are. Codex's acceptance carried three details into this note (roadmap §6): formalise the overdue opportunity and its reset after a later success; an in-progress run during the grace period, and incomplete retained history; the exact classifier and its fake-clock cases. All three are in §4.
 
-The slice is read-only. It adds no verb (§5).
+The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9).
 
 ## 1. The API
 
@@ -124,46 +124,63 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 **Projected fields** (classification and join inputs are never clipped; display strings are clipped first):
 - **Schedule:**
   - classification inputs: `spec.schedule` kept whole (the parsers cap it at 1024 bytes), `paused`, `skipImmediately`, `useOwnerReferencesInBackup`, `creationTimestamp`, `status.phase`, `lastBackup`, `lastSkipped`;
-  - display: `validationErrors` (after §6, 256 bytes each, at most four);
+  - display: the classes and Klyx wordings of at most four `validationErrors` (§6);
   - the template: `storageLocation`, `ttl`, the snapshot settings and `volumeSnapshotLocations`, and the included and excluded namespaces (at most 20 names, with counts);
   - the hook count, never a hook.
 - **BackupStorageLocation:**
   - classification inputs: `status.phase`, `lastValidationTime`, `validationFrequency`, `creationTimestamp`, `default`, `accessMode`;
-  - display: `provider`, `bucket`, `prefix`, `caCertRef`'s name, whether `caCert` is set, `credential`'s name and key, `backupSyncPeriod`, `lastSyncedTime`, `message` (after §6, 1 KiB);
+  - display: `provider`, `bucket`, `prefix`, `caCertRef`'s name, whether `caCert` is set, `credential`'s name and key, `backupSyncPeriod`, `lastSyncedTime`, and the class and Klyx wording of `message` (§6), never its text;
   - the config's keys (at most 32), with values only for the allowlist of §6.
-- **Backup:**
+- **Backup** (revision 1: a checked total, below):
   - classification inputs: `creationTimestamp`, `status.phase`, `startTimestamp`, `completionTimestamp`, `expiration`;
-  - join inputs, kept whole: the `velero.io/schedule-name` label, the ownerReferences whose kind is Schedule (UID and name), `spec.storageLocation`;
-  - display: `errors`, `warnings`, the counters, `progress`, `queuePosition`, `failureReason` (after §6, 512 bytes), `validationErrors` (after §6, 256 bytes each, at most four), the `velero.io/gc-failure` label;
-  - never the spec's hooks or selectors.
+  - join inputs, kept whole: the name, the `velero.io/schedule-name` label, at most two ownerReferences whose kind is Schedule (UID and name), and `spec.storageLocation`. A third Schedule owner marks the owners incomplete, and the Backup is then never proven by owner (§3 identity);
+  - display: `errors`, `warnings`, the counters, `progress`, `queuePosition`, and the classes and Klyx wordings of `failureReason` and of at most four `validationErrors` (§6), plus the `velero.io/gc-failure` label;
+  - never the spec's hooks or selectors, and never Velero's text (§6).
+
+  **The total is bounded by construction.** Every input is capped by Kubernetes or by Klyx:
+  - names at 253 bytes, the namespace and label values at 63, a UID at 36;
+  - timestamps and counters fixed-size;
+  - each Klyx wording at 160 bytes.
+
+  The worst case is under 3 KiB. Each projection is measured after it is built (`Size`) against `MaxObject` 4 KiB. A projection over it (a defect) drops its display classes first. It never drops a classification or join fact. So no Backup is left out for its size, and the window below still covers any that ever is.
 
 **Versions:** each kind is probed for `v1`. A cluster serving none reads it as absent; one serving another version reads "unsupported Velero API version", never empty.
 
-**Identity: which Backups are a schedule's runs.** The roadmap: "a schedule recreated under the same name is a new schedule (UID), so the schedule-name label alone does not prove association".
-- **Local or synced.** A Backup whose `startTimestamp` is more than 5 s before its `creationTimestamp` was processed before it existed here. Backup sync created it from object storage. Klyx counts it as **synced**, and a synced Backup is never a run of a schedule here.
+**Identity: which Backups are a schedule's runs.** The roadmap: "a schedule recreated under the same name is a new schedule (UID), so the schedule-name label alone does not prove association". Revision 1 makes the synced test a qualified heuristic, overridden by stronger evidence (Codex's finding 7).
+- **The run Velero last created**, `N`, is identified by name: `<S>-<lastBackup formatted 20060102150405 in the server's zone>`. That is the controller's own naming of the run it recorded in status. When the server's zone is unresolved (§3 controllers), `N` cannot be identified, and §4.2 says so.
+- **The server's clock offset.** `creationTimestamp` is the API server's clock, while `lastBackup` and `startTimestamp` are the Velero server's.
+  - A found `N` gives the offset, `N.creationTimestamp − lastBackup`, to within the one-second precision of both. The newest such sample in the namespace stands for its server.
+  - Without a sample, the offset is unmeasured.
+- **A run of schedule S** is a Backup in S's namespace that is one of:
+  - **Proven:** it has an ownerReference with S's UID, or it is `N`. Proven runs are never tested for sync. Backup sync keeps a Schedule owner only when that same UID exists here (§1), so a proven run is S's own.
+  - **Named:** it has no Schedule ownerReference to another UID, its `velero.io/schedule-name` label equals S's name, its `creationTimestamp` is at or after S's, and it does not look synced.
 
-  The converse is not proof. A synced backup from a cluster whose clock runs far ahead can pass as local. That is one part of the limit below.
-- **A local Backup is a run of schedule S when** it is in S's namespace, and either:
-  - **Proven:** it has an ownerReference with S's UID.
-  - **Named:** it has no Schedule ownerReference to another UID, its `velero.io/schedule-name` label equals S's name, and its `creationTimestamp` is at or after S's.
-
-  This excludes the runs of an earlier schedule of the same name and every synced backup.
-- **The run Velero last created** is identified by name: `<S>-<lastBackup formatted 20060102150405 in the server's zone>`. That is the controller's own naming of the run it recorded in status.
-- **The run time** of a local run is its `creationTimestamp`.
-- **The limit,** said in the inspector when the proof mode is "named": a bucket shared with another cluster that runs a same-named schedule can bring that cluster's backups in. Klyx excludes the ones it can tell were synced, and cannot exclude a foreign backup created in this cluster's namespace under the same name. `useOwnerReferencesInBackup: true` makes the runs proven.
+  The creation rule excludes the runs of an earlier schedule of the same name, and the sync test excludes most foreign backups.
+- **Looks synced,** for a Backup that is not proven: its processing started before it existed here.
+  - **With a measured offset:** `startTimestamp + offset < creationTimestamp − 5 s`. The 5 s covers the one-second precision on both sides.
+  - **Unmeasured:** a 2-minute allowance replaces the offset, and the result is labelled "probably synced (the server's clock offset is not measured)".
+  - **Never silent:** a Backup that looks synced is not counted, and the views list it as "not counted: looks synced from object storage", with the timestamps that decided it.
+- **The run time** of a run is its `creationTimestamp`.
+- **The limit,** said in the inspector when the proof mode is "named": a bucket shared with another cluster that runs a same-named schedule can bring that cluster's backups in. Klyx excludes the ones whose timing shows they were synced. It cannot exclude one from a cluster whose clock runs far ahead. `useOwnerReferencesInBackup: true` makes every run proven.
 
 **The Backups cap: newest first (a change to the Observer, Stage 1).**
 - **The problem:** the budget admits projections in key order (namespace/name, `observe/kind.go` `admit`). For Backups that keeps the alphabetically first schedules' old runs and drops other schedules' newest ones.
 - **The change:** `KindSpec.Rank`, a function of a projection that must not change over the object's life. The budget admits, evicts and blocks in rank order instead of key order, and the key breaks ties.
   - Every other kind keeps rank = key, so nothing else moves.
   - For Backups, rank is `creationTimestamp` descending, then the key. A new Backup ranks first, and the oldest are left out.
-- **The window:** the capture carries, for a capped kind, the rank of its first left-out object.
-  - For Backups that is a creation time `W`: every Backup created after `W` is retained.
+- **The window:** the capture carries, for a capped kind, the rank of its first left-out object in rank order, **whatever left it out**: the budget's blocker, or a projection over `MaxObject` (revision 1, Codex's finding 6). Admission records the rank of each oversized omission for this. By construction there are none for Backups (above).
+  - For Backups the window is a creation time `W`: every Backup created after `W` is retained.
   - A question about runs created after `W` has a complete answer; one that reaches before `W` is "not retained".
-  - A Backup's projection is bounded by construction (every display string clipped), so none is left out for its size.
+  - A shrunk oversized object is admitted on the next refill, as today, and the window moves with it.
+- **What the window cannot answer: a negative over all history** (Codex's finding 2). Velero's overlap guard ranges over every Backup carrying the schedule's label, old-UID runs included. A blocker older than `W` is invisible to Klyx. While Backups are capped, "no blocker" is therefore never proven, and §4.2 row 9 says so.
 
 **Controllers (C1's controller task).**
-- **Finding the servers:** a cluster-wide list of Deployments labelled `component=velero` with a container named `velero` (as Reloader's detection lists cluster-wide). It gives each server's namespace, readiness, the image tag's version, the container's literal `TZ`, and whether `schedule` is among `--disable-controllers`. Klyx reads no other environment variable, argument or value.
+- **Finding the servers:** a cluster-wide list of Deployments labelled `component=velero` with a container named `velero` (as Reloader's detection lists cluster-wide). It gives each server's namespace, readiness, the image tag's version, the container's literal `TZ`, and whether `schedule` is among `--disable-controllers`. Klyx reads no other environment variable, argument or value, and never resolves a `valueFrom`.
+- **Configuration is not the running server's until it has rolled out** (revision 1). The version, zone and disabled-controller facts come from a Deployment only when:
+  - `status.observedGeneration` equals its generation;
+  - and its updated, available and desired replicas are equal.
+
+  During a rollout they are "unresolved (rollout in progress)". So are two servers in one namespace whose facts disagree, and a `TZ` set by `valueFrom`. An unresolved fact makes only the states that need it unknown (§4.2), never a fault.
 - **The task `velero`:**
   - not ready when a found server is not ready;
   - unknown when the list is unreadable, or when the CRDs are served and no server is found. A retained CRD is not an active install (C2);
@@ -179,7 +196,7 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 
 **The budget** (S1a §3's mechanism):
 - three watches;
-- per-object maxima: 4 KiB for Schedules and BSLs, 2 KiB for Backups;
+- per-object maximum: 4 KiB, checked, for all three kinds;
 - per cluster: Schedules 128 KiB, BSLs 64 KiB, Backups 768 KiB (about 1,500 Backups at a typical 500 bytes), 960 KiB together;
 - ten clusters: **9.4 MiB** encoded, about 52 MiB of heap at S1a's calibration of 5.5 heap bytes per encoded byte.
 
@@ -189,14 +206,16 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 
 ### 4.1 Storage locations
 
-| State | Condition | Role |
-|---|---|---|
-| Not processed | the BSL's namespace has no Velero server, and the server list was read | Degraded, "not in a Velero server's namespace: Velero processes only its own" |
-| Unavailable | `phase` Unavailable | Fault, "Unavailable: <message>" |
-| Available | `phase` Available | OK, "Available, validated <age> ago" |
-| Validation overdue | Available, `validationFrequency` declared and above 0, and now ≥ `lastValidationTime` + 2 × frequency + 5m | Degraded, "validation overdue: last validated <time>" |
-| Awaiting validation | `phase` empty, created under 5 minutes ago | Progressing, "awaiting Velero's first validation" |
-| Not validated | `phase` empty, created 5 minutes ago or more | Degraded, "not validated by Velero" |
+First match wins (revision 1: the overdue rule precedes Available explicitly).
+
+| # | State | Condition | Role |
+|---|---|---|---|
+| 1 | Not processed | the BSL's namespace has no Velero server, and the server list was read | Degraded, "not in a Velero server's namespace: Velero processes only its own" |
+| 2 | Unavailable | `phase` Unavailable | Fault, "Unavailable: <the message's class>" (§6) |
+| 3 | Validation overdue | `phase` Available, `validationFrequency` declared and above 0, and now ≥ `lastValidationTime` + 2 × frequency + 5m | Degraded, "validation overdue: last validated <time>" |
+| 4 | Available | `phase` Available | OK, "Available, validated <age> ago" |
+| 5 | Awaiting validation | `phase` empty, created under 5 minutes ago | Progressing, "awaiting Velero's first validation" |
+| 6 | Not validated | `phase` empty, created 5 minutes ago or more | Degraded, "not validated by Velero" |
 
 - **The overdue rule applies only to a declared frequency.** The server's default comes from a flag Klyx does not read, so an Available BSL without one keeps its age as a fact.
 - **Facts, never roles:** ReadOnly mode (a restore-only location is intended), several defaults, and expired backups awaiting deletion.
@@ -216,10 +235,11 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 
 `D` is the run Velero owes. Velero creates it within about a minute of `D` unless it is blocked or down.
 
-**Which library, when the version is unknown.** Klyx computes `D` with both.
-- **If they agree,** `D` stands. They disagree only for the forms of §1.
-- **If only one parses** the spec while Velero says Enabled, that one is Velero's.
-- **Otherwise** the schedule is Unknown, "its next run depends on Velero's version, which Klyx could not read".
+**Which library, when the version is unresolved.** Klyx computes `D` with both.
+- **If both parse and agree,** `D` stands. They disagree only for the forms of §1.
+- **Otherwise,** including when only one of them parses, the schedule is Unknown: "its next run depends on Velero's version, which Klyx could not resolve".
+  - Revision 1 drops the inference that a phase of Enabled names the library (Codex's finding 5).
+  - The phase carries no observed-spec identity. A spec edited while the server was down keeps an Enabled phase from the old one, and Velero itself revalidates every reconcile rather than trust it (`schedule_controller.go`:120-132).
 - **A known version below 1.15** is Unknown, "Velero before 1.15 uses another cron library".
 
 **The grace `G` is 10 minutes.** It covers the controller's one-minute cadence and a server restart. The controller task names a longer outage.
@@ -230,24 +250,40 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 |---|---|---|---|
 | 1 | Not processed | the schedule's namespace has no Velero server, and the list was read | Degraded, "not in a Velero server's namespace" |
 | 2 | Paused | `spec.paused` | Paused. Velero does not validate a paused schedule; if Klyx's parsers reject its cron, "will fail validation when resumed" |
-| 3 | FailedValidation | `phase` FailedValidation | Fault, with Velero's validation errors (§6) |
+| 3 | FailedValidation | `phase` FailedValidation | Fault, with the validation's class: the empty cron, or Klyx's own parse error (§6) |
 | 4 | Awaiting validation / not processed | `phase` empty: under 5 minutes since creation, or past it | Progressing "awaiting Velero's first validation" / Degraded "not processed by Velero" |
 | 5 | Unknown time | `D` cannot be computed (version, zone or parse, above) | Unknown, with the reason |
 | 6 | Never matches | `D` is the zero time | Degraded, "this cron never matches a time: Velero starts a run on every check" |
-| 7 | Resumed | the resume tracker is Awaiting, within `G` of the capture that last showed it paused | Progressing, "resumed: awaiting Velero's first run" |
+| 7 | Resumed | the resume tracker is Awaiting or Unproven, within `G` of the first capture that showed this suspension's schedule enabled | Progressing, "resumed: awaiting Velero's first run" |
 | 8 | Runs unreadable | the Backups kind is unreadable | Unknown, "runs not readable" |
-| 9 | Missed / deferred | now ≥ `D` + `G`, so Velero has not created the run due at `D` | **deferred**, Degraded, when Velero's own guard holds: a Backup in the namespace labelled with this schedule's name is in "", New or InProgress (the guard reads the label alone, so Klyx does too here): "the run due at D waits for <backup> (Velero defers while one runs)"; otherwise **missed**, Fault, "Velero created no backup for the run due at D", with "the schedule controller is disabled on this server" when so |
+| 9 | Missed / deferred | now ≥ `D` + `G`, so Velero has not created the run due at `D` | see below |
 | 10 | Last run | otherwise (no run is overdue) | the outcome below |
 
-**The outcome of the last run (row 10).** The runs are ordered by run time, and the newest terminal one decides. A schedule stays lit until a run succeeds.
-- **The newest terminal run is Completed:** OK, "last run completed <time>". A newer run in progress adds "a run is in progress".
-- **It is Failed or FailedValidation:** Fault, "the last run failed: <failureReason or validation error>". A newer run in progress adds "a new run is in progress since <time>", and the schedule stays lit until that run succeeds.
-- **It is PartiallyFailed:** Degraded, "the last run partially failed: N errors". It is distinct from Failed, and lit the same way until a success.
-- **No terminal run, some in progress:** Progressing, "first run in progress" or "run in progress".
-- **No run at all:**
-  - without `lastBackup`: Progressing, "awaiting its first run, due D";
-  - with `lastBackup` and no run found: within one minute of `lastBackup`, Progressing, "run created at T" (the run's watch can trail the schedule's); after that, if `lastBackup` is at or before `W`, Unknown "the run created at T is not retained"; otherwise Unknown "the run Velero created at T is not in the cluster".
-- **Never counted:** synced Backups and the runs of an earlier schedule of the same name.
+**Row 9, missed or deferred.** Velero's own guard decides which: a Backup in the namespace labelled with this schedule's name in "", New or InProgress. The guard reads the label alone, old-UID runs included, so Klyx does too here.
+- **A retained blocker:** deferred, Degraded, "the run due at D waits for <backup> (Velero defers while one runs)".
+- **No retained blocker, Backups complete** (not capped): missed, Fault, "Velero created no backup for the run due at D". Add "the schedule controller is disabled on this server" when so.
+- **No retained blocker, Backups capped** (revision 1, Codex's finding 2): Fault, "overdue: Velero created no backup for the run due at D. Klyx holds the Backups created since W only, so an older run in progress, which Velero would wait for, cannot be ruled out".
+  - It is a fault either way. A blocker older than `W` has been running for longer than Klyx's whole retained window, typically days.
+  - A server restart marks InProgress backups Failed, and a "" or New backup that old is never going to be processed. Both stall the schedule as surely as a missed run.
+
+**Row 10, the outcome of the last run** (revision 1, Codex's finding 3: anchored on `N`, the run Velero last created).
+- **`N` decides first.**
+  - **Without `lastBackup`:** no run yet. With no newer manual run, Progressing, "awaiting its first run, due D".
+  - **`N` found:** the outcome rule below runs over `N` and the newer runs.
+  - **`N` not found, within one minute of `lastBackup`:** Progressing, "run created at T, not yet seen". The run's watch can trail the schedule's.
+  - **`N` not found, after that:**
+    - "the run Velero created at T is not retained" when `lastBackup` is at or before `W`;
+    - "the run Velero created at T cannot be identified (the server's zone is unresolved)" when the zone is unresolved;
+    - otherwise "the run Velero created at T is not in the cluster (deleted or expired)".
+
+    Each is Unknown. A retained older run is shown beside it as a fact, never as the latest outcome. This holds whether or not older runs are retained: a surviving older success never stands for a missing newer run, and a deleted newer success never resurrects an older failure.
+- **The outcome rule.** Over `N` and the runs newer than it, ordered by run time, the newest terminal run decides. When all of them are in progress, the newest terminal run before `N` decides, with "a new run is in progress". A schedule stays lit until a run succeeds.
+  - **Completed:** OK, "last run completed <time>".
+  - **Failed or FailedValidation:** Fault, "the last run failed: <its class>" (§6).
+  - **PartiallyFailed:** Degraded, "the last run partially failed: N errors". It is distinct from Failed, and lit the same way until a success.
+  - **No terminal run, some in progress:** Progressing, "first run in progress" or "run in progress".
+  - **No terminal run retained before an in-progress `N`, with Backups capped:** Unknown, "no finished run retained since W".
+- **Never counted:** Backups that look synced (listed as such, §3), and the runs of an earlier schedule of the same name.
 
 **The reset.** A later Completed run ends a failed or partially failed state at once (it becomes the newest terminal run). A missed state ends when Velero creates the owed run, because `lastBackup` passes `D`, and the new run is then judged by the outcome rule. Nothing older than the newest terminal run lights.
 
@@ -256,21 +292,26 @@ A manual `--from-schedule` run is a run of the schedule for the outcome rule, bu
 **An in-progress run during the grace period.** Velero creates the owed run at `D`, so `lastBackup` passes `D` and row 9 does not apply. The run is in progress, and row 10 shows "run in progress" over the previous outcome. A run that overruns into the next `D` blocks it (the overlap guard), and row 9 then reads deferred, Degraded, not missed.
 
 **Incomplete retained history.**
-- With the newest-first cap, the newest runs are always retained, and row 10 needs only the newest terminal run.
-- A schedule whose every retained run is in progress, with older runs past `W`, reads "no terminal run retained since W" (Unknown).
+- With the newest-first cap, the newest runs are always retained. Row 10 checks `N` itself, and then needs only the newest terminal run.
+- What the cap can hide is said where it matters: a blocker before `W` (row 9), `N` before `W`, and a terminal run before `W` (row 10).
 - The rail marks stations before `W` "not retained".
 
-**The resume tracker** (`internal/gitops/resume`, unchanged): the sample is the Schedule's UID. "Disabled" is `spec.paused`, and the fingerprint is the SHA-256 of `phase`, `lastBackup` and `lastSkipped`.
+**The resume tracker** (`internal/gitops/resume`): the sample is the Schedule's UID. "Disabled" is `spec.paused`, and the fingerprint is the SHA-256 of `phase`, `lastBackup` and `lastSkipped`.
 - **Why it is needed:** on unpause, `Next(old lastBackup)` is in the past, so without it row 9 would read missed until Velero acts. Velero acts within seconds of the spec change: it creates the run, or sets `lastSkipped` when unpaused with `--skip-immediately`.
-- **What ends Awaiting:** evidence (a changed fingerprint), or `G` after the capture that last showed the schedule paused, after which the rules apply.
-- **What the tracker needs:** one accessor for its baseline's capture time.
+- **The grace starts at the resume, not the pause** (revision 1, Codex's finding 4).
+  - A paused schedule can sit unchanged for hours, so its last paused capture says nothing about when it was resumed.
+  - The tracker records, per baseline, the first capture that showed the object enabled since that suspension (`ResumedAt`), and keeps it across later captures until evidence ends the resume.
+  - Row 7 holds for `G` from `ResumedAt`.
+- **Unproven** (a baseline the tracker let go of while the object was out of its reads) is handled as Awaiting, with its own `ResumedAt`: the first capture that read it Unproven. A resume Klyx cannot rule out gets the same grace, never a fault in the first `G`.
+- **What ends it:** evidence (a changed fingerprint), or `G` after `ResumedAt`. Then the rules apply.
 - **A Klyx that never saw the pause** has no baseline. It applies the rules, as Velero has long since acted.
+- **The tracker's other users** (the Flux Operator's kinds, ArtifactGenerators) gain only the accessor, and their behaviour is unchanged.
 
 **Named states, each tested** (the roadmap's list): new (rows 4 and 10), paused (2), FailedValidation (3), `skipImmediately` (`lastSkipped` moves `base`, so no run is owed), a backup in progress (10, and 9 deferred), and no known success (10: never a fault on its own; a failed run or a missed run is).
 
 ### 4.3 Unscheduled backups
 
-- **The counted entity:** a local Backup (§3), created in the last 24 hours, that is not a run of a current schedule. That covers manual backups, and runs of a deleted schedule or of an earlier one of the same name. "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
+- **The counted entity:** a Backup that does not look synced (§3), created in the last 24 hours, that is not a run of a current schedule. That covers manual backups, and runs of a deleted schedule or of an earlier one of the same name. "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
 - **Roles:**
 
   | Phase | Role |
@@ -283,7 +324,7 @@ A manual `--from-schedule` run is a run of the schedule for the outcome rule, bu
 
   A Backup outside a server's namespace (list read) is Degraded, "not processed".
 - **Leaving:** a backup leaves the part 24 hours after its creation (a clock, §4.4). Older backups are history, listed in S2b.
-- **Never counted here:** synced Backups. They may belong to another cluster, and are listed in S2b.
+- **Never counted here:** Backups that look synced. They may belong to another cluster. The view lists the last day's as "not counted: looks synced", with the timestamps that decided it, and S2b lists them all.
 
 ### 4.4 Clocks
 
@@ -293,7 +334,8 @@ A manual `--from-schedule` run is a run of the schedule for the outcome rule, bu
 | creation + 5m with an empty phase | schedules, locations | "not processed" / "not validated" |
 | `lastValidationTime` + 2 × frequency + 5m | locations | validation overdue |
 | creation + 24h | backups | the backup leaves the part |
-| the resume baseline + `G` | schedules | Awaiting ends |
+| `ResumedAt` + `G` | schedules | the resume grace ends |
+| `lastBackup` + 1m | schedules | an unseen `N` reads unknown |
 
 - **Each deadline is the part's `Next`,** re-evaluated by the clock as ESO's staleness is. A crossed deadline is the role's `Boundary`, never its `Since`.
 - **Clock sources:**
@@ -308,18 +350,65 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 ## 6. Sensitive data
 
 - **No credential values.** BSLs name a credential Secret, a CA Secret (`caCertRef`) and, for older installs, an inline `caCert`. Klyx shows the names and "set", never a value, and never reads a Secret.
-- **The Velero message rule, `crd.VeleroMessage`,** applies to every Velero free-text field Klyx displays or sends: BSL `status.message`, Backup `failureReason` and `validationErrors`, Schedule `validationErrors`.
-  - **First, Velero's own Azure redaction, whatever the server's version:** the ten SAS parameters (§1) become `***`, wherever they appear, since 1.17 does not redact them.
-  - **Then the URL rule** (S0b, `urlscrub.Origins`): every URL keeps its origin only, so paths, queries and user information go, including an Azure account URL's container path.
-  - **Then the length caps of §3.**
-  - **Where it runs:** the inspectors, the rows, AI evidence, the chat get tool and health reasons (`CapReason` input). A needle test covers each (§7).
+- **The Velero message rule, `crd.VeleroMessage`, fails closed** (revision 1, Codex's finding 1).
+  - **Why:** a redaction pipeline cannot bound a provider plugin's error text. Velero passes object-store `Init` and `ListCommonPrefixes` errors through unchanged (`pkg/persistence/object_store.go`:202-203, 219-222; `pkg/plugin/framework/object_store_server.go`:67-68). Codex showed "invalid configuration value: <secret>" and "Authorization: Bearer <secret>" surviving SAS redaction and the URL rule.
+  - **The rule:** Velero's text is never shown or sent. Each message is classified, and only the class and Klyx's own wording for it cross, as S1b's automation messages do.
+  - **Which fields:** BSL `status.message`; Backup `status.failureReason` and `status.validationErrors[]`; Schedule `status.validationErrors[]`; and Restore's `failureReason` and `validationErrors[]` (read in S2b, registered now).
+- **The classes,** each matched against the whole message by a pinned regular expression. Its variable parts are constrained to Kubernetes object names (DNS-1123), integers or a bucket name's characters, and Klyx re-emits them from the match. The forms are enumerated from v1.18.4's sources at build time and pinned by tests:
+  - **BSL,** after the fixed prefix `BackupStorageLocation "<name>" is unavailable: `:
+
+    | Velero's form | Klyx's wording |
+    |---|---|
+    | `backup storage location does not use object storage` | "no object storage configured" |
+    | `object storage provider name must not be empty` | "no provider configured" |
+    | `backup storage location's bucket name "<bucket>" must not contain a '/' …` | "the bucket name contains '/' (use the prefix)" |
+    | `cannot specify both caCert and caCertRef in objectStorage` | "both caCert and caCertRef are set" |
+    | `error getting CA certificate from secret: …` | "the CA certificate's Secret could not be read" (the tail withheld) |
+    | `unable to get credentials: …` | "the credentials could not be read" (the tail withheld) |
+    | `Backup store contains [<n>] invalid top-level directories: …` | "the bucket holds top-level directories Velero does not own" (the names withheld) |
+    | `unable to locate ObjectStore plugin named <name>` (`pkg/plugin/clientmgmt/process/registry.go`:252) | "the provider plugin <name> is not installed" |
+
+  - **Backup `validationErrors`:**
+    - the read-only and Unavailable BSL forms (§1), each naming the BSL;
+    - the missing default and server-default BSL forms, with the trailing `Error: …` withheld;
+    - `error getting backup storage location: …` (the tail withheld);
+    - the three VolumeSnapshotLocation forms, each naming the location;
+    - `invalid resource policies: …` (the tail withheld);
+    - the old-filter-parameters notice.
+  - **Backup `failureReason`:**
+    - the server-start sweep, "the server restarted while this backup ran";
+    - `backup execution failed: …`, "the backup failed while running" (the tail withheld).
+  - **Schedule `validationErrors`:**
+    - the empty-cron form;
+    - `invalid schedule: …`, for which Klyx shows **its own** parse error from the library the server uses (both libraries' errors when it is unresolved), never Velero's tail. The cron is shown anyway.
+- **Unclassified text is withheld whole:** "Velero's message is withheld: provider errors can carry credentials". The message's presence and its field are kept, so the verdict still says what failed: the BSL is Unavailable, or the run failed or failed validation.
+- **A diagnosis from a fixed vocabulary, never from the text.** A withheld message, or a withheld tail, is scanned for whole tokens from a fixed list, and only the matched list entry crosses: "the provider reported AccessDenied", "network: connection refused".
+  - **Provider error codes:**
+    - S3: `AccessDenied`, `NoSuchBucket`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `ExpiredToken`, `InvalidToken`, `RequestTimeTooSkewed`, `PermanentRedirect`, `AuthorizationHeaderMalformed`, `NoCredentialProviders`;
+    - Azure: `AuthenticationFailed`, `AuthorizationFailure`, `AuthorizationPermissionMismatch`, `ContainerNotFound`, `AccountIsDisabled`, `InvalidAuthenticationInfo`;
+    - GCS: `storage: bucket doesn't exist`.
+  - **HTTP status codes** in the forms `StatusCode: <3 digits>` and `status code: <3 digits>`.
+  - **Network classes:** `no such host`, `connection refused`, `i/o timeout`, `context deadline exceeded`, `x509: certificate signed by unknown authority`, `x509: certificate has expired`.
+
+  Nothing else from the text is emitted, so a secret on either side of a token never crosses.
+- **Where it runs: every path that carries these fields.**
+  - **The new lens:** its rows, inspectors and rails, and the health reasons (`CapReason` input).
+  - **Health and AI:** chat (get, list and events tools), and AI evidence and facts.
+  - **The generic paths, through the S0b registry below:**
+    - the generic detail's Manifest and Fields;
+    - the list's local cells. A column whose JSONPath reaches one of the fields reads the class;
+    - Describe, **withheld whenever one of these fields is non-empty**. Kubectl's text has no field boundaries Klyx could trust, so a payload-free BSL with a message is held too;
+    - the guarded editor (refused while a value is present, as for S0b payloads);
+    - cache diffs (the class, never the text).
+  - **Events:** any Event whose subject is a Velero kind is withheld whole by the event classifier (S1c's `EventMessage`). Velero itself records none for these kinds, so such an event comes from another tool and its text is unbounded.
 - **The S0b registry gains the Velero kinds,** so these surfaces are handled on every path (the generic detail, Describe, the guarded editor, cache diffs, chat, AI), not only in this slice's projection:
+  - the message fields above: classified, as a new registry shape, "Velero message";
   - Backup `spec.hooks`, Schedule `spec.template.hooks` and Restore `spec.hooks`: opaque. Hooks carry exec commands, and a Restore's init hooks embed whole containers with environment values.
   - BSL and VolumeSnapshotLocation `spec.config`: free-form values (keys kept, values omitted). Provider config is arbitrary and can embed credentials in a URL.
   - BSL `spec.objectStorage.caCert`: opaque.
 - **The BSL config allowlist for display:** `region`, and the origins of `s3Url` and `publicUrl`. Every other key shows by name only.
 - **AI facts:**
-  - allowlisted: kind, verdict, phases, the cron and zone, times, counts, the storage location's name, provider, bucket and prefix, and messages after the rule above;
+  - allowlisted: kind, verdict, phases, the cron and zone, times, counts, the storage location's name, provider, bucket and prefix, and the messages' classes and Klyx wordings;
   - excluded: config values, Secret names, hooks and selectors.
 
 ## 7. Tests, lab and smoke
@@ -327,6 +416,7 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 - **Stage 1, the Observer's rank:**
   - newest-first admission across a list, a watch add (a new Backup evicts the oldest), an update (rank unchanged, size changed), a delete (refill), and ties by key;
   - the window `W` in the capture;
+  - an oversized newest Backup: it is left out, the window covers it, and it is admitted again after it shrinks (revision 1);
   - every existing budget test unchanged (rank = key).
 - **Unit:**
   - **parsing:** each kind at v1.18.4's shapes and at 1.17's (no Queued phases, no `caCertRef`); a schedule created paused (empty phase);
@@ -341,19 +431,34 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
     - `D` + `G` crossing, and `Next`;
     - missed, and missed with the schedule controller disabled;
     - deferred behind an InProgress run, and not deferred behind a Queued one;
+    - **a blocker older than `W` while capped:** the qualified overdue fault, never a definite "missed" (revision 1);
     - a run in progress during the grace;
-    - the run at `lastBackup` not yet watched (within a minute), gone, and past `W`;
+    - **`N`** (revision 1):
+      - not yet watched (within a minute);
+      - gone, with an older retained success and, separately, with an older retained failure (Unknown each time, never the older outcome);
+      - past `W`;
+      - unidentifiable with the zone unresolved;
     - Failed then Completed (reset), Completed then PartiallyFailed, Failed with a newer run in progress (still lit);
-    - an unpause with the tracker (Awaiting, evidence, the `G` bound) and without a baseline;
+    - **an unpause:**
+      - after a long quiet pause: the last paused capture hours old, then a fresh unpause, with the grace from `ResumedAt`, held across repeated evaluations (revision 1);
+      - evidence;
+      - the `G` bound;
+      - an Unproven baseline;
+      - no baseline;
     - `skipImmediately` (`lastSkipped` moves `base`);
     - FailedValidation from an unavailable BSL, per tick;
+    - **only one library parses** (`* * * * 7`) with the version unresolved and an Enabled phase: Unknown, never inferred (revision 1);
+    - a rollout in progress: version and zone unresolved;
   - **identity:**
     - proven by owner UID, and an owner reference to another UID;
     - named since creation;
     - an earlier schedule's runs, by creation time;
-    - a synced backup (start before creation by more than 5 s);
+    - **looks synced**, with a measured offset and unmeasured (labelled "probably");
+    - **a locally owned Failed Backup processed by a server 30 s behind the API server** (revision 1): proven by owner, so counted;
+    - a named local run with the same skew and a measured offset: counted;
     - a `--from-schedule` manual run;
-    - the run named by `lastBackup` in a non-UTC server zone;
+    - `N` in a non-UTC server zone;
+    - a third Schedule owner (owners incomplete);
   - **BSL rules:** each row, ReadOnly, several defaults, expired backups awaiting deletion;
   - **unscheduled backups:** each phase, the 24-hour boundary, synced excluded, an orphan of a deleted schedule;
   - **detection:**
@@ -361,11 +466,24 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
     - two servers in two namespaces;
     - the version from `velero/velero:v1.18.4`, from a mirror registry, and unknown from a digest-only image;
   - **sensitive data:**
-    - a SAS token in a 1.17-style BSL message;
-    - a signed S3 URL in a `failureReason`;
-    - a needle in a hook command, a Restore init container's environment and a BSL config value;
+    - **every classified form,** at v1.18.4's text, passing as its class with its constrained parts re-emitted, and a near-miss of each (an extra suffix, a name outside DNS-1123) withheld;
+    - **needles** (revision 1):
+      - a SAS token in a 1.17-style BSL message;
+      - a signed S3 URL in a `failureReason`;
+      - a URL-free needle, `invalid configuration value: <needle>`;
+      - `Authorization: Bearer <needle>`;
+      - a needle before the first URL;
+      - a needle beside a vocabulary token (`AccessDenied <needle>`), of which only the token crosses;
+      - a needle in a Schedule's `invalid schedule:` tail;
+      - a needle in a hook command, a Restore init container's environment and a BSL config value;
 
-    each absent from the serialised generic detail, Describe, the chat tools and AI evidence;
+      each absent from:
+      - the serialised generic detail and the local cells;
+      - Describe, including a payload-free BSL with only a message (held);
+      - the editor's refusal;
+      - a cache diff;
+      - an Event about a Velero object;
+      - the chat tools and AI evidence;
   - **C1 beyond parity:**
     - projection equality for every rule field;
     - baseline, continuous, after-gap and loss cases;
@@ -387,7 +505,7 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
   - **The fixtures:**
     - Velero v1.18.4's CRDs, read before they are applied;
     - the stand-in server;
-    - BSLs, one Unavailable with a SAS-token message carrying the needle;
+    - BSLs: one Unavailable with a SAS-token message carrying the needle, and one with a URL-free provider message carrying it beside `AccessDenied`;
     - an hourly schedule with a fresh Completed run created by each apply;
     - a schedule whose last run Failed;
     - a schedule created by the first apply with no runs, which reads missed from 10 minutes after its first due time;
@@ -412,3 +530,17 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 - **The node-agent, PodVolumeBackups, DataUploads and BackupRepositories.** BackupRepository has its own Ready/NotReady phase and maintenance time, and is a candidate for a later slice.
 - **Velero's Prometheus metrics** (`velero_backup_last_successful_timestamp` and others): S8's external-evidence contract.
 - **Server logs** and the backup logs in object storage (a DownloadRequest is a write).
+
+## 9. Revision 1: Codex's design review of 4e23d5d
+
+| # | Finding | Where answered |
+|---|---|---|
+| P1 | SAS redaction and the URL rule cannot bound a plugin's error text: a URL-free secret or a bearer header survives | §6: Velero's text never crosses. Each message is matched whole against pinned v1.18.4 forms and re-emitted as Klyx's wording. Unclassified text is withheld, with only fixed-vocabulary tokens (provider codes, HTTP status, network classes) emitted. The rule covers every path, generic ones included (cells, Describe held, editor, diffs, events about Velero objects). §7 adds URL-free, bearer, before-the-URL and beside-a-token needles |
+| 2 | A capped suffix cannot prove the overlap guard clear | §3 (a negative over all history is never proven while capped); §4.2 row 9: the qualified overdue fault, with why it stays a fault; §7 |
+| 3 | A missing newest run let an older retained outcome stand | §4.2 row 10: anchored on `N`, checked whether or not older runs exist, with the watch grace, and Unknown with the older outcome as a fact only; §7 covers an older success and an older failure |
+| 4 | The resume grace started at the pause | §4.2: `ResumedAt`, the first enabled capture of the suspension, kept until evidence; Unproven handled as Awaiting with its own `ResumedAt`; §7 |
+| 5 | Enabled does not name the library that parsed the current spec | §4.2: the inference is dropped; one-library parses with an unresolved version are Unknown |
+| 6 | No total bound on a Backup projection; oversized omissions could leave a hole before the window | §3: bounded inputs and a checked 4 KiB total that sheds display classes only. The window is the first omission of any cause, oversized included; §7 |
+| 7 | Cross-clock skew read as proof of sync | §3: the server's clock offset measured from `N`; proven runs (owner UID, `N`) are never tested; "looks synced" is listed, never silent, and "probably" while the offset is unmeasured; §7 |
+| - | Deployment configuration during a rollout | §3: facts only from a rolled-out Deployment, else unresolved |
+| - | The overdue rule's precedence | §4.1: numbered, first match wins, overdue before Available |
