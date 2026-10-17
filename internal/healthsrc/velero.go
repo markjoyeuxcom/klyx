@@ -79,10 +79,14 @@ func VeleroServers(v capability.VeleroCapability) velero.Servers {
 				}
 				switch {
 				case s.TZFromRef:
+				case s.TZSet && s.TZ == "":
+					// an explicit empty TZ is UTC, as Go itself reads it
+					// (Codex's S2a implementation review 3)
+					f.Zone, f.ZoneResolved = "UTC", true
 				case s.TZSet:
 					// only a zone Klyx can load resolves: the value is free
 					// text, never echoed
-					if _, err := time.LoadLocation(s.TZ); err == nil && s.TZ != "" {
+					if _, err := time.LoadLocation(s.TZ); err == nil {
 						f.Zone, f.ZoneResolved = s.TZ, true
 					}
 				default:

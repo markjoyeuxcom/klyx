@@ -737,3 +737,7 @@ Four of the six earlier fixes confirmed. Two residual findings:
 | 2 | The pending boundary survived only the first watch update: a second oversized update, the blocker shrinking, or a deletion followed by an eviction advanced the window past a still-omitted object | A pending floor in the Observer: every blocker the watch path replaces or clears folds into it, the window is never later than it, and only a complete list clears it |
 
 Codex's second-round probes are kept (`review_s2a_r1_test.go` in observe and appbridge).
+
+## 18. Implementation review 3: Codex at 47f0378
+
+Both review 2 fixes confirmed. One regression: an explicitly empty literal `TZ` (which Go reads as UTC) was treated as unresolved, so an overdue schedule read "Unknown time" instead of Missed. `VeleroServers` now maps it to UTC, resolved; `valueFrom` and an unloadable non-empty value stay unresolved. Codex's probes (`review_s2a_r2_test.go` in healthsrc and observe) are kept.
