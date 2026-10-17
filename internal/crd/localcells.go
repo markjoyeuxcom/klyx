@@ -31,6 +31,9 @@ var payloadResources = map[string]bool{
 	"helm.toolkit.fluxcd.io/helmreleases":              true,
 	"argoproj.io/applications":                         true,
 	"argoproj.io/applicationsets":                      true,
+	// S1b §6: its Ready message is a printer column, and it passes the
+	// automation allowlist only through the sanitiser
+	"image.toolkit.fluxcd.io/imageupdateautomations": true,
 }
 
 // IsPayloadResource reports whether group/plural is a registered payload
