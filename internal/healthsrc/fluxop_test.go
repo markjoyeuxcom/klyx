@@ -190,3 +190,17 @@ func TestFluxOperatorBudgetTruncates(t *testing.T) {
 		return false
 	})
 }
+
+// S1a §3: a cluster serving another operator API version reads as an
+// unsupported version - a named gap, never an empty list.
+func TestFluxOperatorUnsupportedVersion(t *testing.T) {
+	served := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
+		return observe.Probe{Served: true, Version: "v1beta1"}, nil
+	}
+	kinds, _ := FluxOperator(NativeDeps{Cluster: "c1", Served: served})
+	for _, k := range kinds {
+		if _, err := k.Probe(context.Background()); err == nil || !strings.Contains(err.Error(), "unsupported Flux Operator API version v1beta1") {
+			t.Errorf("%s: %v", k.Name, err)
+		}
+	}
+}

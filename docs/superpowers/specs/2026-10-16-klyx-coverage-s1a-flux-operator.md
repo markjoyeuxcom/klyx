@@ -312,3 +312,75 @@ S1a is built after S0b and depends on it.
 |---|---|---|
 | 1 | Initializing a disabled object writes Ready=True `ReconciliationDisabled`, which the fingerprint rule would take as evidence, including when the write lands after a resume | §4: the proof names the initialization exception; `ReconciliationDisabled`, like `SkippedDueToSchedule`, is never evidence; an absent Ready is its own baseline; and `ReconciliationDisabled` is never a verdict, even without a baseline. §7 adds your three Observer-path cases and the no-baseline case |
 
+## 13. As built
+
+**Stages (branch `wip-9`):**
+- `a565579` the observer's byte budget;
+- `74e1df8` the pure `internal/gitops/fluxop` package;
+- `0a70588` operator detection;
+- `f8e514f` the health parts;
+- `5861908` the bridge;
+- `c0b7eb3` the Operator view;
+- `c237c3c`, `9511918` and `0fb31de` the lab, the parity gate and the smoke;
+- then the heap calibration and the unsupported-version probe.
+
+**The budget (§3):**
+- **Per kind, by key.** `observe.KindSpec` gains `Budget`, `MaxObject` and `Size`. A budgeted kind admits its projections in key order (namespace/name) while they fit, whatever order the list arrives in. A projection over `MaxObject` is left out on its own and does not end the run.
+  - A watched object that sorts before the run's end is admitted, and the run's last key leaves.
+  - Past a capped run's end nothing is admitted until the next list.
+  - A deletion while capped refills by relisting: the current reflector instance ends without a recorded error, so the kind stays live. Refills run at most once a minute (`RefillEvery`), and a refill inside the window waits for it.
+- **Coverage:** a capped kind reads `Truncated` with `NotRetained`, a lower bound, on `KindCoverage` and `KindState`. The frontend shows "Capped: N ResourceSets not retained", and its counts are lower bounds through the existing truncated path.
+- **The ledger** reads a truncated kind as a capped read (`LossCapped`). An object the budget left out is never a deletion and never a recovery.
+- **The 4 MiB per cluster is split by kind,** so that each kind admits deterministically on its own key order: FluxInstance 128 KiB, FluxReport 128 KiB, ResourceSet 2 MiB, provider 1.75 MiB.
+- **Per object:**
+  - the projection is built with messages clipped at 1 KiB;
+  - one over 8 KiB is rebuilt with every display string at 256 bytes and list caps halved, each clip recorded;
+  - one still over is refused by the observer.
+
+  The classification facts, Ready's fingerprint among them, are never clipped.
+- **Heap calibration** (`TestFluxOperatorHeapCalibration`):
+  - 1,724 typical ResourceSet projections fill the 2 MiB ResourceSet budget, holding 7.45 MB of heap: **3.55 heap bytes per encoded byte**;
+  - so the 4 MiB encoded worst case is about 14 MiB of heap per cluster, and **about 142 MiB for ten clusters**, against the 40 MiB encoded reservation;
+  - **transient:** one 500-object list page with 64 KiB templates holds about 35 MB before projection drops the templates.
+  - **For the owner and the reviewer:** the encoded budget is kept as designed. Holding the fleet to about 40 MiB of heap needs about 1.1 MiB encoded per cluster, which caps at about 940 typical ResourceSets per cluster before coverage reads "capped". It is one constant.
+
+**Projection and rules:**
+- **The operator kinds have no `status.observedGeneration`.** Generation lag is keyed on Ready's own `observedGeneration`, as S1b §4.1 rules for every Flux kind: an older Ready is "Syncing…", and a Ready for the current generation is never masked.
+- **The resume tracker** is per observer (per cluster), keyed by UID. A baseline is swept an hour after its object's last capture, because an evaluation cannot tell a departed object from one the budget left out. A Klyx restart loses baselines, so a resumed object is then treated as current (§4).
+- **Binding:** an orphaned or ambiguous FluxInstance is a row, with its label, but not an item: it is not counted and not in the ledger.
+- **FluxReport** is an evidence part, `fluxreport`: no verdict and no ledger.
+- **Unsupported version:** a cluster serving an operator API other than `v1` fails the kind's probe with "unsupported Flux Operator API version …", a named discovery gap, never an empty list.
+
+**Detection:**
+- `capability.FluxOperatorInfo` binds per namespace (bound, orphan, ambiguous, unverified) and names the operator's own issue.
+- Flux is present with the operator alone.
+- **The kustomize-controller probe follows a single resolved runtime namespace;** otherwise it stays on `flux-system`.
+- The operator's issue feeds the Flux task's controller issue with the operator's own verified state.
+
+**The bridge:**
+- **Rows:** DTOs for the three parts. The ResourceSets part's rows carry `uid`, `kind` and `rule` at the top, with `set` or `provider` inside.
+- **Inspector detail:** read on demand from the object, sanitised first. History is sent without digests, and with metadata only for the operator's own keys (inputs, resources, steps, flux). The inventory is parsed from ids (200 at most). A dependency's `readyExpr` comes from the sanitised object. A failed events read says so.
+- **Verbs:**
+  - `FluxOpAct` is one UID-guarded merge patch of annotations, after an armed read, with a token in RFC 3339 nanoseconds;
+  - the matrix refuses what a kind does not support;
+  - a protected cluster consumes the typed-confirmation grant first.
+
+**The UI:**
+- The Operator view is the Flux lens's third part, "Operator", shown when the `fluxOperator` capability is present.
+- Its contents:
+  - broken-first rows, with a kind filter;
+  - resume, binding and capped notes;
+  - the report as "as reported by the operator", with "condition last changed" and "read by Klyx" kept apart;
+  - verbs with the owner's consequence line, "Fetch now, outside its schedule" for a scheduled provider, and Describe.
+- Reveals from the summary select the object, pinned by UID.
+
+**Verification:**
+- `go test ./internal/...` passes, including the observer budget tests, the `fluxop` unit tests, the observer-path binding, resume and budget tests, detection, verbs and DTOs.
+- The frontend gate passes: tsc, eslint, 2117 vitest tests and the vite build.
+- **The parity gate passes both stages, all 12 cases, at `0fb31de`:**
+  - the operator's two parts are in the oracle and in `ROW_PARTS`;
+  - the baseline stays healthy, because case B allows no attention;
+  - **the frontend stage needed repairs that predate S1a:** The Line's slice 13d replaced the text "▲" with a shape-coded mark, and slices 13a.5 and 13b.1 put a tool lens's lit parts under its one lens row. The stage had not been rerun since.
+- **The native smoke passes 119/119,** night and day at 1440 and 1024, at `0fb31de`. That includes the new "Flux Operator view" step (broken-first, the report head, the report's two times, the suspension note).
+- **Live captures:** `scratchpad/cap-s1a`, sixteen images: the Operator view, the ResourceSet that embeds a Secret, the suspended ResourceSet, and the instance with its report, in each theme and width.
+

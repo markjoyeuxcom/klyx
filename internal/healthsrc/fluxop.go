@@ -2,6 +2,7 @@ package healthsrc
 
 import (
 	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -65,8 +66,14 @@ func FluxOperator(d NativeDeps) ([]observe.KindSpec, []observe.PartSpec) {
 func fluxopKind(d NativeDeps, name, resource, kind string, budget int) observe.KindSpec {
 	return observe.KindSpec{Name: name, GVR: fluxop.Group + "/" + resource, Scope: "all namespaces", ExpectedType: &unstructured.Unstructured{},
 		Project: fluxop.Project(kind), Budget: budget, MaxObject: fluxop.MaxObject, Size: fluxop.SizeOf,
+		// v1 only (S1a §3): another served version is unsupported - a named
+		// discovery gap, never an empty or misread list
 		Probe: func(ctx context.Context) (observe.Probe, error) {
-			return d.Served(ctx, fluxop.Group, resource, fluxop.Version)
+			p, err := d.Served(ctx, fluxop.Group, resource, fluxop.Version)
+			if err == nil && p.Served && p.Version != fluxop.Version {
+				return observe.Probe{}, fmt.Errorf("unsupported Flux Operator API version %s for %s: Klyx reads %s", p.Version, resource, fluxop.Version)
+			}
+			return p, err
 		},
 		NewListWatch: func(version string) cache.ListerWatcherWithContext {
 			ri := d.Dyn.Resource(schema.GroupVersionResource{Group: fluxop.Group, Version: version, Resource: resource})
