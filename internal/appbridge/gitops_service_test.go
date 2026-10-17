@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/observe"
 	"strings"
 	"sync"
 	"testing"
@@ -39,14 +40,27 @@ type fakeGitOpsConn struct {
 	withSource     bool
 	reconcileCalls int // Reconcile + ReconcileWithSource invocations, for gate tests
 	suspendCalls   int
-	armedUID       string                     // the uid the last verb was armed against
-	opObj          *unstructured.Unstructured // what FluxOpObject returns
+	armedUID       string                                // the uid the last verb was armed against
+	opObj          *unstructured.Unstructured            // what FluxOpObject returns
+	byKind         map[string]*unstructured.Unstructured // FluxObject by kind, when set
+	byKindErr      map[string]error
+	rows           observe.Rows // what HealthRowsNow returns
+	rowsOK         bool
 }
 
 // FluxObject: the direct read (design §5b) - a missing object is NotFound,
 // an injected error is returned as is.
 func (f *fakeGitOpsConn) FluxObject(_ context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
 	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: kind}, name)
+	if f.byKind != nil {
+		if err, ok := f.byKindErr[kind]; ok {
+			return nil, err
+		}
+		if u, ok := f.byKind[kind]; ok {
+			return u, nil
+		}
+		return nil, notFound
+	}
 	switch kind {
 	case "Kustomization", "HelmRelease":
 		if f.objErr != nil {
@@ -387,4 +401,8 @@ func TestGetFluxOpDetailIsUIDFenced(t *testing.T) {
 	if d := svc.GetFluxOpDetail("c", "ResourceSet", "flux-system", "apps", ""); d.Error == "" {
 		t.Fatal("no UID, no read")
 	}
+}
+
+func (f *fakeGitOpsConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
+	return f.rows, f.rowsOK
 }

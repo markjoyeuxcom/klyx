@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
@@ -339,6 +340,23 @@ func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Un
 		"/namespaces", "/persistentvolumeclaims", "/persistentvolumes", "storage.k8s.io/storageclasses":
 		return p.tree(nestedMap(obj, "spec"), ".spec", 0, chatTreeDepth, chatStringMax, false),
 			p.tree(nestedMap(obj, "status"), ".status", 0, chatTreeDepth, chatStringMax, false)
+	}
+	if key == "image.toolkit.fluxcd.io/imageupdateautomations" {
+		// Coverage S1b §6: the author's email and the policy selector are
+		// never AI facts; the rest is any CRD's projection.
+		spec := deepCopyMap(nestedMap(obj, "spec"))
+		if a := nestedMap(spec, "git", "commit", "author"); a != nil {
+			if _, ok := a["email"]; ok {
+				delete(a, "email")
+				p.drop(".spec.git.commit.author.email")
+			}
+		}
+		if _, ok := spec["policySelector"]; ok {
+			delete(spec, "policySelector")
+			p.drop(".spec.policySelector")
+		}
+		return p.tree(spec, ".spec", 0, chatCRDDepth, chatCRDStringMax, true),
+			p.tree(nestedMap(obj, "status"), ".status", 0, chatCRDDepth, chatCRDStringMax, true)
 	}
 	// Any other kind (CRDs): scalar leaves to depth 4, strings key-aware
 	// masked, scrubbed and capped at 200 characters (spec §2).
@@ -693,4 +711,13 @@ func mapKeys(m map[string]any, fields ...string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// deepCopyMap copies a JSON object, so a projection can drop members
+// without touching the object it was given.
+func deepCopyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	return runtime.DeepCopyJSONValue(m).(map[string]any)
 }

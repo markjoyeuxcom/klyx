@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -39,6 +40,9 @@ type GitOpsConn interface {
 	// object, and one object read for the inspector's on-demand facts.
 	FluxOpAct(ctx context.Context, kind, ns, name, uid, verb string) error
 	FluxOpObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
+	// HealthRowsNow is one fresh Observer capture of a part's rows: the
+	// image inspector's applied lines read the reconciliations (S1b §2).
+	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
 }
 
 // GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git

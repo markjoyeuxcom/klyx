@@ -71,7 +71,22 @@ var aiEvidenceFields = map[string]allow{
 	healthsrc.TaskESO + "/externalsecrets": {"state": nil, "reason": nil, "message": nil, "storeKind": nil, "storeName": nil, "targetSecret": nil,
 		"refreshIntervalSeconds": nil, "lastRefreshAgeSeconds": nil, "refreshed": nil, "stale": nil, "generation": nil},
 	healthsrc.TaskESO + "/stores": {"kind": nil, "state": nil, "reason": nil, "message": nil, "provider": nil, "generation": nil},
+	// Coverage S1b §6: verdicts, reasons and messages (after the rules),
+	// images, tags and digests, policy type and range, times and commit
+	// SHAs; never the author's email or the selector.
+	healthsrc.TaskFlux + "/images": {"kind": nil,
+		"repository": allow{"ready": nil, "reason": nil, "message": nil, "image": nil, "canonicalImage": nil, "provider": nil, "interval": nil,
+			"scanned": nil, "tagCount": nil, "scanTime": nil, "latestTags": nil, "suspended": nil, "generation": nil, "observedGeneration": nil},
+		"policy": allow{"ready": nil, "reason": nil, "message": nil, "repositoryNamespace": nil, "repositoryName": nil, "policyType": nil,
+			"policyValue": nil, "digestReflection": nil, "latest": imageRefAllow, "previous": imageRefAllow, "blockedBy": nil, "suspended": nil,
+			"generation": nil, "observedGeneration": nil},
+		"automation": allow{"ready": nil, "reason": nil, "message": nil, "sourceKind": nil, "sourceName": nil, "sourceNamespace": nil,
+			"interval": nil, "pushBranch": nil, "updateStrategy": nil, "updatePath": nil, "lastRun": nil, "lastPushTime": nil,
+			"lastPushCommit": nil, "observedSourceRevision": nil, "suspended": nil, "generation": nil, "observedGeneration": nil,
+			"uses": allow{"namespace": nil, "name": nil, "resolved": imageRefAllow, "observed": imageRefAllow, "state": nil}}},
 }
+
+var imageRefAllow = allow{"name": nil, "tag": nil, "digest": nil, "text": nil}
 
 // helmEvidenceFields is the allowlist for a Helm release (it has no row).
 var helmEvidenceFields = allow{"chart": nil, "appVersion": nil, "status": nil, "revision": nil, "updated": nil,

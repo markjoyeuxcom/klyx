@@ -20,6 +20,7 @@ import (
 	"github.com/moomora/klyx/internal/gitcache"
 	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -328,4 +329,8 @@ func TestComputeDiffKeepsTheSuspendedOrFailingGate(t *testing.T) {
 	if d, ok := svc.cacheDiff(context.Background(), conn, "flux-system", "apps"); !ok || d.Error != "" || conn.dryRun == nil {
 		t.Fatalf("a failing Kustomization: ok=%v %+v", ok, d)
 	}
+}
+
+func (d *diffConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
+	return observe.Rows{}, false
 }

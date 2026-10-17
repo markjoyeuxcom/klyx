@@ -27,7 +27,9 @@ type ClusterDTO struct {
 	GitopsReason string `json:"gitopsReason"`
 	FluxPresent  bool   `json:"fluxPresent"`
 	// FluxOperatorPresent: the Flux Operator's API is served (coverage S1a).
-	FluxOperatorPresent    bool   `json:"fluxOperatorPresent"`
+	FluxOperatorPresent bool `json:"fluxOperatorPresent"`
+	// FluxImagesPresent: Flux image automation's API is served (S1b).
+	FluxImagesPresent      bool   `json:"fluxImagesPresent"`
 	FluxHealthy            bool   `json:"fluxHealthy"`
 	ArgoPresent            bool   `json:"argoPresent"`
 	NetworkTier            string `json:"networkTier"`
@@ -90,6 +92,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		GitopsReason:           s.Capabilities.GitOps.Reason,
 		FluxPresent:            s.Capabilities.GitOps.Flux.Present,
 		FluxOperatorPresent:    s.Capabilities.GitOps.FluxOperator.Present,
+		FluxImagesPresent:      s.Capabilities.GitOps.Flux.Images.Served,
 		FluxHealthy:            s.Capabilities.GitOps.Flux.Healthy,
 		ArgoPresent:            s.Capabilities.GitOps.Argo.Present,
 		NetworkTier:            s.Capabilities.Network.Tier.String(),
