@@ -166,3 +166,19 @@ func TestSoftEndsWithoutUserinfo(t *testing.T) {
 		}
 	}
 }
+
+// Codex's S0b re-review, finding 4: a "%40" after the last literal "@" is
+// the decoded separator; everything before it goes.
+func TestMixedLiteralAndEncodedAt(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://one@" + needle + "%40host.example/repo":                "https://host.example/repo",
+		"https://one@" + needle + "%40host.example%40tail.example/repo": "https://tail.example/repo",
+		"https://one%40" + needle + "@host.example/repo":                "https://host.example/repo",
+	} {
+		for _, got := range []string{Text(in).Text, Field(in).Text} {
+			if got != want {
+				t.Errorf("%q: got %q, want %q", in, got, want)
+			}
+		}
+	}
+}

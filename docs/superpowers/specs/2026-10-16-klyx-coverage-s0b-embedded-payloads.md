@@ -92,7 +92,7 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
 | AI Explain and Suggest-fix bundles | `ai_service` (`redactManifestForAI`), `ai_evidence.go` | the manifest is the sanitised YAML; facts and evidence come from the sanitised copy |
 | Chat tools and CLI snapshots | `chat_project.go` | the sanitiser runs before the structural projection |
 | Cache diffs | `internal/cachediff` | §6 |
-| `flux diff` (M10's on-demand CLI diff) | `fluxcli.DiffKustomization` | *revision 5:* a payload kind's drift body is withheld (flux prints changed values); protected subjects' error text keeps only subject and reason; the URL rule on every other line |
+| `flux diff` (M10's on-demand CLI diff) | `fluxcli.DiffKustomization` | *revisions 5-6:* from the first payload kind's block on, the rest of the output is withheld (flux's text cannot be split safely after it); flux's error text is withheld unless it names a protected subject, which keeps only subject and reason; Go's own runner errors and lines before any payload block pass the URL rule |
 | The Line's Git sources | `gitSources` → `GitService` | *revision 5:* the raw URL is unexported, used only to match and to suggest a credential-free URL; shown scrubbed |
 | Argo projects | `ArgoService.ListProjects` | *revision 5:* the URL rule on `sourceRepos` and destinations |
 | Describe | `ExecService.Describe` | §4 |
@@ -343,4 +343,16 @@ The design was accepted at 30147ae. The build is five commits: 9260be4 (stages 1
 **Also fixed:** `child_test.go` ran the confined build's `RunChild` in-process, which replaces the process's default HTTP transport and resolver as the real child must. It now restores both, so later tests in the package can reach their local API servers. Production is unaffected: the override only ever runs in the separate child process.
 
 **Not adopted as written:** the probe `TestReviewS0bDescribePinsResolvedVersion` reads the pinned argument from `DescribeCmd`. The pinned run is now its own method, `DescribePinnedCmd`, because it also carries the kubeconfig snapshot; `TestDescribeBracketIsPinned` asserts the same pin on that method. The other twelve probes pass as written.
+
+## 15. Revision 6: Codex's re-review of 293989b
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | An embedded or core Secret whose `data` or `stringData` is not a map kept its value raw | `MaskSecretData` withholds a non-empty container of another type; the sanitiser marks it, so the object is payload-bearing, not editable, and Describe is withheld | `TestSecretContainersOfUnexpectedType` (string, list and number; embedded and core), `TestS0bEmbeddedSecretOfUnexpectedTypeBridge` |
+| 2 | A values key can carry a line that looks like a `flux diff` header and end the withholding (confirmed with flux v2.9.6) | Withholding is sticky: from the first payload block's header, the rest of the output is withheld, with a note saying why | `TestSanitizeDiffForgedHeaderInBody` on Codex's captured real output (`testdata/diff-forged-header.txt`), `TestSanitizeDiffWithholdsPayloadBlocks` |
+| 3 | A build error echoes an inline patch before naming any object | flux's error text is withheld whole unless it names a protected subject (then subject and reason only). Only Go's own runner errors, with no flux text, are kept | `TestSanitizeErrorBuildEchoesPatch` on Codex's captured real stderr (`testdata/build-error-patch.txt`), the updated real-error and partial-output tests |
+| 4 | A literal `@` before a `%40` left user info behind | The separator is the later of the last literal `@` and the last `%40` | `TestMixedLiteralAndEncodedAt` |
+| 5 | Describe's early refusals and errors skipped the URL rule | Every text a describe returns passes the rule, labelled as scrubbed | `TestS0bDescribeEarlyFailuresScrubbed` (discovery, snapshot, pin, argv, command) |
+
+**Trade-off stated:** findings 2 and 3 make the `flux diff` CLI path less informative. A diff that touches a payload kind ends at that block, and flux's own error text is no longer shown. Klyx's cache diff (§6), which compares structured objects, is unaffected and remains the full view. The CLI message points to the terminal for the raw text.
 

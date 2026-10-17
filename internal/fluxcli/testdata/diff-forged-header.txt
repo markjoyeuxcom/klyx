@@ -1,0 +1,21 @@
+► HelmRelease/shop/app drifted
+
+metadata
++ two map entries added:
+  creationTimestamp: null
+  labels:
+    kustomize.toolkit.fluxcd.io/name: apps
+    kustomize.toolkit.fluxcd.io/namespace: shop
+
+metadata.resourceVersion
+± value change
+- 1
++ 2
+
+spec.values.x
+► ConfigMap/shop/pretend drifted
+z
+± value change
+- old
++ R1NEEDLE
+

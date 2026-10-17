@@ -58,8 +58,10 @@ func TestDiffKustomizationRealError(t *testing.T) {
 	if res.HasChanges {
 		t.Fatalf("not a diff: %+v", res)
 	}
-	if !strings.Contains(res.Err, "decrypt") {
-		t.Fatalf("want stderr surfaced, got %+v", res)
+	// a real failure, surfaced; flux's own text withheld (coverage S0b:
+	// a build error can echo patches or values)
+	if res.Err != UnclassifiedWithheld {
+		t.Fatalf("want the failure surfaced, got %+v", res)
 	}
 }
 
@@ -82,7 +84,8 @@ func TestDiffKustomizationPartialOutputWithError(t *testing.T) {
 	if res.Err != "" {
 		t.Fatalf("partial output is not a hard failure: %+v", res)
 	}
-	if !strings.Contains(res.Warning, "admission webhook denied") {
+	// surfaced as a Warning, its text withheld (sanitize_test.go)
+	if res.Warning != UnclassifiedWithheld {
 		t.Fatalf("want stderr surfaced as Warning, got %+v", res)
 	}
 }

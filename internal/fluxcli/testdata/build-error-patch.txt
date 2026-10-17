@@ -1,0 +1,3 @@
+✗ kustomize build failed: trouble configuring builtin PatchTransformer with config: `
+patch: R1NEEDLE
+`: unable to parse SM or JSON patch from [patch: "R1NEEDLE"]

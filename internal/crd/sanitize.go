@@ -200,8 +200,17 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 	if group == "" && kind == "Secret" {
 		masked, _ := MaskSecretData(o)
 		for _, f := range []string{"data", "stringData"} {
-			if m, ok := o[f].(map[string]any); ok && len(m) > 0 && !allMasked(m) {
-				s.mark(join(at, f), true)
+			switch v := o[f].(type) {
+			case nil:
+			case map[string]any:
+				if len(v) > 0 && !allMasked(v) {
+					s.mark(join(at, f), true)
+				}
+			default:
+				// an unexpected container: MaskSecretData withheld it
+				if !empty(v) && !isPlaceholder(v) {
+					s.mark(join(at, f), true)
+				}
 			}
 		}
 		o = masked
@@ -218,6 +227,9 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 	s.urls(o, at, 0)
 	return o
 }
+
+// emptyValue is empty for MaskSecretData's callers.
+func emptyValue(v any) bool { return empty(v) || isPlaceholder(v) }
 
 func allMasked(m map[string]any) bool {
 	for _, v := range m {

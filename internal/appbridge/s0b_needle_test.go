@@ -3,6 +3,8 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -158,5 +160,45 @@ func TestS0bSecretDetailPolicy(t *testing.T) {
 	}
 	if d.EditEligible || d.DescribeMode != "withheld" || len(d.SecretKeys) != 1 {
 		t.Fatalf("edit=%v mode=%s keys=%d", d.EditEligible, d.DescribeMode, len(d.SecretKeys))
+	}
+}
+
+// Codex's S0b re-review, finding 5: every early refusal and error a
+// describe returns passes the URL rule.
+func TestS0bDescribeEarlyFailuresScrubbed(t *testing.T) {
+	const needle = "EARLYneedle2W"
+	e := errors.New("request failed https://bob:" + needle + "@host.example/repo")
+	cases := map[string]func(f *fakeExecConn){
+		"discovery": func(f *fakeExecConn) { f.kindErr = e },
+		"snapshot":  func(f *fakeExecConn) { f.snaps = []fakeSnap{{err: e}} },
+		"pin":       func(f *fakeExecConn) { f.pinnedErr = e },
+		"argv":      func(f *fakeExecConn) { f.describeArgvErr = e },
+		"command":   func(f *fakeExecConn) { f.kindName = ""; f.describeErr = e },
+	}
+	for name, set := range cases {
+		f := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization",
+			snaps:       []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "7"}},
+			describeCmd: func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: apps") }}
+		set(f)
+		r := NewExecService(func(string) (ExecConn, bool) { return f, true }).Describe(context.Background(), "kind-klyx", "ks", "shop", "apps")
+		b, _ := json.Marshal(r)
+		if strings.Contains(string(b), needle) {
+			t.Errorf("%s: %s", name, b)
+		}
+		if !r.Scrubbed {
+			t.Errorf("%s: a scrubbed error is labelled: %+v", name, r)
+		}
+	}
+}
+
+// Codex's S0b re-review, finding 1, through the bridge.
+func TestS0bEmbeddedSecretOfUnexpectedTypeBridge(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]any{"name": "bad-secret", "namespace": "shop", "uid": "u"},
+		"spec":     map[string]any{"resources": []any{map[string]any{"apiVersion": "v1", "kind": "Secret", "data": "SECRETbridge8M"}}}}}
+	d := NewCRDService(func(string) (CRDConn, bool) { return s0bConn(t, u), true }).GetInstanceDetail("c", "fluxcd.controlplane.io", "v1", "resourcesets", "shop", "bad-secret")
+	b, _ := json.Marshal(d)
+	if d.Error != "" || strings.Contains(string(b), "SECRETbridge8M") || d.EditEligible || d.DescribeMode != "withheld" {
+		t.Fatalf("edit=%v mode=%s: %s", d.EditEligible, d.DescribeMode, b)
 	}
 }

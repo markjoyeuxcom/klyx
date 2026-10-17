@@ -278,3 +278,25 @@ func TestOversizedSurfaceWithheld(t *testing.T) {
 		t.Fatal("sizeOver")
 	}
 }
+
+// Codex's S0b re-review, finding 1: an embedded or core Secret whose data
+// or stringData is not a map is withheld and payload-bearing.
+func TestSecretContainersOfUnexpectedType(t *testing.T) {
+	const n = "SECRETtype3V"
+	for _, field := range []string{"data", "stringData"} {
+		for _, val := range []any{n, []any{n}, 42.0} {
+			secret := map[string]any{"apiVersion": "v1", "kind": "Secret", field: val}
+			embedded := SanitizeEmbedded("fluxcd.controlplane.io", "ResourceSet", map[string]any{"spec": map[string]any{"resources": []any{secret}}})
+			core := SanitizeEmbedded("", "Secret", map[string]any{"apiVersion": "v1", "kind": "Secret", field: val})
+			for name, s := range map[string]Sanitized{"embedded": embedded, "core": core} {
+				if strings.Contains(mustJSON(t, s.Object), n) || !s.Payload || s.EditEligible || s.DescribeMode != DescribeWithheld {
+					t.Errorf("%s %s=%T: %+v", name, field, val, s)
+				}
+			}
+			masked, _ := MaskSecretData(map[string]any{field: val})
+			if masked[field] != WithheldValue {
+				t.Errorf("MaskSecretData %s=%T: %v", field, val, masked[field])
+			}
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/clibin"
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // Runner executes a flux invocation. Unlike a plain runner it returns stdout AND
@@ -123,11 +124,11 @@ func DiffKustomization(ctx context.Context, r Runner, kubeContext, ns, name, pat
 		return res
 	}
 	if err != nil {
-		msg := stderr
-		if msg == "" {
-			msg = err.Error()
+		if stderr == "" {
+			// Go's own error (the binary missing, an exit status): no flux text
+			return DiffResult{Err: urlscrub.Text(err.Error()).Text}
 		}
-		return DiffResult{Err: sanitizeError(msg)}
+		return DiffResult{Err: sanitizeError(stderr)}
 	}
 	return DiffResult{HasChanges: false}
 }

@@ -219,6 +219,24 @@ const describeTimeout = 30 * time.Second
 // empty output. ctx is the call's: the sheet cancels a run it no longer
 // shows (a closed sheet, another object), which stops kubectl.
 func (s *ExecService) Describe(ctx context.Context, cluster, kindArg, namespace, name string) DescribeResultDTO {
+	return scrubDescribe(s.describe(ctx, cluster, kindArg, namespace, name))
+}
+
+// scrubDescribe applies the URL rule to every text a describe returns, the
+// early refusals and errors included (Codex's S0b re-review, finding 5):
+// discovery, snapshot, pinning and command errors can quote a URL. The
+// output is scrubbed where it is read; a change here is labelled the same.
+func scrubDescribe(r DescribeResultDTO) DescribeResultDTO {
+	for _, f := range []*string{&r.Error, &r.CommandError, &r.Withheld, &r.Command} {
+		if t := urlscrub.Text(*f); t.Changed() {
+			*f, r.Scrubbed = t.Text, true
+			r.LinesWithheld += t.Withheld
+		}
+	}
+	return r
+}
+
+func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace, name string) DescribeResultDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return DescribeResultDTO{Error: "cluster not connected: " + cluster}

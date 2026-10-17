@@ -185,10 +185,12 @@ func authority(raw, tail string) (string, bool, int) {
 		if user == "git" && !cut {
 			return raw, true, 0
 		}
-		// remove everything up to the last raw "@" (or its encoded form)
+		// The decoded last "@" is the later of the last literal "@" and the
+		// last "%40" in raw (decoding keeps order): everything up to it goes,
+		// never only up to an earlier literal "@" (Codex's re-review, finding 4).
 		rawAt := strings.LastIndex(raw, "@")
-		if rawAt < 0 {
-			rawAt = strings.LastIndex(strings.ToLower(raw), "%40") + 2
+		if enc := strings.LastIndex(strings.ToLower(raw), "%40"); enc >= 0 && enc+2 > rawAt {
+			rawAt = enc + 2
 		}
 		host := raw[rawAt+1:]
 		if cut {

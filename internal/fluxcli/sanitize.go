@@ -17,8 +17,11 @@ import (
 // is withheld; every other line passes the URL rule. flux masks Secret
 // values itself.
 
-// DiffWithheld replaces the body of a payload kind's block.
-const DiffWithheld = "  (changes withheld: this kind carries embedded payloads)"
+// DiffWithheld replaces the body of a payload kind's block, and everything
+// after it: flux prints field paths and values as text, so a map key can
+// carry a line that looks like a block header, and no later header can be
+// trusted to end the withholding (Codex's re-review, finding 2).
+const DiffWithheld = "  (changes withheld: this kind carries embedded payloads, and flux's text cannot be split safely after it, so the rest of the diff is withheld too)"
 
 // ErrorWithheld replaces error text that names a protected subject.
 const ErrorWithheld = "its message is withheld because this kind carries protected values"
@@ -39,6 +42,9 @@ func sanitizeDiff(out string) string {
 	kept := make([]string, 0, len(lines))
 	withholding := false
 	for _, l := range lines {
+		if withholding {
+			break // sticky: nothing after a payload block is trusted
+		}
 		if m := header.FindStringSubmatch(ansi.ReplaceAllString(l, "")); m != nil {
 			// A recursive Kustomization's "📁" header introduces its children's
 			// own blocks, so it never withholds what follows.
@@ -49,9 +55,7 @@ func sanitizeDiff(out string) string {
 			}
 			continue
 		}
-		if !withholding {
-			kept = append(kept, urlscrub.Text(l).Text)
-		}
+		kept = append(kept, urlscrub.Text(l).Text)
 	}
 	return strings.Join(kept, "\n")
 }
@@ -62,12 +66,16 @@ func protectedSubject(kind string) bool {
 	return kind == "Secret" || crd.IsPayloadKindName(kind)
 }
 
-// sanitizeError keeps error text unless it names a protected subject. Error
-// text can run over several lines and echo submitted values (a validation or
-// admission refusal), so then the whole text is replaced by each protected
-// subject's dry-run failure and reason, and nothing else.
+// UnclassifiedWithheld replaces flux's error text when nothing in it can be
+// shown safely (Codex's re-review, finding 3).
+const UnclassifiedWithheld = "flux's message is withheld: its build and dry-run errors can echo patches, values or templates. Run the diff in a terminal to read it."
+
+// sanitizeError never forwards flux's free text: a build error can echo an
+// inline patch before any object is named, so the absence of a protected
+// subject is no evidence of safety. A protected subject's dry-run failure
+// keeps its subject and reason; anything else is withheld whole.
 func sanitizeError(text string) string {
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return text
 	}
 	plain := ansi.ReplaceAllString(text, "")
@@ -80,7 +88,7 @@ func sanitizeError(text string) string {
 		}
 	}
 	if len(named) == 0 {
-		return urlscrub.Text(text).Text
+		return UnclassifiedWithheld
 	}
 	reasons := map[string]string{}
 	for _, m := range dryRun.FindAllStringSubmatch(plain, -1) {
@@ -90,6 +98,6 @@ func sanitizeError(text string) string {
 	for _, n := range named {
 		out = append(out, fmt.Sprintf("%s dry-run failed%s", n, reasons[n]))
 	}
-	out = append(out, ErrorWithheld+"; other errors in this run are withheld with it")
+	out = append(out, ErrorWithheld+"; other errors in this run are withheld with it. "+UnclassifiedWithheld)
 	return strings.Join(out, "\n")
 }

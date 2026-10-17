@@ -370,6 +370,17 @@ func MaskSecretData(obj map[string]interface{}) (map[string]interface{}, []Secre
 
 	var keys []SecretKeyInfo
 
+	// A data or stringData of an unexpected type (a string, a list) is
+	// withheld whole: masking reads maps only, and a container it cannot
+	// read is never returned raw (coverage S0b; Codex's re-review, finding 1).
+	for _, f := range []string{"data", "stringData"} {
+		if v, ok := obj[f]; ok && v != nil {
+			if _, isMap := v.(map[string]interface{}); !isMap && !emptyValue(v) {
+				out[f] = WithheldValue
+			}
+		}
+	}
+
 	// data: base64-encoded byte values (the standard Secret.data field)
 	if raw, ok := obj["data"].(map[string]interface{}); ok && len(raw) > 0 {
 		masked := make(map[string]interface{}, len(raw))
