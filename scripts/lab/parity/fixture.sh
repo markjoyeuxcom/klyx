@@ -811,11 +811,25 @@ restart_apiserver() {
 	local node=$name-control-plane
 	[[ $(docker inspect "$node" --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}' 2>/dev/null) == "$name" ]] ||
 		die "container $node is not the $name kind node"
+	# Returned only once the new API server serves and the kubelet has
+	# reported its pod Ready again with a higher restart count: /readyz alone
+	# can answer from the old process, and the pod's mirror status reads
+	# Ready=False for about ten seconds after the restart - a pod the
+	# Observer then rightly reads as Progressing, which a hold check would
+	# race (found in S2a's parity runs).
+	local pod=kube-apiserver-$node before i rc ready
+	before=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}')
 	docker exec "$node" sh -c 'crictl stop $(crictl ps --name kube-apiserver -q)' >/dev/null
-	local i
 	for ((i = 0; i < 120; i++)); do
-		k get --raw /readyz >/dev/null 2>&1 && { echo "klyx-parity: API server restarted"; return; }
+		if k get --raw /readyz >/dev/null 2>&1; then
+			rc=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || true)
+			ready=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+			if [[ -n $rc && $rc -gt $before && $ready == True ]]; then
+				echo "klyx-parity: API server restarted"
+				return
+			fi
+		fi
 		sleep 1
 	done
-	die "the API server did not come back within 120s"
+	die "the API server did not come back, reported Ready with a new restart, within 120s"
 }
