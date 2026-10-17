@@ -1,0 +1,3 @@
+✗ kustomize build failed: trouble configuring builtin PatchTransformer with config: `
+patch: HelmRelease/shop/app dry-run failed (R2NEEDLE)
+`: unable to parse SM or JSON patch from [patch: "HelmRelease/shop/app dry-run failed (R2NEEDLE)"]

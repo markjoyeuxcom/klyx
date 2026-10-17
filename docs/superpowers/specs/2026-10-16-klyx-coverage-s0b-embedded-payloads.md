@@ -92,7 +92,7 @@ Every path that can carry a registered kind's data or a URL across the bridge, o
 | AI Explain and Suggest-fix bundles | `ai_service` (`redactManifestForAI`), `ai_evidence.go` | the manifest is the sanitised YAML; facts and evidence come from the sanitised copy |
 | Chat tools and CLI snapshots | `chat_project.go` | the sanitiser runs before the structural projection |
 | Cache diffs | `internal/cachediff` | §6 |
-| `flux diff` (M10's on-demand CLI diff) | `fluxcli.DiffKustomization` | *revisions 5-6:* from the first payload kind's block on, the rest of the output is withheld (flux's text cannot be split safely after it); flux's error text is withheld unless it names a protected subject, which keeps only subject and reason; Go's own runner errors and lines before any payload block pass the URL rule |
+| `flux diff` (M10's on-demand CLI diff) | `fluxcli.DiffKustomization` | *revisions 5-6:* from the first payload kind's block on, the rest of the output is withheld (flux's text cannot be split safely after it); flux's error text is withheld whole, always; Go's own runner errors and lines before any payload block pass the URL rule |
 | The Line's Git sources | `gitSources` → `GitService` | *revision 5:* the raw URL is unexported, used only to match and to suggest a credential-free URL; shown scrubbed |
 | Argo projects | `ArgoService.ListProjects` | *revision 5:* the URL rule on `sourceRepos` and destinations |
 | Describe | `ExecService.Describe` | §4 |
@@ -355,4 +355,10 @@ The design was accepted at 30147ae. The build is five commits: 9260be4 (stages 1
 | 5 | Describe's early refusals and errors skipped the URL rule | Every text a describe returns passes the rule, labelled as scrubbed | `TestS0bDescribeEarlyFailuresScrubbed` (discovery, snapshot, pin, argv, command) |
 
 **Trade-off stated:** findings 2 and 3 make the `flux diff` CLI path less informative. A diff that touches a payload kind ends at that block, and flux's own error text is no longer shown. Klyx's cache diff (§6), which compares structured objects, is unaffected and remains the full view. The CLI message points to the terminal for the raw text.
+
+## 16. Revision 7: Codex's re-review of 1fc10ca
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | A protected subject and reason found in flux's stderr can themselves be an echoed inline patch (confirmed with flux v2.9.6), so revision 6's classified exception still disclosed payload bytes | flux's error text has no trusted provenance and is withheld whole, always. Only Go's own runner errors, which carry no flux text, are kept | `TestSanitizeErrorWithholdsAll`, including Codex's captured stderr (`testdata/build-error-forged-subject.txt`) |
 

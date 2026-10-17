@@ -79,22 +79,30 @@ func TestSanitizeDiffForgedHeaderInBody(t *testing.T) {
 	}
 }
 
-func TestSanitizeErrorWithholdsProtectedSubjects(t *testing.T) {
-	stderr := "✗ HelmRelease/shop/api dry-run failed (Invalid): HelmRelease.helm.toolkit.fluxcd.io \"api\" is invalid: spec.values: Invalid value: " + diffNeedle + "\n" +
-		"  more text " + diffNeedle + "\nSecret/shop/s dry-run failed: admission webhook \"x\" denied the request: " + diffNeedle
-	got := sanitizeError(stderr)
-	if strings.Contains(got, diffNeedle) {
-		t.Fatalf("crossed: %s", got)
-	}
-	for _, want := range []string{"HelmRelease/shop/api dry-run failed (Invalid)", "Secret/shop/s dry-run failed", ErrorWithheld} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in %s", want, got)
+// flux's error text is withheld whole, always: a subject and reason found in
+// it can be part of an echoed patch (Codex's S0b re-review 3), and an error
+// without one is no evidence of safety (re-review 2).
+func TestSanitizeErrorWithholdsAll(t *testing.T) {
+	for _, stderr := range []string{
+		"✗ HelmRelease/shop/api dry-run failed (Invalid): spec.values: Invalid value: " + diffNeedle,
+		"✗ Deployment/shop/web dry-run failed (Invalid): spec.replicas: Invalid value: -1 from https://u:" + diffNeedle + "@h/x",
+		"unable to decrypt: no key",
+	} {
+		if got := sanitizeError(stderr); got != UnclassifiedWithheld {
+			t.Errorf("%q: %s", stderr, got)
 		}
 	}
-	// no protected subject is no evidence of safety: withheld whole
-	plain := "✗ Deployment/shop/web dry-run failed (Invalid): spec.replicas: Invalid value: -1 from https://u:" + diffNeedle + "@h/x"
-	if got := sanitizeError(plain); got != UnclassifiedWithheld {
-		t.Errorf("an unclassified error: %s", got)
+	if got := sanitizeError("  \n"); got != "  \n" {
+		t.Errorf("blank text stays blank: %q", got)
+	}
+	// Codex's capture: an inline patch that reads like a classified subject
+	raw, err := os.ReadFile("testdata/build-error-forged-subject.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := DiffKustomization(context.Background(), fixedRunner{stderr: string(raw), err: errors.New("exit status 1")}, "", "shop", "apps", "/tmp/x")
+	if strings.Contains(r.Err, "R2NEEDLE") || r.Err != UnclassifiedWithheld {
+		t.Fatalf("err: %q", r.Err)
 	}
 }
 
