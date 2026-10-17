@@ -232,10 +232,14 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
   - `spec.git.commit.messageTemplateValues` and `spec.git.push.options`: free-form (keys kept, values omitted).
 
   S0b's machinery then applies unchanged: the generic detail (Manifest, Fields), Describe (withheld while a value is present), the guarded editor, cache diffs, the `flux diff` path, and the chat and AI projections. Codex's probe showed today's generic detail and chat projection retain all three.
-- **Rendered commit messages and template errors.** The controller publishes the rendered commit message, which can carry template values, in its push event (`PushResult.Summary`, the lines after the first). A template error can echo template text in a condition or event message.
-  - **One rule,** `crd.AutomationMessage`, applies to every condition and event message whose involved object is an ImageUpdateAutomation:
-    - only the first line is kept, and the URL rule runs on it;
-    - a first line that names the commit template (`template`, `messageTemplate`, `RemovedTemplateField`) is replaced by "the controller's message concerns the commit template and is withheld: it can echo template values", with the reason kept.
+- **Automation messages fail closed** (revision 2). The controller publishes text no rule can bound:
+  - the rendered commit message, which can carry template values, after the push summary's first line (`PushResult.Summary`);
+  - a template error, which can echo the template;
+  - a Git server's rejection, which go-git copies verbatim into the error (`packp/report_status.go` 125-155). Flux's client wraps it unchanged (`client.go` 417-430), and the controller writes `failed to update source: <error>` into Ready and a warning event. A rejection can quote a push option's value on its first line.
+  - **The rule, `crd.AutomationMessage`,** for every condition and event message whose involved object is an ImageUpdateAutomation, is an allowlist. Only these pass:
+    - the controller's own fixed messages, enumerated from the v1.2.5 sources at build time: `repository up-to-date`, `no change since last reconciliation`, `reconciliation in progress`, and `processing object: new generation <n> -> <m>` with integers;
+    - the push summary's first line, parsed as `pushed commit '<7 hex>' to branch '<branch>'`, optionally followed by ` and refspecs '<refspec>'[, '<refspec>']`. The branch and refspecs must be valid Git ref names, and nothing after the first line is read.
+  - **Everything else is withheld whole,** with the condition's reason kept: "the controller's message is withheld: automation messages can quote push options, template values or a Git server's reply". The reason (`GitOperationFailed`, `UpdateFailed`, and so on), the object's own structured references and the verdict still say what failed.
   - **It runs wherever such text crosses:** the inspector's conditions and events, the events lens, the chat events and get tools, AI evidence, and health reasons (`CapReason` input).
 - **The URL rule** (S0b) applies to every other displayed string, including the GitRepository URL in the push target.
 - **AI facts:**
@@ -281,6 +285,8 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
     - needles in `messageTemplate`, a `messageTemplateValues` value and a push option, absent from the serialised generic detail, Describe, the chat get and events tools and AI evidence;
     - a push event whose rendered commit message carries a needle after the first line;
     - a condition whose message echoes the template;
+    - **a Git rejection on the first line with no template keyword** (`failed to update source: failed to push to remote: command error on refs/heads/main: push option ci.variable=<needle> rejected`), absent from the serialised condition, event, chat and AI paths;
+    - each allowlisted message passing unchanged, and a push summary with a malformed branch withheld;
     - the author's email kept out of AI facts.
 - **Parity:**
   - the three CRDs on `kind-klyx` and in `klyx-parity.sh`;
@@ -315,4 +321,10 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
 | 4 | Join inputs were clipped as display strings | §3: the selector, labels, image references, SHAs and revisions are kept whole as facts; one too large to keep marks its join incomplete; a clipped copy is never compared. §7 tests through the real projection |
 | P3 | The run clock overstated "no run started"; ImagePolicy's Always interval | §4.3: "no newer run recorded; a run may be in progress"; the Always exception acknowledged |
 | P3 | The retired dim and grey chip | §4.1 and §7 use the current fault aspect and neutral syncing text |
+
+## 10. Revision 2: Codex's re-review of d73a347
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | A first-line rule with a template-keyword denylist still passes a Git server's rejection that quotes a push option | §6: automation messages are an allowlist of the controller's fixed messages and the parsed push summary's first line; everything else is withheld whole, keeping the reason. §7 adds the first-line rejection needle across the serialised paths |
 
