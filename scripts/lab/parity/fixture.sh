@@ -409,10 +409,100 @@ EOF
 	ready resourcesetinputproviders.fluxcd.controlplane.io "$ns" parity-rsip True ReconciliationSucceeded
 }
 
+images_objects() {
+	# Flux image automation (coverage S1b): stand-ins for both controllers,
+	# found by their component label in flux-system, so the Flux task has no
+	# controller issue. The baseline is healthy (case B has no attention):
+	# a recent scan and run under a long interval, a resolved policy, and a
+	# suspended automation, which is paused, never attention. Faults are
+	# covered by the observer-path tests (internal/healthsrc/fluximages_test.go).
+	local c
+	for c in image-reflector-controller image-automation-controller; do
+		k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $c
+  namespace: flux-system
+  labels: {app.kubernetes.io/component: $c}
+  annotations:
+    $(marks ok true)
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: $c}}
+  template:
+    metadata:
+      labels: {app: $c}
+      annotations:
+        klyx.dev/parity-role: "ok"
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: manager, image: $pause, imagePullPolicy: Never}]
+EOF
+		k -n flux-system rollout status "deployment/$c" --timeout=120s >/dev/null
+		settled_pods flux-system "$c" Running
+	done
+	k apply -f - >/dev/null <<EOF
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: parity-repo
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec: {image: ghcr.io/klyx/parity, interval: 24h}
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImagePolicy
+metadata:
+  name: parity-policy
+  namespace: $ns
+  labels: {klyx.dev/parity: images}
+  annotations:
+    $(marks ok false)
+spec: {imageRepositoryRef: {name: parity-repo}, policy: {semver: {range: ">=1.0.0"}}}
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageUpdateAutomation
+metadata:
+  name: parity-auto
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  interval: 24h
+  sourceRef: {kind: GitRepository, name: parity-git}
+  git: {push: {branch: auto}, commit: {author: {name: parity, email: parity@klyx.dev}}}
+  policySelector: {matchLabels: {klyx.dev/parity: images}}
+  update: {strategy: Setters, path: ./}
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageUpdateAutomation
+metadata:
+  name: parity-auto-paused
+  namespace: $ns
+  annotations:
+    $(marks paused false)
+spec:
+  interval: 24h
+  suspend: true
+  sourceRef: {kind: GitRepository, name: parity-git}
+  git: {push: {branch: auto}, commit: {author: {name: parity, email: parity@klyx.dev}}}
+EOF
+	local t
+	t=$(now)
+	ready imagerepositories.image.toolkit.fluxcd.io "$ns" parity-repo True Succeeded "\"lastScanResult\":{\"tagCount\":3,\"scanTime\":\"$t\",\"latestTags\":[\"1.2.0\",\"1.1.0\",\"1.0.0\"]},\"canonicalImageName\":\"ghcr.io/klyx/parity\""
+	ready imagepolicies.image.toolkit.fluxcd.io "$ns" parity-policy True Succeeded "\"latestRef\":{\"name\":\"ghcr.io/klyx/parity\",\"tag\":\"1.2.0\"}"
+	ready imageupdateautomations.image.toolkit.fluxcd.io "$ns" parity-auto True Succeeded "\"lastAutomationRunTime\":\"$t\",\"observedPolicies\":{\"parity-policy\":{\"name\":\"ghcr.io/klyx/parity\",\"tag\":\"1.2.0\"}}"
+	ready imageupdateautomations.image.toolkit.fluxcd.io "$ns" parity-auto-paused True Succeeded
+}
+
 baseline() {
 	controllers
 	flux_objects
 	fluxop_objects
+	images_objects
 	argo_objects
 	certs_objects
 	eso_objects

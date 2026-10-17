@@ -271,6 +271,36 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const note = await within(8000, "the suspension note", () => $("[data-testid='fluxop-note']"));
     if (!/^Suspended/.test(note.textContent ?? "")) throw new Error(`the suspension note: ${note.textContent}`);
   });
+  // Coverage S1b: the Flux lens's Images view, from the lab's image
+  // fixtures (scratchpad lab-s1b): broken-first, a policy's own verdict
+  // before its repository block, and an automation's push joined to its
+  // source and Kustomizations; and a failing current generation (Stage 0)
+  // is a fault with the fault aspect.
+  await step(steps, "Flux Images view", async () => {
+    await open("flux-images");
+    await closeDrawer();
+    const first = await within(10_000, "image rows", () => $<HTMLElement>(".lens-row"));
+    if (!/private|app-prerelease|api/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the failing policy", () => byText<HTMLElement>(".lens-row", /policy.*team-a\/app-prerelease/))).click();
+    const panel = await within(8000, "the policy inspector", () => $("[data-testid='images-panel']"));
+    const text = panel.textContent ?? "";
+    if (text.indexOf("Failed") < 0 || text.indexOf("Failed") > text.indexOf("Repository team-a/app")) throw new Error(`the policy's own verdict is not first: ${text.slice(0, 200)}`);
+    if (!/last resolved, before the failure/.test(text)) throw new Error("the retained image is not labelled");
+    (await within(4000, "the automation", () => byText<HTMLElement>(".lens-row", /automation.*team-a\/team-a-images/))).click();
+    const push = await within(8000, "the push block", () => $("[data-testid='images-push']"));
+    await within(8000, "the push joined", () => /the source has fetched this commit/.test(push.textContent ?? "") && /applied this commit/.test(push.textContent ?? ""));
+    if (!/pushed to auto, from the controller's event/.test(push.textContent ?? "")) throw new Error(`the bound branch: ${push.textContent}`);
+  });
+  // Coverage S1b Stage 0: a failure of the current generation, while
+  // status.observedGeneration lags, is a fault with the fault aspect -
+  // never "Syncing…" (scratchpad lab-s1b/stage0.sh).
+  await step(steps, "Flux current failure is a fault", async () => {
+    await open("flux");
+    await closeDrawer();
+    const row = await within(10_000, "the failing-current row", () => byText<HTMLElement>(".lens-row", /flux-system \/ failing-current/));
+    if (/Syncing/.test(row.textContent ?? "") || !/Failed/.test(row.textContent ?? "")) throw new Error(`not a fault: ${row.textContent}`);
+    if (!row.querySelector('[data-aspect="fault"]')) throw new Error("no fault aspect on the row");
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");

@@ -195,6 +195,7 @@ var parityParts = []parityPart{
 	{"flux", "sources", "native", []string{"gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts"}},
 	{"flux", "fluxinstance", "native", []string{"fluxinstances"}},
 	{"flux", "resourcesets", "native", []string{"resourcesets", "resourcesetinputproviders"}},
+	{"flux", "images", "native", []string{"imagerepositories", "imagepolicies", "imageupdateautomations"}},
 	{"argo", "applications", "native", []string{"applications"}},
 	{"argo", "applicationsets", "native", []string{"applicationsets"}},
 	{"certs", "certificates", "native", []string{"certificates"}},
@@ -222,6 +223,8 @@ var parityResource = map[string]string{
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
+	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
+	"imageupdateautomations": "imageupdateautomations.image.toolkit.fluxcd.io",
 }
 
 // parityMember is one counted object's declared evaluation.
