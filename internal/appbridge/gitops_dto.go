@@ -32,13 +32,17 @@ type FluxResourceDTO struct {
 	ReadySinceUnix int64 `json:"readySinceUnix,omitempty"`
 	// Stale: the spec changed and the controller has not observed it yet -
 	// Ready reflects the previous spec; the row renders as transitioning.
-	Stale              bool   `json:"stale"`
-	Generation         int64  `json:"generation"`
-	ObservedGeneration int64  `json:"observedGeneration"`
-	Suspended          bool   `json:"suspended"`
-	SourceKind         string `json:"sourceKind"`
-	SourceName         string `json:"sourceName"`
-	SourceNamespace    string `json:"sourceNamespace"`
+	Stale              bool  `json:"stale"`
+	Generation         int64 `json:"generation"`
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// ReadyGeneration is the Ready condition's own observedGeneration (0
+	// when it carries none): the generation the verdict describes, which the
+	// tooltips name (coverage S1b §4.1).
+	ReadyGeneration int64  `json:"readyGeneration,omitempty"`
+	Suspended       bool   `json:"suspended"`
+	SourceKind      string `json:"sourceKind"`
+	SourceName      string `json:"sourceName"`
+	SourceNamespace string `json:"sourceNamespace"`
 	// LastAttemptedRevision and History are The Line's attempted and
 	// deployment facts (§3.2): the revision last tried, and a HelmRelease's
 	// history newest first (only a "deployed" entry is deployment evidence).
@@ -88,6 +92,7 @@ func fluxResourceFields(r flux.Resource, now time.Time) FluxResourceDTO {
 		Stale:                 r.Stale,
 		Generation:            r.Generation,
 		ObservedGeneration:    r.ObservedGeneration,
+		ReadyGeneration:       r.ReadyObservedGeneration,
 		Suspended:             r.Suspended,
 		SourceKind:            r.SourceKind,
 		SourceName:            r.SourceName,

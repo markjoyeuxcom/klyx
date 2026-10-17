@@ -60,11 +60,16 @@ type Resource struct {
 	// namespaces are different sources - a consumer join needs all three.
 	SourceNamespace string
 	DependsOn       []DependencyRef
-	// Stale reports that the spec changed and the controller has not observed
-	// it yet (metadata.generation > status.observedGeneration). While stale,
-	// Ready reflects the PREVIOUS spec - the UI must present the row as
-	// transitioning, never as confidently green. ObservedGeneration/Generation
-	// feed the explanatory tooltip.
+	// Stale reports that the current spec has no verdict yet (coverage S1b
+	// §4.1): the Ready condition describes an older generation (its own
+	// observedGeneration is behind metadata.generation), or it is not a
+	// failure and status.observedGeneration lags. While stale the UI presents
+	// the row as transitioning, never as confidently green. A Ready=False
+	// written for the current generation is never stale: the controllers
+	// advance status.observedGeneration only on success, so a failing spec
+	// change would otherwise read "Syncing…" for as long as it fails. A
+	// Ready without its own observedGeneration keeps the status rule.
+	// ObservedGeneration/Generation feed the explanatory tooltip.
 	Stale              bool
 	Generation         int64
 	ObservedGeneration int64
@@ -304,7 +309,22 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	// honest best Flux offers (no per-apply timestamp exists in status).
 	r.ReadySince = readySince(u)
 	r.ReadyObservedGeneration = conditionObservedGeneration(u, "Ready")
+	r.Stale = pending(r.Stale, r.Generation, r.ReadyObservedGeneration, r.Ready)
 	return r
+}
+
+// pending is S1b §4.1's rule, from the status lag (lag) and the Ready
+// condition's own generation (readyGen, 0 when it carries none).
+func pending(lag bool, gen, readyGen int64, ready ReadyState) bool {
+	switch {
+	case readyGen == 0 || gen == 0:
+		return lag // no generation on Ready: the status rule
+	case gen > readyGen:
+		return true // Ready describes an older generation
+	case ready == Failed:
+		return false // a failure of the current generation is a fault
+	}
+	return lag // never confirmed while status lags
 }
 
 // conditionObservedGeneration is the named condition's own

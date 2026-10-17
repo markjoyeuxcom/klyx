@@ -63,6 +63,17 @@ function shortRev(rev: string): string {
 // sinceOf ticks the age since the Ready transition from its absolute time
 // (shared rows are pushed only when they change - slice 3 §3); the
 // capture-relative age is the fallback for a payload without it.
+// observedOf is the generation the shown verdict describes: the older of
+// status.observedGeneration and the Ready condition's own (S1b §4.1).
+const observedOf = (r: FluxResourceDTO) =>
+  r.readyGeneration ? Math.min(r.readyGeneration, r.observedGeneration ?? r.readyGeneration) : r.observedGeneration;
+// currentFailure: Ready=False written for the current generation while
+// status.observedGeneration lags - the controllers advance it only on
+// success, so this is a fault of the current spec (S1b §4.1).
+const currentFailure = (r: FluxResourceDTO) =>
+  !r.suspended && !r.stale && r.ready === "Failed" && r.generation != null && r.readyGeneration === r.generation && (r.observedGeneration ?? r.generation) < r.generation;
+const failureTitle = (r: FluxResourceDTO) =>
+  `Ready=False for generation ${r.generation}, the current spec (the last generation the controller completed is ${r.observedGeneration})`;
 const sinceOf = (r: FluxResourceDTO, nowS: number) => (r.readySinceUnix ? Math.max(0, nowS - r.readySinceUnix) : r.readySinceSeconds);
 
 // ago is the shared compact age in prose ("5d ago"); a table cell says the
@@ -623,9 +634,9 @@ function FluxLens({ cluster }: { cluster: string }) {
                       </span>
                     )}
                     {show("status") && (
-                      <span style={ellipsisCell} title={included(r) && r.message ? r.message : undefined}>
+                      <span style={ellipsisCell} title={currentFailure(r) ? `${failureTitle(r)}${r.message ? `: ${r.message}` : ""}` : included(r) && r.message ? r.message : undefined}>
                         {h.kind === "paused" ? <span style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-sans)" }}>{h.label}</span>
-                          : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={r.observedGeneration} />
+                          : h.label === "Syncing…" ? <SyncingChip generation={r.generation} observedGeneration={observedOf(r)} />
                           : <span style={{ color: STATUS_COLOR[h.kind], fontFamily: "var(--font-sans)" }}>
                               {h.label}{included(r) && r.reason ? ` · ${r.reason}` : ""}
                             </span>}
@@ -882,13 +893,16 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
         tone={roleTone(role.kind)}
         kind={role.kind}
         label={role.label}
-        reason={lagging ? `generation ${r.generation} not yet observed (observed ${r.observedGeneration})` : included(r) ? r.reason || undefined : undefined}
+        reason={lagging ? `generation ${r.generation} not yet observed (observed ${observedOf(r)})` : included(r) ? r.reason || undefined : undefined}
         detail={lagging ? undefined : shortRev(r.revision) || undefined}
       />
       {lagging && r.message && (
         <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere", marginTop: -4 }}>
-          <span className="t-section-label">Last observed (generation {r.observedGeneration}): </span>{r.ready}{r.reason ? ` · ${r.reason}` : ""} - {r.message}
+          <span className="t-section-label">Last observed (generation {observedOf(r)}): </span>{r.ready}{r.reason ? ` · ${r.reason}` : ""} - {r.message}
         </div>
+      )}
+      {currentFailure(r) && (
+        <div className="t-body" style={{ color: "var(--color-text-secondary)", marginTop: -4 }}>{failureTitle(r)}.</div>
       )}
       {r.message && included(r) && !lagging && (
         <ClampedText key={r.message} className="verdict-message" text={r.message} style={{ overflowWrap: "anywhere" }} />

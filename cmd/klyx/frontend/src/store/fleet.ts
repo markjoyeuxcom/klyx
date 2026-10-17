@@ -74,6 +74,9 @@ export type FluxResourceDTO = {
   stale?: boolean;
   generation?: number;
   observedGeneration?: number;
+  // the Ready condition's own observedGeneration (absent when it carries
+  // none): the generation the verdict describes (coverage S1b §4.1)
+  readyGeneration?: number;
 };
 
 export type ForwardDTO = {

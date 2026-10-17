@@ -726,6 +726,25 @@ describe("GitOps Codex rework (Flux review)", () => {
     expect(last.style.color).toBe("var(--color-text-secondary)");
   });
 
+  it("4d. a failure of the current generation is a fault, naming its generation, while status lags (S1b §4.1)", () => {
+    // The backend sends stale=false: Ready=False is stamped with generation 5,
+    // and status.observedGeneration (4) advances only on success.
+    seedRows([res({ name: "failing", ready: "Failed", reason: "BuildFailed", message: "kustomize build failed", stale: false, generation: 5, observedGeneration: 4, readyGeneration: 5 })], { expandedKey: "Kustomization/flux-system/failing" });
+    const { container } = render(<GitOps cluster="x" />);
+    const row = container.querySelector(".lens-row") as HTMLElement;
+    expect(row.textContent).toContain("Failed · BuildFailed");
+    expect(row.textContent).not.toContain("Syncing…");
+    expect(row.querySelector('[title^="Ready=False for generation 5, the current spec"]')).toBeTruthy();
+    expect(inspector().getByText(/Ready=False for generation 5, the current spec \(the last generation the controller completed is 4\)/)).toBeTruthy();
+  });
+
+  it("4e. a pending generation names the generation its old verdict describes", () => {
+    // Ready describes generation 4 while status caught up to 5 (a suspension).
+    seedRows([res({ name: "resumed", ready: "Ready", stale: true, generation: 5, observedGeneration: 5, readyGeneration: 4 })]);
+    const { getByText } = render(<GitOps cluster="x" />);
+    expect(getByText("Syncing… generation 5, observed 4")).toBeTruthy();
+  });
+
   it("5. palette/cross-link navigation wins over a stale filter; a later operator edit closes", () => {
     seedRows([res({ name: "a" }), res({ kind: "HelmRelease", name: "h" })]);
     const { getByLabelText, queryByTestId, getByPlaceholderText } = render(<GitOps cluster="x" />);

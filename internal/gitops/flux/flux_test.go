@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/health"
 )
 
 func ks(status string, reason string, suspend bool, rev, msg string) *unstructured.Unstructured {
@@ -230,6 +232,60 @@ func TestStalenessFromObservedGeneration(t *testing.T) {
 	// No observedGeneration in status: not-stale (never guess).
 	if r := ParseKustomization(ks(5, 0, false)); r.Stale {
 		t.Fatalf("missing observedGeneration must read not-stale: %+v", r)
+	}
+}
+
+// S1b §4.1 (Stage 0): the controllers advance status.observedGeneration
+// only on success, so a failing spec change keeps it behind while Ready=False
+// is written for the current generation. That is a fault, never "Syncing…".
+func TestPendingFollowsReadyGeneration(t *testing.T) {
+	ks := func(gen, statusGen, readyGen int64, ready, reason string) *unstructured.Unstructured {
+		cond := map[string]interface{}{"type": "Ready", "status": ready, "reason": reason, "message": "kustomize build failed"}
+		if readyGen > 0 {
+			cond["observedGeneration"] = readyGen
+		}
+		u := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+			"kind":       "Kustomization",
+			"metadata":   map[string]interface{}{"name": "app", "namespace": "flux-system"},
+			"status":     map[string]interface{}{"observedGeneration": statusGen, "conditions": []interface{}{cond}},
+		}}
+		u.SetGeneration(gen)
+		return u
+	}
+	cases := []struct {
+		name      string
+		u         *unstructured.Unstructured
+		wantStale bool
+		wantRole  health.Kind
+		wantLabel string
+	}{
+		{"failing the current generation, status behind", ks(5, 4, 5, "False", "BuildFailed"), false, health.Fault, "Failed"},
+		{"a pending generation with an old Ready", ks(5, 4, 4, "True", "ReconciliationSucceeded"), true, health.Progressing, "Syncing…"},
+		{"an old failure, a newer generation pending", ks(5, 4, 4, "False", "BuildFailed"), true, health.Progressing, "Syncing…"},
+		{"Ready True for the current generation, status behind", ks(5, 4, 5, "True", "ReconciliationSucceeded"), true, health.Progressing, "Syncing…"},
+		{"an old Ready, status caught up (a suspension)", ks(5, 5, 4, "True", "ReconciliationSucceeded"), true, health.Progressing, "Syncing…"},
+		{"Ready without its own generation: the status rule", ks(5, 4, 0, "False", "BuildFailed"), true, health.Progressing, "Syncing…"},
+		{"Ready without its own generation, caught up", ks(5, 5, 0, "False", "BuildFailed"), false, health.Fault, "Failed"},
+		{"current and healthy", ks(5, 5, 5, "True", "ReconciliationSucceeded"), false, health.OK, "Ready"},
+	}
+	for _, c := range cases {
+		r := ParseKustomization(c.u)
+		e := ReconciliationRule(r)
+		if r.Stale != c.wantStale || e.Role != c.wantRole || e.Label != c.wantLabel {
+			t.Errorf("%s: stale=%v role=%v label=%q, want %v %v %q", c.name, r.Stale, e.Role, e.Label, c.wantStale, c.wantRole, c.wantLabel)
+		}
+	}
+	// The current failure carries its reason (the fault is read from Ready).
+	if e := ReconciliationRule(ParseKustomization(ks(5, 4, 5, "False", "BuildFailed"))); e.Reason == "" {
+		t.Fatalf("a current failure reads its reason from Ready: %+v", e)
+	}
+	// A HelmRelease follows the same rule.
+	hr := ks(3, 2, 3, "False", "InstallFailed")
+	hr.SetAPIVersion("helm.toolkit.fluxcd.io/v2")
+	hr.SetKind("HelmRelease")
+	if r := ParseHelmRelease(hr); r.Stale || ReconciliationRule(r).Role != health.Fault {
+		t.Fatalf("a HelmRelease failing its current generation is a fault: %+v", r)
 	}
 }
 
