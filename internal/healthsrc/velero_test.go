@@ -162,3 +162,14 @@ func TestVeleroServers(t *testing.T) {
 		t.Fatal("read")
 	}
 }
+
+// A literal TZ resolves only when Klyx can load it: the value is the
+// server's free text (Codex's S2a implementation review 2, finding 1).
+func TestVeleroServersRejectUnloadableTZ(t *testing.T) {
+	v := VeleroServers(capability.VeleroCapability{ServersRead: true, Servers: []capability.VeleroServer{
+		{Namespace: "velero", Name: "velero", Ready: true, RolledOut: true, Image: "velero/velero:v1.18.4", TZ: "https://user:S2aR1ZoneNeedle@zone/path", TZSet: true},
+	}})
+	if f := v.ByNamespace["velero"]; f.ZoneResolved || f.Zone != "" {
+		t.Fatalf("an unloadable TZ resolved: %+v", f)
+	}
+}

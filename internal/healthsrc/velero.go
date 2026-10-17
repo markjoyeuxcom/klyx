@@ -80,7 +80,11 @@ func VeleroServers(v capability.VeleroCapability) velero.Servers {
 				switch {
 				case s.TZFromRef:
 				case s.TZSet:
-					f.Zone, f.ZoneResolved = s.TZ, true
+					// only a zone Klyx can load resolves: the value is free
+					// text, never echoed
+					if _, err := time.LoadLocation(s.TZ); err == nil && s.TZ != "" {
+						f.Zone, f.ZoneResolved = s.TZ, true
+					}
 				default:
 					f.Zone, f.ZoneResolved = "UTC", true
 				}

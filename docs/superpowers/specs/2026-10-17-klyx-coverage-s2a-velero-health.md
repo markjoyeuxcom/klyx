@@ -726,3 +726,14 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 | 2 | A partial location read certified the newest default | the default is named only from a complete read; otherwise the block is "incomplete" with its candidate, and a location's schedule list is marked incomplete rather than guessed |
 
 Codex's probe tests are kept as regression tests (`review_s2a_test.go` in crd, appbridge, observe, velero and healthsrc, and two cases in `VeleroView.test.tsx`).
+
+## 17. Implementation review 2: Codex at afa092c
+
+Four of the six earlier fixes confirmed. Two residual findings:
+
+| # | Finding | Fix |
+|---|---|---|
+| P1 | An unloadable server `TZ` was echoed in "Klyx does not know the server's time zone …", and a literal URL with user info could leak through it | Fixed wording, never the value; and `VeleroServers` resolves a literal `TZ` only when Klyx can load it |
+| 2 | The pending boundary survived only the first watch update: a second oversized update, the blocker shrinking, or a deletion followed by an eviction advanced the window past a still-omitted object | A pending floor in the Observer: every blocker the watch path replaces or clears folds into it, the window is never later than it, and only a complete list clears it |
+
+Codex's second-round probes are kept (`review_s2a_r1_test.go` in observe and appbridge).

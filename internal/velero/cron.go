@@ -194,7 +194,9 @@ func NextRun(spec string, base time.Time, srv Server) Due {
 		}
 		loc, err := time.LoadLocation(name)
 		if err != nil {
-			return Due{Unknown: fmt.Sprintf("Klyx does not know the server's time zone %q", name)}
+			// fixed wording: the raw value is the server's TZ, free text
+			// (Codex's S2a implementation review 2, finding 1)
+			return Due{Unknown: "Klyx does not know the server's time zone"}
 		}
 		base, zone = base.In(loc), name
 	}

@@ -125,8 +125,16 @@ type kindGen struct {
 	// blockRank is the blocker's rank; oversized holds, for a ranked kind,
 	// the rank of each object left out for its size, so the window covers
 	// every omission (S2a §3, Codex's review finding 6).
-	blockRank  string
-	oversized  map[string]string
+	blockRank string
+	oversized map[string]string
+	// floorRank/floorKey is the pending boundary (Codex's S2a
+	// implementation review 2, finding 2): every blocker the watch path
+	// replaced or cleared since the last complete list folds into it, and
+	// only a list clears it. What ranked past a blocker is not individually
+	// known, so no later update, shrink, deletion or eviction may advance
+	// the window past it.
+	floorRank  string
+	floorKey   string
 	refillAt   time.Time
 	refillDue  bool // a refill waits for its window
 	cancelInst context.CancelFunc
@@ -519,6 +527,7 @@ func (a *modelAdapter) Replace(list []any, _ string) error {
 	if g.ks.spec.Budget > 0 {
 		g.sizes, g.retained, g.capped, g.notRetained = adm.sizes, adm.retained, adm.capped, adm.notRetained
 		g.blockKey, g.blockSize, g.blockRank, g.oversized = adm.blockKey, adm.blockSize, adm.blockRank, adm.oversized
+		g.floorRank, g.floorKey = "", "" // a complete list establishes the boundary
 	}
 	g.observedAt = o.clk.Now() // a complete read is an observation, changed or not
 	// Every list replaces the model: continuity is unproven across it (slice
@@ -605,7 +614,6 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 	switch {
 	case spec.MaxObject > 0 && n > spec.MaxObject:
 		// never retained; it does not end the run
-		orank := r
 		switch {
 		case had:
 			g.retained -= old
@@ -617,17 +625,14 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 			g.capped, g.notRetained = true, g.notRetained+1
 		case key == g.blockKey:
 			// the blocker no longer ends the run: a list may admit past it.
-			// Until that list, the boundary stays at the earlier of its old
-			// and new ranks: what ranked past the old blocker is not
-			// individually known (Codex's S2a implementation review,
-			// finding 3)
-			if rankBefore(g.blockRank, key, r, key) {
-				orank = g.blockRank
-			}
+			// Until that list, its old rank stays the floor: what ranked past
+			// it is not individually known (Codex's S2a implementation
+			// review, finding 3)
+			g.foldBlockerLocked()
 			g.blockKey, g.blockSize, g.blockRank = "", 0, ""
 			g.refillLocked()
 		}
-		g.noteOversizedLocked(key, orank)
+		g.noteOversizedLocked(key, r)
 	case had && g.blockKey != "" && rankBefore(g.blockRank, g.blockKey, r, key):
 		// a retained object whose rank moved past the run's end (S2a §3,
 		// revision 2): left out, as a list would leave it, and the room it
@@ -651,6 +656,9 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 		// past the old boundary are not individually known, and one could
 		// rank anywhere after it (S2a §3, revision 3)
 		moved := r != g.blockRank
+		if moved {
+			g.foldBlockerLocked()
+		}
 		g.blockSize = n
 		if rankBefore(r, key, g.blockRank, key) {
 			g.blockRank = r
@@ -691,7 +699,19 @@ func (g *kindGen) evictLocked() {
 		delete(g.model, last)
 		delete(g.sizes, last)
 		g.capped, g.notRetained = true, g.notRetained+1
+		g.foldBlockerLocked()
 		g.blockKey, g.blockSize, g.blockRank = last, n, rank
+	}
+}
+
+// foldBlockerLocked folds the current blocker into the pending boundary
+// before the watch path replaces or clears it.
+func (g *kindGen) foldBlockerLocked() {
+	if g.ks.spec.Rank == nil || g.blockKey == "" {
+		return
+	}
+	if g.floorKey == "" || rankBefore(g.blockRank, g.blockKey, g.floorRank, g.floorKey) {
+		g.floorRank, g.floorKey = g.blockRank, g.blockKey
 	}
 }
 
@@ -716,6 +736,9 @@ func (g *kindGen) windowLocked() (string, bool) {
 		return "", false
 	}
 	first, firstKey, ok := g.blockRank, g.blockKey, g.blockKey != ""
+	if g.floorKey != "" && (!ok || rankBefore(g.floorRank, g.floorKey, first, firstKey)) {
+		first, firstKey, ok = g.floorRank, g.floorKey, true
+	}
 	for k, r := range g.oversized {
 		if !ok || rankBefore(r, k, first, firstKey) {
 			first, firstKey, ok = r, k, true
@@ -740,6 +763,7 @@ func (g *kindGen) omittedGoneLocked(key string) {
 	}
 	delete(g.oversized, key)
 	if key == g.blockKey {
+		g.foldBlockerLocked()
 		g.blockKey, g.blockSize, g.blockRank = "", 0, ""
 		g.refillLocked()
 	} else if g.notRetained == 0 {

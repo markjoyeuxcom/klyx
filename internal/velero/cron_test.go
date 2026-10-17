@@ -135,7 +135,7 @@ func TestNextRunUnresolvedFacts(t *testing.T) {
 	if d := NextRun(strings.Repeat("1", maxCron+1), base, utcServer); d.Unknown != "the cron is too long to read" {
 		t.Fatalf("too long: %+v", d)
 	}
-	if d := NextRun("0 2 * * *", base, Server{Zone: "Mars/Olympus", ZoneResolved: true}); !strings.Contains(d.Unknown, "Mars/Olympus") {
+	if d := NextRun("0 2 * * *", base, Server{Zone: "Mars/Olympus", ZoneResolved: true}); d.Unknown != "Klyx does not know the server's time zone" || strings.Contains(d.Unknown, "Mars") {
 		t.Fatalf("unknown zone: %+v", d)
 	}
 }
