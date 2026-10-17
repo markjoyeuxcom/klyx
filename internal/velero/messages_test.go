@@ -36,7 +36,7 @@ func TestClassifyPinnedForms(t *testing.T) {
 		{FieldBackupFailure, "backup execution failed: backup already exists in object storage", "execution-failed"},
 		{FieldScheduleValidation, "Schedule must be a non-empty valid Cron expression", "empty-cron"},
 		{FieldScheduleValidation, "invalid schedule: expected exactly 5 fields, found 4: [0 2 * *]", "invalid-cron"},
-		{FieldRestoreFailure, `found a restore with status "InProgress" during the server starting, mark it as "Failed"`, "server-restart"},
+		{FieldRestoreFailure, `found a restore with status "InProgress" during the server starting, mark it as "Failed"`, "restore-server-restart"},
 	}
 	for _, c := range cases {
 		got, ok := Classify(c.field, c.msg)

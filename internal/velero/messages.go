@@ -24,11 +24,14 @@ const (
 // Class is one classified message: a fixed code and Klyx's fixed wording,
 // plus the fixed-vocabulary diagnoses found in it. Withheld is true when
 // no form matched and the message was withheld whole.
+//
+// Text follows from Code, a fixed string of Klyx's, so the projection's
+// encoded size (the budget's measure) leaves it out.
 type Class struct {
-	Code       string   `json:"code"`
-	Text       string   `json:"text"`
-	Withheld   bool     `json:"withheld,omitempty"`
-	Vocabulary []string `json:"vocabulary,omitempty"`
+	Code       string   `json:"k"`
+	Text       string   `json:"-"`
+	Withheld   bool     `json:"w,omitempty"`
+	Vocabulary []string `json:"v,omitempty"`
 }
 
 // Withheld is the wording for a message no form matches.
@@ -83,8 +86,8 @@ var (
 		f(`invalid schedule: `, "invalid-cron", "Velero rejected the cron", false),
 	}
 	restoreFailureForms = []form{
-		f(`found a restore with status "[A-Za-z]+" during the server starting, mark it as "[A-Za-z]+"$`, "server-restart", "the server restarted while this restore ran", false),
-		f(`restore execution failed: `, "execution-failed", "the restore failed while running", true),
+		f(`found a restore with status "[A-Za-z]+" during the server starting, mark it as "[A-Za-z]+"$`, "restore-server-restart", "the server restarted while this restore ran", false),
+		f(`restore execution failed: `, "restore-execution-failed", "the restore failed while running", true),
 	}
 )
 
@@ -144,6 +147,21 @@ var httpCodes = func() map[string]string {
 	m := map[string]string{}
 	for _, c := range []string{"400", "401", "403", "404", "408", "409", "429", "500", "502", "503", "504"} {
 		m[c] = c
+	}
+	return m
+}()
+
+// textOfCode is each code's fixed wording: a projection keeps the code, and
+// the wording follows from it.
+var textOfCode = func() map[string]string {
+	m := map[string]string{"withheld": WithheldText}
+	for _, forms := range [][]form{locationForms, backupValidationForms, backupFailureForms, scheduleValidationForms, restoreFailureForms} {
+		for _, fm := range forms {
+			if old, dup := m[fm.code]; dup && old != fm.text {
+				panic("velero: code " + fm.code + " has two wordings")
+			}
+			m[fm.code] = fm.text
+		}
 	}
 	return m
 }()
