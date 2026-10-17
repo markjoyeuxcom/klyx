@@ -576,6 +576,106 @@ EOF
 	ready receivers.notification.toolkit.fluxcd.io "$ns" parity-receiver True Succeeded "\"webhookPath\":\"/hook/parity\""
 }
 
+velero_objects() {
+	# Velero (coverage S2a): a stand-in server (component=velero, a container
+	# named velero) and time-free objects only. Velero has no status
+	# subresource, so status is written by a plain merge patch. A paused
+	# schedule (paused), one that failed validation (a fault), a yearly
+	# schedule with no run owed for months (awaiting its first run; this
+	# fixture is not for New Year's Eve), an Available and an Unavailable
+	# location, and a failed unscheduled backup. Clock-driven states are
+	# covered by internal/velero's fake-clock tests.
+	k create namespace velero --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velero
+  namespace: velero
+  labels: {component: velero}
+  annotations:
+    $(marks ok true)
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {deploy: velero}}
+  template:
+    metadata:
+      labels: {deploy: velero, component: velero}
+      annotations:
+        klyx.dev/parity-role: "ok"
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: velero, image: $pause, imagePullPolicy: Never}]
+EOF
+	k -n velero rollout status deployment/velero --timeout=120s >/dev/null
+	settled_pods velero velero Running
+	k apply -f - >/dev/null <<EOF
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: parity-paused
+  namespace: velero
+  annotations:
+    $(marks paused false)
+spec: {schedule: "0 2 * * *", paused: true, template: {storageLocation: parity-available}}
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: parity-invalid
+  namespace: velero
+  annotations:
+    $(marks fault true)
+spec: {schedule: "0 2 * *", template: {storageLocation: parity-available}}
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: parity-yearly
+  namespace: velero
+  annotations:
+    $(marks progressing false)
+spec: {schedule: "0 0 1 1 *", template: {storageLocation: parity-available}}
+---
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: parity-available
+  namespace: velero
+  annotations:
+    $(marks ok false)
+spec: {provider: aws, default: true, objectStorage: {bucket: parity}}
+---
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: parity-unavailable
+  namespace: velero
+  annotations:
+    $(marks fault true)
+spec: {provider: aws, objectStorage: {bucket: parity-dr}}
+---
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: parity-failed
+  namespace: velero
+  annotations:
+    $(marks fault true)
+spec: {storageLocation: parity-available}
+EOF
+	local t
+	t=$(now)
+	vstatus() { k -n velero patch "$1" "$2" --type=merge -p "{\"status\":$3}" >/dev/null; }
+	vstatus schedules.velero.io parity-paused '{"phase":"Enabled"}'
+	vstatus schedules.velero.io parity-invalid '{"phase":"FailedValidation","validationErrors":["invalid schedule: expected exactly 5 fields, found 4: [0 2 * *]"]}'
+	vstatus schedules.velero.io parity-yearly '{"phase":"Enabled"}'
+	vstatus backupstoragelocations.velero.io parity-available "{\"phase\":\"Available\",\"lastValidationTime\":\"$t\"}"
+	vstatus backupstoragelocations.velero.io parity-unavailable "{\"phase\":\"Unavailable\",\"lastValidationTime\":\"$t\",\"message\":\"BackupStorageLocation \\\"parity-unavailable\\\" is unavailable: rpc error: AccessDenied\"}"
+	vstatus backups.velero.io parity-failed "{\"phase\":\"Failed\",\"startTimestamp\":\"$t\",\"completionTimestamp\":\"$t\",\"failureReason\":\"backup execution failed: parity\"}"
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -587,6 +687,7 @@ baseline() {
 	eso_objects
 	gateway_objects
 	karpenter_objects
+	velero_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 

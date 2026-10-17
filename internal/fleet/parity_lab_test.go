@@ -208,6 +208,9 @@ var parityParts = []parityPart{
 	{"gateway", "routes", "native", []string{"httproutes"}},
 	{"karpenter", "nodeclaims", "native", []string{"nodeclaims"}},
 	{"karpenter", "nodepools", "native", []string{"nodepools"}},
+	{"velero", "schedules", "native", []string{"schedules"}},
+	{"velero", "locations", "native", []string{"backupstoragelocations"}},
+	{"velero", "backups", "native", []string{"backups"}},
 }
 
 var parityResource = map[string]string{
@@ -229,6 +232,7 @@ var parityResource = map[string]string{
 	"imageupdateautomations": "imageupdateautomations.image.toolkit.fluxcd.io",
 	"artifactgenerators":     "artifactgenerators.source.extensions.fluxcd.io", "externalartifacts": "externalartifacts.source.toolkit.fluxcd.io",
 	"receivers": "receivers.notification.toolkit.fluxcd.io",
+	"schedules": "schedules.velero.io", "backupstoragelocations": "backupstoragelocations.velero.io", "backups": "backups.velero.io",
 }
 
 // parityMember is one counted object's declared evaluation.
@@ -286,7 +290,7 @@ func addRole(c *observe.Counts, role string) {
 // coverage overrides a kind's expected coverage.
 func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
 	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
-	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter"} {
+	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
