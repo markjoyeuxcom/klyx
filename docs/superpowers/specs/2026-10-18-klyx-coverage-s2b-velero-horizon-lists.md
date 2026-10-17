@@ -1,6 +1,6 @@
 # Coverage S2b: the Velero horizon and lists
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2b. It builds on S2a (`2026-10-17-klyx-coverage-s2a-velero-health.md`): design accepted at ebcd07d, implementation at bc3be19. Every S2a contract stands, notably:
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2b. It builds on S2a (`2026-10-17-klyx-coverage-s2a-velero-health.md`): design accepted at ebcd07d, implementation at bc3be19. Revision 1 answers Codex's design review of 1d11926 (§8). Every S2a contract stands, notably:
 - the Backups watch: capped, in two tiers, and its window `W`;
 - run identity: proven, named or synced, with execution and run times;
 - the message classes and placeholders;
@@ -60,7 +60,9 @@ Read from Velero v1.18.4, as S2a.
 - **A Backups tab:** every retained Backup.
   - **Columns:** phase, schedule (with proven, named, synced or none), started, completed, expires, errors and warnings, storage location.
   - **Filters:** by schedule and by phase group (failed, partially failed, in progress, completed).
-  - **Notices:** a notice says the list is what the cluster retains, bounded by each backup's TTL, and, when capped, that it holds the newest runs since `W` and every run in progress.
+  - **Notices:** a notice says the list is what the cluster retains, bounded by each backup's TTL. When capped, it says the list holds the runs that started since `W`, and that it holds every run in progress only when the window is in tier 1 (S2a §3).
+  - **Expired records:** shown as "expired, awaiting deletion", with the GC failure reason.
+  - **Its counts:** its own counts of the records it shows, never the unscheduled part's health total.
   - **The inspector:** S2a's backup inspector, with its attribution:
     - "proven run of daily";
     - "matched by name to daily";
@@ -71,7 +73,7 @@ Read from Velero v1.18.4, as S2a.
   - **The read:** capped at 500, with "+N more" said, and an "as of" time with Read again. Nothing is retained after the view closes.
   - **Columns:** phase, source (backup or schedule), started, completed, errors and warnings, and the restore's class when it failed.
   - **The inspector:**
-    - the source backup, joined to the retained Backups: found, not retained, or not in the cluster;
+    - the source backup, joined to the retained Backups with the Backups kind's own coverage (§3);
     - the namespaces and mapping;
     - the policies, with the selectors as counts and the resource modifier's ConfigMap by name;
     - hooks counted, their commands withheld;
@@ -100,18 +102,30 @@ Read from Velero v1.18.4, as S2a.
 
 **The Backups list rows:**
 - The `backups` part's rows now carry every retained Backup.
-- Each row says whether it is counted (S2a §4.3 membership), and the part's counted items, ledger, Top and notifications are unchanged.
-- A row that is not counted carries a display role for its phase (Completed none, PartiallyFailed look-at, Failed fault, in progress syncing), its attribution and its timing, and is never Klyx's verdict.
-  - The chat verdict map and AI Explain read only counted rows as verdicts. A list row is a fact.
+- Each row says whether it is **counted**: S2a §4.3 membership, never `Rule.Included`. The part's counted items, Native totals and roles, ledger, Top and notifications come from the counted rows alone, unchanged.
+- A row that is not counted carries a **display phase** (Completed none, PartiallyFailed look-at, Failed fault, in progress syncing), kept separate from any verdict, with its attribution and timing.
+- **Verdict eligibility is gated centrally:** the shared anchor that AI Explain and the chat verdict map read (`anchorVerdict`, `verdictsFor`) takes only counted rows as Klyx's verdict. A list row is a fact. A test checks that the counted rows alone make the Native totals and roles.
 - **The cost:**
   - Rows are published only while the lens is subscribed.
   - At S2a's cap of about 1,500 Backups, a publication is about 900 KB of DTOs, comparable to a large Pods list.
   - The rows are built from the capture the part already takes, so there is no new watch and no new retained model.
 
 **The Restores read:**
-- `restores.velero.io` v1, through the cluster's dynamic client, with a 500-item limit and a continue token to count what is past it ("+N more", or "more" when the count is unknown).
-- Projected field by field into a bounded DTO, with Velero's text classified (§5) and display strings under the URL rule (S2a's review fix).
+- `restores.velero.io` v1, through the cluster's dynamic client, with a 500-item limit. Past it, "+N more" uses the list's `remainingItemCount` when the server supplies it. A continue token alone says "more", never a count.
+- **Projected field by field into a bounded DTO** (the CRD bounds neither the map nor its strings):
+  - names validated as object names, else marked invalid;
+  - `namespaceMapping` at most 50 entries, with the count;
+  - included and excluded namespaces at most 20 each, with counts;
+  - every display string under the URL rule and clipped (256 bytes);
+  - Velero's text classified (§5);
+  - one Restore's DTO at most 4 KiB, measured.
+- **Fences:** a reply carries its cluster and read id, and a stale reply (another cluster, an older read) is dropped. The inspector is UID-pinned.
 - An absent API reads "not served", a forbidden one "not readable", never empty.
+- **The source join** (Codex's finding 4) reads the Backups kind's own coverage from the `backups` part's capture, never the Schedules dependency's:
+  - **Live and complete:** found, or "not found in the cluster".
+  - **Live and capped:** found, or "not in the retained window": a capped read never proves absence.
+  - **Stale:** found "as of <last good>", or "not in the last good read".
+  - **Checking or unreadable:** "the Backups could not be read", with its class.
 
 **The fleet read:**
 - `VeleroService.GetBackupHorizon(cluster)` returns one cluster's schedules rows as horizon rows with that capture's coverage, read through `HealthRowsNow`.
@@ -122,21 +136,43 @@ Read from Velero v1.18.4, as S2a.
 
 ## 4. The latest retained successful backup
 
-**Definition, per schedule S:**
-- **The candidates:** S's runs (S2a §3: proven or named, never synced) whose phase is Completed.
-- **Proven first:**
-  - the newest proven Completed run by `completionTimestamp` (falling back to its run time when absent);
-  - only when no proven Completed run is retained, the newest named one, labelled "matched by name".
+Revision 1 answers Codex's design review of 1d11926 (§8): completion order is never certified by `W`, missing completion times are said, expiry is an eligibility rule with its own clock, and the confidence of a name match stays visible everywhere.
 
-  A named run can be a foreign backup from a shared bucket (S2a §3's limit), so it never stands in for a proven one.
-- **A newer PartiallyFailed run:** the newest proven, else named, PartiallyFailed run completed after that success is shown beside it, "a newer run partially failed", and never counted as a success.
-- **Completeness:**
-  - **Uncapped:** "none retained" when there is no candidate.
-  - **Capped:**
-    - a success found whose run time is later than `W` plus a minute is the latest there is (S2a §4.2's margin);
-    - otherwise it is labelled "latest retained since W; an older or concurrent one may not be retained";
-    - and with none found, "none retained since W".
-- **Wording:** "latest retained successful backup <age> ago", never "last backup", "restorable" or "protected". The inspector adds "Completed is Velero's phase; it is not a restore test."
+**The candidates, per schedule S:**
+- **The runs:** S's runs by S2a's `Attribute`, whose precedence stands. `N` and a valid owner proof win over the looks-synced heuristic, so a proven record re-imported by backup sync is a candidate. "Never synced" means the unproven synced category only.
+- **The phase:** Completed.
+- **Not expired at the capture time:** `status.expiration` is after the capture's now. Velero's GC can leave an expired record in the API indefinitely when its storage location is missing, unreadable, unavailable or read-only (`gc_controller.go` 145-178). Such a record is no horizon candidate. The Backups list shows it as "expired, awaiting deletion", with the GC failure label's reason when set.
+
+**The selection:**
+- **Proven first:** among the proven candidates, the newest by `completionTimestamp`.
+- **Named only when no proven candidate is retained:** the newest named one.
+- **Its confidence is part of every cell, row and AI field:**
+  - "latest proven retained success <age> ago";
+  - or "a Completed record matched by name <age> ago (not proven to be this schedule's)".
+
+  A name match never appears as a confirmed success of S.
+- **A newer PartiallyFailed run:** the newest proven, else named, PartiallyFailed run that completed after the selected success. It is labelled the same way: "a newer run partially failed", or "a newer record matched by name partially failed".
+
+**A missing completion time is said, never filled in** (Codex's finding 2). Completed runs normally carry `completionTimestamp` (set by the backup and finalizer controllers), but a record can lack it.
+- **The order rule:** run A is certainly after run B only when both completion times are recorded and A's is later, or when A started after B's recorded completion. Any other pair's order is unknown, and is said.
+- **Applied to the selection:**
+  - **A candidate without one, started after the newest timed candidate's completion,** is certainly newer. It is selected, shown as "started <time>; its completion time is not recorded". When several are, the latest start is shown and the order among them is said to be unknown.
+  - **One started before it** may or may not be newer, so the selection is qualified: "latest by completion time; a success without a recorded completion time may be newer".
+- **Applied to the newer-PartiallyFailed comparison:** a PartiallyFailed run is "newer" only when it is certainly after the selected success; one whose order is unknown is "a PartiallyFailed run of unknown order".
+- **Uncapped history too:** the rule does not depend on the cap.
+
+**Completeness under the cap: `W` does not certify completion order** (Codex's finding 1).
+- **Why:** S2a admits terminal Backups by run time, so an omitted run that started before `W` can have completed after the retained candidate.
+- **When the selection is complete:**
+  - **Uncapped:** the selection is complete, subject to the missing-time rule.
+  - **Capped:** it is complete only when S's whole history is held, that is when S's creation minus a minute is after `W` plus a minute (S2a §15's "own history"), so that every run of S is retained.
+- **Otherwise it is always qualified:** "latest retained success; a run that started before <W> and completed later may not be retained". With no candidate: "none since W retained".
+- **The window in tier 0** (S2a §3) means no terminal Backup is retained at all: "the retained history holds no finished runs". The Backups list's notice, "every run in progress is held", is said only when the window is in tier 1.
+
+**Clock:**
+- **The deadline:** the earliest expiration among S's candidates is a presentation deadline.
+- **Merged into the schedules part's `Next`:** the part is re-evaluated at that time, and the horizon changes without an API event. The roles are unchanged, so S2a's health, ledger and notifications are untouched: an evaluation with the same roles records no transition.
+- **Fleet snapshots** carry their capture's time and name it ("as of").
 
 **Where it is computed:** in `internal/velero` (pure), from the same capture as the schedule's verdict. It is carried in `ScheduleVerdict` and its DTO. It is never part of the verdict: the verdict stays S2a's.
 
@@ -169,13 +205,26 @@ Read from Velero v1.18.4, as S2a.
     - an earlier schedule's success excluded;
     - capped with the margin, with "since W", and with none retained;
     - expiry taking the only success away ("none retained");
+  - **revision 1:**
+    - an omitted run that started before `W` and completed later, which qualifies the capped selection; the schedule's own history held, which does not;
+    - a Completed candidate without `completionTimestamp`, uncapped and capped, starting before and after the newest timed completion, and the same for the newer-PartiallyFailed comparison;
+    - an expired success left in the API by a GC-blocked location: not a candidate, listed as awaiting deletion, and its expiration as the presentation `Next`, crossed with no watch update;
+    - a proven success re-imported by sync, which is a candidate, and an unproven synced one, which is not;
+    - a name-matched success and a name-matched PartiallyFailed, each labelled;
+    - the tier-0 window's notice;
   - **the Restore classes:** every enumerated form, and their near-misses withheld;
   - needles.
 - **healthsrc:** the backups rows carry every retained Backup with `counted` and attribution, while the counted items, roles and Top are unchanged, so S2a's tests still pass.
 - **appbridge:**
-  - `GetVeleroRestores`: the cap, "+N more", absent, forbidden, the join to Backups, and needles in hooks, selectors, a failure reason and the validation errors;
+  - `GetVeleroRestores`:
+    - the cap, with `remainingItemCount` and a token alone;
+    - absent and forbidden;
+    - the source join under each Backups coverage (complete, capped, stale, checking, unreadable), separately from a failure to list Restores;
+    - the DTO bounds;
+    - needles in hooks, selectors, the mapping, a failure reason and the validation errors;
   - `GetBackupHorizon`: a cluster without an Observer, without Velero, capped, and stale;
-  - chat and AI read only counted rows as verdicts.
+  - chat and AI read only counted rows as verdicts;
+  - the counted rows alone make the Native totals and roles.
 - **Frontend:**
   - the column, the horizon block, the Backups tab's filters and notices, and the Restores tab's read, cap and inspector;
   - the fleet Backups view: order, coverage notes, Refresh, and a missing cluster named.
@@ -197,3 +246,13 @@ Read from Velero v1.18.4, as S2a.
 - **A configured maximum success age:** S2a §8 offered it here, but it needs a configuration surface the owner has not asked for. It stays a candidate.
 - **The backup logs and restore logs in object storage:** a DownloadRequest is a write.
 - **BackupRepository and the node-agent's objects.**
+
+## 8. Revision 1: Codex's design review of 1d11926
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | `W` is by run time, so it cannot certify a completion-ordered horizon; the tier-0 notice | §4: capped, the selection is complete only when the schedule's whole history is held, else always qualified; the tier-0 notice is qualified. §6 |
+| 2 | A missing `completionTimestamp` became a completion time | §4: never filled in. A later-started one is selected and said; an earlier-started one qualifies the selection, uncapped too, and the newer-PartiallyFailed comparison likewise. §6 |
+| 3 | Expiry assumed deletion; the GC can leave expired records | §4: `status.expiration` at capture time decides eligibility; expired records are listed as awaiting deletion; the earliest expiration is a presentation deadline merged into `Next` without touching health. §6 |
+| 4 | The Restore source join needed the Backups kind's own coverage | §3: found or not under each coverage, never a capped or stale absence read as "not in the cluster". §6 |
+| - | Guidance | §4: confidence in every cell, row and AI field; S2a's `Attribute` precedence. §3: `counted` is membership, gated centrally; display phase separate; the Restores DTO's bounds, fences and `remainingItemCount` |
