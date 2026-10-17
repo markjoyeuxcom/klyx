@@ -163,9 +163,12 @@ type FluxSetRowDTO struct {
 
 // FluxReportDTO is a FluxReport, "as reported by the operator".
 type FluxReportDTO struct {
-	UID                 string                    `json:"uid"`
-	Namespace           string                    `json:"namespace"`
-	Name                string                    `json:"name"`
+	UID       string `json:"uid"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Owner is who applies the report, for its refresh's consequence line
+	// (C4; Codex's S1a implementation review 2, finding 3).
+	Owner               *FluxOpOwnerDTO           `json:"owner,omitempty"`
 	ReportingSucceeded  bool                      `json:"reportingSucceeded"`
 	ConditionChanged    *time.Time                `json:"conditionChanged,omitempty"`
 	Entitlement         string                    `json:"entitlement,omitempty"`
@@ -278,6 +281,9 @@ func fluxReportDTO(r healthsrc.Row[fluxop.Report]) FluxReportDTO {
 		DistributionVersion: rp.DistributionVersion, ManagedBy: rp.ManagedBy, ServerVersion: rp.ServerVersion, Platform: rp.Platform,
 		Nodes: rp.Nodes, OperatorVersion: rp.OperatorVersion, OperatorPlatform: rp.OperatorPlatform,
 		Components: []FluxReportComponentDTO{}, Reconcilers: []FluxReportReconcilerDTO{}}
+	if rp.Owner != nil {
+		d.Owner = &FluxOpOwnerDTO{Kind: rp.Owner.Kind, Namespace: rp.Owner.Namespace, Name: rp.Owner.Name}
+	}
 	for _, c := range rp.Components {
 		d.Components = append(d.Components, FluxReportComponentDTO{Name: c.Name, Ready: c.Ready, Status: c.Status, Image: c.Image})
 	}

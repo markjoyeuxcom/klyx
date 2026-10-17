@@ -38,7 +38,7 @@ type Kind = "FluxInstance" | "ResourceSet" | "ResourceSetInputProvider";
 type Item = { key: string; kind: Kind; c: FluxOpCommonDTO; instance?: FluxInstanceDTO; set?: FluxSetDTO; provider?: FluxProviderDTO };
 // Target is what a verb is armed against: an Item, or a FluxReport.
 type Target = { key: string; kind: Kind | "FluxReport"; c: Pick<FluxOpCommonDTO, "uid" | "namespace" | "name" | "suspended" | "owner">; provider?: FluxProviderDTO };
-const reportTarget = (r: FluxReportDTO): Target => ({ key: `FluxReport/${r.namespace}/${r.name}`, kind: "FluxReport", c: { uid: r.uid, namespace: r.namespace, name: r.name, suspended: false } });
+const reportTarget = (r: FluxReportDTO): Target => ({ key: `FluxReport/${r.namespace}/${r.name}`, kind: "FluxReport", c: { uid: r.uid, namespace: r.namespace, name: r.name, suspended: false, owner: r.owner } });
 type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown" | "paused"; label: string };
 
 const KIND_SHORT: Record<Kind, string> = { FluxInstance: "instance", ResourceSet: "resourceset", ResourceSetInputProvider: "provider" };

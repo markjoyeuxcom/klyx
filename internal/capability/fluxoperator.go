@@ -101,22 +101,24 @@ func (i FluxOperatorInfo) RuntimeNamespaces() []string {
 	return out
 }
 
-// Issue names the operators' problems for the Flux task, "" when none.
-// Every reconciling operator is judged on its own (Codex's S1a
-// implementation review, finding 6): one ready installation never clears
-// another's. A detection gap - a scan cut short, a runtime namespace that
-// could not be read - is named too, since it leaves bindings unverified.
-func (i FluxOperatorInfo) Issue() string {
+// Problems names the operators' problems for the Flux task, split by what
+// they prove. failures are read states: an operator not ready, several
+// reconciling one namespace, none running reconcilers. gaps are missing
+// evidence: a scan that could not run or was cut short, a runtime
+// namespace that could not be read. Every reconciling operator is judged on
+// its own (Codex's S1a implementation review, finding 6): one ready
+// installation never clears another's. A gap alone is unknown, never "not
+// ready" (review 2, finding 2).
+func (i FluxOperatorInfo) Problems() (failures, gaps []string) {
 	switch {
 	case !i.Present:
-		return ""
+		return nil, nil
 	case !i.Verified:
-		return "Flux Operator installed but its controller is unverified (" + i.Why + ")"
+		return nil, []string{"Flux Operator installed but its controller is unverified (" + i.Why + ")"}
 	}
-	var problems []string
 	for _, ns := range i.RuntimeNamespaces() {
 		if i.Bind(ns) == BindingAmbiguous {
-			problems = append(problems, "several Flux Operators reconcile "+ns)
+			failures = append(failures, "several Flux Operators reconcile "+ns)
 		}
 	}
 	reconcilers := 0
@@ -128,20 +130,33 @@ func (i FluxOperatorInfo) Issue() string {
 		where := op.Namespace + "/" + op.Name
 		switch {
 		case op.RuntimeNamespace == "":
-			problems = append(problems, "Flux Operator "+where+": the namespace it reconciles could not be read")
+			gaps = append(gaps, "Flux Operator "+where+": the namespace it reconciles could not be read")
 			if !op.Ready {
-				problems = append(problems, "Flux Operator "+where+" is not ready")
+				failures = append(failures, "Flux Operator "+where+" is not ready")
 			}
 		case !op.Ready:
-			problems = append(problems, "Flux Operator "+where+" (reconciling "+op.RuntimeNamespace+") is not ready")
+			failures = append(failures, "Flux Operator "+where+" (reconciling "+op.RuntimeNamespace+") is not ready")
 		}
 	}
 	if !i.Complete {
-		problems = append(problems, fmt.Sprintf("Flux Operator detection is incomplete: more than %d labelled Deployments", fluxOperatorLimit))
+		gaps = append(gaps, fmt.Sprintf("Flux Operator detection is incomplete: more than %d labelled Deployments", fluxOperatorLimit))
 	} else if reconcilers == 0 {
-		return "Flux Operator CRDs installed but no operator runs its reconcilers"
+		failures = append(failures, "Flux Operator CRDs installed but no operator runs its reconcilers")
 	}
-	return strings.Join(problems, "; ")
+	return failures, gaps
+}
+
+// Issue is every problem, proven failures first; "" when none.
+func (i FluxOperatorInfo) Issue() string {
+	f, g := i.Problems()
+	return strings.Join(append(f, g...), "; ")
+}
+
+// Proven reports whether Issue names a proven failure, not only missing
+// evidence.
+func (i FluxOperatorInfo) Proven() bool {
+	f, _ := i.Problems()
+	return len(f) > 0
 }
 
 func (d *Detector) detectFluxOperator(ctx context.Context, served map[string]bool) FluxOperatorInfo {

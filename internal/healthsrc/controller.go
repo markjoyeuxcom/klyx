@@ -38,8 +38,10 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	}
 	if r := caps.GitOps.FluxIssue(); r != "" {
 		verified := caps.GitOps.Flux.Verified
-		if caps.GitOps.FluxOperator.Issue() != "" { // the operator's own (S1a §2)
-			verified = caps.GitOps.FluxOperator.Verified
+		if op := caps.GitOps.FluxOperator; op.Issue() != "" {
+			// the operator's own (S1a §2): not ready only for a proven
+			// failure; a detection gap alone is unknown
+			verified = op.Verified && op.Proven()
 		}
 		out[TaskFlux] = issue(stateOf(verified), r)
 	}

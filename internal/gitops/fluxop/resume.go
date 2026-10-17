@@ -35,10 +35,20 @@ const (
 // bounded instead: past MaxBaselines the least recently captured become
 // lost markers (the UID alone), which make the object Unproven, never
 // Current, when it is captured again.
+//
+// Past MaxLost the oldest markers are dropped, and their kind becomes
+// saturated (Codex's S1a implementation review 2, finding 1): forgetting a
+// UID never authorizes Current. While a kind is saturated, any of its
+// objects without a baseline reads Unproven on first sight, and gets an
+// unproven baseline; one proven since is remembered. A complete capture in
+// which every present object is tracked or proven ends the saturation: a
+// UID absent from it has departed, and one seen later is new.
 type Tracker struct {
-	mu   sync.Mutex
-	base map[string]baseline
-	lost map[string]lostMark
+	mu        sync.Mutex
+	base      map[string]baseline
+	lost      map[string]lostMark
+	saturated map[string]bool
+	proven    map[string]map[string]bool // kind -> UIDs proven current while saturated
 }
 
 type baseline struct {
@@ -56,17 +66,20 @@ type lostMark struct {
 	seen time.Time
 }
 
-// The tracker's bounds. A lost marker past MaxLost is dropped, oldest
-// first: that object then reads as current when captured again, the one
-// residual of a bounded memory.
+// The tracker's bounds. Past MaxLost the oldest lost markers are dropped
+// and their kind saturates; past MaxBaselines proven UIDs, a saturated
+// kind forgets them, and they read Unproven again until evidence: both
+// fail closed.
 const (
-	MaxBaselines = 4096
-	MaxLost      = 65536
+	MaxBaselines = 1024
+	MaxLost      = 4096
 )
 
 // NewTracker returns an empty tracker: a Klyx that starts after a resume
 // has no baseline, and treats the object as current.
-func NewTracker() *Tracker { return &Tracker{base: map[string]baseline{}, lost: map[string]lostMark{}} }
+func NewTracker() *Tracker {
+	return &Tracker{base: map[string]baseline{}, lost: map[string]lostMark{}, saturated: map[string]bool{}, proven: map[string]map[string]bool{}}
+}
 
 // Observe classifies one object's state, captured at at.
 //
@@ -95,7 +108,8 @@ func (t *Tracker) Observe(at time.Time, o *Object, c Common, exported string) Re
 		return Current
 	}
 	if !had {
-		if _, lost := t.lost[c.UID]; lost {
+		_, lost := t.lost[c.UID]
+		if lost || (t.saturated[c.Kind] && !t.proven[c.Kind][c.UID]) {
 			delete(t.lost, c.UID)
 			t.base[c.UID] = baseline{kind: c.Kind, at: at, seen: at, fp: fp, hasReady: has, exported: exported, unproven: true}
 			return Unproven
@@ -127,6 +141,12 @@ func (t *Tracker) Observe(at time.Time, o *Object, c Common, exported string) Re
 		return Evaluating
 	}
 	delete(t.base, c.UID)
+	if t.saturated[c.Kind] {
+		if t.proven[c.Kind] == nil {
+			t.proven[c.Kind] = map[string]bool{}
+		}
+		t.proven[c.Kind][c.UID] = true
+	}
 	return Current
 }
 
@@ -153,6 +173,15 @@ func (t *Tracker) Prune(kind string, present map[string]bool, complete bool) {
 				delete(t.lost, uid)
 			}
 		}
+		for uid := range t.proven[kind] {
+			if !present[uid] {
+				delete(t.proven[kind], uid)
+			}
+		}
+		if t.saturated[kind] && t.trackedLocked(kind, present) {
+			delete(t.saturated, kind)
+			delete(t.proven, kind)
+		}
 	}
 	if over := len(t.base) - MaxBaselines; over > 0 {
 		for _, uid := range oldest(t.base, func(b baseline) time.Time { return b.seen }, over) {
@@ -162,9 +191,33 @@ func (t *Tracker) Prune(kind string, present map[string]bool, complete bool) {
 	}
 	if over := len(t.lost) - MaxLost; over > 0 {
 		for _, uid := range oldest(t.lost, func(m lostMark) time.Time { return m.seen }, over) {
+			t.saturated[t.lost[uid].kind] = true
 			delete(t.lost, uid)
 		}
 	}
+	for k, uids := range t.proven {
+		if len(uids) > MaxBaselines {
+			delete(t.proven, k)
+		}
+	}
+}
+
+// trackedLocked: every present object of kind has a baseline or was proven
+// current while the kind was saturated.
+func (t *Tracker) trackedLocked(kind string, present map[string]bool) bool {
+	for uid := range present {
+		if _, ok := t.base[uid]; !ok && !t.proven[kind][uid] {
+			return false
+		}
+	}
+	return true
+}
+
+// Saturated reports whether kind has forgotten lost markers.
+func (t *Tracker) Saturated(kind string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.saturated[kind]
 }
 
 // oldest is the n least recently seen keys of m.

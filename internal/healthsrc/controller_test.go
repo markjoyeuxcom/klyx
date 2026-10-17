@@ -98,3 +98,32 @@ func TestGatewayClassVerdictsThroughDetection(t *testing.T) {
 		t.Fatalf("a current acceptance is healthy: %+v", got)
 	}
 }
+
+// Codex's S1a implementation review 2, finding 2: an operator detection gap
+// alone is unknown, never "not ready"; a proven unready operator is still
+// not ready alongside a gap.
+func TestOperatorDetectionGapIsUnknown(t *testing.T) {
+	ready := capability.FluxOperator{Namespace: "flux-system", Name: "fo", RuntimeNamespace: "flux-system", Ready: true}
+	unresolved := capability.FluxOperator{Namespace: "ops", Name: "fo-x", Ready: true}
+	down := capability.FluxOperator{Namespace: "b", Name: "fo-b", RuntimeNamespace: "b"}
+	state := func(op capability.FluxOperatorInfo) string {
+		op.Present = true
+		got := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true, Healthy: true, Verified: true}, FluxOperator: op}})
+		if got[TaskFlux] == nil {
+			return ""
+		}
+		return got[TaskFlux].State
+	}
+	if s := state(capability.FluxOperatorInfo{Verified: true, Complete: false, Operators: []capability.FluxOperator{ready}}); s != ControllerUnknown {
+		t.Errorf("a scan cut short: %q", s)
+	}
+	if s := state(capability.FluxOperatorInfo{Verified: true, Complete: true, Operators: []capability.FluxOperator{ready, unresolved}}); s != ControllerUnknown {
+		t.Errorf("an unreadable runtime namespace: %q", s)
+	}
+	if s := state(capability.FluxOperatorInfo{Verified: true, Complete: false, Operators: []capability.FluxOperator{ready, down}}); s != ControllerNotReady {
+		t.Errorf("a proven unready operator beside a gap: %q", s)
+	}
+	if s := state(capability.FluxOperatorInfo{Verified: true, Complete: true, Operators: []capability.FluxOperator{ready}}); s != "" {
+		t.Errorf("healthy: %q", s)
+	}
+}

@@ -55,6 +55,7 @@ export type FluxSetRowDTO = { uid: string; kind: "ResourceSet" | "ResourceSetInp
 
 export type FluxReportDTO = {
   uid: string; namespace: string; name: string;
+  owner?: FluxOpOwnerDTO;
   reportingSucceeded: boolean; conditionChanged?: string;
   entitlement?: string; distributionStatus?: string; distributionVersion?: string; managedBy?: string;
   serverVersion?: string; platform?: string; nodes?: number; operatorVersion?: string; operatorPlatform?: string;

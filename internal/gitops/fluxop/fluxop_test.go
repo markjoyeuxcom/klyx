@@ -3,6 +3,7 @@ package fluxop
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -319,4 +320,88 @@ func TestSuspensionIsCaseInsensitive(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Codex's S1a implementation review 2, finding 1: dropping lost markers
+// never authorizes Current. The kind saturates; an object without a
+// baseline reads Unproven until evidence, and a complete capture in which
+// every present object is tracked ends the saturation.
+func TestTrackerSaturationFailsClosed(t *testing.T) {
+	frozen := ready("False", "ReconciliationFailed", "fetch failed", "2026-10-16T09:00:00Z", 1)
+	od, cd := state(t, true, frozen, "")
+	oe, ce := state(t, false, frozen, "")
+	tr := NewTracker()
+	uid := func(i int) string { return fmt.Sprintf("uid-%06d", i) }
+	at := t0
+	for i := 0; i < MaxBaselines+MaxLost+1; i++ {
+		c := cd
+		c.UID = uid(i)
+		at = at.Add(time.Second)
+		tr.Observe(at, od, c, "")
+		if i%1000 == 0 || i == MaxBaselines+MaxLost {
+			tr.Prune(KindProvider, nil, false) // capped captures: nothing proves a departure
+		}
+	}
+	if !tr.Saturated(KindProvider) || tr.Lost() > MaxLost || tr.Len() > MaxBaselines {
+		t.Fatalf("saturated %v, %d baselines, %d lost", tr.Saturated(KindProvider), tr.Len(), tr.Lost())
+	}
+	// the first UID's marker was dropped: resumed with its frozen fault, it
+	// is unproven, never current
+	first := ce
+	first.UID = uid(0)
+	if r := tr.Observe(at.Add(time.Second), oe, first, ""); r != Unproven {
+		t.Fatalf("a forgotten UID certified: %v", r)
+	}
+	// a UID never seen reads unproven too while the kind is saturated
+	fresh := ce
+	fresh.UID = "uid-fresh"
+	if r := tr.Observe(at.Add(time.Second), oe, fresh, ""); r != Unproven {
+		t.Fatalf("an unknown UID while saturated: %v", r)
+	}
+	// evidence proves fresh; a complete capture of the two, both tracked or
+	// proven, ends the saturation
+	ok, cok := state(t, false, ready("True", "ReconciliationSucceeded", "Reconciliation finished in 2s", "2026-10-17T10:00:07Z", 1), "")
+	cok.UID = "uid-fresh"
+	if r := tr.Observe(at.Add(2*time.Second), ok, cok, ""); r != Current {
+		t.Fatalf("evidence: %v", r)
+	}
+	if r := tr.Observe(at.Add(3*time.Second), ok, cok, ""); r != Current {
+		t.Fatalf("a proven UID stays current while saturated: %v", r)
+	}
+	tr.Prune(KindProvider, map[string]bool{"uid-fresh": true, uid(0): true}, true)
+	if tr.Saturated(KindProvider) {
+		t.Fatal("a complete, tracked capture ends the saturation")
+	}
+	if r := tr.Observe(at.Add(4*time.Second), oe, first, ""); r != Unproven {
+		t.Fatalf("the forgotten UID keeps its unproven baseline: %v", r)
+	}
+	later := ce
+	later.UID = "uid-later"
+	if r := tr.Observe(at.Add(5*time.Second), oe, later, ""); r != Current {
+		t.Fatalf("an object new since: %v", r)
+	}
+}
+
+// The tracker's memory at its bounds, for the S1a note (run with -v).
+func TestTrackerHeapAtBounds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("calibration")
+	}
+	frozen := ready("False", "ReconciliationFailed", "fetch failed", "2026-10-16T09:00:00Z", 1)
+	od, cd := state(t, true, frozen, "")
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	tr := NewTracker()
+	for i := 0; i < MaxBaselines+MaxLost; i++ {
+		c := cd
+		c.UID = fmt.Sprintf("6b2a1c3e-0000-4000-8000-%012d", i) // UID-length keys
+		tr.Observe(t0.Add(time.Duration(i)*time.Second), od, c, "")
+	}
+	tr.Prune(KindProvider, nil, false)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	t.Logf("tracker at its bounds: %d baselines, %d lost markers, %d heap bytes (%.2f MiB)", tr.Len(), tr.Lost(),
+		after.HeapAlloc-before.HeapAlloc, float64(after.HeapAlloc-before.HeapAlloc)/(1<<20))
+	runtime.KeepAlive(tr)
 }

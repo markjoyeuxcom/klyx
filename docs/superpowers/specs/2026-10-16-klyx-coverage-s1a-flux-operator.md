@@ -351,8 +351,9 @@ S1a is built after S0b and depends on it.
 - **Heap calibration,** measured on the whole Observer (`TestFluxOperatorObserverHeap`). The test runs the real kinds, parts, rows and tracker, with both parts' rows subscribed, over a baseline that already holds the fake client's objects:
   - 1,000 ResourceSets: 431 retained, 569 not retained;
   - **the Observer holds 2.77 MiB at the 512 KiB ResourceSet allotment, 5.55 heap bytes per budget byte,** whatever the template size (4 KiB and 64 KiB give the same figure);
-  - so a cluster's worst case is about 5.6 MiB of heap with the lens open, and **about 56 MiB for ten clusters**.
-  - The projections alone are 3.59 heap bytes per encoded byte (`TestFluxOperatorHeapCalibration`). The difference is the rows, the capture and the tracker.
+  - **Measured case, not a worst case** (review 2, finding 4): applied to the whole 1 MiB, that ratio gives about 5.6 MiB per cluster with the lens open, and about 56 MiB for ten. The other kinds' projections differ in shape and were not measured with rows. The fixture's ResourceSets are enabled, so this figure carries no suspension history.
+  - **The resume trackers are bounded on their own:** one tracker at its bounds (1,024 baselines, 4,096 lost markers) holds 1.87 MiB (`TestTrackerHeapAtBounds`). There are two per cluster, so a cluster can add up to about 3.7 MiB of history.
+  - The projections alone are 3.59 heap bytes per encoded byte (`TestFluxOperatorHeapCalibration`). The difference is the rows and the capture.
   - **Transient:** client-go's pager, and the watch list, hold the whole decoded list before the model is replaced. The peak is therefore the decoded list, which the budget does not bound: one 500-object page with 64 KiB templates is about 35 MB. A whole-list peak is not measured, because the fake client shares its strings with what it returns.
   - **For the owner:** a larger budget is one set of constants, if a cluster needs more than about 430 ResourceSets retained. Past the budget the kind reads "capped", never empty.
 
@@ -360,8 +361,11 @@ S1a is built after S0b and depends on it.
 - **The operator kinds have no `status.observedGeneration`.** Generation lag is keyed on Ready's own `observedGeneration`, as S1b §4.1 rules for every Flux kind: an older Ready is "Syncing…", and a Ready for the current generation is never masked.
 - **The resume tracker** is per observer (per cluster), keyed by UID (review 1, finding 7):
   - **a baseline ends only on evidence,** or when a complete capture of its kind proves the object gone. `Capture.Complete` names a source that is live with nothing left out. Age never ends one;
-  - **memory is bounded:** past 4,096 baselines, the least recently captured become lost markers, the UID alone. A lost object captured again reads **Unproven**, "Awaiting evaluation", not counted, until evidence against the state first seen again. The view says Klyx lost track of its suspension;
-  - **one residual:** past 65,536 lost markers, the oldest are dropped, and such an object reads as current;
+  - **memory is bounded:** past 1,024 baselines, the least recently captured become lost markers, the UID alone. A lost object captured again reads **Unproven**, "Awaiting evaluation", not counted, until evidence against the state first seen again. The view says Klyx lost track of its suspension;
+  - **forgetting never certifies** (review 2, finding 1). Past 4,096 lost markers, the oldest are dropped and their kind saturates:
+    - while saturated, any object of the kind without a baseline reads Unproven on first sight and gets an unproven baseline;
+    - one proven current since is remembered;
+    - a complete capture in which every present object is tracked or proven ends the saturation, because a UID absent from it has departed, and one seen later is new;
   - a Klyx restart loses baselines, so a resumed object is then treated as current (§4).
 - **Binding:** an orphaned or ambiguous FluxInstance is a row, with its label, but not an item: it is not counted. The ledger still carries it, as unevaluated membership (`observe.entriesOf`). It lights nothing of its own; the task is lit only by an operator that has an issue (review 1).
 - **FluxReport** is an evidence part, `fluxreport`: no verdict and no ledger.
@@ -421,3 +425,12 @@ S1a is built after S0b and depends on it.
 | 11 | Refresh the report was unreachable | In the instance inspector, armed with the report's UID |
 | Heap | Measure the Observer, then size the default | Measured whole (5.55 heap bytes per budget byte), and the default cut to 1 MiB encoded per cluster |
 | Ledger | Unbound instances are unevaluated members, and an orphan lights nothing of its own | §13 says so |
+
+## 15. Implementation review 2: Codex's review of 6cfc410
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Dropping lost markers recreated the false Current | The kind saturates, and its untracked objects read Unproven until a complete, tracked capture. The bounds are 1,024 and 4,096. `TestTrackerSaturationFailsClosed` |
+| 2 | A detection gap was classified "not ready" | `FluxOperatorInfo.Problems` splits proven failures from gaps, and a gap alone is `ControllerUnknown`. `TestOperatorDetectionGapIsUnknown` |
+| 3 | The report refresh lost its owner | `FluxReportDTO.Owner` reaches the confirmation. `TestFluxReportDTOCarriesItsOwner`, plus a view test |
+| 4 | 5.6 MiB was a measured case, not a worst case | §13 says "measured case", names what was not measured, and gives the bounded tracker history apart (1.87 MiB per tracker, two per cluster) |

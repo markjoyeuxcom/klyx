@@ -161,4 +161,14 @@ describe("FluxOperatorView (coverage S1a)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Refresh the report" }));
     await waitFor(() => expect(fluxOpAct).toHaveBeenCalledWith("c", "FluxReport", "flux-system", "flux", "r", "refresh"));
   });
+
+  // Review 2, finding 3: the report's own owner is in its confirmation.
+  it("the report refresh warns its owner may undo it", async () => {
+    setRows({ instances: [instance()], reports: [{ ...report, owner: { kind: "Kustomization", namespace: "flux-system", name: "infra" } }] });
+    render(<FluxOperatorView cluster="c" />);
+    fireEvent.click(screen.getByText("flux"));
+    fireEvent.click(await screen.findByRole("button", { name: /more/i }));
+    fireEvent.click(await screen.findByText("Refresh the report"));
+    expect(screen.getByText(/Owned by Kustomization flux-system\/infra/)).toBeTruthy();
+  });
 });

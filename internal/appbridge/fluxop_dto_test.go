@@ -75,3 +75,19 @@ func TestFluxOpRowsConvert(t *testing.T) {
 		t.Fatalf("provider DTO: %+v", pd)
 	}
 }
+
+// Codex's S1a implementation review 2, finding 3: the report carries its
+// owner, so its refresh's confirmation can warn the owner may undo it.
+func TestFluxReportDTOCarriesItsOwner(t *testing.T) {
+	u := &unstructured.Unstructured{}
+	_ = u.UnmarshalJSON([]byte(`{"apiVersion":"fluxcd.controlplane.io/v1","kind":"FluxReport","metadata":{"name":"flux","namespace":"flux-system","uid":"r1","generation":1,
+		"labels":{"kustomize.toolkit.fluxcd.io/name":"infra","kustomize.toolkit.fluxcd.io/namespace":"flux-system"}},"spec":{"distribution":{"version":"v2.9.6"}}}`))
+	v, err := fluxop.Project(fluxop.KindReport)(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := fluxReportDTO(healthsrc.Row[fluxop.Report]{Ref: healthsrc.RowRef{UID: "r1"}, Data: fluxop.ParseReport(v.(*fluxop.Object))})
+	if d.Owner == nil || d.Owner.Kind != "Kustomization" || d.Owner.Name != "infra" {
+		t.Fatalf("owner: %+v", d.Owner)
+	}
+}
