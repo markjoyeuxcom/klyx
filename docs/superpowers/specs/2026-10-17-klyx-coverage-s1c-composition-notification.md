@@ -1,0 +1,251 @@
+# Coverage S1c: source composition and notification facts
+
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S1c. S1a (the Flux Operator, accepted at 421fb2e) and S1b (image automation, accepted at 6f8824f) come before it. This slice reuses S1a's projection budget and resume evidence, and S1b's message allowlist.
+
+The roadmap's S1c:
+- **Source composition:** `ExternalArtifact` and the source-watcher's `ArtifactGenerator` composing and decomposing sources, drawn as source → generated artifact → reconciler dependency, in the dependency graph and the bound-source panels. The Line test that marks ExternalArtifact as an unknown applied source changes.
+- **Notification facts** for Providers, Alerts and Receivers.
+
+**One finding reaches beyond this slice.** Klyx exposes two bearer credentials today: a Receiver's `status.webhookPath`, and the webhook URLs that Alert dispatch failures echo. It shows them in the generic browser, Describe, the events lens and chat, and can send them to AI. §6 closes both through the S0b registry and the message rule. This part of the slice protects data Klyx already reads, and it lands first.
+
+## 1. The API
+
+Read from source-controller v1.9.6, source-watcher v2.2.4, notification-controller v1.9.4 and kustomize-controller v1.9.6, at their tags, the versions Flux v2.9.6 installs. They are cloned read-only in `scratchpad/fluxsrc-s1c`.
+
+**ExternalArtifact** (`source.toolkit.fluxcd.io/v1`, the only version; short name `ea`):
+- **Spec:** an optional `sourceRef` (apiVersion, kind, name, namespace), naming its producer.
+- **Status:**
+  - `artifact`: `revision`, `digest`, `url`, `path` and `lastUpdateTime`, with optional `size` and `metadata`;
+  - conditions.
+
+  There is no `spec.suspend`, no `observedGeneration` and no `lastHandledReconcileAt`.
+- **Who writes it:** source-controller never does. Its producers are other controllers.
+  - The source-watcher writes only Ready=True, reason `Succeeded`, "Artifact is ready", and never Ready=False (`artifactgenerator_controller.go` 499-511).
+  - **Its Ready therefore says nothing about its producer's health.** When a generator's source fails, the ExternalArtifacts keep their last artifact and stay Ready=True; only the generator turns Ready=False (142-152).
+- **Consumers:**
+  - a Kustomization by `spec.sourceRef.kind: ExternalArtifact`;
+  - a HelmRelease by `spec.chartRef.kind: ExternalArtifact`.
+  - kustomize-controller checks only that `status.artifact` exists, never its Ready (`kustomization_controller.go` 241-246), and needs its `ExternalArtifact` feature gate. The gate defaults to false (`features.go` 100-102); `flux install` turns it on. Without the gate, the Kustomization fails `AccessDenied` "...feature gate is disabled" (703-708).
+
+**ArtifactGenerator** (`source.extensions.fluxcd.io/v1beta1`, the only version; short name `ag`):
+- **Spec:**
+  - `sources[]`: alias, name, namespace and kind, one of Bucket, GitRepository, OCIRepository, HelmChart or ExternalArtifact, so generators chain;
+  - `artifacts[]`: name, `revision` (`@alias`), `originRevision`, and `copy[]` (from, to, exclude, strategy);
+  - `pathPattern` and `commonMetadata`.
+- **Status:**
+  - `lastHandledReconcileAt` and conditions;
+  - `inventory[]` of the generated ExternalArtifacts (name, namespace, digest, filename);
+  - `observedSourcesDigest`, one digest over every source. **No per-source revision is recorded,** and there is no `status.observedGeneration`.
+- **Suspension** is the annotation `source.extensions.fluxcd.io/reconcile: disabled`, case-insensitive. While disabled, conditions are left untouched.
+  - **Initialization:** a generator created disabled gets Ready=True, reason `ReconciliationDisabled`, "Initialized with reconciliation suspended", the same initialization as S1a's.
+  - **Requests:** `lastHandledReconcileAt` is written in a deferred summary even while disabled, so it proves nothing (S1a §4).
+- **Conditions:**
+  - Ready=Unknown `Progressing` with Reconciling, while it builds;
+  - Ready=False `SourceFetchFailed`, `BuildFailed` or `ReconciliationFailed`;
+  - Stalled with `ValidationFailed`, `AccessDenied` or `BuildFailed` on terminal errors;
+  - Ready=True `Succeeded`, "reconciliation succeeded, generated N artifact(s)".
+
+  **A no-drift run writes no condition** (160-166).
+- **Ownership:**
+  - no ownerReferences;
+  - the generated ExternalArtifacts carry `app.kubernetes.io/managed-by: source-watcher` and `source.extensions.fluxcd.io/generator: <generator UID>`, and their `spec.sourceRef` names the generator;
+  - orphans are garbage-collected.
+- **Revisions:** an ExternalArtifact's `artifact.revision` is `latest@<digest>`, or a source's revision under `revision: @alias`. Its `metadata["org.opencontainers.image.revision"]` carries the origin revision.
+
+**Notification kinds** (notification-controller v1.9.4):
+- **Versions:** Alert and Provider are served only as `v1beta3`, Receiver only as `v1`. `v1beta2` was dropped in Flux v2.9.
+- **Alert and Provider are static.** `v1beta3` has no status at all (`provider_types.go` 178-183, `alert_types.go` 88-93). Their controllers only strip a legacy finalizer and emit a `Migration` event.
+  - **Their only health evidence is events on the Alert:** `NotificationDispatchFailed`, `InvalidConfig`, `SourceFetchFailed` and `MetadataAppendFailed` (`event_handlers.go`).
+  - A suspended Provider skips dispatch silently.
+- **Provider spec:** `type` (32 values), `address`, `channel`, `username`, `proxy` (deprecated), `proxySecretRef`, `secretRef`, `certSecretRef`, `serviceAccountName`, `timeout`, `commitStatusExpr`, `suspend`.
+- **Alert spec:** `providerRef`, `eventSeverity`, `eventSources[]` (kinds include ArtifactGenerator and ExternalArtifact), `inclusionList`, `exclusionList`, `eventMetadata`, `suspend`.
+- **Receiver v1:**
+  - **Spec:** `type` (including `generic-oidc`), `interval`, `events`, `resources[]` (each with a CEL `filter`), `resourceFilter`, `secretRef`, `oidcProviders[]`, `suspend`.
+  - **Status:** conditions, `observedGeneration` (default -1), `lastHandledReconcileAt` and `webhookPath` (`/hook/` + sha256 of token, name and namespace).
+  - **Conditions:** Ready=True `Succeeded`, "Receiver initialized for path: /hook/…"; Ready=False `TokenNotFound`, which clears the path; Stalled with `ValidationFailed` or `InvalidCELExpression`.
+  - `observedGeneration` advances only on Ready or a terminal error, so S1b's Stage 0 rule applies.
+  - Webhook deliveries leave no trace on the Receiver, so **its Ready means "token found, spec valid", never "webhooks arriving".**
+
+## 2. What Klyx shows
+
+**Composition, in the Flux lens:**
+- **ArtifactGenerators** join the Sources view as their own kind, beside the five source kinds. Their verdict is their own (§4). The inspector shows:
+  - each declared source, linked to its row with its verdict;
+  - each generated artifact from `inventory`, linked to its ExternalArtifact;
+  - the copy rules, as text;
+  - suspension, with S1a's resume states.
+- **ExternalArtifacts** join the Sources view.
+  - **The verdict comes from the artifact and the producer, never from Ready alone:**
+    - Ready False, from a third-party producer that writes it, is a fault;
+    - an artifact present is healthy;
+    - no artifact is a fault: "no artifact yet: its consumers cannot apply".
+  - **Its producer is its headline** when `spec.sourceRef` or the generator label names one, as a separate block (S1b's rule: the selected object's own verdict first). A failing generator reads "the producer is failing; this artifact is its last good one (<age>)".
+  - The inspector shows the revision, the digest, the origin revision from metadata (labelled "origin revision, as the producer recorded it"), the artifact's age, and the consumers.
+- **The dependency graph** (`internal/gitops/depgraph`) gains three edges:
+  - Kustomization → ExternalArtifact, by `sourceRef`;
+  - HelmRelease → ExternalArtifact, by `chartRef`;
+  - ExternalArtifact → ArtifactGenerator, by `spec.sourceRef` or the generator label, and then ArtifactGenerator → each of its sources.
+
+  A generator's chain to another ExternalArtifact is followed with the graph's existing cycle and depth bounds.
+- **The bound-source panel** of a Kustomization or HelmRelease bound to an ExternalArtifact shows the artifact, then its producer's verdict as its own line.
+  - A Kustomization failing `AccessDenied` with the feature-gate message names the cause: "kustomize-controller runs without its ExternalArtifact feature gate".
+- **The Line:** a Kustomization bound to an ExternalArtifact has its last applied revision as an artifact value (`AppliedArtifact`, the full revision string, compared exactly as OCI and Bucket revisions are). `TestAppliedValue`'s "unsupported source" case becomes this case. The origin revision is shown beside it as a hint, never compared.
+
+**Notification facts, in the Flux lens:**
+- **A Notifications view,** beside Sources and Operator, listing Providers, Alerts and Receivers.
+- **Providers and Alerts are facts, not verdicts.** They have no status to judge.
+  - **A Provider:**
+    - its type and channel;
+    - whether an address is set (the address itself is withheld, §6);
+    - the Secrets it names, never read;
+    - suspension;
+    - the Alerts that use it.
+  - **An Alert:**
+    - its provider, with whether that Provider exists and is suspended;
+    - severity, event sources, and the inclusion and exclusion lists;
+    - suspension.
+  - **Dispatch evidence:** the Alert's recent `NotificationDispatchFailed`, `InvalidConfig`, `SourceFetchFailed` and `MetadataAppendFailed` events. They show as a count and reasons, labelled "from the controller's events (they expire after about an hour)", never as a health verdict.
+- **Receivers have a verdict** (§4), and their own part: Ready means the token was found and the spec is valid. The inspector says so, and that Klyx cannot see whether webhooks arrive.
+
+## 3. The source contract (roadmap C1)
+
+| Part | Acquisition | Projection | Counted entity | Health | Notifications |
+|---|---|---|---|---|---|
+| `sources` (existing, task `flux`), gaining ArtifactGenerators and ExternalArtifacts | observer watches `artifactgenerators` (v1beta1) and `externalartifacts` (v1) | field by field, as S1a §3 | each object's UID | §4 | eligible, as sources |
+| `receivers` (new, task `flux`) | observer watch `receivers` (v1) | field by field, without `webhookPath` | the Receiver's UID | §4 | eligible |
+| Providers and Alerts | read on demand when the Notifications view or an inspector opens: lists capped at 500 each, with "+N more" said | field by field, without `address` or `proxy` | none: facts | none | none |
+
+**Projected fields:**
+- **ArtifactGenerator:**
+  - classification facts: the reconcile annotation's state, Ready's status, reason and fingerprint (S1a §4), Reconciling and Stalled, and generation with Ready's own `observedGeneration`;
+  - **join inputs, kept whole:** `sources[]` (kind, name, namespace, alias) and `inventory[]` (name, namespace);
+  - for display: artifact names and copy rules, clipped.
+- **ExternalArtifact:**
+  - Ready's status and reason;
+  - **join inputs, kept whole:** `artifact.revision` and `artifact.digest`, `spec.sourceRef`, and the generator label;
+  - for display: `lastUpdateTime`, `size`, and the origin revision from metadata. No other metadata key is projected, because producer metadata is free text.
+- **Receiver:**
+  - classification facts as for Flux objects, and `spec.suspend`;
+  - `type`, `events`, the `resources` kinds and names (CEL filters as counts), `secretRef`'s name, and the OIDC provider count.
+  - **Never** `webhookPath`, and never the Ready message (§6).
+
+**Versions:** each kind at its one served version. A cluster serving none of a kind reads it as absent; one serving another version reads "unsupported version", never empty.
+
+**Controllers:** the source-watcher and notification-controller Deployments are found by their `app.kubernetes.io/component` label in the Flux namespace that S1a's detection resolves, and feed the Flux task as S1b's image controllers do.
+
+**The budget,** by S1a §3's mechanism:
+- three watches;
+- 4 KiB per object, checked;
+- these three kinds together hold at most **1 MiB per cluster** (generators 512 KiB, artifacts 384 KiB, receivers 128 KiB), admitted by namespace and name, with "capped" coverage past it;
+- ten clusters reserve **10 MiB**.
+- The on-demand Provider and Alert lists retain nothing after the view closes.
+
+**Dependency completeness:** the joins (generator ↔ artifacts ↔ consumers, Alert → Provider) read the shared rows or the on-demand lists. Missing reads "not found", unreadable "not readable", and past the cap "incomplete". A verdict never depends on another object, except an ExternalArtifact's producer block, which is shown and never folded into the artifact's own verdict.
+
+## 4. Health rules
+
+- **ArtifactGenerator:**
+  - suspension by its own annotation is Suspended;
+  - **resume evidence is S1a §4's, unchanged:**
+    - the Ready fingerprint against the last observed disabled state;
+    - `ReconciliationDisabled` is never evidence or a verdict;
+    - no timestamps or tokens are compared;
+  - otherwise the shared Flux rule with S1b's Stage 0, keyed on Ready's own `observedGeneration`, since there is no top-level one;
+  - **what stays unproven:** a no-drift run writes no condition, so a resumed generator whose sources and spec did not change leaves no evidence. It reads "Resumed · awaiting evaluation: nothing has changed since suspension, and the generator records nothing when nothing drifts". It is not counted, and "Reconcile" is offered.
+- **ExternalArtifact:**
+  - Ready False is a fault with its reason;
+  - no `status.artifact` is a fault, "no artifact yet";
+  - an artifact present is ok;
+  - there is no suspension and no generation lag (no `observedGeneration`).
+- **Receiver:**
+  - `spec.suspend` is Suspended;
+  - otherwise the shared Flux rule with Stage 0: `TokenNotFound` is a fault ("its Secret has no token: webhooks are refused"), and Stalled is a fault that will not retry;
+  - Ready True is labelled "Ready: token found, spec valid".
+- **Providers and Alerts:** no verdict, no count, no notification. A suspended Provider or Alert is shown as such.
+
+## 5. Verbs (roadmap C4)
+
+| Kind | Reconcile | Suspend / resume |
+|---|---|---|
+| ArtifactGenerator | `reconcile.fluxcd.io/requestedAt` | `source.extensions.fluxcd.io/reconcile: disabled`; resume sets `enabled` and a fresh `requestedAt`, as S1a's |
+| ExternalArtifact | none: it is reconciled by its producer, and the inspector links to the producer's verbs | none |
+| Receiver | `requestedAt` | `spec.suspend` |
+| Provider, Alert | none (static) | `spec.suspend` |
+
+- Every verb carries the UID guard, ConfirmDialog with ProtectGuard, and S1b's ownership consequence line.
+- A verb reports "requested", never "completed".
+
+## 6. Sensitive data
+
+**The S0b registry gains:**
+- `Receiver` `status.webhookPath`: opaque. The path is the bearer credential: a `generic` Receiver authenticates nothing but the path (`receiver_handlers.go` 262-263).
+- `Provider` `spec.address` and `spec.proxy`: opaque. For Slack, Teams, Discord, Rocket, Webex, Lark and generic forwarders the address is the credential, its secret in the path. `spec.proxy` can carry `user:password@`.
+- `ExternalArtifact` `status.artifact.metadata`: free-form, with only `org.opencontainers.image.revision` shown. Producer metadata is arbitrary text.
+
+S0b's machinery then applies to them on every path: the generic detail, Describe (withheld while a value is present), the editor guard, diffs, chat and AI.
+
+**Messages fail closed, as S1b §6's rule does:**
+- **Receiver condition and event messages.** The Ready message names the webhook path. The allowlist is `Receiver initialized for path: <withheld>` (the path replaced), the `TokenNotFound` reason with its fixed message, and the Stalled reasons. Anything else is withheld, keeping the reason.
+- **Alert and Provider event messages.** Notifier errors print the webhook URL, unmasked (`slack.go` 72, `teams.go` 127, `forwarder.go` 49 and others). The asynchronous path masks only the Secret's `token`. retryablehttp's "giving up" message redacts only a user-info password, so path and query tokens survive. Non-2xx response bodies are echoed verbatim.
+  - These messages are **withheld whole on every path,** keeping the reason (`NotificationDispatchFailed`, and so on), the involved object and the time.
+  - `InvalidConfig` messages name regular expressions and label selectors, which are configuration. They pass the URL rule.
+- **ArtifactGenerator messages** carry fetch and build errors: in-cluster artifact URLs, paths from Git content, pathPattern captures. They pass the URL rule and are clipped, and are not withheld. They hold no credentials by construction.
+
+**AI facts:** kinds, verdicts, reasons, names, revisions and digests, types and channels. Never addresses, webhook paths, producer metadata, or Alert or Provider event messages.
+
+**The fix for existing exposure lands first,** as Stage 0 of this slice with its own needle tests across the generic detail, Describe, the events lens, chat and AI:
+- the three registry entries;
+- the Receiver and Alert/Provider message rules.
+
+## 7. Tests, lab and smoke
+
+- **Stage 0 (§6):**
+  - needles in a Receiver's `webhookPath` and Ready message, in a Provider's `address` (a Slack-style path token) and `proxy` (user info), and in an Alert's `NotificationDispatchFailed` message (a URL with a path token, and a response body);
+  - each absent from the serialised generic detail, Describe, the events lens, the chat tools and AI evidence;
+  - the allowlisted Receiver message keeps its fixed text with the path replaced.
+- **Unit:**
+  - **parsing and rules** for each kind;
+  - **resume:**
+    - a generator's resume through the projected Observer path: evidence by a Ready change, `ReconciliationDisabled` never evidence, and the no-drift case staying "awaiting";
+    - an ExternalArtifact with an artifact and Ready True from a failing generator: ok, with the producer block failing;
+    - no artifact: a fault;
+  - **the dependency graph:**
+    - the three new edges;
+    - a chained generator (ExternalArtifact → generator → ExternalArtifact);
+    - a cycle bounded;
+    - a generator label without `sourceRef`;
+  - **The Line:**
+    - a Kustomization bound to an ExternalArtifact giving an `AppliedArtifact`;
+    - the origin revision never compared;
+  - **the bound-source panel,** with the feature-gate `AccessDenied` named;
+  - **the Notifications view:**
+    - an Alert whose Provider is missing or suspended;
+    - dispatch-failure evidence counted from events, with no message shown;
+    - capped lists;
+  - **C1 beyond parity:**
+    - projection equality;
+    - UID replacement;
+    - the budget;
+    - an unsupported version.
+- **Parity:**
+  - the ArtifactGenerator, ExternalArtifact and Receiver CRDs on `kind-klyx` and in `klyx-parity.sh`;
+  - oracle-marked fixtures for each verdict;
+  - a source-watcher and a notification-controller stand-in;
+  - the oracle's `sources` and `receivers` parts and the frontend `ROW_PARTS`.
+- **Lab (`kind-klyx`):**
+  - **ArtifactGenerators:** one Ready generator with two artifacts; one failing `SourceFetchFailed` whose artifact stays Ready; one suspended;
+  - **ExternalArtifacts:** one consumed by a Kustomization;
+  - **Receivers:** one Ready, one `TokenNotFound`;
+  - **Providers and Alerts:** a Provider with an address, an Alert with dispatch-failure events written as Kubernetes events;
+  - all status written through the status subresource.
+- **Native smoke:**
+  - the Sources view lists generators and artifacts, with the producer block;
+  - the dependency drawing draws a Kustomization → ExternalArtifact → generator → GitRepository chain;
+  - the Notifications view lists the three kinds, with no address or webhook path anywhere on the page.
+- **Live captures:** the Sources view with a generator, the drawing with the composition chain, and the Notifications view, night and day, at 1440 and 1024.
+
+## 8. Not in S1c
+
+- **Whether webhooks arrive at a Receiver.** Nothing records it.
+- **helm-controller's handling of ExternalArtifact chart references,** beyond showing the reference. Its source was not read for this note, and the HelmRelease rule is unchanged.
+- **Evaluating Alert event-source selectors** against live objects.
