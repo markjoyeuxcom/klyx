@@ -328,3 +328,104 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
 |---|---|---|
 | 1 | A first-line rule with a template-keyword denylist still passes a Git server's rejection that quotes a push option | §6: automation messages are an allowlist of the controller's fixed messages and the parsed push summary's first line; everything else is withheld whole, keeping the reason. §7 adds the first-line rejection needle across the serialised paths |
 
+## 11. As built
+
+**Stages (branch `wip-9`):**
+- `8910655` Stage 0, the Flux rule;
+- `8cc4b5b` Stage 1, the message allowlist and the Describe policy;
+- `720f93a` Stage 2, the pure `internal/gitops/imageauto` package;
+- `c05da6e` Stage 3a, controller detection;
+- `40fed4b` Stage 3b, the observer kinds and the `images` part;
+- `ab7772d` Stage 4, the verbs;
+- `463959b` Stage 5, the bridge;
+- `674749d` Stage 6, the Images view;
+- then Stage 7: the lab, the parity gate and the smoke.
+
+S1a's implementation review fixes (`6cfc410`, `857eb60`, `055758d`) sit between these stages on the branch. They are S1a's, reviewed and accepted there.
+
+**Stage 0 (§4.1).**
+- `flux.Resource.Stale` is now the pending rule (`flux.go` `pending`), so every reader follows it: the rule, the Line, the promotion tracker and the frontend's Syncing chip.
+- **The rule:**
+  - a Ready without its own `observedGeneration` keeps the status rule;
+  - a generation ahead of Ready's own is pending;
+  - Ready=False for the current generation is never pending;
+  - otherwise the status lag decides, so Ready=True is never confirmed early.
+- **"Ready is absent"** is read as the status rule, the same as a Ready without its generation: Syncing when `status.observedGeneration` lags, else Unknown, as before. Reading every object without a Ready as Syncing would also hide one whose controller never runs.
+- **The DTO carries `readyGeneration`.** The lens's Syncing chip and "last observed" line name the older of the two generations. A current failure's tooltip and the inspector line name the generation it applies to.
+
+**Stage 1 (§6).**
+- **The registry** gains the three ImageUpdateAutomation surfaces.
+- **`crd.AutomationMessage` is the allowlist, and `crd.MessageRule` applies it by kind name in any group,** because an event names its involved object's group only when the recorder set it. It runs where every message is made:
+  - the sanitiser's condition walk, which every detail, chat and Explain read passes through;
+  - `workloads.SummarizeEvents`, which builds every event row (the events lens, the Flux inspectors, chat);
+  - the CRD detail's event read;
+  - Karpenter's event read.
+- **The push summary parser:**
+  - each refspec is validated at both endpoints (`refs/heads/auto:refs/heads/main` passes);
+  - globs and deletions fail closed;
+  - a quote inside a name makes the line ambiguous, so it fails.
+- **Describe of a message-sensitive kind** (S1c §6's policy, built here for ImageUpdateAutomation):
+  - it is bracketed even without a payload;
+  - it runs with `--show-events=false`, and so does its copy command;
+  - it is withheld for a version whose condition messages the rule changes: the sanitiser's new `Messages` flag, surfaced as the `messages` hold.
+
+**Stage 2 (§3).**
+- **Each projection is built in up to three passes:**
+  - messages at 1 KiB;
+  - every display string at 256 bytes;
+  - without the join inputs that cannot be kept whole, each named in `Incomplete`. A join that needs one claims nothing.
+- **Kept whole:** the policies' labels, the selector, the references, the image references and the SHAs.
+- **Clipped or withheld:**
+  - more than 100 `observedPolicies` read as incomplete;
+  - the template, its values and push option values are never copied, only the option count;
+  - an automation's messages pass the allowlist inside the projection, so no row holds the raw text.
+
+**Stage 3.**
+- **Detection:**
+  - the image controllers are found by their component label in the namespace S1a resolves;
+  - absent or not ready while the CRDs are served is a failure, and an unreadable list a gap;
+  - Flux's controller problems aggregate across the operator, a real kustomize-controller read and the image controllers (S1a review 3).
+- **The read:**
+  - the kinds are read at `v1`, else `v1beta2`; any other served version is a named gap;
+  - **the budget is 1 MiB encoded per cluster (256, 512 and 256 KiB), not the design's 2 MiB**, for S1a's reason: the whole Observer holds about 5.5 heap bytes per encoded byte with the lens open.
+- **The `images` part counts only its three kinds.** A part's coverage rolls up its dependency kinds, so a GitRepository or Kustomization gap would have degraded image verdicts. Those joins are made in the inspector's detail read instead.
+- **Notifications:** the two overdue states reach the engine as ledger role changes on their clock boundary, as ESO's Stale does. Nothing special-cases them.
+
+**Stage 4 (§5).**
+- "Scan now", "Run now" and a policy's reconcile are the request annotation, and suspension is `spec.suspend`, each UID-guarded.
+- An ImagePolicy served below `v1` is refused both, in the backend and the view.
+- Reconcile with source is refused for the image kinds.
+
+**Stage 5.**
+- **`GetImageDetail(kind, ns, name, uid)` is fenced by the UID.** It reads, for an automation:
+  - the event-bound branch: bound, expired, ambiguous, unreadable when the events read failed, or no push;
+  - the GitRepository read directly: its revision, its `spec.ref` for the push target, and its URL under the URL rule;
+  - the bound Kustomizations from the shared reconciliations rows, with their completeness.
+- **The author's email and the selector never reach a model:** chat's projection drops them for ImageUpdateAutomation, and Explain's `flux/images` allowlist omits them.
+
+**Stage 6.**
+- **The Images view, as §2 describes.**
+- **Every Flux verb dialog now names the owner's consequence:** `flux.Resource.Owner` and the shared `ownershipLine`, for Kustomizations and HelmReleases too, and for S1a's operator verbs.
+- The parts' fixtures, the reveal table and the attention parts learn `images`.
+
+**Stage 7.**
+- **The parity gate:**
+  - the three CRDs and stand-ins for both controllers, found by their component label;
+  - a healthy baseline (case B allows no attention): a recent scan and run under a 24h interval, a resolved policy, and a suspended automation;
+  - the `images` part in the oracle and in `ROW_PARTS`.
+- **The `kind-klyx` lab** now carries the image CRDs (Flux v2.9.6, `v1` only). `scratchpad/lab-s1b/apply.sh` writes the fixtures:
+  - repositories: healthy, `AuthenticationFailed`, and scan overdue;
+  - policies: resolved, failing with a retained image, and `DependencyNotReady`;
+  - an automation with its own GitRepository, two Kustomizations (one at the pushed SHA, one elsewhere) and a push event bound by UID;
+  - a suspended automation.
+
+  `lab-s1b/stage0.sh` adds a Kustomization failing its current generation while status lags.
+- **Smoke steps:** "Flux Images view" and "Flux current failure is a fault".
+
+**Verification.**
+- `go test ./internal/...` passes.
+- The frontend gate passes: tsc, eslint and 2133 vitest tests.
+- **The parity gate passes both stages, all 12 cases,** with the image fixtures.
+- **The native smoke passes 122/122,** night and day at 1440 and 1024, at `f0bc413`.
+- **Live captures:** `scratchpad/cap-s1b`, twelve images: the Images view, the failing policy's inspector, and the automation with its push joined, in each theme and width.
+
