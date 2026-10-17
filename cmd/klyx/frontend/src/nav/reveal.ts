@@ -15,6 +15,7 @@ const FLUX_KINDS: Record<string, string> = {
 const OBJECT_KINDS: Record<string, string> = {
   ...FLUX_KINDS, fluxinstances: "FluxInstance", resourcesets: "ResourceSet", resourcesetinputproviders: "ResourceSetInputProvider",
   imagerepositories: "ImageRepository", imagepolicies: "ImagePolicy", imageupdateautomations: "ImageUpdateAutomation",
+  artifactgenerators: "ArtifactGenerator", externalartifacts: "ExternalArtifact", receivers: "Receiver",
   issuers: "Issuer", clusterissuers: "ClusterIssuer", secretstores: "SecretStore", clustersecretstores: "ClusterSecretStore",
 };
 
@@ -24,7 +25,7 @@ export const kindOfRef = (ref: Pick<RevealRef, "gvr">) => OBJECT_KINDS[last(ref.
 // Every part's lens selects the object it reveals; a part not listed opens
 // its view and the link says so.
 const SELECTS = new Set([
-  "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images",
+  "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers",
   "argo/applications", "argo/applicationsets", "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores",
   "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
 ]);
@@ -69,6 +70,12 @@ export function reveal(cluster: string, task: string, part: string, ref: RevealR
       break;
     case "flux/images":
       nav.openFlux("images");
+      break;
+    case "flux/composition":
+      nav.openFlux("composition");
+      break;
+    case "flux/receivers":
+      nav.openFlux("notifications");
       break;
     case "argo/applications":
     case "argo/applicationsets":

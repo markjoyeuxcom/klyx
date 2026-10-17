@@ -177,6 +177,10 @@ const (
 // that S1c reads.
 type FluxComponents struct {
 	SourceWatcher, Notification ImageController
+	// The views' presence (S1c §2): Composition when ArtifactGenerators or
+	// ExternalArtifacts are served, or discovery cannot rule them out;
+	// Notifications when Receivers, Providers or Alerts are.
+	Composition, Notifications bool
 }
 
 // Problems is both controllers'.
@@ -201,5 +205,8 @@ func (d *Detector) detectFluxComponents(ctx context.Context, served map[string]b
 		res, gap := d.groupResources(served, notificationGroup, "v1", "v1beta3")
 		out.Notification = d.readController(ctx, notificationController, ns, res["receivers"] || res["providers"] || res["alerts"], gap)
 	}
+	src, gap := d.groupResources(served, "source.toolkit.fluxcd.io", "v1")
+	out.Composition = out.SourceWatcher.Needed || src["externalartifacts"] || gap != ""
+	out.Notifications = out.Notification.Needed
 	return out
 }

@@ -21,6 +21,12 @@ const GROUPS: Record<string, string> = {
   ImageRepository: "image.toolkit.fluxcd.io",
   ImagePolicy: "image.toolkit.fluxcd.io",
   ImageUpdateAutomation: "image.toolkit.fluxcd.io",
+  // source composition and notifications (coverage S1c)
+  ExternalArtifact: "source.toolkit.fluxcd.io",
+  ArtifactGenerator: "source.extensions.fluxcd.io",
+  Receiver: "notification.toolkit.fluxcd.io",
+  Provider: "notification.toolkit.fluxcd.io",
+  Alert: "notification.toolkit.fluxcd.io",
   // Argo CD
   Application: "argoproj.io",
   ApplicationSet: "argoproj.io",

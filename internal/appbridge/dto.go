@@ -29,33 +29,37 @@ type ClusterDTO struct {
 	// FluxOperatorPresent: the Flux Operator's API is served (coverage S1a).
 	FluxOperatorPresent bool `json:"fluxOperatorPresent"`
 	// FluxImagesPresent: Flux image automation's API is served (S1b).
-	FluxImagesPresent      bool   `json:"fluxImagesPresent"`
-	FluxHealthy            bool   `json:"fluxHealthy"`
-	ArgoPresent            bool   `json:"argoPresent"`
-	NetworkTier            string `json:"networkTier"`
-	NetworkReason          string `json:"networkReason"`
-	GatewayAPIVersion      string `json:"gatewayAPIVersion"`
-	CiliumPresent          bool   `json:"ciliumPresent"`
-	ClusterMesh            bool   `json:"clusterMesh"`
-	HasHubble              bool   `json:"hasHubble"`
-	KarpenterPresent       bool   `json:"karpenterPresent"`
-	KarpenterHealthy       bool   `json:"karpenterHealthy"`
-	CertManagerTier        string `json:"certManagerTier"`
-	CertManagerReason      string `json:"certManagerReason"`
-	CertManagerPresent     bool   `json:"certManagerPresent"`
-	CertManagerHealthy     bool   `json:"certManagerHealthy"`
-	ExternalSecretsTier    string `json:"externalSecretsTier"`
-	ExternalSecretsReason  string `json:"externalSecretsReason"`
-	ExternalSecretsPresent bool   `json:"externalSecretsPresent"`
-	ExternalSecretsHealthy bool   `json:"externalSecretsHealthy"`
-	ReloaderTier           string `json:"reloaderTier"`
-	ReloaderReason         string `json:"reloaderReason"`
-	ReloaderPresent        bool   `json:"reloaderPresent"`
-	ReloaderHealthy        bool   `json:"reloaderHealthy"`
-	Env                    string `json:"env"`
-	Region                 string `json:"region"`
-	Provider               string `json:"provider"`
-	Group                  string `json:"group"`
+	FluxImagesPresent bool `json:"fluxImagesPresent"`
+	// FluxCompositionPresent / FluxNotificationsPresent: the S1c views'
+	// kinds are served (or discovery cannot rule them out).
+	FluxCompositionPresent   bool   `json:"fluxCompositionPresent"`
+	FluxNotificationsPresent bool   `json:"fluxNotificationsPresent"`
+	FluxHealthy              bool   `json:"fluxHealthy"`
+	ArgoPresent              bool   `json:"argoPresent"`
+	NetworkTier              string `json:"networkTier"`
+	NetworkReason            string `json:"networkReason"`
+	GatewayAPIVersion        string `json:"gatewayAPIVersion"`
+	CiliumPresent            bool   `json:"ciliumPresent"`
+	ClusterMesh              bool   `json:"clusterMesh"`
+	HasHubble                bool   `json:"hasHubble"`
+	KarpenterPresent         bool   `json:"karpenterPresent"`
+	KarpenterHealthy         bool   `json:"karpenterHealthy"`
+	CertManagerTier          string `json:"certManagerTier"`
+	CertManagerReason        string `json:"certManagerReason"`
+	CertManagerPresent       bool   `json:"certManagerPresent"`
+	CertManagerHealthy       bool   `json:"certManagerHealthy"`
+	ExternalSecretsTier      string `json:"externalSecretsTier"`
+	ExternalSecretsReason    string `json:"externalSecretsReason"`
+	ExternalSecretsPresent   bool   `json:"externalSecretsPresent"`
+	ExternalSecretsHealthy   bool   `json:"externalSecretsHealthy"`
+	ReloaderTier             string `json:"reloaderTier"`
+	ReloaderReason           string `json:"reloaderReason"`
+	ReloaderPresent          bool   `json:"reloaderPresent"`
+	ReloaderHealthy          bool   `json:"reloaderHealthy"`
+	Env                      string `json:"env"`
+	Region                   string `json:"region"`
+	Provider                 string `json:"provider"`
+	Group                    string `json:"group"`
 	// Protected is the EFFECTIVE protection - exactly what the backend
 	// ProtectGuard enforces (explicit flag OR a prd/prod/production token in
 	// env/name/context). The UI decides on typed arming from this field; the
@@ -79,49 +83,51 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 	}
 	tags := cc.EffectiveTags()
 	return ClusterDTO{
-		Name:                   s.Name,
-		State:                  s.State.String(),
-		Reason:                 s.Reason,
-		NodesReady:             s.NodesReady,
-		NodesTotal:             s.NodesTotal,
-		Pods:                   s.Pods,
-		PodsKnown:              s.PodsKnown,
-		PodsStale:              s.PodsStale,
-		Version:                s.Version,
-		GitopsTier:             s.Capabilities.GitOps.Tier.String(),
-		GitopsReason:           s.Capabilities.GitOps.Reason,
-		FluxPresent:            s.Capabilities.GitOps.Flux.Present,
-		FluxOperatorPresent:    s.Capabilities.GitOps.FluxOperator.Present,
-		FluxImagesPresent:      s.Capabilities.GitOps.Flux.Images.Served,
-		FluxHealthy:            s.Capabilities.GitOps.Flux.Healthy,
-		ArgoPresent:            s.Capabilities.GitOps.Argo.Present,
-		NetworkTier:            s.Capabilities.Network.Tier.String(),
-		NetworkReason:          s.Capabilities.Network.Reason,
-		GatewayAPIVersion:      s.Capabilities.Network.GatewayAPIVersion,
-		CiliumPresent:          s.Capabilities.Network.CiliumPresent,
-		ClusterMesh:            s.Capabilities.Network.ClusterMesh,
-		HasHubble:              s.Capabilities.Network.HasHubble,
-		KarpenterPresent:       s.Capabilities.Karpenter.Present,
-		KarpenterHealthy:       s.Capabilities.Karpenter.Healthy,
-		CertManagerTier:        s.Capabilities.CertManager.Tier.String(),
-		CertManagerReason:      s.Capabilities.CertManager.Reason,
-		CertManagerPresent:     s.Capabilities.CertManager.Present,
-		CertManagerHealthy:     s.Capabilities.CertManager.Healthy,
-		ExternalSecretsTier:    s.Capabilities.ExternalSecrets.Tier.String(),
-		ExternalSecretsReason:  s.Capabilities.ExternalSecrets.Reason,
-		ExternalSecretsPresent: s.Capabilities.ExternalSecrets.Present,
-		ExternalSecretsHealthy: s.Capabilities.ExternalSecrets.Healthy,
-		ReloaderTier:           s.Capabilities.Reloader.Tier.String(),
-		ReloaderReason:         s.Capabilities.Reloader.Reason,
-		ReloaderPresent:        s.Capabilities.Reloader.Present,
-		ReloaderHealthy:        s.Capabilities.Reloader.Healthy,
-		Env:                    firstNonEmpty(cc.Environment, tags["env"]),
-		Protected:              cc.IsProtected(),
-		ProtectedInferred:      cc.IsProtected() && !cc.Protected,
-		Region:                 tags["region"],
-		Provider:               tags["provider"],
-		Group:                  cc.Group,
-		AgeSeconds:             age,
+		Name:                     s.Name,
+		State:                    s.State.String(),
+		Reason:                   s.Reason,
+		NodesReady:               s.NodesReady,
+		NodesTotal:               s.NodesTotal,
+		Pods:                     s.Pods,
+		PodsKnown:                s.PodsKnown,
+		PodsStale:                s.PodsStale,
+		Version:                  s.Version,
+		GitopsTier:               s.Capabilities.GitOps.Tier.String(),
+		GitopsReason:             s.Capabilities.GitOps.Reason,
+		FluxPresent:              s.Capabilities.GitOps.Flux.Present,
+		FluxOperatorPresent:      s.Capabilities.GitOps.FluxOperator.Present,
+		FluxImagesPresent:        s.Capabilities.GitOps.Flux.Images.Served,
+		FluxCompositionPresent:   s.Capabilities.GitOps.Flux.Components.Composition,
+		FluxNotificationsPresent: s.Capabilities.GitOps.Flux.Components.Notifications,
+		FluxHealthy:              s.Capabilities.GitOps.Flux.Healthy,
+		ArgoPresent:              s.Capabilities.GitOps.Argo.Present,
+		NetworkTier:              s.Capabilities.Network.Tier.String(),
+		NetworkReason:            s.Capabilities.Network.Reason,
+		GatewayAPIVersion:        s.Capabilities.Network.GatewayAPIVersion,
+		CiliumPresent:            s.Capabilities.Network.CiliumPresent,
+		ClusterMesh:              s.Capabilities.Network.ClusterMesh,
+		HasHubble:                s.Capabilities.Network.HasHubble,
+		KarpenterPresent:         s.Capabilities.Karpenter.Present,
+		KarpenterHealthy:         s.Capabilities.Karpenter.Healthy,
+		CertManagerTier:          s.Capabilities.CertManager.Tier.String(),
+		CertManagerReason:        s.Capabilities.CertManager.Reason,
+		CertManagerPresent:       s.Capabilities.CertManager.Present,
+		CertManagerHealthy:       s.Capabilities.CertManager.Healthy,
+		ExternalSecretsTier:      s.Capabilities.ExternalSecrets.Tier.String(),
+		ExternalSecretsReason:    s.Capabilities.ExternalSecrets.Reason,
+		ExternalSecretsPresent:   s.Capabilities.ExternalSecrets.Present,
+		ExternalSecretsHealthy:   s.Capabilities.ExternalSecrets.Healthy,
+		ReloaderTier:             s.Capabilities.Reloader.Tier.String(),
+		ReloaderReason:           s.Capabilities.Reloader.Reason,
+		ReloaderPresent:          s.Capabilities.Reloader.Present,
+		ReloaderHealthy:          s.Capabilities.Reloader.Healthy,
+		Env:                      firstNonEmpty(cc.Environment, tags["env"]),
+		Protected:                cc.IsProtected(),
+		ProtectedInferred:        cc.IsProtected() && !cc.Protected,
+		Region:                   tags["region"],
+		Provider:                 tags["provider"],
+		Group:                    cc.Group,
+		AgeSeconds:               age,
 	}
 }
 

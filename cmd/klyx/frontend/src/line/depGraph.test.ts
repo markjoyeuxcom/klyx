@@ -146,3 +146,32 @@ describe("review of d4ed130", () => {
     expect(shortSha("v1.2.3")).toBe("v1.2.3");
   });
 });
+
+// Coverage S1c §2: an artifact's producer edge is drawn by its evidence -
+// verified and named as a source, disagreeing as incomplete, never a
+// verified edge - and a producer of another kind is declared, not followed.
+describe("producer edges", () => {
+  const ks = "Kustomization/flux-system/apps", ea = "ExternalArtifact/flux-system/apps-a", ag = "ArtifactGenerator/flux-system/apps";
+  const g = (producer: string, artOver: Partial<DepNode> = {}): DepGraph => ({
+    start: ks, reads: 3, incomplete: [], proximity: [],
+    nodes: [n(ks), n(ea, artOver), n(ag, { ready: "False", failing: true, upstreamFailure: producer !== "disagree" })],
+    edges: [{ from: ks, to: ea, type: "source", reported: false, cycle: false }, { from: ea, to: ag, type: "producer", reported: false, cycle: false, producer }],
+  });
+  const gen = (graph: DepGraph) => flat(depTree(graph)).find((s) => s.id === ag)!;
+  it("verified and named are sources, with their evidence", () => {
+    expect(gen(g("verified"))).toMatchObject({ segment: "source", segmentWords: "produced by (the identity it records)" });
+    expect(gen(g("named")).segmentWords).toContain("its identity is not recorded");
+  });
+  it("a disagreeing generator is drawn incomplete and is never an upstream failure", () => {
+    const s = gen(g("disagree"));
+    expect(s.segment).toBe("incomplete");
+    expect(s.segmentWords).toContain("disagree");
+    expect(s.tags).not.toContain("upstream failure");
+  });
+  it("a producer of another kind is a tag, not an edge", () => {
+    const graph: DepGraph = { ...g("verified", { declaredProducer: { kind: "Pipeline", namespace: "ci", name: "build" } }), edges: [{ from: ks, to: ea, type: "source", reported: false, cycle: false }] };
+    const s = flat(depTree(graph)).find((x) => x.id === ea)!;
+    expect(s.tags).toContain("produced by Pipeline ci/build; Klyx does not read that kind's health");
+    expect(s.branches).toHaveLength(0);
+  });
+});

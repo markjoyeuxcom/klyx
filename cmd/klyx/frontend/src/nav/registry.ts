@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -136,8 +136,10 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "flux", label: "Flux CD", cap: "flux", lens: "group", destinations: [
       task("flux", "Reconciliation", section("gitops", { fluxView: "reconciliation" }), { keywords: ["flux", "kustomizations", "helmreleases", "gitops"] }),
       task("flux-sources", "Sources", section("gitops", { fluxView: "sources" }), { keywords: ["flux", "gitrepositories", "ocirepositories"] }),
+      task("flux-composition", "Composition", section("gitops", { fluxView: "composition" }), { cap: "fluxComposition", keywords: ["artifact generator", "external artifact", "artifactgenerator", "externalartifact", "source watcher", "composition"] }),
       task("flux-operator", "Operator", section("gitops", { fluxView: "operator" }), { cap: "fluxOperator", keywords: ["flux operator", "fluxinstance", "fluxreport", "resourceset", "resourcesetinputprovider", "input provider"] }),
       task("flux-images", "Images", section("gitops", { fluxView: "images" }), { cap: "fluxImages", keywords: ["image", "image repository", "image policy", "image update", "image automation", "imagerepository", "imagepolicy", "imageupdateautomation"] }),
+      task("flux-notifications", "Notifications", section("gitops", { fluxView: "notifications" }), { cap: "fluxNotifications", keywords: ["notification", "receiver", "webhook", "provider", "alert", "notification controller"] }),
       res("Kustomizations", r("kustomize.toolkit.fluxcd.io", "v1", "kustomizations", "Kustomization", "Namespaced")),
       res("HelmReleases", r("helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmRelease", "Namespaced")),
       res("GitRepositories", r("source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepository", "Namespaced")),
@@ -145,6 +147,8 @@ export const NAV_GROUPS: NavGroup[] = [
       res("HelmCharts", r("source.toolkit.fluxcd.io", "v1", "helmcharts", "HelmChart", "Namespaced")),
       res("OCIRepositories", r("source.toolkit.fluxcd.io", "v1beta2", "ocirepositories", "OCIRepository", "Namespaced")),
       res("Buckets", r("source.toolkit.fluxcd.io", "v1", "buckets", "Bucket", "Namespaced")),
+      res("ExternalArtifacts", r("source.toolkit.fluxcd.io", "v1", "externalartifacts", "ExternalArtifact", "Namespaced")),
+      res("ArtifactGenerators", r("source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", "ArtifactGenerator", "Namespaced")),
       res("Providers", r("notification.toolkit.fluxcd.io", "v1beta3", "providers", "Provider", "Namespaced")),
       res("Alerts", r("notification.toolkit.fluxcd.io", "v1beta3", "alerts", "Alert", "Namespaced")),
       res("Receivers", r("notification.toolkit.fluxcd.io", "v1", "receivers", "Receiver", "Namespaced")),
@@ -208,6 +212,8 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     flux: c.fluxPresent ?? false,
     fluxOperator: c.fluxOperatorPresent ?? false,
     fluxImages: c.fluxImagesPresent ?? false,
+    fluxComposition: c.fluxCompositionPresent ?? false,
+    fluxNotifications: c.fluxNotificationsPresent ?? false,
     argo: c.argoPresent ?? false,
     certManager: c.certManagerPresent ?? false,
     externalSecrets: c.externalSecretsPresent ?? false,

@@ -139,8 +139,20 @@ func TestFluxComponents(t *testing.T) {
 	if len(f) != 2 || !strings.Contains(f[0], "no source-watcher in flux-system") || !strings.Contains(f[1], "flux-system/nc is not ready") || len(g) != 0 {
 		t.Fatalf("components: %v %v", f, g)
 	}
-	if none := (&Detector{cs: fake.NewSimpleClientset()}).detectFluxComponents(context.Background(), map[string]bool{}, "flux-system"); func() bool { f, g := none.Problems(); return len(f)+len(g) > 0 }() {
-		t.Fatal("not served: nothing")
+	if !c.Composition || !c.Notifications {
+		t.Fatalf("the views are present: %+v", c)
+	}
+	none := (&Detector{cs: fake.NewSimpleClientset()}).detectFluxComponents(context.Background(), map[string]bool{}, "flux-system")
+	if f, g := none.Problems(); len(f)+len(g) > 0 || none.Composition || none.Notifications {
+		t.Fatalf("not served: nothing: %+v", none)
+	}
+	// an ExternalArtifact alone, served by source-controller, opens the view
+	cs2 := fake.NewSimpleClientset()
+	cs2.Discovery().(*fakediscovery.FakeDiscovery).Resources = []*metav1.APIResourceList{
+		{GroupVersion: "source.toolkit.fluxcd.io/v1", APIResources: []metav1.APIResource{{Name: "gitrepositories"}, {Name: "externalartifacts"}}}}
+	ea := (&Detector{cs: cs2}).detectFluxComponents(context.Background(), map[string]bool{"source.toolkit.fluxcd.io": true, "source.toolkit.fluxcd.io/v1": true}, "flux-system")
+	if !ea.Composition || ea.Notifications || ea.SourceWatcher.Needed {
+		t.Fatalf("artifacts alone: %+v", ea)
 	}
 	gc := GitOpsCapability{Flux: FluxInfo{Present: true, Healthy: true, Verified: true, Components: c}}
 	if !strings.Contains(gc.FluxIssue(), "no source-watcher") {

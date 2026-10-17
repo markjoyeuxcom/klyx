@@ -18,6 +18,9 @@ export type ClusterDTO = {
   fluxPresent?: boolean;
   fluxOperatorPresent?: boolean;
   fluxImagesPresent?: boolean;
+  // coverage S1c: source composition and notification kinds are served
+  fluxCompositionPresent?: boolean;
+  fluxNotificationsPresent?: boolean;
   fluxHealthy?: boolean;
   argoPresent?: boolean;
   networkTier: string;
@@ -134,6 +137,7 @@ export type ConditionDTO = { type: string; status: string; reason: string; messa
 export type InventoryEntryDTO = { group: string; version: string; kind: string; namespace: string; name: string };
 export type FluxSourceDTO = {
   rule: RuleDTO; // the relocated lens rule (1c addendum §2)
+  artifactUpdatedUnix?: number; // the artifact's lastUpdateTime
   uid?: string;
   gvr?: string;
   generation?: number;
@@ -158,6 +162,10 @@ export type ResourceDetailDTO = {
   asOfUnix?: number;
   error?: string;
   sourceWarning?: string;
+  // coverage S1c §2: a bound ExternalArtifact's producer, its own line after
+  // the artifact's verdict; sourceNote names a feature-gate refusal
+  sourceProducer?: import("../bridge/fluxcomposition").SourceProducerDTO;
+  sourceNote?: string;
   kind: string;
   namespace: string;
   name: string;
@@ -369,7 +377,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
-export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images";
+export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 // ageSeconds is a list read's; the rows transport never sends it (addendum §3.1).

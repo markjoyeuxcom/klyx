@@ -132,7 +132,26 @@ function tagsOf(n: DepNode, start: boolean): string[] {
   if (n.stub === "not found") t.push("not found");
   if (n.stale) t.push(`status at generation ${n.observedGeneration} of ${n.generation}`);
   if (n.suspended) t.push("suspended");
+  if (n.declaredProducer) {
+    const p = n.declaredProducer;
+    t.push(`produced by ${p.kind} ${p.namespace}/${p.name}; Klyx does not read that kind's health`);
+  } else if (n.kind === "ExternalArtifact" && n.generatorUid && !n.stub) t.push("producer recorded by identity only");
   return t;
+}
+
+// producerSegment draws a producer edge by its evidence (S1c §2): a
+// verified or named generator as a source, a disagreeing one as
+// incomplete - drawn as such, never as a verified edge.
+function producerSegment(e: { producer?: string }): [RailSegment, string] {
+  switch (e.producer) {
+    case "verified":
+      return ["source", "produced by (the identity it records)"];
+    case "named":
+      return ["source", "produced by (named by the artifact; its identity is not recorded)"];
+    case "disagree":
+      return ["incomplete", "the producer reference and the recorded identity disagree: not the generator this artifact records"];
+  }
+  return ["incomplete", `producer: ${e.producer ?? "not read"}`];
 }
 
 // depTree builds the steps from the selected node outward.
@@ -165,6 +184,7 @@ export function depTree(g: DepGraph): DepStep[] {
     };
     const branches = (out.get(id) ?? []).map((e) => [
       e.cycle ? cycleStep(e.to, e.reported, key)
+        : e.type === "producer" ? step(e.to, ...producerSegment(e), key)
         : step(e.to, e.reported ? "reported" : e.type === "source" ? "source" : "dependsOn", e.reported ? `reported blocker (${e.type === "source" ? "source" : "depends on"})` : undefined, key),
     ]);
     return {

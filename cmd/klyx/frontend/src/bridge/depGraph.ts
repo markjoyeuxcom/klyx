@@ -51,9 +51,17 @@ export type DepNode = {
   supply: DepSupply[];
   inventory?: { lastApplied: string; entries: number; workloads: number };
   git?: { url: string; refKind: string; refName: string; applied: string; path: string };
+  // An ExternalArtifact's producer evidence (coverage S1c §2): the
+  // generator UID it records, and a producer of another kind it declares -
+  // shown, never followed.
+  generatorUid?: string;
+  declaredProducer?: { group?: string; kind: string; namespace: string; name: string };
 };
 // cycle: the edge leads back to a node on its own path - cut here, and named.
-export type DepEdge = { from: string; to: string; type: "source" | "dependsOn"; reported: boolean; cycle: boolean };
+// producer: an ExternalArtifact's generator (S1c §2), qualified - verified,
+// named (identity not recorded) or disagree (drawn, never attributed), or
+// the target's stub.
+export type DepEdge = { from: string; to: string; type: "source" | "dependsOn" | "producer"; reported: boolean; cycle: boolean; producer?: string };
 export type DepPair = { failing: string; conditionTime: string; object: string; write: DepWrite };
 export type DepGraph = { start: string; nodes: DepNode[]; edges: DepEdge[]; incomplete: string[]; proximity: DepPair[]; reads: number; error?: string };
 

@@ -40,6 +40,10 @@ import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 import { FluxOperatorView } from "./FluxOperatorView";
 import { ImagesView } from "./ImagesView";
+import { CompositionView } from "./CompositionView";
+import { NotificationsView } from "./NotificationsView";
+import { attributed, producerText } from "./producer";
+import type { SourceProducerDTO } from "../bridge/fluxcomposition";
 import { ownershipLine } from "./ownership";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
@@ -50,6 +54,7 @@ const sourceKindLabel: Record<string, string> = {
   Bucket: "bucket",
   HelmRepository: "helmrepo",
   HelmChart: "chart",
+  ExternalArtifact: "artifact",
 };
 
 function shortRev(rev: string): string {
@@ -184,6 +189,8 @@ export function GitOps({ cluster }: { cluster: string }) {
   const view = useFleet((s) => (s.route.name === "cluster" ? s.route.fluxView : undefined));
   if (view === "operator") return <FluxOperatorView cluster={cluster} />;
   if (view === "images") return <ImagesView cluster={cluster} />;
+  if (view === "composition") return <CompositionView cluster={cluster} />;
+  if (view === "notifications") return <NotificationsView cluster={cluster} />;
   return <FluxLens cluster={cluster} />;
 }
 
@@ -951,7 +958,8 @@ function FluxInspector({ cluster, resource, nowS, removed, unverified, replaced,
                 Apply failed at <span className="t-identifier">{shortRev(detail.attemptedRevision)}</span>
               </div>
             )}
-            {detail.source ? <SourceSection source={detail.source} />
+            {detail.sourceNote && <div className="t-body" data-testid="source-note" style={{ color: "var(--color-text-warning)" }}>{detail.sourceNote}.</div>}
+            {detail.source ? <SourceSection source={detail.source} producer={detail.sourceProducer} />
               : detail.sourceWarning ? (
                 <InspectorBlock title="Source">
                   <div data-testid="source-warning" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{detail.sourceWarning}</div>
@@ -1006,12 +1014,16 @@ function ReconcileDialog({ cluster, resource, isProtected, onCancel, onConfirm }
         <MetaTile label="bound source" value={sourceText(resource) || "—"} />
       </div>
       {resource.owner && <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>{ownershipLine(resource.owner, "annotation")}</div>}
-      <OptionTile
-        active={withSource}
-        title="Re-fetch source first"
-        body="Also annotate the bound source so Flux pulls a fresh artifact before reconciling; use when the source itself is stale."
-        onClick={() => setWithSource((v) => !v)}
-      />
+      {resource.sourceKind === "ExternalArtifact" ? (
+        <div className="t-secondary" data-testid="no-source-refetch">Its source is an ExternalArtifact, which its producer reconciles; only this resource is annotated.</div>
+      ) : (
+        <OptionTile
+          active={withSource}
+          title="Re-fetch source first"
+          body="Also annotate the bound source so Flux pulls a fresh artifact before reconciling; use when the source itself is stale."
+          onClick={() => setWithSource((v) => !v)}
+        />
+      )}
     </OperationDialog>
   );
 }
@@ -1105,7 +1117,7 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
   );
 }
 
-function SourceSection({ source }: { source: FluxSourceDTO }) {
+function SourceSection({ source, producer }: { source: FluxSourceDTO; producer?: SourceProducerDTO }) {
   // A suspended source is paused, not failed: its Ready condition goes stale by
   // design, so it must not surface the red "source not ready" root-cause headline
   // (the status dot already shows paused). Suspended-is-not-a-fault invariant.
@@ -1131,9 +1143,25 @@ function SourceSection({ source }: { source: FluxSourceDTO }) {
           )}
         </div>
       </div>
+      {producer && <ProducerLine producer={producer} lastUpdateUnix={source.artifactUpdatedUnix} />}
     </InspectorBlock>
   );
 }
+
+// ProducerLine is a bound artifact's producer, its own line after the
+// artifact's verdict (S1c §2): a health only for an established producer.
+export function ProducerLine({ producer, lastUpdateUnix }: { producer: SourceProducerDTO; lastUpdateUnix?: number }) {
+  const health = attributed(producer) && producer.label;
+  return (
+    <div className="t-body" data-testid="source-producer" style={{ marginTop: 6, color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>
+      <span className="t-section-label">Producer: </span>{producerText(producer)}
+      {health && <span style={{ color: producer.role === "fault" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}> · {producer.label}</span>}
+      {health && producer.failing && <div style={{ color: "var(--color-text-warning)" }}>The producer is failing; this artifact is its last good one{lastUpdateUnix ? ` (${formatAgo(lastUpdateUnix)})` : ""}.</div>}
+    </div>
+  );
+}
+
+const formatAgo = (unixS: number) => `updated ${new Date(unixS * 1000).toLocaleString()}`;
 
 function isDriftEvent(e: EventRowDTO): boolean {
   const s = `${e.reason} ${e.message}`.toLowerCase();
