@@ -520,3 +520,9 @@ Codex accepted the two deviations (the composition part and view) and asked for 
 Tests:
 - Go: `appbridge.TestS1cReviewFences`, `TestGeneratorOwner`, the replaced-artifact case of `TestGetResourceDetailBoundArtifact`, `fleet.TestFluxNotifications` (keyed by UID), `capability.TestS1cOnlyInstallations` and `depgraph.TestGraphGeneratorSuspensionMatchesTheController`.
 - Frontend: the other-revision, owner-line and capped-dispatch view tests.
+
+## 17. Implementation review 2: Codex at 44f3861
+
+Codex accepted the eight changes of §16 and raised one more.
+
+**A part whose APIs are all confirmed absent is a complete empty read.** The Observer marks it Absent, but `kindState` refused anything not Live. On an S1c-only cluster without Kustomization or HelmRelease CRDs, an artifact's consumers therefore read "not readable", and a generator's GitRepository against an absent Sources part did too. An absent part now reads as found-empty: no consumers, and a source "not found". Stale, checking and unreadable parts still refuse. Test: `appbridge.TestS1cAbsentPartsAreKnownEmpty`.

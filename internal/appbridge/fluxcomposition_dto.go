@@ -489,12 +489,18 @@ func (s *GitOpsService) GetCompositionDetail(cluster, kind, namespace, name, uid
 }
 
 // kindState is the read state of one kind of a part, for a join: found
-// when it is live and whole (or confirmed absent), incomplete when capped,
-// not readable when the part or the kind is not current - a cached row of
-// a stale read never certifies health (Codex's S1c implementation review,
-// finding 4).
+// when it is live and whole, or confirmed absent - a part whose APIs are
+// all absent is a complete empty read (Codex's S1c implementation review
+// 2); incomplete when capped; not readable when the part or the kind is
+// not current - a cached row of a stale read never certifies health
+// (review 1, finding 4).
 func kindState(rows observe.Rows, ok bool, kind string) string {
-	if !ok || rows.Part.Coverage != observe.Live {
+	switch {
+	case !ok:
+		return joinUnreadable
+	case rows.Part.Coverage == observe.Absent:
+		return notify.ProviderFound
+	case rows.Part.Coverage != observe.Live:
 		return joinUnreadable
 	}
 	for _, k := range rows.Part.Kinds {

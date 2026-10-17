@@ -252,3 +252,33 @@ func TestGeneratorOwner(t *testing.T) {
 		t.Fatalf("the owner: %+v", rows[0].Generator)
 	}
 }
+
+// Codex's S1c implementation review 2: a part whose APIs are all confirmed
+// absent is a complete empty read - a generator's GitRepository is "not
+// found", an artifact has no consumers - never "not readable".
+func TestS1cAbsentPartsAreKnownEmpty(t *testing.T) {
+	gen := s1cObj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "apps", "uid-ag", nil,
+		map[string]any{"sources": []any{map[string]any{"alias": "fleet", "kind": "GitRepository", "name": "fleet"}}}, nil)
+	art := s1cObj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "flux-system", "apps-a", "uid-ea", nil, map[string]any{}, nil)
+	absent := func(kinds ...string) observe.Rows {
+		r := observe.Rows{Part: observe.Part{Coverage: observe.Absent}}
+		for _, k := range kinds {
+			r.Part.Kinds = append(r.Part.Kinds, observe.KindCoverage{Kind: k, Coverage: observe.Absent})
+		}
+		return r
+	}
+	conn := &fakeGitOpsConn{byKind: map[string]*unstructured.Unstructured{"ArtifactGenerator": gen, "ExternalArtifact": art}, rowsByPart: map[string]observe.Rows{
+		"sources": absent(healthsrc.KindGitRepositories), "reconciliations": absent(healthsrc.KindKustomizations, healthsrc.KindHelmReleases)}}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+	if d := svc.GetCompositionDetail("c", "ArtifactGenerator", "flux-system", "apps", "uid-ag"); d.Sources[0].State != notify.ProviderMissing || d.SourcesState != notify.ProviderFound {
+		t.Fatalf("an absent Sources part: %+v", d.Sources)
+	}
+	if d := svc.GetCompositionDetail("c", "ExternalArtifact", "flux-system", "apps-a", "uid-ea"); len(d.Consumers) != 0 || d.ConsumersState != notify.ProviderFound {
+		t.Fatalf("absent reconcilers: %+v", d)
+	}
+	// a stale part still refuses
+	conn.rowsByPart["sources"] = observe.Rows{Part: observe.Part{Coverage: observe.Stale}}
+	if d := svc.GetCompositionDetail("c", "ArtifactGenerator", "flux-system", "apps", "uid-ag"); d.Sources[0].State != "not readable" {
+		t.Fatalf("a stale part: %+v", d.Sources)
+	}
+}
