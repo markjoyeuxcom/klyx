@@ -69,6 +69,9 @@ type GitOpsCapability struct {
 	Flux        FluxInfo
 	Argo        ArgoInfo
 	Coexistence bool
+	// FluxOperator is the Flux Operator (coverage S1a §2): Flux is present
+	// when the operator is, even before any FluxInstance installs it.
+	FluxOperator FluxOperatorInfo
 }
 
 // NetworkCapability is finer-grained: Gateway API present without EnvoyProxy is

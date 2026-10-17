@@ -37,7 +37,11 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 		out[t] = nil
 	}
 	if r := caps.GitOps.FluxIssue(); r != "" {
-		out[TaskFlux] = issue(stateOf(caps.GitOps.Flux.Verified), r)
+		verified := caps.GitOps.Flux.Verified
+		if caps.GitOps.FluxOperator.Issue() != "" { // the operator's own (S1a §2)
+			verified = caps.GitOps.FluxOperator.Verified
+		}
+		out[TaskFlux] = issue(stateOf(verified), r)
 	}
 	if r := caps.GitOps.ArgoIssue(); r != "" {
 		out[TaskArgo] = issue(stateOf(caps.GitOps.Argo.Verified), r)

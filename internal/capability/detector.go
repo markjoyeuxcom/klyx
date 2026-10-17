@@ -60,6 +60,9 @@ func StatefulSetReady(s *appsv1.StatefulSet) bool {
 // them per task, where the tier joins them. An unverified controller says
 // so - never "not ready".
 func (g GitOpsCapability) FluxIssue() string {
+	if r := g.FluxOperator.Issue(); r != "" {
+		return r
+	}
 	switch {
 	case !g.Flux.Present || g.Flux.Healthy:
 		return ""
@@ -168,10 +171,12 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 }
 
 func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) GitOpsCapability {
-	fluxPresent := served["kustomize.toolkit.fluxcd.io"]
+	kustomize := served["kustomize.toolkit.fluxcd.io"]
 	argoPresent := served["argoproj.io"]
 
 	out := GitOpsCapability{}
+	out.FluxOperator = d.detectFluxOperator(ctx, served)
+	fluxPresent := kustomize || out.FluxOperator.Present
 	out.Flux.Present = fluxPresent
 	out.Argo.Present = argoPresent
 	out.Coexistence = fluxPresent && argoPresent
@@ -181,11 +186,24 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 		return out
 	}
 
-	if fluxPresent {
-		applyRead(d.controllerProbe(ctx, deploymentWorkload, fluxNamespace, fluxKustomizeController), &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
+	switch {
+	case kustomize:
+		// An operator-managed install runs its controllers in the
+		// operator's runtime namespace; one resolved namespace is probed,
+		// otherwise the conventional one (S1a §2).
+		ns := fluxNamespace
+		if rt := out.FluxOperator.RuntimeNamespaces(); len(rt) == 1 {
+			ns = rt[0]
+		}
+		applyRead(d.controllerProbe(ctx, deploymentWorkload, ns, fluxKustomizeController), &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
 		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}
 		}
+	case fluxPresent:
+		// the operator alone, before a FluxInstance installs Flux: its own
+		// health stands for the installation's (FluxOperatorInfo.Issue)
+		out.Flux.Verified, out.Flux.Why = out.FluxOperator.Verified, out.FluxOperator.Why
+		out.Flux.Healthy = out.FluxOperator.Verified && out.FluxOperator.Issue() == ""
 	}
 	if argoPresent {
 		applyRead(d.controllerProbe(ctx, statefulSetWorkload, argoNamespace, argoAppController), &out.Argo.Healthy, &out.Argo.Verified, &out.Argo.Why)
