@@ -25,6 +25,8 @@ func fluxGroupForKind(kind flux.Kind) (group, fallbackVersion string, ok bool) {
 		return "kustomize.toolkit.fluxcd.io", "v1", true
 	case flux.HelmReleaseKind:
 		return "helm.toolkit.fluxcd.io", "v2", true
+	case flux.ImageRepositoryKind, flux.ImagePolicyKind, flux.ImageUpdateAutomationKind:
+		return "image.toolkit.fluxcd.io", "v1", true
 	default:
 		return "", "", false
 	}
@@ -155,6 +157,9 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 	if err != nil {
 		return err
 	}
+	if err := imagePolicyVerb(flux.Kind(kind), gvr, "reconcile", "a reconcile request could never be confirmed: its status has no lastHandledReconcileAt"); err != nil {
+		return err
+	}
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
 		return fmt.Errorf("reconcile %w", err)
 	}
@@ -171,6 +176,11 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 // failure must not block the resource), then the resource itself, guarded.
 // Degrades to a plain reconcile when the source can't be resolved.
 func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
+	if flux.IsImageKind(flux.Kind(kind)) {
+		// an automation clones Git itself and never reads the GitRepository's
+		// artifact, and a chained verb is not offered (S1b §5)
+		return fmt.Errorf("reconcile with source is not offered for %s", kind)
+	}
 	gvr, err := c.gvrForKind(flux.Kind(kind))
 	if err != nil {
 		return err
@@ -211,11 +221,23 @@ func (c *ClusterConn) SetSuspend(ctx context.Context, kind, ns, name, uid string
 	if err != nil {
 		return err
 	}
+	if err := imagePolicyVerb(flux.Kind(kind), gvr, "suspend or resume", "its v1beta2 spec has no suspend field"); err != nil {
+		return err
+	}
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
 		return fmt.Errorf("set suspend=%v %w", suspend, err)
 	}
 	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.SuspendPatch(suspend)); err != nil {
 		return fmt.Errorf("set suspend=%v %w", suspend, err)
+	}
+	return nil
+}
+
+// imagePolicyVerb refuses a verb on an ImagePolicy served below v1 (S1b
+// §5): v1beta2 has neither spec.suspend nor lastHandledReconcileAt.
+func imagePolicyVerb(kind flux.Kind, gvr schema.GroupVersionResource, verb, why string) error {
+	if kind == flux.ImagePolicyKind && gvr.Version != "v1" {
+		return fmt.Errorf("%s is not offered for an ImagePolicy at %s: %s", verb, gvr.Version, why)
 	}
 	return nil
 }

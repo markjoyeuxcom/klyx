@@ -320,3 +320,48 @@ func TestReconcileWithSourceReportsAPartialWrite(t *testing.T) {
 	}
 
 }
+
+// Coverage S1b §5: the image kinds' verbs - "Scan now", "Run now" and a
+// policy's reconcile are the request annotation, suspension is
+// spec.suspend, every write UID-guarded; an ImagePolicy at v1beta2 has
+// neither; reconcile with source is not offered.
+func TestImageKindVerbs(t *testing.T) {
+	gvr := func(v, res string) schema.GroupVersionResource {
+		return schema.GroupVersionResource{Group: "image.toolkit.fluxcd.io", Version: v, Resource: res}
+	}
+	seed := func(v, kind, name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "image.toolkit.fluxcd.io/" + v, "kind": kind,
+			"metadata": map[string]interface{}{"name": name, "namespace": "apps", "uid": "uid-" + name}, "spec": map[string]interface{}{}}}
+	}
+	lists := map[schema.GroupVersionResource]string{gvr("v1", "imagerepositories"): "ImageRepositoryList", gvr("v1", "imagepolicies"): "ImagePolicyList",
+		gvr("v1", "imageupdateautomations"): "ImageUpdateAutomationList"}
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), lists, seed("v1", "ImageRepository", "repo"), seed("v1", "ImagePolicy", "pol"), seed("v1", "ImageUpdateAutomation", "auto"))
+	c := newActionConn(dyn)
+	ctx := context.Background()
+	for kind, name := range map[string]string{"ImageRepository": "repo", "ImagePolicy": "pol", "ImageUpdateAutomation": "auto"} {
+		if err := c.Reconcile(ctx, kind, "apps", name, "uid-"+name); err != nil {
+			t.Errorf("%s reconcile: %v", kind, err)
+		}
+		if err := c.SetSuspend(ctx, kind, "apps", name, "uid-"+name, true); err != nil {
+			t.Errorf("%s suspend: %v", kind, err)
+		}
+		if err := c.ReconcileWithSource(ctx, kind, "apps", name, "uid-"+name); err == nil || !strings.Contains(err.Error(), "not offered") {
+			t.Errorf("%s with source: %v", kind, err)
+		}
+	}
+	guarded := 0
+	for _, a := range dyn.Actions() {
+		if pa, ok := a.(k8stesting.PatchAction); ok && strings.Contains(string(pa.GetPatch()), `"uid":"uid-`) {
+			guarded++
+		}
+	}
+	if guarded != 6 {
+		t.Fatalf("every write carries the armed UID: %d of 6", guarded)
+	}
+	if err := imagePolicyVerb(flux.ImagePolicyKind, gvr("v1beta2", "imagepolicies"), "reconcile", "why"); err == nil {
+		t.Fatal("an ImagePolicy at v1beta2 is refused")
+	}
+	if err := imagePolicyVerb(flux.ImageRepositoryKind, gvr("v1beta2", "imagerepositories"), "reconcile", "why"); err != nil {
+		t.Fatalf("a v1beta2 ImageRepository is acted on: %v", err)
+	}
+}

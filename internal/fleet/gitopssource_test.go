@@ -93,7 +93,7 @@ func TestFluxObjectNotFoundIsNotForbidden(t *testing.T) {
 func TestFluxObjectUnsupportedKindIsAnErrorNotAbsence(t *testing.T) {
 	c, _, cancel := splitConn(t)
 	defer cancel()
-	if _, err := c.FluxObject(context.Background(), "ImagePolicy", "flux-system", "x"); err == nil || apierrors.IsNotFound(err) {
+	if _, err := c.FluxObject(context.Background(), "Widget", "flux-system", "x"); err == nil || apierrors.IsNotFound(err) {
 		t.Fatalf("an unsupported kind is an error of its own: %v", err)
 	}
 }

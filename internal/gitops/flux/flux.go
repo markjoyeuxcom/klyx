@@ -27,6 +27,19 @@ const (
 	HelmChartKind      Kind = "HelmChart"
 )
 
+// Image automation kinds Klyx acts on (image.toolkit.fluxcd.io, coverage
+// S1b §5); their state is read by internal/gitops/imageauto.
+const (
+	ImageRepositoryKind       Kind = "ImageRepository"
+	ImagePolicyKind           Kind = "ImagePolicy"
+	ImageUpdateAutomationKind Kind = "ImageUpdateAutomation"
+)
+
+// IsImageKind reports whether k is an image automation kind.
+func IsImageKind(k Kind) bool {
+	return k == ImageRepositoryKind || k == ImagePolicyKind || k == ImageUpdateAutomationKind
+}
+
 type ReadyState string
 
 const (

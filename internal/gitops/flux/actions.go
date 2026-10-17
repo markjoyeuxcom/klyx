@@ -38,6 +38,12 @@ func ResourceForKind(k Kind) (string, bool) {
 		return "kustomizations", true
 	case HelmReleaseKind:
 		return "helmreleases", true
+	case ImageRepositoryKind:
+		return "imagerepositories", true
+	case ImagePolicyKind:
+		return "imagepolicies", true
+	case ImageUpdateAutomationKind:
+		return "imageupdateautomations", true
 	default:
 		return "", false
 	}
