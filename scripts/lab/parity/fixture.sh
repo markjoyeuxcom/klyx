@@ -598,10 +598,10 @@ metadata:
 spec:
   replicas: 1
   strategy: {type: Recreate}
-  selector: {matchLabels: {deploy: velero}}
+  selector: {matchLabels: {app: velero}}
   template:
     metadata:
-      labels: {deploy: velero, component: velero}
+      labels: {app: velero, deploy: velero, component: velero}
       annotations:
         klyx.dev/parity-role: "ok"
     spec:
