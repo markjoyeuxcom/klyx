@@ -370,8 +370,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/missed/.test(owed.textContent ?? "") || !owed.querySelector('[data-aspect="fault"]')) throw new Error(`the owed station: ${owed.textContent}`);
     const loc = await within(8000, "the location block", () => $("[data-testid='velero-location-block']"));
     if (!/default/.test(loc.textContent ?? "") || !/Available/.test(loc.textContent ?? "")) throw new Error(`the location block: ${loc.textContent}`);
-    (await within(4000, "the hourly schedule", () => byText<HTMLElement>(".lens-row", /velero\/hourly/))).click();
-    const hourly = await within(8000, "the hourly inspector", () => byText<HTMLElement>("[data-testid='velero-schedule-panel']", /Completed/));
+    (await within(4000, "the regular schedule", () => byText<HTMLElement>(".lens-row", /velero\/regular/))).click();
+    const hourly = await within(8000, "the regular inspector", () => byText<HTMLElement>("[data-testid='velero-schedule-panel']", /Completed/));
     await within(8000, "the rail", () => $("[data-testid='velero-rail']"));
     if (!/commands withheld/.test(hourly.textContent ?? "")) throw new Error("the hooks are not withheld");
     if (!$("[data-testid='velero-synced']")) throw new Error("the synced backup is not said");
