@@ -43,6 +43,7 @@ type ClusterDTO struct {
 	ClusterMesh              bool   `json:"clusterMesh"`
 	HasHubble                bool   `json:"hasHubble"`
 	KarpenterPresent         bool   `json:"karpenterPresent"`
+	VeleroPresent            bool   `json:"veleroPresent"`
 	KarpenterHealthy         bool   `json:"karpenterHealthy"`
 	CertManagerTier          string `json:"certManagerTier"`
 	CertManagerReason        string `json:"certManagerReason"`
@@ -108,6 +109,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		ClusterMesh:              s.Capabilities.Network.ClusterMesh,
 		HasHubble:                s.Capabilities.Network.HasHubble,
 		KarpenterPresent:         s.Capabilities.Karpenter.Present,
+		VeleroPresent:            s.Capabilities.Velero.Present,
 		KarpenterHealthy:         s.Capabilities.Karpenter.Healthy,
 		CertManagerTier:          s.Capabilities.CertManager.Tier.String(),
 		CertManagerReason:        s.Capabilities.CertManager.Reason,

@@ -477,6 +477,9 @@ func init() {
 	add("source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", "ArtifactGeneratorList")
 	add("source.toolkit.fluxcd.io", "v1", "externalartifacts", "ExternalArtifactList")
 	add("notification.toolkit.fluxcd.io", "v1", "receivers", "ReceiverList")
+	add("velero.io", "v1", "schedules", "ScheduleList")
+	add("velero.io", "v1", "backupstoragelocations", "BackupStorageLocationList")
+	add("velero.io", "v1", "backups", "BackupList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -660,7 +663,7 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	}
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native} {
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}

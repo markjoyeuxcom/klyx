@@ -776,8 +776,9 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		gk, gd := healthsrc.GitOps(nd)
 		wk, wd := healthsrc.Gateway(nd)
 		nk, ndoms := healthsrc.Native(nd)
-		kinds = append(append(append(kinds, gk...), wk...), nk...)
-		domains = append(append(append(domains, gd...), wd...), ndoms...)
+		vk, vd := healthsrc.Velero(nd)
+		kinds = append(append(append(append(kinds, gk...), wk...), nk...), vk...)
+		domains = append(append(append(append(domains, gd...), wd...), ndoms...), vd...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
@@ -816,6 +817,7 @@ func (c *ClusterConn) syncHealth() {
 	}
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
+	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])

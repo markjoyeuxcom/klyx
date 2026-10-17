@@ -155,4 +155,5 @@ type Set struct {
 	ExternalSecrets ExternalSecretsCapability
 	Reloader        ReloaderCapability
 	Karpenter       KarpenterCapability
+	Velero          VeleroCapability
 }

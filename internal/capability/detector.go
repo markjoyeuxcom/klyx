@@ -171,6 +171,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Reloader:        ReloaderCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Karpenter:       KarpenterCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Velero:          VeleroCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}, err
 	}
 	return Set{
@@ -180,6 +181,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 		ExternalSecrets: d.detectExternalSecrets(ctx, served),
 		Reloader:        d.detectReloader(ctx),
 		Karpenter:       d.detectKarpenter(ctx, served),
+		Velero:          d.detectVelero(ctx, served),
 	}, nil
 }
 
