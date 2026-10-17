@@ -9,7 +9,6 @@
 package fluxop
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -17,6 +16,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/gitops/resume"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
 
@@ -224,7 +224,7 @@ func conditionsOf(u *unstructured.Unstructured, c *clipper, tight bool) ([]any, 
 		ltt, _ := cm["lastTransitionTime"].(string)
 		if t == "Ready" && !hasReady {
 			hasReady = true
-			fp = sha256.Sum256([]byte(status + "\x00" + reason + "\x00" + msg + "\x00" + ltt))
+			fp = resume.ReadyFingerprint(status, reason, msg, ltt)
 		}
 		if i >= maxConditions {
 			c.clipped = append(c.clipped, "status.conditions")
