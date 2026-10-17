@@ -5,7 +5,9 @@ go 1.27.2
 require (
 	github.com/anthropics/anthropic-sdk-go v1.76.0
 	github.com/fluxcd/pkg/ssa v0.77.0
+	github.com/netresearch/go-cron v0.15.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.103
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.48.0
