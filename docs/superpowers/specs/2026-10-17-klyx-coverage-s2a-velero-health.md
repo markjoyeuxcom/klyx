@@ -4,7 +4,7 @@ Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2a. 
 
 The owner's direction: "velero should be supported also". The roadmap's S2a asks for background evidence independent of any list being open, three faults (an unavailable storage location, a missed schedule, recent failed and partially failed backups, distinct from each other), named schedule states, and Velero's phases kept as they are. Codex's acceptance carried three details into this note (roadmap §6): formalise the overdue opportunity and its reset after a later success; an in-progress run during the grace period, and incomplete retained history; the exact classifier and its fake-clock cases. All three are in §4.
 
-The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11).
+The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11), and revision 4 its re-review of b676a4f (§12).
 
 ## 1. The API
 
@@ -172,6 +172,12 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
   - else **unknown**. Such a run is a fact, never a deciding or previous outcome.
 
   `N`'s execution time is its `startTimestamp`, else `lastBackup`.
+- **A Backup's run time** (revision 4, Codex's third re-review findings 1 and 3) is its `startTimestamp`, else its `creationTimestamp`. One time basis serves:
+  - the cap's tier-1 order;
+  - the 24-hour membership of §4.3, and its clock;
+  - the completeness check of §4.2 row 10.
+
+  It is a function of the projection alone, as a rank must be. For a run that started, it equals the execution time. For a local run that never started, it is the creation, which the controller's name timestamp matches to within the clocks' skew.
 - **The limit,** said in the inspector when the schedule has no owner references: a bucket shared with another cluster that runs a same-named schedule can bring that cluster's backups in as named runs. They can shape the rail, never the verdict. `useOwnerReferencesInBackup: true` makes every run proven.
 
 **The Backups cap: newest first (a change to the Observer, Stage 1).**
@@ -181,9 +187,11 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 - **The Backups rank, in two tiers** (revision 2, Codex's re-review finding 2):
   - **Tier 0:** every Backup in a phase Velero's overlap guard reads ("", New, InProgress).
   - **Tier 1:** every other Backup.
-  - Within each tier, `creationTimestamp` descending, then the key.
+  - Within each tier, **run time** descending, then the key (revision 4, Codex's third re-review finding 1).
 
-  So the guard's evidence is retained first and in full: a blocker is never left out while any terminal Backup is retained. A new Backup is created in tier 0 and ranks first. The oldest terminal Backups are left out.
+  So the guard's evidence is retained first and in full: a blocker is never left out while any terminal Backup is retained. A new Backup is created in tier 0 and ranks first. The terminal Backups that ran longest ago are left out.
+
+  **Why run time, not creation:** Velero 1.18's queue lets a later backup that does not conflict pass an earlier blocked one (`backup_queue_controller.go`:161-195, 278-293). An older-created Backup can therefore start after a newer one. Under creation order it could fall out of tier 1 while it is the latest execution. Under run-time order the retained tier-1 set is exactly the latest executions.
 - **A rank can change** when a phase moves a Backup between tiers. The watch path re-places the object in rank order:
   - **A retained object that now ranks past the run's end** is left out, and the room it frees can refill.
   - **A left-out object that now ranks inside the run** is admitted, evicting from the end.
@@ -191,8 +199,8 @@ A **Velero** group in the cluster's lens index (capability `velero`), with three
 
   The admission invariant (the retained set is the longest rank-ordered run that fits) holds after each.
 - **The window:** the capture carries, for a capped kind, the rank of its first left-out object in rank order, **whatever left it out**: the budget's blocker, or a projection over `MaxObject` (revision 1, Codex's finding 6). Admission records the rank of each oversized omission for this. By construction there are none for Backups (above).
-  - **A window in tier 1,** the normal case, has a creation time `W`. Every tier-0 Backup is retained, and so is every Backup created after `W`.
-  - **A question about runs created after `W`** has a complete answer; one that reaches before `W` is "not retained".
+  - **A window in tier 1,** the normal case, has a run time `W`. Every tier-0 Backup is retained, and so is every Backup whose run time is after `W`.
+  - **A question about runs that ran after `W`** has a complete answer; one that reaches before `W` is "not retained".
   - **Velero's guard, a negative over all history** (every Backup carrying the label, old-UID runs included), is answered completely by tier 0, whatever `W` is.
   - **A window in tier 0** means more blocking Backups than the budget holds. The guard is then unresolved, and §4.2 row 9 says so.
   - **A shrunk oversized object** is admitted on the next refill, as today, and the window moves with it.
@@ -305,6 +313,11 @@ First match wins (revision 1: the overdue rule precedes Available explicitly).
     Each is Unknown. A retained older run is shown beside it as a fact, never as the latest outcome. This holds whether or not older runs are retained: a surviving older success never stands for a missing newer run, and a deleted newer success never resurrects an older failure.
 - **The outcome rule.**
   - **The deciding runs:** `N`, and every proven run whose execution time is later than `N`'s. Without `N`, every proven run. The newest terminal one, by execution time, decides.
+  - **Complete only when the cap cannot hide a later execution** (revision 4). With Backups capped, that needs:
+    - a window in tier 1;
+    - and `N`'s execution time (without `N`, the time the question starts from: the schedule's creation) later than `W` plus one minute. The minute absorbs the skew between the server's clock (an execution time) and the run time a rank was built from.
+
+    Otherwise a later execution could be left out, and the outcome is Unknown, "a run after <time> may not be retained", with the retained outcome shown as a fact.
   - **The previous outcome:** when every deciding run is still in progress, it decides with "a new run is in progress":
     - the newest proven terminal run before `N`, by execution time;
     - **only when none is retained,** the newest named terminal run before `N`, with "matched by name" (and its timing qualifier, §3).
@@ -350,7 +363,9 @@ A manual `--from-schedule` run never moves `lastBackup`, so it never ends a miss
 
 ### 4.3 Unscheduled backups
 
-- **The counted entity:** a Backup that does not look synced (§3), with an execution time in the last 24 hours (its `creationTimestamp` when it has none), that is neither a proven run of a current schedule nor a named run whose execution time is at or before that schedule's `N` (superseded by the controller's own run). So a named run newer than its schedule's `N`, or of a schedule with no `N`, is counted here until a newer `N` supersedes it, and an older proven failure never lights here after a later run. That covers manual backups, runs of a deleted schedule or of an earlier one of the same name, and a Backup whose owner set is incomplete ("not attributed: its owner references are not well-formed"). One with disputed timing counts, with "may have been synced from object storage". "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
+- **The counted entity:** a Backup that does not look synced (§3), with a **run time** (§3: `startTimestamp`, else `creationTimestamp`) in the last 24 hours, that is one of:
+  - neither a proven run of a current schedule nor a named run whose execution time is at or before that schedule's `N` (superseded by the controller's own run);
+  - **a proven run whose execution time is unknown** (revision 4, Codex's third re-review finding 2). For example, a custom-named `--from-schedule` run that failed validation, with no start and no controller timestamp, before the schedule's first automatic run. It cannot decide the schedule's verdict (§4.2), so it is counted here until a proven run with a known execution time later than its creation (plus one minute) supersedes it, or its 24 hours pass. A known failure always lights one of the two parts. So a named run newer than its schedule's `N`, or of a schedule with no `N`, is counted here until a newer `N` supersedes it, and an older proven failure never lights here after a later run. That covers manual backups, runs of a deleted schedule or of an earlier one of the same name, and a Backup whose owner set is incomplete ("not attributed: its owner references are not well-formed"). One with disputed timing counts, with "may have been synced from object storage". "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
 - **Roles:**
 
   | Phase | Role |
@@ -362,7 +377,7 @@ A manual `--from-schedule` run never moves `lastBackup`, so it never ends a miss
   | Deleting | Progressing |
 
   A Backup outside a server's namespace (list read) is Degraded, "not processed".
-- **Leaving:** a backup leaves the part 24 hours after its creation (a clock, §4.4). Older backups are history, listed in S2b.
+- **Leaving:** a backup leaves the part 24 hours after its run time, the same basis as its membership (revision 4, Codex's third re-review finding 3). That is a clock (§4.4). Older backups are history, listed in S2b.
 - **Never counted here:** Backups that look synced. They may belong to another cluster. The view lists the last day's as "not counted: looks synced", with the timestamps that decided it, and S2b lists them all.
 
 ### 4.4 Clocks
@@ -372,7 +387,7 @@ A manual `--from-schedule` run never moves `lastBackup`, so it never ends a miss
 | `D` + `G` (and the next `D` after a run) | schedules | the missed or deferred state can begin |
 | creation + 5m with an empty phase | schedules, locations | "not processed" / "not validated" |
 | `lastValidationTime` + 2 × frequency + 5m | locations | validation overdue |
-| creation + 24h | backups | the backup leaves the part |
+| run time + 24h (`startTimestamp`, else `creationTimestamp`) | backups | the backup leaves the part |
 | `ResumedAt` + `G` | schedules | the resume grace ends |
 | `lastBackup` + 1m | schedules | an unseen `N` reads unknown |
 
@@ -507,12 +522,16 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
     - **re-imported records** (revision 3): an older owner-proven Completed run re-created by sync after `N` failed, which keeps its old execution time, so `N` still decides. And the reverse, an old failure re-imported after a later success;
     - **a proven manual run before the first automatic one** (revision 3): `useOwnerReferencesInBackup: true`, no `lastBackup`, and a `--from-schedule` run that Failed, and separately one that PartiallyFailed. Each lights the schedule, Fault and Degraded;
     - **execution time:** a FailedValidation run ordered by its name's timestamp in a non-UTC zone, and a run with neither a start nor the controller's name form (order unknown, a fact);
+    - **an older-created, later-started run under a cap** (revision 4): a proven Backup created before `N` but started after it (the 1.18 queue), finishing Failed while `N` is Completed and other schedules fill the cap. It is retained by its run time and decides, so the schedule is lit. And the reverse: it finishes Completed after a failed `N`, and the schedule is OK;
+    - **the completeness check:** `N`'s execution time within a minute of `W`, which reads "a run after <time> may not be retained" (Unknown);
+    - **a custom-named `--from-schedule` run** with owner references, FailedValidation with no start, before the schedule's first automatic run (revision 4). Counted in §4.3 with the schedule's verdict unchanged, then superseded by a later proven run of known execution time;
     - **validation of join inputs** (revision 2): a 5,000-byte `spec.storageLocation` (marked invalid, the projection within `MaxObject`), a Schedule ownerReference with a malformed UID or an over-long name (owners incomplete, never named, never proven), and a third Schedule owner;
     - a `--from-schedule` manual run;
     - `N` in a non-UTC server zone;
     - a third Schedule owner (owners incomplete);
   - **BSL rules:** each row, ReadOnly, several defaults, expired backups awaiting deletion;
-  - **unscheduled backups:** each phase, the 24-hour boundary, synced excluded, an orphan of a deleted schedule;
+  - **unscheduled backups:** each phase, synced excluded, an orphan of a deleted schedule;
+    - **the 24-hour boundary on one time basis** (revision 4): a Backup created at 10:00 and started at 12:00. A quiet fake clock, with no object or list change, crosses 10:00 the next day (still counted) and 12:00 (leaves). `Next` is published at 12:00;
   - **detection:**
     - a server ready, not ready, not found while the CRDs are served (unknown), and the list forbidden (unknown);
     - two servers in two namespaces;
@@ -615,3 +634,11 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 | 2 | Creation time let re-imported records reverse the order of runs | §3: runs are ordered by their own execution time (`startTimestamp`, else the controller's name timestamp, else `lastBackup` for `N`, else unknown, never deciding). The earlier-incarnation rule uses it too. §7: re-imported proven success after a failed `N`, and the reverse |
 | 3 | A proven manual failure before the first automatic run lit nothing | §4.2 row 10: without `lastBackup`, proven runs decide alone. §4.3: counted are the backups not proven for a current schedule and not superseded by its `N`. §7: Failed and PartiallyFailed |
 | 4 | A tier-changing blocker's relist does not establish the new window at once | §3: until a complete list, the boundary stays at the earlier of the old and new ranks; §4.2: a missing `N` with the window in tier 0 is "not retained". §7: the delayed-refill capture test |
+
+## 12. Revision 4: Codex's re-review of b676a4f
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Admission by creation did not keep the latest executions: the 1.18 queue can start an older-created Backup after `N` | §3: tier 1 ranks by run time (`startTimestamp`, else `creationTimestamp`), so the retained tier-1 set is the latest executions; §4.2 row 10: the outcome is complete only when `N`'s execution time is later than `W` plus a minute, else "a run after <time> may not be retained". §7: both directions under a cap |
+| 2 | A proven run of unknown order that failed lit neither part | §4.3: counted until a proven run of known later execution supersedes it, or 24 hours pass. §7: the custom-named FailedValidation before the first automatic run |
+| 3 | The 24-hour membership and its clock used different times | §3 and §4.3: one basis, the run time, for membership, leaving and `Next` (§4.4). §7: the quiet fake-clock crossing |
