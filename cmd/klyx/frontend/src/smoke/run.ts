@@ -351,6 +351,52 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/produced by ArtifactGenerator team-a\/apps/.test(line.textContent ?? "")) throw new Error(`the bound source's producer: ${line.textContent}`);
     noNeedle("the Flux inspector");
   });
+  // Coverage S2a: the Velero lens from the lab's fixtures (scratchpad
+  // lab-s2a): schedules broken first, a missed schedule's rail and its
+  // storage location block, a withheld location message, an unscheduled
+  // backup, and no protected value on screen.
+  const noVeleroNeedle = (where: string) => {
+    if ((document.body.textContent ?? "").includes("S2aLABneedle")) throw new Error(`a protected value is on screen: ${where}`);
+  };
+  await step(steps, "Velero schedules", async () => {
+    await open("velero");
+    await closeDrawer();
+    const first = await within(10_000, "schedule rows", () => $<HTMLElement>(".lens-row"));
+    if (!/daily-missed|nightly-failed/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the missed schedule", () => byText<HTMLElement>(".lens-row", /velero\/daily-missed/))).click();
+    const panel = await within(8000, "the schedule inspector", () => $("[data-testid='velero-schedule-panel']"));
+    if (!/Missed/.test(panel.textContent ?? "")) throw new Error(`the missed verdict: ${(panel.textContent ?? "").slice(0, 200)}`);
+    const owed = await within(8000, "the owed station", () => $("[data-testid='velero-owed']"));
+    if (!/missed/.test(owed.textContent ?? "") || !owed.querySelector('[data-aspect="fault"]')) throw new Error(`the owed station: ${owed.textContent}`);
+    const loc = await within(8000, "the location block", () => $("[data-testid='velero-location-block']"));
+    if (!/default/.test(loc.textContent ?? "") || !/Available/.test(loc.textContent ?? "")) throw new Error(`the location block: ${loc.textContent}`);
+    (await within(4000, "the hourly schedule", () => byText<HTMLElement>(".lens-row", /velero\/hourly/))).click();
+    const hourly = await within(8000, "the hourly inspector", () => byText<HTMLElement>("[data-testid='velero-schedule-panel']", /Completed/));
+    await within(8000, "the rail", () => $("[data-testid='velero-rail']"));
+    if (!/commands withheld/.test(hourly.textContent ?? "")) throw new Error("the hooks are not withheld");
+    if (!$("[data-testid='velero-synced']")) throw new Error("the synced backup is not said");
+    noVeleroNeedle("the Velero schedules");
+  });
+  await step(steps, "Velero storage locations", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Storage locations tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Storage locations/))).click();
+    (await within(10_000, "the dr location", () => byText<HTMLElement>(".lens-row", /velero\/dr/))).click();
+    await within(8000, "the withheld message", () => $("[data-testid='velero-message-withheld']"));
+    noVeleroNeedle("a storage location");
+    (await within(4000, "the minio location", () => byText<HTMLElement>(".lens-row", /velero\/minio/))).click();
+    await within(8000, "its vocabulary", () => /AccessDenied/.test($("[data-testid='velero-location-panel']")?.textContent ?? ""));
+    noVeleroNeedle("a storage location");
+  });
+  await step(steps, "Velero unscheduled backups", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Unscheduled backups tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Unscheduled backups/))).click();
+    (await within(10_000, "the pre-upgrade backup", () => byText<HTMLElement>(".lens-row", /velero\/pre-upgrade/))).click();
+    const panel = await within(8000, "the backup inspector", () => $("[data-testid='velero-backup-panel']"));
+    if (!/the storage location is Unavailable/.test(panel.textContent ?? "")) throw new Error(`the validation class: ${panel.textContent}`);
+    noVeleroNeedle("an unscheduled backup");
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
