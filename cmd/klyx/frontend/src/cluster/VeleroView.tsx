@@ -72,7 +72,7 @@ const COLUMNS: Record<Tab, (ColumnDef & { label: string })[]> = {
     { id: "name", label: "Name", width: 200, priority: 0, flex: true },
     { id: "status", label: "Status", width: 220, priority: 0 },
     { id: "cron", label: "Schedule", width: 170, priority: 1 },
-    { id: "next", label: "Next run", width: 120, priority: 2 },
+    { id: "next", label: "Run due", width: 120, priority: 2 },
     { id: "location", label: "Location", width: 130, priority: 2 },
   ],
   locations: [
@@ -301,7 +301,7 @@ export function VeleroRail({ s }: { s: VeleroScheduleDTO }) {
   );
 }
 
-const stationStyle: React.CSSProperties = { display: "grid", justifyItems: "center", gap: 2, minWidth: 64 };
+const stationStyle: React.CSSProperties = { display: "grid", justifyItems: "center", gap: 2, minWidth: 104, padding: "0 4px", whiteSpace: "nowrap" };
 const trackStyle = (owed: boolean): React.CSSProperties => ({
   display: "flex", alignItems: "center", justifyContent: "center", height: 14, width: "100%",
   backgroundImage: `linear-gradient(var(--color-border-secondary), var(--color-border-secondary))`, backgroundSize: "100% 1px",
@@ -366,7 +366,7 @@ function ScheduleInspector({ cluster, s, gone, onOpen, onClose }: { cluster: str
         <InspectorBlock title="Recent runs">
           <VeleroRail s={s} />
           <div className="insp-kv" style={{ marginTop: 6 }}>
-            {s.lastBackup && <><span>last created</span><span>Velero last created a run at {when(s.lastBackup)} (a creation, never a success){s.nName ? ` · ${s.nName}: ${N_STATE[s.nState ?? ""] ?? "-"}` : ""}</span></>}
+            {s.lastBackup && <><span>last created</span><span>Velero last created a run at {when(s.lastBackup)} (a creation, never a success){s.nName && s.nState ? ` · ${s.nName}: ${N_STATE[s.nState] ?? s.nState}` : ""}</span></>}
             {s.lastSkipped && <><span>skipped</span><span>{when(s.lastSkipped)}</span></>}
             {runLine("decided by", s.deciding)}
             {runLine(s.previousNamed ? "previous (named)" : "previous", s.previous)}
@@ -435,7 +435,7 @@ function LocationInspector({ cluster, l, gone, onOpen, onClose }: { cluster: str
         verdict={gone ? goneVerdict("BackupStorageLocation", gone) : (
           <div>
             <InspectorStatus tone={toneOf(ro.kind)} kind={ro.kind} label={ro.label} reason={why(l.reason, ro.label) || undefined} />
-            {l.messageWithheld && <div className="t-secondary" data-testid="velero-message-withheld" style={{ marginTop: 4 }}>Velero's message is withheld: provider errors can carry credentials. Klyx shows only fixed words found in it.</div>}
+            {l.messageWithheld && <div className="t-secondary" data-testid="velero-message-withheld" style={{ marginTop: 4 }}>Only Klyx's fixed words for what it found in the message are shown: a provider's error code, an HTTP status or a network failure.</div>}
           </div>
         )}
         more={[...describe.menu, ...ai.menu]}
