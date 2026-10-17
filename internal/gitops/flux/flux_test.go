@@ -333,7 +333,7 @@ func TestKustomizationMessagesPassOrigins(t *testing.T) {
 		"metadata": map[string]interface{}{"name": "apps", "namespace": "flux-system"},
 		"spec":     map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "fleet"}},
 		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "ArtifactFailed",
-			"message": "failed to download artifact from https://store.example/a.tgz?sig=" + needle}}},
+			"message": "failed to download archive from https://store.example/a.tgz?sig=" + needle + " (status: 403 Forbidden)"}}},
 	}}
 	r := ParseKustomization(u)
 	d := ParseDetail(u)

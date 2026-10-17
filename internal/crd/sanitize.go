@@ -254,6 +254,9 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 			s.apply(o, sf.path, sf.shape, at, depth)
 		}
 	}
+	if IsEventKind(group, kind) {
+		s.eventMessages(o, at)
+	}
 	s.conditionMessages(kind, o, at)
 	if OriginsKind(kind) {
 		s.originsHold(o, at, 0)

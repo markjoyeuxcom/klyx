@@ -384,3 +384,36 @@ Stage 0 closes the exposure Klyx already had before any S1c view exists.
 - The notification kinds, ExternalArtifact and ArtifactGenerator are listed here.
 - Two tests keep every payload kind's resource, and every message-rule kind's resource, in the list.
 
+
+## 13. Stage 0 review 1: Codex at 1c6271e
+
+Codex asked for changes on three findings. Each is fixed as below, with the design extended where the finding needed it.
+
+**1. A generic Event object bypassed its subject's rule.** Stage 0 ruled event rows and condition messages. An Event read as an object (the generic browser's list, Summary, YAML and fields, Describe, chat) still carried its text raw. This applied to core/v1 `message` and events.k8s.io/v1 `note`.
+- The sanitiser now applies to an Event's own text the message rule of every object the Event names: `involvedObject`, `regarding` and `related`. It covers both field names in either API, because either API serves every Event.
+- A subject kind that cannot be read withholds the text.
+- The text is a writable top-level field, not status. A change therefore blocks a round-trip edit as well as Describe (`markEventMessage`), and it never counts as a payload.
+- The editor refuses such an Event in its own words. A submitted document with a placeholder was already refused.
+- `events` (core) and `events.k8s.io/events` join `payloadResources`. Their list and Summary cells are local. The columns are Klyx's own (`BuiltinPayloadColumns`: type, reason, subject kind and name, and the text), since a built-in kind has no printer-column definition.
+- Describe brackets every Event, in either API, without events (`MessageBracketed`). A held Event is withheld in its own words.
+
+**2. Finding no `scheme://` did not prove a fetch error safe.** The ExternalArtifact CRD declares its URL a plain string. `http.NewRequest` accepts `https:/host/TOKEN`, `/TOKEN`, or a URL with no URL syntax at all, and Go's HTTP stack prints whatever target it was given. The design is extended in two layers.
+- **`Origins` gains candidates.** Each is withheld from its start to the end of the message:
+  - a request echo, as Go's HTTP stack prints a target: url.Error's `<Op> "<target>"` (an HTTP method in title case, or `parse`) and retryablehttp's `<METHOD> <target> giving up`;
+  - `http:` or `https:` without `//`.
+
+  An echo whose target is itself a `scheme://` candidate keeps its origin (`GET https://host <withheld…>`). These are library shapes, not one controller's wording, so they hold for any Go fetcher.
+- **Under a fetch reason, only the pinned forms pass.** The reasons are `ArtifactFailed` for Kustomization and HelmRelease, and `SourceFetchFailed` for ArtifactGenerator. A message passes only in the forms that kustomize-controller v1.9.6, helm-controller v1.6.5, source-watcher v2.2.4 and fluxcd/pkg's archive fetcher write:
+  - with a URL candidate, the text before it must be one of their fetch-error prefixes;
+  - without one, the message must start with one of their wordings that never carry the URL.
+
+  Anything else, multi-line text included, is withheld whole as `FetchWithheld`, and the reason is kept. An unrecognised wording, or a future controller version, therefore fails closed.
+- **Describe** follows both layers. `originsHold` sees the new candidates, and a condition message the fetch rule changes holds the version.
+- **Known losses, deliberate:**
+  - a HelmRelease's chart-content error under `ArtifactFailed` (Helm's loader wordings are many, and none is pinned) is withheld;
+  - a source lookup error that echoes an API server URL after `unable to get source '…'` is withheld whole;
+  - `parse "` and an upper-case method followed by a space can over-withhold in other messages of the Origins kinds.
+
+**3. `InvalidConfig` was not proven safe.** notification-controller v1.9.4 quotes the expression that failed to compile (event_handlers.go:212, :232), and that expression can be a webhook URL. The exception is removed. Alert and Provider messages are withheld whole under every reason, as §6 already said; the reason is kept.
+
+Tests: `urlscrub.TestOriginsMalformedURLs`; `crd.TestFetchFailures`, with Codex's two `http.NewRequest` shapes; `crd.TestEventObjects`; `fleet.TestEventDetailUsesSubjectRule` and `fleet.TestApplyRefusesASanitisedEvent`, for both APIs; and `appbridge.TestDescribe_EventObjects`.

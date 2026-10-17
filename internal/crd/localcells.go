@@ -43,6 +43,34 @@ var payloadResources = map[string]bool{
 	"notification.toolkit.fluxcd.io/alerts":          true,
 	"source.toolkit.fluxcd.io/externalartifacts":     true,
 	"source.extensions.fluxcd.io/artifactgenerators": true,
+	// an Event's text is its subject's, under that subject's rule (Codex's
+	// Stage 0 review, finding 1); its columns are Klyx's own
+	"/events":              true,
+	"events.k8s.io/events": true,
+}
+
+// BuiltinPayloadColumns are the local columns of a built-in payload
+// resource, which has no printer column definition to read: an Event's
+// type, reason, subject and text, as kubectl get prints them.
+func BuiltinPayloadColumns(group, plural, version string) ([]Column, bool) {
+	if plural != "events" || version != "v1" {
+		return nil, false
+	}
+	subject, text, textName := "involvedObject", "message", "Message"
+	switch group {
+	case "":
+	case "events.k8s.io":
+		subject, text, textName = "regarding", "note", "Note"
+	default:
+		return nil, false
+	}
+	return LocalColumns([]PrinterColumn{
+		{Name: "Type", Type: "string", JSONPath: ".type"},
+		{Name: "Reason", Type: "string", JSONPath: ".reason"},
+		{Name: "Kind", Type: "string", JSONPath: "." + subject + ".kind"},
+		{Name: "Object", Type: "string", JSONPath: "." + subject + ".name"},
+		{Name: textName, Type: "string", JSONPath: "." + text},
+	}), true
 }
 
 // IsPayloadResource reports whether group/plural is a registered payload

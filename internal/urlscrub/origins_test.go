@@ -60,3 +60,44 @@ func TestOriginsIsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// Codex's Stage 0 review, finding 2: a URL that is not "<scheme>://" is
+// still withheld, from the request echo or bare "http(s):" that prints it;
+// an echo whose target is a well-formed URL keeps its origin.
+func TestOriginsMalformedURLs(t *testing.T) {
+	const n = "SIGNEDneedle2M"
+	for _, in := range []string{
+		`failed to download archive: Get "https:/store.example/signed/` + n + `": http: no Host in request URL`,
+		`failed to download archive: Get "/signed/` + n + `": unsupported protocol scheme ""`,
+		`failed to download archive: GET /signed/` + n + ` giving up after 1 attempt(s): Get "/signed/` + n + `": unsupported protocol scheme ""`,
+		`failed to download archive: GET ` + n + ` giving up after 1 attempt(s)`,
+		`failed to create a new request: parse "https:/x` + n + "\x7f" + `": net/url: invalid control character in URL`,
+		`failed to download archive from https:/store.example/` + n + ` (status: 403)`,
+		`fetching HTTPS:store.example/` + n,
+		`Could not load chart: Head "oci:/` + n + `": unsupported protocol scheme "oci"`,
+	} {
+		out, changed := Origins(in)
+		if strings.Contains(out, n) || !changed || !strings.HasSuffix(out, OriginsRest) {
+			t.Errorf("%q: %q", in, out)
+		}
+		if twice, c := Origins(out); c || twice != out {
+			t.Errorf("not idempotent: %q then %q", out, twice)
+		}
+	}
+	for in, want := range map[string]string{
+		`failed to download archive: GET https://store.example/a?sig=` + n + ` giving up after 3 attempt(s)`: "failed to download archive: GET https://store.example " + OriginsRest,
+		`failed to download archive: Get "http://source-controller.flux-system.svc/x": dial tcp`:             `failed to download archive: Get "http://source-controller.flux-system.svc ` + OriginsRest,
+		`failed to download archive: ` + n: `failed to download archive: ` + n,
+		"TARGET reached; the parsed value": "TARGET reached; the parsed value",
+	} {
+		if out, _ := Origins(in); out != want {
+			t.Errorf("%q: got %q, want %q", in, out, want)
+		}
+	}
+	if p, ok := Prefix(`failed to download archive: GET https://h/x giving up`); !ok || p != "failed to download archive: " {
+		t.Errorf("an echo's method is not part of its prefix: %q %v", p, ok)
+	}
+	if _, ok := Prefix("no url here"); ok {
+		t.Error("no candidate, no prefix")
+	}
+}

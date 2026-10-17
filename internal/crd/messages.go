@@ -60,10 +60,10 @@ var messageRules = map[string]func(reason, msg string) (string, bool){
 	"Receiver":          ReceiverMessage,
 	"Alert":             NotificationMessage,
 	"Provider":          NotificationMessage,
-	"ArtifactGenerator": originsMessage,
+	"ArtifactGenerator": fetchRule("ArtifactGenerator"),
 	"ExternalArtifact":  originsMessage,
-	"Kustomization":     originsMessage,
-	"HelmRelease":       originsMessage,
+	"Kustomization":     fetchRule("Kustomization"),
+	"HelmRelease":       fetchRule("HelmRelease"),
 }
 
 // OriginsKind reports whether kind's messages pass urlscrub.Origins. Its
@@ -79,6 +79,88 @@ func OriginsKind(kind string) bool {
 
 func originsMessage(_, msg string) (string, bool) { return urlscrub.Origins(msg) }
 
+// FetchWithheld replaces a fetch failure Klyx cannot place the URL in.
+const FetchWithheld = "the controller's message is withheld: it reports a failed artifact fetch in a form Klyx does not recognise, and a fetch error can quote the artifact URL"
+
+// Fetch failures (Codex's Stage 0 review, finding 2). Under the reason a
+// controller gives a failed artifact fetch, Origins finding no URL proves
+// nothing: an ExternalArtifact's URL is any string, even one with no URL
+// syntax, and an unrecognised wording could print it anywhere. So under
+// that reason a message passes only in the forms the pinned controllers
+// write (kustomize-controller v1.9.6, helm-controller v1.6.5,
+// source-watcher v2.2.4, fluxcd/pkg http/fetch): with a URL candidate,
+// the text before it must be one of their fetch-error prefixes; without
+// one, the message must start with one of their wordings that never carry
+// the URL. Anything else is withheld whole, the reason kept.
+type fetchForms struct {
+	reason string
+	// before a URL candidate: one of wrap's prefixes, then one of lead's
+	wrap, lead []string
+	// with no candidate: one of wrap's prefixes, then one of these
+	plain []string
+}
+
+// The fluxcd/pkg archive fetcher's prefixes before the URL (a request
+// error, retryablehttp's give-up, a non-200 status), and its wordings that
+// never carry it.
+var (
+	archiveLead  = []string{"", "failed to create a new request: ", "failed to download archive: ", "failed to download archive from "}
+	archivePlain = []string{"artifact is ", "failed to copy temp contents: ", "failed to seek back to beginning", "failed to verify archive: ",
+		"failed to extract archive ", "failed to create temp file: ", "failed to create target file: ", "file not found"}
+)
+
+var fetchKinds = map[string]fetchForms{
+	"Kustomization": {reason: "ArtifactFailed", wrap: []string{""}, lead: archiveLead,
+		plain: append([]string{"Source artifact not found, retrying in ", "Source is not ready, artifact not found, retrying in ",
+			"kustomization path not found: ", "unable to get source '"}, archivePlain...)},
+	// the condition says "Could not load chart: <err>", its event <err>
+	"HelmRelease": {reason: "ArtifactFailed", wrap: []string{"Could not load chart: ", ""},
+		lead: []string{"", "failed to download chart from '", "failed to parse URL to overwrite hostname: "},
+		plain: []string{"could not get Source object: ", "Source not ready: artifact not found. Retrying in ",
+			"failed to parse digest '", "failed to copy and verify chart artifact: ", "integrity failure: "}},
+	"ArtifactGenerator": {reason: "SourceFetchFailed", wrap: []string{"fetch sources failed: ", "get sources failed: "}, lead: archiveLead,
+		plain: append([]string{"failed to create source dir: ", "unable to get source '", "source '"}, archivePlain...)},
+}
+
+// fetchRule is Origins, and under the kind's fetch reason the pinned
+// forms only.
+func fetchRule(kind string) func(reason, msg string) (string, bool) {
+	f := fetchKinds[kind]
+	return func(reason, msg string) (string, bool) {
+		out, changed := urlscrub.Origins(msg)
+		if reason != f.reason || msg == "" || f.known(msg) {
+			return out, changed
+		}
+		return FetchWithheld, true
+	}
+}
+
+func (f fetchForms) known(msg string) bool {
+	if strings.Contains(msg, "\n") {
+		return false
+	}
+	if prefix, ok := urlscrub.Prefix(msg); ok {
+		for _, w := range f.wrap {
+			for _, l := range f.lead {
+				if prefix == w+l {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, w := range f.wrap {
+		if rest, ok := strings.CutPrefix(msg, w); ok {
+			for _, p := range f.plain {
+				if strings.HasPrefix(rest, p) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ReceiverMessage is the Receiver rule: the Ready message with its path
 // replaced; anything else withheld whole, the reason kept.
 func ReceiverMessage(_, msg string) (string, bool) {
@@ -93,16 +175,13 @@ func ReceiverMessage(_, msg string) (string, bool) {
 }
 
 // NotificationMessage is the Alert and Provider rule: notifier errors print
-// the webhook URL unmasked and echo response bodies, so every message is
-// withheld whole, the reason kept - except InvalidConfig, which names
-// configuration (regular expressions, selectors) and passes the URL rule.
-func NotificationMessage(reason, msg string) (string, bool) {
-	switch {
-	case msg == "":
+// the webhook URL unmasked and echo response bodies, and an InvalidConfig
+// message quotes the expression that failed to compile, which can be a
+// URL (Codex's Stage 0 review, finding 3) - so every message is withheld
+// whole, the reason kept.
+func NotificationMessage(_, msg string) (string, bool) {
+	if msg == "" {
 		return msg, false
-	case reason == "InvalidConfig":
-		r := urlscrub.Text(msg)
-		return r.Text, r.Changed()
 	}
 	return NotificationWithheld, true
 }
@@ -296,6 +375,85 @@ func (s *sanitizer) originsHold(v any, at string, depth int) {
 			s.originsHold(e, at, depth+1)
 		}
 	}
+}
+
+// IsEventKind reports whether group/kind is a Kubernetes Event, in either
+// API.
+func IsEventKind(group, kind string) bool {
+	return kind == "Event" && (group == "" || group == "events.k8s.io")
+}
+
+// MessageBracketed reports whether a describe of group/kind runs inside
+// the version bracket for its messages, without events: a message-
+// sensitive kind, and an Event, whose text is its subject's.
+func MessageBracketed(group, kind string) bool {
+	return MessageSensitive(kind) || IsEventKind(group, kind)
+}
+
+// eventMessages applies the message rule of the object an Event is about to
+// the Event's own text (Codex's Stage 0 review, finding 1): core/v1 calls
+// its subject involvedObject and its text message, events.k8s.io/v1
+// regarding and note, and either API serves every Event. Both texts pass
+// the rule of every subject the Event names, related included. A subject
+// that cannot be read withholds the text. The text is a writable top-level
+// field, so a change blocks a round-trip edit as well as Describe.
+func (s *sanitizer) eventMessages(o map[string]any, at string) {
+	var kinds []string
+	known := true
+	for _, f := range []string{"involvedObject", "regarding", "related"} {
+		switch ref := o[f].(type) {
+		case nil:
+		case map[string]any:
+			switch k := ref["kind"].(type) {
+			case nil:
+			case string:
+				kinds = append(kinds, k)
+			default:
+				known = false
+			}
+		default:
+			if !empty(ref) {
+				known = false
+			}
+		}
+	}
+	reason, _ := o["reason"].(string)
+	for _, f := range []string{"message", "note"} {
+		path := join(at, f)
+		switch m := o[f].(type) {
+		case nil:
+		case string:
+			if m == "" {
+				continue
+			}
+			if !known {
+				o[f] = WithheldValue
+				s.markEventMessage(path)
+				continue
+			}
+			out, changed := m, false
+			for _, k := range kinds {
+				if r, c := MessageRule(k, reason, out); c {
+					out, changed = r, true
+				}
+			}
+			if changed {
+				o[f] = out
+				s.markEventMessage(path)
+			}
+		default:
+			o[f] = WithheldValue
+			s.markEventMessage(path)
+		}
+	}
+}
+
+// markEventMessage records an Event text its subject's rule changed: it
+// blocks an edit (the text is not status) and Describe.
+func (s *sanitizer) markEventMessage(path string) {
+	s.mark(path, false)
+	s.edit = true
+	s.messages = true
 }
 
 // markMessage records a message the kind rule changed: not an edit blocker

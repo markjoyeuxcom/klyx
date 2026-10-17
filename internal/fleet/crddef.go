@@ -122,6 +122,9 @@ func (c *ClusterConn) payloadColumns(ctx context.Context, group, plural, version
 		return e.cols
 	}
 	c.payloadColMu.Unlock()
+	if cols, ok := crd.BuiltinPayloadColumns(group, plural, version); ok {
+		return cols
+	}
 	def, err := c.GetCRDDefinition(ctx, plural+"."+group, version)
 	if err != nil {
 		return nil

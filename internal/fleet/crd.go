@@ -203,6 +203,9 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 			if crd.IsPayloadKind(group, kind) {
 				return fmt.Errorf("this %s carries templates, patches or values that Klyx shows sanitised; edit it in Git", kind)
 			}
+			if crd.IsEventKind(group, kind) {
+				return fmt.Errorf("this Event's message is shown under the rules of the object it is about, so an edit could write the shown text back; Klyx does not edit it")
+			}
 			return fmt.Errorf("this %s has a URL with credentials, which Klyx shows without them; edit it in Git", kind)
 		}
 	}

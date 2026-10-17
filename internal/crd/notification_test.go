@@ -60,7 +60,7 @@ func TestSanitizeNotificationKinds(t *testing.T) {
 		"metadata": map[string]any{"name": "apps", "namespace": "flux-system", "generation": int64(3)},
 		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "fleet"}},
 		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "ArtifactFailed", "observedGeneration": int64(2),
-			"message": "failed to download artifact from https://store.example/a.tgz?sig=" + notifNeedle + ": status 403"}}}}
+			"message": "failed to download archive from https://store.example/a.tgz?sig=" + notifNeedle + " (status: 403 Forbidden)"}}}}
 	b, s = sanitisedJSON(t, "kustomize.toolkit.fluxcd.io", "Kustomization", ks)
 	if strings.Contains(b, notifNeedle) || !strings.Contains(b, "https://store.example "+urlscrub.OriginsRest) || s.Hold() != HoldMessages {
 		t.Fatalf("residual kustomization message: %s %+v", b, s)
@@ -89,11 +89,10 @@ func TestNotificationMessages(t *testing.T) {
 	if out, _ := NotificationMessage("NotificationDispatchFailed", "failed to send to https://hooks.slack.com/services/T/B/"+notifNeedle+": 404 body "+notifNeedle); out != NotificationWithheld {
 		t.Fatalf("a dispatch failure is withheld whole: %q", out)
 	}
-	if out, _ := NotificationMessage("InvalidConfig", "invalid inclusion regex ^app-("); out != "invalid inclusion regex ^app-(" {
-		t.Fatalf("InvalidConfig keeps its text: %q", out)
-	}
-	if out, _ := NotificationMessage("InvalidConfig", "bad https://u:"+notifNeedle+"@h/x"); strings.Contains(out, notifNeedle) {
-		t.Fatalf("InvalidConfig passes the URL rule: %q", out)
+	// Codex's Stage 0 review, finding 3: notification-controller v1.9.4
+	// quotes the expression that failed to compile, which can be a URL
+	if out, _ := NotificationMessage("InvalidConfig", "failed to compile inclusion regex: https://hooks.slack.com/services/T/B/"+notifNeedle+"["); out != NotificationWithheld {
+		t.Fatalf("InvalidConfig is withheld whole: %q", out)
 	}
 	if out, _ := ReceiverMessage("TokenNotFound", "unable to read token from secret flux-system/token: "+notifNeedle); out != ReceiverWithheld {
 		t.Fatalf("anything else withheld: %q", out)

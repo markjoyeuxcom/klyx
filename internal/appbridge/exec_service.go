@@ -258,8 +258,8 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 	// read through Klyx's own surface under that rule.
 	gvr, gvk, cerr := conn.DescribeTarget(ctx, kindArg)
 	withheld := ""
-	payloadKind := cerr == nil && (crd.IsPayloadKind(gvk.Group, gvk.Kind) || crd.MessageSensitive(gvk.Kind))
-	events := cerr != nil || !crd.MessageSensitive(gvk.Kind)
+	payloadKind := cerr == nil && (crd.IsPayloadKind(gvk.Group, gvk.Kind) || crd.MessageBracketed(gvk.Group, gvk.Kind))
+	events := cerr != nil || !crd.MessageBracketed(gvk.Group, gvk.Kind)
 	var preUID, preRV string
 	switch {
 	case cerr != nil:
@@ -365,6 +365,8 @@ func (s *ExecService) OpenTerminal() ActionResultDTO {
 // holdWithheld is the refusal for a snapshot's hold.
 func holdWithheld(kind, hold string) string {
 	switch {
+	case hold == crd.HoldMessages && kind == "Event":
+		return "Describe is withheld for this Event: its message is about an object whose messages Klyx shows only under that object's rules, and kubectl would print it raw. The inspector shows it under them."
 	case hold == crd.HoldMessages && crd.OriginsKind(kind):
 		return "Describe is withheld for this " + kind + ": it holds a URL whose path Klyx does not show (a signed artifact URL can carry a token), and kubectl would print it raw. The inspector shows it under Klyx's rules."
 	case hold == crd.HoldMessages:

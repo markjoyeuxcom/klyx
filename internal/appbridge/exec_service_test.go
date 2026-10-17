@@ -653,6 +653,27 @@ func TestDescribe_NotificationAndOriginsKinds(t *testing.T) {
 	}
 }
 
+// Codex's Stage 0 review, finding 1: an Event's text is its subject's, so
+// an Event is bracketed without events in either API, and a held one is
+// withheld in its own words.
+func TestDescribe_EventObjects(t *testing.T) {
+	report := func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: gh.1") }
+	for _, g := range []string{"", "events.k8s.io"} {
+		conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: g, kindName: "Event",
+			snaps: []fakeSnap{{uid: "u", rv: "1"}, {uid: "u", rv: "1"}}, describeCmd: report}
+		s := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+		if r := s.Describe(context.Background(), "kind-klyx", "events", "flux-system", "gh.1"); !r.OK || conn.gotPinned == "" || !strings.Contains(r.Command, "--show-events=false") {
+			t.Fatalf("%q: an Event is bracketed without events: %+v", g, r)
+		}
+		conn = &fakeExecConn{kubeContext: "kind-klyx", kindGroup: g, kindName: "Event",
+			snaps: []fakeSnap{{uid: "u", rv: "1", hold: crd.HoldMessages}}, describeCmd: report}
+		s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+		if r := s.Describe(context.Background(), "kind-klyx", "events", "flux-system", "gh.1"); r.OK || !strings.Contains(r.Withheld, "this Event: its message is about an object") {
+			t.Fatalf("%q: a held Event is withheld: %+v", g, r)
+		}
+	}
+}
+
 // Codex's S0b implementation review, finding 4: a bracketed describe runs
 // the resolved resource.version.group through the pinned command (never the
 // alias through the unpinned one), removes its snapshot, withholds when the
