@@ -134,6 +134,10 @@ func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural str
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil
 }
+func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
+	return VeleroRestores{}, nil
+}
+
 func (f *fakeConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
 	return observe.Rows{}, false
 }

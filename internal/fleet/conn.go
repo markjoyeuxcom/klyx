@@ -56,6 +56,8 @@ type Conn interface {
 	Snapshot() Snapshot
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
+	// ListVeleroRestores reads the Restores on demand (coverage S2b §3).
+	ListVeleroRestores(ctx context.Context) (VeleroRestores, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

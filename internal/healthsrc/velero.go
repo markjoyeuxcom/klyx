@@ -198,11 +198,28 @@ type VeleroScheduleRef struct {
 	Namespace, Name, Label, Role string
 }
 
-// VeleroBackupRow is one recent unscheduled backup and why it is here.
+// VeleroBackupRow is one retained Backup (S2b §3). Counted is S2a §4.3's
+// membership: only counted rows are the part's items and carry Klyx's
+// verdict. A row not counted is a listed fact, with no evaluation.
 type VeleroBackupRow struct {
-	Backup     *velero.Backup
-	Membership velero.Membership
+	Backup      *velero.Backup
+	Membership  velero.Membership
+	Counted     bool
+	Attribution velero.Attr
+	// Expired: past its expiration at the capture and still in the API,
+	// awaiting deletion (Velero's GC can be blocked).
+	Expired bool
 }
+
+// FactOnly reports a listed fact: never Klyx's verdict (FactRow).
+func (r VeleroBackupRow) FactOnly() bool { return !r.Counted }
+
+// The backups part's row facts: the Backups kind's window, for the list's
+// notices (S2b §2). RFC 3339, or absent when unknown or uncapped.
+const (
+	FactVeleroWindow = "veleroWindow"
+	FactVeleroTier0  = "veleroTier0"
+)
 
 // defaultLocation is the namespace's default storage location: the newest
 // marked default (Velero keeps the newest, S2a §1).
@@ -381,24 +398,42 @@ func evalVeleroBackups(cluster string) func(observe.Capture) observe.PartResult 
 	return func(c observe.Capture) observe.PartResult {
 		servers, hist, scheds := veleroServersOf(c), veleroHistory(c), veleroSchedules(c)
 		members := velero.Unscheduled(hist.Backups, scheds, servers, c.Now)
+		var attrs map[*velero.Backup]velero.Attr
+		if c.Rows {
+			attrs = velero.Attributions(hist.Backups, scheds, servers)
+		}
 		var items []nativeItem
 		var rows []Row[VeleroBackupRow]
 		for _, b := range hist.Backups {
 			m := members[b]
+			ref := veleroRef(b.Meta, KindVeleroBackups)
+			row := VeleroBackupRow{Backup: b, Membership: m, Counted: m.In, Attribution: attrs[b],
+				Expired: !b.Expiration.IsZero() && !b.Expiration.After(c.Now)}
 			if !m.In {
-				// a backup becomes a member only by being created or changed,
-				// never by time alone, so only leaving needs a clock
+				// a listed fact (S2b §3). A backup becomes a member only by
+				// being created or changed, never by time alone, so only
+				// leaving needs a clock
+				if c.Rows {
+					rows = append(rows, Row[VeleroBackupRow]{Ref: ref.rowRef(), Data: row})
+				}
 				continue
 			}
-			it := nativeItem{velero.BackupRule(b, m, servers, c.Now), veleroRef(b.Meta, KindVeleroBackups)}
+			it := nativeItem{velero.BackupRule(b, m, servers, c.Now), ref}
 			items = append(items, it)
 			if c.Rows {
-				rows = append(rows, nativeRow(it, VeleroBackupRow{Backup: b, Membership: m}))
+				rows = append(rows, nativeRow(it, row))
 			}
 		}
 		res := nativeResult(c.RoleCap, cluster, TaskVelero, "failed or partially failed", items)
 		if c.Rows {
-			res.Rows = rowSet(rows)
+			set := rowSet(rows)
+			if hist.Window != nil {
+				set.Facts = map[string]any{FactVeleroTier0: hist.Window.Tier0}
+				if !hist.Window.Tier0 {
+					set.Facts[FactVeleroWindow] = hist.Window.W.UTC().Format(time.RFC3339)
+				}
+			}
+			res.Rows = set
 		}
 		return res
 	}

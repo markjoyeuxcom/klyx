@@ -89,6 +89,27 @@ var (
 		f(`found a restore with status "[A-Za-z]+" during the server starting, mark it as "[A-Za-z]+"$`, "restore-server-restart", "the server restarted while this restore ran", false),
 		f(`restore execution failed: `, "restore-execution-failed", "the restore failed while running", true),
 	}
+	// restore_controller.go 307-435 (v1.18.4). In v1.17 the hook and init
+	// container errors were the bare error, so they are withheld whole.
+	restoreValidationForms = []form{
+		f(`[a-z0-9.]+ are non-restorable resources$`, "restore-non-restorable", "a non-restorable resource is included", false),
+		f(`Invalid included/excluded resource lists: `, "restore-resource-lists", "the included or excluded resource lists are invalid", false),
+		f(`Invalid included/excluded namespace lists: `, "restore-namespace-lists", "the included or excluded namespace lists are invalid", false),
+		f(`encountered labelSelector as well as orLabelSelectors in restore spec, only one can be specified$`, "restore-both-selectors", "both labelSelector and orLabelSelectors are set", false),
+		f(`Either a backup or schedule must be specified as a source for the restore, but not both$`, "restore-source", "exactly one of a backup and a schedule must be the source", false),
+		f(`invalid restore hooks: `, "restore-hooks", "the restore hooks are invalid", false),
+		f(`invalid init container in restore hook "`, "restore-init-container", "an init container in a restore hook is invalid", false),
+		f(`Invalid ExistingResourcePolicy: `, "restore-existing-policy", "the existingResourcePolicy is invalid", false),
+		f(`Unable to list backups for schedule$`, "restore-schedule-unlistable", "the schedule's backups could not be listed", false),
+		f(`No backups found for schedule$`, "restore-schedule-none", "the schedule has no backups", false),
+		f(`No completed backups found for schedule$`, "restore-schedule-none-completed", "the schedule has no completed backup", false),
+		f(`Error retrieving backup: `, "restore-backup-unreadable", "the source backup could not be read", true),
+		f(`The BSL \S+ is unavailable, cannot retrieve the backup$`, "restore-location-unavailable", "the backup's storage location is unavailable", false),
+		f(`invalid restore resource policies: `, "restore-resource-policy", "the restore's resource policy is invalid", false),
+		f(`failed to get resource modifiers configmap \S+$`, "restore-modifier-unreadable", "the resource modifier's ConfigMap could not be read", false),
+		f(`Error in parsing resource modifiers provided in configmap \S+: `, "restore-modifier-unparseable", "the resource modifier's ConfigMap could not be parsed", false),
+		f(`Validation error in resource modifiers provided in configmap \S+: `, "restore-modifier-invalid", "the resource modifier is invalid", false),
+	}
 )
 
 // The fixed vocabulary (S2a §6): only a matched entry ever crosses, never
@@ -155,7 +176,7 @@ var httpCodes = func() map[string]string {
 // the wording follows from it.
 var textOfCode = func() map[string]string {
 	m := map[string]string{"withheld": WithheldText}
-	for _, forms := range [][]form{locationForms, backupValidationForms, backupFailureForms, scheduleValidationForms, restoreFailureForms} {
+	for _, forms := range [][]form{locationForms, backupValidationForms, backupFailureForms, scheduleValidationForms, restoreFailureForms, restoreValidationForms} {
 		for _, fm := range forms {
 			if old, dup := m[fm.code]; dup && old != fm.text {
 				panic("velero: code " + fm.code + " has two wordings")
@@ -201,7 +222,7 @@ func Classify(field, msg string) (Class, bool) {
 	case FieldRestoreFailure:
 		return classify(restoreFailureForms, msg), true
 	case FieldRestoreValidation:
-		return classify(nil, msg), true // S2b enumerates its forms
+		return classify(restoreValidationForms, msg), true
 	}
 	return classify(nil, msg), true
 }

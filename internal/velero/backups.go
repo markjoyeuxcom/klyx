@@ -142,3 +142,65 @@ func BackupRule(b *Backup, m Membership, servers Servers, now time.Time) health.
 	}
 	return ev
 }
+
+// Attr is how a listed Backup relates to the current schedules (S2b §2).
+// How is "proven", "named", "synced" (it carries a current schedule's name
+// and looks synced from object storage, unproven) or "" (not a run of a
+// current schedule). Attribute's precedence decides: a proof wins over the
+// looks-synced heuristic.
+type Attr struct {
+	Schedule string
+	How      string
+	// Disputed: named, with timing within plausible skew of a synced one.
+	Disputed bool
+}
+
+// Attributions relates every listed Backup to the current schedules.
+func Attributions(backups []*Backup, schedules []*Schedule, servers Servers) map[*Backup]Attr {
+	type view struct {
+		s     *Schedule
+		nName string
+		loc   *time.Location
+	}
+	byName, byUID := map[string]*view{}, map[string]*view{}
+	for _, s := range schedules {
+		srv, _ := servers.For(s.Namespace)
+		v := &view{s: s, loc: zoneOf(srv.Server)}
+		if !s.LastBackup.IsZero() && v.loc != nil {
+			v.nName = RunName(s.Name, s.LastBackup, v.loc)
+		}
+		byName[s.Namespace+"/"+s.Name], byUID[s.UID] = v, v
+	}
+	out := make(map[*Backup]Attr, len(backups))
+	for _, b := range backups {
+		var cands []*view
+		if v := byName[b.Namespace+"/"+b.ScheduleLabel]; v != nil && b.ScheduleLabel != "" {
+			cands = append(cands, v)
+		}
+		for _, o := range b.Owners {
+			if v := byUID[o.UID]; v != nil && v.s.Namespace == b.Namespace {
+				cands = append(cands, v)
+			}
+		}
+		var a Attr
+		for _, v := range cands {
+			switch Attribute(v.s, b, v.nName, v.loc) {
+			case Proven:
+				a = Attr{Schedule: v.s.Name, How: "proven"}
+			case Named:
+				if a.How == "" {
+					a = Attr{Schedule: v.s.Name, How: "named", Disputed: b.Timing() == TimingDisputed}
+				}
+			}
+			if a.How == "proven" {
+				break
+			}
+		}
+		// as S2a's rail counts them: unowned, carrying the name, looking synced
+		if a.How == "" && b.Timing() == TimingSynced && len(b.Owners) == 0 && len(cands) > 0 && cands[0].s.Name == b.ScheduleLabel {
+			a = Attr{Schedule: b.ScheduleLabel, How: "synced"}
+		}
+		out[b] = a
+	}
+	return out
+}

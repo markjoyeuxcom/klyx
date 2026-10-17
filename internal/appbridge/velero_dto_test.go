@@ -85,9 +85,26 @@ func TestVeleroRowsCrossUnderTheRules(t *testing.T) {
 		lr[0].S3URL != "https://minio:9000" || len(lr[0].Schedules) != 1 {
 		t.Fatalf("location rows: %s", b)
 	}
+	// S2b §3: every retained Backup is a row; only the counted one carries
+	// Klyx's verdict
 	br := evaluateVelero(t, "backups", objs).([]VeleroBackupDTO)
-	if b := rawJSONOf(t, br); strings.Contains(b, s2aNeedle) || len(br) != 1 || br[0].Name != "manual" || br[0].Validation[0] != "the storage location is Unavailable" {
+	if b := rawJSONOf(t, br); strings.Contains(b, s2aNeedle) || len(br) != 2 {
 		t.Fatalf("backup rows: %s", b)
+	}
+	for _, r := range br {
+		switch r.Name {
+		case "manual":
+			if !r.Counted || r.Rule == nil || r.Rule.Label != "FailedValidation" || r.Validation[0] != "the storage location is Unavailable" || r.Attribution != "" {
+				t.Fatalf("manual: %+v", r)
+			}
+		default: // N, a proven run: a listed fact
+			if r.Counted || r.Rule != nil || r.Reason != "" || r.Attribution != "proven" || r.Schedule != "daily" {
+				t.Fatalf("N: %+v", r)
+			}
+		}
+	}
+	if sr[0].Horizon.State != velero.HorizonNone || sr[0].Horizon.Text != "no successful backup retained" {
+		t.Fatalf("horizon: %+v", sr[0].Horizon)
 	}
 	for _, part := range []string{"schedules", "locations", "backups"} {
 		a := rawJSONOf(t, aiEvidenceFields[healthsrc.TaskVelero+"/"+part])

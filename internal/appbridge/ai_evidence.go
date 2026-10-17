@@ -107,14 +107,20 @@ var aiEvidenceFields = map[string]allow{
 		"runs": veleroRunAllow, "newer": veleroRunAllow, "synced": nil, "resumed": nil, "reason": nil,
 		"template": allow{"storageLocation": nil, "ttl": nil, "snapshotVolumes": nil, "defaultVolumesToFsBackup": nil, "snapshotMoveData": nil,
 			"includedCount": nil, "excludedCount": nil, "hooks": nil},
-		"location": allow{"state": nil, "name": nil, "byDefault": nil, "label": nil, "role": nil, "validated": nil}},
+		"location": allow{"state": nil, "name": nil, "byDefault": nil, "label": nil, "role": nil, "validated": nil},
+		// S2b §5: the horizon, with its wording, so its confidence travels
+		"horizon": allow{"state": nil, "success": veleroRunAllow, "at": nil, "proven": nil, "untimed": nil, "orderUnknown": nil,
+			"incomplete": nil, "window": nil, "tier0": nil, "partial": veleroRunAllow, "partialProven": nil, "partialOrderUnknown": nil,
+			"expired": nil, "nextExpiry": nil, "text": nil, "partialText": nil}},
 	healthsrc.TaskVelero + "/locations": {"provider": nil, "bucket": nil, "prefix": nil, "default": nil, "accessMode": nil, "phase": nil,
 		"lastValidation": nil, "lastSynced": nil, "validationFrequency": nil, "syncPeriod": nil, "message": nil, "messageWithheld": nil,
 		"configCount": nil, "schedules": allow{"name": nil, "label": nil, "role": nil}, "schedulesState": nil, "expired": nil,
 		"expiredState": nil, "gcFailures": nil, "severalDefaults": nil, "reason": nil},
 	healthsrc.TaskVelero + "/backups": {"phase": nil, "created": nil, "started": nil, "completed": nil, "expires": nil, "scheduleLabel": nil,
 		"storageLocation": nil, "errors": nil, "warnings": nil, "itemsTotal": nil, "itemsBackedUp": nil, "failure": nil, "validation": nil,
-		"validationCount": nil, "hooksFailed": nil, "operationsFailed": nil, "membership": nil, "disputed": nil, "reason": nil},
+		"validationCount": nil, "hooksFailed": nil, "operationsFailed": nil, "membership": nil, "disputed": nil, "reason": nil,
+		// S2b §5: whether the row is counted, and its attribution
+		"counted": nil, "schedule": nil, "attribution": nil, "attributionDisputed": nil, "expired": nil, "gcFailure": nil},
 }
 
 var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,

@@ -128,9 +128,32 @@ func TestVeleroParts(t *testing.T) {
 			}
 		}
 	}
+	// S2b §4: the horizon beside the verdict
+	if hz := daily.Data.Verdict.Horizon; hz.State != velero.HorizonFound || !hz.Proven || hz.Success.Name != daily.Data.Verdict.NName || hz.Incomplete {
+		t.Fatalf("daily's horizon: %+v", hz)
+	}
+	// S2b §3: every retained Backup is a row; only the counted ones carry
+	// an evaluation, and they alone make the part's totals (above: 1)
 	brows, _ := o.RowsNow(TaskVelero, "backups")
-	if bs := brows.Rows.(RowSet[VeleroBackupRow]).Rows; len(bs) != 1 || bs[0].Data.Backup.Name != "pre-upgrade" || bs[0].Data.Membership.Why != "unattributed" {
+	bs := brows.Rows.(RowSet[VeleroBackupRow]).Rows
+	if len(bs) != 3 {
 		t.Fatalf("backups rows: %+v", bs)
+	}
+	for _, r := range bs {
+		switch r.Data.Backup.Name {
+		case "pre-upgrade":
+			if !r.Data.Counted || r.Data.FactOnly() || r.Eval.Label != "FailedValidation" || r.Data.Membership.Why != "unattributed" || !r.Data.Expired || r.Data.Attribution.How != "" {
+				t.Fatalf("pre-upgrade: %+v", r)
+			}
+		case "daily-20260101020000":
+			if r.Data.Counted || !r.Data.FactOnly() || r.Eval.Label != "" || r.Data.Attribution != (velero.Attr{Schedule: "daily", How: "synced"}) {
+				t.Fatalf("synced: %+v", r)
+			}
+		default: // N
+			if r.Data.Counted || r.Eval.Label != "" || r.Data.Attribution != (velero.Attr{Schedule: "daily", How: "proven"}) || r.Data.Expired {
+				t.Fatalf("N: %+v", r)
+			}
+		}
 	}
 }
 

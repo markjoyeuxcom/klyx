@@ -91,8 +91,44 @@ type VeleroScheduleDTO struct {
 	Template           VeleroTemplateDTO     `json:"template"`
 	Location           VeleroLocationLinkDTO `json:"location"`
 	Resumed            bool                  `json:"resumed,omitempty"`
+	Horizon            VeleroHorizonDTO      `json:"horizon"`
 	Reason             string                `json:"reason,omitempty"`
 	Rule               RuleDTO               `json:"rule"`
+}
+
+// VeleroHorizonDTO is a schedule's latest retained successful backup
+// (coverage S2b §4): a fact beside the verdict, never "restorable". Text
+// and PartialText are Klyx's wording, the same on every surface.
+type VeleroHorizonDTO struct {
+	State               string        `json:"state"` // found | none | unreadable
+	Success             *VeleroRunDTO `json:"success,omitempty"`
+	At                  *time.Time    `json:"at,omitempty"` // completion, or start when Untimed
+	Proven              bool          `json:"proven"`
+	Untimed             bool          `json:"untimed,omitempty"`
+	OrderUnknown        bool          `json:"orderUnknown,omitempty"`
+	Incomplete          bool          `json:"incomplete,omitempty"`
+	Window              *time.Time    `json:"window,omitempty"`
+	Tier0               bool          `json:"tier0,omitempty"`
+	Partial             *VeleroRunDTO `json:"partial,omitempty"`
+	PartialProven       bool          `json:"partialProven,omitempty"`
+	PartialOrderUnknown bool          `json:"partialOrderUnknown,omitempty"`
+	Expired             int           `json:"expired,omitempty"`
+	NextExpiry          *time.Time    `json:"nextExpiry,omitempty"`
+	Text                string        `json:"text"`
+	PartialText         string        `json:"partialText,omitempty"`
+}
+
+func veleroHorizonDTO(h velero.Horizon) VeleroHorizonDTO {
+	d := VeleroHorizonDTO{State: h.State, Proven: h.Proven, Untimed: h.Untimed, OrderUnknown: h.OrderUnknown, Incomplete: h.Incomplete,
+		Window: timePtrOf(h.W), Tier0: h.Tier0, PartialProven: h.PartialProven, PartialOrderUnknown: h.PartialOrderUnknown,
+		Expired: h.Expired, NextExpiry: timePtrOf(h.NextExpiry), Text: h.Text(), PartialText: h.PartialText(), At: timePtrOf(h.At())}
+	if h.Success != nil {
+		d.Success = veleroRunDTO(h.Success, h.Success.RunTime(), h.Proven)
+	}
+	if h.Partial != nil {
+		d.Partial = veleroRunDTO(h.Partial, h.Partial.RunTime(), h.PartialProven)
+	}
+	return d
 }
 
 // VeleroScheduleRefDTO names a schedule and its verdict.
@@ -142,7 +178,9 @@ type VeleroLocationDTO struct {
 	Rule                RuleDTO                `json:"rule"`
 }
 
-// VeleroBackupDTO is a recent unscheduled Backup row.
+// VeleroBackupDTO is one retained Backup (coverage S2b §3). Counted rows are
+// the recent unscheduled ones S2a counts, with Klyx's verdict in Rule; a
+// row not counted is a listed fact, with no Rule and no Reason.
 type VeleroBackupDTO struct {
 	UID                    string     `json:"uid"`
 	GVR                    string     `json:"gvr"`
@@ -170,8 +208,14 @@ type VeleroBackupDTO struct {
 	Membership             string     `json:"membership"`
 	MembershipSchedule     string     `json:"membershipSchedule,omitempty"`
 	Disputed               bool       `json:"disputed,omitempty"`
+	Counted                bool       `json:"counted"`
+	Schedule               string     `json:"schedule,omitempty"`    // the current schedule it relates to
+	Attribution            string     `json:"attribution,omitempty"` // proven | named | synced | "" (none)
+	AttributionDisputed    bool       `json:"attributionDisputed,omitempty"`
+	Expired                bool       `json:"expired,omitempty"` // past its expiration, awaiting deletion
+	GCFailure              string     `json:"gcFailure,omitempty"`
 	Reason                 string     `json:"reason,omitempty"`
-	Rule                   RuleDTO    `json:"rule"`
+	Rule                   *RuleDTO   `json:"rule,omitempty"`
 }
 
 func timingWord(t velero.Timing) string {
@@ -229,6 +273,7 @@ func veleroScheduleDTO(r healthsrc.Row[healthsrc.VeleroScheduleRow]) VeleroSched
 		UseOwnerReferences: s.UseOwnerReferences, LastBackup: timePtrOf(s.LastBackup), LastSkipped: timePtrOf(s.LastSkipped),
 		DueZero: v.Due.Zero, DueUnknown: v.Due.Unknown, Validation: classTexts(s.Validation), NName: v.NName, NState: v.NState,
 		PreviousNamed: v.PreviousNamed, Runs: []VeleroRunDTO{}, Newer: []VeleroRunDTO{}, Synced: v.Synced, Resumed: r.Data.Resumed,
+		Horizon: veleroHorizonDTO(v.Horizon),
 		Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval),
 		Template: VeleroTemplateDTO{StorageLocation: t.StorageLocation, StorageLocationInvalid: t.StorageLocationInvalid, TTL: t.TTL,
 			SnapshotVolumes: t.SnapshotVolumes, DefaultVolumesToFs: t.DefaultVolumesToFs, SnapshotMoveData: t.SnapshotMoveData,
@@ -286,7 +331,13 @@ func veleroBackupDTO(r healthsrc.Row[healthsrc.VeleroBackupRow]) VeleroBackupDTO
 		StorageLocation: b.StorageLocation, StorageLocationInvalid: b.StorageLocationInvalid, Errors: b.Errors, Warnings: b.Warnings,
 		ItemsTotal: b.ItemsTotal, ItemsBackedUp: b.ItemsBackedUp, QueuePosition: b.QueuePosition, Validation: classTexts(b.Validation),
 		ValidationCount: b.ValidationCount, HooksAttempted: b.HooksAttempted, HooksFailed: b.HooksFailed, OperationsFailed: b.OperationsFailed,
-		Membership: m.Why, MembershipSchedule: m.Schedule, Disputed: m.Disputed, Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
+		Membership: m.Why, MembershipSchedule: m.Schedule, Disputed: m.Disputed, Counted: r.Data.Counted,
+		Schedule: r.Data.Attribution.Schedule, Attribution: r.Data.Attribution.How, AttributionDisputed: r.Data.Attribution.Disputed,
+		Expired: r.Data.Expired, GCFailure: b.GCFailure}
+	if r.Data.Counted { // only a counted row carries Klyx's verdict
+		rule := toRuleDTO(r.Eval)
+		d.Reason, d.Rule = r.Eval.Reason, &rule
+	}
 	if b.Failure != nil {
 		d.Failure = velero.TextOf(*b.Failure)
 	}

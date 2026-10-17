@@ -134,6 +134,9 @@ type ScheduleVerdict struct {
 	Runs   []Run
 	Newer  []*Backup
 	Synced int
+	// Horizon is the latest retained success (S2b §4), a fact beside the
+	// verdict: it never changes the role.
+	Horizon Horizon
 }
 
 func (v *ScheduleVerdict) set(role health.Kind, label, reason string) {
@@ -171,8 +174,19 @@ func zoneOf(srv Server) *time.Location {
 	return loc
 }
 
-// ScheduleRule is S2a §4.2's classifier: first match wins.
+// ScheduleRule is S2a §4.2's classifier, with S2b's horizon beside it. The
+// earliest candidate expiration joins Next, so the horizon is re-read when
+// it changes; the role is the classifier's alone.
 func ScheduleRule(in ScheduleInput) ScheduleVerdict {
+	v := scheduleRule(in)
+	srv, _ := in.Servers.For(in.S.Namespace)
+	v.Horizon = HorizonOf(in.S, in.History, v.NName, zoneOf(srv.Server), in.Now)
+	v.next(v.Horizon.NextExpiry, in.Now)
+	return v
+}
+
+// scheduleRule is S2a §4.2's classifier: first match wins.
+func scheduleRule(in ScheduleInput) ScheduleVerdict {
 	s, now := in.S, in.Now
 	var v ScheduleVerdict
 	srv, _ := in.Servers.For(s.Namespace)

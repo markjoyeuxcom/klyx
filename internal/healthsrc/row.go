@@ -35,6 +35,11 @@ type RowSet[T any] struct {
 // them beside the converted rows.
 func (r RowSet[T]) RowFacts() map[string]any { return r.Facts }
 
+// FactRow is a row that may be a listed fact rather than one of Klyx's
+// verdicts (coverage S2b §3). AI Explain and the chat verdict map take a
+// row's evaluation as Klyx's verdict only when FactOnly is false.
+type FactRow interface{ FactOnly() bool }
+
 func (r refInput) rowRef() RowRef {
 	return RowRef{UID: r.uid, GVR: r.gvr, Namespace: r.ns, Name: r.name, Generation: r.generation}
 }
