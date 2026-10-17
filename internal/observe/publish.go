@@ -307,6 +307,12 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 					kc.Objects = len(ks.gen.model)
 					kc.Truncated, kc.NotRetained = ks.gen.capped, ks.gen.notRetained
 					c.Complete[name] = f.cov == Live && !ks.gen.capped
+					if w, ok := ks.gen.windowLocked(); ok {
+						if c.Windows == nil {
+							c.Windows = map[string]string{}
+						}
+						c.Windows[name] = w
+					}
 					if cp.truncated != nil {
 						// a budgeted kind's left-out objects are not deletions:
 						// the ledger treats the read as capped (S1a §3)

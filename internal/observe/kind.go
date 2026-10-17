@@ -50,6 +50,31 @@ type KindSpec struct {
 	Budget    int
 	MaxObject int
 	Size      func(v any) int
+	// Rank orders a budgeted kind's admission in place of the key
+	// (coverage S2a §3): the budget admits, evicts and blocks in ascending
+	// rank, the key breaking ties. It is a function of the projection. A
+	// rank may change with the object: the watch path re-places it (out
+	// when it moves past the run's end, in with eviction when it moves
+	// into the run, a relist when the blocker moves), so the retained set
+	// stays the run a list would admit. Nil ranks by key. A ranked kind's
+	// capture carries its window (Capture.Windows).
+	Rank func(key string, v any) string
+}
+
+// rankOf is a projection's admission order.
+func (s KindSpec) rankOf(key string, v any) string {
+	if s.Rank != nil {
+		return s.Rank(key, v)
+	}
+	return key
+}
+
+// rankBefore orders two admissions: rank, then key.
+func rankBefore(ra, ka, rb, kb string) bool {
+	if ra != rb {
+		return ra < rb
+	}
+	return ka < kb
 }
 
 // RefillEvery bounds a budgeted kind's refill relists.
@@ -97,9 +122,14 @@ type kindGen struct {
 	notRetained int
 	blockKey    string
 	blockSize   int
-	refillAt    time.Time
-	refillDue   bool // a refill waits for its window
-	cancelInst  context.CancelFunc
+	// blockRank is the blocker's rank; oversized holds, for a ranked kind,
+	// the rank of each object left out for its size, so the window covers
+	// every omission (S2a §3, Codex's review finding 6).
+	blockRank  string
+	oversized  map[string]string
+	refillAt   time.Time
+	refillDue  bool // a refill waits for its window
+	cancelInst context.CancelFunc
 }
 
 type kindState struct {
@@ -488,7 +518,7 @@ func (a *modelAdapter) Replace(list []any, _ string) error {
 	g.model = next
 	if g.ks.spec.Budget > 0 {
 		g.sizes, g.retained, g.capped, g.notRetained = adm.sizes, adm.retained, adm.capped, adm.notRetained
-		g.blockKey, g.blockSize = adm.blockKey, adm.blockSize
+		g.blockKey, g.blockSize, g.blockRank, g.oversized = adm.blockKey, adm.blockSize, adm.blockRank, adm.oversized
 	}
 	g.observedAt = o.clk.Now() // a complete read is an observation, changed or not
 	// Every list replaces the model: continuity is unproven across it (slice
@@ -517,30 +547,41 @@ type admission struct {
 	notRetained int
 	blockKey    string
 	blockSize   int
+	blockRank   string
+	oversized   map[string]string
 }
 
-// admit keeps the longest key-ordered run of projections that fits the
+// admit keeps the longest rank-ordered run of projections that fits the
 // budget: deterministic whatever order the list arrived in. A projection
 // over MaxObject is left out on its own and does not end the run.
 func admit(all map[string]any, spec KindSpec) (map[string]any, admission) {
-	keys := make([]string, 0, len(all))
-	for k := range all {
-		keys = append(keys, k)
+	type ranked struct{ key, rank string }
+	keys := make([]ranked, 0, len(all))
+	for k, v := range all {
+		keys = append(keys, ranked{k, spec.rankOf(k, v)})
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(a, b int) bool { return rankBefore(keys[a].rank, keys[a].key, keys[b].rank, keys[b].key) })
 	// sized by what is admitted, never by the whole list (Codex's S1a
 	// implementation review, finding 2): the retained model's allocation
 	// follows the budget
 	out := map[string]any{}
 	adm := admission{sizes: map[string]int{}}
 	full := false
-	for _, k := range keys {
+	for _, kr := range keys {
+		k := kr.key
 		n := spec.Size(all[k])
 		if full || (spec.MaxObject > 0 && n > spec.MaxObject) || adm.retained+n > spec.Budget {
 			adm.capped, adm.notRetained = true, adm.notRetained+1
-			if !full && (spec.MaxObject <= 0 || n <= spec.MaxObject) {
+			oversize := spec.MaxObject > 0 && n > spec.MaxObject
+			if !full && !oversize {
 				full = true // the budget ended the run here
-				adm.blockKey, adm.blockSize = k, n
+				adm.blockKey, adm.blockSize, adm.blockRank = k, n, kr.rank
+			}
+			if oversize && spec.Rank != nil {
+				if adm.oversized == nil {
+					adm.oversized = map[string]string{}
+				}
+				adm.oversized[k] = kr.rank
 			}
 			continue
 		}
@@ -559,6 +600,7 @@ func admit(all map[string]any, spec KindSpec) (map[string]any, admission) {
 func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 	spec, o := g.ks.spec, g.o
 	n := spec.Size(v)
+	r := spec.rankOf(key, v)
 	old, had := g.sizes[key]
 	switch {
 	case spec.MaxObject > 0 && n > spec.MaxObject:
@@ -574,9 +616,19 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 			g.capped, g.notRetained = true, g.notRetained+1
 		case key == g.blockKey:
 			// the blocker no longer ends the run: a list may admit past it
-			g.blockKey, g.blockSize = "", 0
+			g.blockKey, g.blockSize, g.blockRank = "", 0, ""
 			g.refillLocked()
 		}
+		g.noteOversizedLocked(key, r)
+	case had && g.blockKey != "" && rankBefore(g.blockRank, g.blockKey, r, key):
+		// a retained object whose rank moved past the run's end (S2a §3,
+		// revision 2): left out, as a list would leave it, and the room it
+		// frees can refill
+		g.retained -= old
+		delete(g.model, key)
+		delete(g.sizes, key)
+		g.capped, g.notRetained = true, g.notRetained+1
+		g.roomFreedLocked()
 	case had:
 		g.retained += n - old
 		g.model[key], g.sizes[key] = v, n
@@ -586,21 +638,24 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 		}
 	case key == g.blockKey:
 		// the blocker changed: still left out, and a list decides again
-		// when it now fits
-		g.blockSize = n
-		if g.retained+n <= spec.Budget {
+		// when it now fits or moved in the order
+		moved := r != g.blockRank
+		g.blockSize, g.blockRank = n, r
+		if moved || g.retained+n <= spec.Budget {
 			g.refillLocked()
 		}
-	case g.blockKey != "" && key > g.blockKey:
+	case g.blockKey != "" && rankBefore(g.blockRank, g.blockKey, r, key):
 		// past the run's end: left out until a list admits it
 		if added {
 			g.notRetained++
 		}
+		delete(g.oversized, key) // left out by the run now, not its size
 	default:
 		// within the run: retained, evicting from the end while over
 		if !added && g.notRetained > 0 {
 			g.notRetained-- // an object left out for its size now fits
 		}
+		delete(g.oversized, key)
 		g.model[key], g.sizes[key] = v, n
 		g.retained += n
 		g.evictLocked()
@@ -616,14 +671,43 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 // the last left out becomes the blocker.
 func (g *kindGen) evictLocked() {
 	for g.retained > g.ks.spec.Budget {
-		last := g.lastKeyLocked()
+		last, rank := g.lastKeyLocked()
 		n := g.sizes[last]
 		g.retained -= n
 		delete(g.model, last)
 		delete(g.sizes, last)
 		g.capped, g.notRetained = true, g.notRetained+1
-		g.blockKey, g.blockSize = last, n
+		g.blockKey, g.blockSize, g.blockRank = last, n, rank
 	}
+}
+
+// noteOversizedLocked records a ranked kind's object left out for its size,
+// so the window covers it.
+func (g *kindGen) noteOversizedLocked(key, rank string) {
+	if g.ks.spec.Rank == nil {
+		return
+	}
+	if g.oversized == nil {
+		g.oversized = map[string]string{}
+	}
+	g.oversized[key] = rank
+}
+
+// windowLocked is a capped ranked kind's window: the rank of its first
+// left-out object in admission order, whatever left it out. Every object
+// ranking before it is retained. ok is false when the kind is not capped,
+// not ranked, or (never expected) capped with no recorded omission.
+func (g *kindGen) windowLocked() (string, bool) {
+	if !g.capped || g.ks.spec.Rank == nil {
+		return "", false
+	}
+	first, firstKey, ok := g.blockRank, g.blockKey, g.blockKey != ""
+	for k, r := range g.oversized {
+		if !ok || rankBefore(r, k, first, firstKey) {
+			first, firstKey, ok = r, k, true
+		}
+	}
+	return first, ok
 }
 
 // roomFreedLocked refills a capped kind when the blocker would now fit.
@@ -640,8 +724,9 @@ func (g *kindGen) omittedGoneLocked(key string) {
 	if g.notRetained > 0 {
 		g.notRetained--
 	}
+	delete(g.oversized, key)
 	if key == g.blockKey {
-		g.blockKey, g.blockSize = "", 0
+		g.blockKey, g.blockSize, g.blockRank = "", 0, ""
 		g.refillLocked()
 	} else if g.notRetained == 0 {
 		g.refillLocked()
@@ -650,15 +735,16 @@ func (g *kindGen) omittedGoneLocked(key string) {
 	g.o.markKindLocked(g.ks)
 }
 
-// lastKeyLocked is the greatest retained key.
-func (g *kindGen) lastKeyLocked() string {
-	last := ""
+// lastKeyLocked is the retained key last in admission order, and its rank.
+func (g *kindGen) lastKeyLocked() (string, string) {
+	last, lastRank, found := "", "", false
 	for k := range g.sizes {
-		if k > last {
-			last = k
+		r := g.ks.spec.rankOf(k, g.model[k])
+		if !found || rankBefore(lastRank, last, r, k) {
+			last, lastRank, found = k, r, true
 		}
 	}
-	return last
+	return last, lastRank
 }
 
 // refillLocked relists a capped kind after room was freed, at most once per

@@ -64,8 +64,14 @@ type Capture struct {
 	// there is: live, with nothing left out by a budget or a cap. Only a
 	// complete source proves an absent object departed.
 	Complete map[string]bool
-	Facts    map[string]any
-	Rows     bool
+	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
+	// rank of its first left-out object: every object that ranks before it
+	// is here, so a question confined to those has a complete answer
+	// (coverage S2a §3). Absent when the kind is complete, unranked, or
+	// its window is unknown.
+	Windows map[string]string
+	Facts   map[string]any
+	Rows    bool
 	// RoleCap bounds PartResult.Roles: an evaluator appends at most RoleCap
 	// entries, then sets RolesCapped and stops appending. 0 when the part
 	// keeps no ledger.
