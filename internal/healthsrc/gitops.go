@@ -42,13 +42,15 @@ func GitOps(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 		crdKind(d, KindApplicationSets, "argoproj.io", "applicationsets", "v1alpha1", ns),
 	}
 	c := d.Cluster
+	opKinds, opParts := FluxOperator(d)
+	kinds = append(kinds, opKinds...)
 	domains := []observe.DomainSpec{
-		{ID: TaskFlux, Parts: []observe.PartSpec{
+		{ID: TaskFlux, Parts: append([]observe.PartSpec{
 			{ID: "reconciliations", Entity: "Kustomizations and HelmReleases", Scope: ns, Classifier: "native",
 				Counted: []string{KindKustomizations, KindHelmReleases}, Evaluate: evalFluxReconciliations(c), Ledger: true},
 			{ID: "sources", Entity: "Flux sources", Scope: ns, Classifier: "native",
 				Counted: fluxSourceKinds, Evaluate: evalFluxSources(c), Ledger: true},
-		}},
+		}, opParts...)},
 		{ID: TaskArgo, Parts: []observe.PartSpec{
 			{ID: "applications", Entity: "Applications", Scope: ns, Classifier: "native",
 				Counted: []string{KindApplications}, Evaluate: evalArgoApps(c), Ledger: true},

@@ -234,3 +234,17 @@ func TestRule(t *testing.T) {
 		t.Errorf("a scheduled provider awaiting: %+v", e)
 	}
 }
+
+func TestTrackerSweep(t *testing.T) {
+	tr := NewTracker()
+	o, c := state(t, true, ready("True", "ReconciliationSucceeded", "ok", "2026-10-17T10:00:00Z", 1), "")
+	tr.Observe(t0, o, c, "")
+	tr.Sweep(t0.Add(SweepAfter / 2))
+	if tr.Len() != 1 {
+		t.Fatal("swept too early")
+	}
+	tr.Sweep(t0.Add(SweepAfter + time.Second))
+	if tr.Len() != 0 {
+		t.Fatal("a departed object's baseline outlived SweepAfter")
+	}
+}

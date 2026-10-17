@@ -27,7 +27,8 @@ type Tracker struct {
 }
 
 type baseline struct {
-	at       time.Time
+	at       time.Time // the baseline state's capture
+	seen     time.Time // the last capture that held the object
 	fp       [32]byte
 	hasReady bool
 	exported string
@@ -58,12 +59,16 @@ func (t *Tracker) Observe(at time.Time, o *Object, c Common, exported string) Re
 	b, had := t.base[c.UID]
 	if c.Disabled {
 		if !had || !at.Before(b.at) {
-			t.base[c.UID] = baseline{at: at, fp: fp, hasReady: has, exported: exported}
+			t.base[c.UID] = baseline{at: at, seen: at, fp: fp, hasReady: has, exported: exported}
 		}
 		return Current
 	}
 	if !had {
 		return Current
+	}
+	if at.After(b.seen) {
+		b.seen = at
+		t.base[c.UID] = b
 	}
 	if at.Before(b.at) {
 		return Awaiting // a capture older than the baseline proves nothing
@@ -90,15 +95,26 @@ func inProgress(c Common) bool {
 	return c.Ready == Reconciling || (c.Ready == Unknown && c.Reason == ReasonProgressing)
 }
 
-// Retain drops the baselines of objects no longer observed. Call it only
-// with a complete read: a kind the budget truncated holds objects it did
-// not retain.
-func (t *Tracker) Retain(uids map[string]bool) {
+// SweepAfter is how long a baseline outlives its object's last capture.
+// Evaluations do not know whether a kind's read was complete - the budget
+// can leave an object out - so a departed object is dropped by age, never
+// on one capture's absence.
+const SweepAfter = time.Hour
+
+// Sweep drops the baselines of objects no capture has held for SweepAfter.
+func (t *Tracker) Sweep(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for uid := range t.base {
-		if !uids[uid] {
+	for uid, b := range t.base {
+		if now.Sub(b.seen) > SweepAfter {
 			delete(t.base, uid)
 		}
 	}
+}
+
+// Len is the number of baselines held.
+func (t *Tracker) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.base)
 }

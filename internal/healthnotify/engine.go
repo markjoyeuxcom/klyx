@@ -788,4 +788,5 @@ var kinds = map[string]string{
 	"clusterissuers": "ClusterIssuer", "externalsecrets": "ExternalSecret", "secretstores": "SecretStore",
 	"clustersecretstores": "ClusterSecretStore", "gateways": "Gateway", "httproutes": "HTTPRoute",
 	"nodeclaims": "NodeClaim", "nodepools": "NodePool",
+	"fluxinstances": "FluxInstance", "resourcesets": "ResourceSet", "resourcesetinputproviders": "ResourceSetInputProvider",
 }

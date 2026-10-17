@@ -810,6 +810,7 @@ func (c *ClusterConn) syncHealth() {
 		ix.SetConnection(c.name, word) // the same word, in the same handoff
 	}
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
+	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])
