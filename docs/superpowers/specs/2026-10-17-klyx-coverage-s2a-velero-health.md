@@ -4,7 +4,7 @@ Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2a. 
 
 The owner's direction: "velero should be supported also". The roadmap's S2a asks for background evidence independent of any list being open, three faults (an unavailable storage location, a missed schedule, recent failed and partially failed backups, distinct from each other), named schedule states, and Velero's phases kept as they are. Codex's acceptance carried three details into this note (roadmap §6): formalise the overdue opportunity and its reset after a later success; an in-progress run during the grace period, and incomplete retained history; the exact classifier and its fake-clock cases. All three are in §4.
 
-The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11), and revision 4 its re-review of b676a4f (§12).
+The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11), and revision 4 its re-review of b676a4f (§12), and revision 5 its re-review of 54cb39a (§13).
 
 ## 1. The API
 
@@ -319,8 +319,9 @@ First match wins (revision 1: the overdue rule precedes Available explicitly).
 
     Otherwise a later execution could be left out, and the outcome is Unknown, "a run after <time> may not be retained", with the retained outcome shown as a fact.
   - **The previous outcome:** when every deciding run is still in progress, it decides with "a new run is in progress":
-    - the newest proven terminal run before `N`, by execution time;
-    - **only when none is retained,** the newest named terminal run before `N`, with "matched by name" (and its timing qualifier, §3).
+    - the newest proven terminal run before `N`, by execution time. A retained one is the newest there is: anything the cap left out ran before `W`, and so before it;
+    - **only when none is retained and the Backups are complete** (not capped), the newest named terminal run before `N`, with "matched by name" (and its timing qualifier, §3);
+    - **when none is retained and the Backups are capped**, Unknown: "the run before <N's time> may not be retained" (revision 5, Codex's fourth re-review finding 1). A proven run before `W` could be the true previous outcome, so a named record is never promoted into its place, and retention alone never changes the verdict uncapped evidence would give.
 
     A proven failure is therefore never cleared by a named success, newer or not. With `N` in progress after a proven failure at 10:00 and a named success at 10:30, the 10:00 failure decides.
   - **Order unknown:** a run whose execution time cannot be established (§3) never decides. It is shown as a fact, "order unknown".
@@ -365,7 +366,7 @@ A manual `--from-schedule` run never moves `lastBackup`, so it never ends a miss
 
 - **The counted entity:** a Backup that does not look synced (§3), with a **run time** (§3: `startTimestamp`, else `creationTimestamp`) in the last 24 hours, that is one of:
   - neither a proven run of a current schedule nor a named run whose execution time is at or before that schedule's `N` (superseded by the controller's own run);
-  - **a proven run whose execution time is unknown** (revision 4, Codex's third re-review finding 2). For example, a custom-named `--from-schedule` run that failed validation, with no start and no controller timestamp, before the schedule's first automatic run. It cannot decide the schedule's verdict (§4.2), so it is counted here until a proven run with a known execution time later than its creation (plus one minute) supersedes it, or its 24 hours pass. A known failure always lights one of the two parts. So a named run newer than its schedule's `N`, or of a schedule with no `N`, is counted here until a newer `N` supersedes it, and an older proven failure never lights here after a later run. That covers manual backups, runs of a deleted schedule or of an earlier one of the same name, and a Backup whose owner set is incomplete ("not attributed: its owner references are not well-formed"). One with disputed timing counts, with "may have been synced from object storage". "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
+  - **a proven run whose execution time is unknown** (revision 4, Codex's third re-review finding 2). For example, a custom-named `--from-schedule` run that failed validation, with no start and no controller timestamp, before the schedule's first automatic run. It cannot decide the schedule's verdict (§4.2), so it is counted here until it is superseded, or its 24 hours pass. **Only a terminal run supersedes it** (revision 5, Codex's fourth re-review finding 2): a proven run that has finished, with a known execution time later than its creation plus one minute. A run that has only started leaves it counted, so a known failure always lights one of the two parts until a finished run replaces it. So a named run newer than its schedule's `N`, or of a schedule with no `N`, is counted here until a newer `N` supersedes it, and an older proven failure never lights here after a later run. That covers manual backups, runs of a deleted schedule or of an earlier one of the same name, and a Backup whose owner set is incomplete ("not attributed: its owner references are not well-formed"). One with disputed timing counts, with "may have been synced from object storage". "Recent" is the roadmap's word; 24 hours is Klyx's rule, and the view says so.
 - **Roles:**
 
   | Phase | Role |
@@ -518,13 +519,16 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
     - **a locally owned Failed Backup processed by a server 30 s behind the API server**: proven by owner, never tested, so it decides;
     - **a re-synced `N`** (revision 2): `N` deleted and re-created by sync an hour later under its name, with a foreign Backup started in between. `N`'s stored outcome decides, the foreign Backup is at most a named fact, and it never clears `N`'s failure;
     - **a named Completed Backup newer than a failed `N`** (a manual run without owners, or a foreign one): shown as a fact, the schedule still lit, and counted in §4.3 only if it failed;
-    - **the previous outcome while `N` runs** (revision 3): a proven failure at 10:00, a named success at 10:30 and `N` in progress at 11:00, where the 10:00 failure decides. Without any proven terminal run, the named one decides with its qualifier;
+    - **the previous outcome while `N` runs** (revision 3): a proven failure at 10:00, a named success at 10:30 and `N` in progress at 11:00, where the 10:00 failure decides. Without any proven terminal run, uncapped, the named one decides with its qualifier;
+    - **its capped counterpart** (revision 5): the same runs with a tier-1 window `W` at 10:20, so the 10:00 failure is left out. Unknown, "the run before 11:00 may not be retained", never the named success;
     - **re-imported records** (revision 3): an older owner-proven Completed run re-created by sync after `N` failed, which keeps its old execution time, so `N` still decides. And the reverse, an old failure re-imported after a later success;
     - **a proven manual run before the first automatic one** (revision 3): `useOwnerReferencesInBackup: true`, no `lastBackup`, and a `--from-schedule` run that Failed, and separately one that PartiallyFailed. Each lights the schedule, Fault and Degraded;
     - **execution time:** a FailedValidation run ordered by its name's timestamp in a non-UTC zone, and a run with neither a start nor the controller's name form (order unknown, a fact);
     - **an older-created, later-started run under a cap** (revision 4): a proven Backup created before `N` but started after it (the 1.18 queue), finishing Failed while `N` is Completed and other schedules fill the cap. It is retained by its run time and decides, so the schedule is lit. And the reverse: it finishes Completed after a failed `N`, and the schedule is OK;
     - **the completeness check:** `N`'s execution time within a minute of `W`, which reads "a run after <time> may not be retained" (Unknown);
-    - **a custom-named `--from-schedule` run** with owner references, FailedValidation with no start, before the schedule's first automatic run (revision 4). Counted in §4.3 with the schedule's verdict unchanged, then superseded by a later proven run of known execution time;
+    - **a custom-named `--from-schedule` run** with owner references, FailedValidation with no start, before the schedule's first automatic run (revision 4). Counted in §4.3 with the schedule's verdict unchanged (revision 5):
+      - still counted while a replacement is only InProgress;
+      - superseded when the replacement completes, and also when it fails, which then lights the schedule;
     - **validation of join inputs** (revision 2): a 5,000-byte `spec.storageLocation` (marked invalid, the projection within `MaxObject`), a Schedule ownerReference with a malformed UID or an over-long name (owners incomplete, never named, never proven), and a third Schedule owner;
     - a `--from-schedule` manual run;
     - `N` in a non-UTC server zone;
@@ -642,3 +646,10 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 | 1 | Admission by creation did not keep the latest executions: the 1.18 queue can start an older-created Backup after `N` | §3: tier 1 ranks by run time (`startTimestamp`, else `creationTimestamp`), so the retained tier-1 set is the latest executions; §4.2 row 10: the outcome is complete only when `N`'s execution time is later than `W` plus a minute, else "a run after <time> may not be retained". §7: both directions under a cap |
 | 2 | A proven run of unknown order that failed lit neither part | §4.3: counted until a proven run of known later execution supersedes it, or 24 hours pass. §7: the custom-named FailedValidation before the first automatic run |
 | 3 | The 24-hour membership and its clock used different times | §3 and §4.3: one basis, the run time, for membership, leaving and `Next` (§4.4). §7: the quiet fake-clock crossing |
+
+## 13. Revision 5: Codex's re-review of 54cb39a
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | The completeness check missed the previous-outcome query: a capped proven failure let a named success decide | §4.2 row 10: a retained proven previous run is provably the newest; with none retained, the named fallback applies only to complete Backups, and capped it is Unknown. §7: the capped 10:00 / 10:30 / 11:00 case |
+| 2 | An unknown-order failure left §4.3 as soon as a replacement started | §4.3: only a finished proven run supersedes it. §7: still counted while the replacement runs, superseded when it completes or fails |
