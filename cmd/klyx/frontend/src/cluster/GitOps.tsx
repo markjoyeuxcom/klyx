@@ -38,6 +38,7 @@ import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { FluxOperatorView } from "./FluxOperatorView";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -164,7 +165,14 @@ const STATUS_COLOR: Record<string, string> = {
 
 const ellipsisCell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 
+// The Flux lens: the Operator view (coverage S1a) is its own component, so
+// the Reconciliation and Sources views keep their hooks unchanged.
 export function GitOps({ cluster }: { cluster: string }) {
+  const operator = useFleet((s) => s.route.name === "cluster" && s.route.fluxView === "operator");
+  return operator ? <FluxOperatorView cluster={cluster} /> : <FluxLens cluster={cluster} />;
+}
+
+function FluxLens({ cluster }: { cluster: string }) {
   const tier = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.gitopsTier ?? "Unknown");
   const gitops = useFleet((s) => s.gitops);
   const expand = useFleet((s) => s.expand);

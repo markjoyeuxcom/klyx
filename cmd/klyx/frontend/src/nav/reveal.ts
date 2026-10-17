@@ -13,7 +13,8 @@ const FLUX_KINDS: Record<string, string> = {
   buckets: "Bucket", helmrepositories: "HelmRepository", helmcharts: "HelmChart",
 };
 const OBJECT_KINDS: Record<string, string> = {
-  ...FLUX_KINDS, issuers: "Issuer", clusterissuers: "ClusterIssuer", secretstores: "SecretStore", clustersecretstores: "ClusterSecretStore",
+  ...FLUX_KINDS, fluxinstances: "FluxInstance", resourcesets: "ResourceSet", resourcesetinputproviders: "ResourceSetInputProvider",
+  issuers: "Issuer", clusterissuers: "ClusterIssuer", secretstores: "SecretStore", clustersecretstores: "ClusterSecretStore",
 };
 
 /** kindOfRef: the object's kind from its GVR's resource, or "". */
@@ -22,7 +23,7 @@ export const kindOfRef = (ref: Pick<RevealRef, "gvr">) => OBJECT_KINDS[last(ref.
 // Every part's lens selects the object it reveals; a part not listed opens
 // its view and the link says so.
 const SELECTS = new Set([
-  "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources",
+  "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets",
   "argo/applications", "argo/applicationsets", "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores",
   "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
 ]);
@@ -60,6 +61,10 @@ export function reveal(cluster: string, task: string, part: string, ref: RevealR
       return;
     case "flux/sources":
       nav.openFlux("sources");
+      break;
+    case "flux/fluxinstance":
+    case "flux/resourcesets":
+      nav.openFlux("operator");
       break;
     case "argo/applications":
     case "argo/applicationsets":

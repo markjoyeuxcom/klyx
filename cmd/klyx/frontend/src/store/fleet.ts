@@ -16,6 +16,7 @@ export type ClusterDTO = {
   gitopsTier: string;
   gitopsReason: string;
   fluxPresent?: boolean;
+  fluxOperatorPresent?: boolean;
   fluxHealthy?: boolean;
   argoPresent?: boolean;
   networkTier: string;
@@ -262,6 +263,9 @@ export type KindCoverageDTO = {
   // the failure class, a discovery gap.
   coverage?: "live" | "stale" | "checking" | "unreadable" | "absent";
   class?: string; asOf?: string; lastGoodAt?: string; discovery?: string;
+  // A budgeted kind that left objects out (coverage S1a §3): its counts are
+  // lower bounds; notRetained counts what was left out, itself a lower bound.
+  truncated?: boolean; notRetained?: number;
 };
 
 export type CertManagerSlice = {
@@ -359,7 +363,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
-export type FluxViewMode = "reconciliation" | "sources";
+export type FluxViewMode = "reconciliation" | "sources" | "operator";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 // ageSeconds is a list read's; the rows transport never sends it (addendum §3.1).

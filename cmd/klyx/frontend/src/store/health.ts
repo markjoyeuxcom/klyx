@@ -10,6 +10,8 @@ export type Coverage = "live" | "stale" | "checking" | "unreadable" | "absent";
 export type KindCoverage = {
   kind: string; role: string; scope: string; coverage: Coverage;
   class?: string; error?: string; objects: number; truncated?: boolean;
+  // a budgeted informer kind's left-out objects (coverage S1a §3), a lower bound
+  notRetained?: number;
   asOf?: string; lastGoodAt?: string; cadenceSec?: number; discovery?: string;
 };
 export type Counts = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };

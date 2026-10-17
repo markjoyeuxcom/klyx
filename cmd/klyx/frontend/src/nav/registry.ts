@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
+export type CapKey = "flux" | "fluxOperator" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -136,6 +136,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "flux", label: "Flux CD", cap: "flux", lens: "group", destinations: [
       task("flux", "Reconciliation", section("gitops", { fluxView: "reconciliation" }), { keywords: ["flux", "kustomizations", "helmreleases", "gitops"] }),
       task("flux-sources", "Sources", section("gitops", { fluxView: "sources" }), { keywords: ["flux", "gitrepositories", "ocirepositories"] }),
+      task("flux-operator", "Operator", section("gitops", { fluxView: "operator" }), { cap: "fluxOperator", keywords: ["flux operator", "fluxinstance", "fluxreport", "resourceset", "resourcesetinputprovider", "input provider"] }),
       res("Kustomizations", r("kustomize.toolkit.fluxcd.io", "v1", "kustomizations", "Kustomization", "Namespaced")),
       res("HelmReleases", r("helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmRelease", "Namespaced")),
       res("GitRepositories", r("source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepository", "Namespaced")),
@@ -204,6 +205,7 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
   if (c.state !== "Synced" && c.state !== "Degraded" && c.state !== "Stale") return "unknown";
   const present: Record<CapKey, boolean> = {
     flux: c.fluxPresent ?? false,
+    fluxOperator: c.fluxOperatorPresent ?? false,
     argo: c.argoPresent ?? false,
     certManager: c.certManagerPresent ?? false,
     externalSecrets: c.externalSecretsPresent ?? false,

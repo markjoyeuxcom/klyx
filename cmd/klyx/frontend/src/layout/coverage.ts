@@ -46,7 +46,7 @@ const OBSERVER_EVIDENCE: Record<NonNullable<KindCoverageDTO["coverage"]>, KindEv
   live: "complete", stale: "stale", checking: "pending", unreadable: "failed", absent: "complete",
 };
 
-type HealthKind = { kind: string; role?: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; asOf?: string; lastGoodAt?: string; discovery?: string };
+type HealthKind = { kind: string; role?: string; coverage: NonNullable<KindCoverageDTO["coverage"]>; class?: string; error?: string; asOf?: string; lastGoodAt?: string; discovery?: string; truncated?: boolean; notRetained?: number };
 
 /** coverageFromHealth maps an Observer part's per-kind coverage onto the
  * lens's KindCoverageDTO, renaming kinds by `names` (Observer kind -> lens
@@ -62,7 +62,8 @@ export function coverageFromHealth(kinds: HealthKind[] | undefined, names: Recor
     const served = k.coverage !== "absent";
     const synced = k.coverage === "live" || k.coverage === "stale";
     const error = k.error ? (k.class ? `${k.class}: ${k.error}` : k.error) : undefined;
-    out.push({ kind, served, synced, error, coverage: k.coverage, class: k.class, asOf: k.asOf, lastGoodAt: k.lastGoodAt, discovery: k.discovery });
+    out.push({ kind, served, synced, error, coverage: k.coverage, class: k.class, asOf: k.asOf, lastGoodAt: k.lastGoodAt, discovery: k.discovery,
+      ...(k.truncated ? { truncated: true, notRetained: k.notRetained } : {}) });
   }
   return out;
 }

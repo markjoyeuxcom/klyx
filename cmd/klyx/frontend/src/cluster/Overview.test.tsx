@@ -282,7 +282,8 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
   it("the Observer's confirmed absence wins over a lagging present flag", () => {
     const c = { ...dto, fluxPresent: true, argoPresent: true, gatewayAPIVersion: "v1.2" };
     useFleet.setState({ clusters: [c] });
-    seed([...core(), task("flux", [absentPart("reconciliations", "kustomizations"), absentPart("sources", "gitrepositories")]),
+    seed([...core(), task("flux", [absentPart("reconciliations", "kustomizations"), absentPart("sources", "gitrepositories"),
+      absentPart("fluxinstance", "fluxinstances"), absentPart("resourcesets", "resourcesets")]),
       task("argo", [absentPart("applications", "applications"), absentPart("applicationsets", "applicationsets")]),
       task("gateway", [absentPart("gateways", "gateways"), absentPart("routes", "httproutes")])]);
     render(<Overview c={c} />);
