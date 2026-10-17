@@ -28,30 +28,52 @@ type ImageControllers struct {
 	Automation ImageController
 }
 
-// ImageController is one controller's read. Found with Ready a claim;
-// not Found from a complete list is a proven absence; Unverified (the list
-// failed) claims nothing.
+// ImageController is one controller's read (Codex's S1b implementation
+// review, findings 2 and 4). It is Needed only when its own resources are
+// served: a reflector-only installation needs no automation controller.
+// Every Deployment found is judged on its own - a ready shard never
+// certifies another - and absence needs a complete list. Unverified (the
+// discovery or the list failed) claims nothing.
 type ImageController struct {
-	Name         string
-	Found, Ready bool
-	Unverified   bool
-	Why          string
+	Name        string
+	Needed      bool
+	Deployments []ImageDeployment
+	Complete    bool
+	Unverified  bool
+	Why         string
 }
 
-// Problems splits the image controllers' issues into proven failures (not
-// ready, or absent while their CRDs are served) and gaps (unreadable).
+// ImageDeployment is one Deployment carrying the controller's label.
+type ImageDeployment struct {
+	Namespace, Name string
+	Ready           bool
+}
+
+// Problems splits the image controllers' issues into proven failures (a
+// Deployment not ready, or none in a complete list while its resources are
+// served) and gaps (unreadable, or a list cut short).
 func (i ImageControllers) Problems() (failures, gaps []string) {
 	if !i.Served {
 		return nil, nil
 	}
 	for _, c := range []ImageController{i.Reflector, i.Automation} {
 		switch {
+		case !c.Needed:
+			continue
 		case c.Unverified:
 			gaps = append(gaps, "Flux "+c.Name+" health is unverified ("+c.Why+")")
-		case !c.Found:
+			continue
+		}
+		for _, d := range c.Deployments {
+			if !d.Ready {
+				failures = append(failures, "Flux "+c.Name+" "+d.Namespace+"/"+d.Name+" is not ready")
+			}
+		}
+		switch {
+		case !c.Complete:
+			gaps = append(gaps, "Flux "+c.Name+": the list of Deployments in "+i.Namespace+" was cut short")
+		case len(c.Deployments) == 0:
 			failures = append(failures, fmt.Sprintf("Flux image automation CRDs installed but no %s in %s", c.Name, i.Namespace))
-		case !c.Ready:
-			failures = append(failures, "Flux "+c.Name+" is not ready")
 		}
 	}
 	return failures, gaps
@@ -63,28 +85,55 @@ func (i ImageControllers) Issue() string {
 	return strings.Join(append(f, g...), "; ")
 }
 
+// imageResources reads which image resources the served versions carry. An
+// unreadable version is a gap: which controllers are needed is then not
+// known.
+func (d *Detector) imageResources(served map[string]bool) (map[string]bool, string) {
+	res := map[string]bool{}
+	for _, v := range []string{"v1", "v1beta2"} {
+		gv := fluxImageGroup + "/" + v
+		if !served[gv] {
+			continue
+		}
+		rl, err := d.cs.Discovery().ServerResourcesForGroupVersion(gv)
+		if err != nil || rl == nil {
+			return nil, "the image API's resources could not be read"
+		}
+		for _, r := range rl.APIResources {
+			res[r.Name] = true
+		}
+	}
+	return res, ""
+}
+
 func (d *Detector) detectImageControllers(ctx context.Context, served map[string]bool, ns string) ImageControllers {
-	out := ImageControllers{Served: served[fluxImageGroup], Namespace: ns}
+	out := ImageControllers{Served: served[fluxImageGroup], Namespace: ns,
+		Reflector: ImageController{Name: imageReflector}, Automation: ImageController{Name: imageAutomation}}
 	if !out.Served {
 		return out
 	}
-	read := func(name string) ImageController {
-		c := ImageController{Name: name}
-		deps, err := d.cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + name, Limit: imageControllerMax})
+	res, gap := d.imageResources(served)
+	read := func(c *ImageController, needed bool) {
+		switch {
+		case gap != "":
+			c.Needed, c.Unverified, c.Why = true, true, gap
+			return
+		case !needed:
+			return
+		}
+		c.Needed = true
+		deps, err := d.cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/component=" + c.Name, Limit: imageControllerMax})
 		if err != nil {
 			c.Unverified, c.Why = true, "could not list Deployments in "+ns+": "+err.Error()
-			return c
+			return
 		}
-		if len(deps.Items) == 0 && deps.Continue != "" {
-			c.Unverified, c.Why = true, "the list of Deployments in "+ns+" was cut short"
-			return c
-		}
+		c.Complete = deps.Continue == ""
 		for i := range deps.Items {
-			c.Found = true
-			c.Ready = c.Ready || DeploymentReady(&deps.Items[i])
+			dep := &deps.Items[i]
+			c.Deployments = append(c.Deployments, ImageDeployment{Namespace: dep.Namespace, Name: dep.Name, Ready: DeploymentReady(dep)})
 		}
-		return c
 	}
-	out.Reflector, out.Automation = read(imageReflector), read(imageAutomation)
+	read(&out.Reflector, res["imagerepositories"] || res["imagepolicies"])
+	read(&out.Automation, res["imageupdateautomations"])
 	return out
 }

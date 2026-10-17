@@ -79,12 +79,17 @@ type ImageRow struct {
 	Repository *imageauto.Repository
 	Policy     *imageauto.Policy
 	Automation *imageauto.Automation
-	// A repository's policies, across namespaces.
-	Policies []ImagePolicyRef
-	// A policy's repository (a separate block) and the automations using it.
-	RepositoryLink *ImageRepositoryLink
-	BlockedBy      string
-	Automations    []imageauto.AutomationUse
+	// A repository's policies, across namespaces, and that read's state
+	// (Codex's S1b implementation review, finding 6): found, incomplete or
+	// not readable - an empty list from a partial read is never proof.
+	Policies      []ImagePolicyRef
+	PoliciesState string
+	// A policy's repository (a separate block) and the automations using
+	// it, with that read's state.
+	RepositoryLink   *ImageRepositoryLink
+	BlockedBy        string
+	Automations      []imageauto.AutomationUse
+	AutomationsState string
 	// An automation's policies now, with what its last successful run used.
 	Uses      []imageauto.PolicyUse
 	UsesState string
@@ -142,7 +147,7 @@ func evalImages(cluster string) func(observe.Capture) observe.PartResult {
 		for _, o := range autoObjs {
 			autos = append(autos, imageauto.ParseAutomation(o))
 		}
-		repoCov, polCov := coverageOf(c, KindImageRepositories), coverageOf(c, KindImagePolicies)
+		repoCov, polCov, autoCov := coverageOf(c, KindImageRepositories), coverageOf(c, KindImagePolicies), coverageOf(c, KindImageAutomations)
 
 		var items []nativeItem
 		var rows []Row[ImageRow]
@@ -150,7 +155,7 @@ func evalImages(cluster string) func(observe.Capture) observe.PartResult {
 			it := nativeItem{imageauto.RepositoryRule(r, c.Now), refOf(repoObjs[i].Unstructured, KindImageRepositories)}
 			items = append(items, it)
 			if c.Rows {
-				row := ImageRow{Repository: &repos[i]}
+				row := ImageRow{Repository: &repos[i], PoliciesState: imageauto.CoverageState(polCov)}
 				for _, p := range imageauto.RepositoryPolicies(r, pols) {
 					e := imageauto.PolicyRule(p)
 					row.Policies = append(row.Policies, ImagePolicyRef{Namespace: p.Namespace, Name: p.Name, Label: e.Label, Role: e.Role.String()})
@@ -162,7 +167,8 @@ func evalImages(cluster string) func(observe.Capture) observe.PartResult {
 			it := nativeItem{imageauto.PolicyRule(p), refOf(polObjs[i].Unstructured, KindImagePolicies)}
 			items = append(items, it)
 			if c.Rows {
-				row := ImageRow{Policy: &pols[i], BlockedBy: p.BlockedBy(), Automations: imageauto.PolicyAutomations(p, autos)}
+				row := ImageRow{Policy: &pols[i], BlockedBy: p.BlockedBy(), Automations: imageauto.PolicyAutomations(p, autos),
+					AutomationsState: imageauto.CoverageState(autoCov)}
 				l := imageauto.PolicyRepository(p, repos, repoCov)
 				link := ImageRepositoryLink{State: l.State, Namespace: p.RepositoryNamespace, Name: p.RepositoryName}
 				if l.Repository != nil {

@@ -126,9 +126,11 @@ export function ImagesView({ cluster }: { cluster: string }) {
   const lastGood = lastGoodAt(rows.coverage, ["ImageRepository", "ImagePolicy", "ImageUpdateAutomation"]);
   const discoveryGap = coverageGaps(rows.coverage);
   const capped = rows.coverage.filter((k) => k.truncated);
-  const counted = rows.counts?.total ?? 0;
-  const attention = rows.counts?.included ?? 0;
-  const faults = items.filter((i) => i.c.rule.role === "fault").length;
+  // One reading for the headline (Codex's S1b implementation review,
+  // finding 5): the summary's counts when it has them, else the rows alone.
+  const counted = rows.counts ? rows.counts.total : items.length;
+  const attention = rows.counts ? rows.counts.included : items.filter((i) => i.c.rule.included).length;
+  const faults = rows.counts ? rows.counts.fault : items.filter((i) => i.c.rule.role === "fault").length;
   const overdue = items.filter((i) => i.c.rule.label === "Scan overdue" || i.c.rule.label === "Run overdue").length;
   const suspended = items.filter((i) => i.c.suspended).length;
 
@@ -303,8 +305,15 @@ function ImageInspector({ cluster, it, nowS, gone, replaced, onVerb, onOpen, onC
     const uid = it.uid;
     void getImageDetail(cluster, it.kind, it.c.namespace, it.c.name, uid).then((d) => { if (live) setDetail({ uid, d }); });
     return () => { live = false; };
-  }, [cluster, it.kind, it.c.namespace, it.c.name, it.uid, gone]);
-  const d = detail && detail.uid === it.uid ? detail.d : null;
+  }, [cluster, it.kind, it.c.namespace, it.c.name, it.uid, it.c.generation, it.automation?.lastPushCommit, it.automation?.sourceNamespace, it.automation?.sourceName, gone]);
+  // the evidence is shown only beside the revision it describes (Codex's
+  // S1b implementation review, finding 1): the same UID, generation, push
+  // and source as the row; a read of another revision waits for the row
+  const fresh = (x: ImageDetailDTO) => x.uid === it.uid && (!!x.error || x.generation === it.c.generation) &&
+    (!x.push || ((x.push.lastPushCommit ?? "") === (it.automation?.lastPushCommit ?? "") &&
+      x.push.sourceNamespace === it.automation?.sourceNamespace && x.push.sourceName === it.automation?.sourceName));
+  const d = detail && detail.uid === it.uid && fresh(detail.d) ? detail.d : null;
+  const otherRevision = !!detail && detail.uid === it.uid && !fresh(detail.d);
 
   const v1Policy = it.kind !== "ImagePolicy" || isV1(it.c);
   const verbs: MenuItem[] = gone ? [] : [
@@ -338,7 +347,7 @@ function ImageInspector({ cluster, it, nowS, gone, replaced, onVerb, onOpen, onC
         {it.policy && <PolicyBlocks p={it.policy} nowS={nowS} onOpen={onOpen} />}
         {it.automation && <AutomationBlocks a={it.automation} d={d} onOpen={onOpen} />}
         <InspectorBlock title="Events">
-          {!d ? <div className="t-secondary">Reading…</div>
+          {!d ? <div className="t-secondary">{otherRevision ? "The latest read describes another revision of this object; it waits for the row to catch up." : "Reading…"}</div>
             : d.error ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>{d.error}</div>
             : d.eventsError ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>Events could not be read: {d.eventsError}</div>
             : d.events.length === 0 ? <div className="t-secondary">No recent events (they age out after about an hour).</div>
@@ -387,8 +396,9 @@ function RepositoryBlocks({ r, onOpen }: { r: ImageRepositoryDTO; onOpen: (key: 
         </div>
         {r.latestTags.length > 0 && <div className="t-body" style={{ marginTop: 6, overflowWrap: "anywhere" }}><span className="t-section-label">the ten highest tags by reverse string order: </span>{r.latestTags.join(", ")}</div>}
       </InspectorBlock>
-      <InspectorBlock title={`Policies using it · ${r.policies.length}`}>
-        {r.policies.length === 0 ? <div className="t-secondary">No ImagePolicy names this repository in the current read.</div>
+      <InspectorBlock title={`Policies using it · ${joinCount(r.policies.length, r.policiesState)}`}>
+        {r.policiesState === "not readable" ? <div className="t-secondary" style={{ color: "var(--color-text-warning)" }}>The policies could not be read, so which use it is not known.</div>
+          : r.policies.length === 0 ? <div className="t-secondary">{r.policiesState === "incomplete" ? "None among the policies Klyx retains; the read is capped, so others may." : "No ImagePolicy names this repository in the current read."}</div>
           : r.policies.map((p) => (
             <button key={`${p.namespace}/${p.name}`} className="t-body" onClick={() => onOpen(keyOf("ImagePolicy", p.namespace, p.name))} style={linkStyle}>
               {p.namespace}/{p.name} <span style={{ color: ROLE_TEXT[p.role] ?? ROLE_TEXT.unknown }}>· {p.label}</span>
@@ -398,6 +408,9 @@ function RepositoryBlocks({ r, onOpen }: { r: ImageRepositoryDTO; onOpen: (key: 
     </>
   );
 }
+
+// joinCount is a reverse join's count, qualified by its read's state.
+const joinCount = (n: number, state: string) => (state === "not readable" ? "not readable" : state === "incomplete" ? `${n}+` : String(n));
 
 const useLabel: Record<string, string> = { used: "used in its last successful run", pending: "pending: not yet in a successful run", incomplete: "not known: the automation's record could not be kept whole" };
 
@@ -425,8 +438,9 @@ function PolicyBlocks({ p, nowS, onOpen }: { p: ImagePolicyDTO; nowS: number; on
           {p.digestReflection && <><span>digests</span><span>{p.digestReflection}{p.interval ? ` · every ${p.interval}` : ""}</span></>}
         </div>
       </InspectorBlock>
-      <InspectorBlock title={`Automations using it · ${p.automations.length}`}>
-        {p.automations.length === 0 ? <div className="t-secondary">No ImageUpdateAutomation in its namespace selects it in the current read.</div>
+      <InspectorBlock title={`Automations using it · ${joinCount(p.automations.length, p.automationsState)}`}>
+        {p.automationsState === "not readable" ? <div className="t-secondary" style={{ color: "var(--color-text-warning)" }}>The automations could not be read, so which use it is not known.</div>
+          : p.automations.length === 0 ? <div className="t-secondary">{p.automationsState === "incomplete" ? "None among the automations Klyx retains; the read is capped, so others may." : "No ImageUpdateAutomation in its namespace selects it in the current read."}</div>
           : p.automations.map((a) => (
             <button key={`${a.namespace}/${a.name}`} className="t-body" onClick={() => onOpen(keyOf("ImageUpdateAutomation", a.namespace, a.name))} style={linkStyle}>
               {a.namespace}/{a.name} <span className="t-secondary">· {useLabel[a.state] ?? a.state}</span>

@@ -65,6 +65,9 @@ type ImageRepositoryDTO struct {
 	ScanTime            *time.Time          `json:"scanTime,omitempty"`
 	LatestTags          []string            `json:"latestTags"`
 	Policies            []ImagePolicyRefDTO `json:"policies"`
+	// PoliciesState is the policies read's state: found, incomplete or
+	// not readable.
+	PoliciesState string `json:"policiesState"`
 }
 
 // ImagePolicyRefDTO names a policy with its verdict.
@@ -108,6 +111,7 @@ type ImagePolicyDTO struct {
 	BlockedBy           string                  `json:"blockedBy,omitempty"`
 	Repository          *ImageRepositoryLinkDTO `json:"repository,omitempty"`
 	Automations         []ImageAutomationUseDTO `json:"automations"`
+	AutomationsState    string                  `json:"automationsState"`
 }
 
 // ImagePolicyUseDTO is a policy an automation uses now.
@@ -209,7 +213,7 @@ func imageRowDTO(r healthsrc.Row[healthsrc.ImageRow]) ImageRowDTO {
 			Provider: x.Provider, ServiceAccountName: x.ServiceAccountName, SecretRef: x.SecretRef, CertSecretRef: x.CertSecretRef,
 			ProxySecretRef: x.ProxySecretRef, Interval: x.IntervalText, Timeout: x.Timeout, Insecure: x.Insecure,
 			ExclusionList: nonNil(x.ExclusionList), AccessFromSelectors: x.AccessFromSelectors, Scanned: x.Scanned, TagCount: x.TagCount,
-			ScanTime: timePtrOf(x.ScanTime), LatestTags: nonNil(x.LatestTags), Policies: []ImagePolicyRefDTO{}}
+			ScanTime: timePtrOf(x.ScanTime), LatestTags: nonNil(x.LatestTags), Policies: []ImagePolicyRefDTO{}, PoliciesState: r.Data.PoliciesState}
 		for _, p := range r.Data.Policies {
 			d.Policies = append(d.Policies, ImagePolicyRefDTO{Namespace: p.Namespace, Name: p.Name, Label: p.Label, Role: p.Role})
 		}
@@ -219,7 +223,7 @@ func imageRowDTO(r healthsrc.Row[healthsrc.ImageRow]) ImageRowDTO {
 		d := ImagePolicyDTO{ImageCommonDTO: imageCommon(x.Common, r.Ref, eval), RepositoryNamespace: x.RepositoryNamespace,
 			RepositoryName: x.RepositoryName, PolicyType: x.PolicyType, PolicyValue: x.PolicyValue, FilterPattern: x.FilterPattern,
 			FilterExtract: x.FilterExtract, DigestReflection: x.DigestReflection, Interval: x.Interval, Latest: imageRef(x.Latest),
-			Previous: imageRef(x.Previous), BlockedBy: r.Data.BlockedBy, Automations: []ImageAutomationUseDTO{}}
+			Previous: imageRef(x.Previous), BlockedBy: r.Data.BlockedBy, Automations: []ImageAutomationUseDTO{}, AutomationsState: r.Data.AutomationsState}
 		if l := r.Data.RepositoryLink; l != nil {
 			d.Repository = &ImageRepositoryLinkDTO{State: l.State, Namespace: l.Namespace, Name: l.Name, Label: l.Label, Role: l.Role, ScanTime: parseTime(l.ScanTime)}
 		}

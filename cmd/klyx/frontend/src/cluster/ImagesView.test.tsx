@@ -6,7 +6,7 @@ import { useFleet } from "../store/fleet";
 import { ImagesView } from "./ImagesView";
 
 vi.mock("../bridge/fluximages", () => ({
-  getImageDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, events: [] })),
+  getImageDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, generation: 1, events: [] })),
 }));
 vi.mock("../bridge/gitops", () => ({ reconcile: vi.fn(async () => {}), setSuspend: vi.fn(async () => {}) }));
 import { getImageDetail } from "../bridge/fluximages";
@@ -30,12 +30,12 @@ const common = (kind: string, name: string, over: Partial<ImageCommonDTO> = {}):
 });
 const repo = (name: string, over: Partial<ImageRepositoryDTO> = {}): ImageRowDTO => {
   const r: ImageRepositoryDTO = { ...common("ImageRepository", name), image: "ghcr.io/org/app", exclusionList: [], scanned: true, tagCount: 42,
-    scanTime: "2026-10-17T09:55:00Z", latestTags: ["v9", "v8"], policies: [], ...over };
+    scanTime: "2026-10-17T09:55:00Z", latestTags: ["v9", "v8"], policies: [], policiesState: "found", ...over };
   return { uid: r.uid, kind: "ImageRepository", rule: r.rule, repository: r };
 };
 const policy = (name: string, over: Partial<ImagePolicyDTO> = {}): ImageRowDTO => {
   const p: ImagePolicyDTO = { ...common("ImagePolicy", name), repositoryNamespace: "flux-system", repositoryName: "app", policyType: "semver", policyValue: ">=1.0.0",
-    latest: { name: "ghcr.io/org/app", tag: "1.2.0", text: "ghcr.io/org/app:1.2.0" }, automations: [],
+    latest: { name: "ghcr.io/org/app", tag: "1.2.0", text: "ghcr.io/org/app:1.2.0" }, automations: [], automationsState: "found",
     repository: { state: "found", namespace: "flux-system", name: "app", label: "Ready", role: "ok" }, ...over };
   return { uid: p.uid, kind: "ImagePolicy", rule: p.rule, policy: p };
 };
@@ -73,7 +73,8 @@ describe("ImagesView (coverage S1b)", () => {
   });
 
   it("the automation's push shows the bound branch, the source and the applied lines, never a deployment", async () => {
-    vi.mocked(getImageDetail).mockImplementationOnce(async (_c, _k, _ns, _n, uid) => ({ uid, events: [], push: {
+    vi.mocked(getImageDetail).mockImplementationOnce(async (_c, _k, _ns, _n, uid) => ({ uid, generation: 1, events: [], push: {
+      lastPushCommit: "abc1234def5678", sourceNamespace: "flux-system", sourceName: "fleet",
       branchState: "bound", branch: "auto", target: { checkoutFrom: "source", branch: "auto", repositoryURL: "https://github.com/org/fleet" },
       sourceState: "found", sourceLine: "other", sourceRevision: "main@sha1:fff", sourceBranchNote: "pushed to auto; this source tracks main",
       applied: [{ namespace: "flux-system", name: "apps", revision: "main@sha1:fff", applied: false }], appliedState: "found" } }));
@@ -129,4 +130,46 @@ describe("ImagesView (coverage S1b)", () => {
     render(<ImagesView cluster="c" />);
     expect(screen.getByText("Flux image automation is not installed on this cluster.")).toBeTruthy();
   });
+
+  // Codex's S1b implementation review, finding 1: evidence about push A is
+  // never shown beside a row that records push B of the same object.
+  it("push evidence is fenced to the revision the row shows", async () => {
+    const evidence = (commit: string) => ({ uid: "uid-apps", generation: 1, events: [], push: {
+      lastPushCommit: commit, sourceNamespace: "flux-system", sourceName: "fleet", branchState: "bound", branch: "auto",
+      target: { checkoutFrom: "source", branch: "auto" }, sourceState: "found", sourceLine: "fetched",
+      applied: [{ namespace: "flux-system", name: "apps", applied: true }], appliedState: "found" } });
+    vi.mocked(getImageDetail).mockImplementation(async () => evidence("aaaaaaa1111"));
+    setRows([automation("apps", { lastPushCommit: "aaaaaaa1111" })]);
+    const { rerender } = render(<ImagesView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    const pushA = await screen.findByTestId("images-push");
+    await waitFor(() => expect(pushA.textContent).toContain("the source has fetched this commit"));
+    // the same UID now records push B; the read still describes A
+    setRows([automation("apps", { lastPushCommit: "bbbbbbb2222" })]);
+    rerender(<ImagesView cluster="c" />);
+    const pushB = await screen.findByTestId("images-push");
+    expect(pushB.textContent).toContain("bbbbbbb");
+    expect(pushB.textContent).not.toContain("the source has fetched this commit");
+    expect(pushB.textContent).not.toContain("applied this commit");
+    vi.mocked(getImageDetail).mockImplementation(async (_c, _k, _ns, _n, uid) => ({ uid, generation: 1, events: [] }));
+  });
+
+  // Finding 5: one reading for the headline - the summary's counts.
+  it("the headline's severity comes from the same reading as its counts", () => {
+    setRows([repo("app")], { counts: { total: 1, included: 1, fault: 1 } });
+    render(<ImagesView cluster="c" />);
+    expect(screen.getByText("1 failing")).toBeTruthy();
+  });
+
+  // Finding 6: a reverse join from an unreadable or capped read is never a
+  // proven empty one.
+  it("a reverse join says when its read was not complete", async () => {
+    setRows([repo("app", { policiesState: "not readable" }), policy("p", { automationsState: "incomplete" })]);
+    render(<ImagesView cluster="c" />);
+    fireEvent.click(screen.getByText("app"));
+    expect((await screen.findByTestId("images-panel")).textContent).toContain("The policies could not be read");
+    fireEvent.click(screen.getByText("p"));
+    await waitFor(() => expect(screen.getByTestId("images-panel").textContent).toContain("the read is capped, so others may"));
+  });
 });
+

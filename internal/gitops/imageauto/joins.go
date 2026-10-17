@@ -31,6 +31,19 @@ const (
 	CoverageUnreadable                 // nothing readable
 )
 
+// CoverageState is a whole join's state from its read: found (complete),
+// incomplete (capped) or not readable. A join drawn from an incomplete or
+// unreadable read never reads as a proven empty one.
+func CoverageState(cov Coverage) string {
+	switch cov {
+	case CoverageUnreadable:
+		return JoinUnreadable
+	case CoveragePartial:
+		return JoinIncomplete
+	}
+	return JoinFound
+}
+
 // missing is the state of an object a join did not find.
 func missing(cov Coverage) string {
 	switch cov {

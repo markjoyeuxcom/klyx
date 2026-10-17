@@ -290,6 +290,8 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			kc.Scope = ks.spec.Scope
 			if ks.gen == nil {
 				kc.Coverage, kc.Class, kc.Error = o.kindCoverageLocked(ks)
+				// a kind confirmed absent has no objects: a complete read
+				c.Complete[name] = kc.Coverage == Absent
 				if kc.Coverage == Stale && !ks.probedAt.IsZero() {
 					kc.AsOf, kc.LastGoodAt = copyTime(&ks.probedAt), copyTime(&ks.probedAt)
 				}

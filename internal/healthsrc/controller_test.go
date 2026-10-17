@@ -139,7 +139,7 @@ func TestOperatorGapDoesNotHideFluxFailure(t *testing.T) {
 	if got == nil || got.State != ControllerNotReady || !strings.Contains(got.Reason, "kustomize-controller is not ready") || !strings.Contains(got.Reason, "detection is incomplete") {
 		t.Fatalf("the failure first, the gap after: %+v", got)
 	}
-	synth := capability.FluxInfo{Present: true, Verified: true, FromOperator: true}
+	synth := capability.FluxInfo{Present: true, Verified: true, Synthesized: true}
 	if got := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: synth, FluxOperator: gapOp}})[TaskFlux]; got == nil || got.State != ControllerUnknown || strings.Contains(got.Reason, "kustomize-controller") {
 		t.Fatalf("an operator-only install: %+v", got)
 	}

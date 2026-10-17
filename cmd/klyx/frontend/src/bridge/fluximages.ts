@@ -28,6 +28,8 @@ export type ImageRepositoryDTO = ImageCommonDTO & {
   exclusionList: string[]; accessFromSelectors?: number;
   scanned: boolean; tagCount: number; scanTime?: string; latestTags: string[];
   policies: { namespace: string; name: string; label: string; role: string }[];
+  // the policies read's state: found, incomplete or not readable
+  policiesState: string;
 };
 
 export type ImagePolicyDTO = ImageCommonDTO & {
@@ -37,6 +39,7 @@ export type ImagePolicyDTO = ImageCommonDTO & {
   latest?: ImageRefDTO; previous?: ImageRefDTO; blockedBy?: string;
   repository?: { state: string; namespace: string; name: string; label?: string; role?: string; scanTime?: string };
   automations: { namespace: string; name: string; state: string }[];
+  automationsState: string;
 };
 
 export type ImageCheckoutDTO = { branch?: string; tag?: string; semver?: string; name?: string; commit?: string };
@@ -58,6 +61,8 @@ export type ImageRowDTO = {
 };
 
 export type ImagePushDTO = {
+  // what this evidence describes: shown only beside a row with the same
+  lastPushCommit?: string; sourceNamespace?: string; sourceName?: string;
   branchState: string; branch?: string;
   target: { repositoryURL?: string; checkoutFrom: string; checkout?: ImageCheckoutDTO; branch?: string; error?: string; refspec?: string; optionCount?: number };
   sourceState: string; sourceLine: string; sourceRevision?: string; sourceBranchNote?: string;
@@ -65,7 +70,7 @@ export type ImagePushDTO = {
   appliedState: string;
 };
 
-export type ImageDetailDTO = { uid: string; replaced?: boolean; error?: string; events: EventRowDTO[]; eventsError?: string; push?: ImagePushDTO };
+export type ImageDetailDTO = { uid: string; generation?: number; replaced?: boolean; error?: string; events: EventRowDTO[]; eventsError?: string; push?: ImagePushDTO };
 
 // getImageDetail reads the object the inspector shows, fenced by its UID:
 // a reply about another object is refused.

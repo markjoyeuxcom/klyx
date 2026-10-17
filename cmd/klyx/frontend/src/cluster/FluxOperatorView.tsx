@@ -114,7 +114,10 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
 
   const counted = (rows.partCounts.fluxinstance?.total ?? 0) + (rows.partCounts.resourcesets?.total ?? 0);
   const attention = (rows.partCounts.fluxinstance?.included ?? 0) + (rows.partCounts.resourcesets?.included ?? 0);
-  const faults = items.filter((i) => i.c.rule.role === "fault").length;
+  // one reading for the headline: the summary's counts when it has them
+  const faults = rows.partCounts.fluxinstance || rows.partCounts.resourcesets
+    ? (rows.partCounts.fluxinstance?.fault ?? 0) + (rows.partCounts.resourcesets?.fault ?? 0)
+    : items.filter((i) => i.c.rule.role === "fault").length;
   const awaiting = items.filter((i) => i.c.resume === "awaiting" || i.c.rule.label === "Awaiting evaluation").length;
   const suspended = items.filter((i) => i.c.suspended).length;
   const unbound = rows.instances.filter((i) => i.binding === "orphan" || i.binding === "ambiguous");

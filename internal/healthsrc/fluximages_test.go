@@ -2,6 +2,7 @@ package healthsrc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,15 +32,19 @@ func imgReady(status, reason, msg string, gen int64) []any {
 
 func startImages(t *testing.T, version string, objs ...runtime.Object) (*sink, *observe.Observer) {
 	t.Helper()
+	return startImagesServed(t, version, func(_ context.Context, group, _, _ string) (observe.Probe, error) {
+		return observe.Probe{Served: group == imageauto.Group, Version: version}, nil
+	}, objs...)
+}
+
+func startImagesServed(t *testing.T, version string, served func(context.Context, string, string, string) (observe.Probe, error), objs ...runtime.Object) (*sink, *observe.Observer) {
+	t.Helper()
 	lists := map[schema.GroupVersionResource]string{
 		imageGVR(version, KindImageRepositories): "ImageRepositoryList",
 		imageGVR(version, KindImagePolicies):     "ImagePolicyList",
 		imageGVR(version, KindImageAutomations):  "ImageUpdateAutomationList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), lists, objs...)
-	served := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
-		return observe.Probe{Served: group == imageauto.Group, Version: version}, nil
-	}
 	kinds, parts := FluxImages(NativeDeps{Cluster: "c1", Dyn: dyn, Served: served})
 	s := &sink{}
 	o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: kinds, Domains: []observe.DomainSpec{{ID: TaskFlux, Parts: parts}}, Throttle: 10 * time.Millisecond})
@@ -128,5 +133,43 @@ func TestFluxImagesVersions(t *testing.T) {
 		if _, err := k.Probe(context.Background()); err == nil || !strings.Contains(err.Error(), "unsupported image automation version v1beta1") {
 			t.Errorf("%s: %v", k.Name, err)
 		}
+	}
+}
+
+// Codex's S1b implementation review, finding 6: a reverse join carries its
+// read's state - an unreadable automations read is never a proven empty
+// list, and a kind confirmed absent is.
+func TestFluxImagesReverseJoinStates(t *testing.T) {
+	policyObj := imgObj("v1", "ImagePolicy", "apps", "app", 1, map[string]any{"imageRepositoryRef": map[string]any{"name": "app"}},
+		map[string]any{"latestRef": map[string]any{"name": "a", "tag": "1"}, "conditions": imgReady("True", "Succeeded", "ok", 1)})
+	for _, c := range []struct {
+		name, want string
+		served     func(context.Context, string, string, string) (observe.Probe, error)
+	}{
+		{"unreadable", imageauto.JoinUnreadable, func(_ context.Context, _, res, _ string) (observe.Probe, error) {
+			if res == KindImageAutomations {
+				return observe.Probe{}, errors.New("forbidden")
+			}
+			return observe.Probe{Served: true, Version: imageauto.Version}, nil
+		}},
+		{"absent", imageauto.JoinFound, func(_ context.Context, _, res, _ string) (observe.Probe, error) {
+			return observe.Probe{Served: res != KindImageAutomations, Version: imageauto.Version}, nil
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, o := startImagesServed(t, imageauto.Version, c.served, policyObj)
+			waitFor(t, "the policy row's join state", func() bool {
+				r, ok := o.RowsNow(TaskFlux, "images")
+				if !ok {
+					return false
+				}
+				for _, row := range r.Rows.(RowSet[ImageRow]).Rows {
+					if row.Data.Policy != nil {
+						return row.Data.AutomationsState == c.want
+					}
+				}
+				return false
+			})
+		})
 	}
 }

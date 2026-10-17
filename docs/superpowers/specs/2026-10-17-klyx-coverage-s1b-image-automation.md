@@ -429,3 +429,16 @@ S1a's implementation review fixes (`6cfc410`, `857eb60`, `055758d`) sit between 
 - **The native smoke passes 122/122,** night and day at 1440 and 1024, at `f0bc413`.
 - **Live captures:** `scratchpad/cap-s1b`, twelve images: the Images view, the failing policy's inspector, and the automation with its push joined, in each theme and width.
 
+## 12. Implementation review 1: Codex's review of 2e62fca
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Push evidence was fenced by UID only | `GetImageDetail` returns the generation, push commit and source it describes. The view shows evidence only beside a row with the same, and refetches when they change. A read of another revision waits for the row |
+| 2 | Group presence made both controllers mandatory | Each controller is needed only when its own resources are served, read from discovery per version. An unreadable discovery is a gap |
+| 3 | An image-only cluster was not Flux | Image automation alone makes Flux present. `FluxInfo.Synthesized` (renamed from `FromOperator`) marks a state that invents no kustomize-controller or operator failure |
+| 4 | Readiness was ORed across shards | Each Deployment is judged on its own. A list cut short is a gap, and absence needs a complete list |
+| 5 | The headline's counts and severity came from two readings | The summary's counts (with `fault`) when present, else the rows alone. S1a's Operator view had the same mismatch and is fixed with it |
+| 6 | The reverse joins lost their completeness | `PoliciesState` and `AutomationsState` from each read's coverage, shown as "not readable", "N+" or a proven empty list. A kind confirmed absent is now a complete read in the capture |
+| 7 | The image kinds were not Describe targets | Added, with the S1a operator kinds, which were missing too |
+| Found while waiting | A payload kind outside `payloadResources` took the server's list cells (ImageUpdateAutomation's Status column is its raw Ready message) | `dc8b666`, with a test that keeps every payload kind's resource listed |
+

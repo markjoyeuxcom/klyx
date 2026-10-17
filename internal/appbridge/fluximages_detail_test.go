@@ -71,6 +71,9 @@ func TestGetImageDetailPushEvidence(t *testing.T) {
 		t.Fatalf("detail: %+v", d)
 	}
 	p := d.Push
+	if p.LastPushCommit != pushSHA || p.SourceName != "fleet" || d.Generation != 1 {
+		t.Fatalf("the evidence names what it describes: %+v gen %d", p, d.Generation)
+	}
 	if p.BranchState != "bound" || p.Branch != "auto" {
 		t.Fatalf("the branch from the bound event only: %+v", p)
 	}

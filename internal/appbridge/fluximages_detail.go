@@ -18,7 +18,11 @@ import (
 // events and, for an automation, the last push's evidence. It is fenced by
 // the shown UID; a replacement is refused with its own UID.
 type ImageDetailDTO struct {
-	UID         string        `json:"uid"`
+	UID string `json:"uid"`
+	// Generation is the object's generation this detail was read at; the
+	// view shows it only beside a row of the same generation (Codex's S1b
+	// implementation review, finding 1).
+	Generation  int64         `json:"generation"`
 	Replaced    bool          `json:"replaced,omitempty"`
 	Error       string        `json:"error,omitempty"`
 	Events      []EventRowDTO `json:"events"`
@@ -30,6 +34,11 @@ type ImageDetailDTO struct {
 // evidence and compares with today's objects; none proves where the last
 // push went.
 type ImagePushDTO struct {
+	// LastPushCommit and the source are what this evidence describes: the
+	// view discards it beside a row with another push or source.
+	LastPushCommit  string `json:"lastPushCommit,omitempty"`
+	SourceNamespace string `json:"sourceNamespace,omitempty"`
+	SourceName      string `json:"sourceName,omitempty"`
 	// Branch: from an event bound by UID and hash (state bound, expired,
 	// ambiguous or "no push").
 	BranchState string `json:"branchState"`
@@ -87,7 +96,7 @@ func (s *GitOpsService) GetImageDetail(cluster, kind, namespace, name, uid strin
 	if got := string(u.GetUID()); got != uid {
 		return ImageDetailDTO{UID: got, Replaced: true, Events: []EventRowDTO{}, Error: kind + " " + namespace + "/" + name + " was replaced (its UID changed); nothing about the new object is shown here"}
 	}
-	d := ImageDetailDTO{UID: uid, Events: []EventRowDTO{}}
+	d := ImageDetailDTO{UID: uid, Generation: u.GetGeneration(), Events: []EventRowDTO{}}
 	var pushEvents []imageauto.PushEvent
 	if evs, err := conn.FluxEvents(ctx, kind, namespace, name); err != nil {
 		d.EventsError = urlscrub.Text(err.Error()).Text
@@ -117,7 +126,8 @@ func (s *GitOpsService) pushEvidence(ctx context.Context, conn GitOpsConn, a ima
 	if eventsFailed && bound.State == imageauto.BranchExpired {
 		bound.State = "unreadable" // a failed events read is not an expired event
 	}
-	out := ImagePushDTO{BranchState: bound.State, Branch: bound.Branch, Applied: []ImageAppliedDTO{}}
+	out := ImagePushDTO{LastPushCommit: a.LastPushCommit, SourceNamespace: a.SourceNamespace, SourceName: a.SourceName,
+		BranchState: bound.State, Branch: bound.Branch, Applied: []ImageAppliedDTO{}}
 	src := imageauto.SourceInput{State: imageauto.JoinNotFound}
 	var sourceRef *imageauto.CheckoutRef
 	if a.SourceKind == "" || a.SourceKind == string(flux.GitRepositoryKind) {

@@ -73,7 +73,7 @@ func (g GitOpsCapability) FluxIssue() string {
 func (g GitOpsCapability) FluxProblems() (failures, gaps []string) {
 	failures, gaps = g.FluxOperator.Problems()
 	switch {
-	case !g.Flux.Present || g.Flux.Healthy || g.Flux.FromOperator:
+	case !g.Flux.Present || g.Flux.Healthy || g.Flux.Synthesized:
 	case !g.Flux.Verified:
 		gaps = append(gaps, "Flux installed but "+fluxKustomizeController+" health is unverified ("+g.Flux.Why+")")
 	default:
@@ -186,7 +186,9 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 
 	out := GitOpsCapability{}
 	out.FluxOperator = d.detectFluxOperator(ctx, served)
-	fluxPresent := kustomize || out.FluxOperator.Present
+	// image automation is Flux too, alone or not (Codex's S1b
+	// implementation review, finding 3)
+	fluxPresent := kustomize || out.FluxOperator.Present || served[fluxImageGroup]
 	out.Flux.Present = fluxPresent
 	out.Argo.Present = argoPresent
 	out.Coexistence = fluxPresent && argoPresent
@@ -212,12 +214,17 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}
 		}
-	case fluxPresent:
+	case out.FluxOperator.Present:
 		// the operator alone, before a FluxInstance installs Flux: its own
 		// health stands for the installation's (FluxOperatorInfo.Issue)
 		out.Flux.Verified, out.Flux.Why = out.FluxOperator.Verified, out.FluxOperator.Why
 		out.Flux.Healthy = out.FluxOperator.Verified && out.FluxOperator.Issue() == ""
-		out.Flux.FromOperator = true
+		out.Flux.Synthesized = true
+	case fluxPresent:
+		// image automation alone: its controllers stand for the
+		// installation; no kustomize-controller is expected
+		f, g := out.Flux.Images.Problems()
+		out.Flux.Verified, out.Flux.Healthy, out.Flux.Synthesized = len(g) == 0, len(f)+len(g) == 0, true
 	}
 	if argoPresent {
 		applyRead(d.controllerProbe(ctx, statefulSetWorkload, argoNamespace, argoAppController), &out.Argo.Healthy, &out.Argo.Verified, &out.Argo.Why)

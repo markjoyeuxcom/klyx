@@ -12,6 +12,15 @@ const GROUPS: Record<string, string> = {
   HelmRepository: "source.toolkit.fluxcd.io",
   HelmChart: "source.toolkit.fluxcd.io",
   Bucket: "source.toolkit.fluxcd.io",
+  // the Flux Operator (coverage S1a)
+  FluxInstance: "fluxcd.controlplane.io",
+  FluxReport: "fluxcd.controlplane.io",
+  ResourceSet: "fluxcd.controlplane.io",
+  ResourceSetInputProvider: "fluxcd.controlplane.io",
+  // Flux image automation (coverage S1b)
+  ImageRepository: "image.toolkit.fluxcd.io",
+  ImagePolicy: "image.toolkit.fluxcd.io",
+  ImageUpdateAutomation: "image.toolkit.fluxcd.io",
   // Argo CD
   Application: "argoproj.io",
   ApplicationSet: "argoproj.io",
