@@ -20,14 +20,14 @@ type ClusterDTO struct {
 	// PodsKnown: a complete pod read has happened (Pods is evidence, an
 	// observed zero included); false is unknown, never zero. PodsStale: Pods
 	// is the last good count.
-	PodsKnown              bool   `json:"podsKnown"`
-	PodsStale              bool   `json:"podsStale"`
-	Version                string `json:"version"`
-	GitopsTier             string `json:"gitopsTier"`
-	GitopsReason           string `json:"gitopsReason"`
-	FluxPresent            bool   `json:"fluxPresent"`
+	PodsKnown    bool   `json:"podsKnown"`
+	PodsStale    bool   `json:"podsStale"`
+	Version      string `json:"version"`
+	GitopsTier   string `json:"gitopsTier"`
+	GitopsReason string `json:"gitopsReason"`
+	FluxPresent  bool   `json:"fluxPresent"`
 	// FluxOperatorPresent: the Flux Operator's API is served (coverage S1a).
-	FluxOperatorPresent bool `json:"fluxOperatorPresent"`
+	FluxOperatorPresent    bool   `json:"fluxOperatorPresent"`
 	FluxHealthy            bool   `json:"fluxHealthy"`
 	ArgoPresent            bool   `json:"argoPresent"`
 	NetworkTier            string `json:"networkTier"`
