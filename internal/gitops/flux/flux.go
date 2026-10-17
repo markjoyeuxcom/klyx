@@ -101,6 +101,29 @@ type Resource struct {
 	// the generation the Ready verdict was computed for. The top-level
 	// observedGeneration can advance without a reconcile (a suspension).
 	ReadyObservedGeneration int64
+	// Owner is who applies the object (a Kustomization, a HelmRelease or an
+	// Argo Application), from its labels: the verbs' consequence line
+	// (roadmap C4, coverage S1b §5). Nil when none is recorded.
+	Owner *Owner
+}
+
+// Owner names who applies an object.
+type Owner struct {
+	Kind, Namespace, Name string
+}
+
+// OwnerOf reads an object's owner from the GitOps labels and tracking
+// annotation the tools stamp.
+func OwnerOf(labels, ann map[string]string) *Owner {
+	switch {
+	case labels["kustomize.toolkit.fluxcd.io/name"] != "":
+		return &Owner{Kind: "Kustomization", Namespace: labels["kustomize.toolkit.fluxcd.io/namespace"], Name: labels["kustomize.toolkit.fluxcd.io/name"]}
+	case labels["helm.toolkit.fluxcd.io/name"] != "":
+		return &Owner{Kind: "HelmRelease", Namespace: labels["helm.toolkit.fluxcd.io/namespace"], Name: labels["helm.toolkit.fluxcd.io/name"]}
+	case ann["argocd.argoproj.io/tracking-id"] != "":
+		return &Owner{Kind: "Application", Name: ann["argocd.argoproj.io/tracking-id"]}
+	}
+	return nil
 }
 
 // HelmHistory is one HelmRelease status.history snapshot.
@@ -322,6 +345,7 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 	// honest best Flux offers (no per-apply timestamp exists in status).
 	r.ReadySince = readySince(u)
 	r.ReadyObservedGeneration = conditionObservedGeneration(u, "Ready")
+	r.Owner = OwnerOf(u.GetLabels(), u.GetAnnotations())
 	r.Stale = pending(r.Stale, r.Generation, r.ReadyObservedGeneration, r.Ready)
 	return r
 }

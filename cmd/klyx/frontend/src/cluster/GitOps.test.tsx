@@ -627,6 +627,17 @@ describe("GitOps workspace template (redesign)", () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
+  // Coverage S1b §5: every Flux verb names the owner's consequence.
+  it("suspend and reconcile name the owner's consequence", () => {
+    seedRows([res({ name: "a", owner: { kind: "Kustomization", namespace: "flux-system", name: "flux-system" } })], { expandedKey: "Kustomization/flux-system/a" });
+    const { getByText, getByRole } = render(<GitOps cluster="x" />);
+    fireEvent.click(inspector().getByRole("button", { name: /^Suspend/ }));
+    expect(getByText(/If Git sets spec.suspend for it, the owner sets it back on its next apply/)).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: "Cancel" }));
+    fireEvent.click(inspector().getByRole("button", { name: /^Reconcile/ }));
+    expect(getByText(/the annotation may be removed when the owner applies/)).toBeTruthy();
+  });
+
   it("a pending suspend raised by keyboard (no selection) is pinned to its own cluster", () => {
     seedRows([res({ name: "a" })]);
     const { getByText, queryByText, rerender } = render(<GitOps cluster="x" />);

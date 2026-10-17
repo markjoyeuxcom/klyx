@@ -38,11 +38,13 @@ type FluxResourceDTO struct {
 	// ReadyGeneration is the Ready condition's own observedGeneration (0
 	// when it carries none): the generation the verdict describes, which the
 	// tooltips name (coverage S1b §4.1).
-	ReadyGeneration int64  `json:"readyGeneration,omitempty"`
-	Suspended       bool   `json:"suspended"`
-	SourceKind      string `json:"sourceKind"`
-	SourceName      string `json:"sourceName"`
-	SourceNamespace string `json:"sourceNamespace"`
+	ReadyGeneration int64 `json:"readyGeneration,omitempty"`
+	Suspended       bool  `json:"suspended"`
+	// Owner is who applies the object: the verbs' consequence line (C4).
+	Owner           *FluxOpOwnerDTO `json:"owner,omitempty"`
+	SourceKind      string          `json:"sourceKind"`
+	SourceName      string          `json:"sourceName"`
+	SourceNamespace string          `json:"sourceNamespace"`
 	// LastAttemptedRevision and History are The Line's attempted and
 	// deployment facts (§3.2): the revision last tried, and a HelmRelease's
 	// history newest first (only a "deployed" entry is deployment evidence).
@@ -99,7 +101,15 @@ func fluxResourceFields(r flux.Resource, now time.Time) FluxResourceDTO {
 		SourceNamespace:       r.SourceNamespace,
 		LastAttemptedRevision: r.LastAttemptedRevision,
 		History:               helmHistoryDTOs(r.History),
+		Owner:                 fluxOwnerDTO(r.Owner),
 	}
+}
+
+func fluxOwnerDTO(o *flux.Owner) *FluxOpOwnerDTO {
+	if o == nil {
+		return nil
+	}
+	return &FluxOpOwnerDTO{Kind: o.Kind, Namespace: o.Namespace, Name: o.Name}
 }
 
 func helmHistoryDTOs(h []flux.HelmHistory) []HelmHistoryDTO {

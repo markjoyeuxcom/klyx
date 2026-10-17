@@ -26,6 +26,7 @@ import { LensParts } from "../chrome/LensParts";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { kindOfRef } from "../nav/reveal";
 import { expectPin } from "../nav/inspectorPin";
+import { ownershipLine } from "./ownership";
 
 // FluxOperatorView - the Flux lens's Operator view (coverage S1a §2): the
 // FluxInstance, the ResourceSets and their input providers from the
@@ -313,7 +314,7 @@ function verbDetail(v: FluxOpVerb, it: Target): string {
     resume: "Sets fluxcd.controlplane.io/reconcile: enabled and a fresh requestedAt. Klyx reads it as awaiting evaluation until the operator's status changes.",
     refresh: "Sets reconcile.fluxcd.io/requestedAt on the report, so the operator recomputes it now rather than at its next interval. The report is the operator's own object; nothing it reports about is changed.",
   }[v];
-  const owner = it.c.owner ? ` Owned by ${it.c.owner.kind} ${it.c.owner.namespace ? `${it.c.owner.namespace}/` : ""}${it.c.owner.name}: an annotation set here may be removed when it applies.` : "";
+  const owner = it.c.owner ? ` ${ownershipLine(it.c.owner, "annotation")}` : "";
   const suspendedNote = it.c.suspended && v !== "resume" ? " The object is suspended: the request waits until it is resumed." : "";
   return `${what}. ${mech}${owner}${suspendedNote}`;
 }

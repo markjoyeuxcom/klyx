@@ -17,6 +17,7 @@ export type ClusterDTO = {
   gitopsReason: string;
   fluxPresent?: boolean;
   fluxOperatorPresent?: boolean;
+  fluxImagesPresent?: boolean;
   fluxHealthy?: boolean;
   argoPresent?: boolean;
   networkTier: string;
@@ -77,6 +78,8 @@ export type FluxResourceDTO = {
   // the Ready condition's own observedGeneration (absent when it carries
   // none): the generation the verdict describes (coverage S1b §4.1)
   readyGeneration?: number;
+  // who applies the object: the verbs' consequence line (roadmap C4)
+  owner?: { kind: string; namespace?: string; name: string };
 };
 
 export type ForwardDTO = {
@@ -366,7 +369,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
-export type FluxViewMode = "reconciliation" | "sources" | "operator";
+export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images";
 
 export type OwnerDTO = { kind: string; namespace: string; name: string };
 // ageSeconds is a list read's; the rows transport never sends it (addendum §3.1).

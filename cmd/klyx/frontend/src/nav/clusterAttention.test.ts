@@ -141,7 +141,7 @@ describe("evidence: counted kinds, dependencies, membership (§2.1)", () => {
 describe("native lines and controllers (§2.1)", () => {
   // the backend always reports the operator's parts (coverage S1a); absent here
   const flux = (recs: HealthPart, srcs?: HealthPart, over: Partial<HealthTask> = {}) => task("flux", [recs, srcs ?? native("sources", { ok: 2 }, 0, "not ready", [kind("gitrepositories")]),
-    absentPart("fluxinstance", "fluxinstances"), absentPart("resourcesets", "resourcesets")], over);
+    absentPart("fluxinstance", "fluxinstances"), absentPart("resourcesets", "resourcesets"), absentPart("images", "imagerepositories")], over);
   const c = cluster({ fluxPresent: true });
 
   it("lit only by fault or degraded roles; progressing in the tool's word is unlit", () => {

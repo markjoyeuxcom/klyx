@@ -39,6 +39,8 @@ import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 import { FluxOperatorView } from "./FluxOperatorView";
+import { ImagesView } from "./ImagesView";
+import { ownershipLine } from "./ownership";
 
 const keyOf = (r: { kind: string; namespace: string; name: string }) => `${r.kind}/${r.namespace}/${r.name}`;
 
@@ -179,8 +181,10 @@ const ellipsisCell: React.CSSProperties = { overflow: "hidden", textOverflow: "e
 // The Flux lens: the Operator view (coverage S1a) is its own component, so
 // the Reconciliation and Sources views keep their hooks unchanged.
 export function GitOps({ cluster }: { cluster: string }) {
-  const operator = useFleet((s) => s.route.name === "cluster" && s.route.fluxView === "operator");
-  return operator ? <FluxOperatorView cluster={cluster} /> : <FluxLens cluster={cluster} />;
+  const view = useFleet((s) => (s.route.name === "cluster" ? s.route.fluxView : undefined));
+  if (view === "operator") return <FluxOperatorView cluster={cluster} />;
+  if (view === "images") return <ImagesView cluster={cluster} />;
+  return <FluxLens cluster={cluster} />;
 }
 
 function FluxLens({ cluster }: { cluster: string }) {
@@ -704,7 +708,7 @@ function FluxLens({ cluster }: { cluster: string }) {
         <ConfirmDialog
           title={verb.kind === "suspend" ? "Suspend reconciliation" : "Resume reconciliation"}
           cluster={verb.cluster}
-          detail={`${verb.r.kind} ${verb.r.namespace}/${verb.r.name}`}
+          detail={[`${verb.r.kind} ${verb.r.namespace}/${verb.r.name}`, ownershipLine(verb.r.owner, "suspend")].filter(Boolean).join(". ")}
           protected={isProtected}
           danger={verb.kind === "suspend"}
           confirmLabel={verb.kind === "suspend" ? "Suspend" : "Resume"}
@@ -1001,6 +1005,7 @@ function ReconcileDialog({ cluster, resource, isProtected, onCancel, onConfirm }
         <MetaTile label="resource" value={`${resource.kind} ${resource.namespace}/${resource.name}`} />
         <MetaTile label="bound source" value={sourceText(resource) || "—"} />
       </div>
+      {resource.owner && <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>{ownershipLine(resource.owner, "annotation")}</div>}
       <OptionTile
         active={withSource}
         title="Re-fetch source first"
