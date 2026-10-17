@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/lastwrite"
 	"github.com/moomora/klyx/internal/line"
@@ -603,6 +604,8 @@ func readyCondition(u *unstructured.Unstructured, n *Node) {
 		n.Ready, _ = cm["status"].(string)
 		n.Reason, _ = cm["reason"].(string)
 		n.Message, _ = cm["message"].(string)
+		// S1c §6: the kind's message rule, as the lens rows pass it
+		n.Message, _ = crd.MessageRule(u.GetKind(), n.Reason, n.Message)
 		if lt, ok := cm["lastTransitionTime"].(string); ok {
 			n.ConditionTime, _ = time.Parse(time.RFC3339, lt)
 		}

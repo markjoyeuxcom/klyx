@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // Message rules (coverage S1b §6). Some controllers publish text no rule can
@@ -37,11 +39,72 @@ func (s Sanitized) Hold() string {
 // allowlist.
 const AutomationWithheld = "the controller's message is withheld: automation messages can quote push options, template values or a Git server's reply"
 
-// messageRules maps a kind name to its rule. Keyed by name in any group: an
-// event names its involved object's kind, and its group only when the
-// recorder set the apiVersion, so a rule errs towards withholding.
-var messageRules = map[string]func(string) (string, bool){
-	"ImageUpdateAutomation": AutomationMessage,
+// The notification kinds' withheld wordings (coverage S1c §6).
+const (
+	ReceiverWithheld     = "the controller's message is withheld: a Receiver's messages can name its webhook path"
+	NotificationWithheld = "the controller's message is withheld: notification messages can carry a webhook URL"
+	ReceiverPathPrefix   = "Receiver initialized for path: "
+)
+
+// messageRules maps a kind name to its rule, given the condition's or
+// event's reason. Keyed by name in any group: an event names its involved
+// object's kind, and its group only when the recorder set the apiVersion,
+// so a rule errs towards withholding.
+var messageRules = map[string]func(reason, msg string) (string, bool){
+	"ImageUpdateAutomation": func(_, m string) (string, bool) { return AutomationMessage(m) },
+	// S1c §6: a Receiver's Ready message names its path; Alert and
+	// Provider messages echo webhook URLs, path and query tokens included;
+	// a fetch error prints an ExternalArtifact's URL whole into its
+	// generator's and consumers' messages, so those kinds' messages pass
+	// Origins whatever their current reference.
+	"Receiver":          ReceiverMessage,
+	"Alert":             NotificationMessage,
+	"Provider":          NotificationMessage,
+	"ArtifactGenerator": originsMessage,
+	"ExternalArtifact":  originsMessage,
+	"Kustomization":     originsMessage,
+	"HelmRelease":       originsMessage,
+}
+
+// OriginsKind reports whether kind's messages pass urlscrub.Origins. Its
+// Describe is released only when every string of the snapshot passes
+// Origins unchanged (S1c §6, revision 3).
+func OriginsKind(kind string) bool {
+	switch kind {
+	case "ArtifactGenerator", "ExternalArtifact", "Kustomization", "HelmRelease":
+		return true
+	}
+	return false
+}
+
+func originsMessage(_, msg string) (string, bool) { return urlscrub.Origins(msg) }
+
+// ReceiverMessage is the Receiver rule: the Ready message with its path
+// replaced; anything else withheld whole, the reason kept.
+func ReceiverMessage(_, msg string) (string, bool) {
+	switch {
+	case msg == "":
+		return msg, false
+	case strings.HasPrefix(msg, ReceiverPathPrefix) && !strings.Contains(msg, "\n"):
+		out := ReceiverPathPrefix + WithheldValue
+		return out, out != msg
+	}
+	return ReceiverWithheld, true
+}
+
+// NotificationMessage is the Alert and Provider rule: notifier errors print
+// the webhook URL unmasked and echo response bodies, so every message is
+// withheld whole, the reason kept - except InvalidConfig, which names
+// configuration (regular expressions, selectors) and passes the URL rule.
+func NotificationMessage(reason, msg string) (string, bool) {
+	switch {
+	case msg == "":
+		return msg, false
+	case reason == "InvalidConfig":
+		r := urlscrub.Text(msg)
+		return r.Text, r.Changed()
+	}
+	return NotificationWithheld, true
 }
 
 // MessageSensitive reports whether kind's condition and event messages pass
@@ -52,11 +115,12 @@ func MessageSensitive(kind string) bool {
 	return ok
 }
 
-// MessageRule returns msg as kind's rule lets it cross, and whether the rule
-// changed it. Another kind's message is returned unchanged.
-func MessageRule(kind, msg string) (string, bool) {
+// MessageRule returns msg as kind's rule lets it cross, given its reason,
+// and whether the rule changed it. Another kind's message is returned
+// unchanged.
+func MessageRule(kind, reason, msg string) (string, bool) {
 	if r, ok := messageRules[kind]; ok {
-		return r(msg)
+		return r(reason, msg)
 	}
 	return msg, false
 }
@@ -187,10 +251,11 @@ func (s *sanitizer) conditionMessages(kind string, o map[string]any, at string) 
 				continue
 			}
 			at := fmt.Sprintf("%s[%d].message", cat, i)
+			reason, _ := cm["reason"].(string)
 			switch m := cm["message"].(type) {
 			case nil:
 			case string:
-				if out, changed := MessageRule(kind, m); changed {
+				if out, changed := MessageRule(kind, reason, m); changed {
 					cm["message"] = out
 					s.markMessage(at)
 				}
@@ -203,6 +268,32 @@ func (s *sanitizer) conditionMessages(kind string, o map[string]any, at string) 
 		if !empty(conds) {
 			st["conditions"] = WithheldValue
 			s.markMessage(cat)
+		}
+	}
+}
+
+// originsHold holds Describe for an Origins kind when any string of the
+// object would change under Origins (S1c §6, revision 3): kubectl's text
+// cannot be rewritten safely, so the report is released only when the
+// snapshot passes unchanged. The strings themselves are left to their own
+// rules.
+func (s *sanitizer) originsHold(v any, at string, depth int) {
+	if depth > sanitizeMaxDepth {
+		s.messages = true
+		return
+	}
+	switch x := v.(type) {
+	case string:
+		if _, changed := urlscrub.Origins(x); changed {
+			s.messages = true
+		}
+	case map[string]any:
+		for k, e := range x {
+			s.originsHold(e, join(at, k), depth+1)
+		}
+	case []any:
+		for _, e := range x {
+			s.originsHold(e, at, depth+1)
 		}
 	}
 }

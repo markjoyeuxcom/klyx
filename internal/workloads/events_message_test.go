@@ -35,3 +35,20 @@ func TestSummarizeEventsAppliesMessageRules(t *testing.T) {
 		t.Fatalf("another kind's message is unchanged: %q", byReason["BuildFailed"])
 	}
 }
+
+// Coverage S1c §6: Alert and Provider event messages are withheld whole; a
+// Kustomization's event passes Origins whatever it references now.
+func TestSummarizeEventsNotificationAndOrigins(t *testing.T) {
+	const needle = "TOKENneedle5W"
+	evs := []corev1.Event{
+		{Type: "Warning", Reason: "NotificationDispatchFailed", Message: "failed to send to https://hooks.slack.com/services/T/B/" + needle,
+			InvolvedObject: corev1.ObjectReference{Kind: "Alert", Name: "a"}},
+		{Type: "Warning", Reason: "ArtifactFailed", Message: "failed to download artifact from https://store.example/a?sig=" + needle,
+			InvolvedObject: corev1.ObjectReference{Kind: "Kustomization", Name: "apps"}},
+	}
+	for _, e := range SummarizeEvents(evs) {
+		if strings.Contains(e.Message, needle) {
+			t.Fatalf("%s crossed: %q", e.Reason, e.Message)
+		}
+	}
+}

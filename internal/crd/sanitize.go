@@ -74,6 +74,7 @@ const (
 	shapeSource                  // an Argo ApplicationSource
 	shapeTemplate                // an ApplicationSet template (its spec's sources)
 	shapeGenerators              // ApplicationSet generators, at any nesting
+	shapeOrigin                  // a URL shown only as its scheme and host
 )
 
 // surface is one registered payload location. A "[]" segment is every item
@@ -101,6 +102,22 @@ var payloadKinds = map[string][]surface{
 	},
 	"fluxcd.controlplane.io/FluxInstance": {
 		p("spec.kustomize.patches.[].patch", shapeOpaque),
+	},
+	// S1c §6: a Receiver's path is its bearer credential (a generic
+	// Receiver authenticates nothing else); a Provider's address carries a
+	// webhook secret in its path for most types, and its deprecated proxy
+	// can carry user info; an ExternalArtifact's URL can be signed and its
+	// metadata is the producer's arbitrary text.
+	"notification.toolkit.fluxcd.io/Receiver": {
+		p("status.webhookPath", shapeOpaque),
+	},
+	"notification.toolkit.fluxcd.io/Provider": {
+		p("spec.address", shapeOpaque),
+		p("spec.proxy", shapeOpaque),
+	},
+	"source.toolkit.fluxcd.io/ExternalArtifact": {
+		p("status.artifact.url", shapeOrigin),
+		p("status.artifact.metadata", shapeFreeForm),
 	},
 	// S1b §6: the commit message template, its values and the push options
 	// can carry tokens; values are omitted, keys kept.
@@ -238,6 +255,9 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 		}
 	}
 	s.conditionMessages(kind, o, at)
+	if OriginsKind(kind) {
+		s.originsHold(o, at, 0)
+	}
 	s.urls(o, at, 0)
 	return o
 }
@@ -412,6 +432,21 @@ func (s *sanitizer) transform(v any, sh shape, at string, depth int) any {
 		return OmittedText
 	case shapeFreeForm:
 		return s.freeForm(v, at, depth)
+	case shapeOrigin:
+		// S1c §6: a producer may sign its artifact URL in the path or query
+		str, ok := v.(string)
+		if !ok {
+			return s.withhold(v, at)
+		}
+		if isPlaceholder(v) || str == "" {
+			return v
+		}
+		s.mark(at, true)
+		out, _ := urlscrub.Origins(str)
+		if !strings.Contains(str, "://") {
+			out = WithheldValue
+		}
+		return out
 	case shapeEmbedded:
 		o, ok := v.(map[string]any)
 		if !ok {

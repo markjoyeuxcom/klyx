@@ -252,7 +252,8 @@ func conditionsOf(u *unstructured.Unstructured, kind string, c *clipper) []any {
 			keep["observedGeneration"] = int64(g)
 		}
 		if msg, ok := cm["message"].(string); ok {
-			msg, _ = crd.MessageRule(kind, msg)
+			reason, _ := cm["reason"].(string)
+			msg, _ = crd.MessageRule(kind, reason, msg)
 			keep["message"] = c.url(fmt.Sprintf("status.conditions[%d].message", i), msg)
 		}
 		out = append(out, keep)

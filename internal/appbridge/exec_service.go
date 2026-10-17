@@ -364,7 +364,10 @@ func (s *ExecService) OpenTerminal() ActionResultDTO {
 
 // holdWithheld is the refusal for a snapshot's hold.
 func holdWithheld(kind, hold string) string {
-	if hold == crd.HoldMessages {
+	switch {
+	case hold == crd.HoldMessages && crd.OriginsKind(kind):
+		return "Describe is withheld for this " + kind + ": it holds a URL whose path Klyx does not show (a signed artifact URL can carry a token), and kubectl would print it raw. The inspector shows it under Klyx's rules."
+	case hold == crd.HoldMessages:
 		return "Describe is withheld for this " + kind + ": a condition message is outside Klyx's message rules, and kubectl would print it raw. The inspector shows it under them."
 	}
 	return payloadWithheld(kind)

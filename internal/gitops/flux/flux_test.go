@@ -1,6 +1,7 @@
 package flux
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -320,5 +321,26 @@ func TestSourceNamespaceResolution(t *testing.T) {
 	// chartRef: explicit.
 	if r := ParseHelmRelease(hr(map[string]interface{}{"chartRef": map[string]interface{}{"kind": "OCIRepository", "name": "podinfo", "namespace": "sources"}})); r.SourceNamespace != "sources" || r.SourceKind != "OCIRepository" {
 		t.Fatalf("hr chartRef source: %+v", r)
+	}
+}
+
+// Coverage S1c §6: a Kustomization's messages pass Origins on the row and
+// in the detail, whatever it references now.
+func TestKustomizationMessagesPassOrigins(t *testing.T) {
+	const needle = "SIGNEDneedle3R"
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]interface{}{"name": "apps", "namespace": "flux-system"},
+		"spec":     map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "fleet"}},
+		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "ArtifactFailed",
+			"message": "failed to download artifact from https://store.example/a.tgz?sig=" + needle}}},
+	}}
+	r := ParseKustomization(u)
+	d := ParseDetail(u)
+	if strings.Contains(r.Message, needle) || strings.Contains(d.Conditions[0].Message, needle) || !strings.Contains(r.Message, "https://store.example") {
+		t.Fatalf("row %q, detail %q", r.Message, d.Conditions[0].Message)
+	}
+	if e := ReconciliationRule(r); strings.Contains(e.Reason, needle) {
+		t.Fatalf("health reason: %q", e.Reason)
 	}
 }

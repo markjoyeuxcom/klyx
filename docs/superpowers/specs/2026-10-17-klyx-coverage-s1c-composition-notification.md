@@ -351,3 +351,36 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
 | # | Finding | Where answered |
 |---|---|---|
 | 1 | Indentation does not prove a message or URL has ended; spaces and escaped line breaks continue a URL too | §6: `Origins` never looks for a URL's end. It keeps the text before the first URL, the scheme, and the host only when the authority is well formed. It withholds everything after the authority to the end of the message, and works on whole messages only. Describe no longer rewrites kubectl's text: every message-sensitive kind runs without events, and an `Origins` kind's report is released only when its snapshot passes `Origins` unchanged. §7 adds indented, multi-line, escaped, literal-space, user-info, port and second-URL needles |
+
+## 12. As built: Stage 0
+
+Stage 0 closes the exposure Klyx already had before any S1c view exists.
+
+**`urlscrub.Origins`** is the whole-message rule of §6 (revision 3).
+- It recognises its own output: the sanitiser must be idempotent, and the rule can meet text it has already rewritten.
+- Tested against every needle in §7: continuations, an escaped `\n`, a literal space, user info with a space or `/`, an invalid port and a second URL.
+
+**The registry gains:**
+- a Receiver's `status.webhookPath` (opaque);
+- a Provider's `spec.address` and `spec.proxy` (opaque);
+- an ExternalArtifact's `status.artifact.metadata` (free-form) and `status.artifact.url`: a new shape, `shapeOrigin`, which shows the scheme and host and counts as a payload.
+
+**`crd.MessageRule(kind, reason, msg)`** gains a reason, because an Alert's `InvalidConfig` message keeps its text under the URL rule:
+- **Receiver:** the Ready message with its path replaced; anything else withheld whole.
+- **Alert and Provider:** withheld whole, except `InvalidConfig`.
+- **ArtifactGenerator, ExternalArtifact, Kustomization and HelmRelease:** `Origins`, by kind alone.
+
+**Where the rule runs:** wherever S1b's does (the sanitiser's conditions, every event row), and also:
+- a Kustomization's and HelmRelease's parsed message, which every Flux row, Line unit, promotion row and health reason reads;
+- the Flux detail's conditions (`flux.ParseDetail`);
+- the dependency graph's node messages.
+
+**Describe:**
+- every message-sensitive kind is bracketed and runs without events;
+- an `Origins` kind is held when any string of the snapshot would change under `Origins` (`originsHold`), with its own wording: "it holds a URL whose path Klyx does not show".
+
+**Found while building, in S1b too.** The generic browser's list and Summary cells for a kind not in `payloadResources` are the server's own. For ImageUpdateAutomation, Receiver and ArtifactGenerator, the "Status" column is the raw Ready message.
+- ImageUpdateAutomation is fixed as an S1b commit, `dc8b666`.
+- The notification kinds, ExternalArtifact and ArtifactGenerator are listed here.
+- Two tests keep every payload kind's resource, and every message-rule kind's resource, in the list.
+

@@ -21,8 +21,9 @@ import (
 // definition that changed between reads can at worst show a wrong value,
 // never protected data. The definition chooses presentation only.
 
-// payloadResources maps "group/plural" to the registered payload kinds, so
-// a list can ask for objects before it reads them.
+// payloadResources maps "group/plural" to the registered payload kinds and
+// the message-sensitive kinds (S1b, S1c), so a list can ask for objects
+// before it reads them.
 var payloadResources = map[string]bool{
 	"fluxcd.controlplane.io/resourcesets":              true,
 	"fluxcd.controlplane.io/resourcesetinputproviders": true,
@@ -34,6 +35,14 @@ var payloadResources = map[string]bool{
 	// S1b §6: its Ready message is a printer column, and it passes the
 	// automation allowlist only through the sanitiser
 	"image.toolkit.fluxcd.io/imageupdateautomations": true,
+	// S1c §6: these kinds' printer columns include their Ready message
+	// (a Receiver's names its path, a generator's can quote a signed URL),
+	// or their payload surfaces
+	"notification.toolkit.fluxcd.io/receivers":       true,
+	"notification.toolkit.fluxcd.io/providers":       true,
+	"notification.toolkit.fluxcd.io/alerts":          true,
+	"source.toolkit.fluxcd.io/externalartifacts":     true,
+	"source.extensions.fluxcd.io/artifactgenerators": true,
 }
 
 // IsPayloadResource reports whether group/plural is a registered payload

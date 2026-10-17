@@ -117,7 +117,7 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 			if last.IsZero() {
 				last = e.CreationTimestamp.Time
 			}
-			msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Message) // S1b §6
+			msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Reason, e.Message) // S1b §6
 			out.Events = append(out.Events, workloads.EventSummary{
 				Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(msg).Text, Count: e.Count,
 				Namespace: e.Namespace, Kind: e.InvolvedObject.Kind, Name: e.InvolvedObject.Name,

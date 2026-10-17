@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/crd"
 )
 
 type Kind string
@@ -337,6 +339,9 @@ func common(u *unstructured.Unstructured, kind Kind) Resource {
 		r.SourceNamespace = refNamespace(u, "spec", "sourceRef", "namespace")
 	}
 	r.Ready, r.Reason, r.Message = readyFromConditions(u)
+	// coverage S1c §6: a Kustomization's or HelmRelease's message can carry
+	// an ExternalArtifact's signed URL, whatever it references now
+	r.Message, _ = crd.MessageRule(string(kind), r.Reason, r.Message)
 	r.DependsOn = parseDependsOn(u)
 	r.Stale, r.Generation, r.ObservedGeneration = staleness(u)
 	r.LastAttemptedRevision, _, _ = unstructured.NestedString(u.Object, "status", "lastAttemptedRevision")
@@ -576,6 +581,8 @@ func ParseDetail(u *unstructured.Unstructured) Detail {
 		cond.Status, _ = cm["status"].(string)
 		cond.Reason, _ = cm["reason"].(string)
 		cond.Message, _ = cm["message"].(string)
+		// S1c §6: the kind's message rule, as the row's message passes it
+		cond.Message, _ = crd.MessageRule(u.GetKind(), cond.Reason, cond.Message)
 		d.Conditions = append(d.Conditions, cond)
 	}
 

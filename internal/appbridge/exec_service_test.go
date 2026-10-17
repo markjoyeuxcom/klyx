@@ -633,6 +633,26 @@ func TestDescribe_MessageSensitiveKind(t *testing.T) {
 	}
 }
 
+// Coverage S1c §6 Stage 0: an Alert has no payload, yet its events can
+// print a webhook token: it is bracketed and described without events; a
+// Kustomization holding a URL beyond its origin is withheld.
+func TestDescribe_NotificationAndOriginsKinds(t *testing.T) {
+	report := func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: a") }
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "notification.toolkit.fluxcd.io", kindName: "Alert",
+		snaps: []fakeSnap{{uid: "u", rv: "1"}, {uid: "u", rv: "1"}}, describeCmd: report}
+	s := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := s.Describe(context.Background(), "kind-klyx", "alerts.notification.toolkit.fluxcd.io", "flux-system", "a")
+	if !r.OK || conn.gotPinned == "" || !strings.Contains(r.Command, "--show-events=false") {
+		t.Fatalf("an Alert is bracketed without events: %+v", r)
+	}
+	conn = &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "kustomize.toolkit.fluxcd.io", kindName: "Kustomization",
+		snaps: []fakeSnap{{uid: "u", rv: "1", hold: crd.HoldMessages}}, describeCmd: report}
+	s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	if r := s.Describe(context.Background(), "kind-klyx", "kustomizations.kustomize.toolkit.fluxcd.io", "flux-system", "apps"); r.OK || !strings.Contains(r.Withheld, "a URL whose path Klyx does not show") {
+		t.Fatalf("a held Kustomization is withheld: %+v", r)
+	}
+}
+
 // Codex's S0b implementation review, finding 4: a bracketed describe runs
 // the resolved resource.version.group through the pinned command (never the
 // alias through the unpinned one), removes its snapshot, withholds when the

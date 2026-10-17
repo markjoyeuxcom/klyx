@@ -44,7 +44,7 @@ func TestAutomationMessage(t *testing.T) {
 	if p, ok := ParsePushSummary("pushed commit 'abc1234' to branch 'auto' and refspecs 'refs/heads/auto:refs/heads/main'"); !ok || p.Branch != "auto" || p.Commit != "abc1234" || len(p.Refspecs) != 1 {
 		t.Fatalf("parse: %+v %v", p, ok)
 	}
-	if got, _ := MessageRule("Kustomization", "kustomize build failed "+automationNeedle); !strings.Contains(got, automationNeedle) {
+	if got, _ := MessageRule("Kustomization", "BuildFailed", "kustomize build failed "+automationNeedle); !strings.Contains(got, automationNeedle) {
 		t.Fatal("another kind's message passes unchanged")
 	}
 }
@@ -106,7 +106,7 @@ func TestSanitizeImageUpdateAutomation(t *testing.T) {
 	if b, _ := json.Marshal(SanitizeEmbedded("image.toolkit.fluxcd.io", "ImageUpdateAutomation", o).Object); strings.Contains(string(b), automationNeedle) {
 		t.Fatalf("conditions of another type withheld: %s", b)
 	}
-	if !IsPayloadKind("image.toolkit.fluxcd.io", "ImageUpdateAutomation") || !MessageSensitive("ImageUpdateAutomation") || MessageSensitive("Kustomization") {
+	if !IsPayloadKind("image.toolkit.fluxcd.io", "ImageUpdateAutomation") || !MessageSensitive("ImageUpdateAutomation") || MessageSensitive("GitRepository") {
 		t.Fatal("registration")
 	}
 }

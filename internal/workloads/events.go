@@ -38,7 +38,7 @@ func SummarizeEvents(events []corev1.Event) []EventSummary {
 	out := make([]EventSummary, 0, len(events))
 	for i := range events {
 		e := &events[i]
-		msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Message)
+		msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Reason, e.Message)
 		out = append(out, EventSummary{
 			Type:          e.Type,
 			Reason:        e.Reason,
