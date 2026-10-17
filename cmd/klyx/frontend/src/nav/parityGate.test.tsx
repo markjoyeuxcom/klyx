@@ -266,19 +266,23 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       const ix = render(<LensIndex />);
       const needs = ix.container.querySelector('[aria-labelledby="lens-index-needs"]');
       const tool = (g: string) => NAV_GROUPS.find((x) => x.id === g)?.lens === "group";
-      const needsRow = (id: string) => {
-        const e = im.needsYou.find((x) => x.id === id);
+      // a tool group's lit parts sit under its one lens row (slices 13a.5
+      // and 13b.1): the lens row is context, and each lit part is a sub-row
+      // with its own tone and mark
+      const needsRow = (groupId: string, id: string) => {
+        const lens = tool(groupId) ? im.needsYou.find((x) => x.key === `lens:${groupId}`) : undefined;
+        const e = lens ? (lens.subs.find((x) => x.id === id) ?? lens) : im.needsYou.find((x) => x.id === id);
         expect(e, `${c.case} needs you ${id}`).toBeTruthy();
         const row = needs?.querySelector(`[data-entry="${e!.key}"]`);
         expect(row, `${c.case} needs-you row ${id}`).toBeTruthy();
         return { e: e!, row: row as HTMLElement };
       };
       for (const { a, l } of litLines) {
-        const { e, row } = needsRow(l.destinationId ?? a.destinationId);
+        const { e, row } = needsRow(a.groupId, l.destinationId ?? a.destinationId);
         if (l.destinationId && l.tone === "danger") expect([e.tone, row.querySelector('[data-aspect="fault"]') !== null], `${c.case} ${a.id}/${l.part}`).toEqual(["danger", true]);
       }
       for (const a of ctl) {
-        const { e, row } = needsRow(a.destinationId);
+        const { e, row } = needsRow(a.groupId, a.destinationId);
         expect([e.tone, row.textContent?.includes("controller not ready")], `${c.case} ${a.id} controller`).toEqual(["danger", true]);
       }
       for (const { a, l } of gapLines) {
@@ -326,9 +330,20 @@ suite("the parity gate's frontend stage (slice 6 §3)", () => {
       useFleet.setState({ route: { name: "cluster", cluster: c.cluster.name, section: "overview" } });
       const ov = render(<Overview c={c.cluster} />);
       for (const a of m.areas) {
-        const row = ov.getByTestId(`ov-area-${a.id}`).textContent ?? "";
-        for (const l of a.lines) expect(row, `${c.case} ${a.id}/${l.part}`).toContain(`${l.state === "attention" && l.tone === "danger" ? "▲ " : ""}${lineText(l)}`);
-        if (a.controller?.state === "not ready") expect(row, `${c.case} ${a.id}`).toContain("▲ controller not ready");
+        // The Line slice 13d retired the text "▲" for a shape-coded fault
+        // mark (Aspect, data-aspect="fault"): a danger line or a not-ready
+        // controller carries that mark beside its words.
+        const el = ov.getByTestId(`ov-area-${a.id}`);
+        const row = el.textContent ?? "";
+        const faultMark = el.querySelector('[data-aspect="fault"]');
+        for (const l of a.lines) {
+          expect(row, `${c.case} ${a.id}/${l.part}`).toContain(lineText(l));
+          if (l.state === "attention" && l.tone === "danger") expect(faultMark, `${c.case} ${a.id}/${l.part} fault mark`).not.toBeNull();
+        }
+        if (a.controller?.state === "not ready") {
+          expect(row, `${c.case} ${a.id}`).toContain("controller not ready");
+          expect(faultMark, `${c.case} ${a.id} controller fault mark`).not.toBeNull();
+        }
       }
       ov.unmount();
     }
