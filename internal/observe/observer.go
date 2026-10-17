@@ -60,6 +60,10 @@ type PartSpec struct {
 type Capture struct {
 	Now     time.Time
 	Objects map[string][]any
+	// Complete names the sources whose objects here are every object
+	// there is: live, with nothing left out by a budget or a cap. Only a
+	// complete source proves an absent object departed.
+	Complete map[string]bool
 	Facts   map[string]any
 	Rows    bool
 	// RoleCap bounds PartResult.Roles: an evaluator appends at most RoleCap

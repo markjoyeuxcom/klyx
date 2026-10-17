@@ -36,6 +36,9 @@ import { expectPin } from "../nav/inspectorPin";
 
 type Kind = "FluxInstance" | "ResourceSet" | "ResourceSetInputProvider";
 type Item = { key: string; kind: Kind; c: FluxOpCommonDTO; instance?: FluxInstanceDTO; set?: FluxSetDTO; provider?: FluxProviderDTO };
+// Target is what a verb is armed against: an Item, or a FluxReport.
+type Target = { key: string; kind: Kind | "FluxReport"; c: Pick<FluxOpCommonDTO, "uid" | "namespace" | "name" | "suspended" | "owner">; provider?: FluxProviderDTO };
+const reportTarget = (r: FluxReportDTO): Target => ({ key: `FluxReport/${r.namespace}/${r.name}`, kind: "FluxReport", c: { uid: r.uid, namespace: r.namespace, name: r.name, suspended: false } });
 type Role = { kind: "fault" | "degraded" | "progressing" | "ok" | "unknown" | "paused"; label: string };
 
 const KIND_SHORT: Record<Kind, string> = { FluxInstance: "instance", ResourceSet: "resourceset", ResourceSetInputProvider: "provider" };
@@ -79,7 +82,7 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [selKey, setSelKey] = useClusterKey(cluster);
   const [bodyWidth, setBodyWidth] = useState(1100);
-  const [pending, setPending] = useState<{ cluster: string; item: Item; verb: FluxOpVerb } | null>(null);
+  const [pending, setPending] = useState<{ cluster: string; item: Target; verb: FluxOpVerb } | null>(null);
   const listRef = useRef<VirtualListHandle>(null);
 
   const evidenceOf = (kind: string): KindEvidence => kindEvidence(!rows.loading, rows.coverage, kind, rows.watchError);
@@ -95,7 +98,12 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
     return out.sort((a, b) => rankOf(a.c.rule) - rankOf(b.c.rule) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.c.namespace.localeCompare(b.c.namespace) || a.c.name.localeCompare(b.c.name));
   }, [rows.instances, rows.sets]);
   const visible = useMemo(() => items.filter((it) => !kindFilter || it.kind === kindFilter), [items, kindFilter]);
-  const report: FluxReportDTO | undefined = rows.reports[0];
+  // A FluxReport belongs to the instance of its own namespace and name, and
+  // only when one operator is proven to reconcile it (Codex's S1a
+  // implementation review, finding 10): never the first report found.
+  const reportFor = (i: FluxInstanceDTO): FluxReportDTO | undefined =>
+    i.binding === "bound" ? rows.reports.find((r) => r.namespace === i.namespace && r.name === i.name) : undefined;
+  const headReport: FluxReportDTO | undefined = rows.reports.length === 1 ? rows.reports[0] : undefined;
 
   const rowsRefreshing = rows.rowsState.refreshing;
   const rowsAsOf = rows.rowsState.evaluatedAt ? clock(rows.rowsState.evaluatedAt) : "the last read";
@@ -141,8 +149,15 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   const selKind = (selKey?.split("/")[0] ?? "") as Kind;
-  const pin = usePinnedSubject(cluster, selKey, selKey ? items.find((i) => i.key === selKey)?.c : undefined, selKind ? evidenceOf(selKind) === "complete" : false, "FluxOperator");
-  const selItem = pin.subject ? items.find((i) => i.key === selKey && i.c.uid === pin.subject?.uid) ?? (selKey ? items.find((i) => i.key === selKey) : undefined) : undefined;
+  // The whole selected Item is pinned and held (Codex's S1a implementation
+  // review, finding 8): a same-name replacement never shows its data as the
+  // pinned object's last evidence until it is explicitly adopted.
+  const liveSel = useMemo(() => {
+    const it = selKey ? items.find((i) => i.key === selKey) : undefined;
+    return it ? { ...it, uid: it.c.uid } : undefined;
+  }, [items, selKey]);
+  const pin = usePinnedSubject(cluster, selKey, liveSel, selKind ? evidenceOf(selKind) === "complete" : false, "FluxOperator");
+  const selItem: Item | undefined = pin.subject ?? undefined;
   const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
 
   let state: DatasetState = "ready";
@@ -192,10 +207,12 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
   };
 
   const confirm = pending && pending.cluster === cluster ? pending : null;
-  const send = (p: { item: Item; verb: FluxOpVerb }) => {
+  const send = (p: { item: Target; verb: FluxOpVerb }) => {
     setPending(null);
-    const cur = items.find((i) => i.key === p.item.key);
-    if (!cur || cur.c.uid !== p.item.c.uid) {
+    const curUID = p.item.kind === "FluxReport"
+      ? rows.reports.find((r) => r.namespace === p.item.c.namespace && r.name === p.item.c.name)?.uid
+      : items.find((i) => i.key === p.item.key)?.c.uid;
+    if (!curUID || curUID !== p.item.c.uid) {
       useFleet.getState().setActionStatus({ kind: "error", message: `${p.item.kind} ${p.item.c.namespace}/${p.item.c.name} was replaced since the action was armed - nothing was sent` });
       return;
     }
@@ -220,8 +237,10 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
             {suspended > 0 && <span className="t-secondary">{suspended} suspended</span>}
           </>
         )}
-        headerEnd={report ? <span className="t-secondary" data-testid="fluxop-report-head" title="The FluxReport is the operator's own account, not Klyx's counts.">
-          {report.distributionVersion ? `Flux ${report.distributionVersion}` : "Flux"}{report.operatorVersion ? ` · operator ${report.operatorVersion}` : ""} · as reported by the operator
+        headerEnd={headReport ? <span className="t-secondary" data-testid="fluxop-report-head" title={`The FluxReport ${headReport.namespace}/${headReport.name} is the operator's own account, not Klyx's counts.`}>
+          {headReport.distributionVersion ? `Flux ${headReport.distributionVersion}` : "Flux"}{headReport.operatorVersion ? ` · operator ${headReport.operatorVersion}` : ""} · as reported by the operator in {headReport.namespace}
+        </span> : rows.reports.length > 1 ? <span className="t-secondary" data-testid="fluxop-report-head" title="Each FluxReport is its operator's own account; select an instance to read its own.">
+          {rows.reports.length} FluxReports · one per operator namespace
         </span> : undefined}
         controls={(
           <>
@@ -249,9 +268,10 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
         }
         footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
         footerEnd={<span className="t-secondary">broken first · suspended is intended · a resumed object is not counted until evaluated</span>}
-        inspector={selItem && pin.subject ? <OperatorInspector cluster={cluster} it={selItem} report={selItem.instance ? report : undefined} reportReadAt={rows.reportReadAt}
+        inspector={selItem ? <OperatorInspector cluster={cluster} it={selItem} report={selItem.instance ? reportFor(selItem.instance) : undefined} reportReadAt={rows.reportReadAt}
             items={items} nowS={nowS} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined}
-            onVerb={(verb) => setPending({ cluster, item: selItem, verb })} onClose={() => setSelKey(null)} />
+            onVerb={(verb) => setPending({ cluster, item: selItem, verb })}
+            onReportVerb={(r) => setPending({ cluster, item: reportTarget(r), verb: "refresh" })} onClose={() => setSelKey(null)} />
           : selKey && pin.expected && pin.gone ? <PinnedGone cluster={cluster} kind={selKind} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone} onAdopt={pin.next ? pin.adopt : undefined} onClose={() => setSelKey(null)} />
           : undefined}
         inspectorLabel="Operator object details"
@@ -277,30 +297,30 @@ function verbWord(v: FluxOpVerb): string {
   return { reconcile: "Reconcile", fetch: "Fetch now", suspend: "Suspend", resume: "Resume", refresh: "Refresh the report" }[v];
 }
 
-function verbTitle(v: FluxOpVerb, it: Item): string {
+function verbTitle(v: FluxOpVerb, it: Target): string {
   if (v === "fetch") return "Fetch now, outside its schedule";
   return `${verbWord(v)} ${it.kind}`;
 }
 
 // The confirmation names the object, the operator's mechanism, and who
 // applies it (roadmap C4): an owner's next apply may undo the annotation.
-function verbDetail(v: FluxOpVerb, it: Item): string {
+function verbDetail(v: FluxOpVerb, it: Target): string {
   const what = `${it.kind} ${it.c.namespace}/${it.c.name}`;
   const mech = {
     reconcile: "Sets reconcile.fluxcd.io/requestedAt to a fresh token.",
     fetch: "Sets requestedAt and forceAt to the same fresh token, so the operator fetches outside the schedule.",
     suspend: "Sets fluxcd.controlplane.io/reconcile: disabled. Its conditions freeze until it is resumed.",
     resume: "Sets fluxcd.controlplane.io/reconcile: enabled and a fresh requestedAt. Klyx reads it as awaiting evaluation until the operator's status changes.",
-    refresh: "Sets requestedAt on the report.",
+    refresh: "Sets reconcile.fluxcd.io/requestedAt on the report, so the operator recomputes it now rather than at its next interval. The report is the operator's own object; nothing it reports about is changed.",
   }[v];
   const owner = it.c.owner ? ` Owned by ${it.c.owner.kind} ${it.c.owner.namespace ? `${it.c.owner.namespace}/` : ""}${it.c.owner.name}: an annotation set here may be removed when it applies.` : "";
   const suspendedNote = it.c.suspended && v !== "resume" ? " The object is suspended: the request waits until it is resumed." : "";
   return `${what}. ${mech}${owner}${suspendedNote}`;
 }
 
-function OperatorInspector({ cluster, it, report, reportReadAt, items, nowS, gone, replaced, onVerb, onClose }: {
+function OperatorInspector({ cluster, it, report, reportReadAt, items, nowS, gone, replaced, onVerb, onReportVerb, onClose }: {
   cluster: string; it: Item; report?: FluxReportDTO; reportReadAt: string | null; items: Item[]; nowS: number;
-  gone: "removed" | "unverified" | null; replaced?: () => void; onVerb: (v: FluxOpVerb) => void; onClose: () => void;
+  gone: "removed" | "unverified" | null; replaced?: () => void; onVerb: (v: FluxOpVerb) => void; onReportVerb: (r: FluxReportDTO) => void; onClose: () => void;
 }) {
   const role = roleOf(it.c.rule);
   const describe = useDescribe(cluster, !gone ? { kind: it.kind, namespace: it.c.namespace, name: it.c.name, uid: it.c.uid } : null);
@@ -309,23 +329,31 @@ function OperatorInspector({ cluster, it, report, reportReadAt, items, nowS, gon
     let live = true;
     setDetail(null);
     if (gone) return;
-    void getFluxOpDetail(cluster, it.kind, it.c.namespace, it.c.name).then((d) => { if (live) setDetail({ uid: it.c.uid, d }); });
+    const uid = it.c.uid;
+    void getFluxOpDetail(cluster, it.kind, it.c.namespace, it.c.name, uid).then((d) => { if (live) setDetail({ uid, d }); });
     return () => { live = false; };
   }, [cluster, it.kind, it.c.namespace, it.c.name, it.c.uid, gone]);
+  // the reply is for the UID asked about, or the bridge's refusal of a
+  // replacement: never another object's data under this one's identity
   const d = detail && detail.uid === it.c.uid ? detail.d : null;
 
-  const verbs: MenuItem[] = gone ? [] : it.c.suspended
-    ? [{ label: "Resume", onSelect: () => onVerb("resume") }]
-    : [
-      { label: "Reconcile", onSelect: () => onVerb("reconcile") },
-      ...(it.provider && it.provider.schedule.length > 0 ? [{ label: "Fetch now, outside its schedule", onSelect: () => onVerb("fetch") }] : []),
-      { label: "Suspend", danger: true, onSelect: () => onVerb("suspend") },
-    ];
+  const verbs: MenuItem[] = gone ? [] : [
+    ...(it.c.suspended
+      ? [{ label: "Resume", onSelect: () => onVerb("resume") }]
+      : [
+        { label: "Reconcile", onSelect: () => onVerb("reconcile") },
+        ...(it.provider && it.provider.schedule.length > 0 ? [{ label: "Fetch now, outside its schedule", onSelect: () => onVerb("fetch") }] : []),
+        { label: "Suspend", danger: true, onSelect: () => onVerb("suspend") },
+      ]),
+    // the report's own verb (S1a §5), armed with the report's UID
+    ...(report ? [{ label: "Refresh the report", onSelect: () => onReportVerb(report) }] : []),
+  ];
   const frozen = it.c.ready ? `${it.c.ready}${it.c.reason ? ` (${it.c.reason})` : ""}${it.c.message ? `: ${it.c.message}` : ""}` : "no Ready condition";
   const note = it.c.suspended ? `Suspended - an intended pause. Its conditions are frozen; last known before suspension: ${frozen}.`
     : it.c.resume === "awaiting" ? (it.provider && it.provider.schedule.length > 0
       ? `Resumed, awaiting its schedule. Last known before suspension: ${frozen}. A scheduled provider is not evaluated until its window opens; "Fetch now" evaluates it. It is not counted meanwhile.`
       : `Resumed, awaiting evaluation. Last known before suspension: ${frozen}. It is not counted until the operator evaluates it.`)
+    : it.c.resume === "unproven" ? `Klyx lost track of this object's suspension while it was out of its reads (its budget), so it cannot tell whether the operator has evaluated it since. Last known: ${frozen}. It is not counted until its status changes.`
     : it.c.rule.label === "Awaiting evaluation" ? `Not yet evaluated: the operator initialized it while reconciliation was disabled (${frozen}).`
     : it.c.resume === "evaluating" ? "Resumed - the operator is evaluating it now."
     : it.instance?.binding === "orphan" ? "No operator reconciles this namespace: the operator only reconciles a FluxInstance in its runtime namespace. Not counted."
@@ -350,6 +378,7 @@ function OperatorInspector({ cluster, it, report, reportReadAt, items, nowS, gon
       >
         {it.instance && <InstanceBlocks i={it.instance} />}
         {it.instance && report && <ReportBlock r={report} readAt={reportReadAt} />}
+        {it.instance && !report && it.instance.binding !== "bound" && <InspectorBlock title="Report"><div className="t-secondary">Its FluxReport is not shown: no single operator is proven to reconcile this namespace.</div></InspectorBlock>}
         {it.set && <SetBlocks s={it.set} readyExprs={d?.readyExprs} />}
         {it.provider && <ProviderBlocks p={it.provider} nowS={nowS} consumers={items.filter((x) => x.set && x.set.inputsFrom.some((r) => r.name === it.c.name && x.c.namespace === it.c.namespace))} />}
         {d?.error ? <InspectorBlock title="History"><div className="t-body" style={{ color: "var(--color-text-warning)" }}>Could not read its history: {d.error}</div></InspectorBlock> : d && (

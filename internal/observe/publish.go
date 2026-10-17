@@ -270,7 +270,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	// evaluate at it, and its batches and rows are stamped with it - never an
 	// earlier cycle time, which a slow evaluation before it would make stale.
 	at := o.clk.Now()
-	c := Capture{Now: at, Objects: map[string][]any{}}
+	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}}
 	cp := captured{at: at, connEpoch: o.connEpoch, connUsable: o.connUsable}
 	if p.ledger != nil {
 		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
@@ -304,6 +304,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 					c.Objects[name] = sortedValues(ks.gen.model)
 					kc.Objects = len(ks.gen.model)
 					kc.Truncated, kc.NotRetained = ks.gen.capped, ks.gen.notRetained
+					c.Complete[name] = f.cov == Live && !ks.gen.capped
 					if cp.truncated != nil {
 						// a budgeted kind's left-out objects are not deletions:
 						// the ledger treats the read as capped (S1a §3)
@@ -331,6 +332,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				}
 				if f.cov == Live || f.cov == Stale {
 					c.Objects[name] = append([]any(nil), ss.gen.items...)
+					c.Complete[name] = f.cov == Live && !f.truncated
 					kc.Objects = len(ss.gen.items)
 				}
 			}

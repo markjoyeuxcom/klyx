@@ -43,9 +43,10 @@ type KindSpec struct {
 	// projections are admitted in key order (namespace/name) while they
 	// fit, and past it they are not retained - the kind then reads
 	// truncated, its counts lower bounds. Size measures one projection and
-	// MaxObject bounds one: a larger projection is never retained. A
-	// deletion while capped refills by relisting, at most once per
-	// RefillEvery. Budget 0 is unbounded.
+	// MaxObject bounds one: a larger projection is never retained. A change
+	// that can let more in (room freed, the run's blocker shrinking or
+	// going, an omitted object shrinking to fit) refills by relisting, at
+	// most once per RefillEvery. Budget 0 is unbounded.
 	Budget    int
 	MaxObject int
 	Size      func(v any) int
@@ -85,11 +86,17 @@ type kindGen struct {
 	relisting bool
 	// The budget (KindSpec.Budget): retained bytes, each key's size, and
 	// whether objects were left out. notRetained counts the objects left
-	// out since the last list, a lower bound.
+	// out: exact at a complete list, and kept exact by the watch (an Add is
+	// a new object, an Update an existing one, a Delete one gone). capped
+	// stays set until a complete list clears it. blockKey is the first key
+	// the budget ended the run at ("" when only oversized objects were left
+	// out), and blockSize its size: every retained key sorts before it.
 	retained    int
 	sizes       map[string]int
 	capped      bool
 	notRetained int
+	blockKey    string
+	blockSize   int
 	refillAt    time.Time
 	refillDue   bool // a refill waits for its window
 	cancelInst  context.CancelFunc
@@ -399,10 +406,12 @@ func (a *modelAdapter) project(obj any) (string, any, error) {
 	return key, obj, nil
 }
 
-func (a *modelAdapter) Add(obj any) error    { return a.put(obj) }
-func (a *modelAdapter) Update(obj any) error { return a.put(obj) }
+func (a *modelAdapter) Add(obj any) error    { return a.put(obj, true) }
+func (a *modelAdapter) Update(obj any) error { return a.put(obj, false) }
 
-func (a *modelAdapter) put(obj any) error {
+// put records one watched object; added is true for a new object (the
+// budget's count of omitted objects tells a new one from a changed one).
+func (a *modelAdapter) put(obj any, added bool) error {
 	key, v, err := a.project(obj)
 	if err != nil {
 		return err
@@ -417,7 +426,7 @@ func (a *modelAdapter) put(obj any) error {
 		return nil // nothing the model keeps changed
 	}
 	if a.g.ks.spec.Budget > 0 {
-		a.g.putBudgetedLocked(key, v)
+		a.g.putBudgetedLocked(key, v, added)
 		return nil
 	}
 	a.g.model[key] = v
@@ -438,9 +447,8 @@ func (a *modelAdapter) Delete(obj any) error {
 		return nil
 	}
 	if _, ok := a.g.model[key]; !ok {
-		// a left-out object went: a capped kind may now fit, so it relists
 		if a.g.capped {
-			a.g.refillLocked()
+			a.g.omittedGoneLocked(key)
 		}
 		return nil
 	}
@@ -448,9 +456,7 @@ func (a *modelAdapter) Delete(obj any) error {
 	if a.g.ks.spec.Budget > 0 {
 		a.g.retained -= a.g.sizes[key]
 		delete(a.g.sizes, key)
-		if a.g.capped {
-			a.g.refillLocked()
-		}
+		a.g.roomFreedLocked()
 	}
 	a.g.observedAt = o.clk.Now()
 	o.bumpKindLocked(a.g.ks)
@@ -482,6 +488,7 @@ func (a *modelAdapter) Replace(list []any, _ string) error {
 	g.model = next
 	if g.ks.spec.Budget > 0 {
 		g.sizes, g.retained, g.capped, g.notRetained = adm.sizes, adm.retained, adm.capped, adm.notRetained
+		g.blockKey, g.blockSize = adm.blockKey, adm.blockSize
 	}
 	g.observedAt = o.clk.Now() // a complete read is an observation, changed or not
 	// Every list replaces the model: continuity is unproven across it (slice
@@ -508,6 +515,8 @@ type admission struct {
 	retained    int
 	capped      bool
 	notRetained int
+	blockKey    string
+	blockSize   int
 }
 
 // admit keeps the longest key-ordered run of projections that fits the
@@ -519,15 +528,19 @@ func admit(all map[string]any, spec KindSpec) (map[string]any, admission) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make(map[string]any, len(all))
+	// sized by what is admitted, never by the whole list (Codex's S1a
+	// implementation review, finding 2): the retained model's allocation
+	// follows the budget
+	out := map[string]any{}
 	adm := admission{sizes: map[string]int{}}
 	full := false
 	for _, k := range keys {
 		n := spec.Size(all[k])
 		if full || (spec.MaxObject > 0 && n > spec.MaxObject) || adm.retained+n > spec.Budget {
 			adm.capped, adm.notRetained = true, adm.notRetained+1
-			if spec.MaxObject <= 0 || n <= spec.MaxObject {
-				full = true // the budget ended the run
+			if !full && (spec.MaxObject <= 0 || n <= spec.MaxObject) {
+				full = true // the budget ended the run here
+				adm.blockKey, adm.blockSize = k, n
 			}
 			continue
 		}
@@ -537,43 +550,104 @@ func admit(all map[string]any, spec KindSpec) (map[string]any, admission) {
 	return out, adm
 }
 
-// putBudgetedLocked admits one watched projection. An object already
-// retained is updated; a new one is retained when it fits, or when it sorts
-// before the last retained key, which is then left out until it fits. Past
-// a capped run's end nothing is admitted until the next list refills it.
-func (g *kindGen) putBudgetedLocked(key string, v any) {
+// putBudgetedLocked records one watched projection, as a complete list
+// would admit it: the run is the key-ordered prefix that fits, an
+// oversized projection is left out on its own, and the count of omitted
+// objects stays exact (added tells a new object from a changed one). A
+// change that a list could admit differently than this update can - the
+// blocker shrinking, room freed - refills instead.
+func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 	spec, o := g.ks.spec, g.o
 	n := spec.Size(v)
-	_, had := g.sizes[key]
+	old, had := g.sizes[key]
 	switch {
 	case spec.MaxObject > 0 && n > spec.MaxObject:
-		if had {
+		// never retained; it does not end the run
+		switch {
+		case had:
+			g.retained -= old
 			delete(g.model, key)
-			g.retained -= g.sizes[key]
 			delete(g.sizes, key)
+			g.capped, g.notRetained = true, g.notRetained+1
+			g.roomFreedLocked()
+		case added:
+			g.capped, g.notRetained = true, g.notRetained+1
+		case key == g.blockKey:
+			// the blocker no longer ends the run: a list may admit past it
+			g.blockKey, g.blockSize = "", 0
+			g.refillLocked()
 		}
-		g.capped, g.notRetained = true, g.notRetained+1
 	case had:
-		g.retained += n - g.sizes[key]
+		g.retained += n - old
 		g.model[key], g.sizes[key] = v, n
-	case g.capped && key > g.lastKeyLocked():
-		g.notRetained++
-		g.observedAt = o.clk.Now()
-		o.markKindLocked(g.ks)
-		return
+		g.evictLocked()
+		if n < old {
+			g.roomFreedLocked()
+		}
+	case key == g.blockKey:
+		// the blocker changed: still left out, and a list decides again
+		// when it now fits
+		g.blockSize = n
+		if g.retained+n <= spec.Budget {
+			g.refillLocked()
+		}
+	case g.blockKey != "" && key > g.blockKey:
+		// past the run's end: left out until a list admits it
+		if added {
+			g.notRetained++
+		}
 	default:
+		// within the run: retained, evicting from the end while over
+		if !added && g.notRetained > 0 {
+			g.notRetained-- // an object left out for its size now fits
+		}
 		g.model[key], g.sizes[key] = v, n
 		g.retained += n
+		g.evictLocked()
 	}
-	for g.retained > spec.Budget {
-		last := g.lastKeyLocked()
-		g.retained -= g.sizes[last]
-		delete(g.model, last)
-		delete(g.sizes, last)
-		g.capped, g.notRetained = true, g.notRetained+1
+	if g.capped && g.notRetained == 0 {
+		g.refillLocked() // nothing left out: a list clears the cap
 	}
 	g.observedAt = o.clk.Now()
 	o.bumpKindLocked(g.ks)
+}
+
+// evictLocked leaves out retained keys from the end while over budget;
+// the last left out becomes the blocker.
+func (g *kindGen) evictLocked() {
+	for g.retained > g.ks.spec.Budget {
+		last := g.lastKeyLocked()
+		n := g.sizes[last]
+		g.retained -= n
+		delete(g.model, last)
+		delete(g.sizes, last)
+		g.capped, g.notRetained = true, g.notRetained+1
+		g.blockKey, g.blockSize = last, n
+	}
+}
+
+// roomFreedLocked refills a capped kind when the blocker would now fit.
+func (g *kindGen) roomFreedLocked() {
+	if g.capped && g.blockKey != "" && g.retained+g.blockSize <= g.ks.spec.Budget {
+		g.refillLocked()
+	}
+}
+
+// omittedGoneLocked counts a left-out object's deletion. The blocker going
+// can let the run continue, and nothing left out means a list can clear
+// the cap: both refill.
+func (g *kindGen) omittedGoneLocked(key string) {
+	if g.notRetained > 0 {
+		g.notRetained--
+	}
+	if key == g.blockKey {
+		g.blockKey, g.blockSize = "", 0
+		g.refillLocked()
+	} else if g.notRetained == 0 {
+		g.refillLocked()
+	}
+	g.observedAt = g.o.clk.Now()
+	g.o.markKindLocked(g.ks)
 }
 
 // lastKeyLocked is the greatest retained key.

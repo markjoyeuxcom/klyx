@@ -1,7 +1,10 @@
 package observe
 
 import (
+	"fmt"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,4 +130,125 @@ func TestBudgetLeftOutIsNotDeleted(t *testing.T) {
 			}
 		}
 	}
+}
+
+// sizedKind sizes each projection by its "until" value as a number of
+// bytes (100 when unset).
+func sizedKind(name string, src *fakeSource, budget, maxObject int) KindSpec {
+	k := cmKind(name, src)
+	k.Budget, k.MaxObject = budget, maxObject
+	k.Size = func(v any) int {
+		if n, err := strconv.Atoi(v.(cmView).Until); err == nil {
+			return n
+		}
+		return 100
+	}
+	return k
+}
+
+func sz(n int) map[string]string { return map[string]string{"until": strconv.Itoa(n)} }
+
+func budgetHarness(t *testing.T, k KindSpec) *harness {
+	h := start(t, Config{Kinds: []KindSpec{k}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.o.SubscribeRows("things", "cms", Owner{Kind: "lens", ID: "t"})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	return h
+}
+
+func coverageIs(h *harness, names string, truncated bool, notRetained int) func() bool {
+	return func() bool {
+		p, _ := h.sink.part("things", "cms")
+		k := kindOf(p)
+		return retainedNames(p, h) == names && k.Truncated == truncated && k.NotRetained == notRetained
+	}
+}
+
+// Codex's S1a implementation review, finding 3: NotRetained counts omitted
+// objects, never watch events. Updates of an object left out do not count
+// again; a new one does, and a deleted one is no longer counted.
+func TestBudgetCountsObjectsNotEvents(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	src.put("b", nil)
+	h := budgetHarness(t, sizedKind("cms", src, 100, 500))
+	h.eventually(coverageIs(h, "a", true, 1), "b left out")
+	for i := 0; i < 3; i++ {
+		src.put("b", map[string]string{"bad": strconv.Itoa(i)})
+	}
+	h.settle(300 * time.Millisecond)
+	if !coverageIs(h, "a", true, 1)() {
+		p, _ := h.sink.part("things", "cms")
+		t.Fatalf("three updates of b: %+v", kindOf(p))
+	}
+	src.put("c", nil) // a new object past the run's end
+	h.eventually(coverageIs(h, "a", true, 2), "c counted once")
+	src.put("c", map[string]string{"bad": "1"})
+	h.settle(200 * time.Millisecond)
+	if !coverageIs(h, "a", true, 2)() {
+		t.Fatal("an update of c counted again")
+	}
+	src.remove("c")
+	h.eventually(coverageIs(h, "a", true, 1), "c gone")
+}
+
+// Codex's S1a implementation review, finding 4: a cap heals on an update
+// that a list would admit. An oversized object shrinking to fit is
+// admitted; the count reaches zero and a refill clears the cap.
+func TestBudgetHealsOnAFittingUpdate(t *testing.T) {
+	src := newSource()
+	src.put("a", sz(1000))
+	h := budgetHarness(t, sizedKind("cms", src, 300, 500))
+	h.eventually(coverageIs(h, "", true, 1), "a left out for its size")
+	src.put("a", sz(100))
+	h.eventually(coverageIs(h, "a", false, 0), "a admitted, cap cleared by a refill")
+}
+
+// A retained object shrinking frees room for the blocker; the blocker
+// shrinking to fit lets the run continue: both refill, as a list would
+// admit them.
+func TestBudgetRefillsWhenTheBlockerCanFit(t *testing.T) {
+	src := newSource()
+	src.put("a", sz(200))
+	src.put("b", sz(200)) // the blocker: 200 + 200 > 300
+	src.put("c", sz(50))
+	h := budgetHarness(t, sizedKind("cms", src, 300, 500))
+	h.eventually(coverageIs(h, "a", true, 2), "b blocks the run, c after it")
+	// c fits the room but sorts after the blocker: no list would admit it
+	lists, _ := src.counts()
+	src.put("c", sz(40))
+	h.settle(300 * time.Millisecond)
+	if l, _ := src.counts(); l != lists || !coverageIs(h, "a", true, 2)() {
+		t.Fatalf("a futile refill or admission past the blocker: lists %d -> %d", lists, l)
+	}
+	// a shrinks: the blocker fits now, so the kind refills
+	src.put("a", sz(100))
+	h.eventually(coverageIs(h, "a,b", true, 1), "a and b retained after the refill, c still out")
+	// the new blocker c shrinks to fit: the run continues
+	h.clk.Step(RefillEvery)
+	src.put("c", sz(0))
+	h.eventually(coverageIs(h, "a,b,c", false, 0), "c admitted by a refill")
+}
+
+// Finding 2: the retained model's allocation follows what is admitted,
+// never the whole list.
+func TestBudgetAdmitAllocatesByAdmitted(t *testing.T) {
+	all := make(map[string]any, 100000)
+	for i := 0; i < 100000; i++ {
+		all[fmt.Sprintf("ns/o%06d", i)] = cmView{Name: strconv.Itoa(i)}
+	}
+	spec := KindSpec{Budget: 1, MaxObject: 1, Size: func(any) int { return 1 }}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out, adm := admit(all, spec)
+	all = nil
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	if len(out) != 1 || adm.notRetained != 99999 {
+		t.Fatalf("admission: %d retained, %d left out", len(out), adm.notRetained)
+	}
+	if grew := int64(after.HeapAlloc) - int64(before.HeapAlloc); grew > 512<<10 {
+		t.Fatalf("one admitted value holds %d heap bytes", grew)
+	}
+	runtime.KeepAlive(out)
 }

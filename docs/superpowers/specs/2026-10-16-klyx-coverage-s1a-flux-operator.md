@@ -328,38 +328,56 @@ S1a is built after S0b and depends on it.
 - **Per kind, by key.** `observe.KindSpec` gains `Budget`, `MaxObject` and `Size`. A budgeted kind admits its projections in key order (namespace/name) while they fit, whatever order the list arrives in. A projection over `MaxObject` is left out on its own and does not end the run.
   - A watched object that sorts before the run's end is admitted, and the run's last key leaves.
   - Past a capped run's end nothing is admitted until the next list.
-  - A deletion while capped refills by relisting: the current reflector instance ends without a recorded error, so the kind stays live. Refills run at most once a minute (`RefillEvery`), and a refill inside the window waits for it.
-- **Coverage:** a capped kind reads `Truncated` with `NotRetained`, a lower bound, on `KindCoverage` and `KindState`. The frontend shows "Capped: N ResourceSets not retained", and its counts are lower bounds through the existing truncated path.
+  - **A refill relists** when a change could let a list admit more than the watch can (review 1, finding 4):
+    - room freed so that the run's blocker would fit (a deletion or a shrinking retained object);
+    - the blocker shrinking to fit, growing past `MaxObject`, or going;
+    - nothing left out any more.
+
+    The blocker is the first key the budget ended the run at. An object past it never refills, so a fitting update there causes no futile relist. A refill ends the current reflector instance without a recorded error, so the kind stays live. Refills run at most once a minute (`RefillEvery`), and a refill inside the window waits for it.
+- **Coverage:** a capped kind reads `Truncated` with `NotRetained` on `KindCoverage` and `KindState`. `NotRetained` counts objects, not events (review 1, finding 3):
+  - it is exact at a complete list;
+  - the watch keeps it exact, because an Add is a new object, an Update an existing one and a Delete one gone;
+  - the cap stays set until a complete list clears it.
+
+  The frontend shows "Capped: N ResourceSets not retained", and the totals are lower bounds through the existing truncated path. The retained model is allocated by what is admitted, never by the list's length (finding 2).
 - **The ledger** reads a truncated kind as a capped read (`LossCapped`). An object the budget left out is never a deletion and never a recovery.
-- **The 4 MiB per cluster is split by kind,** so that each kind admits deterministically on its own key order: FluxInstance 128 KiB, FluxReport 128 KiB, ResourceSet 2 MiB, provider 1.75 MiB.
+- **The budget is 1 MiB encoded per cluster, not the design's 4 MiB** (review 1, the heap question). It is split by kind, so that each kind admits deterministically on its own key order: FluxInstance 64 KiB, FluxReport 64 KiB, ResourceSet 512 KiB, provider 384 KiB. It holds about 430 typical ResourceSets.
 - **Per object:**
   - the projection is built with messages clipped at 1 KiB;
   - one over 8 KiB is rebuilt with every display string at 256 bytes and list caps halved, each clip recorded;
   - one still over is refused by the observer.
 
   The classification facts, Ready's fingerprint among them, are never clipped.
-- **Heap calibration** (`TestFluxOperatorHeapCalibration`):
-  - 1,724 typical ResourceSet projections fill the 2 MiB ResourceSet budget, holding 7.45 MB of heap: **3.55 heap bytes per encoded byte**;
-  - so the 4 MiB encoded worst case is about 14 MiB of heap per cluster, and **about 142 MiB for ten clusters**, against the 40 MiB encoded reservation;
-  - **transient:** one 500-object list page with 64 KiB templates holds about 35 MB before projection drops the templates.
-  - **For the owner and the reviewer:** the encoded budget is kept as designed. Holding the fleet to about 40 MiB of heap needs about 1.1 MiB encoded per cluster, which caps at about 940 typical ResourceSets per cluster before coverage reads "capped". It is one constant.
+- **Heap calibration,** measured on the whole Observer (`TestFluxOperatorObserverHeap`). The test runs the real kinds, parts, rows and tracker, with both parts' rows subscribed, over a baseline that already holds the fake client's objects:
+  - 1,000 ResourceSets: 431 retained, 569 not retained;
+  - **the Observer holds 2.77 MiB at the 512 KiB ResourceSet allotment, 5.55 heap bytes per budget byte,** whatever the template size (4 KiB and 64 KiB give the same figure);
+  - so a cluster's worst case is about 5.6 MiB of heap with the lens open, and **about 56 MiB for ten clusters**.
+  - The projections alone are 3.59 heap bytes per encoded byte (`TestFluxOperatorHeapCalibration`). The difference is the rows, the capture and the tracker.
+  - **Transient:** client-go's pager, and the watch list, hold the whole decoded list before the model is replaced. The peak is therefore the decoded list, which the budget does not bound: one 500-object page with 64 KiB templates is about 35 MB. A whole-list peak is not measured, because the fake client shares its strings with what it returns.
+  - **For the owner:** a larger budget is one set of constants, if a cluster needs more than about 430 ResourceSets retained. Past the budget the kind reads "capped", never empty.
 
 **Projection and rules:**
 - **The operator kinds have no `status.observedGeneration`.** Generation lag is keyed on Ready's own `observedGeneration`, as S1b §4.1 rules for every Flux kind: an older Ready is "Syncing…", and a Ready for the current generation is never masked.
-- **The resume tracker** is per observer (per cluster), keyed by UID. A baseline is swept an hour after its object's last capture, because an evaluation cannot tell a departed object from one the budget left out. A Klyx restart loses baselines, so a resumed object is then treated as current (§4).
-- **Binding:** an orphaned or ambiguous FluxInstance is a row, with its label, but not an item: it is not counted and not in the ledger.
+- **The resume tracker** is per observer (per cluster), keyed by UID (review 1, finding 7):
+  - **a baseline ends only on evidence,** or when a complete capture of its kind proves the object gone. `Capture.Complete` names a source that is live with nothing left out. Age never ends one;
+  - **memory is bounded:** past 4,096 baselines, the least recently captured become lost markers, the UID alone. A lost object captured again reads **Unproven**, "Awaiting evaluation", not counted, until evidence against the state first seen again. The view says Klyx lost track of its suspension;
+  - **one residual:** past 65,536 lost markers, the oldest are dropped, and such an object reads as current;
+  - a Klyx restart loses baselines, so a resumed object is then treated as current (§4).
+- **Binding:** an orphaned or ambiguous FluxInstance is a row, with its label, but not an item: it is not counted. The ledger still carries it, as unevaluated membership (`observe.entriesOf`). It lights nothing of its own; the task is lit only by an operator that has an issue (review 1).
 - **FluxReport** is an evidence part, `fluxreport`: no verdict and no ledger.
 - **Unsupported version:** a cluster serving an operator API other than `v1` fails the kind's probe with "unsupported Flux Operator API version …", a named discovery gap, never an empty list.
 
 **Detection:**
-- `capability.FluxOperatorInfo` binds per namespace (bound, orphan, ambiguous, unverified) and names the operator's own issue.
+- `capability.FluxOperatorInfo` binds per namespace (bound, orphan, ambiguous, unverified). **One operator found is a binding only when no other could be one** (review 1, finding 5): the scan is complete and every operator's runtime namespace resolved. Two found are ambiguous, whatever else is unknown.
+- **`Issue()` judges every reconciling operator on its own** (finding 6), so one ready installation never clears another's. It names a not-ready operator with the namespace it reconciles, an unreadable runtime namespace, and a scan cut short.
+- **Suspension is read as the operator reads it:** `strings.ToLower` of the annotation equals `disabled` (finding 1).
 - Flux is present with the operator alone.
 - **The kustomize-controller probe follows a single resolved runtime namespace;** otherwise it stays on `flux-system`.
 - The operator's issue feeds the Flux task's controller issue with the operator's own verified state.
 
 **The bridge:**
 - **Rows:** DTOs for the three parts. The ResourceSets part's rows carry `uid`, `kind` and `rule` at the top, with `set` or `provider` inside.
-- **Inspector detail:** read on demand from the object, sanitised first. History is sent without digests, and with metadata only for the operator's own keys (inputs, resources, steps, flux). The inventory is parsed from ids (200 at most). A dependency's `readyExpr` comes from the sanitised object. A failed events read says so.
+- **Inspector detail:** read on demand from the object, sanitised first, **fenced by the shown UID** (review 1, finding 9). A replacement is refused with its own UID, and only that object's events are kept. History is sent without digests, and with metadata only for the operator's own keys (inputs, resources, steps, flux). The inventory is parsed from ids (200 at most). A dependency's `readyExpr` comes from the sanitised object. A failed events read says so.
 - **Verbs:**
   - `FluxOpAct` is one UID-guarded merge patch of annotations, after an armed read, with a token in RFC 3339 nanoseconds;
   - the matrix refuses what a kind does not support;
@@ -372,7 +390,9 @@ S1a is built after S0b and depends on it.
   - resume, binding and capped notes;
   - the report as "as reported by the operator", with "condition last changed" and "read by Klyx" kept apart;
   - verbs with the owner's consequence line, "Fetch now, outside its schedule" for a scheduled provider, and Describe.
-- Reveals from the summary select the object, pinned by UID.
+- Reveals from the summary select the object, pinned by UID. **The whole selected item is held:** a same-name replacement's data never shows as the pinned object's last evidence until it is adopted (finding 8).
+- **Each instance reads its own report,** joined by namespace and name under a bound binding (finding 10). With several reports the header names their count. An unbound instance says its report is not shown.
+- **"Refresh the report"** is in the instance inspector's menu. It is armed with the report's UID and has its own confirmation (finding 11).
 
 **Verification:**
 - `go test ./internal/...` passes, including the observer budget tests, the `fluxop` unit tests, the observer-path binding, resume and budget tests, detection, verbs and DTOs.
@@ -384,3 +404,20 @@ S1a is built after S0b and depends on it.
 - **The native smoke passes 119/119,** night and day at 1440 and 1024, at `0fb31de`. That includes the new "Flux Operator view" step (broken-first, the report head, the report's two times, the suspension note).
 - **Live captures:** `scratchpad/cap-s1a`, sixteen images: the Operator view, the ResourceSet that embeds a Secret, the suspended ResourceSet, and the instance with its report, in each theme and width.
 
+## 14. Implementation review 1: Codex's review of 9c865a5
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Suspension was case-sensitive | `fluxop.common` lowercases as `IsDisabled` does; `TestSuspensionIsCaseInsensitive` |
+| 2 | The retained map was sized by the whole list | `observe.admit` allocates by what is admitted; `TestBudgetAdmitAllocatesByAdmitted` |
+| 3 | `NotRetained` counted watch events | Add, Update and Delete keep an exact object count; `TestBudgetCountsObjectsNotEvents` |
+| 4 | A cap could not heal on a fitting update | The blocker key and the refill conditions in §13; `TestBudgetHealsOnAFittingUpdate`, `TestBudgetRefillsWhenTheBlockerCanFit` |
+| 5 | One operator found was a binding before uniqueness was proven | `Bind` needs a complete scan and every runtime namespace resolved; the gap is named |
+| 6 | Operator readiness was ORed across namespaces | `Issue()` per operator; `TestFluxOperatorUniquenessAndReadiness` |
+| 7 | Expiring a baseline certified an unproven resume | Prune on complete captures, lost markers and `Unproven`; `TestTrackerPrune` |
+| 8 | A failed UID match fell back to the replacement's data | The whole item is pinned and held |
+| 9 | The on-demand detail had no UID fence | `GetFluxOpDetail` takes and checks the UID, and keeps that UID's events; `TestGetFluxOpDetailIsUIDFenced` |
+| 10 | Every instance read the first report | Joined by namespace and name under a bound binding; the header names several |
+| 11 | Refresh the report was unreachable | In the instance inspector, armed with the report's UID |
+| Heap | Measure the Observer, then size the default | Measured whole (5.55 heap bytes per budget byte), and the default cut to 1 MiB encoded per cluster |
+| Ledger | Unbound instances are unevaluated members, and an orphan lights nothing of its own | §13 says so |

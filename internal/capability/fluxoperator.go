@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,13 +51,16 @@ type FluxOperator struct {
 type Binding string
 
 const (
-	BindingBound      Binding = "bound"      // exactly one reconciling operator
+	BindingBound      Binding = "bound"      // exactly one reconciling operator, proven unique
 	BindingOrphan     Binding = "orphan"     // none, from a complete scan
 	BindingAmbiguous  Binding = "ambiguous"  // several reconciling operators
 	BindingUnverified Binding = "unverified" // the scan could not tell
 )
 
-// Bind classifies the FluxInstance namespace ns.
+// Bind classifies the FluxInstance namespace ns. One operator found is a
+// binding only when nothing could be a second (Codex's S1a implementation
+// review, finding 5): the scan is complete and every operator's runtime
+// namespace resolved. Two found are ambiguous whatever else is unknown.
 func (i FluxOperatorInfo) Bind(ns string) Binding {
 	if !i.Verified {
 		return BindingUnverified
@@ -72,12 +76,12 @@ func (i FluxOperatorInfo) Bind(ns string) Binding {
 		}
 	}
 	switch {
-	case n == 1:
-		return BindingBound
 	case n > 1:
 		return BindingAmbiguous
 	case unresolved || !i.Complete:
 		return BindingUnverified
+	case n == 1:
+		return BindingBound
 	}
 	return BindingOrphan
 }
@@ -97,7 +101,11 @@ func (i FluxOperatorInfo) RuntimeNamespaces() []string {
 	return out
 }
 
-// Issue names the operator's own problem for the Flux task, "" when none.
+// Issue names the operators' problems for the Flux task, "" when none.
+// Every reconciling operator is judged on its own (Codex's S1a
+// implementation review, finding 6): one ready installation never clears
+// another's. A detection gap - a scan cut short, a runtime namespace that
+// could not be read - is named too, since it leaves bindings unverified.
 func (i FluxOperatorInfo) Issue() string {
 	switch {
 	case !i.Present:
@@ -105,25 +113,35 @@ func (i FluxOperatorInfo) Issue() string {
 	case !i.Verified:
 		return "Flux Operator installed but its controller is unverified (" + i.Why + ")"
 	}
-	ready, reconcilers := false, 0
+	var problems []string
 	for _, ns := range i.RuntimeNamespaces() {
 		if i.Bind(ns) == BindingAmbiguous {
-			return "several Flux Operators reconcile " + ns
+			problems = append(problems, "several Flux Operators reconcile "+ns)
 		}
 	}
+	reconcilers := 0
 	for _, op := range i.Operators {
-		if !op.WebOnly {
-			reconcilers++
-			ready = ready || op.Ready
+		if op.WebOnly {
+			continue
+		}
+		reconcilers++
+		where := op.Namespace + "/" + op.Name
+		switch {
+		case op.RuntimeNamespace == "":
+			problems = append(problems, "Flux Operator "+where+": the namespace it reconciles could not be read")
+			if !op.Ready {
+				problems = append(problems, "Flux Operator "+where+" is not ready")
+			}
+		case !op.Ready:
+			problems = append(problems, "Flux Operator "+where+" (reconciling "+op.RuntimeNamespace+") is not ready")
 		}
 	}
-	switch {
-	case reconcilers == 0 && i.Complete:
+	if !i.Complete {
+		problems = append(problems, fmt.Sprintf("Flux Operator detection is incomplete: more than %d labelled Deployments", fluxOperatorLimit))
+	} else if reconcilers == 0 {
 		return "Flux Operator CRDs installed but no operator runs its reconcilers"
-	case reconcilers > 0 && !ready:
-		return "Flux Operator installed but not ready"
 	}
-	return ""
+	return strings.Join(problems, "; ")
 }
 
 func (d *Detector) detectFluxOperator(ctx context.Context, served map[string]bool) FluxOperatorInfo {

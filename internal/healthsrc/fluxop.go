@@ -29,13 +29,17 @@ const (
 	FactFluxOperator = "fluxOperator"
 )
 
-// The budget per cluster (S1a §3, as built): 4 MiB together, split by kind
-// so each kind admits deterministically on its own key order.
+// The budget per cluster (S1a §3, as built): 1 MiB encoded together, split
+// by kind so each kind admits deterministically on its own key order. The
+// design's 4 MiB was cut after the whole Observer was measured at about 5.4
+// heap bytes per encoded byte with the lens open (TestFluxOperatorObserverHeap;
+// Codex's implementation review preferred a default near 1 MiB). It still
+// holds several hundred typical ResourceSets; past it the kind reads capped.
 const (
-	budgetInstances = 128 << 10
-	budgetReports   = 128 << 10
-	budgetSets      = 2 << 20
-	budgetProviders = (4 << 20) - budgetInstances - budgetReports - budgetSets
+	budgetInstances = 64 << 10
+	budgetReports   = 64 << 10
+	budgetSets      = 512 << 10
+	budgetProviders = (1 << 20) - budgetInstances - budgetReports - budgetSets
 )
 
 // FluxOperator returns the operator's kinds and its parts of the Flux task.
@@ -92,6 +96,7 @@ func fluxopKind(d NativeDeps, name, resource, kind string, budget int) observe.K
 const (
 	ResumeAwaiting   = "awaiting"
 	ResumeEvaluating = "evaluating"
+	ResumeUnproven   = "unproven"
 )
 
 func resumeWord(r fluxop.Resume) string {
@@ -100,8 +105,22 @@ func resumeWord(r fluxop.Resume) string {
 		return ResumeAwaiting
 	case fluxop.Evaluating:
 		return ResumeEvaluating
+	case fluxop.Unproven:
+		return ResumeUnproven
 	}
 	return ""
+}
+
+// prune hands the tracker what this capture proves about one kind's
+// membership (S1a §4; Codex's implementation review, finding 7).
+func prune(tr *fluxop.Tracker, c observe.Capture, source, kind string) {
+	present := map[string]bool{}
+	for _, x := range c.Objects[source] {
+		if o, ok := x.(*fluxop.Object); ok {
+			present[string(o.GetUID())] = true
+		}
+	}
+	tr.Prune(kind, present, c.Complete[source])
 }
 
 // FluxInstanceRow is one FluxInstance: its parse, resume state and binding
@@ -120,7 +139,9 @@ type FluxSetRow struct {
 }
 
 // Binding labels: an instance no single operator reconciles is not counted
-// (S1a §3): the operator's own issue lights the task instead.
+// (S1a §3). It stays in the ledger's membership as unevaluated, and it
+// lights nothing of its own: an operator's issue lights the task only when
+// that operator has one (FluxOperatorInfo.Issue).
 const (
 	LabelOrphan    = "No operator reconciles this namespace"
 	LabelAmbiguous = "Several operators reconcile this namespace"
@@ -151,7 +172,7 @@ func evalFluxInstances(cluster string, tr *fluxop.Tracker) func(observe.Capture)
 			}
 			rows = append(rows, nativeRow(it, FluxInstanceRow{Instance: in, Resume: resumeWord(r), Binding: b}))
 		}
-		tr.Sweep(c.Now)
+		prune(tr, c, KindFluxInstances, fluxop.KindInstance)
 		res := nativeResult(c.RoleCap, cluster, TaskFlux, "not ready", items)
 		if c.Rows {
 			res.Rows = RowSet[FluxInstanceRow]{Rows: rows, Facts: c.Facts}
@@ -186,7 +207,8 @@ func evalResourceSets(cluster string, tr *fluxop.Tracker) func(observe.Capture) 
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, FluxSetRow{Provider: &p, Resume: resumeWord(r)}))
 		}
-		tr.Sweep(c.Now)
+		prune(tr, c, KindResourceSets, fluxop.KindSet)
+		prune(tr, c, KindInputProviders, fluxop.KindProvider)
 		res := nativeResult(c.RoleCap, cluster, TaskFlux, "not ready", items)
 		if c.Rows {
 			res.Rows = rowSet(rows)

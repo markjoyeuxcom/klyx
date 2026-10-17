@@ -2,6 +2,7 @@ package fluxop
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -235,16 +236,87 @@ func TestRule(t *testing.T) {
 	}
 }
 
-func TestTrackerSweep(t *testing.T) {
+// Codex's S1a implementation review, finding 7: only a complete capture
+// proves a departure, age never does; past the bound a baseline becomes a
+// lost marker, and the object reads Unproven, never Current, when it is
+// captured again.
+func TestTrackerPrune(t *testing.T) {
+	frozen := ready("False", "ReconciliationFailed", "fetch failed", "2026-10-16T09:00:00Z", 1)
 	tr := NewTracker()
-	o, c := state(t, true, ready("True", "ReconciliationSucceeded", "ok", "2026-10-17T10:00:00Z", 1), "")
-	tr.Observe(t0, o, c, "")
-	tr.Sweep(t0.Add(SweepAfter / 2))
-	if tr.Len() != 1 {
-		t.Fatal("swept too early")
+	od, cd := state(t, true, frozen, "")
+	oe, ce := state(t, false, frozen, "")
+	tr.Observe(t0, od, cd, "")
+	// left out by the budget for hours: incomplete captures prove nothing
+	for h := 1; h <= 3; h++ {
+		tr.Prune(KindProvider, map[string]bool{}, false)
 	}
-	tr.Sweep(t0.Add(SweepAfter + time.Second))
+	// another kind's complete capture does not touch it
+	tr.Prune(KindSet, map[string]bool{}, true)
+	if tr.Len() != 1 {
+		t.Fatal("a baseline ended without proof of departure")
+	}
+	// resumed without a run, captured again with the identical frozen Ready
+	if r := tr.Observe(t0.Add(3*time.Hour), oe, ce, ""); r != Awaiting {
+		t.Fatalf("the frozen fault is not current: %v", r)
+	}
+	// a complete capture holding it keeps it; one without it ends it
+	tr.Prune(KindProvider, map[string]bool{ce.UID: true}, true)
+	if tr.Len() != 1 {
+		t.Fatal("a present object's baseline ended")
+	}
+	tr.Prune(KindProvider, map[string]bool{}, true)
 	if tr.Len() != 0 {
-		t.Fatal("a departed object's baseline outlived SweepAfter")
+		t.Fatal("a departed object's baseline outlived a complete capture")
+	}
+
+	// the bound: the least recently captured become lost markers
+	tr = NewTracker()
+	first := cd
+	first.UID = "uid-first"
+	tr.Observe(t0, od, first, "")
+	for i := 0; i < MaxBaselines; i++ {
+		c := cd
+		c.UID = fmt.Sprintf("uid-%05d", i)
+		tr.Observe(t0.Add(time.Duration(i+1)*time.Second), od, c, "")
+	}
+	tr.Prune(KindProvider, nil, false)
+	if tr.Len() != MaxBaselines || tr.Lost() != 1 {
+		t.Fatalf("bounded: %d baselines, %d lost", tr.Len(), tr.Lost())
+	}
+	again := ce
+	again.UID = "uid-first"
+	if r := tr.Observe(t0.Add(2*time.Hour), oe, again, ""); r != Unproven {
+		t.Fatalf("a lost baseline's object is unproven, never current: %v", r)
+	}
+	if e := Rule(again, Unproven); e.Role != health.Unknown || e.Included || e.Label != LabelUnproven {
+		t.Fatalf("unproven is not counted: %+v", e)
+	}
+	if r := tr.Observe(t0.Add(2*time.Hour+time.Second), oe, again, ""); r != Unproven {
+		t.Fatalf("still unproven without evidence: %v", r)
+	}
+	ok, cok := state(t, false, ready("True", "ReconciliationSucceeded", "Reconciliation finished in 2s", "2026-10-17T10:00:07Z", 1), "")
+	cok.UID = "uid-first"
+	if r := tr.Observe(t0.Add(2*time.Hour+2*time.Second), ok, cok, ""); r != Current {
+		t.Fatalf("evidence ends unproven: %v", r)
+	}
+}
+
+// Codex's S1a implementation review, finding 1: the operator lowercases the
+// reconcile annotation (IsDisabled), so any case suspends - and only what
+// strings.ToLower maps to "disabled".
+func TestSuspensionIsCaseInsensitive(t *testing.T) {
+	frozen := ready("False", "ReconciliationFailed", "fetch failed", "2026-10-16T09:00:00Z", 1)
+	for v, want := range map[string]bool{"disabled": true, "Disabled": true, "DISABLED": true, "dIsAbLeD": true, "enabled": false, "diſabled": false, "": false} {
+		ann := `,"annotations":{"fluxcd.controlplane.io/reconcile":"` + v + `"}`
+		o := project(t, KindProvider, obj(t, provider(ann, frozen, "")))
+		c := ParseProvider(o).Common
+		if c.Disabled != want {
+			t.Errorf("%q: disabled %v, want %v", v, c.Disabled, want)
+		}
+		if want {
+			if e := Rule(c, Current); e.Role != health.Paused {
+				t.Errorf("%q: a suspended frozen fault is paused, not counted: %+v", v, e)
+			}
+		}
 	}
 }

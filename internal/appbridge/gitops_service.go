@@ -259,7 +259,15 @@ func (s *GitOpsService) FluxOpAct(cluster, kind, namespace, name, uid, verb stri
 // (without digests), inventory and readyExprs, from the sanitised object,
 // and its events. A failed read is the request's outcome, never an empty
 // detail; a failed events read says so.
-func (s *GitOpsService) GetFluxOpDetail(cluster, kind, namespace, name string) FluxOpDetailDTO {
+//
+// It is fenced by the UID the inspector shows (Codex's S1a implementation
+// review, finding 9): a same-name replacement read in between is refused,
+// never stamped with the old object's identity, and only the shown
+// object's events are kept. The reply carries the UID it describes.
+func (s *GitOpsService) GetFluxOpDetail(cluster, kind, namespace, name, uid string) FluxOpDetailDTO {
+	if uid == "" {
+		return FluxOpDetailDTO{Error: "no identity to read: the inspector names no UID"}
+	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return FluxOpDetailDTO{Error: "cluster not connected: " + cluster}
@@ -270,14 +278,20 @@ func (s *GitOpsService) GetFluxOpDetail(cluster, kind, namespace, name string) F
 	if err != nil {
 		return FluxOpDetailDTO{Error: urlscrub.Text(err.Error()).Text}
 	}
+	if got := string(u.GetUID()); got != uid {
+		return FluxOpDetailDTO{UID: got, Replaced: true, Error: kind + " " + namespace + "/" + name + " was replaced (its UID changed); nothing about the new object is shown here"}
+	}
 	d := fluxOpDetail(u)
+	d.UID = uid
 	evs, err := conn.FluxEvents(ctx, kind, namespace, name)
 	if err != nil {
 		d.EventsError = urlscrub.Text(err.Error()).Text
 		return d
 	}
 	for _, e := range evs {
-		d.Events = append(d.Events, toEventRowDTO(e))
+		if e.UID == uid {
+			d.Events = append(d.Events, toEventRowDTO(e))
+		}
 	}
 	return d
 }

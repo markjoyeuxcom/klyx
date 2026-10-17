@@ -39,7 +39,8 @@ type fakeGitOpsConn struct {
 	withSource     bool
 	reconcileCalls int // Reconcile + ReconcileWithSource invocations, for gate tests
 	suspendCalls   int
-	armedUID       string // the uid the last verb was armed against
+	armedUID       string                     // the uid the last verb was armed against
+	opObj          *unstructured.Unstructured // what FluxOpObject returns
 }
 
 // FluxObject: the direct read (design §5b) - a missing object is NotFound,
@@ -101,7 +102,10 @@ func (f *fakeGitOpsConn) FluxOpAct(context.Context, string, string, string, stri
 	return nil
 }
 func (f *fakeGitOpsConn) FluxOpObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
-	return nil, nil
+	if f.opObj == nil {
+		return nil, errors.New("no operator object in this fake")
+	}
+	return f.opObj, nil
 }
 func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	f.mu.Lock()
@@ -356,5 +360,31 @@ func TestFluxVerbsCarryTheArmedUID(t *testing.T) {
 				t.Fatalf("a refused replacement is the verb's error: %+v", r)
 			}
 		})
+	}
+}
+
+// Codex's S1a implementation review, finding 9: the operator detail is
+// fenced by the inspector's UID - a replacement is refused, never stamped
+// with the old identity - and only that object's events are kept.
+func TestGetFluxOpDetailIsUIDFenced(t *testing.T) {
+	rs := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "fluxcd.controlplane.io/v1", "kind": "ResourceSet",
+		"metadata": map[string]any{"name": "apps", "namespace": "flux-system", "uid": "uid-b"},
+		"status":   map[string]any{"history": []any{map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "totalReconciliations": int64(3)}}},
+	}}
+	conn := &fakeGitOpsConn{opObj: rs, events: []workloads.EventSummary{
+		{Reason: "Old", Message: "the replaced object's", UID: "uid-a"},
+		{Reason: "New", Message: "this object's", UID: "uid-b"},
+	}}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+	if d := svc.GetFluxOpDetail("c", "ResourceSet", "flux-system", "apps", "uid-a"); !d.Replaced || d.UID != "uid-b" || len(d.History) != 0 || d.Error == "" {
+		t.Fatalf("a replacement is refused: %+v", d)
+	}
+	d := svc.GetFluxOpDetail("c", "ResourceSet", "flux-system", "apps", "uid-b")
+	if d.Replaced || d.UID != "uid-b" || len(d.History) != 1 || len(d.Events) != 1 || d.Events[0].Reason != "New" {
+		t.Fatalf("the shown object's detail and events only: %+v", d)
+	}
+	if d := svc.GetFluxOpDetail("c", "ResourceSet", "flux-system", "apps", ""); d.Error == "" {
+		t.Fatal("no UID, no read")
 	}
 }

@@ -7,9 +7,9 @@ import { FluxOperatorView } from "./FluxOperatorView";
 
 vi.mock("../bridge/fluxop", () => ({
   fluxOpAct: vi.fn(async () => ({ ok: true, error: "" })),
-  getFluxOpDetail: vi.fn(async () => ({ history: [], inventory: [], inventoryTotal: 0, events: [] })),
+  getFluxOpDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, history: [], inventory: [], inventoryTotal: 0, events: [] })),
 }));
-import { fluxOpAct } from "../bridge/fluxop";
+import { fluxOpAct, getFluxOpDetail } from "../bridge/fluxop";
 
 let rowsValue: FluxOperatorRows;
 vi.mock("../health/useFluxOperatorRows", () => ({ useFluxOperatorRows: () => rowsValue }));
@@ -101,5 +101,64 @@ describe("FluxOperatorView (coverage S1a)", () => {
     setRows({ coverage: ["FluxInstance", "ResourceSet", "ResourceSetInputProvider", "FluxReport"].map((k) => ({ kind: k, served: false, synced: false, coverage: "absent" as const })) });
     render(<FluxOperatorView cluster="c" />);
     expect(screen.getByText("The Flux Operator is not installed on this cluster.")).toBeTruthy();
+  });
+  // Codex's S1a implementation review, finding 8: the pinned object's own
+  // data stays until the replacement is adopted.
+  it("a same-name replacement never shows its data as the pinned object's", async () => {
+    setRows({ sets: [setRow(set("apps", { uid: "uid-OLD", inputStrategy: "old-evidence" }))] });
+    const { rerender } = render(<FluxOperatorView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    await screen.findByTestId("fluxop-panel");
+    setRows({ sets: [setRow(set("apps", { uid: "uid-NEW", inputStrategy: "new-object-data" }))] });
+    rerender(<FluxOperatorView cluster="c" />);
+    const panel = await screen.findByTestId("fluxop-panel");
+    expect(panel.textContent).toContain("old-evidence");
+    expect(panel.textContent).not.toContain("new-object-data");
+  });
+
+  // Finding 9: the detail is asked for by UID, and a reply about another
+  // object is not shown under this one's identity.
+  it("the on-demand detail is fenced by the shown UID", async () => {
+    vi.mocked(getFluxOpDetail).mockImplementationOnce(async () => ({ uid: "uid-B", replaced: true, error: "ResourceSet team/apps was replaced (its UID changed); nothing about the new object is shown here", history: [], inventory: [], inventoryTotal: 0, events: [] }));
+    setRows({ sets: [setRow(set("apps", { uid: "uid-A" }))] });
+    render(<FluxOperatorView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    await waitFor(() => expect(getFluxOpDetail).toHaveBeenCalledWith("c", "ResourceSet", "team", "apps", "uid-A"));
+    expect((await screen.findByTestId("fluxop-panel")).textContent).toContain("was replaced");
+  });
+
+  // Finding 10: each instance reads its own report, joined by namespace and
+  // name under a verified binding.
+  it("each instance reads its own report", async () => {
+    const a = instance({ uid: "uid-a", namespace: "ns-a" });
+    const b = instance({ uid: "uid-b", namespace: "ns-b" });
+    setRows({ instances: [a, b], reports: [{ ...report, uid: "r-a", namespace: "ns-a", operatorVersion: "vA" }, { ...report, uid: "r-b", namespace: "ns-b", operatorVersion: "vB" }] });
+    render(<FluxOperatorView cluster="c" />);
+    expect(screen.getByTestId("fluxop-report-head").textContent).toContain("2 FluxReports");
+    fireEvent.click(screen.getByText((_, el) => el?.classList.contains("lens-cell-name") === true && (el.textContent ?? "").startsWith("ns-b/")));
+    const block = await screen.findByTestId("fluxop-report");
+    expect(block.textContent).toContain("vB");
+    expect(block.textContent).not.toContain("vA");
+  });
+
+  it("an unbound instance shows no report as its own", async () => {
+    setRows({ instances: [instance({ binding: "ambiguous" })], reports: [report] });
+    render(<FluxOperatorView cluster="c" />);
+    fireEvent.click(screen.getByText("flux"));
+    await screen.findByTestId("fluxop-panel");
+    expect(screen.queryByTestId("fluxop-report")).toBeNull();
+    expect(screen.getByText(/Its FluxReport is not shown/)).toBeTruthy();
+  });
+
+  // Finding 11: the report's refresh is reachable, armed with its UID.
+  it("Refresh the report is offered and carries the report's UID", async () => {
+    setRows({ instances: [instance()], reports: [report] });
+    render(<FluxOperatorView cluster="c" />);
+    fireEvent.click(screen.getByText("flux"));
+    fireEvent.click(await screen.findByRole("button", { name: /more/i }));
+    fireEvent.click(await screen.findByText("Refresh the report"));
+    expect(screen.getByText(/recomputes it now/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh the report" }));
+    await waitFor(() => expect(fluxOpAct).toHaveBeenCalledWith("c", "FluxReport", "flux-system", "flux", "r", "refresh"));
   });
 });

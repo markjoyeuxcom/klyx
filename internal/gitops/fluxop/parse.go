@@ -1,6 +1,7 @@
 package fluxop
 
 import (
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -59,7 +60,8 @@ func common(o *Object) Common {
 	c := Common{Kind: u.GetKind(), Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
 		Generation: u.GetGeneration(), Created: u.GetCreationTimestamp().Time, Clipped: o.Clipped}
 	ann := u.GetAnnotations()
-	c.Disabled = ann[AnnReconcile] == "disabled"
+	// the operator lowercases the value (IsDisabled, v0.61.0)
+	c.Disabled = strings.ToLower(ann[AnnReconcile]) == "disabled"
 	c.RequestedAt = ann[AnnRequestedAt]
 	c.Owner = ownerOf(u.GetLabels(), ann)
 	c.Ready = NoReady

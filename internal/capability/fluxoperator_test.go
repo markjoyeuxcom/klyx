@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -89,8 +90,21 @@ func TestFluxOperatorScanLimits(t *testing.T) {
 		return true, l, nil
 	})
 	info := (&Detector{cs: cs}).detectFluxOperator(context.Background(), map[string]bool{fluxOperatorGroup: true})
-	if info.Complete || info.Bind("flux-system") != BindingUnverified || info.Bind("ops") != BindingBound {
-		t.Errorf("incomplete: %+v %s", info, info.Bind("flux-system"))
+	// one found in an incomplete scan is not a binding: a second may be in
+	// the rest (Codex's S1a implementation review, finding 5)
+	if info.Complete || info.Bind("flux-system") != BindingUnverified || info.Bind("ops") != BindingUnverified ||
+		!strings.Contains(info.Issue(), "detection is incomplete") {
+		t.Errorf("incomplete: %+v %s %s %q", info, info.Bind("flux-system"), info.Bind("ops"), info.Issue())
+	}
+	// two found are ambiguous, whatever the rest holds
+	cs = fake.NewSimpleClientset()
+	cs.PrependReactor("list", "deployments", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		l := &appsv1.DeploymentList{ListMeta: metav1.ListMeta{Continue: "more"}}
+		l.Items = append(l.Items, *operatorDep("ops", "fo", true, fieldRefNS), *operatorDep("ops", "fo2", true, fieldRefNS))
+		return true, l, nil
+	})
+	if info := (&Detector{cs: cs}).detectFluxOperator(context.Background(), map[string]bool{fluxOperatorGroup: true}); info.Bind("ops") != BindingAmbiguous {
+		t.Errorf("two in an incomplete scan: %s", info.Bind("ops"))
 	}
 	// a forbidden list is unverified, never absent
 	cs = fake.NewSimpleClientset()
@@ -104,6 +118,27 @@ func TestFluxOperatorScanLimits(t *testing.T) {
 	// not served: nothing
 	if info := (&Detector{cs: fake.NewSimpleClientset()}).detectFluxOperator(context.Background(), map[string]bool{}); info.Present || info.Issue() != "" {
 		t.Errorf("absent: %+v", info)
+	}
+}
+
+// Finding 5: an operator whose runtime namespace could not be read may be
+// a second for any namespace, so one found elsewhere is not proven unique.
+// Finding 6: every reconciling operator is judged on its own.
+func TestFluxOperatorUniquenessAndReadiness(t *testing.T) {
+	secretEnv := []corev1.EnvVar{{Name: "RUNTIME_NAMESPACE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{Key: "ns"}}}}
+	info := detectOps(t, operatorDep("ops", "fo", true, fieldRefNS), operatorDep("other", "fo-x", true, secretEnv))
+	if info.Bind("ops") != BindingUnverified || !strings.Contains(info.Issue(), "other/fo-x: the namespace it reconciles could not be read") {
+		t.Errorf("unresolved second: %s %q", info.Bind("ops"), info.Issue())
+	}
+	info = detectOps(t, operatorDep("a", "fo-a", true, fieldRefNS), operatorDep("b", "fo-b", false, fieldRefNS))
+	if info.Bind("a") != BindingBound || info.Bind("b") != BindingBound {
+		t.Fatalf("bindings: %s %s", info.Bind("a"), info.Bind("b"))
+	}
+	if is := info.Issue(); !strings.Contains(is, "b/fo-b (reconciling b) is not ready") || strings.Contains(is, "fo-a") {
+		t.Errorf("a ready operator in a never clears b's: %q", is)
+	}
+	if is := detectOps(t, operatorDep("a", "fo-a", true, fieldRefNS), operatorDep("b", "fo-b", true, fieldRefNS)).Issue(); is != "" {
+		t.Errorf("both ready: %q", is)
 	}
 }
 

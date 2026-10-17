@@ -332,6 +332,10 @@ func init() {
 // object is sanitised (S0b) before anything is read from it; history
 // digests are never sent (S0b: no digests of protected content).
 type FluxOpDetailDTO struct {
+	// UID is the object this detail describes; Replaced is set when the
+	// object at the name is not the one asked for.
+	UID       string               `json:"uid"`
+	Replaced  bool                 `json:"replaced,omitempty"`
 	History   []FluxOpHistoryDTO   `json:"history"`
 	Inventory []FluxOpInventoryDTO `json:"inventory"`
 	// InventoryTotal counts every entry; Inventory holds at most 200.

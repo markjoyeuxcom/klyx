@@ -25,6 +25,8 @@ func Rule(c Common, r Resume) health.NativeEval {
 		return health.NativeEval{Role: health.Paused, Label: LabelSuspended}
 	case r == Awaiting:
 		return health.NativeEval{Role: health.Unknown, Label: LabelAwaiting}
+	case r == Unproven:
+		return health.NativeEval{Role: health.Unknown, Label: LabelUnproven}
 	case c.Reason == ReasonDisabled:
 		return health.NativeEval{Role: health.Unknown, Label: LabelUnproven}
 	case r == Evaluating:

@@ -1,14 +1,19 @@
 package healthsrc
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	krt "k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/moomora/klyx/internal/gitops/fluxop"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // Coverage S1a §3's calibration: the budget counts encoded bytes, so the
@@ -90,5 +95,71 @@ func TestFluxOperatorHeapCalibration(t *testing.T) {
 	runtime.KeepAlive(page)
 	if ratio <= 0 || ratio > 10 {
 		t.Fatalf("an implausible ratio %.2f", ratio)
+	}
+}
+
+// The whole Observer, not a slice of projections (Codex's S1a
+// implementation review, the heap question): a cluster holding more
+// ResourceSets than the budget admits, read through the real kinds, parts,
+// rows and tracker. Retained is the heap the running Observer holds after
+// its first complete list, with both parts' rows subscribed, over a
+// baseline taken with the fake client already holding every object. The
+// list's transient peak is not measured here: the fake shares its strings
+// with what it returns, where a real decode allocates them. It is the
+// decoded list (the pager and the watch list both hold it whole before the
+// model is replaced), measured per page by TestFluxOperatorHeapCalibration.
+//
+//	go test ./internal/healthsrc -run TestFluxOperatorObserverHeap -v
+func TestFluxOperatorObserverHeap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("calibration")
+	}
+	for _, tc := range []struct {
+		n, template int
+	}{{1000, 4 << 10}, {1000, 64 << 10}} {
+		objs := make([]krt.Object, 0, tc.n)
+		for i := 0; i < tc.n; i++ {
+			objs = append(objs, calibrationSet(i, tc.template))
+		}
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(krt.NewScheme(), fluxopListKinds(), objs...)
+		objs = nil
+		served := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
+			return observe.Probe{Served: group == fluxop.Group, Version: fluxop.Version}, nil
+		}
+		kinds, parts := FluxOperator(NativeDeps{Cluster: "c1", Dyn: dyn, Served: served})
+		s := &sink{}
+		o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: kinds, Domains: []observe.DomainSpec{{ID: TaskFlux, Parts: parts}}, Throttle: 10 * time.Millisecond})
+		before := heapNow()
+		ctx, cancel := context.WithCancel(context.Background())
+		o.Start(ctx)
+		o.SubscribeRows(TaskFlux, "resourcesets", observe.Owner{Kind: "lens", ID: "t"})
+		o.SubscribeRows(TaskFlux, "fluxinstance", observe.Owner{Kind: "lens", ID: "t"})
+		var kept, left int
+		waitFor(t, "the first complete list, capped", func() bool {
+			p, ok := nativePart(s, TaskFlux, "resourcesets")
+			if !ok || p.Coverage != observe.Live {
+				return false
+			}
+			for _, k := range p.Kinds {
+				if k.Kind == KindResourceSets && k.Truncated {
+					kept, left = k.Objects, k.NotRetained
+					return true
+				}
+			}
+			return false
+		})
+		if _, ok := o.RowsNow(TaskFlux, "resourcesets"); !ok {
+			t.Fatal("rows not published")
+		}
+		after := heapNow()
+		retained := int64(after) - int64(before)
+		t.Logf("%d ResourceSets with %d KiB templates: %d retained, %d not retained; the Observer holds %d heap bytes (%.2f MiB) against a %d-byte ResourceSet budget, %.2f heap bytes per budget byte",
+			tc.n, tc.template>>10, kept, left, retained, float64(retained)/(1<<20), budgetSets, float64(retained)/float64(budgetSets))
+		if kept+left != tc.n || kept == 0 {
+			t.Fatalf("admission: %d kept, %d left of %d", kept, left, tc.n)
+		}
+		cancel()
+		<-o.Done()
+		runtime.KeepAlive(dyn)
 	}
 }

@@ -16,7 +16,7 @@ export type FluxOpCommonDTO = {
   reason?: string; message?: string;
   readySince?: string; readyGeneration?: number;
   stalled?: boolean; progress?: string;
-  resume?: "" | "awaiting" | "evaluating";
+  resume?: "" | "awaiting" | "evaluating" | "unproven";
   owner?: FluxOpOwnerDTO;
   clipped: string[];
   rule: RuleDTO;
@@ -64,6 +64,9 @@ export type FluxReportDTO = {
 };
 
 export type FluxOpDetailDTO = {
+  // the object this detail describes; replaced: the name now holds another
+  uid: string;
+  replaced?: boolean;
   history: { firstReconciled?: string; lastReconciled?: string; duration?: string; status?: string; totalReconciliations: number; metadata?: Record<string, string> }[];
   inventory: { namespace?: string; name: string; group?: string; kind: string; version?: string }[];
   inventoryTotal: number;
@@ -83,10 +86,16 @@ export async function fluxOpAct(cluster: string, kind: string, namespace: string
   }
 }
 
-export async function getFluxOpDetail(cluster: string, kind: string, namespace: string, name: string): Promise<FluxOpDetailDTO> {
+// getFluxOpDetail reads the object the inspector shows, fenced by its UID:
+// a reply about another object is refused (Codex's S1a implementation
+// review, finding 9).
+export async function getFluxOpDetail(cluster: string, kind: string, namespace: string, name: string, uid: string): Promise<FluxOpDetailDTO> {
+  const failed = (error: string): FluxOpDetailDTO => ({ uid, history: [], inventory: [], inventoryTotal: 0, events: [], error });
   try {
-    return (await GitOpsService.GetFluxOpDetail(cluster, kind, namespace, name)) as unknown as FluxOpDetailDTO;
+    const d = (await GitOpsService.GetFluxOpDetail(cluster, kind, namespace, name, uid)) as unknown as FluxOpDetailDTO;
+    if (d.uid !== uid && !d.error) return failed(`${kind} ${namespace}/${name} was replaced (its UID changed); nothing about the new object is shown here`);
+    return d;
   } catch (e) {
-    return { history: [], inventory: [], inventoryTotal: 0, events: [], error: e instanceof Error ? e.message : String(e) };
+    return failed(e instanceof Error ? e.message : String(e));
   }
 }
