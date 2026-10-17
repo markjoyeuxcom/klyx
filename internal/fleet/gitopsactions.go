@@ -201,6 +201,10 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 	// The source's outcome is kept: if the target's write then fails, the
 	// error says what already happened to the source - never "nothing".
 	source := ""
+	if ref, ok := flux.BoundSource(u); ok && ref.Kind == string(flux.ExternalArtifactKind) {
+		// S1c §5: its producer reconciles an artifact; nothing was written
+		return fmt.Errorf("reconcile with source is not offered for %s %s/%s: its source is an ExternalArtifact, which its producer reconciles; reconcile it alone", kind, ns, name)
+	}
 	if ref, ok := flux.BoundSource(u); ok {
 		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 			body := flux.ReconcilePatch(c.clk.Now())

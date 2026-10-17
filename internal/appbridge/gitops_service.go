@@ -10,8 +10,10 @@ import (
 
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/fluxcli"
+	"github.com/moomora/klyx/internal/gitops/composition"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
@@ -183,12 +185,26 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 		switch {
 		case err == nil:
 			src := toSourceDTO(flux.ParseSource(su))
+			if ref.Kind == string(flux.ExternalArtifactKind) {
+				// S1c §4: an artifact's verdict comes from the artifact and
+				// Ready, never Ready alone; its producer is its own line
+				if v, perr := composition.Project(composition.KindArtifact)(su); perr == nil {
+					src.Rule = toRuleDTO(composition.ArtifactRule(composition.ParseArtifact(v.(*composition.Object))))
+				}
+				d.SourceProducer = s.artifactProducer(ctx, conn, ref.Namespace, ref.Name)
+			}
 			d.Source = &src
 		case apierrors.IsNotFound(err):
 			d.SourceWarning = what + " was not found - its health is unknown"
 		default:
 			d.SourceWarning = what + " is unverified: " + err.Error()
 		}
+	}
+	switch flux.Kind(kind) {
+	case flux.KustomizationKind:
+		d.SourceNote = flux.FeatureGateNote(flux.ParseKustomization(u))
+	case flux.HelmReleaseKind:
+		d.SourceNote = flux.FeatureGateNote(flux.ParseHelmRelease(u))
 	}
 	// Drift surface: the controller's own record of what it did (M10-e).
 	if evs, err := conn.FluxEvents(ctx, kind, namespace, name); err == nil {
@@ -197,6 +213,25 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 		}
 	}
 	return d
+}
+
+// artifactProducer reads a bound artifact's producer from the shared
+// composition rows (S1c §3: joins read the shared rows): the generator
+// evidence there is the resume tracker's and the capture's, which a single
+// read cannot give. Unread rows say so, never a health.
+func (s *GitOpsService) artifactProducer(ctx context.Context, conn GitOpsConn, ns, name string) *SourceProducerDTO {
+	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskFlux, "composition")
+	if !ok || rows.Part.Coverage != observe.Live {
+		return &SourceProducerDTO{State: composition.ProducerUnreadable}
+	}
+	set, _ := rows.Rows.(healthsrc.RowSet[healthsrc.CompositionRow])
+	for _, r := range set.Rows {
+		if a := r.Data.Artifact; a != nil && a.Namespace == ns && a.Name == name && r.Data.Producer != nil {
+			return sourceProducerDTO(r.Data.Producer)
+		}
+	}
+	// the artifact was read, but not into the rows: past the budget
+	return &SourceProducerDTO{State: composition.ProducerIncomplete}
 }
 
 // detailErrorDTO is a failed detail read for the requested resource: its

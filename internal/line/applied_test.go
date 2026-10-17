@@ -20,7 +20,8 @@ func TestAppliedValue(t *testing.T) {
 		"git none yet":       {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "GitRepository"}, "", "", false},
 		"oci hex-shaped":     {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "OCIRepository", Revision: "sha256:" + sha + sha[:24]}, AppliedArtifact, "sha256:" + sha + sha[:24], true},
 		"bucket":             {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "Bucket", Revision: "sha256:abc"}, AppliedArtifact, "sha256:abc", true},
-		"unsupported source": {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "ExternalArtifact", Revision: "x"}, "", "", false},
+		"external artifact":  {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "ExternalArtifact", Revision: "latest@sha256:ab"}, AppliedArtifact, "latest@sha256:ab", true},
+		"unsupported source": {flux.Resource{Kind: flux.KustomizationKind, SourceKind: "Pipeline", Revision: "x"}, "", "", false},
 		"helm deployed": {flux.Resource{Kind: flux.HelmReleaseKind, History: []flux.HelmHistory{
 			{Status: "failed", ChartName: "podinfo", ChartVersion: "6.8.0"}, {Status: "deployed", ChartName: "podinfo", ChartVersion: "6.7.1"}}}, AppliedChart, "podinfo@6.7.1", true},
 		"helm none deployed": {flux.Resource{Kind: flux.HelmReleaseKind, History: []flux.HelmHistory{{Status: "failed", ChartName: "podinfo", ChartVersion: "6.8.0"}}}, "", "", false},

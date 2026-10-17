@@ -22,6 +22,8 @@ func sourceGVR(kind string) (group, fallbackVersion, resource string, ok bool) {
 		return g, "v1", "helmrepositories", true
 	case "HelmChart":
 		return g, "v1", "helmcharts", true
+	case "ExternalArtifact":
+		return g, "v1", "externalartifacts", true
 	default:
 		return "", "", "", false
 	}
@@ -51,6 +53,8 @@ func fluxGVR(kind string) (group, fallbackVersion, resource string, ok bool) {
 		return "kustomize.toolkit.fluxcd.io", "v1", "kustomizations", true
 	case "HelmRelease":
 		return "helm.toolkit.fluxcd.io", "v2", "helmreleases", true
+	case "ArtifactGenerator":
+		return "source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", true
 	case "ImageRepository", "ImagePolicy", "ImageUpdateAutomation":
 		return "image.toolkit.fluxcd.io", "v1", map[string]string{"ImageRepository": "imagerepositories", "ImagePolicy": "imagepolicies", "ImageUpdateAutomation": "imageupdateautomations"}[kind], true
 	}

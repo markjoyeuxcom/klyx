@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/healthsrc"
 )
 
 // ActionResultDTO is the result of an operational write. Error carries the
@@ -247,17 +248,43 @@ type FluxDiffChangeDTO struct {
 	OmittedChanged []string `json:"omittedChanged,omitempty"`
 }
 
+// SourceProducerDTO is a bound artifact's producer as the evidence
+// establishes it (S1c §2): Label and Role only for a producer whose health
+// may be shown, never the artifact's own verdict.
+type SourceProducerDTO struct {
+	State             string `json:"state"`
+	Kind              string `json:"kind,omitempty"`
+	Namespace         string `json:"namespace,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Label             string `json:"label,omitempty"`
+	Role              string `json:"role,omitempty"`
+	Failing           bool   `json:"failing,omitempty"`
+	RecordedNamespace string `json:"recordedNamespace,omitempty"`
+	RecordedName      string `json:"recordedName,omitempty"`
+	RecordedGone      bool   `json:"recordedGone,omitempty"`
+	RecordedLookup    string `json:"recordedLookup,omitempty"`
+}
+
+func sourceProducerDTO(p *healthsrc.ProducerView) *SourceProducerDTO {
+	return &SourceProducerDTO{State: p.State, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name, Label: p.Label, Role: p.Role,
+		Failing: p.GeneratorFailing, RecordedNamespace: p.RecordedNamespace, RecordedName: p.RecordedName, RecordedGone: p.RecordedGone, RecordedLookup: p.RecordedLookup}
+}
+
 type ResourceDetailDTO struct {
 	// UID, Generation and AsOfUnix: the read object's identity and when it was
 	// read (design §5b) - the lens shows a detail only for the selected
 	// row's UID. Error: the read failed; the DTO then carries only the
 	// requested kind/namespace/name. SourceWarning: the bound source could
 	// not be read (not found, or unverified) - never a silent gap.
-	UID               string              `json:"uid,omitempty"`
-	Generation        int64               `json:"generation,omitempty"`
-	AsOfUnix          int64               `json:"asOfUnix,omitempty"`
-	Error             string              `json:"error,omitempty"`
-	SourceWarning     string              `json:"sourceWarning,omitempty"`
+	UID           string `json:"uid,omitempty"`
+	Generation    int64  `json:"generation,omitempty"`
+	AsOfUnix      int64  `json:"asOfUnix,omitempty"`
+	Error         string `json:"error,omitempty"`
+	SourceWarning string `json:"sourceWarning,omitempty"`
+	// Coverage S1c §2: a bound ExternalArtifact's producer, its own line
+	// after the artifact's verdict; SourceNote names a feature-gate refusal.
+	SourceProducer    *SourceProducerDTO  `json:"sourceProducer,omitempty"`
+	SourceNote        string              `json:"sourceNote,omitempty"`
 	Kind              string              `json:"kind"`
 	Namespace         string              `json:"namespace"`
 	Name              string              `json:"name"`

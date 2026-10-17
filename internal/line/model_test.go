@@ -105,6 +105,7 @@ func TestExclusionsAreCounted(t *testing.T) {
 		in.Kustomizations = append(in.Kustomizations,
 			ks("oci", "latest@sha256:"+strings.Repeat("a", 64), func(r *flux.Resource) { r.SourceKind = "OCIRepository" }),
 			ks("bucket", "x", func(r *flux.Resource) { r.SourceKind = "Bucket" }),
+			ks("artifact", "latest@sha256:ab", func(r *flux.Resource) { r.SourceKind = "ExternalArtifact" }),
 			ks("orphan", "main@sha1:"+sha('1'), func(r *flux.Resource) { r.SourceName = "missing" }),
 			ks("weird", "main/"+sha('1')))
 	})
@@ -113,7 +114,7 @@ func TestExclusionsAreCounted(t *testing.T) {
 	for _, x := range ex {
 		reasons = append(reasons, x.Name+":"+x.Reason)
 	}
-	if len(us) != 0 || strings.Join(reasons, " ") != "oci:oci source bucket:bucket source orphan:source not read weird:unparsable revision" {
+	if len(us) != 0 || strings.Join(reasons, " ") != "oci:oci source bucket:bucket source artifact:external artifact source orphan:source not read weird:unparsable revision" {
 		t.Fatalf("units %d, exclusions %v", len(us), reasons)
 	}
 	if ex[0].Digest == "" {

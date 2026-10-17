@@ -170,6 +170,7 @@ type Exclusion struct {
 const (
 	ExcludedOCI         = "oci source"
 	ExcludedBucket      = "bucket source"
+	ExcludedArtifact    = "external artifact source" // S1c: an artifact source, as OCI and Bucket
 	ExcludedUnparsable  = "unparsable revision"
 	ExcludedNoSource    = "source not read"
 	ExcludedSourceKind  = "unsupported source kind"
@@ -297,6 +298,9 @@ func kustomizationUnit(o Object[flux.Resource], lookup func(kind, ns, name strin
 		return nil, x
 	case "Bucket":
 		x.Reason, x.Digest = ExcludedBucket, r.Revision
+		return nil, x
+	case "ExternalArtifact":
+		x.Reason, x.Digest = ExcludedArtifact, r.Revision
 		return nil, x
 	case "GitRepository":
 	default:

@@ -8,7 +8,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/gitops/composition"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -145,5 +148,44 @@ func TestGetResourceDetailNamesWhyItsSourceIsMissing(t *testing.T) {
 				t.Fatalf("%+v", dto)
 			}
 		})
+	}
+}
+
+// Coverage S1c §2 and §4: a Kustomization bound to an ExternalArtifact gets
+// the artifact's own rule (no artifact is a fault, whatever Ready says),
+// its producer as its own line from the shared composition rows, and the
+// feature-gate refusal named.
+func TestGetResourceDetailBoundArtifact(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]interface{}{"name": "apps", "namespace": "flux-system"},
+		"spec":     map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "ExternalArtifact", "name": "apps-a"}},
+		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "AccessDenied",
+			"message": "can't access 'ExternalArtifact/flux-system/apps-a', ExternalArtifact feature gate is disabled"}}},
+	}}
+	ea := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+		"metadata": map[string]interface{}{"name": "apps-a", "namespace": "flux-system", "uid": "uid-ea"},
+		"status":   map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "Succeeded"}}},
+	}}
+	prod := &healthsrc.ProducerView{State: "verified", Kind: "ArtifactGenerator", Namespace: "flux-system", Name: "apps", Label: "Failed", Role: "fault", GeneratorFailing: true}
+	rows := observe.Rows{Part: observe.Part{Coverage: observe.Live}, Rows: healthsrc.RowSet[healthsrc.CompositionRow]{Rows: []healthsrc.Row[healthsrc.CompositionRow]{
+		{Data: healthsrc.CompositionRow{Artifact: &composition.Artifact{Common: composition.Common{Namespace: "flux-system", Name: "apps-a"}}, Producer: prod}}}}}
+	conn := &fakeGitOpsConn{obj: ks, srcObj: ea, rows: rows, rowsOK: true}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+	dto := svc.GetResourceDetail("x", "Kustomization", "flux-system", "apps")
+	if dto.Source == nil || dto.Source.Kind != "ExternalArtifact" || dto.Source.Rule.Label != composition.LabelNoArtifact {
+		t.Fatalf("the artifact's own rule: %+v", dto.Source)
+	}
+	if p := dto.SourceProducer; p == nil || p.State != "verified" || p.Name != "apps" || !p.Failing {
+		t.Fatalf("the producer line: %+v", dto.SourceProducer)
+	}
+	if dto.SourceNote != "kustomize-controller runs without its ExternalArtifact feature gate" {
+		t.Fatalf("the feature gate: %q", dto.SourceNote)
+	}
+	// rows not read: never a health
+	conn.rowsOK = false
+	if p := svc.GetResourceDetail("x", "Kustomization", "flux-system", "apps").SourceProducer; p == nil || p.State != composition.ProducerUnreadable || p.Label != "" {
+		t.Fatalf("unread rows: %+v", p)
 	}
 }

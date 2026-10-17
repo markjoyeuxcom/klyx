@@ -7,7 +7,7 @@ import "github.com/moomora/klyx/internal/gitops/flux"
 // shape.
 const (
 	AppliedGit      = "git"      // a Kustomization bound to a GitRepository: the commit
-	AppliedArtifact = "artifact" // a Kustomization bound to an OCIRepository or a Bucket: the digest
+	AppliedArtifact = "artifact" // a Kustomization bound to an OCIRepository, a Bucket or an ExternalArtifact (S1c): the revision
 	AppliedChart    = "chart"    // a HelmRelease: the newest deployed entry's chart name@version
 )
 
@@ -22,7 +22,7 @@ func AppliedValue(r flux.Resource) (kind, value string, ok bool) {
 			if rev, ok := ParseGitRevision(r.Revision); ok {
 				return AppliedGit, rev.SHA, true
 			}
-		case string(flux.OCIRepositoryKind), string(flux.BucketKind):
+		case string(flux.OCIRepositoryKind), string(flux.BucketKind), string(flux.ExternalArtifactKind):
 			if r.Revision != "" {
 				return AppliedArtifact, r.Revision, true
 			}

@@ -13,9 +13,20 @@ import (
 type DepEdgeDTO struct {
 	From     string `json:"from"`
 	To       string `json:"to"`
-	Type     string `json:"type"`     // source | dependsOn
+	Type     string `json:"type"`     // source | dependsOn | producer
 	Reported bool   `json:"reported"` // the downstream controller reports this edge blocks it
 	Cycle    bool   `json:"cycle"`    // leads back to a node on its own path: cut here, and named
+	// Producer qualifies a producer edge (S1c §2): verified | named |
+	// disagree, or the target's stub. Only verified and named attribute.
+	Producer string `json:"producer,omitempty"`
+}
+
+// DepRefDTO names an object the graph shows and does not follow.
+type DepRefDTO struct {
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 type DepSupplierDTO struct {
@@ -95,6 +106,10 @@ type DepNodeDTO struct {
 	Supply        []DepSupplyDTO   `json:"supply"`
 	Inventory     *DepInventoryDTO `json:"inventory,omitempty"`
 	Git           *DepGitDTO       `json:"git,omitempty"`
+	// An ExternalArtifact's recorded producer identity and a producer of
+	// another kind it declares (S1c §2): shown, never followed.
+	GeneratorUID     string     `json:"generatorUid,omitempty"`
+	DeclaredProducer *DepRefDTO `json:"declaredProducer,omitempty"`
 }
 
 // DepPairDTO places a main-resource update beside a failing node's
@@ -158,10 +173,14 @@ func depGraphDTO(g depgraph.Graph) DepGraphDTO {
 		if g := n.Git; g != nil {
 			d.Git = &DepGitDTO{URL: g.URL, RefKind: g.RefKind, RefName: g.RefName, Applied: g.Applied, Path: g.Path}
 		}
+		d.GeneratorUID = n.GeneratorUID
+		if p := n.DeclaredProducer; p != nil {
+			d.DeclaredProducer = &DepRefDTO{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}
+		}
 		out.Nodes = append(out.Nodes, d)
 	}
 	for _, e := range g.Edges {
-		out.Edges = append(out.Edges, DepEdgeDTO{From: e.From, To: e.To, Type: string(e.Type), Reported: e.Reported, Cycle: e.Cycle})
+		out.Edges = append(out.Edges, DepEdgeDTO{From: e.From, To: e.To, Type: string(e.Type), Reported: e.Reported, Cycle: e.Cycle, Producer: e.Producer})
 	}
 	for _, p := range g.Proximity {
 		w := p.Write

@@ -40,6 +40,7 @@ const (
 	GroupHelm      = "helm.toolkit.fluxcd.io"
 	GroupSource    = "source.toolkit.fluxcd.io"
 	GroupESO       = "external-secrets.io"
+	GroupGenerator = "source.extensions.fluxcd.io"
 )
 
 // Ref names one object by group, kind, namespace and name.
@@ -59,6 +60,19 @@ type EdgeType string
 const (
 	EdgeSource    EdgeType = "source"
 	EdgeDependsOn EdgeType = "dependsOn"
+	// EdgeProducer leads from an ExternalArtifact to the ArtifactGenerator
+	// its sourceRef names (coverage S1c §2), qualified by Edge.Producer.
+	EdgeProducer EdgeType = "producer"
+)
+
+// Producer evidence on an EdgeProducer edge (S1c §2): the artifact's
+// recorded generator UID is the named generator's (verified), it records
+// none (named), or another (disagree: drawn, never attributed). A stub
+// target is its stub's word.
+const (
+	ProducerVerified = "verified"
+	ProducerNamed    = "named"
+	ProducerDisagree = "disagree"
 )
 
 // Edge leads from a node to what it declares it needs. Reported: the
@@ -69,6 +83,7 @@ type Edge struct {
 	Type     EdgeType
 	Reported bool
 	Cycle    bool
+	Producer string // an EdgeProducer edge's evidence
 }
 
 // Stub kinds: a node whose evidence stops. Every kind but NotFound is
@@ -121,6 +136,12 @@ type Node struct {
 	Supply    []Supply
 	Inventory *Inventory
 	Git       *GitFacts
+
+	// An ExternalArtifact's producer evidence (S1c §2): the generator UID
+	// it records, and a sourceRef of another kind - shown as declared,
+	// never followed or matched to a same-named generator.
+	GeneratorUID     string
+	DeclaredProducer *Ref
 }
 
 // Supply is a credential a node reads, followed to what supplies it.
@@ -228,6 +249,7 @@ func Build(ctx context.Context, r Reader, start Ref, startUID string, now func()
 	}
 	b.g.Reads = b.reads
 	b.summarize()
+	b.producers()
 	b.label()
 	b.proximity()
 	return b.g
@@ -445,6 +467,24 @@ func outgoing(ref Ref, u *unstructured.Unstructured) []target {
 		if kind != "" && name != "" {
 			out = append(out, target{Ref{GroupSource, kind, ns, name}, EdgeSource})
 		}
+	case string(flux.ExternalArtifactKind):
+		if g, ok := generatorRef(u); ok {
+			out = append(out, target{g, EdgeProducer})
+		}
+	case string(flux.ArtifactGeneratorKind):
+		srcs, _, _ := unstructured.NestedSlice(u.Object, "spec", "sources")
+		for _, x := range srcs {
+			m, _ := x.(map[string]any)
+			kind, _ := m["kind"].(string)
+			name, _ := m["name"].(string)
+			sns, _ := m["namespace"].(string)
+			if sns == "" {
+				sns = ns
+			}
+			if kind != "" && name != "" {
+				out = append(out, target{Ref{GroupSource, kind, sns, name}, EdgeSource})
+			}
+		}
 	}
 	if ref.Kind == string(flux.KustomizationKind) || ref.Kind == string(flux.HelmReleaseKind) {
 		for _, d := range dependsOn(u) {
@@ -461,6 +501,68 @@ func outgoing(ref Ref, u *unstructured.Unstructured) []target {
 		}
 	}
 	return uniq
+}
+
+// generatorRef is an ExternalArtifact's sourceRef when it names an
+// ArtifactGenerator: only that kind in source.extensions.fluxcd.io (or with
+// no apiVersion) is a generator (S1c §2, revision 1).
+func generatorRef(u *unstructured.Unstructured) (Ref, bool) {
+	ref, ok, _ := unstructured.NestedMap(u.Object, "spec", "sourceRef")
+	if !ok {
+		return Ref{}, false
+	}
+	kind, _ := ref["kind"].(string)
+	name, _ := ref["name"].(string)
+	api, _ := ref["apiVersion"].(string)
+	ns, _ := ref["namespace"].(string)
+	if ns == "" {
+		ns = u.GetNamespace()
+	}
+	if kind != string(flux.ArtifactGeneratorKind) || name == "" || (api != "" && groupOf(api) != GroupGenerator) {
+		return Ref{}, false
+	}
+	return Ref{GroupGenerator, kind, ns, name}, true
+}
+
+// producers qualifies every producer edge by its evidence.
+func (b *builder) producers() {
+	for i := range b.g.Edges {
+		e := &b.g.Edges[i]
+		if e.Type != EdgeProducer {
+			continue
+		}
+		from, to := b.g.Nodes[b.idx[e.From]], b.g.Nodes[b.idx[e.To]]
+		switch {
+		case to.Stub != "":
+			e.Producer = string(to.Stub)
+		case from.GeneratorUID == "":
+			e.Producer = ProducerNamed
+		case from.GeneratorUID == to.UID:
+			e.Producer = ProducerVerified
+		default:
+			e.Producer = ProducerDisagree
+		}
+	}
+}
+
+// attributable is every node reached from the start without crossing a
+// disagreeing producer edge: a generator the artifact does not record is
+// drawn, and its failure is never the artifact's upstream failure.
+func (b *builder) attributable() map[string]bool {
+	seen := map[string]bool{b.g.Start: true}
+	queue := []string{b.g.Start}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, e := range b.g.Edges {
+			if e.From != id || seen[e.To] || (e.Type == EdgeProducer && e.Producer == ProducerDisagree) {
+				continue
+			}
+			seen[e.To] = true
+			queue = append(queue, e.To)
+		}
+	}
+	return seen
 }
 
 // helmSource is what a HelmRelease's controller reads: its chartRef, else
@@ -560,6 +662,26 @@ func nodeOf(ref Ref, u *unstructured.Unstructured, at time.Time) Node {
 	_, n.HasArtifact, _ = unstructured.NestedMap(u.Object, "status", "artifact")
 	n.Stalled = conditionTrue(u, "Stalled")
 	n.Suspended, _, _ = unstructured.NestedBool(u.Object, "spec", "suspend")
+	switch ref.Kind {
+	case string(flux.ArtifactGeneratorKind):
+		// suspended by its own annotation (S1c §4)
+		n.Suspended = strings.EqualFold(u.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled")
+	case string(flux.ExternalArtifactKind):
+		n.GeneratorUID = u.GetLabels()["source.extensions.fluxcd.io/generator"]
+		if ref, ok, _ := unstructured.NestedMap(u.Object, "spec", "sourceRef"); ok {
+			if _, isGen := generatorRef(u); !isGen {
+				kind, _ := ref["kind"].(string)
+				name, _ := ref["name"].(string)
+				ns, _ := ref["namespace"].(string)
+				if ns == "" {
+					ns = u.GetNamespace()
+				}
+				if kind != "" && name != "" {
+					n.DeclaredProducer = &Ref{Group: groupOf(fmt.Sprint(ref["apiVersion"])), Kind: kind, Namespace: ns, Name: name}
+				}
+			}
+		}
+	}
 	readyCondition(u, &n)
 	n.Failing = n.Ready == "False" && !n.Suspended
 	n.Writes = lastwrite.Read(u.GetManagedFields())
@@ -742,12 +864,13 @@ func (b *builder) label() {
 			reportedOut[e.From] = true
 		}
 	}
+	reach := b.attributable()
 	for i := range b.g.Nodes {
 		n := &b.g.Nodes[i]
 		if n.Stub != "" && n.Stub != StubNotFound {
 			continue
 		}
-		n.UpstreamFailure = n.Failing && n.ID != b.g.Start
+		n.UpstreamFailure = n.Failing && n.ID != b.g.Start && reach[n.ID]
 		n.ChainEnd = reportedIn[n.ID] && !reportedOut[n.ID]
 	}
 	for _, e := range b.g.Edges {

@@ -27,7 +27,14 @@ const (
 	BucketKind         Kind = "Bucket"
 	HelmRepositoryKind Kind = "HelmRepository"
 	HelmChartKind      Kind = "HelmChart"
+	// coverage S1c: an artifact another controller produces, bound by a
+	// Kustomization's sourceRef or a HelmRelease's chartRef
+	ExternalArtifactKind Kind = "ExternalArtifact"
 )
+
+// ArtifactGeneratorKind produces ExternalArtifacts (source-watcher,
+// source.extensions.fluxcd.io; coverage S1c).
+const ArtifactGeneratorKind Kind = "ArtifactGenerator"
 
 // Image automation kinds Klyx acts on (image.toolkit.fluxcd.io, coverage
 // S1b §5); their state is read by internal/gitops/imageauto.
@@ -498,6 +505,8 @@ func ParseSource(u *unstructured.Unstructured) Source {
 	s.URL, _, _ = unstructured.NestedString(u.Object, "spec", "url")
 	s.Revision, _, _ = unstructured.NestedString(u.Object, "status", "artifact", "revision")
 	s.Ready, s.Reason, s.Message = readyFromConditions(u)
+	// coverage S1c §6: an ExternalArtifact's messages pass Origins
+	s.Message, _ = crd.MessageRule(string(s.Kind), s.Reason, s.Message)
 	for _, f := range refPrecedence[s.Kind] {
 		if v, ok, _ := unstructured.NestedString(u.Object, "spec", "ref", f); ok && v != "" {
 			s.RefKind, s.RefName = f, v
@@ -510,6 +519,25 @@ func ParseSource(u *unstructured.Unstructured) Source {
 	s.ReadySince = readySince(u)
 	_, s.Generation, s.ObservedGeneration = staleness(u)
 	return s
+}
+
+// ReasonAccessDenied is a controller's refusal to read a source.
+const ReasonAccessDenied = "AccessDenied"
+
+// FeatureGateNote names why a resource bound to an ExternalArtifact is
+// refused (S1c §2): both controllers refuse with AccessDenied when started
+// without the ExternalArtifact feature gate (kustomize-controller v1.9.6,
+// helm-controller v1.6.5: "can't access '...', ExternalArtifact feature
+// gate is disabled"). "" otherwise.
+func FeatureGateNote(r Resource) string {
+	if r.Reason != ReasonAccessDenied || r.SourceKind != string(ExternalArtifactKind) || !strings.Contains(r.Message, "ExternalArtifact feature gate is disabled") {
+		return ""
+	}
+	controller := "kustomize-controller"
+	if r.Kind == HelmReleaseKind {
+		controller = "helm-controller"
+	}
+	return controller + " runs without its ExternalArtifact feature gate"
 }
 
 // SourceRef points at a source object bound to a Kustomization/HelmRelease.

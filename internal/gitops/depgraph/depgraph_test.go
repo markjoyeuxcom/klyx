@@ -617,3 +617,74 @@ func TestGraphReviewOfeb6a10e(t *testing.T) {
 		t.Fatalf("cancelled during the first read: %+v", g)
 	}
 }
+
+// Coverage S1c §2: a Kustomization bound to an ExternalArtifact reaches its
+// generator by the artifact's sourceRef, qualified by the identity the
+// artifact records, and the generator's own sources; a disagreeing
+// generator is drawn, never an upstream failure; a producer of another
+// kind is declared, never followed.
+func TestGraphComposition(t *testing.T) {
+	art := func(label string, ref map[string]any) *unstructured.Unstructured {
+		u := obj("ExternalArtifact", "flux-system", "apps-a", "uid-ea", map[string]any{"sourceRef": ref},
+			map[string]any{"artifact": map[string]any{"revision": "latest@sha256:ab"}, "conditions": []any{ready("True", "Succeeded", "ok", t0)}})
+		if label != "" {
+			u.SetLabels(map[string]string{"source.extensions.fluxcd.io/generator": label})
+		}
+		return u
+	}
+	gen := obj("ArtifactGenerator", "flux-system", "apps", "uid-ag",
+		map[string]any{"sources": []any{map[string]any{"alias": "fleet", "kind": "GitRepository", "name": "platform"}}},
+		map[string]any{"conditions": []any{ready("False", "SourceFetchFailed", "fetch sources failed: failed to download archive: Get \"/signed/TOKEN\": unsupported protocol scheme \"\"", t0)}})
+	apps := ks("apps", map[string]any{"sourceRef": map[string]any{"kind": "ExternalArtifact", "name": "apps-a"}},
+		map[string]any{"conditions": []any{ready("True", "ReconciliationSucceeded", "Applied revision: latest@sha256:ab", t0)}})
+	platform := obj("GitRepository", "flux-system", "platform", "uid-platform", map[string]any{"url": "https://git.example/fleet"},
+		map[string]any{"artifact": map[string]any{"revision": "main@sha1:" + sha}, "conditions": []any{ready("True", "Succeeded", "ok", t0)}})
+	agRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "apps"}
+	for _, c := range []struct {
+		name, label, want string
+		attributed        bool
+	}{
+		{"verified", "uid-ag", ProducerVerified, true},
+		{"named", "", ProducerNamed, true},
+		{"disagree", "uid-other", ProducerDisagree, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := &fakeReader{objs: map[string]*unstructured.Unstructured{
+				"Kustomization/flux-system/apps": apps, "ExternalArtifact/flux-system/apps-a": art(c.label, agRef),
+				"ArtifactGenerator/flux-system/apps": gen, "GitRepository/flux-system/platform": platform}, fail: map[string]error{}}
+			g := build(t, r, "uid-apps")
+			if _, ok := edge(g, "Kustomization/flux-system/apps", "ExternalArtifact/flux-system/apps-a"); !ok {
+				t.Fatal("the Kustomization's artifact source")
+			}
+			e, ok := edge(g, "ExternalArtifact/flux-system/apps-a", "ArtifactGenerator/flux-system/apps")
+			if !ok || e.Type != EdgeProducer || e.Producer != c.want {
+				t.Fatalf("the producer edge: %+v %v", e, ok)
+			}
+			if s, ok := edge(g, "ArtifactGenerator/flux-system/apps", "GitRepository/flux-system/platform"); !ok || s.Type != EdgeSource {
+				t.Fatal("the generator's source")
+			}
+			n := node(t, g, "ArtifactGenerator/flux-system/apps")
+			if n.UpstreamFailure != c.attributed || strings.Contains(n.Message, "TOKEN") {
+				t.Fatalf("the generator node: %+v", n)
+			}
+		})
+	}
+	// another kind is declared and not followed
+	r := &fakeReader{objs: map[string]*unstructured.Unstructured{
+		"Kustomization/flux-system/apps": apps, "ExternalArtifact/flux-system/apps-a": art("", map[string]any{"apiVersion": "ci.example/v1", "kind": "Pipeline", "name": "build"}),
+	}, fail: map[string]error{}}
+	g := build(t, r, "uid-apps")
+	n := node(t, g, "ExternalArtifact/flux-system/apps-a")
+	if n.DeclaredProducer == nil || n.DeclaredProducer.Kind != "Pipeline" || n.DeclaredProducer.Group != "ci.example" || len(g.Edges) != 1 {
+		t.Fatalf("a declared producer: %+v %+v", n, g.Edges)
+	}
+	// a generator suspended by its annotation
+	paused := gen.DeepCopy()
+	paused.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "Disabled"})
+	r = &fakeReader{objs: map[string]*unstructured.Unstructured{
+		"Kustomization/flux-system/apps": apps, "ExternalArtifact/flux-system/apps-a": art("uid-ag", agRef),
+		"ArtifactGenerator/flux-system/apps": paused, "GitRepository/flux-system/platform": platform}, fail: map[string]error{}}
+	if n := node(t, build(t, r, "uid-apps"), "ArtifactGenerator/flux-system/apps"); !n.Suspended || n.Failing {
+		t.Fatalf("suspended by its annotation: %+v", n)
+	}
+}

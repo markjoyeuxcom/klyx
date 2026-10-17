@@ -344,3 +344,15 @@ func TestKustomizationMessagesPassOrigins(t *testing.T) {
 		t.Fatalf("health reason: %q", e.Reason)
 	}
 }
+
+// Coverage S1c §6: a bound ExternalArtifact's message passes Origins where
+// its source health is parsed.
+func TestParseSourceArtifactMessage(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+		"metadata": map[string]interface{}{"name": "a", "namespace": "flux-system"},
+		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "UploadFailed",
+			"message": "upload to https://store.example/a?sig=SIGNEDneedle5S failed"}}}}}
+	if s := ParseSource(u); strings.Contains(s.Message, "SIGNEDneedle5S") || !strings.Contains(s.Message, "https://store.example") {
+		t.Fatalf("message: %q", s.Message)
+	}
+}

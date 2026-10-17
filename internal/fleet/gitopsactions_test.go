@@ -365,3 +365,21 @@ func TestImageKindVerbs(t *testing.T) {
 		t.Fatalf("a v1beta2 ImageRepository is acted on: %v", err)
 	}
 }
+
+// Coverage S1c §5: a resource bound to an ExternalArtifact is never
+// reconciled with its source - the producer reconciles the artifact - and
+// nothing is written.
+func TestReconcileWithSourceRefusesAnArtifactSource(t *testing.T) {
+	listKinds := map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"}
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomizationWithSource("app", "ExternalArtifact", "flux-system"))
+	c := newActionConn(dyn)
+	err := c.ReconcileWithSource(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
+	if err == nil || !strings.Contains(err.Error(), "its producer reconciles") {
+		t.Fatalf("refused: %v", err)
+	}
+	for _, a := range dyn.Actions() {
+		if _, ok := a.(k8stesting.PatchAction); ok {
+			t.Fatalf("nothing is written: %v", a)
+		}
+	}
+}
