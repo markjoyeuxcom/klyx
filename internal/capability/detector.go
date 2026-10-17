@@ -80,6 +80,8 @@ func (g GitOpsCapability) FluxProblems() (failures, gaps []string) {
 		failures = append(failures, "Flux installed but "+fluxKustomizeController+" is not ready")
 	}
 	f, gp := g.Flux.Images.Problems()
+	failures, gaps = append(failures, f...), append(gaps, gp...)
+	f, gp = g.Flux.Components.Problems()
 	return append(failures, f...), append(gaps, gp...)
 }
 
@@ -111,7 +113,8 @@ func gitOpsTier(flux FluxInfo, argo ArgoInfo) (Tier, string) {
 	if r := g.ArgoIssue(); r != "" {
 		reasons = append(reasons, r)
 	}
-	fluxOK := !flux.Present || (flux.Healthy && flux.Images.Issue() == "")
+	cf, cg := flux.Components.Problems()
+	fluxOK := !flux.Present || (flux.Healthy && flux.Images.Issue() == "" && len(cf)+len(cg) == 0)
 	argoOK := !argo.Present || argo.Healthy
 	return Classify(true, fluxOK && argoOK), strings.Join(reasons, "; ")
 }
@@ -207,6 +210,7 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 	}
 	if fluxPresent {
 		out.Flux.Images = d.detectImageControllers(ctx, served, ns)
+		out.Flux.Components = d.detectFluxComponents(ctx, served, ns)
 	}
 	switch {
 	case kustomize:

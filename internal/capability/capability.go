@@ -55,6 +55,9 @@ type FluxInfo struct {
 	// Images are the image automation controllers (coverage S1b §3), read
 	// with detection.
 	Images ImageControllers
+	// Components are source-watcher and notification-controller
+	// (coverage S1c §3), each needed only for its own resources.
+	Components FluxComponents
 	// Synthesized: no kustomize-controller was read; Healthy and Verified
 	// stand for the operator's own state (an operator-only install) or the
 	// image controllers' (an image-automation-only install), so they never

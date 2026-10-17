@@ -124,3 +124,26 @@ func TestImageOnlyInstallation(t *testing.T) {
 		t.Fatalf("no invented failure: %v", f)
 	}
 }
+
+// Coverage S1c §3: source-watcher and notification-controller, each needed
+// only for its own resources, reach the Flux task.
+func TestFluxComponents(t *testing.T) {
+	cs := fake.NewSimpleClientset(imageDep("flux-system", "nc", notificationController, false))
+	cs.Discovery().(*fakediscovery.FakeDiscovery).Resources = []*metav1.APIResourceList{
+		{GroupVersion: notificationGroup + "/v1", APIResources: []metav1.APIResource{{Name: "receivers"}}},
+		{GroupVersion: sourceExtensionsGroup + "/v1beta1", APIResources: []metav1.APIResource{{Name: "artifactgenerators"}}},
+	}
+	served := map[string]bool{notificationGroup: true, notificationGroup + "/v1": true, sourceExtensionsGroup: true, sourceExtensionsGroup + "/v1beta1": true}
+	c := (&Detector{cs: cs}).detectFluxComponents(context.Background(), served, "flux-system")
+	f, g := c.Problems()
+	if len(f) != 2 || !strings.Contains(f[0], "no source-watcher in flux-system") || !strings.Contains(f[1], "flux-system/nc is not ready") || len(g) != 0 {
+		t.Fatalf("components: %v %v", f, g)
+	}
+	if none := (&Detector{cs: fake.NewSimpleClientset()}).detectFluxComponents(context.Background(), map[string]bool{}, "flux-system"); func() bool { f, g := none.Problems(); return len(f)+len(g) > 0 }() {
+		t.Fatal("not served: nothing")
+	}
+	gc := GitOpsCapability{Flux: FluxInfo{Present: true, Healthy: true, Verified: true, Components: c}}
+	if !strings.Contains(gc.FluxIssue(), "no source-watcher") {
+		t.Fatalf("the Flux task names it: %q", gc.FluxIssue())
+	}
+}
