@@ -140,7 +140,7 @@ func TestArtifactProjectionAndRule(t *testing.T) {
 		t.Fatalf("the artifact's URL or metadata crossed: %s", b)
 	}
 	a := ParseArtifact(o)
-	if !a.HasArtifact || a.Origin != "https://store.example <the rest of the message is withheld: it follows a URL>" || a.OriginRevision != "main@sha1:4f2c9e1" || a.SourceRef.Namespace != "flux-system" {
+	if !a.HasArtifact || a.Origin != "https://store.example" || a.OriginRevision != "main@sha1:4f2c9e1" || a.SourceRef.Namespace != "flux-system" {
 		t.Fatalf("parse: %+v", a)
 	}
 	if e := ArtifactRule(a); e.Role != health.OK {

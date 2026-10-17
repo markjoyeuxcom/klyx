@@ -77,6 +77,22 @@ const (
 	OriginsRest    = "<the rest of the message is withheld: it follows a URL>"
 )
 
+// OriginOf is a URL field shown as its origin only (S1c §6): its
+// "<scheme>://<host>" when the field begins with a well-formed one, else
+// OriginWithheld - never a message's wording, never a path.
+func OriginOf(url string) string {
+	at, loc := first(url)
+	if at != 0 || loc == nil {
+		return OriginWithheld
+	}
+	out, _ := Origins(url)
+	out = strings.TrimSuffix(out, " "+OriginsRest)
+	if strings.HasSuffix(out, "://"+OriginWithheld) {
+		return OriginWithheld
+	}
+	return out
+}
+
 // Prefix is the text before the first URL candidate, a request echo's
 // method included in what follows; ok is false when there is none.
 func Prefix(msg string) (string, bool) {

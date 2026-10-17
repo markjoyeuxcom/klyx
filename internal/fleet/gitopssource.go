@@ -55,6 +55,8 @@ func fluxGVR(kind string) (group, fallbackVersion, resource string, ok bool) {
 		return "helm.toolkit.fluxcd.io", "v2", "helmreleases", true
 	case "ArtifactGenerator":
 		return "source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", true
+	case "Receiver":
+		return "notification.toolkit.fluxcd.io", "v1", "receivers", true
 	case "ImageRepository", "ImagePolicy", "ImageUpdateAutomation":
 		return "image.toolkit.fluxcd.io", "v1", map[string]string{"ImageRepository": "imagerepositories", "ImagePolicy": "imagepolicies", "ImageUpdateAutomation": "imageupdateautomations"}[kind], true
 	}

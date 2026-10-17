@@ -5,6 +5,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/gitops/notify"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -334,3 +335,5 @@ func TestComputeDiffKeepsTheSuspendedOrFailingGate(t *testing.T) {
 func (d *diffConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
 	return observe.Rows{}, false
 }
+
+func (f *diffConn) FluxNotifications(context.Context) notify.Read { return notify.Read{} }

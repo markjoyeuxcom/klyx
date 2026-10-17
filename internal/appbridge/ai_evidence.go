@@ -84,6 +84,20 @@ var aiEvidenceFields = map[string]allow{
 			"interval": nil, "pushBranch": nil, "updateStrategy": nil, "updatePath": nil, "lastRun": nil, "lastPushTime": nil,
 			"lastPushCommit": nil, "observedSourceRevision": nil, "suspended": nil, "generation": nil, "observedGeneration": nil,
 			"uses": allow{"namespace": nil, "name": nil, "resolved": imageRefAllow, "observed": imageRefAllow, "state": nil}}},
+	// Coverage S1c §6: kinds, verdicts, reasons and messages (after the
+	// rules), names, revisions and digests, an artifact's origin (scheme
+	// and host) and the producer block; never a URL path, producer
+	// metadata, a webhook path or a Secret's name.
+	healthsrc.TaskFlux + "/composition": {"kind": nil,
+		"generator": allow{"ready": nil, "reason": nil, "message": nil, "suspended": nil, "resume": nil, "generation": nil, "readyGeneration": nil,
+			"sources": allow{"kind": nil, "alias": nil, "namespace": nil, "name": nil}, "outputs": allow{"name": nil, "revision": nil},
+			"generated": allow{"namespace": nil, "name": nil, "found": nil, "label": nil, "role": nil}, "generatedState": nil},
+		"artifact": allow{"ready": nil, "reason": nil, "message": nil, "hasArtifact": nil, "revision": nil, "digest": nil, "origin": nil,
+			"originRevision": nil, "lastUpdate": nil, "size": nil, "sourceRef": allow{"kind": nil, "namespace": nil, "name": nil},
+			"producer": allow{"state": nil, "kind": nil, "namespace": nil, "name": nil, "label": nil, "role": nil, "failing": nil}}},
+	healthsrc.TaskFlux + "/receivers": {"type": nil, "ready": nil, "reason": nil, "suspended": nil, "events": nil, "meaning": nil, "stalled": nil,
+		"resources": allow{"kind": nil, "name": nil, "namespace": nil}, "resourceCount": nil, "filterCount": nil,
+		"generation": nil, "observedGeneration": nil, "readyGeneration": nil},
 }
 
 var imageRefAllow = allow{"name": nil, "tag": nil, "digest": nil, "text": nil}

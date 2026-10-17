@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -244,7 +243,14 @@ func generatorFields(u *unstructured.Unstructured, spec, status map[string]any, 
 			cp, _ := am["copy"].([]any)
 			var rules []any
 			for _, c := range cp {
-				cm, _ := c.(map[string]any)
+				cm, ok := c.(map[string]any)
+				if !ok {
+					// a rule that is not an object is not shown as one
+					if len(*incomplete) == 0 || (*incomplete)[len(*incomplete)-1] != "spec.artifacts.copy" {
+						*incomplete = append(*incomplete, "spec.artifacts.copy")
+					}
+					continue
+				}
 				rule := str(cm, "from") + " → " + str(cm, "to")
 				if s := str(cm, "strategy"); s != "" {
 					rule += " (" + s + ")"
@@ -294,11 +300,7 @@ func artifactFields(u *unstructured.Unstructured, spec, status map[string]any, l
 	// the URL shows as its scheme and host only (S1c §6); of the metadata,
 	// only the origin revision, which the producer records
 	if url := str(art, "url"); url != "" {
-		origin, _ := urlscrub.Origins(url)
-		if !strings.Contains(url, "://") {
-			origin = crd.WithheldValue
-		}
-		a["origin"] = clip(origin, tightClip, "status.artifact.url", clipped)
+		a["origin"] = clip(urlscrub.OriginOf(url), tightClip, "status.artifact.url", clipped)
 	}
 	if md, ok := art["metadata"].(map[string]any); ok {
 		if r, ok := md[OriginRevision].(string); ok {

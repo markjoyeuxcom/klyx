@@ -25,6 +25,8 @@ import (
 const (
 	Group           = "notification.toolkit.fluxcd.io"
 	ReceiverVersion = "v1"
+	// FactsVersion is the version Providers and Alerts are read at.
+	FactsVersion    = "v1beta3"
 	StaticVersion   = "v1beta3" // Provider and Alert
 	KindReceiver    = "Receiver"
 	KindProvider    = "Provider"
@@ -499,3 +501,33 @@ func SummaryOf(counts map[string]int) string {
 	}
 	return strings.Join(parts, ", ") + " (from the controller's events, which expire after about an hour)"
 }
+
+// Read is the Notifications view's on-demand read (S1c §3): Providers and
+// Alerts, each capped, and the reasons of the Alerts' recent events. It
+// retains nothing after the view closes.
+type Read struct {
+	Providers, Alerts List
+	// AlertReasons are the Alerts' recent event reasons by "namespace/name":
+	// never their messages (§6).
+	AlertReasons    map[string][]string
+	EventsTruncated bool
+	EventsError     string
+}
+
+// List is one capped read of a kind.
+type List struct {
+	Items []*unstructured.Unstructured
+	// Absent: the cluster does not serve the kind. Error: the read failed,
+	// or the kind is served at a version Klyx does not read.
+	Absent bool
+	Error  string
+	// More is how many are past the cap: the server's count, -1 when it
+	// does not say, 0 when nothing is.
+	More int64
+}
+
+// Complete: every object of the kind is in the list.
+func (l List) Complete() bool { return l.Error == "" && l.More == 0 }
+
+// ListCap bounds each on-demand list (S1c §3).
+const ListCap = 500

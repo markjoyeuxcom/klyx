@@ -37,6 +37,7 @@ import (
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/argo"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gitops/notify"
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
@@ -117,6 +118,8 @@ type Conn interface {
 	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, events bool) (*exec.Cmd, func(), error)
 	FluxOpAct(ctx context.Context, kind, ns, name, uid, verb string) error
 	FluxOpObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
+	// FluxNotifications reads Providers and Alerts on demand (S1c §3).
+	FluxNotifications(ctx context.Context) notify.Read
 	ExecCommand(namespace, pod, container string) ([]string, error)
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error

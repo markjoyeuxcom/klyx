@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/gitops/notify"
 	"github.com/moomora/klyx/internal/observe"
 	"strings"
 	"sync"
@@ -46,6 +47,8 @@ type fakeGitOpsConn struct {
 	byKindErr      map[string]error
 	rows           observe.Rows // what HealthRowsNow returns
 	rowsOK         bool
+	rowsByPart     map[string]observe.Rows // per part, when set (a missing part is unread)
+	notifications  notify.Read
 }
 
 // FluxObject: the direct read (design §5b) - a missing object is NotFound,
@@ -403,6 +406,12 @@ func TestGetFluxOpDetailIsUIDFenced(t *testing.T) {
 	}
 }
 
-func (f *fakeGitOpsConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
+func (f *fakeGitOpsConn) HealthRowsNow(_ context.Context, _, part string) (observe.Rows, bool) {
+	if f.rowsByPart != nil {
+		r, ok := f.rowsByPart[part]
+		return r, ok
+	}
 	return f.rows, f.rowsOK
 }
+
+func (f *fakeGitOpsConn) FluxNotifications(context.Context) notify.Read { return f.notifications }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/gitops/notify"
 	"github.com/moomora/klyx/internal/observe"
 	"io"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -380,3 +381,5 @@ func TestRegistrySurfacesFriendlyFactoryError(t *testing.T) {
 		t.Fatalf("want friendly AWS failure, got %+v", snaps)
 	}
 }
+
+func (f *fakeConn) FluxNotifications(context.Context) notify.Read { return notify.Read{} }

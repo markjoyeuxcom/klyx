@@ -101,3 +101,22 @@ func TestOriginsMalformedURLs(t *testing.T) {
 		t.Error("no candidate, no prefix")
 	}
 }
+
+// A URL field shows its origin or nothing: never a path, never message words.
+func TestOriginOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://store.example/a?sig=SIGNEDneedle": "https://store.example",
+		"http://source-watcher.flux-system.svc./x": "http://source-watcher.flux-system.svc.",
+		"https://u:p@store.example:8443/a":         "https://store.example:8443",
+		"https://store.example":                    "https://store.example",
+		"https:/store.example/signed/x":            OriginWithheld,
+		"/signed/x":                                OriginWithheld,
+		"https://bad host/x":                       OriginWithheld,
+		" https://store.example/x":                 OriginWithheld,
+		`Get "https://store.example/x"`:            OriginWithheld,
+	} {
+		if got := OriginOf(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}

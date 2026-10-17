@@ -13,6 +13,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/composition"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/gitops/notify"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/urlscrub"
@@ -45,6 +46,8 @@ type GitOpsConn interface {
 	// HealthRowsNow is one fresh Observer capture of a part's rows: the
 	// image inspector's applied lines read the reconciliations (S1b §2).
 	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
+	// FluxNotifications reads Providers and Alerts on demand (S1c §3).
+	FluxNotifications(ctx context.Context) notify.Read
 }
 
 // GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git

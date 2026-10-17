@@ -1005,6 +1005,13 @@ var chatParts = map[string][2]string{
 	"external-secrets.io/externalsecrets":        {healthsrc.TaskESO, "externalsecrets"},
 	"karpenter.sh/nodeclaims":                    {healthsrc.TaskKarpenter, "nodeclaims"},
 	"karpenter.sh/nodepools":                     {healthsrc.TaskKarpenter, "nodepools"},
+	// coverage S1b and S1c: the image, composition and Receiver parts
+	"image.toolkit.fluxcd.io/imagerepositories":      {healthsrc.TaskFlux, "images"},
+	"image.toolkit.fluxcd.io/imagepolicies":          {healthsrc.TaskFlux, "images"},
+	"image.toolkit.fluxcd.io/imageupdateautomations": {healthsrc.TaskFlux, "images"},
+	"source.extensions.fluxcd.io/artifactgenerators": {healthsrc.TaskFlux, "composition"},
+	"source.toolkit.fluxcd.io/externalartifacts":     {healthsrc.TaskFlux, "composition"},
+	"notification.toolkit.fluxcd.io/receivers":       {healthsrc.TaskFlux, "receivers"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer
