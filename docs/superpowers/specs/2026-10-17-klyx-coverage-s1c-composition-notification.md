@@ -435,3 +435,66 @@ Codex accepted the fetch and `InvalidConfig` changes and asked for two more on E
 **Found while fixing:** the gated load test (`KLYX_LOAD=1`, health 1c §7) serves every group. It had not registered the kinds S1a and S1b watch, so it could not run since S1a. Every coverage kind is now registered.
 
 Tests: `crd.TestEventObjects` covers no kind, an empty kind, an empty related kind, no subject, a null related, and the classifier table. `workloads.TestSummarizeEventsSharesTheEventClassifier`, `appbridge.TestListEventsRelatedSubjectRule` (the serialised bridge result) and `fleet.TestEventDetailUsesSubjectRule` (now with the inspector's typed events) cover the readers.
+
+## 15. As built: Stages 1 to 8
+
+**Stage 1 (918db30): pure packages.**
+- `internal/gitops/resume` is S1a's resume tracker, generalised over a `Sample` (kind, UID, disabled, Ready fingerprint, and whether this Ready is evidence). The Flux Operator's tracker is now an adapter over it. It has the same bounds, lost markers and saturation, failing closed.
+- `internal/gitops/composition` holds:
+  - the field-by-field projection, budgeted at 4 KiB per object;
+  - the generator and artifact parse, and their rules;
+  - `ProducerOf`, which gives every producer state in §2.
+- The artifact's URL is projected as its origin only (`urlscrub.OriginOf`, Stage 6). A copy rule that is not an object marks the rules incomplete.
+
+**Stage 2 (707d6d4): `internal/gitops/notify`.**
+- The Receiver projection never carries `webhookPath` or a message.
+- `ReceiverRule` uses Klyx's own wording, and `ReadyMeaning` says what Ready means by type.
+- Providers and Alerts are facts. The address and proxy are read only for whether they are set, and only the keys of event metadata are read.
+- Dispatch evidence is a count of reasons.
+
+**Stage 3a (791a8f9): controllers.** source-watcher and notification-controller are found by component label. Each is needed only for its own served resources, judged per Deployment, and reaches the Flux task. The views' presence flags (Stage 7) come from the same detection.
+
+**Stage 3b (38c9a3c): the Observer.**
+- Three watches, each at its one served version; another served version is a named gap. The budget is 512, 384 and 128 KiB, 1 MiB per cluster.
+- **Deviation:** generators and artifacts are a part of their own, `composition`, rather than rows of `sources`. The row types differ, and so does the inspector shape: an artifact's producer block. The Sources view is unchanged, and the composition part is shown in its own view (Stage 7).
+- The part joins a generator's inventory and an artifact's producer from the same capture. The tracker is pruned only by a complete read.
+
+**Stage 4 (5621832): verbs.**
+- A generator uses source-watcher's annotations, through the operator's UID-guarded annotation path, and only at v1beta1.
+- A Receiver reconciles and suspends.
+- A Provider or an Alert suspends only: it is static, and reconcile is refused.
+- An ExternalArtifact has no verb. Reconcile with source is refused for a resource bound to one (Stage 5).
+
+**Stage 5 (6f5b59e): drawings and joins.**
+- The dependency graph follows an artifact's generator sourceRef, qualified by the identity the artifact records (verified, named, disagree), and then the generator's sources.
+- A disagreeing generator is drawn but never attributed: no node reached only through it is an upstream failure. A producer of another kind is declared, never followed.
+- The bound-source panel gives an artifact its own rule and a producer line from the shared composition rows, and names a feature-gate refusal for its controller.
+- `AppliedArtifact` covers artifact-bound Kustomizations. The Line excludes them as artifact sources (`ExcludedArtifact`), as it does OCI and Bucket.
+
+**Stage 6 (d8fbf11): the bridge.**
+- Row DTOs for both parts.
+- `GetNotifications`:
+  - reads at v1beta3, capped at 500 each, with what is past the cap said;
+  - joins both ways, where a capped read is "incomplete", never "not found";
+  - keeps only the reasons of the Alerts' events.
+- `GetCompositionDetail` is UID-fenced. It gives events under the message rules, a generator's sources and an artifact's consumers from the shared rows.
+- The AI evidence allowlists cover both parts. Chat verdicts map the composition, Receiver and image kinds; the image kinds were missing since S1b.
+
+**Stage 7 (8b870e1): the UI.**
+- **Deviation:** a Composition view beside Sources rather than inside it, for the same reason as Stage 3b.
+- The Composition view leads each inspector with the object's own verdict, then the producer block, which carries a health only when the producer's identity is established.
+- The Notifications view has three tabs: Receivers with verdicts, and Providers and Alerts as facts read when the view opens.
+- The dependency drawing qualifies producer edges.
+- Capability flags gate both destinations, and reveal, attention, Describe and the smoke titles know the new kinds.
+
+**Stage 8: the lab, parity and smoke.**
+- The lab (`scratchpad/lab-s1c/apply.sh`, kind-klyx only):
+  - installs the pinned ArtifactGenerator CRD, read first, and stand-ins for both controllers;
+  - adds generators (ready, failing with a signed URL, suspended);
+  - adds artifacts (recorded producer, declared producer with a signed URL, none);
+  - adds an artifact-bound Kustomization, Receivers, Providers, Alerts, and two Events whose text must never reach the screen.
+
+  Every protected value carries one needle, and the smoke asserts it is absent from every view it opens.
+- Parity copies the three new CRDs, seeds a healthy generator, artifact and Receiver with their stand-ins, and both oracles name the two parts.
+
+**Found while building:** the gated load test (§14).

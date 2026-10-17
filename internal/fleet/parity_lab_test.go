@@ -196,6 +196,8 @@ var parityParts = []parityPart{
 	{"flux", "fluxinstance", "native", []string{"fluxinstances"}},
 	{"flux", "resourcesets", "native", []string{"resourcesets", "resourcesetinputproviders"}},
 	{"flux", "images", "native", []string{"imagerepositories", "imagepolicies", "imageupdateautomations"}},
+	{"flux", "composition", "native", []string{"artifactgenerators", "externalartifacts"}},
+	{"flux", "receivers", "native", []string{"receivers"}},
 	{"argo", "applications", "native", []string{"applications"}},
 	{"argo", "applicationsets", "native", []string{"applicationsets"}},
 	{"certs", "certificates", "native", []string{"certificates"}},
@@ -225,6 +227,8 @@ var parityResource = map[string]string{
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
 	"imageupdateautomations": "imageupdateautomations.image.toolkit.fluxcd.io",
+	"artifactgenerators":     "artifactgenerators.source.extensions.fluxcd.io", "externalartifacts": "externalartifacts.source.toolkit.fluxcd.io",
+	"receivers": "receivers.notification.toolkit.fluxcd.io",
 }
 
 // parityMember is one counted object's declared evaluation.

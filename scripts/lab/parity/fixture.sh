@@ -498,11 +498,90 @@ EOF
 	ready imageupdateautomations.image.toolkit.fluxcd.io "$ns" parity-auto-paused True Succeeded
 }
 
+composition_objects() {
+	# Source composition and Receivers (coverage S1c): stand-ins for
+	# source-watcher and notification-controller, found by their component
+	# label in flux-system, so the Flux task has no controller issue. The
+	# baseline is healthy: a ready generator whose inventory names a ready
+	# artifact that records it, and a ready Receiver. Faults are covered by
+	# the observer-path tests (internal/healthsrc/fluxcomposition_test.go).
+	local c
+	for c in source-watcher notification-controller; do
+		k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $c
+  namespace: flux-system
+  labels: {app.kubernetes.io/component: $c}
+  annotations:
+    $(marks ok true)
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: $c}}
+  template:
+    metadata:
+      labels: {app: $c}
+      annotations:
+        klyx.dev/parity-role: "ok"
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: manager, image: $pause, imagePullPolicy: Never}]
+EOF
+		k -n flux-system rollout status "deployment/$c" --timeout=120s >/dev/null
+		settled_pods flux-system "$c" Running
+	done
+	k apply -f - >/dev/null <<EOF
+apiVersion: source.extensions.fluxcd.io/v1beta1
+kind: ArtifactGenerator
+metadata:
+  name: parity-gen
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  sources: [{alias: git, kind: GitRepository, name: parity-git}]
+  artifacts: [{name: parity-art, copy: [{from: "@git/**", to: "@artifact/"}]}]
+---
+apiVersion: notification.toolkit.fluxcd.io/v1
+kind: Receiver
+metadata:
+  name: parity-receiver
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  type: generic
+  secretRef: {name: parity-token}
+  resources: [{kind: GitRepository, name: parity-git}]
+EOF
+	local uid t
+	uid=$(k -n "$ns" get artifactgenerators.source.extensions.fluxcd.io parity-gen -o jsonpath='{.metadata.uid}')
+	k apply -f - >/dev/null <<EOF
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: ExternalArtifact
+metadata:
+  name: parity-art
+  namespace: $ns
+  labels: {source.extensions.fluxcd.io/generator: "$uid"}
+  annotations:
+    $(marks ok false)
+spec:
+  sourceRef: {apiVersion: source.extensions.fluxcd.io/v1beta1, kind: ArtifactGenerator, name: parity-gen}
+EOF
+	t=$(now)
+	ready artifactgenerators.source.extensions.fluxcd.io "$ns" parity-gen True Succeeded "\"inventory\":[{\"name\":\"parity-art\",\"namespace\":\"$ns\",\"digest\":\"sha256:ab\",\"filename\":\"a.tar.gz\"}]"
+	ready externalartifacts.source.toolkit.fluxcd.io "$ns" parity-art True Succeeded "\"artifact\":{\"revision\":\"latest@sha256:ab\",\"digest\":\"sha256:ab\",\"path\":\"a.tar.gz\",\"url\":\"http://source-watcher.flux-system.svc/a.tar.gz\",\"lastUpdateTime\":\"$t\"}"
+	ready receivers.notification.toolkit.fluxcd.io "$ns" parity-receiver True Succeeded "\"webhookPath\":\"/hook/parity\""
+}
+
 baseline() {
 	controllers
 	flux_objects
 	fluxop_objects
 	images_objects
+	composition_objects
 	argo_objects
 	certs_objects
 	eso_objects

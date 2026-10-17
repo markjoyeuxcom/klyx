@@ -75,6 +75,7 @@ crds=(
 	fluxinstances.fluxcd.controlplane.io fluxreports.fluxcd.controlplane.io
 	resourcesets.fluxcd.controlplane.io resourcesetinputproviders.fluxcd.controlplane.io
 	imagerepositories.image.toolkit.fluxcd.io imagepolicies.image.toolkit.fluxcd.io imageupdateautomations.image.toolkit.fluxcd.io
+	artifactgenerators.source.extensions.fluxcd.io externalartifacts.source.toolkit.fluxcd.io receivers.notification.toolkit.fluxcd.io
 )
 
 copy_crds() {

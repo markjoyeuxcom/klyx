@@ -301,6 +301,56 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (/Syncing/.test(row.textContent ?? "") || !/Failed/.test(row.textContent ?? "")) throw new Error(`not a fault: ${row.textContent}`);
     if (!row.querySelector('[data-aspect="fault"]')) throw new Error("no fault aspect on the row");
   });
+  // Coverage S1c: the Composition and Notifications views and a bound
+  // artifact's producer line, from the lab's fixtures (scratchpad
+  // lab-s1c): broken-first, an artifact's own verdict before its producer,
+  // facts without a verdict, and no protected value on screen.
+  const noNeedle = (where: string) => {
+    if ((document.body.textContent ?? "").includes("S1cLABneedle")) throw new Error(`a protected value is on screen: ${where}`);
+  };
+  await step(steps, "Flux Composition view", async () => {
+    await open("flux-composition");
+    await closeDrawer();
+    const first = await within(10_000, "composition rows", () => $<HTMLElement>(".lens-row"));
+    if (!/broken|empty/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the artifact apps-a", () => byText<HTMLElement>(".lens-row", /artifact.*team-a\/apps-a/))).click();
+    const panel = await within(8000, "the artifact inspector", () => $("[data-testid='composition-panel']"));
+    const producer = await within(8000, "the producer block", () => $("[data-testid='composition-producer']"));
+    const text = panel.textContent ?? "";
+    if (text.indexOf("Ready") < 0 || text.indexOf("Ready") > text.indexOf("produced by ArtifactGenerator team-a/apps")) throw new Error(`the artifact's own verdict is not first: ${text.slice(0, 200)}`);
+    if (!/produced by ArtifactGenerator team-a\/apps/.test(producer.textContent ?? "")) throw new Error(`the producer: ${producer.textContent}`);
+    (await within(4000, "the signed artifact", () => byText<HTMLElement>(".lens-row", /artifact.*team-a\/signed/))).click();
+    const signed = await within(8000, "the declared producer", () => byText<HTMLElement>("[data-testid='composition-producer']", /Pipeline team-a\/build/));
+    if (!/Klyx does not read that kind's health/.test(signed.textContent ?? "")) throw new Error(`a declared producer: ${signed.textContent}`);
+    await within(8000, "the origin only", () => /https:\/\/store\.example/.test($("[data-testid='composition-artifact']")?.textContent ?? ""));
+    noNeedle("the Composition view");
+  });
+  await step(steps, "Flux Notifications view", async () => {
+    await open("flux-notifications");
+    await closeDrawer();
+    const first = await within(10_000, "receiver rows", () => $<HTMLElement>(".lens-row"));
+    if (!/broken/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the github Receiver", () => byText<HTMLElement>(".lens-row", /team-a\/github/))).click();
+    const meaning = await within(8000, "what Ready means", () => $("[data-testid='receiver-meaning']"));
+    if (!/configuration accepted, token read/.test(meaning.textContent ?? "")) throw new Error(`Ready's meaning: ${meaning.textContent}`);
+    noNeedle("a Receiver");
+    (await within(4000, "the Providers tab", () => byText<HTMLElement>("[aria-label='Notification kinds'] button", /^Providers/))).click();
+    (await within(10_000, "the slack Provider", () => byText<HTMLElement>(".lens-row", /team-a\/slack/))).click();
+    const prov = await within(8000, "the Provider inspector", () => $("[data-testid='provider-panel']"));
+    if (!/set \(not shown/.test(prov.textContent ?? "") || !/without a verdict/.test(prov.textContent ?? "")) throw new Error(`the Provider: ${prov.textContent}`);
+    (await within(4000, "the Alerts tab", () => byText<HTMLElement>("[aria-label='Notification kinds'] button", /^Alerts/))).click();
+    (await within(10_000, "the on-call Alert", () => byText<HTMLElement>(".lens-row", /team-a\/on-call/))).click();
+    await within(8000, "dispatch evidence", () => /NotificationDispatchFailed/.test($("[data-testid='alert-dispatch']")?.textContent ?? ""));
+    noNeedle("Providers and Alerts");
+  });
+  await step(steps, "Flux bound artifact", async () => {
+    await open("flux");
+    await closeDrawer();
+    (await within(10_000, "the artifact-bound Kustomization", () => byText<HTMLElement>(".lens-row", /team-a \/ artifact-apps/))).click();
+    const line = await within(10_000, "the producer line", () => $("[data-testid='source-producer']"));
+    if (!/produced by ArtifactGenerator team-a\/apps/.test(line.textContent ?? "")) throw new Error(`the bound source's producer: ${line.textContent}`);
+    noNeedle("the Flux inspector");
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
