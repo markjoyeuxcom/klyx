@@ -442,3 +442,10 @@ S1a's implementation review fixes (`6cfc410`, `857eb60`, `055758d`) sit between 
 | 7 | The image kinds were not Describe targets | Added, with the S1a operator kinds, which were missing too |
 | Found while waiting | A payload kind outside `payloadResources` took the server's list cells (ImageUpdateAutomation's Status column is its raw Ready message) | `dc8b666`, with a test that keeps every payload kind's resource listed |
 
+## 13. Implementation review 2: Codex's review of 8d74ed1
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Revision matching discarded a failed read, hiding its error | A failed read belongs to its request (the UID asked for) and is shown as itself. The push lines say "not known". Successful evidence is still matched to the row's revision, and a replacement's refusal carries none of its data. Tested with the DTO's real error shape (an empty UID) and the replacement shape |
+| 2 | One unreadable version discarded what another version proved | A version that reads proves its resources present. A controller whose resources are proven is read, whatever else is unknown. An unreadable version is a gap only for a controller not proven needed |
+

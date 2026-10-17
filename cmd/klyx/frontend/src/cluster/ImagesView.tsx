@@ -309,11 +309,16 @@ function ImageInspector({ cluster, it, nowS, gone, replaced, onVerb, onOpen, onC
   // the evidence is shown only beside the revision it describes (Codex's
   // S1b implementation review, finding 1): the same UID, generation, push
   // and source as the row; a read of another revision waits for the row
-  const fresh = (x: ImageDetailDTO) => x.uid === it.uid && (!!x.error || x.generation === it.c.generation) &&
+  // A failed read belongs to its request (the UID asked for) and is shown as
+  // it is; it carries no evidence, a replacement's included (Codex's S1b
+  // implementation review 2, finding 1).
+  const fresh = (x: ImageDetailDTO) => x.uid === it.uid && x.generation === it.c.generation &&
     (!x.push || ((x.push.lastPushCommit ?? "") === (it.automation?.lastPushCommit ?? "") &&
       x.push.sourceNamespace === it.automation?.sourceNamespace && x.push.sourceName === it.automation?.sourceName));
-  const d = detail && detail.uid === it.uid && fresh(detail.d) ? detail.d : null;
-  const otherRevision = !!detail && detail.uid === it.uid && !fresh(detail.d);
+  const mine = detail && detail.uid === it.uid ? detail.d : null;
+  const readError = mine?.error ? mine.error : null;
+  const d = mine && !readError && fresh(mine) ? mine : null;
+  const otherRevision = !!mine && !readError && !fresh(mine);
 
   const v1Policy = it.kind !== "ImagePolicy" || isV1(it.c);
   const verbs: MenuItem[] = gone ? [] : [
@@ -345,10 +350,10 @@ function ImageInspector({ cluster, it, nowS, gone, replaced, onVerb, onOpen, onC
         {ai.block}
         {it.repository && <RepositoryBlocks r={it.repository} onOpen={onOpen} />}
         {it.policy && <PolicyBlocks p={it.policy} nowS={nowS} onOpen={onOpen} />}
-        {it.automation && <AutomationBlocks a={it.automation} d={d} onOpen={onOpen} />}
+        {it.automation && <AutomationBlocks a={it.automation} d={d} readError={readError} onOpen={onOpen} />}
         <InspectorBlock title="Events">
-          {!d ? <div className="t-secondary">{otherRevision ? "The latest read describes another revision of this object; it waits for the row to catch up." : "Reading…"}</div>
-            : d.error ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>{d.error}</div>
+          {readError ? <div className="t-body" data-testid="images-read-error" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Could not be read: {readError}</div>
+            : !d ? <div className="t-secondary">{otherRevision ? "The latest read describes another revision of this object; it waits for the row to catch up." : "Reading…"}</div>
             : d.eventsError ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>Events could not be read: {d.eventsError}</div>
             : d.events.length === 0 ? <div className="t-secondary">No recent events (they age out after about an hour).</div>
             : d.events.slice(0, 8).map((e, i) => <div key={i} className="t-body" style={{ color: e.type === "Warning" ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{e.reason}: {e.message}</div>)}
@@ -456,14 +461,15 @@ function checkoutText(c?: { branch?: string; tag?: string; semver?: string; name
   return [c.commit && `commit ${c.commit}`, c.name && `ref ${c.name}`, c.semver && `semver ${c.semver}`, c.tag && `tag ${c.tag}`, c.branch && `branch ${c.branch}`].filter(Boolean).join(", ");
 }
 
-function AutomationBlocks({ a, d, onOpen }: { a: ImageAutomationDTO; d: ImageDetailDTO | null; onOpen: (key: string) => void }) {
+function AutomationBlocks({ a, d, readError, onOpen }: { a: ImageAutomationDTO; d: ImageDetailDTO | null; readError: string | null; onOpen: (key: string) => void }) {
   const push = d?.push;
-  const branch = !push ? "reading…"
+  const pending = readError ? "not known: the detail could not be read" : "reading…";
+  const branch = !push ? pending
     : push.branchState === "bound" ? `pushed to ${push.branch}, from the controller's event`
     : push.branchState === "ambiguous" ? "branch ambiguous: the controller's events disagree"
     : push.branchState === "unreadable" ? "branch not known: events could not be read"
     : push.branchState === "no push" ? "" : "branch not recorded (the event has expired)";
-  const source = !push ? "reading…"
+  const source = !push ? pending
     : push.sourceState !== "found" ? `GitRepository ${a.sourceNamespace}/${a.sourceName}: ${push.sourceState}`
     : push.sourceLine === "fetched" ? "the source has fetched this commit"
     : push.sourceLine === "no push" ? "" : `the source is at ${push.sourceRevision || "no artifact"}; whether it includes the push is not known here`;
@@ -487,7 +493,7 @@ function AutomationBlocks({ a, d, onOpen }: { a: ImageAutomationDTO; d: ImageDet
             <div className="t-body" style={{ marginTop: 6 }}><span className="t-section-label">Source: </span>{source}</div>
             {push?.sourceBranchNote && <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>{push.sourceBranchNote}</div>}
             <div className="t-body" style={{ marginTop: 6 }}><span className="t-section-label">Applied: </span>
-              {!push ? "reading…" : push.appliedState === "not readable" ? "the Kustomizations could not be read"
+              {!push ? pending : push.appliedState === "not readable" ? "the Kustomizations could not be read"
                 : push.applied.length === 0 ? `no Kustomization is bound to this GitRepository${push.appliedState === "incomplete" ? " in the retained read" : ""}` : null}
             </div>
             {push && push.applied.map((k) => (

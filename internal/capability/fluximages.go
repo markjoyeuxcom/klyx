@@ -85,11 +85,12 @@ func (i ImageControllers) Issue() string {
 	return strings.Join(append(f, g...), "; ")
 }
 
-// imageResources reads which image resources the served versions carry. An
-// unreadable version is a gap: which controllers are needed is then not
-// known.
+// imageResources reads which image resources the served versions carry.
+// A version that reads proves its resources present; an unreadable one is a
+// gap that proves nothing either way, and never discards what another
+// version proved (Codex's S1b implementation review 2, finding 2).
 func (d *Detector) imageResources(served map[string]bool) (map[string]bool, string) {
-	res := map[string]bool{}
+	res, gap := map[string]bool{}, ""
 	for _, v := range []string{"v1", "v1beta2"} {
 		gv := fluxImageGroup + "/" + v
 		if !served[gv] {
@@ -97,13 +98,14 @@ func (d *Detector) imageResources(served map[string]bool) (map[string]bool, stri
 		}
 		rl, err := d.cs.Discovery().ServerResourcesForGroupVersion(gv)
 		if err != nil || rl == nil {
-			return nil, "the image API's resources could not be read"
+			gap = "the image API's resources at " + v + " could not be read"
+			continue
 		}
 		for _, r := range rl.APIResources {
 			res[r.Name] = true
 		}
 	}
-	return res, ""
+	return res, gap
 }
 
 func (d *Detector) detectImageControllers(ctx context.Context, served map[string]bool, ns string) ImageControllers {
@@ -115,10 +117,14 @@ func (d *Detector) detectImageControllers(ctx context.Context, served map[string
 	res, gap := d.imageResources(served)
 	read := func(c *ImageController, needed bool) {
 		switch {
+		case needed:
+			// its resources are proven served: read it, whatever else is
+			// unknown
 		case gap != "":
+			// not proven needed, and the discovery that could tell failed
 			c.Needed, c.Unverified, c.Why = true, true, gap
 			return
-		case !needed:
+		default:
 			return
 		}
 		c.Needed = true

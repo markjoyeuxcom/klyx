@@ -171,5 +171,28 @@ describe("ImagesView (coverage S1b)", () => {
     fireEvent.click(screen.getByText("p"));
     await waitFor(() => expect(screen.getByTestId("images-panel").textContent).toContain("the read is capped, so others may"));
   });
+
+  // Review 2, finding 1: a failed read is shown as itself, with the DTO's
+  // real error shape (an empty UID), never as "another revision".
+  it("a failed detail read shows its error and claims no evidence", async () => {
+    vi.mocked(getImageDetail).mockImplementationOnce(async () => ({ uid: "", events: [], error: "imageupdateautomations.image.toolkit.fluxcd.io \"apps\" is forbidden" }));
+    setRows([automation("apps")]);
+    render(<ImagesView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    const err = await screen.findByTestId("images-read-error");
+    expect(err.textContent).toContain("is forbidden");
+    const pushEl = screen.getByTestId("images-push");
+    expect(pushEl.textContent).toContain("not known: the detail could not be read");
+    expect(pushEl.textContent).not.toContain("another revision");
+  });
+
+  it("a replacement's refusal is shown, and none of its data", async () => {
+    vi.mocked(getImageDetail).mockImplementationOnce(async () => ({ uid: "uid-OTHER", replaced: true, events: [],
+      error: "ImageUpdateAutomation apps/apps was replaced (its UID changed); nothing about the new object is shown here" }));
+    setRows([automation("apps")]);
+    render(<ImagesView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    expect((await screen.findByTestId("images-read-error")).textContent).toContain("was replaced");
+  });
 });
 

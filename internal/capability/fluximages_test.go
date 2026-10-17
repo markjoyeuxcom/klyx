@@ -83,6 +83,15 @@ func TestImageControllersPerResource(t *testing.T) {
 	if f, g := detectImages(cs).Problems(); len(f) != 0 || len(g) != 2 || !strings.Contains(g[0], "could not be read") {
 		t.Fatalf("unreadable discovery is a gap: %v %v", f, g)
 	}
+	// review 2, finding 2: v1 proves all three resources, v1beta2 is
+	// advertised but unreadable, and the reflector is down - the failure is
+	// still read and reported
+	both := imageCluster(allImageKinds, imageDep("flux-system", "r", imageReflector, false), imageDep("flux-system", "a", imageAutomation, true))
+	served := map[string]bool{fluxImageGroup: true, fluxImageGroup + "/v1": true, fluxImageGroup + "/v1beta2": true}
+	ic := (&Detector{cs: both}).detectImageControllers(context.Background(), served, "flux-system")
+	if f, g := ic.Problems(); len(f) != 1 || !strings.Contains(f[0], "flux-system/r is not ready") || len(g) != 0 {
+		t.Fatalf("a proven need is read despite another version's gap: %v %v", f, g)
+	}
 }
 
 // Finding 4: a ready shard never certifies another; a list cut short is a
