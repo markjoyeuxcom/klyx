@@ -332,6 +332,9 @@ fluxop_objects() {
 	# A flux-operator stand-in (coverage S1a): found by its label, runtime
 	# namespace flux-system (RUNTIME_NAMESPACE unset), so the FluxInstance
 	# there is bound and the kustomize-controller probe stays in flux-system.
+	# The baseline is healthy (case B has no attention): a suspended
+	# ResourceSet is paused, never attention; the operator's faults are
+	# covered by the observer-path tests (internal/healthsrc/fluxop_test.go).
 	k apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -376,15 +379,7 @@ metadata:
   annotations:
     $(marks ok false)
 spec: {resources: [{apiVersion: v1, kind: ConfigMap, metadata: {name: parity-rs-cm, namespace: $ns}}]}
----
-apiVersion: fluxcd.controlplane.io/v1
-kind: ResourceSet
-metadata:
-  name: parity-rs-failed
-  namespace: $ns
-  annotations:
-    $(marks fault true)
-spec: {resources: [{apiVersion: v1, kind: ConfigMap, metadata: {name: parity-rs-failed-cm, namespace: $ns}}]}
+
 ---
 apiVersion: fluxcd.controlplane.io/v1
 kind: ResourceSet
@@ -410,7 +405,6 @@ EOF
 	ready fluxinstances.fluxcd.controlplane.io flux-system flux True ReconciliationSucceeded
 	ready fluxreports.fluxcd.controlplane.io flux-system flux True ReconciliationSucceeded
 	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs True ReconciliationSucceeded
-	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs-failed False BuildFailed
 	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs-paused True ReconciliationSucceeded
 	ready resourcesetinputproviders.fluxcd.controlplane.io "$ns" parity-rsip True ReconciliationSucceeded
 }
