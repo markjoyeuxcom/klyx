@@ -48,11 +48,13 @@ Read from the controllers' own sources at the versions Flux v2.9.6 installs: ima
 - **What the controller does:**
   - **The policies it uses** are every ImagePolicy in its own namespace that matches `policySelector` and has a `latestRef`, **whether or not that policy is Ready**. A failing policy's last resolved image still drives updates.
   - **`lastAutomationRunTime` is set when a run starts**, before any step can fail. It is the last attempt, not the last success.
-  - **The push target:**
-    - the branch is `git.push.branch`, else the checkout branch (`git.checkout.ref.branch`, else the GitRepository's `spec.ref.branch`);
-    - a `git.push.refspec` pushes there as well;
-    - with no branch to infer, the run fails `InvalidSourceConfiguration`.
-  - **A push sets `lastPushCommit` and `lastPushTime`.** The time is the controller's clock just after the push, not the commit's own time. The branch is not recorded in status; it is in the controller's event ("pushed commit '…' to branch '…'").
+  - **The push target** (`internal/source/git.go` 86-97, 146-183):
+    - the checkout ref is `git.checkout.ref` **as a whole** when it is set, else the GitRepository's `spec.ref`. An explicit checkout never falls back to the source's fields: a checkout by tag with no `push.branch` is an inference failure (`InvalidSourceConfiguration`), whatever branch the GitRepository names;
+    - the branch is `git.push.branch`, else the checkout ref's branch;
+    - a `git.push.refspec` additionally updates the refs it names, so the refspec can update any branch, the source's own included (`source.go` 350-378).
+  - **A push sets `lastPushCommit` and `lastPushTime`.** The time is the controller's clock just after the push, not the commit's own time.
+    - The branch is not recorded in status. It appears only in the controller's event, `pushed commit '<7-character hash>' to branch '<branch>'`, followed by the rendered commit message (`PushResult.Summary`, `source.go` 485-499).
+    - `lastPushCommit` survives later changes to the source, branch or refspec, so today's configuration is not proof of where the last push went.
   - **`observedSourceRevision` and `observedPolicies`** are written only on a successful run (no change, or a push). With a different push branch, `observedSourceRevision` is the checkout branch's commit, not the pushed one.
   - **Faults, by reason:**
     - Stalled: `InvalidPolicySelector`, `AccessDenied`, `InvalidSourceConfiguration`, `FeatureGateDisabled`, `InvalidUpdateStrategy`, `RemovedTemplateField`;
@@ -75,26 +77,26 @@ An **Images** view in the Flux lens (design principle 2), beside Reconciliation,
   - the exclusion list, and whether the registry is insecure;
   - **the policies that use it,** found by their `imageRepositoryRef` across namespaces, each with its verdict.
 - **The ImagePolicy inspector:**
-  - **its headline is the bound repository's verdict** (the M10/M11 bound-source pattern): "Repository <ns>/<name>: Ready, scanned 3m ago", or its fault;
+  - **its own verdict first,** with its reason and message, as every Flux inspector leads with the selected object (`GitOps.tsx` `FluxInspector`). Then a separately labelled **repository block**: "Repository <ns>/<name>: Ready, scanned 3m ago", or its fault. A healthy repository never stands in for a failing policy, and a failing repository never replaces a policy's own verdict;
   - **the resolved image** (`name:tag@digest`) and the previous one. While the policy is not Ready, the image is labelled **"last resolved, before the failure"**, because the controller never clears it;
   - the policy (`semver` range, or `alphabetical`/`numerical` order), the tag filter (pattern and extract) and the digest reflection policy;
   - **the automations that use it** (same namespace, matching `policySelector`, and a resolved image), each with either "used in its last successful run" (`observedPolicies[name]` equals the resolved image) or **"pending: not yet in a successful run"**.
 - **The ImageUpdateAutomation inspector:**
-  - **its headline is the bound GitRepository's verdict;**
+  - **its own verdict first,** with its reason and message, then a separately labelled **source block** for the bound GitRepository. A healthy source never stands in for a failed push;
   - **the last push:**
     - the commit (`lastPushCommit`, abbreviated, with a copy affordance) and "pushed <age> ago", the time being the controller's clock just after the push;
-    - the branch from the controller's own event ("pushed commit '…' to branch '…'") while that event exists. Otherwise the branch is shown as **"push target as configured now"**, since status does not record it;
-  - **the push target as configured:** the repository URL from the GitRepository (URL rule), the branch, any refspec, and the number of push options;
+    - **the branch, only from a bound event:** an event whose `involvedObject.uid` is this automation's UID, whose seven-character hash is the prefix of `lastPushCommit`, and whose first line parses as the push summary. Exactly one such event names the branch ("pushed to <branch>, from the controller's event"). None reads "branch not recorded (the event has expired)". Several that disagree read "branch ambiguous". Only the first line is read (§6);
+  - **the push target as configured now,** labelled so: the repository URL from the GitRepository (URL rule), the checkout ref and where it comes from (the automation, or the source), the inferred branch or the inference failure, any refspec, and the number of push options. It describes the next run, never the last push;
   - the checkout ref, and **"last run started <age> ago"** (`lastAutomationRunTime`, set when a run begins, so it is an attempt, never a success);
   - `observedSourceRevision`, and the update strategy and path;
   - **the policies it uses now,** each with its resolved image, the image in the automation's last successful run, and "pending" when they differ;
   - the commit author, and the signing key's Secret named, never read;
   - events.
-- **Push versus applied** (roadmap), shown under the last push, each line naming its own evidence:
-  - **Source:** the GitRepository's artifact revision.
+- **Push versus applied** (roadmap), shown under the last push. Each line names its own evidence and is a comparison with today's objects, never proof of the old push's destination:
+  - **Source:** the GitRepository's current artifact revision.
     - Its SHA equals `lastPushCommit`: "the source has fetched this commit".
     - Otherwise: "the source is at <revision>; whether it includes the push is not known here".
-    - If the push branch differs from the branch the GitRepository tracks: "pushed to a branch this source does not track".
+    - **A branch note only when it is provable:** if the event-bound branch (above) differs from the branch the GitRepository tracks, **and** no refspec is configured, the line reads "pushed to <branch>; this source tracks <branch>". With a refspec, it reads "a refspec is configured, so the push may also have updated other branches". Without a bound branch, no branch claim is made.
   - **Applied:** each Kustomization bound to that GitRepository, with its last applied revision.
     - An equal SHA reads "applied this commit".
     - Anything else reads "at another revision".
@@ -123,9 +125,14 @@ An **Images** view in the Flux lens (design principle 2), beside Reconciliation,
   - `latestRef` (or `latestImage`) and `observedPreviousRef` (or `observedPreviousImage`).
 - **ImageUpdateAutomation display:**
   - `sourceRef`, `git.checkout.ref`, `git.push.branch` and `refspec`, the count of push options, the author's name and email, the signing key's Secret name and type, `update`;
-  - `policySelector`, rendered as a selector string of at most 256 bytes;
+  - `policySelector`, **as a structured selector, retained losslessly** (a join input, §3 below);
   - `lastPushCommit`, `lastPushTime` and `observedSourceRevision`;
   - `observedPolicies` (at most 100 entries; past that the map is marked clipped and the "pending" join says it is incomplete).
+- **ImagePolicy labels,** retained losslessly: the automation's selector matches them.
+- **Join inputs are never display strings** (revision 1):
+  - the selector and the labels it matches, `imageRepositoryRef`, the resolved and observed image references, `lastPushCommit`, the artifact revisions and the Kustomizations' applied revisions are kept whole, among the facts never clipped;
+  - one that cannot be kept whole within the object's 4 KiB marks its join **incomplete**: "pending" or "used", "fetched" or "applied" is then not claimed;
+  - display copies of the same strings may be clipped, and a clipped copy is never compared.
 - **Never projected:** `messageTemplate`, the values of `messageTemplateValues` and of push options (counts only), and `accessFrom` selectors (a count only).
 - **Condition messages,** for display only, clipped at 1 KiB, and further as S1a §3 sets out.
 
@@ -164,8 +171,8 @@ An **Images** view in the Flux lens (design principle 2), beside Reconciliation,
 So a spec change whose reconcile fails and retries keeps `status.observedGeneration` behind indefinitely. Meanwhile Ready=False is written for the **current** generation: `fluxcd/pkg/runtime/conditions.Set` stamps every condition with the object's generation. Klyx shows "Syncing…" for as long as the failure lasts.
 
 **The rule:**
-- **Pending:** generation is ahead of the Ready condition's own `observedGeneration`, or Ready is absent. The object reads "Syncing…" as today (Progressing, the ratified dim and grey chip).
-- **A current failure:** Ready=False whose own `observedGeneration` equals the generation. It reads as the failure it is, a fault with its reason, even if `status.observedGeneration` lags. The row stays dimmed, because the spec is not realised; the chip is the failure, and its tooltip names the generation it applies to.
+- **Pending:** generation is ahead of the Ready condition's own `observedGeneration`, or Ready is absent. The object reads "Syncing…" as today: Progressing, with the current neutral syncing text (slice 11a retired the row dim and slice 13b the grey chip; `staleness.tsx`).
+- **A current failure:** Ready=False whose own `observedGeneration` equals the generation. It reads as the failure it is: a fault, with the current fault aspect and contrast and its reason, even if `status.observedGeneration` lags. Its tooltip names the generation the failure applies to.
 - **Never confirmed early:** Ready=True while `status.observedGeneration` lags still reads "Syncing…", as ratified.
 - **Missing condition generation:** a Ready condition without `observedGeneration` (written by an older controller) keeps today's rule.
 
@@ -191,10 +198,10 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
 | **Run overdue** | ImageUpdateAutomation | Ready True for the current generation, not suspended, and now ≥ `lastAutomationRunTime` + `interval` + max(`interval`, 5m) | Degraded, "Run overdue", counted |
 
 - **Scan overdue** means the controller has not completed a scan for over twice its interval while still reporting Ready.
-- **Run overdue** means no run has even started: `lastAutomationRunTime` is set at the start of every run, so a stuck or absent controller is the cause.
+- **Run overdue** means no newer run has been recorded. `lastAutomationRunTime` is set in memory when a run starts, but an ordinary interval run publishes it only with its final patch (the early patch runs only for a new generation or request, `imageupdateautomation_controller.go` 296-320). A long run may therefore be in flight. The tooltip says "no newer run recorded; a run may be in progress", and the role stays Degraded, never a fault.
 - **Each deadline is the part's `Next`**, re-evaluated by the clock as ESO's staleness is. A deadline crossed is the role's start.
 - **Clock skew:** the slack (at least five minutes, or one interval) absorbs ordinary skew between the controller's clock and Klyx's. A larger skew can raise an overdue state early. It is Degraded, never a fault, and its tooltip names both times.
-- **ImagePolicy has no clock.** It runs when its repository changes, so a quiet policy is not a stale one.
+- **ImagePolicy has no clock.** It runs when its repository changes, so a quiet policy is not a stale one. The exception is `digestReflectionPolicy: Always`, which also reruns on its `interval` to refresh the digest. Status records no time for that refresh, so Klyx has nothing to compare and keeps no clock for it.
 
 ## 5. Verbs (roadmap C4)
 
@@ -217,24 +224,28 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
   - "reconcile with source" for an automation, which clones Git itself and never reads the GitRepository's artifact;
   - chained verbs: a policy's inspector links to its repository's "Scan now" instead.
 
-## 6. Sensitive data
+## 6. Sensitive data (revision 1)
 
 - **No credential values.** These kinds name Secrets (`secretRef`, `certSecretRef`, `proxySecretRef`, `signingKey.secretRef`) and Klyx shows the names only, never reading the Secrets.
-- **The URL rule** (S0b) applies to every displayed string: condition and event messages, and the GitRepository URL in the push target.
-- **Not projected or shown:**
-  - push option values and `messageTemplateValues` values (counts only);
-  - `messageTemplate`.
+- **ImageUpdateAutomation joins the S0b registry,** so its free-form surfaces are handled on every path, not only in this slice's projection:
+  - `spec.git.commit.messageTemplate`: opaque;
+  - `spec.git.commit.messageTemplateValues` and `spec.git.push.options`: free-form (keys kept, values omitted).
 
-  Neither is a credential channel by design, but neither has diagnostic value, and both are free text.
-- **The generic browser** shows these objects as ordinary custom resources, as kubectl does. They are not S0b payload kinds: they embed no manifests, values or templates.
+  S0b's machinery then applies unchanged: the generic detail (Manifest, Fields), Describe (withheld while a value is present), the guarded editor, cache diffs, the `flux diff` path, and the chat and AI projections. Codex's probe showed today's generic detail and chat projection retain all three.
+- **Rendered commit messages and template errors.** The controller publishes the rendered commit message, which can carry template values, in its push event (`PushResult.Summary`, the lines after the first). A template error can echo template text in a condition or event message.
+  - **One rule,** `crd.AutomationMessage`, applies to every condition and event message whose involved object is an ImageUpdateAutomation:
+    - only the first line is kept, and the URL rule runs on it;
+    - a first line that names the commit template (`template`, `messageTemplate`, `RemovedTemplateField`) is replaced by "the controller's message concerns the commit template and is withheld: it can echo template values", with the reason kept.
+  - **It runs wherever such text crosses:** the inspector's conditions and events, the events lens, the chat events and get tools, AI evidence, and health reasons (`CapReason` input).
+- **The URL rule** (S0b) applies to every other displayed string, including the GitRepository URL in the push target.
 - **AI facts:**
-  - **allowlisted:** kind, verdict, reasons and messages (URL rule), images, tags and digests, policy type and range, times, and commit SHAs;
-  - **excluded:** the author's email and the selector string.
+  - **allowlisted:** kind, verdict, reasons and messages (after the rules above), images, tags and digests, policy type and range, times, and commit SHAs;
+  - **excluded:** the author's email and the selector.
 
 ## 7. Tests, lab and smoke
 
 - **Stage 0 (§4.1):**
-  - a Kustomization failing its current generation with `status.observedGeneration` behind: a fault with its reason, dimmed;
+  - a Kustomization failing its current generation with `status.observedGeneration` behind: a fault with its reason;
   - a pending generation with an old Ready: "Syncing…";
   - Ready True with `status.observedGeneration` behind: "Syncing…";
   - a Ready without `observedGeneration`: today's rule;
@@ -252,8 +263,11 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
   - **joins:**
     - a policy's repository across namespaces;
     - an automation's policies by namespace, selector and resolved image, including a failing policy that still has an image;
-    - the push target's precedence (push branch, checkout ref, the GitRepository's branch, none);
-    - the source and applied lines (equal SHA, another revision, an untracked branch, a missing or unreadable GitRepository);
+    - the push target: push branch; an explicit checkout by branch; an explicit checkout by tag with no push branch (an inference failure, never the source's branch); the GitRepository's ref; none;
+    - the event-bound branch: one matching event, none (expired), two that disagree, an event of another automation (UID), an event of an older push (hash);
+    - the source and applied lines: equal SHA, another revision, a changed source or branch since the push, a refspec that may update the tracked branch, a missing or unreadable GitRepository;
+    - inspectors: a healthy repository with a failing policy, a failing repository with a healthy policy, a healthy source with a failed push;
+    - **lossless joins through the real projection:** a valid selector over 256 bytes, labels that only a full comparison distinguishes, and a join input too large to keep (incomplete, no claim);
     - "pending" from `observedPolicies`, including a clipped map;
   - **verbs:** the matrix, `guardUID`, the `v1beta2` policy refusals, the protected-cluster grant, and the ownership line for a Flux-owned, an Argo-owned and an unowned object;
   - **C1 beyond parity:**
@@ -263,7 +277,11 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
     - the budget: an oversized projection clipped, then refused; "capped" coverage and incomplete joins;
     - a `v1beta2`-only discovery, and a `v1beta1`-only automation ("unsupported");
   - **detection:** controllers ready, not ready, absent with CRDs served, and unreadable;
-  - **AI:** the allowlist, with a needle in the author's email and in a push option, absent from the AI and chat payloads.
+  - **sensitive data (§6):**
+    - needles in `messageTemplate`, a `messageTemplateValues` value and a push option, absent from the serialised generic detail, Describe, the chat get and events tools and AI evidence;
+    - a push event whose rendered commit message carries a needle after the first line;
+    - a condition whose message echoes the template;
+    - the author's email kept out of AI facts.
 - **Parity:**
   - the three CRDs on `kind-klyx` and in `klyx-parity.sh`;
   - **fixtures:** a ready repository, a repository failing `AuthenticationFailed`, a ready policy, a policy failing with a retained image, a blocked policy, an automation with a push, and a suspended automation;
@@ -276,9 +294,9 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
   - status written through the status subresource. No registry or Git server is needed (C6).
 - **Native smoke:**
   - "Images" opens the view, broken-first;
-  - the policy inspector's headline is its repository;
+  - the policy inspector leads with its own verdict, then its repository block;
   - the automation inspector shows the push with its source and applied lines;
-  - Stage 0: a failing Kustomization fixture reads as a fault.
+  - Stage 0: a failing Kustomization fixture reads as a fault, with the current fault aspect.
 - **Live captures:** the Images view, a policy inspector, and an automation inspector with the push join, in night and day, at 1440 and 1024.
 
 ## 8. Not in S1b
@@ -286,3 +304,15 @@ So a spec change whose reconcile fails and retries keeps `status.observedGenerat
 - **Which workloads run a policy's image.** Matching by image name is a heuristic; the setter markers are in Git. It needs Git-side reading, a later slice if the owner wants it.
 - **A preview of what the automation would change in Git.**
 - **ExternalArtifact, ArtifactGenerator and the notification kinds** are S1c.
+
+## 9. Revision 1: Codex's design review of f9a818d
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Excluding the automation's free text from the projection does not protect the generic detail, Describe or chat paths; the rendered commit message reaches events | §6: ImageUpdateAutomation joins the S0b registry; one message rule for its conditions and events (first line only, template-related lines withheld) on every path; §7 needles across serialised paths |
+| 2 | A dependency's verdict replaced the selected object's | §2: the selected object's own verdict comes first, with the repository or source as a separate block; §7 tests both directions |
+| 3 | The push target and branch history needed fences | §1: an explicit checkout replaces the source ref as a whole; a refspec may update any branch; `lastPushCommit` survives configuration changes. §2: the branch comes only from an event bound by UID and hash; the configuration is labelled "as configured now"; branch notes are made only when provable. §7 names each case |
+| 4 | Join inputs were clipped as display strings | §3: the selector, labels, image references, SHAs and revisions are kept whole as facts; one too large to keep marks its join incomplete; a clipped copy is never compared. §7 tests through the real projection |
+| P3 | The run clock overstated "no run started"; ImagePolicy's Always interval | §4.3: "no newer run recorded; a run may be in progress"; the Always exception acknowledged |
+| P3 | The retired dim and grey chip | §4.1 and §7 use the current fault aspect and neutral syncing text |
+
