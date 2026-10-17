@@ -205,3 +205,38 @@ func Classify(field, msg string) (Class, bool) {
 	}
 	return classify(nil, msg), true
 }
+
+// Placeholder is the generic paths' stand-in for one Velero message (S2a
+// §6): the generic detail, Describe's gate, the editor and cache diffs see
+// Klyx's fixed wording for its class, from a finite set, never the text.
+// The vocabulary is shown only by the lens, so every placeholder is one of
+// a fixed list and a second run leaves it as it is.
+func Placeholder(field, msg string) string {
+	c, ok := Classify(field, msg)
+	if !ok {
+		return msg
+	}
+	return placeholderOf(c.Code)
+}
+
+func placeholderOf(code string) string { return "<velero: " + textOfCode[code] + ">" }
+
+var placeholders = func() map[string]bool {
+	m := map[string]bool{}
+	for code := range textOfCode {
+		m[placeholderOf(code)] = true
+	}
+	return m
+}()
+
+// IsPlaceholder reports one of Placeholder's fixed strings.
+func IsPlaceholder(s string) bool { return placeholders[s] }
+
+// Kinds is every velero.io kind, for the event rule: an Event about any of
+// them is withheld whole (S2a §6), since Velero itself records none for the
+// kinds Klyx reads and another tool's text is unbounded.
+var Kinds = map[string]bool{
+	"Backup": true, "BackupRepository": true, "BackupStorageLocation": true, "DeleteBackupRequest": true,
+	"DownloadRequest": true, "PodVolumeBackup": true, "PodVolumeRestore": true, "Restore": true, "Schedule": true,
+	"ServerStatusRequest": true, "VolumeSnapshotLocation": true, "DataUpload": true, "DataDownload": true,
+}

@@ -43,6 +43,13 @@ var payloadResources = map[string]bool{
 	"notification.toolkit.fluxcd.io/alerts":          true,
 	"source.toolkit.fluxcd.io/externalartifacts":     true,
 	"source.extensions.fluxcd.io/artifactgenerators": true,
+	// S2a §6: Velero's messages and hooks, and provider config; its own
+	// printer columns are phases and times, read locally all the same
+	"velero.io/schedules":               true,
+	"velero.io/backups":                 true,
+	"velero.io/restores":                true,
+	"velero.io/backupstoragelocations":  true,
+	"velero.io/volumesnapshotlocations": true,
 	// an Event's text is its subject's, under that subject's rule (Codex's
 	// Stage 0 review, finding 1); its columns are Klyx's own
 	"/events":              true,

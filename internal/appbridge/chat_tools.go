@@ -1012,6 +1012,12 @@ var chatParts = map[string][2]string{
 	"source.extensions.fluxcd.io/artifactgenerators": {healthsrc.TaskFlux, "composition"},
 	"source.toolkit.fluxcd.io/externalartifacts":     {healthsrc.TaskFlux, "composition"},
 	"notification.toolkit.fluxcd.io/receivers":       {healthsrc.TaskFlux, "receivers"},
+	// coverage S2a: a scheduled Backup has no verdict of its own (its
+	// schedule's verdict covers it); the backups part is the recent
+	// unscheduled ones
+	"velero.io/schedules":              {healthsrc.TaskVelero, "schedules"},
+	"velero.io/backupstoragelocations": {healthsrc.TaskVelero, "locations"},
+	"velero.io/backups":                {healthsrc.TaskVelero, "backups"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer

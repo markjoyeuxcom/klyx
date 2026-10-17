@@ -791,4 +791,5 @@ var kinds = map[string]string{
 	"fluxinstances": "FluxInstance", "resourcesets": "ResourceSet", "resourcesetinputproviders": "ResourceSetInputProvider",
 	"imagerepositories": "ImageRepository", "imagepolicies": "ImagePolicy", "imageupdateautomations": "ImageUpdateAutomation",
 	"artifactgenerators": "ArtifactGenerator", "externalartifacts": "ExternalArtifact", "receivers": "Receiver",
+	"schedules": "Schedule", "backupstoragelocations": "BackupStorageLocation", "backups": "Backup",
 }
