@@ -221,7 +221,7 @@ func GeneratorRule(g Generator, r resume.Resume) health.NativeEval {
 	case g.Disabled:
 		return health.NativeEval{Role: health.Paused, Label: LabelSuspended}
 	case r == resume.Awaiting:
-		return health.NativeEval{Role: health.Unknown, Label: LabelAwaiting}
+		return health.NativeEval{Role: health.Unknown, Label: LabelAwaiting, Reason: health.CapReason("", AwaitingNoDrift)}
 	case r == resume.Unproven, g.Reason == ReasonDisabled:
 		return health.NativeEval{Role: health.Unknown, Label: LabelUnproven}
 	case r == resume.Evaluating:

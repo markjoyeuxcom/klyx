@@ -49,6 +49,8 @@ func gitopsListKinds() map[schema.GroupVersionResource]string {
 		{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}:        "HelmReleaseList",
 		{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}:             "ApplicationList",
 		{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}:          "ApplicationSetList",
+		// S1c: served beside the sources at v1
+		{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"}: "ExternalArtifactList",
 	}
 	for _, r := range []string{"gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts"} {
 		m[schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: r}] = "SourceList"

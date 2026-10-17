@@ -44,14 +44,15 @@ func GitOps(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	c := d.Cluster
 	opKinds, opParts := FluxOperator(d)
 	imgKinds, imgParts := FluxImages(d)
-	kinds = append(append(kinds, opKinds...), imgKinds...)
+	compKinds, compParts := FluxComposition(d)
+	kinds = append(append(append(kinds, opKinds...), imgKinds...), compKinds...)
 	domains := []observe.DomainSpec{
 		{ID: TaskFlux, Parts: append([]observe.PartSpec{
 			{ID: "reconciliations", Entity: "Kustomizations and HelmReleases", Scope: ns, Classifier: "native",
 				Counted: []string{KindKustomizations, KindHelmReleases}, Evaluate: evalFluxReconciliations(c), Ledger: true},
 			{ID: "sources", Entity: "Flux sources", Scope: ns, Classifier: "native",
 				Counted: fluxSourceKinds, Evaluate: evalFluxSources(c), Ledger: true},
-		}, append(opParts, imgParts...)...)},
+		}, append(append(opParts, imgParts...), compParts...)...)},
 		{ID: TaskArgo, Parts: []observe.PartSpec{
 			{ID: "applications", Entity: "Applications", Scope: ns, Classifier: "native",
 				Counted: []string{KindApplications}, Evaluate: evalArgoApps(c), Ledger: true},

@@ -38,7 +38,7 @@ func lineListKinds() map[schema.GroupVersionResource]string {
 		{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}:      "ApplicationList",
 		{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}:   "ApplicationSetList",
 	}
-	for _, r := range []string{"gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts"} {
+	for _, r := range []string{"gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts", "externalartifacts"} {
 		m[schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: r}] = "SourceList"
 	}
 	return m
