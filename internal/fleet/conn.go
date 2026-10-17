@@ -111,10 +111,10 @@ type Conn interface {
 	CheckNodeArmed(ctx context.Context, nodeName, uid string) error
 	DrainNodeCmd(nodeName string, opts DrainOptions) (*exec.Cmd, error)
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
-	DescribeArgv(kindArg, namespace, name string) ([]string, error)
+	DescribeArgv(kindArg, namespace, name string, events bool) ([]string, error)
 	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
-	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
-	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*exec.Cmd, func(), error)
+	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion, hold string, err error)
+	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, events bool) (*exec.Cmd, func(), error)
 	FluxOpAct(ctx context.Context, kind, ns, name, uid, verb string) error
 	FluxOpObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	ExecCommand(namespace, pod, container string) ([]string, error)

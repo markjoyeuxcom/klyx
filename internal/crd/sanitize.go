@@ -56,8 +56,12 @@ type Sanitized struct {
 	// snapshot do not count. Describe of a payload kind is released only
 	// for a version without one (S0b revision 4).
 	Payload bool
-	// DescribeMode is DescribeWithheld when the object carries a payload,
-	// DescribeURLScrubbed otherwise.
+	// Messages is true when a kind's message rule changed a condition
+	// message (S1b §6): kubectl would print the raw text, so Describe is
+	// withheld for this version.
+	Messages bool
+	// DescribeMode is DescribeWithheld when the object carries a payload or
+	// a message its kind's rule withholds, DescribeURLScrubbed otherwise.
 	DescribeMode string
 }
 
@@ -97,6 +101,13 @@ var payloadKinds = map[string][]surface{
 	},
 	"fluxcd.controlplane.io/FluxInstance": {
 		p("spec.kustomize.patches.[].patch", shapeOpaque),
+	},
+	// S1b §6: the commit message template, its values and the push options
+	// can carry tokens; values are omitted, keys kept.
+	"image.toolkit.fluxcd.io/ImageUpdateAutomation": {
+		p("spec.git.commit.messageTemplate", shapeOpaque),
+		p("spec.git.commit.messageTemplateValues", shapeFreeForm),
+		p("spec.git.push.options", shapeFreeForm),
 	},
 	"kustomize.toolkit.fluxcd.io/Kustomization": {
 		p("spec.patches.[].patch", shapeOpaque),
@@ -153,10 +164,11 @@ func IsPayloadKindName(kind string) bool {
 
 // sanitizer carries one run's changes.
 type sanitizer struct {
-	paths   map[string]bool
-	edit    bool // a change that blocks a round-trip edit
-	payload bool // a registered surface was non-empty
-	inURLs  bool // marks made by the URL rule
+	paths    map[string]bool
+	edit     bool // a change that blocks a round-trip edit
+	payload  bool // a registered surface was non-empty
+	messages bool // a kind's message rule changed a condition message
+	inURLs   bool // marks made by the URL rule
 }
 
 func (s *sanitizer) mark(path string, blocksEdit bool) {
@@ -187,15 +199,16 @@ func SanitizeEmbedded(group, kind string, obj map[string]any) Sanitized {
 	}
 	sort.Strings(paths)
 	mode := DescribeURLScrubbed
-	if s.payload {
+	if s.payload || s.messages {
 		mode = DescribeWithheld
 	}
-	return Sanitized{Object: out, Paths: paths, EditEligible: !s.edit, Payload: s.payload, DescribeMode: mode}
+	return Sanitized{Object: out, Paths: paths, EditEligible: !s.edit, Payload: s.payload, Messages: s.messages, DescribeMode: mode}
 }
 
 // object sanitises one object in place (a copy already): its registered
-// surfaces, its last-applied snapshot when registered, then the URL rule
-// over every string leaf.
+// surfaces, its last-applied snapshot when registered, its kind's message
+// rule over its condition messages, then the URL rule over every string
+// leaf.
 func (s *sanitizer) object(group, kind string, o map[string]any, at string, depth int) map[string]any {
 	if group == "" && kind == "Secret" {
 		masked, _ := MaskSecretData(o)
@@ -224,6 +237,7 @@ func (s *sanitizer) object(group, kind string, o map[string]any, at string, dept
 			s.apply(o, sf.path, sf.shape, at, depth)
 		}
 	}
+	s.conditionMessages(kind, o, at)
 	s.urls(o, at, 0)
 	return o
 }

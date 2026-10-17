@@ -20,16 +20,16 @@ type ExecConn interface {
 	DebugCommand(namespace, pod, container string) ([]string, error)
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
-	DescribeArgv(kindArg, namespace, name string) ([]string, error)
+	DescribeArgv(kindArg, namespace, name string, events bool) ([]string, error)
 	// DescribeTarget resolves the resource argument through discovery, and
 	// DescribeSnapshot reads the object for the version bracket around
 	// kubectl's own read (coverage S0b §4, revision 4).
 	DescribeTarget(ctx context.Context, kindArg string) (schema.GroupVersionResource, schema.GroupVersionKind, error)
-	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion string, payload bool, err error)
+	DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (uid, resourceVersion, hold string, err error)
 	// DescribePinnedCmd is the bracketed describe: the resolved
 	// resource.version.group, against a kubeconfig snapshot verified to be
 	// the bracket's own connection. cleanup removes the snapshot.
-	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (cmd *exec.Cmd, cleanup func(), err error)
+	DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, events bool) (cmd *exec.Cmd, cleanup func(), err error)
 }
 
 // ExecCommandDTO is the response from GetExecCommand.
@@ -250,20 +250,27 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 	// reads show the same UID and resourceVersion with no payload - every
 	// write changes the resourceVersion, so kubectl's read in between saw
 	// that payload-free version. Anything else discards both streams.
+	//
+	// A message-sensitive kind (S1b §6) is bracketed the same way, and runs
+	// without events: kubectl prints condition messages raw and appends the
+	// object's events, so its report is released only for a version whose
+	// condition messages pass the kind's rule unchanged, and its events are
+	// read through Klyx's own surface under that rule.
 	gvr, gvk, cerr := conn.DescribeTarget(ctx, kindArg)
 	withheld := ""
-	payloadKind := cerr == nil && crd.IsPayloadKind(gvk.Group, gvk.Kind)
+	payloadKind := cerr == nil && (crd.IsPayloadKind(gvk.Group, gvk.Kind) || crd.MessageSensitive(gvk.Kind))
+	events := cerr != nil || !crd.MessageSensitive(gvk.Kind)
 	var preUID, preRV string
 	switch {
 	case cerr != nil:
 		withheld = "Describe is withheld: Klyx could not tell what kind of object this is (" + cerr.Error() + "), so it cannot rule out templates, patches or values that can carry secrets."
 	case payloadKind:
-		uid, rv, payload, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
+		uid, rv, hold, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
 		switch {
 		case err != nil:
 			withheld = "Describe is withheld: Klyx could not read this " + gvk.Kind + " to check it for templates, patches or values that can carry secrets (" + err.Error() + ")."
-		case payload:
-			withheld = payloadWithheld(gvk.Kind)
+		case hold != "":
+			withheld = holdWithheld(gvk.Kind, hold)
 		case uid == "" || rv == "":
 			withheld = "Describe is withheld: the server did not report this " + gvk.Kind + "'s identity and version, so Klyx cannot bracket kubectl's read."
 		default:
@@ -271,7 +278,7 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 		}
 	}
 	var res DescribeResultDTO
-	if argv, err := conn.DescribeArgv(kindArg, namespace, name); err != nil {
+	if argv, err := conn.DescribeArgv(kindArg, namespace, name, events); err != nil {
 		res.CommandError = err.Error()
 	} else if line, err := displayCommand(hostGOOS, argv); err != nil {
 		res.CommandError = err.Error()
@@ -292,7 +299,7 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 	var err error
 	if payloadKind {
 		var cleanup func()
-		cmd, cleanup, err = conn.DescribePinnedCmd(ctx, gvr, namespace, name)
+		cmd, cleanup, err = conn.DescribePinnedCmd(ctx, gvr, namespace, name, events)
 		if err != nil {
 			res.Withheld = "Describe is withheld: Klyx could not bind kubectl to the connection it checks this " + gvk.Kind + " through (" + err.Error() + ")."
 			return res
@@ -312,13 +319,13 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
 	if payloadKind {
-		uid, rv, payload, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
-		if err != nil || uid == "" || uid != preUID || rv != preRV || payload {
+		uid, rv, hold, err := conn.DescribeSnapshot(ctx, gvr, gvk, namespace, name)
+		if err != nil || uid == "" || uid != preUID || rv != preRV || hold != "" {
 			// discard both streams: the version kubectl read is not proven
 			stdout.Reset()
 			stderr.Reset()
-			if payload {
-				res.Withheld = payloadWithheld(gvk.Kind)
+			if hold != "" {
+				res.Withheld = holdWithheld(gvk.Kind, hold)
 			} else {
 				res.Withheld = "Describe is withheld: this " + gvk.Kind + " changed while it was being described, so Klyx cannot prove the report carries no templates, patches or values. Try again."
 			}
@@ -353,6 +360,14 @@ func (s *ExecService) describe(ctx context.Context, cluster, kindArg, namespace,
 // external-terminal escape hatch. Same platform behavior as OpenExecTerminal.
 func (s *ExecService) OpenTerminal() ActionResultDTO {
 	return launchTerminal(nil)
+}
+
+// holdWithheld is the refusal for a snapshot's hold.
+func holdWithheld(kind, hold string) string {
+	if hold == crd.HoldMessages {
+		return "Describe is withheld for this " + kind + ": a condition message is outside Klyx's message rules, and kubectl would print it raw. The inspector shows it under them."
+	}
+	return payloadWithheld(kind)
 }
 
 func payloadWithheld(kind string) string {

@@ -1676,7 +1676,8 @@ func (c *ClusterConn) instanceEvents(ctx context.Context, uid string) []crd.Even
 			last = e.EventTime.Time
 		}
 		// coverage S0b §3: a controller can echo a credential-bearing URL
-		out = append(out, crd.Event{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: e.Count, Last: last})
+		msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Message) // S1b §6
+		out = append(out, crd.Event{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(msg).Text, Count: e.Count, Last: last})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Last.After(out[b].Last) })
 	return out

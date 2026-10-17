@@ -100,7 +100,7 @@ func isObjectNameAlnum(ch byte) bool {
 // kubectl would silently fall back to the kubeconfig's current-context and
 // describe an object on whatever cluster the user's terminal points at.
 func (c *ClusterConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
-	args, err := c.describeArgs(kindArg, namespace, name)
+	args, err := c.describeArgs(kindArg, namespace, name, true)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +118,8 @@ func (c *ClusterConn) DescribeCmd(ctx context.Context, kindArg, namespace, name 
 // the argv (kubectlTerminalArgv - --kubeconfig for one file, env KUBECONFIG
 // for a list, a list refused on Windows), so a copied command can never
 // resolve the context through another file to another cluster.
-func (c *ClusterConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
-	args, err := c.describeArgs(kindArg, namespace, name)
+func (c *ClusterConn) DescribeArgv(kindArg, namespace, name string, events bool) ([]string, error) {
+	args, err := c.describeArgs(kindArg, namespace, name, events)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,9 @@ func (c *ClusterConn) DescribeArgv(kindArg, namespace, name string) ([]string, e
 }
 
 // describeArgs validates one describe and returns its kubectl arguments.
-func (c *ClusterConn) describeArgs(kindArg, namespace, name string) ([]string, error) {
+// events false adds --show-events=false: a message-sensitive kind's events
+// are read through Klyx's own surface, under its message rules (S1b §6).
+func (c *ClusterConn) describeArgs(kindArg, namespace, name string, events bool) ([]string, error) {
 	if c.kubeContext == "" {
 		return nil, fmt.Errorf("cluster has no kubeconfig context")
 	}
@@ -149,6 +151,9 @@ func (c *ClusterConn) describeArgs(kindArg, namespace, name string) ([]string, e
 	args := []string{"--context", c.kubeContext, "describe", kindArg}
 	if namespace != "" {
 		args = append(args, "-n", namespace)
+	}
+	if !events {
+		args = append(args, "--show-events=false")
 	}
 	return append(args, "--", name), nil
 }
@@ -252,11 +257,11 @@ func resolveTarget(dc discovery.DiscoveryInterface, kindArg string) (schema.Grou
 //     refuses rather than letting kubectl read another cluster.
 //
 // cleanup removes the snapshot; call it once the command has ended.
-func (c *ClusterConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*exec.Cmd, func(), error) {
+func (c *ClusterConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, events bool) (*exec.Cmd, func(), error) {
 	if gvr.Group == "" || gvr.Version == "" || gvr.Resource == "" {
 		return nil, nil, fmt.Errorf("a pinned describe needs a resolved group, version and resource")
 	}
-	args, err := c.describeArgs(gvr.Resource+"."+gvr.Version+"."+gvr.Group, namespace, name)
+	args, err := c.describeArgs(gvr.Resource+"."+gvr.Version+"."+gvr.Group, namespace, name, events)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -408,10 +413,11 @@ func sameProxy(a, b *rest.Config) bool {
 
 // DescribeSnapshot reads the object a describe names, for the version
 // bracket around kubectl's own read (S0b revision 4): its UID, its
-// resourceVersion and whether it carries a registered payload.
-func (c *ClusterConn) DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (string, string, bool, error) {
+// resourceVersion and why kubectl's text would be withheld (crd.HoldPayload,
+// crd.HoldMessages), empty when it would not.
+func (c *ClusterConn) DescribeSnapshot(ctx context.Context, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, ns, name string) (string, string, string, error) {
 	if c.dyn == nil {
-		return "", "", false, fmt.Errorf("dynamic client unavailable")
+		return "", "", "", fmt.Errorf("dynamic client unavailable")
 	}
 	res := c.dyn.Resource(gvr)
 	var u *unstructured.Unstructured
@@ -422,8 +428,8 @@ func (c *ClusterConn) DescribeSnapshot(ctx context.Context, gvr schema.GroupVers
 		u, err = res.Get(ctx, name, metav1.GetOptions{})
 	}
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", err
 	}
 	s := crd.SanitizeEmbedded(gvk.Group, gvk.Kind, u.Object)
-	return string(u.GetUID()), u.GetResourceVersion(), s.Payload, nil
+	return string(u.GetUID()), u.GetResourceVersion(), s.Hold(), nil
 }

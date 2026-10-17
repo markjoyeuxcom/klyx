@@ -3,7 +3,6 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"github.com/moomora/klyx/internal/urlscrub"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -116,8 +117,9 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 			if last.IsZero() {
 				last = e.CreationTimestamp.Time
 			}
+			msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Message) // S1b §6
 			out.Events = append(out.Events, workloads.EventSummary{
-				Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: e.Count,
+				Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(msg).Text, Count: e.Count,
 				Namespace: e.Namespace, Kind: e.InvolvedObject.Kind, Name: e.InvolvedObject.Name,
 				LastSeenUnix: last.Unix(),
 			})

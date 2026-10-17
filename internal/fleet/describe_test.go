@@ -170,7 +170,7 @@ func TestDescribeArgv_PinsTheKubeconfig(t *testing.T) {
 	dev := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/dev.yaml")
 	prd := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/prd.yaml")
 	for conn, file := range map[*ClusterConn]string{dev: "/k/dev.yaml", prd: "/k/prd.yaml"} {
-		argv, err := conn.DescribeArgv("gateways.gateway.networking.k8s.io", "infra", "internal")
+		argv, err := conn.DescribeArgv("gateways.gateway.networking.k8s.io", "infra", "internal", true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +184,7 @@ func TestDescribeArgv_PinsTheKubeconfig(t *testing.T) {
 	t.Cleanup(func() { terminalGOOS = prev })
 	terminalGOOS = "linux"
 	list := (&ClusterConn{kubeContext: "shared"}).WithKubeconfig("/k/a.yaml" + sep + "/k/b.yaml")
-	argv, err := list.DescribeArgv("node", "", "n1")
+	argv, err := list.DescribeArgv("node", "", "n1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestDescribeArgv_PinsTheKubeconfig(t *testing.T) {
 	}
 
 	terminalGOOS = "windows"
-	if _, err := list.DescribeArgv("node", "", "n1"); err == nil || !strings.Contains(err.Error(), "path list") {
+	if _, err := list.DescribeArgv("node", "", "n1", true); err == nil || !strings.Contains(err.Error(), "path list") {
 		t.Errorf("want the Windows path-list refusal, got %v", err)
 	}
 }
@@ -201,10 +201,10 @@ func TestDescribeArgv_PinsTheKubeconfig(t *testing.T) {
 func TestDescribeArgv_ValidatesLikeTheRun(t *testing.T) {
 	fakeKubectl(t, true)
 	conn := &ClusterConn{kubeContext: "ctx"}
-	if _, err := conn.DescribeArgv("pod", "default", "--all"); err == nil {
+	if _, err := conn.DescribeArgv("pod", "default", "--all", true); err == nil {
 		t.Error("a flag-shaped name must be refused")
 	}
-	if _, err := (&ClusterConn{}).DescribeArgv("pod", "default", "web"); err == nil {
+	if _, err := (&ClusterConn{}).DescribeArgv("pod", "default", "web", true); err == nil {
 		t.Error("an empty context must be refused")
 	}
 }

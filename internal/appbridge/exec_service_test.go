@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/fleet"
 )
 
@@ -37,10 +38,13 @@ type fakeExecConn struct {
 	gotPinned string
 	pinnedErr error
 	cleanups  int
+	// gotEvents records each DescribeArgv and DescribePinnedCmd events flag.
+	gotEvents []bool
 }
 
-func (f *fakeExecConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*exec.Cmd, func(), error) {
+func (f *fakeExecConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, events bool) (*exec.Cmd, func(), error) {
 	f.gotPinned = gvr.Resource + "." + gvr.Version + "." + gvr.Group
+	f.gotEvents = append(f.gotEvents, events)
 	if f.pinnedErr != nil {
 		return nil, nil, f.pinnedErr
 	}
@@ -53,6 +57,7 @@ func (f *fakeExecConn) DescribePinnedCmd(ctx context.Context, gvr schema.GroupVe
 type fakeSnap struct {
 	uid, rv string
 	payload bool
+	hold    string // overrides payload when set
 	err     error
 }
 
@@ -66,13 +71,17 @@ func (f *fakeExecConn) DescribeTarget(_ context.Context, kindArg string) (schema
 	return schema.GroupVersionResource{Group: f.kindGroup, Version: "v1", Resource: "x"}, schema.GroupVersionKind{Group: f.kindGroup, Version: "v1", Kind: f.kindName}, nil
 }
 
-func (f *fakeExecConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, bool, error) {
+func (f *fakeExecConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, string, error) {
 	if len(f.snaps) == 0 {
-		return "", "", false, errors.New("no snapshot scripted")
+		return "", "", "", errors.New("no snapshot scripted")
 	}
 	s := f.snaps[0]
 	f.snaps = f.snaps[1:]
-	return s.uid, s.rv, s.payload, s.err
+	hold := s.hold
+	if hold == "" && s.payload {
+		hold = crd.HoldPayload
+	}
+	return s.uid, s.rv, hold, s.err
 }
 
 func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error) {
@@ -86,11 +95,16 @@ func (f *fakeExecConn) DescribeCmd(ctx context.Context, kindArg, namespace, name
 	return exec.CommandContext(ctx, "true"), nil
 }
 
-func (f *fakeExecConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
+func (f *fakeExecConn) DescribeArgv(kindArg, namespace, name string, events bool) ([]string, error) {
+	f.gotEvents = append(f.gotEvents, events)
 	if f.describeArgvErr != nil {
 		return nil, f.describeArgvErr
 	}
-	return []string{"/fake/kubectl", "--kubeconfig", "/k/my config", "--context", f.kubeContext, "describe", kindArg, "-n", namespace, "--", name}, nil
+	argv := []string{"/fake/kubectl", "--kubeconfig", "/k/my config", "--context", f.kubeContext, "describe", kindArg, "-n", namespace}
+	if !events {
+		argv = append(argv, "--show-events=false")
+	}
+	return append(argv, "--", name), nil
 }
 
 func (f *fakeExecConn) CheckPodArmed(_ context.Context, namespace, name, uid string) error {
@@ -570,6 +584,52 @@ func TestDescribe_PayloadKindBracket(t *testing.T) {
 		if r.Withheld == "" || r.Output != "" || r.OK {
 			t.Errorf("%s: %+v", c.name, r)
 		}
+	}
+}
+
+// Coverage S1b §6: an ImageUpdateAutomation is bracketed even without a
+// payload, runs without events, and is withheld while a condition message
+// is outside its rule.
+func TestDescribe_MessageSensitiveKind(t *testing.T) {
+	report := func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, "echo", "Name: apps") }
+	conn := &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "image.toolkit.fluxcd.io", kindName: "ImageUpdateAutomation",
+		snaps: []fakeSnap{{uid: "u", rv: "7"}, {uid: "u", rv: "7"}}, describeCmd: report}
+	s := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := s.Describe(context.Background(), "kind-klyx", "imageupdateautomations.image.toolkit.fluxcd.io", "flux-system", "apps")
+	if !r.OK || r.Withheld != "" || conn.gotPinned == "" {
+		t.Fatalf("fixed messages only: released through the bracket: %+v (pinned %q)", r, conn.gotPinned)
+	}
+	for _, ev := range conn.gotEvents {
+		if ev {
+			t.Fatalf("every run and copy command omits events: %v", conn.gotEvents)
+		}
+	}
+	if !strings.Contains(r.Command, "--show-events=false") {
+		t.Fatalf("the copy command is the same describe: %q", r.Command)
+	}
+
+	for _, snaps := range [][]fakeSnap{
+		{{uid: "u", rv: "7", hold: crd.HoldMessages}},
+		{{uid: "u", rv: "7"}, {uid: "u", rv: "7", hold: crd.HoldMessages}},
+	} {
+		ran := false
+		conn = &fakeExecConn{kubeContext: "kind-klyx", kindGroup: "image.toolkit.fluxcd.io", kindName: "ImageUpdateAutomation", snaps: snaps,
+			describeCmd: func(ctx context.Context) *exec.Cmd {
+				ran = true
+				return exec.CommandContext(ctx, "echo", "Message: push option x=SECRET")
+			}}
+		s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+		r = s.Describe(context.Background(), "kind-klyx", "imageupdateautomations.image.toolkit.fluxcd.io", "flux-system", "apps")
+		if r.OK || r.Output != "" || !strings.Contains(r.Withheld, "message rules") {
+			t.Fatalf("a held message withholds (ran %v): %+v", ran, r)
+		}
+	}
+
+	// Another kind keeps its events.
+	conn = &fakeExecConn{kubeContext: "kind-klyx", describeCmd: report}
+	s = NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	if r := s.Describe(context.Background(), "kind-klyx", "pods", "shop", "web"); !r.OK || strings.Contains(r.Command, "--show-events") {
+		t.Fatalf("a pod keeps its events: %+v", r)
 	}
 }
 

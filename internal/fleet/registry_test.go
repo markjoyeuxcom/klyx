@@ -176,10 +176,10 @@ func (f *fakeConn) DescribeTarget(_ context.Context, kindArg string) (schema.Gro
 	return schema.GroupVersionResource{Version: "v1", Resource: "pods"}, schema.GroupVersionKind{Version: "v1", Kind: "Pod"}, nil
 }
 
-func (f *fakeConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, bool, error) {
-	return "u", "1", false, nil
+func (f *fakeConn) DescribeSnapshot(context.Context, schema.GroupVersionResource, schema.GroupVersionKind, string, string) (string, string, string, error) {
+	return "u", "1", "", nil
 }
-func (f *fakeConn) DescribePinnedCmd(context.Context, schema.GroupVersionResource, string, string) (*exec.Cmd, func(), error) {
+func (f *fakeConn) DescribePinnedCmd(context.Context, schema.GroupVersionResource, string, string, bool) (*exec.Cmd, func(), error) {
 	return nil, nil, nil
 }
 func (f *fakeConn) FluxOpAct(context.Context, string, string, string, string, string) error {
@@ -189,7 +189,7 @@ func (f *fakeConn) FluxOpObject(context.Context, string, string, string) (*unstr
 	return nil, nil
 }
 
-func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
+func (f *fakeConn) DescribeArgv(kindArg, namespace, name string, _ bool) ([]string, error) {
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil
 }
 func (f *fakeConn) CheckPodArmed(context.Context, string, string, string) error { return nil }

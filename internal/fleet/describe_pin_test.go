@@ -69,7 +69,7 @@ func pinConn(t *testing.T) (*ClusterConn, string) {
 func TestDescribePinnedCmd(t *testing.T) {
 	c, _ := pinConn(t)
 	gvr := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
-	cmd, cleanup, err := c.DescribePinnedCmd(context.Background(), gvr, "flux-system", "apps")
+	cmd, cleanup, err := c.DescribePinnedCmd(context.Background(), gvr, "flux-system", "apps", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestDescribePinnedCmd(t *testing.T) {
 	if _, err := os.Stat(snapPath); !os.IsNotExist(err) {
 		t.Fatalf("the snapshot outlived its describe: %v", err)
 	}
-	if _, _, err := c.DescribePinnedCmd(context.Background(), schema.GroupVersionResource{Resource: "pods", Version: "v1"}, "ns", "p"); err == nil {
+	if _, _, err := c.DescribePinnedCmd(context.Background(), schema.GroupVersionResource{Resource: "pods", Version: "v1"}, "ns", "p", true); err == nil {
 		t.Fatal("a pinned describe needs a group")
 	}
 }

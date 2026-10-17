@@ -4,6 +4,8 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/moomora/klyx/internal/crd"
 )
 
 // EventSummary is one cluster event for the events lens.
@@ -28,14 +30,19 @@ type EventSummary struct {
 // series/eventTime fields honestly (prefer series.lastObservedTime/count when
 // set, else lastTimestamp/count, else eventTime; never invent a timestamp - 0
 // means unknown).
+//
+// A message of a kind with a message rule passes it here, at the one place
+// every event row is made (coverage S1b §6): the events lens, the
+// inspectors, chat and AI all read these rows.
 func SummarizeEvents(events []corev1.Event) []EventSummary {
 	out := make([]EventSummary, 0, len(events))
 	for i := range events {
 		e := &events[i]
+		msg, _ := crd.MessageRule(e.InvolvedObject.Kind, e.Message)
 		out = append(out, EventSummary{
 			Type:          e.Type,
 			Reason:        e.Reason,
-			Message:       e.Message,
+			Message:       msg,
 			Count:         eventCount(e),
 			Namespace:     e.Namespace,
 			Kind:          e.InvolvedObject.Kind,
