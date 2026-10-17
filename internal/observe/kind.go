@@ -638,9 +638,15 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 		}
 	case key == g.blockKey:
 		// the blocker changed: still left out, and a list decides again
-		// when it now fits or moved in the order
+		// when it now fits or moved in the order. Until that list, the
+		// boundary stays at the earlier of its old and new ranks: objects
+		// past the old boundary are not individually known, and one could
+		// rank anywhere after it (S2a §3, revision 3)
 		moved := r != g.blockRank
-		g.blockSize, g.blockRank = n, r
+		g.blockSize = n
+		if rankBefore(r, key, g.blockRank, key) {
+			g.blockRank = r
+		}
 		if moved || g.retained+n <= spec.Budget {
 			g.refillLocked()
 		}

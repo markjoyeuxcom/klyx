@@ -120,6 +120,41 @@ func TestBudgetRankedAdmissionAndWindow(t *testing.T) {
 	h.eventually(is("0,a,f", "", false), "complete: no window")
 }
 
+// A blocker that moves later in the order waits for its relist, which the
+// refill window can delay; until that list, the window stays at its old
+// rank, never a later one an omitted object might precede (coverage S2a
+// §3, revision 3: Codex's second re-review, finding 4).
+func TestBudgetRankedBlockerMoveKeepsWindowUntilList(t *testing.T) {
+	src := newSource()
+	for n, r := range map[string]string{"a": "r1", "b": "r2", "c": "r3", "d": "r4", "e": "r5"} {
+		src.put(n, rank(r))
+	}
+	rec := &windowRec{}
+	h := start(t, Config{Kinds: []KindSpec{rankedKind("cms", src, 200)},
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{windowPart("cms", rec)}}}})
+	is := func(names, window string) func() bool {
+		return func() bool { n, w, ok := rec.state(); return n == names && w == window && ok }
+	}
+	h.eventually(is("a,b", "r3"), "a and b retained, c blocking")
+	// a refill now, so the next one waits for RefillEvery
+	src.remove("b")
+	h.eventually(is("a,c", "r4"), "refilled: c in, d blocking")
+
+	// the blocker moves past e while the refill waits
+	lists, _ := src.counts()
+	src.put("d", rank("r9"))
+	h.settle(300 * time.Millisecond)
+	if l, _ := src.counts(); l != lists {
+		t.Fatalf("a refill inside its window: %d -> %d", lists, l)
+	}
+	if n, w, ok := rec.state(); n != "a,c" || w != "r4" || !ok {
+		t.Fatalf("the window advanced before a list: names %s window %q (%v)", n, w, ok)
+	}
+	// the list establishes the new boundary: e is now the first left out
+	h.clk.Step(RefillEvery)
+	h.eventually(is("a,c", "r5"), "the list moves the window to e")
+}
+
 // An unranked kind carries no window, capped or not: key order is not a
 // question the evaluators ask.
 func TestBudgetUnrankedHasNoWindow(t *testing.T) {
