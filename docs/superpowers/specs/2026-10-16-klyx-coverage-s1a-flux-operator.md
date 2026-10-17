@@ -364,7 +364,7 @@ S1a is built after S0b and depends on it.
   - **memory is bounded:** past 1,024 baselines, the least recently captured become lost markers, the UID alone. A lost object captured again reads **Unproven**, "Awaiting evaluation", not counted, until evidence against the state first seen again. The view says Klyx lost track of its suspension;
   - **forgetting never certifies** (review 2, finding 1). Past 4,096 lost markers, the oldest are dropped and their kind saturates:
     - while saturated, any object of the kind without a baseline reads Unproven on first sight and gets an unproven baseline;
-    - one proven current since is remembered;
+    - one proven current since is remembered, for that suspension only: a new suspension voids the proof (review 3);
     - a complete capture in which every present object is tracked or proven ends the saturation, because a UID absent from it has departed, and one seen later is new;
   - a Klyx restart loses baselines, so a resumed object is then treated as current (§4).
 - **Binding:** an orphaned or ambiguous FluxInstance is a row, with its label, but not an item: it is not counted. The ledger still carries it, as unevaluated membership (`observe.entriesOf`). It lights nothing of its own; the task is lit only by an operator that has an issue (review 1).
@@ -434,3 +434,10 @@ S1a is built after S0b and depends on it.
 | 2 | A detection gap was classified "not ready" | `FluxOperatorInfo.Problems` splits proven failures from gaps, and a gap alone is `ControllerUnknown`. `TestOperatorDetectionGapIsUnknown` |
 | 3 | The report refresh lost its owner | `FluxReportDTO.Owner` reaches the confirmation. `TestFluxReportDTOCarriesItsOwner`, plus a view test |
 | 4 | 5.6 MiB was a measured case, not a worst case | §13 says "measured case", names what was not measured, and gives the bounded tracker history apart (1.87 MiB per tracker, two per cluster) |
+
+## 16. Implementation review 3: Codex's review of 857eb60
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | A proof outlived a later suspension | An observed disabled state voids the UID's proof. `TestProofDoesNotOutliveANewSuspension` |
+| 2 | An operator gap hid a proven kustomize-controller failure | `FluxProblems` aggregates the operator's, a real kustomize-controller read's, and the image controllers' failures, then their gaps. `FluxInfo.FromOperator` marks an operator-only install, whose synthesized state never invents a failure; the live re-read skips it. `TestOperatorGapDoesNotHideFluxFailure` |

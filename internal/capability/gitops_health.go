@@ -12,7 +12,7 @@ type ControllerRef struct {
 // present in s. Empty if neither Flux nor Argo is present.
 func ControllerRefs(s Set) []ControllerRef {
 	var refs []ControllerRef
-	if s.GitOps.Flux.Present {
+	if s.GitOps.Flux.Present && !s.GitOps.Flux.FromOperator { // an operator-only install has no kustomize-controller yet
 		refs = append(refs, ControllerRef{
 			Tool: "flux", Kind: "Deployment",
 			Namespace: fluxNamespace, Name: fluxKustomizeController,
@@ -33,7 +33,7 @@ func ControllerRefs(s Set) []ControllerRef {
 // present in s; an unverified read claims nothing.
 func WithGitOpsHealth(s Set, flux, argo ControllerRead) GitOpsCapability {
 	out := s.GitOps
-	if out.Flux.Present {
+	if out.Flux.Present && !out.Flux.FromOperator {
 		applyRead(flux, &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
 		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}

@@ -65,20 +65,19 @@ func (g GitOpsCapability) FluxIssue() string {
 }
 
 // FluxProblems splits Flux's controller problems into proven failures and
-// evidence gaps: the operator's own (S1a §2) or else kustomize-controller's,
-// then the image controllers' (S1b §3). A gap alone is unknown, never "not
-// ready".
+// evidence gaps, aggregated across every read (Codex's S1a implementation
+// review 3, finding 2): the operator's own (S1a §2), kustomize-controller's
+// when it was actually read, and the image controllers' (S1b §3). One
+// read's gap never hides another's failure; a gap alone is unknown, never
+// "not ready".
 func (g GitOpsCapability) FluxProblems() (failures, gaps []string) {
-	if f, gp := g.FluxOperator.Problems(); len(f)+len(gp) > 0 {
-		failures, gaps = f, gp
-	} else {
-		switch {
-		case !g.Flux.Present || g.Flux.Healthy:
-		case !g.Flux.Verified:
-			gaps = append(gaps, "Flux installed but "+fluxKustomizeController+" health is unverified ("+g.Flux.Why+")")
-		default:
-			failures = append(failures, "Flux installed but "+fluxKustomizeController+" is not ready")
-		}
+	failures, gaps = g.FluxOperator.Problems()
+	switch {
+	case !g.Flux.Present || g.Flux.Healthy || g.Flux.FromOperator:
+	case !g.Flux.Verified:
+		gaps = append(gaps, "Flux installed but "+fluxKustomizeController+" health is unverified ("+g.Flux.Why+")")
+	default:
+		failures = append(failures, "Flux installed but "+fluxKustomizeController+" is not ready")
 	}
 	f, gp := g.Flux.Images.Problems()
 	return append(failures, f...), append(gaps, gp...)
@@ -218,6 +217,7 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 		// health stands for the installation's (FluxOperatorInfo.Issue)
 		out.Flux.Verified, out.Flux.Why = out.FluxOperator.Verified, out.FluxOperator.Why
 		out.Flux.Healthy = out.FluxOperator.Verified && out.FluxOperator.Issue() == ""
+		out.Flux.FromOperator = true
 	}
 	if argoPresent {
 		applyRead(d.controllerProbe(ctx, statefulSetWorkload, argoNamespace, argoAppController), &out.Argo.Healthy, &out.Argo.Verified, &out.Argo.Why)

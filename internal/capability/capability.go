@@ -55,6 +55,10 @@ type FluxInfo struct {
 	// Images are the image automation controllers (coverage S1b §3), read
 	// with detection.
 	Images ImageControllers
+	// FromOperator: no kustomize-controller was read; Healthy and Verified
+	// stand for the operator's own state (an operator-only install), so
+	// they never invent a controller failure of their own.
+	FromOperator bool
 }
 
 type ArgoInfo struct {

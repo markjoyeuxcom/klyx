@@ -3,6 +3,7 @@ package healthsrc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -125,5 +126,21 @@ func TestOperatorDetectionGapIsUnknown(t *testing.T) {
 	}
 	if s := state(capability.FluxOperatorInfo{Verified: true, Complete: true, Operators: []capability.FluxOperator{ready}}); s != "" {
 		t.Errorf("healthy: %q", s)
+	}
+}
+
+// Codex's S1a implementation review 3, finding 2: an operator detection
+// gap never hides a proven kustomize-controller failure; an operator-only
+// install's synthesized Flux state never invents one.
+func TestOperatorGapDoesNotHideFluxFailure(t *testing.T) {
+	gapOp := capability.FluxOperatorInfo{Present: true, Verified: true, Complete: false,
+		Operators: []capability.FluxOperator{{Namespace: "flux-system", Name: "fo", RuntimeNamespace: "flux-system", Ready: true}}}
+	got := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: capability.FluxInfo{Present: true, Verified: true}, FluxOperator: gapOp}})[TaskFlux]
+	if got == nil || got.State != ControllerNotReady || !strings.Contains(got.Reason, "kustomize-controller is not ready") || !strings.Contains(got.Reason, "detection is incomplete") {
+		t.Fatalf("the failure first, the gap after: %+v", got)
+	}
+	synth := capability.FluxInfo{Present: true, Verified: true, FromOperator: true}
+	if got := ControllerIssues(capability.Set{GitOps: capability.GitOpsCapability{Flux: synth, FluxOperator: gapOp}})[TaskFlux]; got == nil || got.State != ControllerUnknown || strings.Contains(got.Reason, "kustomize-controller") {
+		t.Fatalf("an operator-only install: %+v", got)
 	}
 }

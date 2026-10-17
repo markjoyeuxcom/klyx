@@ -104,6 +104,9 @@ func (t *Tracker) Observe(at time.Time, o *Object, c Common, exported string) Re
 		if !had || !at.Before(b.at) {
 			t.base[c.UID] = baseline{kind: c.Kind, at: at, seen: at, fp: fp, hasReady: has, exported: exported}
 			delete(t.lost, c.UID)
+			// a proof belongs to one suspension: a new one voids it
+			// (Codex's S1a implementation review 3, finding 1)
+			delete(t.proven[c.Kind], c.UID)
 		}
 		return Current
 	}

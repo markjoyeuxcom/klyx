@@ -405,3 +405,53 @@ func TestTrackerHeapAtBounds(t *testing.T) {
 		after.HeapAlloc-before.HeapAlloc, float64(after.HeapAlloc-before.HeapAlloc)/(1<<20))
 	runtime.KeepAlive(tr)
 }
+
+// Codex's S1a implementation review 3, finding 1: a proof belongs to one
+// suspension. Proven while saturated, then suspended again and forgotten,
+// the object resumed with its new frozen fault is unproven, never current.
+func TestProofDoesNotOutliveANewSuspension(t *testing.T) {
+	frozen := ready("False", "ReconciliationFailed", "fetch failed", "2026-10-16T09:00:00Z", 1)
+	frozen2 := ready("False", "ReconciliationFailed", "fetch failed again", "2026-10-17T09:00:00Z", 1)
+	od, cd := state(t, true, frozen, "")
+	tr := NewTracker()
+	at := t0
+	fill := func(prefix string) {
+		for i := 0; i < MaxBaselines+MaxLost+1; i++ {
+			c := cd
+			c.UID = fmt.Sprintf("%s-%06d", prefix, i)
+			at = at.Add(time.Second)
+			tr.Observe(at, od, c, "")
+			if i%1000 == 0 || i == MaxBaselines+MaxLost {
+				tr.Prune(KindProvider, nil, false)
+			}
+		}
+	}
+	fill("a")
+	if !tr.Saturated(KindProvider) {
+		t.Fatal("saturated")
+	}
+	x := func(disabled bool, cond string) (*Object, Common) {
+		o, c := state(t, disabled, cond, "")
+		c.UID = "uid-x"
+		return o, c
+	}
+	ox, cx := x(false, frozen)
+	at = at.Add(time.Second)
+	if r := tr.Observe(at, ox, cx, ""); r != Unproven {
+		t.Fatalf("first sight while saturated: %v", r)
+	}
+	ox, cx = x(false, frozen2) // a genuinely changed Ready: proven
+	at = at.Add(time.Second)
+	if r := tr.Observe(at, ox, cx, ""); r != Current {
+		t.Fatalf("evidence: %v", r)
+	}
+	ox, cx = x(true, frozen2) // suspended again
+	at = at.Add(time.Second)
+	tr.Observe(at, ox, cx, "")
+	fill("b") // its baseline and lost marker are forgotten
+	ox, cx = x(false, frozen2)
+	at = at.Add(time.Second)
+	if r := tr.Observe(at, ox, cx, ""); r != Unproven {
+		t.Fatalf("the earlier proof certified a new suspension: %v", r)
+	}
+}
