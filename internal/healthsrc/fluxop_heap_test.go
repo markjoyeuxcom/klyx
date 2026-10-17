@@ -80,8 +80,7 @@ func TestFluxOperatorHeapCalibration(t *testing.T) {
 	ratio := float64(after-before) / float64(encoded)
 	t.Logf("retained: %d ResourceSet projections, %d encoded bytes (budget %d), heap %d bytes, %.2f heap bytes per encoded byte",
 		len(held), encoded, budgetSets, after-before, ratio)
-	runtime.KeepAlive(held)
-	held = nil
+	runtime.KeepAlive(held) // held is dead from here: the next measurement does not count it
 
 	// transient: one list page of 500 ResourceSets with 64 KiB templates,
 	// decoded before projection (the reflector's default page size)
@@ -122,7 +121,6 @@ func TestFluxOperatorObserverHeap(t *testing.T) {
 			objs = append(objs, calibrationSet(i, tc.template))
 		}
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(krt.NewScheme(), fluxopListKinds(), objs...)
-		objs = nil
 		served := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
 			return observe.Probe{Served: group == fluxop.Group, Version: fluxop.Version}, nil
 		}

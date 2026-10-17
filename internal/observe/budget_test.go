@@ -240,8 +240,7 @@ func TestBudgetAdmitAllocatesByAdmitted(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	out, adm := admit(all, spec)
-	all = nil
+	out, adm := admit(all, spec) // all is dead from here, before the GC below
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	if len(out) != 1 || adm.notRetained != 99999 {

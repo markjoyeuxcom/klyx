@@ -208,9 +208,6 @@ const (
 	CheckoutDefault    = "default"    // neither: Git's default branch
 )
 
-// gitDefaultBranch is the go-git default the controller falls back to.
-const gitDefaultBranch = "master"
-
 // PushTarget is where the next run would push, as configured now: never
 // proof of where the last push went (S1b §2).
 type PushTarget struct {
