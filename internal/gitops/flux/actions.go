@@ -44,6 +44,12 @@ func ResourceForKind(k Kind) (string, bool) {
 		return "imagepolicies", true
 	case ImageUpdateAutomationKind:
 		return "imageupdateautomations", true
+	case ReceiverKind:
+		return "receivers", true
+	case ProviderKind:
+		return "providers", true
+	case AlertKind:
+		return "alerts", true
 	default:
 		return "", false
 	}

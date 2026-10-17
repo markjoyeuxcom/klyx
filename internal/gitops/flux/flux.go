@@ -42,6 +42,17 @@ func IsImageKind(k Kind) bool {
 	return k == ImageRepositoryKind || k == ImagePolicyKind || k == ImageUpdateAutomationKind
 }
 
+// Notification kinds Klyx acts on (notification.toolkit.fluxcd.io,
+// coverage S1c §5); their state is read by internal/gitops/notify.
+const (
+	ReceiverKind Kind = "Receiver"
+	ProviderKind Kind = "Provider"
+	AlertKind    Kind = "Alert"
+)
+
+// IsNotificationKind reports whether k is a notification kind.
+func IsNotificationKind(k Kind) bool { return k == ReceiverKind || k == ProviderKind || k == AlertKind }
+
 type ReadyState string
 
 const (

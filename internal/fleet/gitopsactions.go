@@ -27,6 +27,10 @@ func fluxGroupForKind(kind flux.Kind) (group, fallbackVersion string, ok bool) {
 		return "helm.toolkit.fluxcd.io", "v2", true
 	case flux.ImageRepositoryKind, flux.ImagePolicyKind, flux.ImageUpdateAutomationKind:
 		return "image.toolkit.fluxcd.io", "v1", true
+	case flux.ReceiverKind:
+		return "notification.toolkit.fluxcd.io", "v1", true
+	case flux.ProviderKind, flux.AlertKind:
+		return "notification.toolkit.fluxcd.io", "v1beta3", true
 	default:
 		return "", "", false
 	}
@@ -160,6 +164,10 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 	if err := imagePolicyVerb(flux.Kind(kind), gvr, "reconcile", "a reconcile request could never be confirmed: its status has no lastHandledReconcileAt"); err != nil {
 		return err
 	}
+	if k := flux.Kind(kind); k == flux.ProviderKind || k == flux.AlertKind {
+		// S1c §5: notification-controller does not reconcile them
+		return fmt.Errorf("reconcile is not offered for a %s: it is static, and notification-controller has nothing to reconcile", kind)
+	}
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
 		return fmt.Errorf("reconcile %w", err)
 	}
@@ -176,9 +184,10 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 // failure must not block the resource), then the resource itself, guarded.
 // Degrades to a plain reconcile when the source can't be resolved.
 func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
-	if flux.IsImageKind(flux.Kind(kind)) {
+	if flux.IsImageKind(flux.Kind(kind)) || flux.IsNotificationKind(flux.Kind(kind)) {
 		// an automation clones Git itself and never reads the GitRepository's
-		// artifact, and a chained verb is not offered (S1b §5)
+		// artifact, and a chained verb is not offered (S1b §5); a
+		// notification kind binds no source (S1c §5)
 		return fmt.Errorf("reconcile with source is not offered for %s", kind)
 	}
 	gvr, err := c.gvrForKind(flux.Kind(kind))
