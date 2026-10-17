@@ -578,13 +578,15 @@ EOF
 
 velero_objects() {
 	# Velero (coverage S2a): a stand-in server (component=velero, a container
-	# named velero) and time-free objects only. Velero has no status
+	# named velero) and a healthy, time-free baseline. Velero has no status
 	# subresource, so status is written by a plain merge patch. A paused
-	# schedule (paused), one that failed validation (a fault), a yearly
-	# schedule with no run owed for months (awaiting its first run; this
-	# fixture is not for New Year's Eve), an Available and an Unavailable
-	# location, and a failed unscheduled backup. Clock-driven states are
-	# covered by internal/velero's fake-clock tests.
+	# schedule; a yearly schedule awaiting its first run (none is owed for
+	# months, so this fixture is not for New Year's Eve); an Available
+	# location; and a completed unscheduled backup. Every Backup of the
+	# baseline is unscheduled: the oracle counts every object of a counted
+	# kind, and the backups part counts only those. Faults and
+	# clock-driven states are covered by internal/velero's fake-clock tests
+	# and internal/healthsrc's observer-path test.
 	k create namespace velero --dry-run=client -o yaml | k apply -f - >/dev/null
 	k apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
@@ -610,6 +612,9 @@ spec:
 EOF
 	k -n velero rollout status deployment/velero --timeout=120s >/dev/null
 	settled_pods velero velero Running
+	local stamp t
+	stamp=$(date -u +%Y%m%d%H%M%S)
+	t="${stamp:0:4}-${stamp:4:2}-${stamp:6:2}T${stamp:8:2}:${stamp:10:2}:${stamp:12:2}Z"
 	k apply -f - >/dev/null <<EOF
 apiVersion: velero.io/v1
 kind: Schedule
@@ -619,15 +624,6 @@ metadata:
   annotations:
     $(marks paused false)
 spec: {schedule: "0 2 * * *", paused: true, template: {storageLocation: parity-available}}
----
-apiVersion: velero.io/v1
-kind: Schedule
-metadata:
-  name: parity-invalid
-  namespace: velero
-  annotations:
-    $(marks fault true)
-spec: {schedule: "0 2 * *", template: {storageLocation: parity-available}}
 ---
 apiVersion: velero.io/v1
 kind: Schedule
@@ -648,32 +644,19 @@ metadata:
 spec: {provider: aws, default: true, objectStorage: {bucket: parity}}
 ---
 apiVersion: velero.io/v1
-kind: BackupStorageLocation
-metadata:
-  name: parity-unavailable
-  namespace: velero
-  annotations:
-    $(marks fault true)
-spec: {provider: aws, objectStorage: {bucket: parity-dr}}
----
-apiVersion: velero.io/v1
 kind: Backup
 metadata:
-  name: parity-failed
+  name: parity-manual
   namespace: velero
   annotations:
-    $(marks fault true)
+    $(marks ok false)
 spec: {storageLocation: parity-available}
 EOF
-	local t
-	t=$(now)
 	vstatus() { k -n velero patch "$1" "$2" --type=merge -p "{\"status\":$3}" >/dev/null; }
 	vstatus schedules.velero.io parity-paused '{"phase":"Enabled"}'
-	vstatus schedules.velero.io parity-invalid '{"phase":"FailedValidation","validationErrors":["invalid schedule: expected exactly 5 fields, found 4: [0 2 * *]"]}'
 	vstatus schedules.velero.io parity-yearly '{"phase":"Enabled"}'
 	vstatus backupstoragelocations.velero.io parity-available "{\"phase\":\"Available\",\"lastValidationTime\":\"$t\"}"
-	vstatus backupstoragelocations.velero.io parity-unavailable "{\"phase\":\"Unavailable\",\"lastValidationTime\":\"$t\",\"message\":\"BackupStorageLocation \\\"parity-unavailable\\\" is unavailable: rpc error: AccessDenied\"}"
-	vstatus backups.velero.io parity-failed "{\"phase\":\"Failed\",\"startTimestamp\":\"$t\",\"completionTimestamp\":\"$t\",\"failureReason\":\"backup execution failed: parity\"}"
+	vstatus backups.velero.io parity-manual "{\"phase\":\"Completed\",\"startTimestamp\":\"$t\",\"completionTimestamp\":\"$t\"}"
 }
 
 baseline() {

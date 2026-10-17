@@ -668,3 +668,48 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 | # | Finding | Where answered |
 |---|---|---|
 | 1 | A retained previous run is not provably the latest when clocks differ by up to a minute around `W` | §4.2 row 10: capped, the previous run decides only when its execution time is later than `W` plus one minute, else Unknown with it as a fact. §7: the mixed-clock FailedValidation case in both directions |
+
+## 15. As built
+
+**Stage 1 (f319d5e, ee7956d): the Observer's rank.**
+- `KindSpec.Rank` orders a budgeted kind's admission, eviction and blocker in place of the key. The key breaks ties, and a nil rank keeps key order, so no other kind moves.
+- **A rank that changes is re-placed on the watch path:**
+  - a retained object moving past the run's end leaves, and its room refills;
+  - a left-out object moving into the run is admitted and evicts from the end;
+  - the blocker moving relists, and until that list lands the boundary stays at the earlier of its old and new ranks.
+- **`Capture.Windows`** gives a capped ranked kind's first left-out rank, with oversized omissions recorded for it.
+
+**Stage 2 (670b6f9, ff35bd9): `internal/velero`, pure.**
+- **Due time:** `NextRun` with `robfig/cron/v3` v3.0.1 and `netresearch/go-cron` v0.15.0, the versions Velero pins. Both are new dependencies.
+- **Messages:** `Classify` maps Velero's text to fixed classes pinned from v1.18.4 (`textOfCode`) and the fixed vocabulary.
+- **Projections:** typed and bounded, with every join input validated by Klyx.
+- **Rank:** `Rank` and `WindowOf` give the two tiers.
+- **Identity:** N's name, timing, execution time, and proven or named attribution.
+- **Rules:** `ScheduleRule` (rows 1 to 10), `LocationRule`, and `Unscheduled` membership with `BackupRule`.
+- **Tests:** every cron disagreement of §1 is checked against both libraries, and passed on the first run.
+
+**Stage 3 (d169f5d): detection and the Observer.**
+- **Detection:** `capability.VeleroCapability` reads the servers, `healthsrc.VeleroServers` maps them onto the rules' facts, and the velero controller task follows them.
+- **The Observer:** three kinds and three parts, with one resume tracker shared by both schedule readers. `resume.Tracker` gains `ResumedAt`.
+
+**Stage 4 (e5d9ef1): sensitive data.**
+- **The S0b registry and placeholders:** the registry gains the Velero kinds. Velero's message fields are a new shape whose generic-path value is a fixed placeholder, `<velero: Klyx's wording>`, from a finite set; the vocabulary is shown only by the lens. A second run, and a raw value that equals a placeholder, carry only Klyx's words.
+- **Local cells:** the Velero resources take local cells.
+- **Events:** `EventSubject` gains the reference's group. An event about a velero.io object, or one of its kinds with no group, is withheld whole, while another group's kind of the same name (a CNPG `Backup`) keeps its rule.
+
+**Stage 5 (a0ed918): the bridge.** Row DTOs, converters and AI allowlists for the three parts.
+
+**Stage 6 (4ea2ea8): the UI.** The Velero lens with the run rail. The registry, attention, reveal, Describe, the console, route persistence and the smoke titles all know the task.
+
+**Stage 7 (e01a47b, bfc32fb): the lab, parity and smoke.**
+- **The lab** (`scratchpad/lab-s2a/apply.sh`, kind-klyx only): Velero v1.18.4's CRDs, read before use, the stand-in server, and every fixture of §7 with the needle.
+- **Parity:** a healthy, time-free baseline with a stand-in server: a paused schedule, a yearly one awaiting its first run, an Available location and a completed unscheduled backup. The frontend stage requires a healthy baseline, and the oracle counts every object of a counted kind, so every baseline Backup is unscheduled. The faults are covered by the fake-clock and observer-path tests. Both oracles name the three parts.
+- **The smoke:** three steps.
+
+**Deviations:**
+- **One section with three tabs** (Schedules, Storage locations, Unscheduled backups), as the Notifications view has, rather than three route views. A reveal switches the tab.
+- **The lab backdates `lastBackup`,** which is status, instead of waiting for a fresh schedule's first due time. The missed and deferred fixtures are therefore immediate, and the 15-minute wait of §7 is not needed.
+- **"Complete for the schedule's own history."** When Backups are capped but the schedule was created after `W` plus a minute, no run of it can have been left out. So row 10's named fallback and "first run in progress" still apply. This is §4.2's completeness rule read for the one schedule.
+- **Restore messages:** a Restore's failure forms are pinned, and its validation errors are withheld whole until S2b enumerates them.
+
+**The budget,** as designed: per cluster 128 + 64 + 768 KiB, about 9.4 MiB encoded for ten clusters.
