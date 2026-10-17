@@ -193,6 +193,8 @@ var parityParts = []parityPart{
 	{"helm", "releases", "native", nil},
 	{"flux", "reconciliations", "native", []string{"kustomizations", "helmreleases"}},
 	{"flux", "sources", "native", []string{"gitrepositories", "ocirepositories", "buckets", "helmrepositories", "helmcharts"}},
+	{"flux", "fluxinstance", "native", []string{"fluxinstances"}},
+	{"flux", "resourcesets", "native", []string{"resourcesets", "resourcesetinputproviders"}},
 	{"argo", "applications", "native", []string{"applications"}},
 	{"argo", "applicationsets", "native", []string{"applicationsets"}},
 	{"certs", "certificates", "native", []string{"certificates"}},
@@ -218,6 +220,8 @@ var parityResource = map[string]string{
 	"clustersecretstores": "clustersecretstores.external-secrets.io",
 	"gateways":            "gateways.gateway.networking.k8s.io", "httproutes": "httproutes.gateway.networking.k8s.io",
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
+	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
+	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 }
 
 // parityMember is one counted object's declared evaluation.

@@ -328,9 +328,97 @@ EOF
 	status nodeclaims.karpenter.sh - parity-claim "{\"conditions\":[$(cond Launched True Launched "$g"),$(cond Registered True Registered "$g"),$(cond Initialized True Initialized "$g"),$(cond Ready True Ready "$g")]}"
 }
 
+fluxop_objects() {
+	# A flux-operator stand-in (coverage S1a): found by its label, runtime
+	# namespace flux-system (RUNTIME_NAMESPACE unset), so the FluxInstance
+	# there is bound and the kustomize-controller probe stays in flux-system.
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flux-operator
+  namespace: flux-system
+  labels: {app.kubernetes.io/name: flux-operator}
+  annotations:
+    $(marks ok true)
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: flux-operator}}
+  template:
+    metadata:
+      labels: {app: flux-operator}
+      annotations:
+        klyx.dev/parity-role: "ok"
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: manager, image: $pause, imagePullPolicy: Never}]
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: FluxInstance
+metadata:
+  name: flux
+  namespace: flux-system
+  annotations:
+    $(marks ok false)
+spec: {distribution: {version: "2.x", registry: ghcr.io/fluxcd}}
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: FluxReport
+metadata: {name: flux, namespace: flux-system}
+spec: {distribution: {version: v2.9.6, status: Installed, entitlement: parity}}
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: parity-rs
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec: {resources: [{apiVersion: v1, kind: ConfigMap, metadata: {name: parity-rs-cm, namespace: $ns}}]}
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: parity-rs-failed
+  namespace: $ns
+  annotations:
+    $(marks fault true)
+spec: {resources: [{apiVersion: v1, kind: ConfigMap, metadata: {name: parity-rs-failed-cm, namespace: $ns}}]}
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: parity-rs-paused
+  namespace: $ns
+  annotations:
+    fluxcd.controlplane.io/reconcile: disabled
+    $(marks paused false)
+spec: {resources: [{apiVersion: v1, kind: ConfigMap, metadata: {name: parity-rs-paused-cm, namespace: $ns}}]}
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSetInputProvider
+metadata:
+  name: parity-rsip
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec: {type: Static, defaultValues: {env: parity}}
+EOF
+	k -n flux-system rollout status deployment/flux-operator --timeout=120s >/dev/null
+	settled_pods flux-system flux-operator Running
+	ready fluxinstances.fluxcd.controlplane.io flux-system flux True ReconciliationSucceeded
+	ready fluxreports.fluxcd.controlplane.io flux-system flux True ReconciliationSucceeded
+	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs True ReconciliationSucceeded
+	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs-failed False BuildFailed
+	ready resourcesets.fluxcd.controlplane.io "$ns" parity-rs-paused True ReconciliationSucceeded
+	ready resourcesetinputproviders.fluxcd.controlplane.io "$ns" parity-rsip True ReconciliationSucceeded
+}
+
 baseline() {
 	controllers
 	flux_objects
+	fluxop_objects
 	argo_objects
 	certs_objects
 	eso_objects

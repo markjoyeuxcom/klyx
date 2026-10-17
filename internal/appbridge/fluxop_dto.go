@@ -151,7 +151,12 @@ type FluxNextScheduleDTO struct {
 }
 
 // FluxSetRowDTO is one row of the ResourceSets part: a set or a provider.
+// Its identity and the capture's rule are at the top, as every rows DTO's
+// are (the parity gate reads them there); the kind says which one is set.
 type FluxSetRowDTO struct {
+	UID      string           `json:"uid"`
+	Kind     string           `json:"kind"`
+	Rule     RuleDTO          `json:"rule"`
 	Set      *FluxSetDTO      `json:"set,omitempty"`
 	Provider *FluxProviderDTO `json:"provider,omitempty"`
 }
@@ -251,7 +256,7 @@ func fluxSetRowDTO(r healthsrc.Row[healthsrc.FluxSetRow]) FluxSetRowDTO {
 			d.DependsOn = append(d.DependsOn, FluxDependencyDTO{APIVersion: dep.APIVersion, Kind: dep.Kind, Name: dep.Name,
 				Namespace: dep.Namespace, Ready: dep.Ready, HasReadyExpr: dep.HasReadyExpr})
 		}
-		return FluxSetRowDTO{Set: &d}
+		return FluxSetRowDTO{UID: r.Ref.UID, Kind: fluxop.KindSet, Rule: eval, Set: &d}
 	}
 	p := r.Data.Provider
 	d := FluxProviderDTO{FluxOpCommonDTO: fluxOpCommon(p.Common, r.Ref, r.Data.Resume, eval), Type: p.Type, URL: p.URL,
@@ -263,7 +268,7 @@ func fluxSetRowDTO(r healthsrc.Row[healthsrc.FluxSetRow]) FluxSetRowDTO {
 	if n := p.NextSchedule; n != nil {
 		d.NextSchedule = &FluxNextScheduleDTO{FluxScheduleDTO: FluxScheduleDTO{Cron: n.Cron, TimeZone: n.TimeZone, Window: n.Window}, When: timePtrOf(n.When)}
 	}
-	return FluxSetRowDTO{Provider: &d}
+	return FluxSetRowDTO{UID: r.Ref.UID, Kind: fluxop.KindProvider, Rule: eval, Provider: &d}
 }
 
 func fluxReportDTO(r healthsrc.Row[fluxop.Report]) FluxReportDTO {

@@ -33,6 +33,8 @@ const instance = (over: Partial<FluxInstanceDTO> = {}): FluxInstanceDTO => ({
 });
 const set = (name: string, over: Partial<FluxSetDTO> = {}): FluxSetDTO => ({ ...common("ResourceSet", name), inputsFrom: [], dependsOn: [], steps: [], ...over });
 const provider = (name: string, over: Partial<FluxProviderDTO> = {}): FluxProviderDTO => ({ ...common("ResourceSetInputProvider", name), type: "GitHubBranch", schedule: [], exportedInputCount: 2, ...over });
+const setRow = (s: FluxSetDTO) => ({ uid: s.uid, kind: "ResourceSet" as const, rule: s.rule, set: s });
+const provRow = (p: FluxProviderDTO) => ({ uid: p.uid, kind: "ResourceSetInputProvider" as const, rule: p.rule, provider: p });
 const report: FluxReportDTO = { uid: "r", namespace: "flux-system", name: "flux", reportingSucceeded: true, conditionChanged: "2026-10-17T09:00:00Z",
   distributionVersion: "v2.9.6", operatorVersion: "v0.61.0", components: [{ name: "source-controller", ready: true }],
   reconcilers: [{ kind: "Kustomization", running: 3, failing: 1, suspended: 0 }] };
@@ -49,9 +51,9 @@ describe("FluxOperatorView (coverage S1a)", () => {
     setRows({
       instances: [instance()], reports: [report],
       sets: [
-        { set: set("ok-set") },
-        { set: set("bad-set", { ready: "Failed", reason: "DependencyNotReady", rule: { included: true, role: "fault", label: "Failed" } }) },
-        { provider: provider("prs") },
+        setRow(set("ok-set")),
+        setRow(set("bad-set", { ready: "Failed", reason: "DependencyNotReady", rule: { included: true, role: "fault", label: "Failed" } })),
+        provRow(provider("prs")),
       ],
     });
     render(<FluxOperatorView cluster="c" />);
@@ -61,7 +63,7 @@ describe("FluxOperatorView (coverage S1a)", () => {
   });
 
   it("a resumed object without evidence says why it is not counted", async () => {
-    setRows({ sets: [{ set: set("apps", { resume: "awaiting", ready: "Failed", reason: "BuildFailed", rule: { included: false, role: "unknown", label: "Resumed · awaiting evaluation" } }) }] });
+    setRows({ sets: [setRow(set("apps", { resume: "awaiting", ready: "Failed", reason: "BuildFailed", rule: { included: false, role: "unknown", label: "Resumed · awaiting evaluation" } }))] });
     render(<FluxOperatorView cluster="c" />);
     fireEvent.click(screen.getByText("apps"));
     const note = await screen.findByTestId("fluxop-note");
@@ -80,7 +82,7 @@ describe("FluxOperatorView (coverage S1a)", () => {
   });
 
   it("a scheduled provider offers Fetch now; the verb carries the armed UID", async () => {
-    setRows({ sets: [{ provider: provider("prs", { schedule: [{ cron: "0 * * * *" }] }) }] });
+    setRows({ sets: [provRow(provider("prs", { schedule: [{ cron: "0 * * * *" }] }))] });
     render(<FluxOperatorView cluster="c" />);
     fireEvent.click(screen.getByText("prs"));
     fireEvent.click(await screen.findByRole("button", { name: /more/i }));
@@ -90,7 +92,7 @@ describe("FluxOperatorView (coverage S1a)", () => {
   });
 
   it("a capped kind is said, with its lower bound", () => {
-    setRows({ sets: [{ set: set("a") }], coverage: [live("FluxInstance"), { ...live("ResourceSet"), truncated: true, notRetained: 7 }, live("ResourceSetInputProvider")] });
+    setRows({ sets: [setRow(set("a"))], coverage: [live("FluxInstance"), { ...live("ResourceSet"), truncated: true, notRetained: 7 }, live("ResourceSetInputProvider")] });
     render(<FluxOperatorView cluster="c" />);
     expect(screen.getByTestId("fluxop-capped").textContent).toContain("7 ResourceSets not retained");
   });

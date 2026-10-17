@@ -254,6 +254,23 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await open("flux");
     sized(await within(10_000, "the dependency drawing", () => $("[data-testid='dep-graph']")), "the dependency drawing");
   });
+  // Coverage S1a: the Flux lens's Operator view, from the lab's operator
+  // fixtures (scratchpad lab-s1a): broken-first, the report as the
+  // operator's own account with its two times, a suspension said.
+  await step(steps, "Flux Operator view", async () => {
+    await open("flux-operator");
+    await closeDrawer();
+    const first = await within(10_000, "operator rows", () => $<HTMLElement>(".lens-row"));
+    if (!/apps-waiting|app-tags/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    const head = await within(4000, "the report head", () => $("[data-testid='fluxop-report-head']"));
+    if (!/as reported by the operator/.test(head.textContent ?? "")) throw new Error(`the report head: ${head.textContent}`);
+    (await within(4000, "the FluxInstance row", () => byText<HTMLElement>(".lens-row", /instance.*flux-system\/flux/))).click();
+    const rep = await within(8000, "the report block", () => $("[data-testid='fluxop-report']"));
+    if (!/reporting succeeded/.test(rep.textContent ?? "") || !/read by Klyx/.test(rep.textContent ?? "")) throw new Error(`the report block: ${rep.textContent}`);
+    (await within(4000, "the paused ResourceSet", () => byText<HTMLElement>(".lens-row", /team-b\/paused/))).click();
+    const note = await within(8000, "the suspension note", () => $("[data-testid='fluxop-note']"));
+    if (!/^Suspended/.test(note.textContent ?? "")) throw new Error(`the suspension note: ${note.textContent}`);
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");

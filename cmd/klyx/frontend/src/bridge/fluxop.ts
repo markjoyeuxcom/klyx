@@ -51,7 +51,7 @@ export type FluxProviderDTO = FluxOpCommonDTO & {
   lastExportedRevision?: string; exportedInputCount: number;
 };
 
-export type FluxSetRowDTO = { set?: FluxSetDTO; provider?: FluxProviderDTO };
+export type FluxSetRowDTO = { uid: string; kind: "ResourceSet" | "ResourceSetInputProvider"; rule: RuleDTO; set?: FluxSetDTO; provider?: FluxProviderDTO };
 
 export type FluxReportDTO = {
   uid: string; namespace: string; name: string;
