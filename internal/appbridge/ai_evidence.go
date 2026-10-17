@@ -98,7 +98,27 @@ var aiEvidenceFields = map[string]allow{
 	healthsrc.TaskFlux + "/receivers": {"type": nil, "ready": nil, "reason": nil, "suspended": nil, "events": nil, "meaning": nil, "stalled": nil,
 		"resources": allow{"kind": nil, "name": nil, "namespace": nil}, "resourceCount": nil, "filterCount": nil,
 		"generation": nil, "observedGeneration": nil, "readyGeneration": nil},
+	// Coverage S2a §6: kinds, verdicts, phases, the cron and zone, times,
+	// counts, a location's name, provider, bucket and prefix, and Klyx's
+	// classes; never a config value, a Secret's name, a hook or a selector.
+	healthsrc.TaskVelero + "/schedules": {"cron": nil, "zone": nil, "library": nil, "paused": nil, "phase": nil, "useOwnerReferences": nil,
+		"lastBackup": nil, "lastSkipped": nil, "due": nil, "dueZero": nil, "dueUnknown": nil, "validation": nil, "nState": nil,
+		"n": veleroRunAllow, "deciding": veleroRunAllow, "previous": veleroRunAllow, "previousNamed": nil, "blocker": veleroRunAllow,
+		"runs": veleroRunAllow, "newer": veleroRunAllow, "synced": nil, "resumed": nil, "reason": nil,
+		"template": allow{"storageLocation": nil, "ttl": nil, "snapshotVolumes": nil, "defaultVolumesToFsBackup": nil, "snapshotMoveData": nil,
+			"includedCount": nil, "excludedCount": nil, "hooks": nil},
+		"location": allow{"state": nil, "name": nil, "byDefault": nil, "label": nil, "role": nil, "validated": nil}},
+	healthsrc.TaskVelero + "/locations": {"provider": nil, "bucket": nil, "prefix": nil, "default": nil, "accessMode": nil, "phase": nil,
+		"lastValidation": nil, "lastSynced": nil, "validationFrequency": nil, "syncPeriod": nil, "message": nil, "messageWithheld": nil,
+		"configCount": nil, "schedules": allow{"name": nil, "label": nil, "role": nil}, "schedulesState": nil, "expired": nil,
+		"expiredState": nil, "gcFailures": nil, "severalDefaults": nil, "reason": nil},
+	healthsrc.TaskVelero + "/backups": {"phase": nil, "created": nil, "started": nil, "completed": nil, "expires": nil, "scheduleLabel": nil,
+		"storageLocation": nil, "errors": nil, "warnings": nil, "itemsTotal": nil, "itemsBackedUp": nil, "failure": nil, "validation": nil,
+		"validationCount": nil, "hooksFailed": nil, "operationsFailed": nil, "membership": nil, "disputed": nil, "reason": nil},
 }
+
+var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,
+	"timing": nil, "errors": nil, "warnings": nil, "class": nil}
 
 var imageRefAllow = allow{"name": nil, "tag": nil, "digest": nil, "text": nil}
 
