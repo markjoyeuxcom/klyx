@@ -28,7 +28,7 @@ export type ClusterDTO = {
   gatewayAPIVersion?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -374,7 +374,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
 export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
@@ -742,6 +742,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   upgrade: "Upgrade",
   connectivity: "Connectivity",
   karpenter: "Karpenter",
+  velero: "Velero",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };

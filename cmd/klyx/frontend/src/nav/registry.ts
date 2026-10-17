@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -184,6 +184,26 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // coverage S2a: read-only; one view with its own tabs (Schedules,
+    // Storage locations, Unscheduled backups)
+    id: "velero", label: "Velero", cap: "velero", lens: "group", destinations: [
+      task("velero", "Backups", section("velero"), { keywords: ["velero", "backup", "schedule", "backup storage location", "bsl", "restore", "storage location"] }),
+      res("Schedules", r("velero.io", "v1", "schedules", "Schedule", "Namespaced")),
+      res("Backups", r("velero.io", "v1", "backups", "Backup", "Namespaced")),
+      res("Restores", r("velero.io", "v1", "restores", "Restore", "Namespaced")),
+      res("BackupStorageLocations", r("velero.io", "v1", "backupstoragelocations", "BackupStorageLocation", "Namespaced"), { keywords: ["bsl"] }),
+      res("VolumeSnapshotLocations", r("velero.io", "v1", "volumesnapshotlocations", "VolumeSnapshotLocation", "Namespaced"), { keywords: ["vsl"] }),
+      res("BackupRepositories", r("velero.io", "v1", "backuprepositories", "BackupRepository", "Namespaced")),
+      res("PodVolumeBackups", r("velero.io", "v1", "podvolumebackups", "PodVolumeBackup", "Namespaced")),
+      res("PodVolumeRestores", r("velero.io", "v1", "podvolumerestores", "PodVolumeRestore", "Namespaced")),
+      res("DataUploads", r("velero.io", "v2alpha1", "datauploads", "DataUpload", "Namespaced")),
+      res("DataDownloads", r("velero.io", "v2alpha1", "datadownloads", "DataDownload", "Namespaced")),
+      res("DeleteBackupRequests", r("velero.io", "v1", "deletebackuprequests", "DeleteBackupRequest", "Namespaced")),
+      res("DownloadRequests", r("velero.io", "v1", "downloadrequests", "DownloadRequest", "Namespaced")),
+      res("ServerStatusRequests", r("velero.io", "v1", "serverstatusrequests", "ServerStatusRequest", "Namespaced")),
+    ],
+  },
+  {
     id: "helm", label: "Helm", lens: "group", destinations: [
       task("helm", "Releases", section("helm"), { keywords: ["helm", "charts", "rollback"] }),
     ],
@@ -219,6 +239,7 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     externalSecrets: c.externalSecretsPresent ?? false,
     gatewayAPI: Boolean(c.gatewayAPIVersion),
     karpenter: c.karpenterPresent ?? false,
+    velero: c.veleroPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

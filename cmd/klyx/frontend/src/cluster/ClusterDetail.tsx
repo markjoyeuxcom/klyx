@@ -18,6 +18,7 @@ import { AccessView } from "./AccessView";
 import { UpgradeView } from "./UpgradeView";
 import { ConnectivityView } from "./ConnectivityView";
 import { KarpenterView } from "./KarpenterView";
+import { VeleroView } from "./VeleroView";
 
 export function ClusterDetail() {
   const route = useFleet((s) => s.route);
@@ -61,6 +62,7 @@ export function ClusterDetail() {
   if (route.section === "upgrade") return <UpgradeView cluster={cluster.name} />;
   if (route.section === "connectivity") return <ConnectivityView cluster={cluster.name} />;
   if (route.section === "karpenter") return <KarpenterView cluster={cluster.name} />;
+  if (route.section === "velero") return <VeleroView cluster={cluster.name} />;
   // Every section is routed above; a persisted unknown section never reaches
   // here (persist.ts validates it), but say so rather than render nothing.
   return <div className="t-body" style={{ padding: 24 }}>This view is not available in this version of Klyx.</div>;

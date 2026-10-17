@@ -34,6 +34,8 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "routes", label: "Routes" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
+  { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
+    parts: [{ part: "schedules", label: "Schedules", destinationId: "velero" }, { part: "locations", label: "Storage locations" }, { part: "backups", label: "Unscheduled backups" }] },
 ];
 
 const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence" };
@@ -50,6 +52,7 @@ const KIND_LABELS: Record<string, string> = {
   helmcharts: "HelmCharts", applications: "Applications", applicationsets: "ApplicationSets", certificates: "Certificates",
   issuers: "Issuers", clusterissuers: "ClusterIssuers", externalsecrets: "ExternalSecrets", secretstores: "SecretStores",
   clustersecretstores: "ClusterSecretStores", nodepools: "NodePools", nodeclaims: "NodeClaims",
+  schedules: "Schedules", backupstoragelocations: "BackupStorageLocations", backups: "Backups",
 };
 const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 

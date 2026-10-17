@@ -34,6 +34,9 @@ const LENSES: Record<string, Lens> = {
   "gateway.networking.k8s.io/httproutes": { task: "gateway", part: "routes", label: "Gateway API" },
   "karpenter.sh/nodeclaims": { task: "karpenter", part: "nodeclaims", label: "Karpenter" },
   "karpenter.sh/nodepools": { task: "karpenter", part: "nodepools", label: "Karpenter" },
+  "velero.io/schedules": { task: "velero", part: "schedules", label: "Velero" },
+  "velero.io/backupstoragelocations": { task: "velero", part: "locations", label: "Velero" },
+  "velero.io/backups": { task: "velero", part: "backups", label: "Velero" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;
