@@ -78,6 +78,10 @@ func (d *diffConn) FluxAvailable() bool { return false }
 func (d *diffConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
 	return depgraph.Graph{}
 }
+func (d *diffConn) FluxOpAct(context.Context, string, string, string, string, string) error { return nil }
+func (d *diffConn) FluxOpObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
 func (d *diffConn) FluxDiffKustomization(context.Context, string, string, string) (fluxcli.DiffResult, error) {
 	return fluxcli.DiffResult{}, errors.New("the flux CLI path ran")
 }

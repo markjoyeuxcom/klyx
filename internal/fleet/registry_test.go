@@ -182,6 +182,12 @@ func (f *fakeConn) DescribeSnapshot(context.Context, schema.GroupVersionResource
 func (f *fakeConn) DescribePinnedCmd(context.Context, schema.GroupVersionResource, string, string) (*exec.Cmd, func(), error) {
 	return nil, nil, nil
 }
+func (f *fakeConn) FluxOpAct(context.Context, string, string, string, string, string) error {
+	return nil
+}
+func (f *fakeConn) FluxOpObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
 
 func (f *fakeConn) DescribeArgv(kindArg, namespace, name string) ([]string, error) {
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil

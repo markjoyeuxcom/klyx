@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -34,6 +35,10 @@ type GitOpsConn interface {
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	// DependencyGraph walks the GitOps dependency graph (The Line slice 8b).
 	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
+	// The Flux Operator (coverage S1a §5): one annotation verb on the armed
+	// object, and one object read for the inspector's on-demand facts.
+	FluxOpAct(ctx context.Context, kind, ns, name, uid, verb string) error
+	FluxOpObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 }
 
 // GitOpsService is bound to JS: the Flux lens's on-demand reads (detail, Git
@@ -228,4 +233,51 @@ func (s *GitOpsService) ResolveGitLink(cluster, kind, namespace, name string) Gi
 	}
 	link := flux.ResolveGitLink(url, src.Path, src.Revision)
 	return GitLinkDTO{URL: link.URL, IsDeepLink: link.IsDeepLink, CopyText: link.CopyText}
+}
+
+// FluxOpAct runs one Flux Operator verb (S1a §5: reconcile, fetch, suspend,
+// resume, refresh) on the armed object. On a protected cluster it consumes
+// the typed-confirmation grant first, as every Flux verb does. A verb
+// reports "requested"; only the object's status says it was evaluated.
+func (s *GitOpsService) FluxOpAct(cluster, kind, namespace, name, uid, verb string) ActionResultDTO {
+	if err := checkProtected(cluster); err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if err := conn.FluxOpAct(ctx, kind, namespace, name, uid, verb); err != nil {
+		return ActionResultDTO{Error: urlscrub.Text(err.Error()).Text}
+	}
+	return ActionResultDTO{OK: true}
+}
+
+// GetFluxOpDetail reads one operator object for the inspector: its history
+// (without digests), inventory and readyExprs, from the sanitised object,
+// and its events. A failed read is the request's outcome, never an empty
+// detail; a failed events read says so.
+func (s *GitOpsService) GetFluxOpDetail(cluster, kind, namespace, name string) FluxOpDetailDTO {
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return FluxOpDetailDTO{Error: "cluster not connected: " + cluster}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	u, err := conn.FluxOpObject(ctx, kind, namespace, name)
+	if err != nil {
+		return FluxOpDetailDTO{Error: urlscrub.Text(err.Error()).Text}
+	}
+	d := fluxOpDetail(u)
+	evs, err := conn.FluxEvents(ctx, kind, namespace, name)
+	if err != nil {
+		d.EventsError = urlscrub.Text(err.Error()).Text
+		return d
+	}
+	for _, e := range evs {
+		d.Events = append(d.Events, toEventRowDTO(e))
+	}
+	return d
 }

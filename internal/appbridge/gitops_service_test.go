@@ -97,6 +97,10 @@ func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name
 func (f *fakeGitOpsConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
 	return depgraph.Graph{}
 }
+func (f *fakeGitOpsConn) FluxOpAct(context.Context, string, string, string, string, string) error { return nil }
+func (f *fakeGitOpsConn) FluxOpObject(context.Context, string, string, string) (*unstructured.Unstructured, error) {
+	return nil, nil
+}
 func (f *fakeGitOpsConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	f.mu.Lock()
 	f.lastSuspend = suspend
