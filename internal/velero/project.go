@@ -255,6 +255,11 @@ func validNamespace(s string) bool {
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// disp is a display string: the URL rule (S0b) first - a free string can
+// carry a URL with user info - then the clip (Codex's S2a implementation
+// review, finding 2).
+func disp(s string, n int) string { return clip(urlscrub.Field(s).Text, n) }
+
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -377,7 +382,7 @@ func size(v any) int {
 
 // ProjectSchedule builds a Schedule's projection. It never mutates u.
 func ProjectSchedule(u *unstructured.Unstructured) *Schedule {
-	s := &Schedule{Meta: metaOf(u), Phase: clip(str(u, "status", "phase"), maxShort),
+	s := &Schedule{Meta: metaOf(u), Phase: disp(str(u, "status", "phase"), maxShort),
 		Paused: boolp(u, "spec", "paused") != nil && *boolp(u, "spec", "paused"), SkipImmediately: boolp(u, "spec", "skipImmediately"),
 		LastBackup: ts(u, "status", "lastBackup"), LastSkipped: ts(u, "status", "lastSkipped")}
 	if p := boolp(u, "spec", "useOwnerReferencesInBackup"); p != nil {
@@ -397,7 +402,7 @@ func ProjectSchedule(u *unstructured.Unstructured) *Schedule {
 			t.StorageLocationInvalid = true
 		}
 	}
-	t.TTL = clip(str(u, "spec", "template", "ttl"), maxShort)
+	t.TTL = disp(str(u, "spec", "template", "ttl"), maxShort)
 	t.SnapshotVolumes = boolp(u, "spec", "template", "snapshotVolumes")
 	t.DefaultVolumesToFs = boolp(u, "spec", "template", "defaultVolumesToFsBackup")
 	t.SnapshotMoveData = boolp(u, "spec", "template", "snapshotMoveData")
@@ -421,17 +426,17 @@ const (
 
 // ProjectLocation builds a BackupStorageLocation's projection.
 func ProjectLocation(u *unstructured.Unstructured) *Location {
-	l := &Location{Meta: metaOf(u), Provider: clip(str(u, "spec", "provider"), maxName),
-		Bucket: clip(str(u, "spec", "objectStorage", "bucket"), maxName), Prefix: clip(str(u, "spec", "objectStorage", "prefix"), maxPrefix),
-		CACertSet: str(u, "spec", "objectStorage", "caCert") != "", AccessMode: clip(str(u, "spec", "accessMode"), maxShort),
-		Phase: clip(str(u, "status", "phase"), maxShort), LastValidation: ts(u, "status", "lastValidationTime"), LastSynced: ts(u, "status", "lastSyncedTime")}
+	l := &Location{Meta: metaOf(u), Provider: disp(str(u, "spec", "provider"), maxName),
+		Bucket: disp(str(u, "spec", "objectStorage", "bucket"), maxName), Prefix: disp(str(u, "spec", "objectStorage", "prefix"), maxPrefix),
+		CACertSet: str(u, "spec", "objectStorage", "caCert") != "", AccessMode: disp(str(u, "spec", "accessMode"), maxShort),
+		Phase: disp(str(u, "status", "phase"), maxShort), LastValidation: ts(u, "status", "lastValidationTime"), LastSynced: ts(u, "status", "lastSyncedTime")}
 	if p := boolp(u, "spec", "default"); p != nil {
 		l.Default = *p
 	}
 	if ref := str(u, "spec", "objectStorage", "caCertRef", "name"); ref != "" {
 		l.CACertRef = clipName(ref)
 	}
-	l.Credential, l.CredentialKey = clipName(str(u, "spec", "credential", "name")), clip(str(u, "spec", "credential", "key"), maxName)
+	l.Credential, l.CredentialKey = clipName(str(u, "spec", "credential", "name")), disp(str(u, "spec", "credential", "key"), maxName)
 	l.SyncPeriod, l.SyncPeriodSet = dur(u, "spec", "backupSyncPeriod")
 	l.ValidationFrequency, l.ValidationSet = dur(u, "spec", "validationFrequency")
 	if m := str(u, "status", "message"); m != "" {
@@ -450,9 +455,9 @@ func ProjectLocation(u *unstructured.Unstructured) *Location {
 			if len(l.ConfigKeys) == maxConfigKeys {
 				break
 			}
-			l.ConfigKeys = append(l.ConfigKeys, clip(k, maxConfigKey))
+			l.ConfigKeys = append(l.ConfigKeys, disp(k, maxConfigKey))
 		}
-		l.Region = clip(cfg[cfgRegion], maxShort)
+		l.Region = disp(cfg[cfgRegion], maxShort)
 		if v := cfg[cfgS3URL]; v != "" {
 			l.S3URL = clip(urlscrub.OriginOf(v), maxName)
 		}
@@ -478,7 +483,7 @@ var gcFailures = map[string]bool{"BSLNotFound": true, "BSLCannotGet": true, "BSL
 // ProjectBackup builds a Backup's projection, validating every join input
 // itself (S2a §3, revision 2): no API limit bounds them all.
 func ProjectBackup(u *unstructured.Unstructured) *Backup {
-	b := &Backup{Meta: metaOf(u), ScheduleLabel: u.GetLabels()[LabelSchedule], Phase: clip(str(u, "status", "phase"), maxShort),
+	b := &Backup{Meta: metaOf(u), ScheduleLabel: u.GetLabels()[LabelSchedule], Phase: disp(str(u, "status", "phase"), maxShort),
 		Start: ts(u, "status", "startTimestamp"), Completion: ts(u, "status", "completionTimestamp"), Expiration: ts(u, "status", "expiration"),
 		Errors: num(u, "status", "errors"), Warnings: num(u, "status", "warnings"),
 		ItemsTotal: num(u, "status", "progress", "totalItems"), ItemsBackedUp: num(u, "status", "progress", "itemsBackedUp"),

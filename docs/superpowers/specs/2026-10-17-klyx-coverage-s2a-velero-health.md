@@ -713,3 +713,16 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 - **Restore messages:** a Restore's failure forms are pinned, and its validation errors are withheld whole until S2b enumerates them.
 
 **The budget,** as designed: per cluster 128 + 64 + 768 KiB, about 9.4 MiB encoded for ten clusters.
+
+## 16. Implementation review 1: Codex at ca82ef6
+
+| # | Finding | Fix |
+|---|---|---|
+| P1 | Any string beginning `<omitted> × ` passed as a placeholder, so raw Velero text could cross (a pre-existing S0b hole the Velero shapes made reachable) | `crd.isPlaceholder` accepts the counted form exactly (`<omitted> × <digits>`) and otherwise only the fixed set; forged prefixes are classified |
+| P1 | A location's prefix, region and other display strings bypassed the URL rule | `velero.disp` applies the URL rule before clipping to every free display string; the cron stays raw for the parser and is ruled in the DTO and in Klyx's parse errors, which echo it |
+| 2 | A blocker turning oversized dropped the conservative boundary before its relist | the oversized record keeps the earlier of the blocker's old and new ranks until a list |
+| 2 | Absence from a capped or filtered view read as removal | the inspector claims removal only from a complete, uncapped read, and never for the backups part, a filtered set ("No longer in this list") |
+| 2 | A kept owner proved a run despite an incomplete owner set | `Attribute` checks the incomplete set before owner proof; `N` keeps its separate rule |
+| 2 | A partial location read certified the newest default | the default is named only from a complete read; otherwise the block is "incomplete" with its candidate, and a location's schedule list is marked incomplete rather than guessed |
+
+Codex's probe tests are kept as regression tests (`review_s2a_test.go` in crd, appbridge, observe, velero and healthsrc, and two cases in `VeleroView.test.tsx`).

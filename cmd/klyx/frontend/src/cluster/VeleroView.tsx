@@ -159,7 +159,12 @@ export function VeleroView({ cluster }: { cluster: string }) {
   const selTab: Tab | null = selKind === "Schedule" ? "schedules" : selKind === "BackupStorageLocation" ? "locations" : selKind === "Backup" ? "backups" : null;
   const live = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
   const selEv = selTab ? kindEvidence(!part[selTab].loading, part[selTab].coverage, PARTS[selTab].kind, part[selTab].watchError) : "pending";
-  const pin = usePinnedSubject(cluster, selTab ? selKey : null, live, selEv === "complete", selTab ? PARTS[selTab].lens : undefined);
+  // absence proves removal only from a complete, unfiltered read (Codex's
+  // S2a implementation review, finding 4): a capped kind can leave an object
+  // out, and the backups part is the last day's unscheduled ones, a set an
+  // object leaves without being deleted
+  const selCapped = selTab ? part[selTab].coverage.some((k) => k.kind === PARTS[selTab].kind && k.truncated) : false;
+  const pin = usePinnedSubject(cluster, selTab ? selKey : null, live, selEv === "complete" && !selCapped && selTab !== "backups", selTab ? PARTS[selTab].lens : undefined);
 
   let state: DatasetState = "ready";
   if (absent) state = "empty";
@@ -329,7 +334,10 @@ type Gone = "removed" | "unverified" | null;
 const linkStyle: React.CSSProperties = { display: "block", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", overflowWrap: "anywhere" };
 
 function goneVerdict(kind: string, gone: Gone) {
-  return <div role="status" className="t-body"><span className="t-status">{gone === "removed" ? `${kind} removed.` : `Not in the current ${kind} read.`}</span> The details below are its last evidence.</div>;
+  const word = gone === "removed" ? `${kind} removed.`
+    : kind === "Backup" ? "No longer in this list." : `Not in the current ${kind} read.`;
+  const why = kind === "Backup" && gone !== "removed" ? " It may have left the last day's unscheduled backups, or Klyx no longer holds it; that is not proof it was deleted." : "";
+  return <div role="status" className="t-body"><span className="t-status">{word}</span>{why} The details below are its last evidence.</div>;
 }
 
 function runLine(label: string, r: VeleroRunDTO | undefined) {
@@ -388,6 +396,7 @@ function ScheduleInspector({ cluster, s, gone, onOpen, onClose }: { cluster: str
             ) : <span>{loc.name ?? (loc.state === "server default" ? "the server's default (by flag; Klyx does not read flags)" : "-")}</span>}
             {loc.state === "found" ? <span style={{ color: ROLE_TEXT[loc.role ?? "unknown"] }}>: {loc.label}{loc.validated ? `, validated ${formatAge(Math.max(0, Math.floor(Date.now() / 1000) - unix(loc.validated)))} ago` : ""}</span>
               : loc.state === "invalid" ? <span style={{ color: "var(--color-text-warning)" }}> · the template names an invalid location</span>
+              : loc.state === "incomplete" ? <span style={{ color: "var(--color-text-warning)" }}> · the location read is incomplete, so which location is the default cannot be confirmed</span>
               : loc.state !== "server default" ? <span style={{ color: "var(--color-text-warning)" }}> · {loc.state}</span> : null}
           </div>
           <div className="t-secondary">Its own verdict, shown beside the schedule's: never folded into it.</div>

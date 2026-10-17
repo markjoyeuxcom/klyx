@@ -2,6 +2,7 @@ package crd
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -792,8 +793,13 @@ func isPlaceholder(v any) bool {
 		return false
 	}
 	return str == OmittedText || str == OmittedValue || str == WithheldValue || str == MaskedValue ||
-		strings.HasPrefix(str, OmittedValue+" × ") || velero.IsPlaceholder(str)
+		omittedCount.MatchString(str) || velero.IsPlaceholder(str)
 }
+
+// omittedCount is freeForm's placeholder for a list of scalars, exactly:
+// a prefix alone would let any text that begins with it pass as a
+// placeholder (Codex's S2a implementation review, finding 1).
+var omittedCount = regexp.MustCompile(`^` + regexp.QuoteMeta(OmittedValue) + ` × [0-9]{1,9}$`)
 
 func empty(v any) bool {
 	switch t := v.(type) {

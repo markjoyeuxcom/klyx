@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/velero"
 )
 
@@ -224,7 +225,7 @@ func veleroScheduleDTO(r healthsrc.Row[healthsrc.VeleroScheduleRow]) VeleroSched
 	s, v := r.Data.Schedule, r.Data.Verdict
 	t := s.Template
 	d := VeleroScheduleDTO{UID: r.Ref.UID, GVR: r.Ref.GVR, Namespace: s.Namespace, Name: s.Name, Generation: s.Generation, Created: timePtrOf(s.Created),
-		Cron: s.Cron, CronTooLong: s.CronTooLong, Zone: v.Due.Zone, Library: v.Due.Library, Paused: s.Paused, Phase: s.Phase,
+		Cron: urlscrub.Field(s.Cron).Text, CronTooLong: s.CronTooLong, Zone: v.Due.Zone, Library: v.Due.Library, Paused: s.Paused, Phase: s.Phase,
 		UseOwnerReferences: s.UseOwnerReferences, LastBackup: timePtrOf(s.LastBackup), LastSkipped: timePtrOf(s.LastSkipped),
 		DueZero: v.Due.Zero, DueUnknown: v.Due.Unknown, Validation: classTexts(s.Validation), NName: v.NName, NState: v.NState,
 		PreviousNamed: v.PreviousNamed, Runs: []VeleroRunDTO{}, Newer: []VeleroRunDTO{}, Synced: v.Synced, Resumed: r.Data.Resumed,

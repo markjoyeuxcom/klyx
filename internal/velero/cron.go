@@ -9,6 +9,8 @@ import (
 
 	gocron "github.com/netresearch/go-cron"
 	robfig "github.com/robfig/cron/v3"
+
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // The cron libraries Velero has parsed schedules with (coverage S2a §1):
@@ -151,7 +153,8 @@ func ParseError(spec string, srv Server) string {
 	var errs []string
 	for _, lib := range librariesFor(srv) {
 		if _, err := nextWith(lib, spec, time.Unix(0, 0).UTC()); err != nil {
-			errs = append(errs, lib+": "+err.Error())
+			// a parser echoes the spec: the URL rule, as for any display string
+			errs = append(errs, lib+": "+urlscrub.Field(err.Error()).Text)
 		}
 	}
 	return strings.Join(errs, "; ")
@@ -204,7 +207,7 @@ func NextRun(spec string, base time.Time, srv Server) Due {
 		d, err := nextWith(lib, spec, base)
 		if err != nil {
 			if len(libs) == 1 {
-				return Due{Unknown: "Klyx cannot parse this cron: " + err.Error(), Library: lib, Zone: zone}
+				return Due{Unknown: "Klyx cannot parse this cron: " + urlscrub.Field(err.Error()).Text, Library: lib, Zone: zone}
 			}
 			return Due{Unknown: "its next run depends on Velero's version, which Klyx could not resolve", Zone: zone}
 		}

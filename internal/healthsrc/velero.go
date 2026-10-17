@@ -227,12 +227,17 @@ func locationLink(s *velero.Schedule, locs []*velero.Location, readable string, 
 	}
 	name, byDefault := t.StorageLocation, false
 	if name == "" {
+		// the default is the newest marked default: only a complete read of
+		// the candidates can name it (Codex's S2a implementation review,
+		// finding 6); a partial one names its candidate, unverified
 		d := defaultLocation(s.Namespace, locs)
-		if d == nil {
-			if readable == "found" {
-				return VeleroLocationLink{State: "server default", ByDefault: true}
-			}
+		switch {
+		case readable != "found" && d != nil:
+			return VeleroLocationLink{State: readable, Name: d.Name, ByDefault: true}
+		case readable != "found":
 			return VeleroLocationLink{State: readable, ByDefault: true}
+		case d == nil:
+			return VeleroLocationLink{State: "server default", ByDefault: true}
 		}
 		name, byDefault = d.Name, true
 	}
@@ -299,6 +304,7 @@ func evalVeleroLocations(cluster string, tr *resume.Tracker) func(observe.Captur
 	return func(c observe.Capture) observe.PartResult {
 		servers, locs, scheds, hist := veleroServersOf(c), veleroLocations(c), veleroSchedules(c), veleroHistory(c)
 		schedState := coverageWord(c, KindVeleroSchedules)
+		locsComplete := coverageWord(c, KindVeleroLocations) == "found"
 		backupState := coverageWord(c, KindVeleroBackups)
 		defaults := map[string]int{}
 		for _, l := range locs {
@@ -321,6 +327,14 @@ func evalVeleroLocations(cluster string, tr *resume.Tracker) func(observe.Captur
 				}
 				target := s.Template.StorageLocation
 				if target == "" && !s.Template.StorageLocationInvalid {
+					if !locsComplete {
+						// which location is the default is not proven by a
+						// partial read: this list cannot be complete
+						if row.SchedulesState == "found" {
+							row.SchedulesState = "incomplete"
+						}
+						continue
+					}
 					if d := defaultLocation(s.Namespace, locs); d != nil {
 						target = d.Name
 					}

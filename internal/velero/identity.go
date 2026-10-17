@@ -101,15 +101,18 @@ func Attribute(s *Schedule, b *Backup, nName string, loc *time.Location) Attribu
 	if nName != "" && b.Name == nName && b.ScheduleLabel == s.Name {
 		return Proven
 	}
+	if b.OwnersIncomplete {
+		// an incomplete owner set proves nothing either way, a kept owner
+		// included (Codex's S2a implementation review, finding 5)
+		return NotRun
+	}
 	for _, o := range b.Owners {
 		if o.UID == s.UID {
 			return Proven
 		}
 	}
-	if b.OwnersIncomplete || len(b.Owners) > 0 {
-		// an incomplete owner set proves nothing either way; a Schedule
-		// owner to another UID is another schedule's run
-		return NotRun
+	if len(b.Owners) > 0 {
+		return NotRun // a Schedule owner to another UID: another schedule's run
 	}
 	if b.ScheduleLabel != s.Name || b.Timing() == TimingSynced {
 		return NotRun

@@ -90,6 +90,31 @@ describe("VeleroView (coverage S2a)", () => {
     expect(screen.getByText("Velero is not installed on this cluster.")).toBeTruthy();
   });
 
+  // Codex's S2a implementation review, finding 4: absence from a capped or
+  // filtered view is never proof of deletion.
+  it("an object left out by the cap is unverified rather than removed", () => {
+    schedules = part([sched("daily")], ["Schedule"]);
+    const { rerender } = render(<VeleroView cluster="c" />);
+    fireEvent.click(screen.getByText("daily"));
+    schedules = { ...part<VeleroScheduleDTO>([], ["Schedule"]), coverage: [{ ...live("Schedule"), truncated: true, notRetained: 1 }] };
+    rerender(<VeleroView cluster="c" />);
+    expect(screen.queryByText("Schedule removed.")).toBeNull();
+    expect(screen.getByText("Not in the current Schedule read.")).toBeTruthy();
+  });
+
+  it("leaving the recent-backups set does not prove deletion", () => {
+    backups = part([{ uid: "uid-m", gvr: "velero.io/v1/backups", namespace: "velero", name: "pre-upgrade", phase: "Failed", errors: 1, warnings: 0,
+      validation: [], validationCount: 0, membership: "unattributed", rule: rule("fault", "Failed") }], ["Backup"]);
+    const { rerender } = render(<VeleroView cluster="c" />);
+    fireEvent.click(tab(/^Unscheduled backups/));
+    fireEvent.click(screen.getByText("pre-upgrade"));
+    // still held by the Observer, but aged out of the part's 24 hours
+    backups = part([], ["Backup"]);
+    rerender(<VeleroView cluster="c" />);
+    expect(screen.queryByText("Backup removed.")).toBeNull();
+    expect(screen.getByText("No longer in this list.")).toBeTruthy();
+  });
+
   it("phases keep Velero's vocabulary as marks", () => {
     expect(["Completed", "PartiallyFailed", "Failed", "FailedValidation", "InProgress", "Queued"].map(phaseKind))
       .toEqual(["ok", "degraded", "fault", "fault", "progressing", "progressing"]);

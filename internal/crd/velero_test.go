@@ -93,3 +93,25 @@ func TestEventAboutVelero(t *testing.T) {
 		t.Fatalf("event: %v", s.Object["message"])
 	}
 }
+
+// Only the exact placeholders pass as placeholders: a value that begins like
+// one is classified like any other text (Codex's S2a implementation review,
+// finding 1).
+func TestPlaceholdersAreAClosedSet(t *testing.T) {
+	for _, legit := range []string{OmittedText, OmittedValue, WithheldValue, MaskedValue, "<omitted> × 3", "<velero: the provider's plugin is not installed>"} {
+		if !isPlaceholder(legit) {
+			t.Errorf("%q is a placeholder", legit)
+		}
+	}
+	for _, forged := range []string{"<omitted> × " + veleroNeedle, "<omitted> × 3 " + veleroNeedle, "<omitted> × ", "<velero: " + veleroNeedle + ">"} {
+		if isPlaceholder(forged) {
+			t.Errorf("%q is not a placeholder", forged)
+		}
+		d := veleroDoc("BackupStorageLocation", nil, map[string]any{"message": forged})
+		s := SanitizeEmbedded("velero.io", "BackupStorageLocation", d)
+		b, _ := json.Marshal(s.Object)
+		if strings.Contains(string(b), veleroNeedle) || !s.Payload || s.DescribeMode != DescribeWithheld {
+			t.Errorf("%q crossed: %s", forged, b)
+		}
+	}
+}

@@ -605,6 +605,7 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 	switch {
 	case spec.MaxObject > 0 && n > spec.MaxObject:
 		// never retained; it does not end the run
+		orank := r
 		switch {
 		case had:
 			g.retained -= old
@@ -615,11 +616,18 @@ func (g *kindGen) putBudgetedLocked(key string, v any, added bool) {
 		case added:
 			g.capped, g.notRetained = true, g.notRetained+1
 		case key == g.blockKey:
-			// the blocker no longer ends the run: a list may admit past it
+			// the blocker no longer ends the run: a list may admit past it.
+			// Until that list, the boundary stays at the earlier of its old
+			// and new ranks: what ranked past the old blocker is not
+			// individually known (Codex's S2a implementation review,
+			// finding 3)
+			if rankBefore(g.blockRank, key, r, key) {
+				orank = g.blockRank
+			}
 			g.blockKey, g.blockSize, g.blockRank = "", 0, ""
 			g.refillLocked()
 		}
-		g.noteOversizedLocked(key, r)
+		g.noteOversizedLocked(key, orank)
 	case had && g.blockKey != "" && rankBefore(g.blockRank, g.blockKey, r, key):
 		// a retained object whose rank moved past the run's end (S2a §3,
 		// revision 2): left out, as a list would leave it, and the room it
