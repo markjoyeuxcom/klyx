@@ -209,11 +209,21 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
   - **Where the error lands:**
     - source-watcher writes it into an ArtifactGenerator's `SourceFetchFailed` condition and events;
     - kustomize-controller writes it into a consuming Kustomization's `ArtifactFailed` condition and events (`kustomization_controller.go` 371-373).
-  - **A new urlscrub mode,** `Origins`, replaces every URL in a text with its scheme and host, keeping no path or query. A candidate it cannot delimit withholds its line, as the URL rule does.
+  - **A new urlscrub mode,** `Origins` (revision 3). Nothing in a message proves where a URL ends:
+    - the URL is a producer's string;
+    - `http.NewRequest` accepts literal spaces, and the fetcher's non-200 error echoes them with `%s`;
+    - Go's request errors quote control characters as `\n`;
+    - kubectl prints an embedded line break raw, with its following spaces.
+
+    So `Origins` never looks for the end:
+    - **The text before the first URL candidate** (a `<scheme>://`, case-insensitive) is kept.
+    - **The candidate shows as `<scheme>://<host>`** only when its authority is well formed. The authority runs to the first `/`, `?` or `#`, or to the message's end. A user info part, up to its last `@` or `%40`, is dropped. What remains must be a host name, an IPv4 address or a bracketed IPv6 address, with an optional all-digit port. Anything else shows as `<scheme>://<withheld>`.
+    - **Everything after the authority, to the end of the message, is withheld:** "<the rest of the message is withheld: it follows a URL>". That includes the path, the query, later lines and any later URL.
+
+    It works on a whole message, never on a line.
   - **It applies to every condition and event message of every ArtifactGenerator, ExternalArtifact, Kustomization and HelmRelease, whatever its current reference** (revision 2).
     - **Why not by reference:** a message a past ExternalArtifact reference left behind (an older generation's `ArtifactFailed` condition, or an event) records nothing about the reference it came from. A Kustomization first seen after it moved to a GitRepository still carries the signed URL. So the rule is read from the kind alone: a condition's own object, and an event's `involvedObject.kind`.
-    - **The cost:** fetch errors from GitRepository, OCIRepository, Bucket and Helm sources lose their artifact paths too. The source reference is shown as its own fact, so the path adds nothing the inspector lacks.
-    - **Lines:** `Origins` works line by line. A message can hold a line break (kubectl and Klyx both print messages raw). So a candidate that reaches its line's end also withholds the next line, unless that line begins with whitespace: a URL's tail after a break begins with a URL character. Every kubectl describer line below the top level is indented.
+    - **The cost:** a message from these kinds loses everything after its first URL's host. That includes the artifact paths of fetch errors from GitRepository, OCIRepository, Bucket and Helm sources, and any status code after the URL. The source reference is shown as its own fact, the reason (`ArtifactFailed`, and so on) is kept, and the source's own inspector carries its fetch error under the URL rule.
 
     It runs on every path that carries such text: detail, events lens, chat, AI and health reasons.
   - **The resume fingerprint** (S1a §4) is computed from the raw condition before this reduction, as it is before display clipping.
@@ -221,12 +231,11 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
 
 **Describe (revision 2).** kubectl describe prints the object's conditions as they are and appends its events. S0b's version bracket fences the object's payload fields, not its messages, and not its events at all. A payload-free Alert can still print a webhook token from a `NotificationDispatchFailed` event. A payload-free ImageUpdateAutomation whose template was removed after a failed push can still print the old protected value from a retained condition.
 
-**The principle:** the bracket never authorizes raw text that the kind's structured rule would withhold. Each message-sensitive kind's report is either passed through a transformation that enforces its rule on any text, or released only when every message in it passes that rule unchanged. The policy is by kind, and holds whatever the object's current reference:
-- **The `Origins` kinds** (ArtifactGenerator, ExternalArtifact, Kustomization, HelmRelease) are described with their events.
-  - The whole report passes `Origins`, so conditions and events come out under the same rule as on every other path.
-  - `Origins` is a URL-level rewrite with its line rule above: it does not depend on where in the report a URL sits.
-  - The report is labelled as transformed.
-- **The allowlist kinds** (ImageUpdateAutomation, Receiver, Alert, Provider) are described with `--show-events=false`. Their events are read through Klyx's own events surface, under the message rules above, and the sheet says "events are shown in the inspector, under Klyx's message rules".
+**The principle:** the bracket never authorizes raw text that the kind's structured rule would withhold. kubectl's text cannot be rewritten safely, because a message's own lines are indistinguishable from the report's fields (revision 3). So a message-sensitive kind's report is released only when the snapshot's text passes the kind's rule unchanged, and is otherwise withheld. The policy is by kind, and holds whatever the object's current reference.
+
+**Every message-sensitive kind is described with `--show-events=false`.** Its events are read through Klyx's own events surface, under the message rules above. The sheet says "events are shown in the inspector, under Klyx's message rules".
+- **The `Origins` kinds** (ArtifactGenerator, ExternalArtifact, Kustomization, HelmRelease): the report is released only when every string in the bracket's snapshot passes `Origins` unchanged, that is, when no URL in it has anything after a well-formed authority. Otherwise it is withheld: "Describe withheld: this object holds a URL whose path Klyx does not show; the inspector shows it under Klyx's rules".
+- **The allowlist kinds** (ImageUpdateAutomation, Receiver, Alert, Provider):
   - **The report is released only when every condition message in the bracket's snapshot passes its kind's rule unchanged:** exactly one of the controller's fixed messages, or, for ImageUpdateAutomation, exactly a push summary's first line with nothing after it.
   - **Otherwise the report is withheld:** "Describe withheld: a condition message is outside Klyx's message rules; the inspector shows it under them". The kubeconfig-pinned copy command stays offered.
   - **Kind by kind:** Alert and Provider have no allowlisted message, so any condition message left over from an older API version withholds the report. A Receiver's Ready message names its path, which a rewrite would replace, so a Ready Receiver's report is always withheld (its `webhookPath` would withhold it anyway).
@@ -253,8 +262,16 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
     - a payload-free ImageUpdateAutomation with no events, whose retained Ready condition quotes a push option: Describe withheld, and the inspector shows the reason with the withheld wording;
     - an ImageUpdateAutomation whose conditions are all fixed messages: Describe released, without events;
     - a push summary with text after its first line: Describe withheld, and the inspector shows the parsed first line;
-    - an ArtifactGenerator whose `SourceFetchFailed` condition holds a signed URL: its report passes `Origins`;
-    - a URL broken by a line break: the following line withheld on every path, and an indented next line kept;
+    - an ArtifactGenerator whose `SourceFetchFailed` condition holds a signed URL: Describe withheld; the inspector shows the scheme and host;
+  - **`Origins` (revision 3),** each needle absent from every path:
+    - a needle on a line after the URL, unindented and indented;
+    - several continuation lines;
+    - a quoted URL whose escaped `\n` precedes the needle;
+    - a URL with a literal space before the needle, as a non-200 fetch error prints it;
+    - user info with a space or `/` in its password;
+    - an invalid port;
+    - a second URL after the first;
+    - and the kept cases: the text before the URL, and a well-formed origin;
   - Receivers: `generic-oidc` without a Secret (Ready wording), a forbidden Secret read and a missing token key (both "token unavailable").
 - **Unit:**
   - **parsing and rules** for each kind;
@@ -328,3 +345,9 @@ S0b's machinery then applies to them on every path: the generic detail, Describe
 | 1 | The current reference kind cannot classify messages a past ExternalArtifact reference left behind | §6: `Origins` applies to every ArtifactGenerator, ExternalArtifact, Kustomization and HelmRelease message, read from the kind alone, with its cost stated and a line rule for messages with line breaks; Describe no longer classifies by reference; §7 tests a Kustomization first seen on a GitRepository with an older `ArtifactFailed` condition and an older event, on every path |
 | 2 | `--show-events=false` leaves the report's conditions raw | §6: the bracket never authorizes text the structured rule would withhold. The `Origins` kinds' whole report passes `Origins`. An allowlist kind's report is released only when every condition message in the snapshot passes its rule unchanged, and is otherwise withheld. §7 tests a payload-free automation with an unsafe retained condition and no events, and a generator's report |
 | Wording | A UID mismatch proves the named object is different, not that the producer is gone | §2: "the producer reference and the recorded identity disagree"; a live recorded producer is named; "no longer exists" only after a complete read; §7 adds the live-elsewhere case |
+
+## 11. Revision 3: Codex's re-review of 1cb75ac
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Indentation does not prove a message or URL has ended; spaces and escaped line breaks continue a URL too | §6: `Origins` never looks for a URL's end. It keeps the text before the first URL, the scheme, and the host only when the authority is well formed. It withholds everything after the authority to the end of the message, and works on whole messages only. Describe no longer rewrites kubectl's text: every message-sensitive kind runs without events, and an `Origins` kind's report is released only when its snapshot passes `Origins` unchanged. §7 adds indented, multi-line, escaped, literal-space, user-info, port and second-URL needles |
