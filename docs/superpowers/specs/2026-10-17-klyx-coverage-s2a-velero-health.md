@@ -4,7 +4,7 @@ Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2a. 
 
 The owner's direction: "velero should be supported also". The roadmap's S2a asks for background evidence independent of any list being open, three faults (an unavailable storage location, a missed schedule, recent failed and partially failed backups, distinct from each other), named schedule states, and Velero's phases kept as they are. Codex's acceptance carried three details into this note (roadmap §6): formalise the overdue opportunity and its reset after a later success; an in-progress run during the grace period, and incomplete retained history; the exact classifier and its fake-clock cases. All three are in §4.
 
-The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11), and revision 4 its re-review of b676a4f (§12), and revision 5 its re-review of 54cb39a (§13).
+The slice is read-only. It adds no verb (§5). Revision 1 answers Codex's design review of 4e23d5d (§9), revision 2 its re-review of 9f95194 (§10), and revision 3 its re-review of 47c0dff (§11), and revision 4 its re-review of b676a4f (§12), revision 5 its re-review of 54cb39a (§13), and revision 6 its re-review of 8cea045 (§14).
 
 ## 1. The API
 
@@ -319,7 +319,10 @@ First match wins (revision 1: the overdue rule precedes Available explicitly).
 
     Otherwise a later execution could be left out, and the outcome is Unknown, "a run after <time> may not be retained", with the retained outcome shown as a fact.
   - **The previous outcome:** when every deciding run is still in progress, it decides with "a new run is in progress":
-    - the newest proven terminal run before `N`, by execution time. A retained one is the newest there is: anything the cap left out ran before `W`, and so before it;
+    - the newest proven terminal run before `N`, by execution time.
+      - **When Backups are capped, it decides only when its execution time is later than `W` plus one minute** (revision 6, Codex's fifth re-review finding 1). An omitted run has a run time at or before `W`, and its execution time is within the same minute of skew (the controller's name timestamp against the API server's creation), so only then is the retained one provably the latest.
+      - Otherwise the outcome is Unknown, "the run before <N's time> may not be retained", with the retained run shown as a fact.
+      - The same margin keeps a re-imported record's newer API creation from standing as proof of order;
     - **only when none is retained and the Backups are complete** (not capped), the newest named terminal run before `N`, with "matched by name" (and its timing qualifier, §3);
     - **when none is retained and the Backups are capped**, Unknown: "the run before <N's time> may not be retained" (revision 5, Codex's fourth re-review finding 1). A proven run before `W` could be the true previous outcome, so a named record is never promoted into its place, and retention alone never changes the verdict uncapped evidence would give.
 
@@ -521,6 +524,12 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
     - **a named Completed Backup newer than a failed `N`** (a manual run without owners, or a foreign one): shown as a fact, the schedule still lit, and counted in §4.3 only if it failed;
     - **the previous outcome while `N` runs** (revision 3): a proven failure at 10:00, a named success at 10:30 and `N` in progress at 11:00, where the 10:00 failure decides. Without any proven terminal run, uncapped, the named one decides with its qualifier;
     - **its capped counterpart** (revision 5): the same runs with a tier-1 window `W` at 10:20, so the 10:00 failure is left out. Unknown, "the run before 11:00 may not be retained", never the named success;
+    - **mixed clocks around `W`** (revision 6), with the server a minute ahead of the API server:
+      - A, owner-proven Completed, with start, run and execution time all 10:20:00;
+      - B, owner-proven FailedValidation, run time (creation) 10:19:30 and execution time (controller name) 10:20:30;
+      - `N` InProgress at 11:00, and the cap retaining A and `N` with B as `W`.
+
+      A's execution time is not later than `W` plus a minute, so the outcome is Unknown with A as a fact. The same holds in the other direction, with A failed and B Completed;
     - **re-imported records** (revision 3): an older owner-proven Completed run re-created by sync after `N` failed, which keeps its old execution time, so `N` still decides. And the reverse, an old failure re-imported after a later success;
     - **a proven manual run before the first automatic one** (revision 3): `useOwnerReferencesInBackup: true`, no `lastBackup`, and a `--from-schedule` run that Failed, and separately one that PartiallyFailed. Each lights the schedule, Fault and Degraded;
     - **execution time:** a FailedValidation run ordered by its name's timestamp in a non-UTC zone, and a run with neither a start nor the controller's name form (order unknown, a fact);
@@ -653,3 +662,9 @@ None. S2 is read-only (roadmap). Velero's own day-2 verbs, pause and unpause, ar
 |---|---|---|
 | 1 | The completeness check missed the previous-outcome query: a capped proven failure let a named success decide | §4.2 row 10: a retained proven previous run is provably the newest; with none retained, the named fallback applies only to complete Backups, and capped it is Unknown. §7: the capped 10:00 / 10:30 / 11:00 case |
 | 2 | An unknown-order failure left §4.3 as soon as a replacement started | §4.3: only a finished proven run supersedes it. §7: still counted while the replacement runs, superseded when it completes or fails |
+
+## 14. Revision 6: Codex's re-review of 8cea045
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | A retained previous run is not provably the latest when clocks differ by up to a minute around `W` | §4.2 row 10: capped, the previous run decides only when its execution time is later than `W` plus one minute, else Unknown with it as a fact. §7: the mixed-clock FailedValidation case in both directions |
