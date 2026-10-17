@@ -64,8 +64,8 @@ type Capture struct {
 	// there is: live, with nothing left out by a budget or a cap. Only a
 	// complete source proves an absent object departed.
 	Complete map[string]bool
-	Facts   map[string]any
-	Rows    bool
+	Facts    map[string]any
+	Rows     bool
 	// RoleCap bounds PartResult.Roles: an evaluator appends at most RoleCap
 	// entries, then sets RolesCapped and stops appending. 0 when the part
 	// keeps no ledger.
