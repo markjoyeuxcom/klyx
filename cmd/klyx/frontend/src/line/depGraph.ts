@@ -125,7 +125,9 @@ function aspectOf(n: DepNode): AspectKind {
   return "checking";
 }
 
-function tagsOf(n: DepNode, start: boolean): string[] {
+// tagsOf: a node's qualified claims. followed: an edge leaves it for its
+// producer, so an identity-only note would be wrong.
+function tagsOf(n: DepNode, start: boolean, followed = false): string[] {
   const t: string[] = [];
   if (n.upstreamFailure && !start) t.push("upstream failure");
   if (n.chainEnd) t.push("reported chain ends here");
@@ -135,7 +137,7 @@ function tagsOf(n: DepNode, start: boolean): string[] {
   if (n.declaredProducer) {
     const p = n.declaredProducer;
     t.push(`produced by ${p.kind} ${p.namespace}/${p.name}; Klyx does not read that kind's health`);
-  } else if (n.kind === "ExternalArtifact" && n.generatorUid && !n.stub) t.push("producer recorded by identity only");
+  } else if (n.kind === "ExternalArtifact" && n.generatorUid && !n.stub && !followed) t.push("producer recorded by identity only");
   return t;
 }
 
@@ -162,6 +164,7 @@ export function depTree(g: DepGraph): DepStep[] {
   const pairs = new Map<string, DepPair[]>();
   for (const p of g.proximity) pairs.set(p.failing, [...(pairs.get(p.failing) ?? []), p]);
   const drawn = new Set<string>();
+  const producerFrom = new Set(g.edges.filter((e) => e.type === "producer").map((e) => e.from));
 
   const step = (id: string, segment: RailSegment, words: string | undefined, path: string): DepStep => {
     const n = byId.get(id);
@@ -189,7 +192,7 @@ export function depTree(g: DepGraph): DepStep[] {
     ]);
     return {
       key, id, segment: seg, segmentWords: segWords, name: incomplete && n.name ? `${nodeName(n)}: ${n.note ?? n.stub}` : nodeName(n), kind: kindOf(n),
-      aspect: aspectOf(n), tags: tagsOf(n, start), evidence, chainEnd: n.chainEnd, git: !!n.git, branches,
+      aspect: aspectOf(n), tags: tagsOf(n, start, producerFrom.has(id)), evidence, chainEnd: n.chainEnd, git: !!n.git, branches,
     };
   };
   // A cycle is an edge back to a node on its own path: cut here, and named.

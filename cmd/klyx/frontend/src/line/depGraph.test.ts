@@ -168,6 +168,12 @@ describe("producer edges", () => {
     expect(s.segmentWords).toContain("disagree");
     expect(s.tags).not.toContain("upstream failure");
   });
+  it("an identity-only note only when no producer edge is followed", () => {
+    const followed = flat(depTree(g("verified", { generatorUid: "uid-ag" }))).find((x) => x.id === ea)!;
+    expect(followed.tags).not.toContain("producer recorded by identity only");
+    const alone: DepGraph = { ...g("verified", { generatorUid: "uid-ag" }), edges: [{ from: ks, to: ea, type: "source", reported: false, cycle: false }] };
+    expect(flat(depTree(alone)).find((x) => x.id === ea)!.tags).toContain("producer recorded by identity only");
+  });
   it("a producer of another kind is a tag, not an edge", () => {
     const graph: DepGraph = { ...g("verified", { declaredProducer: { kind: "Pipeline", namespace: "ci", name: "build" } }), edges: [{ from: ks, to: ea, type: "source", reported: false, cycle: false }] };
     const s = flat(depTree(graph)).find((x) => x.id === ea)!;
