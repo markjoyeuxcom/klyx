@@ -186,7 +186,7 @@ func evalComposition(cluster string, tr *resume.Tracker) func(observe.Capture) o
 			it := nativeItem{composition.ArtifactRule(a), refOf(artObjs[i].Unstructured, KindExternalArtifacts)}
 			items = append(items, it)
 			if c.Rows {
-				rows = append(rows, nativeRow(it, CompositionRow{Artifact: &arts[i], Producer: producerView(a, gens, genCov, genEval)}))
+				rows = append(rows, nativeRow(it, CompositionRow{Artifact: &arts[i], Producer: ProducerViewOf(a, gens, genCov, genEval)}))
 			}
 		}
 		res := nativeResult(c.RoleCap, cluster, TaskFlux, "not ready", items)
@@ -197,9 +197,9 @@ func evalComposition(cluster string, tr *resume.Tracker) func(observe.Capture) o
 	}
 }
 
-// producerView is ProducerOf for display: the producer's health only when
-// its identity is established (verified, by identity or named).
-func producerView(a composition.Artifact, gens []composition.Generator, cov composition.Coverage, genEval map[string]health.NativeEval) *ProducerView {
+// ProducerViewOf is ProducerOf for display: the producer's health only
+// when its identity is established (verified, by identity or named).
+func ProducerViewOf(a composition.Artifact, gens []composition.Generator, cov composition.Coverage, genEval map[string]health.NativeEval) *ProducerView {
 	p := composition.ProducerOf(a, gens, cov)
 	pv := &ProducerView{State: p.State, RecordedGone: p.RecordedGone, RecordedLookup: p.RecordedLookup}
 	if p.Declared != nil {

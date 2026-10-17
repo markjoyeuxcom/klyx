@@ -190,8 +190,10 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 	out := GitOpsCapability{}
 	out.FluxOperator = d.detectFluxOperator(ctx, served)
 	// image automation is Flux too, alone or not (Codex's S1b
-	// implementation review, finding 3)
-	fluxPresent := kustomize || out.FluxOperator.Present || served[fluxImageGroup]
+	// implementation review, finding 3), and so are source composition and
+	// notifications (Codex's S1c implementation review, finding 6)
+	fluxPresent := kustomize || out.FluxOperator.Present || served[fluxImageGroup] ||
+		served[sourceExtensionsGroup] || served[notificationGroup] || d.artifactsServed(served)
 	out.Flux.Present = fluxPresent
 	out.Argo.Present = argoPresent
 	out.Coexistence = fluxPresent && argoPresent
@@ -225,9 +227,12 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 		out.Flux.Healthy = out.FluxOperator.Verified && out.FluxOperator.Issue() == ""
 		out.Flux.Synthesized = true
 	case fluxPresent:
-		// image automation alone: its controllers stand for the
-		// installation; no kustomize-controller is expected
+		// image automation, source composition or notifications alone:
+		// their own controllers stand for the installation; no
+		// kustomize-controller is expected
 		f, g := out.Flux.Images.Problems()
+		cf, cg := out.Flux.Components.Problems()
+		f, g = append(f, cf...), append(g, cg...)
 		out.Flux.Verified, out.Flux.Healthy, out.Flux.Synthesized = len(g) == 0, len(f)+len(g) == 0, true
 	}
 	if argoPresent {

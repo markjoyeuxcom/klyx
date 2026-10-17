@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gitops/resume"
 	"github.com/moomora/klyx/internal/health"
 )
@@ -32,12 +33,16 @@ type Common struct {
 	ReadyGeneration            int64
 	Stalled                    bool
 	Clipped, Incomplete        []string
+	// Owner is the GitOps unit that applies it, from its ownership labels:
+	// its verbs say what the owner's next apply may undo (roadmap C4).
+	Owner *flux.Owner
 }
 
 func common(o *Object) Common {
 	u := o.Unstructured
 	c := Common{Kind: u.GetKind(), Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
-		Generation: u.GetGeneration(), Created: u.GetCreationTimestamp().Time, Ready: NoReady, Clipped: o.Clipped, Incomplete: o.Incomplete}
+		Generation: u.GetGeneration(), Created: u.GetCreationTimestamp().Time, Ready: NoReady, Clipped: o.Clipped, Incomplete: o.Incomplete,
+		Owner: flux.OwnerOf(u.GetLabels(), u.GetAnnotations())}
 	reconciling := false
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, x := range conds {

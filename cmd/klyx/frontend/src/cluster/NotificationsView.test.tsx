@@ -7,7 +7,7 @@ import { NotificationsView } from "./NotificationsView";
 
 let notes: NotificationsDTO;
 vi.mock("../bridge/fluxcomposition", () => ({
-  getCompositionDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, sources: [], consumers: [], events: [] })),
+  getCompositionDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, generation: 1, sources: [], consumers: [], events: [] })),
   getNotifications: vi.fn(async () => notes),
 }));
 vi.mock("../bridge/gitops", () => ({ reconcile: vi.fn(async () => {}), setSuspend: vi.fn(async () => {}) }));
@@ -62,5 +62,15 @@ describe("NotificationsView (coverage S1c)", () => {
     clickRow("flux-system/on-call");
     expect((await screen.findByTestId("alert-dispatch")).textContent).toContain("2 NotificationDispatchFailed");
     expect(screen.getByTestId("alert-panel").textContent).toContain("cluster (values not shown)");
+  });
+
+  // Codex's S1c implementation review, finding 5: a capped events read is said.
+  it("a capped events read makes dispatch counts lower bounds", async () => {
+    notes = { ...notes, eventsTruncated: true, alerts: [{ ...notes.alerts[0], dispatch: {}, dispatchPartial: true,
+      dispatchSummary: "dispatch evidence is incomplete: the events read was capped, so a failure may not be shown" }] };
+    render(<NotificationsView cluster="c" />);
+    fireEvent.click(tab(/^Alerts/));
+    expect((await screen.findByTestId("dispatch-capped")).textContent).toContain("lower bounds");
+    expect(rowTexts().join("|")).not.toContain("no dispatch problems");
   });
 });

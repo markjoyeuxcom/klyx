@@ -14,6 +14,7 @@ import (
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/gitops/notify"
+	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/urlscrub"
@@ -192,9 +193,12 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 				// S1c §4: an artifact's verdict comes from the artifact and
 				// Ready, never Ready alone; its producer is its own line
 				if v, perr := composition.Project(composition.KindArtifact)(su); perr == nil {
-					src.Rule = toRuleDTO(composition.ArtifactRule(composition.ParseArtifact(v.(*composition.Object))))
+					a := composition.ParseArtifact(v.(*composition.Object))
+					src.Rule = toRuleDTO(composition.ArtifactRule(a))
+					d.SourceProducer = s.artifactProducer(ctx, conn, a)
+				} else {
+					d.SourceProducer = &SourceProducerDTO{State: composition.ProducerUnreadable}
 				}
-				d.SourceProducer = s.artifactProducer(ctx, conn, ref.Namespace, ref.Name)
 			}
 			d.Source = &src
 		case apierrors.IsNotFound(err):
@@ -218,23 +222,33 @@ func (s *GitOpsService) GetResourceDetail(cluster, kind, namespace, name string)
 	return d
 }
 
-// artifactProducer reads a bound artifact's producer from the shared
-// composition rows (S1c §3: joins read the shared rows): the generator
-// evidence there is the resume tracker's and the capture's, which a single
-// read cannot give. Unread rows say so, never a health.
-func (s *GitOpsService) artifactProducer(ctx context.Context, conn GitOpsConn, ns, name string) *SourceProducerDTO {
+// artifactProducer resolves the producer of the artifact just read - its
+// own recorded identity and sourceRef - among the generators of the shared
+// composition rows, whose verdicts carry the resume tracker's evidence
+// (S1c §3). A same-name predecessor's row lends it nothing (Codex's S1c
+// implementation review, finding 2); a generators read that is not current
+// says so, never a health.
+func (s *GitOpsService) artifactProducer(ctx context.Context, conn GitOpsConn, a composition.Artifact) *SourceProducerDTO {
 	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskFlux, "composition")
-	if !ok || rows.Part.Coverage != observe.Live {
-		return &SourceProducerDTO{State: composition.ProducerUnreadable}
+	cov := composition.CoverageComplete
+	switch kindState(rows, ok, healthsrc.KindArtifactGenerators) {
+	case joinUnreadable:
+		cov = composition.CoverageUnreadable
+	case notify.ProviderIncomplete:
+		cov = composition.CoveragePartial
 	}
 	set, _ := rows.Rows.(healthsrc.RowSet[healthsrc.CompositionRow])
-	for _, r := range set.Rows {
-		if a := r.Data.Artifact; a != nil && a.Namespace == ns && a.Name == name && r.Data.Producer != nil {
-			return sourceProducerDTO(r.Data.Producer)
+	var gens []composition.Generator
+	evals := map[string]health.NativeEval{}
+	if cov != composition.CoverageUnreadable {
+		for _, r := range set.Rows {
+			if g := r.Data.Generator; g != nil {
+				gens = append(gens, *g)
+				evals[g.UID] = r.Eval
+			}
 		}
 	}
-	// the artifact was read, but not into the rows: past the budget
-	return &SourceProducerDTO{State: composition.ProducerIncomplete}
+	return sourceProducerDTO(healthsrc.ProducerViewOf(a, gens, cov, evals))
 }
 
 // detailErrorDTO is a failed detail read for the requested resource: its

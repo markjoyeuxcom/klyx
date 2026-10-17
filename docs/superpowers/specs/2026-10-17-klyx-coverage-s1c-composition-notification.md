@@ -498,3 +498,25 @@ Tests: `crd.TestEventObjects` covers no kind, an empty kind, an empty related ki
 - Parity copies the three new CRDs, seeds a healthy generator, artifact and Receiver with their stand-ins, and both oracles name the two parts.
 
 **Found while building:** the gated load test (§14).
+
+## 16. Implementation review 1: Codex at c4edd13
+
+Codex accepted the two deviations (the composition part and view) and asked for eight changes, all made.
+
+1. **The detail is fenced by revision.** `GetCompositionDetail` returns the generation it read. The Composition and Receiver inspectors show its sources, consumers and events only beside a row of the same generation, and otherwise say the read describes another revision.
+2. **The bound artifact's producer is the artifact read.** The panel now resolves the producer from the freshly read artifact's own recorded identity and sourceRef, among the generators of the shared rows (`healthsrc.ProducerViewOf`). It no longer copies a same-name row's producer, and a generators read that is not current is "not readable", never a health.
+3. **Evidence is fenced by UID.**
+   - Composition and Receiver events are only the shown object's. A predecessor's event, or one naming no UID, is dropped.
+   - Alert dispatch reasons are keyed by the involved Alert's UID, so a new Alert inherits nothing from a deleted predecessor.
+4. **A join's read state wins over a cached match.** `kindState` judges the part and the joined kind together. A stale, checking or unreadable read is "not readable" and copies no label: a generator's sources and an artifact's consumers stay unattributed until the read is current.
+5. **A capped events read claims no absence.** With the Alert events capped, an Alert with no retained failure reads "dispatch evidence is incomplete", and counts are lower bounds. The view says so.
+6. **An S1c-only installation is Flux.**
+   - ExternalArtifacts served by source-controller, or the source-watcher or notification groups, make Flux present.
+   - Health is judged by the image and component controllers, with no kustomize-controller invented.
+   - A source group without ExternalArtifacts is still not Flux by itself.
+7. **Generator verbs name the owner.** The ownership labels reach the row (`composition.Common.Owner`), and every generator verb's confirmation carries the shared C4 line for annotations.
+8. **The drawing reads suspension as source-watcher does:** lower-cased, never case-folded.
+
+Tests:
+- Go: `appbridge.TestS1cReviewFences`, `TestGeneratorOwner`, the replaced-artifact case of `TestGetResourceDetailBoundArtifact`, `fleet.TestFluxNotifications` (keyed by UID), `capability.TestS1cOnlyInstallations` and `depgraph.TestGraphGeneratorSuspensionMatchesTheController`.
+- Frontend: the other-revision, owner-line and capped-dispatch view tests.

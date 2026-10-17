@@ -163,6 +163,7 @@ export function NotificationsView({ cluster }: { cluster: string }) {
       {" "}<button className="l-chip" onClick={() => load()}>Read again</button>
     </div>);
     if (notes.eventsError && tab === "alerts") notices.push(<div key="ev" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>Dispatch evidence could not be read: {notes.eventsError}</div>);
+    else if (notes.eventsTruncated && tab === "alerts") notices.push(<div key="evcap" role="status" data-testid="dispatch-capped" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>The events read was capped: dispatch counts are lower bounds, and an Alert with none may still have failures.</div>);
   }
 
   const rowFor = (key: string, mark: React.ReactNode, name: React.ReactNode, status: React.ReactNode, detail: string, created?: string) => (
@@ -292,9 +293,12 @@ function ReceiverInspector({ cluster, r, gone, replaced, onVerb, onClose }: {
     void getCompositionDetail(cluster, "Receiver", r.namespace, r.name, uid).then((d) => { if (live) setDetail({ uid, d }); });
     return () => { live = false; };
   }, [cluster, r.namespace, r.name, r.uid, r.generation, gone]);
+  // shown only beside the revision it read (Codex's S1c implementation
+  // review, finding 1)
   const mine = detail && detail.uid === r.uid ? detail.d : null;
   const readError = mine?.error ? mine.error : null;
-  const d = mine && !readError ? mine : null;
+  const d = mine && !readError && mine.generation === r.generation ? mine : null;
+  const otherRevision = !!mine && !readError && !d;
   const verbs: MenuItem[] = gone ? [] : r.suspended ? [{ label: "Resume", onSelect: () => onVerb("resume") }] : [
     { label: "Reconcile", onSelect: () => onVerb("reconcile") },
     { label: "Suspend", danger: true, onSelect: () => onVerb("suspend") },
@@ -331,7 +335,7 @@ function ReceiverInspector({ cluster, r, gone, replaced, onVerb, onClose }: {
         </InspectorBlock>
         <InspectorBlock title="Events">
           {readError ? <div className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Could not be read: {readError}</div>
-            : !d ? <div className="t-secondary">Reading…</div>
+            : !d ? <div className="t-secondary">{otherRevision ? "The latest read describes another revision of this Receiver; it waits for the row to catch up." : "Reading…"}</div>
             : d.eventsError ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>Events could not be read: {d.eventsError}</div>
             : d.events.length === 0 ? <div className="t-secondary">No recent events (they age out after about an hour).</div>
             : d.events.slice(0, 8).map((e, i) => <div key={i} className="t-body" style={{ color: e.type === "Warning" ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{e.reason}: {e.message}</div>)}
@@ -401,7 +405,7 @@ function AlertInspector({ cluster, a, onOpen, onVerb, onClose }: { cluster: stri
           {a.eventSources.map((s, i) => <div key={i} className="t-body" style={{ padding: "2px 0" }}>{s.kind} {s.namespace ? `${s.namespace}/` : ""}{s.name}{s.matchLabels ? ` (${s.matchLabels} label match${s.matchLabels === 1 ? "" : "es"})` : ""}</div>)}
         </InspectorBlock>
         <InspectorBlock title="Dispatch evidence">
-          <div className="t-body" data-testid="alert-dispatch" style={{ color: Object.keys(a.dispatch).length ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{a.dispatchSummary}</div>
+          <div className="t-body" data-testid="alert-dispatch" style={{ color: Object.keys(a.dispatch).length || a.dispatchPartial ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{a.dispatchSummary}</div>
           <div className="t-secondary" style={{ marginTop: 4 }}>A count and reasons from the controller's events, never a verdict: their messages can carry the webhook URL, so they are not shown.</div>
         </InspectorBlock>
       </InspectorLayout>

@@ -688,3 +688,23 @@ func TestGraphComposition(t *testing.T) {
 		t.Fatalf("suspended by its annotation: %+v", n)
 	}
 }
+
+// Codex's S1c implementation review, finding 8: the drawing reads a
+// generator's suspension as source-watcher does - lower-cased, never case
+// folded - so a value the controller ignores never hides a failure.
+func TestGraphGeneratorSuspensionMatchesTheController(t *testing.T) {
+	agRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "apps"}
+	art := obj("ExternalArtifact", "flux-system", "apps-a", "uid-ea", map[string]any{"sourceRef": agRef},
+		map[string]any{"artifact": map[string]any{"revision": "r"}, "conditions": []any{ready("True", "Succeeded", "ok", t0)}})
+	apps := ks("apps", map[string]any{"sourceRef": map[string]any{"kind": "ExternalArtifact", "name": "apps-a"}},
+		map[string]any{"conditions": []any{ready("True", "ReconciliationSucceeded", "ok", t0)}})
+	for value, want := range map[string]bool{"Disabled": true, "diſabled": false} {
+		gen := obj("ArtifactGenerator", "flux-system", "apps", "uid-ag", map[string]any{}, map[string]any{"conditions": []any{ready("False", "BuildFailed", "x", t0)}})
+		gen.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": value})
+		r := &fakeReader{objs: map[string]*unstructured.Unstructured{"Kustomization/flux-system/apps": apps, "ExternalArtifact/flux-system/apps-a": art,
+			"ArtifactGenerator/flux-system/apps": gen}, fail: map[string]error{}}
+		if n := node(t, build(t, r, "uid-apps"), "ArtifactGenerator/flux-system/apps"); n.Suspended != want || n.Failing == want {
+			t.Fatalf("%q: suspended %v failing %v", value, n.Suspended, n.Failing)
+		}
+	}
+}

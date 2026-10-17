@@ -36,6 +36,8 @@ type CompositionCommonDTO struct {
 	Clipped         []string   `json:"clipped"`
 	Incomplete      []string   `json:"incomplete"`
 	Rule            RuleDTO    `json:"rule"`
+	// Owner: the GitOps unit that applies it (roadmap C4).
+	Owner *FluxOpOwnerDTO `json:"owner,omitempty"`
 }
 
 // CompositionRefDTO is a joined object, with its verdict when read.
@@ -106,9 +108,13 @@ type CompositionRowDTO struct {
 }
 
 func compositionCommon(c composition.Common, ref healthsrc.RowRef, eval RuleDTO) CompositionCommonDTO {
-	return CompositionCommonDTO{UID: ref.UID, GVR: ref.GVR, Kind: c.Kind, Namespace: c.Namespace, Name: c.Name, Generation: c.Generation,
+	d := CompositionCommonDTO{UID: ref.UID, GVR: ref.GVR, Kind: c.Kind, Namespace: c.Namespace, Name: c.Name, Generation: c.Generation,
 		ReadyGeneration: c.ReadyGeneration, Created: timePtrOf(c.Created), Ready: string(c.Ready), Reason: c.Reason, Message: c.Message,
 		ReadySince: timePtrOf(c.ReadySince), Stalled: c.Stalled, Clipped: nonNil(c.Clipped), Incomplete: nonNil(c.Incomplete), Rule: eval}
+	if o := c.Owner; o != nil {
+		d.Owner = &FluxOpOwnerDTO{Kind: o.Kind, Namespace: o.Namespace, Name: o.Name}
+	}
+	return d
 }
 
 func compositionRowDTO(r healthsrc.Row[healthsrc.CompositionRow]) CompositionRowDTO {
@@ -277,6 +283,9 @@ type AlertDTO struct {
 	Owner             *FluxOpOwnerDTO       `json:"owner,omitempty"`
 	Dispatch          map[string]int        `json:"dispatch"`
 	DispatchSummary   string                `json:"dispatchSummary"`
+	// DispatchPartial: the events read failed or was capped, so the counts
+	// are a lower bound and an absence proves nothing.
+	DispatchPartial bool `json:"dispatchPartial,omitempty"`
 }
 
 // NotificationListDTO is one capped list's state.
@@ -373,10 +382,18 @@ func (s *GitOpsService) GetNotifications(cluster string) NotificationsDTO {
 		for _, src := range a.EventSources {
 			d.EventSources = append(d.EventSources, AlertEventSourceDTO{Kind: src.Kind, Name: src.Name, Namespace: src.Namespace, MatchLabels: src.MatchLabels})
 		}
-		d.Dispatch = notify.Dispatch(r.AlertReasons[a.Namespace+"/"+a.Name])
+		// keyed by the Alert's own UID: a predecessor of the same name
+		// lends it nothing (finding 3)
+		d.Dispatch = notify.Dispatch(r.AlertReasons[a.UID])
 		d.DispatchSummary = notify.SummaryOf(d.Dispatch)
-		if r.EventsError != "" {
-			d.DispatchSummary = "dispatch evidence could not be read: the events read failed"
+		switch {
+		case r.EventsError != "":
+			d.DispatchSummary, d.DispatchPartial = "dispatch evidence could not be read: the events read failed", true
+		case r.EventsTruncated && len(d.Dispatch) == 0:
+			// finding 5: a capped read proves no absence
+			d.DispatchSummary, d.DispatchPartial = "dispatch evidence is incomplete: the events read was capped, so a failure may not be shown", true
+		case r.EventsTruncated:
+			d.DispatchSummary, d.DispatchPartial = d.DispatchSummary+"; at least these: the events read was capped", true
 		}
 		out.Alerts = append(out.Alerts, d)
 	}
@@ -401,6 +418,10 @@ type CompositionDetailDTO struct {
 	Replaced bool   `json:"replaced,omitempty"`
 	Error    string `json:"error,omitempty"`
 	AsOfUnix int64  `json:"asOfUnix,omitempty"`
+	// Generation is the revision read: the inspector shows this detail only
+	// beside a row of the same generation (Codex's S1c implementation
+	// review, finding 1).
+	Generation int64 `json:"generation,omitempty"`
 	// a generator's declared sources, with their verdicts from the shared
 	// rows; an artifact's consumers
 	Sources        []CompositionRefDTO `json:"sources"`
@@ -444,12 +465,16 @@ func (s *GitOpsService) GetCompositionDetail(cluster, kind, namespace, name, uid
 		out.Replaced = true
 		return out
 	}
-	out.UID, out.AsOfUnix = uid, s.now().Unix()
+	out.UID, out.AsOfUnix, out.Generation = uid, s.now().Unix(), u.GetGeneration()
 	if evs, err := conn.FluxEvents(ctx, kind, namespace, name); err != nil {
 		out.EventsError = err.Error()
 	} else {
+		// only this object's events: a predecessor of the same name, or an
+		// event naming no UID, is never attributed to it (finding 3)
 		for _, e := range evs {
-			out.Events = append(out.Events, toEventRowDTO(e))
+			if e.UID == uid {
+				out.Events = append(out.Events, toEventRowDTO(e))
+			}
 		}
 	}
 	switch kind {
@@ -463,19 +488,35 @@ func (s *GitOpsService) GetCompositionDetail(cluster, kind, namespace, name, uid
 	return out
 }
 
-// rowsState is a part's read state for a join: found when live and
-// complete, incomplete when a kind is capped, not readable otherwise.
-func rowsState(rows observe.Rows, ok bool) string {
-	switch {
-	case !ok || rows.Part.Coverage != observe.Live:
+// kindState is the read state of one kind of a part, for a join: found
+// when it is live and whole (or confirmed absent), incomplete when capped,
+// not readable when the part or the kind is not current - a cached row of
+// a stale read never certifies health (Codex's S1c implementation review,
+// finding 4).
+func kindState(rows observe.Rows, ok bool, kind string) string {
+	if !ok || rows.Part.Coverage != observe.Live {
 		return joinUnreadable
 	}
 	for _, k := range rows.Part.Kinds {
-		if k.Truncated {
+		if k.Kind != kind {
+			continue
+		}
+		switch {
+		case k.Coverage == observe.Absent:
+			return notify.ProviderFound
+		case k.Coverage != observe.Live:
+			return joinUnreadable
+		case k.Truncated:
 			return notify.ProviderIncomplete
 		}
 	}
 	return notify.ProviderFound
+}
+
+// sourceKinds maps a generator source's kind to its watched kind.
+var sourceKinds = map[string]string{
+	"GitRepository": healthsrc.KindGitRepositories, "OCIRepository": healthsrc.KindOCIRepositories, "Bucket": healthsrc.KindBuckets,
+	"HelmRepository": healthsrc.KindHelmRepositories, "HelmChart": healthsrc.KindHelmCharts,
 }
 
 // generatorSources joins a generator's declared sources to their verdicts:
@@ -489,18 +530,24 @@ func (s *GitOpsService) generatorSources(ctx context.Context, conn GitOpsConn, g
 	out := []CompositionRefDTO{}
 	for _, ref := range g.Sources {
 		d := CompositionRefDTO{Kind: ref.Kind, Alias: ref.Alias, Namespace: ref.Namespace, Name: ref.Name}
-		state := rowsState(src, srcOK)
-		if ref.Kind == composition.KindArtifact {
-			state = rowsState(comp, compOK)
-			for _, r := range compSet.Rows {
-				if a := r.Data.Artifact; a != nil && a.Namespace == ref.Namespace && a.Name == ref.Name {
-					d.Found, d.Label, d.Role = true, r.Eval.Label, r.Eval.Role.String()
+		var state string
+		switch {
+		case ref.Kind == composition.KindArtifact:
+			if state = kindState(comp, compOK, healthsrc.KindExternalArtifacts); state != joinUnreadable {
+				for _, r := range compSet.Rows {
+					if a := r.Data.Artifact; a != nil && a.Namespace == ref.Namespace && a.Name == ref.Name {
+						d.Found, d.Label, d.Role = true, r.Eval.Label, r.Eval.Role.String()
+					}
 				}
 			}
-		} else {
-			for _, r := range srcSet.Rows {
-				if string(r.Data.Kind) == ref.Kind && r.Data.Namespace == ref.Namespace && r.Data.Name == ref.Name {
-					d.Found, d.Label, d.Role = true, r.Eval.Label, r.Eval.Role.String()
+		case sourceKinds[ref.Kind] == "":
+			state = joinUnreadable // a kind Klyx does not watch
+		default:
+			if state = kindState(src, srcOK, sourceKinds[ref.Kind]); state != joinUnreadable {
+				for _, r := range srcSet.Rows {
+					if string(r.Data.Kind) == ref.Kind && r.Data.Namespace == ref.Namespace && r.Data.Name == ref.Name {
+						d.Found, d.Label, d.Role = true, r.Eval.Label, r.Eval.Role.String()
+					}
 				}
 			}
 		}
@@ -524,9 +571,15 @@ func (s *GitOpsService) generatorSources(ctx context.Context, conn GitOpsConn, g
 // artifact, with their verdicts, from the reconciliations rows.
 func (s *GitOpsService) artifactConsumers(ctx context.Context, conn GitOpsConn, ns, name string) ([]CompositionRefDTO, string) {
 	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskFlux, "reconciliations")
-	state := rowsState(rows, ok)
-	set, _ := rows.Rows.(healthsrc.RowSet[flux.Resource])
+	state := kindState(rows, ok, healthsrc.KindKustomizations)
+	if hr := kindState(rows, ok, healthsrc.KindHelmReleases); hr != notify.ProviderFound {
+		state = hr
+	}
 	out := []CompositionRefDTO{}
+	if state == joinUnreadable {
+		return out, state
+	}
+	set, _ := rows.Rows.(healthsrc.RowSet[flux.Resource])
 	for _, r := range set.Rows {
 		k := r.Data
 		if k.SourceKind == composition.KindArtifact && k.SourceNamespace == ns && k.SourceName == name {

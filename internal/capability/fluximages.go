@@ -195,6 +195,15 @@ func (f FluxComponents) Problems() (failures, gaps []string) {
 	return failures, gaps
 }
 
+// artifactsServed: source-controller serves ExternalArtifacts here.
+func (d *Detector) artifactsServed(served map[string]bool) bool {
+	if !served["source.toolkit.fluxcd.io"] {
+		return false
+	}
+	res, _ := d.groupResources(served, "source.toolkit.fluxcd.io", "v1")
+	return res["externalartifacts"]
+}
+
 func (d *Detector) detectFluxComponents(ctx context.Context, served map[string]bool, ns string) FluxComponents {
 	out := FluxComponents{SourceWatcher: ImageController{Name: sourceWatcher, Namespace: ns}, Notification: ImageController{Name: notificationController, Namespace: ns}}
 	if served[sourceExtensionsGroup] {

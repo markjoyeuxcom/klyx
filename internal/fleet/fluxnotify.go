@@ -28,11 +28,13 @@ func (c *ClusterConn) FluxNotifications(ctx context.Context) notify.Read {
 	}
 	out.EventsTruncated = evs.Continue != ""
 	for _, e := range evs.Items {
-		// a server (or fake) that ignores the field selector
-		if e.InvolvedObject.Kind != "Alert" {
+		// a server (or fake) that ignores the field selector; an event
+		// naming no UID is attributed to no Alert (Codex's S1c
+		// implementation review, finding 3)
+		if e.InvolvedObject.Kind != "Alert" || e.InvolvedObject.UID == "" {
 			continue
 		}
-		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+		key := string(e.InvolvedObject.UID)
 		out.AlertReasons[key] = append(out.AlertReasons[key], e.Reason)
 	}
 	return out

@@ -507,8 +507,8 @@ func SummaryOf(counts map[string]int) string {
 // retains nothing after the view closes.
 type Read struct {
 	Providers, Alerts List
-	// AlertReasons are the Alerts' recent event reasons by "namespace/name":
-	// never their messages (§6).
+	// AlertReasons are the Alerts' recent event reasons by the involved
+	// Alert's UID: never their messages (§6).
 	AlertReasons    map[string][]string
 	EventsTruncated bool
 	EventsError     string

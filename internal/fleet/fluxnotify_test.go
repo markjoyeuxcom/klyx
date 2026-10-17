@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -39,16 +40,19 @@ func TestFluxNotifications(t *testing.T) {
 	}
 	both := []*metav1.APIResourceList{{GroupVersion: group + "/v1beta3", APIResources: []metav1.APIResource{
 		{Name: "providers", Namespaced: true, Kind: "Provider"}, {Name: "alerts", Namespaced: true, Kind: "Alert"}}}}
-	ev := func(kind, name, reason string) *corev1.Event {
-		return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "flux-system", Name: name + "." + reason},
-			InvolvedObject: corev1.ObjectReference{Kind: kind, Namespace: "flux-system", Name: name}, Reason: reason, Message: "secret text"}
+	ev := func(kind, name, uid, reason string) *corev1.Event {
+		return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "flux-system", Name: name + "." + reason + uid},
+			InvolvedObject: corev1.ObjectReference{Kind: kind, Namespace: "flux-system", Name: name, UID: types.UID(uid)}, Reason: reason, Message: "secret text"}
 	}
-	r := conn(both, ev("Alert", "on-call", "NotificationDispatchFailed"), ev("Kustomization", "on-call", "BuildFailed")).FluxNotifications(context.Background())
+	r := conn(both, ev("Alert", "on-call", "uid-a", "NotificationDispatchFailed"), ev("Kustomization", "on-call", "uid-k", "BuildFailed"),
+		ev("Alert", "on-call", "", "InvalidConfig")).FluxNotifications(context.Background())
 	if len(r.Providers.Items) != 1 || len(r.Alerts.Items) != 1 || !r.Providers.Complete() || r.EventsError != "" {
 		t.Fatalf("the read: %+v", r)
 	}
-	if got := r.AlertReasons["flux-system/on-call"]; len(got) != 1 || got[0] != "NotificationDispatchFailed" {
-		t.Fatalf("only the Alert's reasons: %v", r.AlertReasons)
+	// by the involved Alert's UID; an event naming no UID is nobody's
+	// (Codex's S1c implementation review, finding 3)
+	if got := r.AlertReasons["uid-a"]; len(got) != 1 || got[0] != "NotificationDispatchFailed" || len(r.AlertReasons) != 1 {
+		t.Fatalf("only the Alert's reasons, by UID: %v", r.AlertReasons)
 	}
 	// alerts served at another version; providers not at all
 	other := []*metav1.APIResourceList{{GroupVersion: group + "/v1beta2", APIResources: []metav1.APIResource{{Name: "alerts", Namespaced: true, Kind: "Alert"}}},

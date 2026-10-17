@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 const s1cNeedle = "S1cBRIDGEneedle"
@@ -128,7 +129,7 @@ func TestGetNotifications(t *testing.T) {
 	conn := &fakeGitOpsConn{notifications: notify.Read{
 		Providers:    notify.List{Items: []*unstructured.Unstructured{prov}},
 		Alerts:       notify.List{Items: []*unstructured.Unstructured{alert, orphan}, More: 3},
-		AlertReasons: map[string][]string{"flux-system/on-call": {"NotificationDispatchFailed", "NotificationDispatchFailed", "Info"}},
+		AlertReasons: map[string][]string{"uid-a": {"NotificationDispatchFailed", "NotificationDispatchFailed", "Info"}, "uid-predecessor-of-orphan": {"NotificationDispatchFailed"}},
 	}}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	d := svc.GetNotifications("c")
@@ -194,5 +195,60 @@ func TestGetCompositionDetail(t *testing.T) {
 	}
 	if d := svc.GetCompositionDetail("c", "Provider", "flux-system", "x", "u"); d.Error == "" {
 		t.Fatal("a Provider has no composition detail")
+	}
+}
+
+// Codex's S1c implementation review, findings 1, 3, 4 and 5: the detail
+// names the generation it read and only its own events; a stale source
+// read certifies no health; a capped events read claims no absence.
+func TestS1cReviewFences(t *testing.T) {
+	gen := s1cObj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "apps", "uid-ag", nil,
+		map[string]any{"sources": []any{map[string]any{"alias": "fleet", "kind": "GitRepository", "name": "fleet"}}}, nil)
+	gen.SetGeneration(2)
+	ok := health.NativeEval{Role: health.OK, Label: "Ready"}
+	stale := observe.Rows{Part: observe.Part{Coverage: observe.Stale}, Rows: healthsrc.RowSet[flux.Source]{Rows: []healthsrc.Row[flux.Source]{
+		{Eval: ok, Data: flux.Source{Kind: flux.GitRepositoryKind, Namespace: "flux-system", Name: "fleet"}}}}}
+	conn := &fakeGitOpsConn{byKind: map[string]*unstructured.Unstructured{"ArtifactGenerator": gen}, rowsByPart: map[string]observe.Rows{"sources": stale},
+		events: []workloads.EventSummary{{Reason: "Mine", UID: "uid-ag", Kind: "ArtifactGenerator", Name: "apps"},
+			{Reason: "Predecessor", UID: "uid-old", Kind: "ArtifactGenerator", Name: "apps"}, {Reason: "Nobody", Kind: "ArtifactGenerator", Name: "apps"}}}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+	d := svc.GetCompositionDetail("c", "ArtifactGenerator", "flux-system", "apps", "uid-ag")
+	if d.Generation != 2 {
+		t.Fatalf("the generation read: %+v", d)
+	}
+	if len(d.Events) != 1 || d.Events[0].Reason != "Mine" {
+		t.Fatalf("only its own events: %+v", d.Events)
+	}
+	if s := d.Sources[0]; s.Found || s.Label != "" || s.State != "not readable" || d.SourcesState != "not readable" {
+		t.Fatalf("a stale read certifies nothing: %+v", d.Sources)
+	}
+	// a stale reconciliations read lists no consumer
+	conn.byKind["ExternalArtifact"] = s1cObj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "flux-system", "apps-a", "uid-ea", nil, map[string]any{}, nil)
+	conn.rowsByPart["reconciliations"] = observe.Rows{Part: observe.Part{Coverage: observe.Stale}, Rows: healthsrc.RowSet[flux.Resource]{Rows: []healthsrc.Row[flux.Resource]{
+		{Eval: ok, Data: flux.Resource{Kind: flux.KustomizationKind, Namespace: "flux-system", Name: "apps", SourceKind: "ExternalArtifact", SourceNamespace: "flux-system", SourceName: "apps-a"}}}}}
+	if d := svc.GetCompositionDetail("c", "ExternalArtifact", "flux-system", "apps-a", "uid-ea"); len(d.Consumers) != 0 || d.ConsumersState != "not readable" {
+		t.Fatalf("stale consumers: %+v", d)
+	}
+
+	alert := s1cObj("notification.toolkit.fluxcd.io/v1beta3", "Alert", "flux-system", "on-call", "uid-a", nil, map[string]any{"providerRef": map[string]any{"name": "slack"}}, nil)
+	conn.notifications = notify.Read{Alerts: notify.List{Items: []*unstructured.Unstructured{alert}}, AlertReasons: map[string][]string{}, EventsTruncated: true}
+	a := svc.GetNotifications("c").Alerts[0]
+	if !a.DispatchPartial || strings.Contains(a.DispatchSummary, "no dispatch problems") {
+		t.Fatalf("a capped read claims no absence: %+v", a)
+	}
+	conn.notifications.AlertReasons = map[string][]string{"uid-a": {"NotificationDispatchFailed"}}
+	if a := svc.GetNotifications("c").Alerts[0]; !a.DispatchPartial || !strings.Contains(a.DispatchSummary, "at least these") {
+		t.Fatalf("a capped count is a lower bound: %+v", a)
+	}
+}
+
+// Finding 7: a generator's owner reaches its row, for its verbs' line.
+func TestGeneratorOwner(t *testing.T) {
+	gen := s1cObj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "apps", "uid-ag",
+		map[string]any{"kustomize.toolkit.fluxcd.io/name": "platform", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
+		map[string]any{"sources": []any{map[string]any{"alias": "fleet", "kind": "GitRepository", "name": "fleet"}}}, nil)
+	rows := evaluate(t, "composition", map[string][]*unstructured.Unstructured{healthsrc.KindArtifactGenerators: {gen}}).([]CompositionRowDTO)
+	if o := rows[0].Generator.Owner; o == nil || o.Kind != "Kustomization" || o.Name != "platform" || o.Namespace != "flux-system" {
+		t.Fatalf("the owner: %+v", rows[0].Generator)
 	}
 }

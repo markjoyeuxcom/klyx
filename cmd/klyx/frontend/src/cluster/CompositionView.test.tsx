@@ -6,7 +6,7 @@ import { useFleet } from "../store/fleet";
 import { CompositionView } from "./CompositionView";
 
 vi.mock("../bridge/fluxcomposition", () => ({
-  getCompositionDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, sources: [], consumers: [], events: [] })),
+  getCompositionDetail: vi.fn(async (_c: string, _k: string, _ns: string, _n: string, uid: string) => ({ uid, generation: 1, sources: [], consumers: [], events: [] })),
 }));
 vi.mock("../bridge/fluxop", () => ({ fluxOpAct: vi.fn(async () => ({ ok: true, error: "" })) }));
 import { getCompositionDetail } from "../bridge/fluxcomposition";
@@ -75,7 +75,7 @@ describe("CompositionView (coverage S1c)", () => {
   });
 
   it("a generator awaiting evaluation says why, its sources come from the detail, and its verbs are its annotations", async () => {
-    vi.mocked(getCompositionDetail).mockImplementationOnce(async (_c, _k, _ns, _n, uid) => ({ uid, events: [], consumers: [], sourcesState: "found",
+    vi.mocked(getCompositionDetail).mockImplementationOnce(async (_c, _k, _ns, _n, uid) => ({ uid, generation: 1, events: [], consumers: [], sourcesState: "found",
       sources: [{ kind: "GitRepository", alias: "fleet", namespace: "flux-system", name: "fleet", found: true, state: "found", label: "Ready", role: "ok" }] }));
     setRows([gen("apps", { rule: { included: false, role: "unknown", label: "Resumed · awaiting evaluation" }, resume: "awaiting" })]);
     render(<CompositionView cluster="c" />);
@@ -84,5 +84,27 @@ describe("CompositionView (coverage S1c)", () => {
     await waitFor(() => expect(screen.getByTestId("composition-panel").textContent).toContain("fleet: GitRepository flux-system/fleet · Ready"));
     expect(screen.getByTestId("composition-panel").textContent).toContain("@fleet/apps/** → @artifact/");
     expect(vi.mocked(fluxOpAct)).not.toHaveBeenCalled();
+  });
+
+  // Codex's S1c implementation review, finding 1: a detail of another
+  // revision waits for the row; finding 7: the verbs name the owner.
+  it("a detail of another revision is never shown beside this row", async () => {
+    vi.mocked(getCompositionDetail).mockImplementationOnce(async (_c, _k, _ns, _n, uid) => ({ uid, generation: 2, events: [], consumers: [], sourcesState: "found",
+      sources: [{ kind: "GitRepository", alias: "next", namespace: "flux-system", name: "next", found: true, state: "found", label: "Ready", role: "ok" }] }));
+    setRows([gen("apps")]);
+    render(<CompositionView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    await waitFor(() => expect(screen.getByTestId("composition-panel").textContent).toContain("another revision"));
+    expect(screen.getByTestId("composition-panel").textContent).not.toContain("next: GitRepository");
+  });
+
+  it("a generator's verbs name its owner", async () => {
+    setRows([gen("apps", { owner: { kind: "Kustomization", namespace: "flux-system", name: "platform" } })]);
+    render(<CompositionView cluster="c" />);
+    fireEvent.click(screen.getByText("apps"));
+    await screen.findByTestId("composition-panel");
+    fireEvent.click(screen.getByRole("button", { name: /More/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Suspend/ }));
+    expect((await screen.findByRole("dialog")).textContent).toContain("Owned by Kustomization flux-system/platform: the annotation may be removed when the owner applies.");
   });
 });

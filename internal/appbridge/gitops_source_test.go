@@ -10,6 +10,7 @@ import (
 
 	"github.com/moomora/klyx/internal/gitops/composition"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
@@ -163,14 +164,24 @@ func TestGetResourceDetailBoundArtifact(t *testing.T) {
 		"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "AccessDenied",
 			"message": "can't access 'ExternalArtifact/flux-system/apps-a', ExternalArtifact feature gate is disabled"}}},
 	}}
-	ea := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
-		"metadata": map[string]interface{}{"name": "apps-a", "namespace": "flux-system", "uid": "uid-ea"},
-		"status":   map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "Succeeded"}}},
-	}}
-	prod := &healthsrc.ProducerView{State: "verified", Kind: "ArtifactGenerator", Namespace: "flux-system", Name: "apps", Label: "Failed", Role: "fault", GeneratorFailing: true}
+	eaOf := func(uid, generator string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+			"metadata": map[string]interface{}{"name": "apps-a", "namespace": "flux-system", "uid": uid,
+				"labels": map[string]interface{}{"source.extensions.fluxcd.io/generator": generator}},
+			"spec":   map[string]interface{}{"sourceRef": map[string]interface{}{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "apps"}},
+			"status": map[string]interface{}{"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "Succeeded"}}},
+		}}
+	}
+	ea := eaOf("uid-ea", "uid-ag")
+	failing := health.NativeEval{Included: true, Role: health.Fault, Label: "Failed"}
+	gen := &composition.Generator{Common: composition.Common{Kind: "ArtifactGenerator", Namespace: "flux-system", Name: "apps", UID: "uid-ag"}}
+	// the shared rows also hold the artifact's predecessor, whose producer
+	// was another generator: it lends the artifact read nothing
+	old := &healthsrc.ProducerView{State: "verified", Kind: "ArtifactGenerator", Namespace: "flux-system", Name: "old", Label: "Ready", Role: "ok"}
 	rows := observe.Rows{Part: observe.Part{Coverage: observe.Live}, Rows: healthsrc.RowSet[healthsrc.CompositionRow]{Rows: []healthsrc.Row[healthsrc.CompositionRow]{
-		{Data: healthsrc.CompositionRow{Artifact: &composition.Artifact{Common: composition.Common{Namespace: "flux-system", Name: "apps-a"}}, Producer: prod}}}}}
+		{Eval: failing, Data: healthsrc.CompositionRow{Generator: gen}},
+		{Data: healthsrc.CompositionRow{Artifact: &composition.Artifact{Common: composition.Common{Namespace: "flux-system", Name: "apps-a", UID: "uid-old"}}, Producer: old}}}}}
 	conn := &fakeGitOpsConn{obj: ks, srcObj: ea, rows: rows, rowsOK: true}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
 	dto := svc.GetResourceDetail("x", "Kustomization", "flux-system", "apps")
@@ -183,8 +194,14 @@ func TestGetResourceDetailBoundArtifact(t *testing.T) {
 	if dto.SourceNote != "kustomize-controller runs without its ExternalArtifact feature gate" {
 		t.Fatalf("the feature gate: %q", dto.SourceNote)
 	}
+	// a replacement recording another generator: its own evidence decides
+	// (Codex's S1c implementation review, finding 2)
+	conn.srcObj = eaOf("uid-new", "uid-other")
+	if p := svc.GetResourceDetail("x", "Kustomization", "flux-system", "apps").SourceProducer; p == nil || p.State != composition.ProducerDisagree || p.Label != "" {
+		t.Fatalf("a replaced artifact: %+v", p)
+	}
 	// rows not read: never a health
-	conn.rowsOK = false
+	conn.srcObj, conn.rowsOK = ea, false
 	if p := svc.GetResourceDetail("x", "Kustomization", "flux-system", "apps").SourceProducer; p == nil || p.State != composition.ProducerUnreadable || p.Label != "" {
 		t.Fatalf("unread rows: %+v", p)
 	}

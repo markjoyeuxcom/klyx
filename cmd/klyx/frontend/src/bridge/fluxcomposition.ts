@@ -16,6 +16,7 @@ export type CompositionCommonDTO = {
   reason?: string; message?: string; readySince?: string; stalled?: boolean;
   clipped: string[]; incomplete: string[];
   rule: RuleDTO;
+  owner?: FluxOpOwnerDTO; // the GitOps unit that applies it (roadmap C4)
 };
 
 // A joined object; state: found | not found | incomplete | not readable.
@@ -73,6 +74,7 @@ export type AlertDTO = {
   inclusionList: string[]; exclusionList: string[]; metadataKeys: string[];
   suspended: boolean; owner?: FluxOpOwnerDTO;
   dispatch: Record<string, number>; dispatchSummary: string;
+  dispatchPartial?: boolean; // the events read failed or was capped: a lower bound
 };
 
 // More: past the cap; -1 when the server does not say how many.
@@ -84,6 +86,7 @@ export type NotificationsDTO = {
 
 export type CompositionDetailDTO = {
   uid?: string; replaced?: boolean; error?: string; asOfUnix?: number;
+  generation?: number; // the revision read: shown only beside a row of the same generation
   sources: CompositionRefDTO[]; sourcesState?: string;
   consumers: CompositionRefDTO[]; consumersState?: string;
   events: EventRowDTO[]; eventsError?: string;

@@ -664,8 +664,10 @@ func nodeOf(ref Ref, u *unstructured.Unstructured, at time.Time) Node {
 	n.Suspended, _, _ = unstructured.NestedBool(u.Object, "spec", "suspend")
 	switch ref.Kind {
 	case string(flux.ArtifactGeneratorKind):
-		// suspended by its own annotation (S1c §4)
-		n.Suspended = strings.EqualFold(u.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled")
+		// suspended by its own annotation, compared as source-watcher's
+		// IsDisabled does (lower-cased), never by case folding (Codex's S1c
+		// implementation review, finding 8)
+		n.Suspended = strings.ToLower(u.GetAnnotations()["source.extensions.fluxcd.io/reconcile"]) == "disabled"
 	case string(flux.ExternalArtifactKind):
 		n.GeneratorUID = u.GetLabels()["source.extensions.fluxcd.io/generator"]
 		if ref, ok, _ := unstructured.NestedMap(u.Object, "spec", "sourceRef"); ok {

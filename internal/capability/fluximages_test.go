@@ -159,3 +159,33 @@ func TestFluxComponents(t *testing.T) {
 		t.Fatalf("the Flux task names it: %q", gc.FluxIssue())
 	}
 }
+
+// Codex's S1c implementation review, finding 6: source composition or
+// notifications alone are a Flux installation, judged by their own
+// controllers, with no kustomize-controller invented.
+func TestS1cOnlyInstallations(t *testing.T) {
+	ea := fake.NewSimpleClientset()
+	ea.Discovery().(*fakediscovery.FakeDiscovery).Resources = []*metav1.APIResourceList{
+		{GroupVersion: "source.toolkit.fluxcd.io/v1", APIResources: []metav1.APIResource{{Name: "externalartifacts"}}}}
+	g := (&Detector{cs: ea}).detectGitOps(context.Background(), map[string]bool{"source.toolkit.fluxcd.io": true, "source.toolkit.fluxcd.io/v1": true})
+	if !g.Flux.Present || !g.Flux.Components.Composition || !g.Flux.Synthesized || g.FluxIssue() != "" || g.Tier == Absent {
+		t.Fatalf("artifacts alone: %+v issue %q", g, g.FluxIssue())
+	}
+	rc := fake.NewSimpleClientset()
+	rc.Discovery().(*fakediscovery.FakeDiscovery).Resources = []*metav1.APIResourceList{
+		{GroupVersion: notificationGroup + "/v1", APIResources: []metav1.APIResource{{Name: "receivers"}}}}
+	g = (&Detector{cs: rc}).detectGitOps(context.Background(), map[string]bool{notificationGroup: true, notificationGroup + "/v1": true})
+	f, _ := g.FluxProblems()
+	if !g.Flux.Present || !g.Flux.Components.Notifications || g.Flux.Healthy || len(f) != 1 || !strings.Contains(f[0], "notification-controller") {
+		t.Fatalf("Receivers alone, no controller: %+v %v", g.Flux, f)
+	}
+	for _, p := range f {
+		if strings.Contains(p, "kustomize-controller") {
+			t.Fatalf("no kustomize-controller is invented: %v", f)
+		}
+	}
+	// source-controller without ExternalArtifacts is not Flux by itself
+	if g := (&Detector{cs: fake.NewSimpleClientset()}).detectGitOps(context.Background(), map[string]bool{"source.toolkit.fluxcd.io": true}); g.Flux.Present {
+		t.Fatalf("a source group alone: %+v", g.Flux)
+	}
+}

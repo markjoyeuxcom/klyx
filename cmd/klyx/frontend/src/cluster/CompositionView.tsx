@@ -30,6 +30,7 @@ import { useNavIntent } from "../chrome/useNavIntent";
 import { kindOfRef } from "../nav/reveal";
 import { expectPin } from "../nav/inspectorPin";
 import { attributed, producerText } from "./producer";
+import { ownershipLine } from "./ownership";
 
 // CompositionView - the Flux lens's Composition view (coverage S1c §2):
 // ArtifactGenerators and ExternalArtifacts from the Observer's shared
@@ -95,7 +96,9 @@ function verbDetail(v: Verb, it: Item): string {
   const mech = v === "reconcile" ? "Sets reconcile.fluxcd.io/requestedAt to a fresh token, so source-watcher regenerates its artifacts now."
     : v === "suspend" ? "Sets source.extensions.fluxcd.io/reconcile: disabled. Its artifacts stay as they are until it is resumed."
     : "Sets source.extensions.fluxcd.io/reconcile: enabled and a fresh requestedAt. A run that finds nothing changed writes no condition, so it can stay awaiting evaluation.";
-  return [what, mech, "Klyx reports the request; completion is the object's own status."].join(" ");
+  // every generator verb is an annotation (roadmap C4; Codex's S1c
+  // implementation review, finding 7)
+  return [what, mech, ownershipLine(it.c.owner, "annotation"), "Klyx reports the request; completion is the object's own status."].filter(Boolean).join(" ");
 }
 
 export function CompositionView({ cluster }: { cluster: string }) {
@@ -307,10 +310,15 @@ function CompositionInspector({ cluster, it, items, nowS, gone, replaced, onVerb
     void getCompositionDetail(cluster, it.kind, it.c.namespace, it.c.name, uid).then((d) => { if (live) setDetail({ uid, d }); });
     return () => { live = false; };
   }, [cluster, it.kind, it.c.namespace, it.c.name, it.uid, it.c.generation, gone]);
-  // a failed read is its request's (the UID asked for), shown as it is
+  // a failed read is its request's (the UID asked for), shown as it is;
+  // evidence is shown only beside the revision it describes (Codex's S1c
+  // implementation review, finding 1)
   const mine = detail && detail.uid === it.uid ? detail.d : null;
   const readError = mine?.error ? mine.error : null;
-  const d = mine && !readError ? mine : null;
+  const fresh = (x: CompositionDetailDTO) => x.generation === it.c.generation;
+  const d = mine && !readError && fresh(mine) ? mine : null;
+  const otherRevision = !!mine && !readError && !fresh(mine);
+  const waiting = otherRevision ? "The latest read describes another revision of this object; it waits for the row to catch up." : "Reading…";
 
   const g = it.generator;
   const a = it.artifact;
@@ -369,7 +377,7 @@ function CompositionInspector({ cluster, it, items, nowS, gone, replaced, onVerb
             </InspectorBlock>
             <InspectorBlock title={`Consumers · ${d ? joinCount(d.consumers.length, d.consumersState) : "…"}`}>
               {readError ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>Could not be read: {readError}</div>
-                : !d ? <div className="t-secondary">Reading…</div>
+                : !d ? <div className="t-secondary">{waiting}</div>
                 : d.consumersState === "not readable" ? <div className="t-secondary" style={{ color: "var(--color-text-warning)" }}>The Kustomizations and HelmReleases could not be read, so which use it is not known.</div>
                 : d.consumers.length === 0 ? <div className="t-secondary">{d.consumersState === "incomplete" ? "None among those Klyx retains; the read is capped, so others may." : "No Kustomization or HelmRelease is bound to it."}</div>
                 : d.consumers.map((c) => <RefLine key={`${c.kind}/${c.namespace}/${c.name}`} r={c} items={items} onOpen={onOpen} />)}
@@ -398,7 +406,7 @@ function CompositionInspector({ cluster, it, items, nowS, gone, replaced, onVerb
         )}
         <InspectorBlock title="Events">
           {readError ? <div className="t-body" data-testid="composition-read-error" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Could not be read: {readError}</div>
-            : !d ? <div className="t-secondary">Reading…</div>
+            : !d ? <div className="t-secondary">{waiting}</div>
             : d.eventsError ? <div className="t-body" style={{ color: "var(--color-text-warning)" }}>Events could not be read: {d.eventsError}</div>
             : d.events.length === 0 ? <div className="t-secondary">No recent events (they age out after about an hour).</div>
             : d.events.slice(0, 8).map((e, i) => <div key={i} className="t-body" style={{ color: e.type === "Warning" ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{e.reason}: {e.message}</div>)}
