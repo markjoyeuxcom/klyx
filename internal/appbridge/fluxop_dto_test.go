@@ -58,7 +58,7 @@ func TestFluxOpRowsConvert(t *testing.T) {
 	}
 	p := fluxop.ParseProvider(v.(*fluxop.Object))
 	rows := healthsrc.RowSet[healthsrc.FluxSetRow]{Rows: []healthsrc.Row[healthsrc.FluxSetRow]{{
-		Ref: healthsrc.RowRef{UID: "u1", GVR: "fluxcd.controlplane.io/v1/resourcesetinputproviders", Namespace: "team", Name: "p", Generation: 1},
+		Ref:  healthsrc.RowRef{UID: "u1", GVR: "fluxcd.controlplane.io/v1/resourcesetinputproviders", Namespace: "team", Name: "p", Generation: 1},
 		Eval: health.NativeEval{Role: health.Unknown, Label: fluxop.LabelSchedule}, Data: healthsrc.FluxSetRow{Provider: &p, Resume: healthsrc.ResumeAwaiting}}}}
 	out, err := rowsConverters[healthsrc.TaskFlux+"/resourcesets"](rows, time.Now())
 	if err != nil {
