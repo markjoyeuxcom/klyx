@@ -223,8 +223,10 @@ func Rank(key string, v any) string {
 
 // Window is a capped Backups kind's boundary, decoded from its rank.
 type Window struct {
-	// Tier0: the window is in tier 0, so no terminal Backup is retained and
-	// Velero's guard is unresolved.
+	// Tier0: the window is in tier 0, so Velero's guard is unresolved and no
+	// terminal coverage is certified. It does not prove that no terminal
+	// Backup is retained: the Observer keeps a tier-0 floor until a complete
+	// refill while a retained Backup can finish (S2b revision 2).
 	Tier0 bool
 	// W is the run time of the first left-out tier-1 Backup: every Backup
 	// whose run time is after it is retained.

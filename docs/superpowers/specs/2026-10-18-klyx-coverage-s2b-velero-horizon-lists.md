@@ -1,6 +1,6 @@
 # Coverage S2b: the Velero horizon and lists
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2b. It builds on S2a (`2026-10-17-klyx-coverage-s2a-velero-health.md`): design accepted at ebcd07d, implementation at bc3be19. Revision 1 answers Codex's design review of 1d11926 (§8). Every S2a contract stands, notably:
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S2b. It builds on S2a (`2026-10-17-klyx-coverage-s2a-velero-health.md`): design accepted at ebcd07d, implementation at bc3be19. Revision 1 answers Codex's design review of 1d11926 (§8), revision 2 its re-review of 8b6129d (§9). Every S2a contract stands, notably:
 - the Backups watch: capped, in two tiers, and its window `W`;
 - run identity: proven, named or synced, with execution and run times;
 - the message classes and placeholders;
@@ -167,7 +167,10 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
   - **Uncapped:** the selection is complete, subject to the missing-time rule.
   - **Capped:** it is complete only when S's whole history is held, that is when S's creation minus a minute is after `W` plus a minute (S2a §15's "own history"), so that every run of S is retained.
 - **Otherwise it is always qualified:** "latest retained success; a run that started before <W> and completed later may not be retained". With no candidate: "none since W retained".
-- **The window in tier 0** (S2a §3) means no terminal Backup is retained at all: "the retained history holds no finished runs". The Backups list's notice, "every run in progress is held", is said only when the window is in tier 1.
+- **The window in tier 0** (S2a §3) certifies no terminal coverage, and it does not prove that no finished run is retained (revision 2): the Observer keeps a tier-0 floor until a complete refill, while a Backup it retains can finish meanwhile.
+  - The selection is made from the retained candidates, as in tier 1, and is always qualified: "latest retained success; the retained history may be missing finished runs".
+  - "No finished runs are retained" is said only when the retained set itself holds none, and then as a fact about the retained set.
+  - The Backups list's notice, "every run in progress is held", is said only when the window is in tier 1.
 
 **Clock:**
 - **The deadline:** the earliest expiration among S's candidates is a presentation deadline.
@@ -212,6 +215,7 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
     - a proven success re-imported by sync, which is a candidate, and an unproven synced one, which is not;
     - a name-matched success and a name-matched PartiallyFailed, each labelled;
     - the tier-0 window's notice;
+    - revision 2: a tier-0 window with a retained Completed candidate, which is selected and qualified, never suppressed; and, in `internal/observe`, the delayed refill that leaves a deleted blocker's tier-0 floor while a retained Backup turns terminal (Codex's probe, kept);
   - **the Restore classes:** every enumerated form, and their near-misses withheld;
   - needles.
 - **healthsrc:** the backups rows carry every retained Backup with `counted` and attribution, while the counted items, roles and Top are unchanged, so S2a's tests still pass.
@@ -256,3 +260,9 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
 | 3 | Expiry assumed deletion; the GC can leave expired records | §4: `status.expiration` at capture time decides eligibility; expired records are listed as awaiting deletion; the earliest expiration is a presentation deadline merged into `Next` without touching health. §6 |
 | 4 | The Restore source join needed the Backups kind's own coverage | §3: found or not under each coverage, never a capped or stale absence read as "not in the cluster". §6 |
 | - | Guidance | §4: confidence in every cell, row and AI field; S2a's `Attribute` precedence. §3: `counted` is membership, gated centrally; display phase separate; the Restores DTO's bounds, fences and `remainingItemCount` |
+
+## 9. Revision 2: Codex's design re-review of 8b6129d
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | A tier-0 window does not prove that no finished Backup is retained: the pending floor survives a delayed refill while a retained Backup finishes | §4: tier 0 certifies no terminal coverage; the selection is made from the retained candidates and qualified; "no finished runs are retained" only when the retained set holds none. S2a's code was already conservative (`covers` and `guardComplete` certify nothing in tier 0); only `Window`'s doc comment overclaimed, and is corrected. §6 |
