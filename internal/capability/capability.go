@@ -52,6 +52,9 @@ type FluxInfo struct {
 	// conventional name) claims nothing; Why names the gap.
 	Verified bool
 	Why      string
+	// Images are the image automation controllers (coverage S1b §3), read
+	// with detection.
+	Images ImageControllers
 }
 
 type ArgoInfo struct {

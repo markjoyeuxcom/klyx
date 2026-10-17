@@ -60,17 +60,28 @@ func StatefulSetReady(s *appsv1.StatefulSet) bool {
 // them per task, where the tier joins them. An unverified controller says
 // so - never "not ready".
 func (g GitOpsCapability) FluxIssue() string {
-	if r := g.FluxOperator.Issue(); r != "" {
-		return r
+	f, gaps := g.FluxProblems()
+	return strings.Join(append(f, gaps...), "; ")
+}
+
+// FluxProblems splits Flux's controller problems into proven failures and
+// evidence gaps: the operator's own (S1a §2) or else kustomize-controller's,
+// then the image controllers' (S1b §3). A gap alone is unknown, never "not
+// ready".
+func (g GitOpsCapability) FluxProblems() (failures, gaps []string) {
+	if f, gp := g.FluxOperator.Problems(); len(f)+len(gp) > 0 {
+		failures, gaps = f, gp
+	} else {
+		switch {
+		case !g.Flux.Present || g.Flux.Healthy:
+		case !g.Flux.Verified:
+			gaps = append(gaps, "Flux installed but "+fluxKustomizeController+" health is unverified ("+g.Flux.Why+")")
+		default:
+			failures = append(failures, "Flux installed but "+fluxKustomizeController+" is not ready")
+		}
 	}
-	switch {
-	case !g.Flux.Present || g.Flux.Healthy:
-		return ""
-	case !g.Flux.Verified:
-		return "Flux installed but " + fluxKustomizeController + " health is unverified (" + g.Flux.Why + ")"
-	default:
-		return "Flux installed but " + fluxKustomizeController + " is not ready"
-	}
+	f, gp := g.Flux.Images.Problems()
+	return append(failures, f...), append(gaps, gp...)
 }
 
 func (g GitOpsCapability) ArgoIssue() string {
@@ -101,7 +112,7 @@ func gitOpsTier(flux FluxInfo, argo ArgoInfo) (Tier, string) {
 	if r := g.ArgoIssue(); r != "" {
 		reasons = append(reasons, r)
 	}
-	fluxOK := !flux.Present || flux.Healthy
+	fluxOK := !flux.Present || (flux.Healthy && flux.Images.Issue() == "")
 	argoOK := !argo.Present || argo.Healthy
 	return Classify(true, fluxOK && argoOK), strings.Join(reasons, "; ")
 }
@@ -186,15 +197,18 @@ func (d *Detector) detectGitOps(ctx context.Context, served map[string]bool) Git
 		return out
 	}
 
+	// An operator-managed install runs its controllers in the operator's
+	// runtime namespace; one resolved namespace is probed, otherwise the
+	// conventional one (S1a §2).
+	ns := fluxNamespace
+	if rt := out.FluxOperator.RuntimeNamespaces(); len(rt) == 1 {
+		ns = rt[0]
+	}
+	if fluxPresent {
+		out.Flux.Images = d.detectImageControllers(ctx, served, ns)
+	}
 	switch {
 	case kustomize:
-		// An operator-managed install runs its controllers in the
-		// operator's runtime namespace; one resolved namespace is probed,
-		// otherwise the conventional one (S1a §2).
-		ns := fluxNamespace
-		if rt := out.FluxOperator.RuntimeNamespaces(); len(rt) == 1 {
-			ns = rt[0]
-		}
 		applyRead(d.controllerProbe(ctx, deploymentWorkload, ns, fluxKustomizeController), &out.Flux.Healthy, &out.Flux.Verified, &out.Flux.Why)
 		if out.Flux.Healthy {
 			out.Flux.Controllers = []string{fluxKustomizeController}
