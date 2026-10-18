@@ -318,3 +318,78 @@ That is already enough for §2-§4, so the projection does not change. A raw/pro
   - compare both CPU and memory with that node's spare capacity *after* placement;
   - equality fits.
 - **Version unknown:** the maximum is taken per resource per pod, before node aggregation.
+
+## 12. As built (d57b3e2 to 3e6e579)
+
+**The reservation models** (d57b3e2, `internal/workloads/schedreq.go`):
+- Six models: 1.32 and older, 1.33, 1.34, 1.35, 1.36 and 1.37. Each is implemented from that minor's helper, with the scheduler's options at default gates.
+- **Golden values** (`testdata/schedreq_golden.json`) come from a scratchpad generator, one module per upstream version. Each unmodified `k8s.io/component-helpers` (v0.32.13 to v0.37.1) computed `PodRequests` over 24 fixtures, and the file records each module's version, `go.sum` hashes and options.
+- **Every model equals its helper on every fixture**, including:
+  - opposite directions in two containers (8 CPU on 1.33-1.36, 5 on 1.37);
+  - pod-level status (memory 1Gi on 1.36, 2Gi on 1.37);
+  - a pod-level key the effective map lacks (zero on 1.36);
+  - Infeasible with no status maps (zero on 1.37);
+  - nil `status.resources` beside an allocation (1 CPU on 1.33-1.36, 4 on 1.37).
+- **The unknown model** is tested to be the per-resource maximum over every model.
+- **Model selection** reads the server's GitVersion, distribution suffixes included ("v1.34.2-eks-…", "v1.31.0+k3s1"). A minor newer than 1.37 assumes 1.37 and says so.
+- **The summary** carries:
+  - the scheduled, desired and alternative figures;
+  - `observedGeneration`;
+  - the resize state.
+
+  `SummarizePods` keeps its signature and uses the unknown model; the pod list behind headroom and the pod detail use the connection's model.
+
+**The verdicts** (d57b3e2, `internal/health/podresize.go`): as §3 revision 1, tested over every case §9 lists:
+- the current and older generations;
+- both generations 0, and a condition generation of 0 beside a reported pod generation, which is not proven current and so is a Note;
+- an older active Error beside a newer Pending;
+- non-True conditions;
+- a fault, Not ready, Succeeded, Failed and terminating pods;
+- an exited ephemeral container.
+
+**Headroom** (d57b3e2): as §2, with the acceptance's guard: per survivor, the sum of positive per-pod differences against the spare after placement, both resources, equality fits. The report carries the assumption.
+
+**The debug verb** (6eb1f83, `internal/fleet/debugopts.go`):
+- `ValidateDebugOptions`: a preset or OCI reference image, and the five profiles.
+- `DebugKubectlCheck` reads `kubectl version --client -o json` of the binary `kubectlBin` resolves, which is the one the terminal argv names. Unresolved, unreadable or older than 1.30.0 refuses; newer than 1.37 is qualified.
+- `OpenDebugTerminal` checks the gate before the pod's UID.
+- `DebugPreflight` feeds the dialog.
+- The copy path stays ungated.
+
+**The frontend** (b7c147e):
+- **The Pods row:** Syncing (dashed mark, `SyncingChip`) only where the verdict draws no mark and the kubelet reports a generation behind the spec.
+- **The inspector:** "Resources" and "Debug containers" (`cluster/PodS6.tsx`). The container block's request line reads "desired".
+- **The debug flow:** the chooser, then the confirmation. `sysadmin` takes a typed "privileged" interlock off a protected cluster (`ConfirmDialog`'s typed interlock with a local arm). On a protected cluster the cluster lock covers it.
+- **Headroom** says the assumption, the alternative's difference, and "depends on the scheduler version".
+
+**Deviations:**
+- **The lab cannot show Infeasible, Deferred or an actuation Error live.** On 1.37 the API server refuses a resize past the node's allocatable ("Forbidden: node didn't have enough allocatable resources"), so Infeasible needs kubelet-side policies (static CPU or memory manager) that kind does not run. The kubelet owns pod status, so a status-patched stand-in would not hold. A Deferred resize reserves its desired amount in the scheduler (the rule itself) and would starve the lab's single node. All three are covered by the verdict tests, the golden models and the projection parity test.
+- **Parity:** for the same reason, §9's resize-infeasible parity fixture is not built. The projection parity test (`healthsrc/parity_test.go`) carries a resizing pod: both resize conditions with their generations, container allocated and actual, pod-level status, and the acknowledged generation. It checks raw and projected verdicts and summaries equal under every model. The live parity gate runs unchanged and still compares the pods part, whose verdict now includes the two rules.
+- **The row carries no scheduled figures** (§4 said the row would). Only the inspector and headroom show them, read through the connection's model; the Observer's rows have no version to choose one.
+- **"Debug containers" lists profile evidence** (privileged, capabilities added, non-root). Dropped capabilities are not listed.
+
+**The lab** (scratchpad `lab-s6`, kind-klyx v1.37, a real kubelet):
+- `resize-done` is resized in place to 150m/300m: desired, allocated and actual agree, and generation 2 is acknowledged.
+- `debug-target` (pod `runAsUser: 65534`) carries `dbg-failed` (general, exited 3) and `dbg-running` (restricted, running as non-root). Its generation is 3: each added debug container incremented it, as KEP-5067 says.
+
+## 13. Gates
+
+- **The four-way native smoke:** 173/173 in all four modes at 3e6e579, clean, with every lab (s1b, s1c, s2b, s3a, s5, s6) re-applied within the hour. That includes the three S6 steps: the completed resize, the failed debug container on a Running pod, and the chooser naming sysadmin's privilege, cancelled.
+- **The parity gate:** passes, both stages, at 3e6e579 (run 2ebb75d8490fa8d3; dirty only with these notes).
+- **`go test -race ./...`:** ok.
+- **golangci-lint v2.14.0:** 0 issues.
+- **The frontend:**
+  - the suite: 2211 passed;
+  - tsc: clean;
+  - eslint: 0 errors. The 3 warnings are pre-existing.
+- **Mutation checks:** 21, every one caught.
+  - **Backend (15):** the aggregate rule, Infeasible dropping spec, 1.36's spec keys, 1.33 skipping pod-level, the unknown maximum, headroom placing by desired, the guard's equality and its memory check, the current-generation rule, running pods only, active conditions only, Error whatever its generation, the 1.30 gate, image validation, and the gate before the UID check.
+  - **Frontend (6):** Syncing needing a reported generation, the sysadmin interlock, a refused kubectl blocking, the version-dependent verdict, debug-container evidence, and the unreported-generation line.
+- **The live captures** (scratchpad cap-s6, server mode): 6 shots in each of the four themes and widths, 24 in all:
+  - the completed resize's Resources;
+  - debug-target's Resources and Debug containers;
+  - the chooser and the sysadmin confirmation;
+  - survivability.
+
+  None scrolls sideways and none has a page error.
+- **The load test:** not run. S6 adds no watch and no model. The summary computes the reservation once per pod under the unknown model in the Observer path (the maximum over six models), and once per pod in the on-demand reads.
