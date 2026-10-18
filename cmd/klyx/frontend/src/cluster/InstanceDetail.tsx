@@ -16,6 +16,7 @@ import { YamlBlock } from "../chrome/YamlBlock";
 import { vh } from "../app/zoom";
 import { PinnedGone } from "./PinnedGone";
 import type { Gone } from "./usePinnedSubject";
+import { ServiceAccountIdentity } from "./IdentityBlocks";
 
 const TONE_SET = new Set<string>(["success", "warning", "danger", "info", "muted", "neutral"]);
 function asTone(s: string): Tone | undefined {
@@ -931,6 +932,7 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
             {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />}
             {d.serviceBacking != null && <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />}
             {d.secretKeys && d.secretKeys.length > 0 && !removed && <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />}
+            {resource.kind === "ServiceAccount" && resource.group === "" && d.uid && !removed && <ServiceAccountIdentity cluster={cluster} namespace={instance.namespace} name={instance.name} uid={d.uid} active />}
             {d.conditions.length > 0 && (
               <InspectorBlock title="Conditions" count={d.conditions.length}>
                 <InspectorConditions conditions={d.conditions} generation={d.generation} />

@@ -39,6 +39,7 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { PodIdentity } from "./IdentityBlocks";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -771,6 +772,8 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
           )}
           {p.containers.map((c) => <ContainerBlock key={c.name} c={c} d={detailContainers.get(c.name)} detailState={detailState} u={usageByContainer.get(c.name)} />)}
         </InspectorBlock>
+
+        {uid && !gone && <PodIdentity cluster={cluster} namespace={namespace} name={name} uid={uid} active />}
 
         <InspectorBlock title="Placement">
           <div className="insp-kv">

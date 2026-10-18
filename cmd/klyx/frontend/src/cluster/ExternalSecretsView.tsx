@@ -27,6 +27,7 @@ import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { StoreAuthenticatesAs } from "./IdentityBlocks";
 
 const keyOf = (e: { namespace: string; name: string }) => `${e.namespace}/${e.name}`;
 
@@ -670,6 +671,7 @@ function StoreInspector({ cluster, store, removed, unverified, replaced, secrets
             </div>
           )}
         </InspectorBlock>
+        {store.uid && !removed && !unverified && <StoreAuthenticatesAs cluster={cluster} kind={store.kind} namespace={store.kind === "ClusterSecretStore" ? "" : store.namespace} name={store.name} uid={store.uid} active />}
         {store.message && store.state === "Synced" && (
           <InspectorBlock title="Message" defaultOpen={false}>
             <div className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{store.message}</div>
