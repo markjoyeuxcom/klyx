@@ -60,7 +60,8 @@ owned() {
 }
 
 # The CRDs the Observer reads, copied from the read-only source with
-# server-set fields stripped (no network).
+# server-set fields stripped (no network). Applied server-side: Gateway API
+# 1.6's HTTPRoute CRD is over client-side apply's 256 KiB annotation.
 crds=(
 	kustomizations.kustomize.toolkit.fluxcd.io helmreleases.helm.toolkit.fluxcd.io
 	gitrepositories.source.toolkit.fluxcd.io ocirepositories.source.toolkit.fluxcd.io buckets.source.toolkit.fluxcd.io
@@ -70,7 +71,7 @@ crds=(
 	orders.acme.cert-manager.io challenges.acme.cert-manager.io
 	externalsecrets.external-secrets.io secretstores.external-secrets.io clustersecretstores.external-secrets.io
 	gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io
-	grpcroutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io
+	grpcroutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io listenersets.gateway.networking.k8s.io
 	nodepools.karpenter.sh nodeclaims.karpenter.sh
 	fluxinstances.fluxcd.controlplane.io fluxreports.fluxcd.controlplane.io
 	resourcesets.fluxcd.controlplane.io resourcesetinputproviders.fluxcd.controlplane.io
@@ -89,7 +90,7 @@ copy_crds() {
 	for n in "${crds[@]}"; do
 		kubectl --context "$src" get crd "$n" -o json |
 			jq 'del(.status, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.managedFields, .metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"])'
-	done | k apply -f - >/dev/null
+	done | k apply --server-side --force-conflicts --field-manager=klyx-parity -f - >/dev/null
 	k wait --for condition=established --timeout=60s "${crds[@]/#/crd/}" >/dev/null
 }
 

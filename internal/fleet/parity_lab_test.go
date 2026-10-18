@@ -205,6 +205,7 @@ var parityParts = []parityPart{
 	{"eso", "externalsecrets", "native", []string{"externalsecrets"}},
 	{"eso", "stores", "native", []string{"secretstores", "clustersecretstores"}},
 	{"gateway", "gateways", "native", []string{"gateways"}},
+	{"gateway", "listenersets", "native", []string{"listenersets"}}, // coverage S7a
 	{"gateway", "routes", "native", []string{"httproutes"}},
 	{"karpenter", "nodeclaims", "native", []string{"nodeclaims"}},
 	{"karpenter", "nodepools", "native", []string{"nodepools"}},
@@ -231,7 +232,8 @@ var parityResource = map[string]string{
 	"externalsecrets": "externalsecrets.external-secrets.io", "secretstores": "secretstores.external-secrets.io",
 	"clustersecretstores": "clustersecretstores.external-secrets.io",
 	"gateways":            "gateways.gateway.networking.k8s.io", "httproutes": "httproutes.gateway.networking.k8s.io",
-	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
+	"listenersets": "listenersets.gateway.networking.k8s.io",
+	"nodeclaims":   "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
@@ -771,7 +773,7 @@ func TestParityGate(t *testing.T) {
 		controllers map[string]string
 	}{
 		{"1", "Synced", none}, {"2", "Synced", none}, {"3", "Synced", none}, {"4", "Synced", none},
-		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none},
+		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none}, {"5d", "Synced", none},
 		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
 		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
 	} {

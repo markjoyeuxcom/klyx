@@ -299,6 +299,7 @@ kind: Gateway
 metadata: {name: parity-gw, namespace: $ns, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
 spec:
   gatewayClassName: parity-gc
+  allowedListeners: {namespaces: {from: Same}}
   listeners: [{name: http, port: 80, protocol: HTTP}]
 EOF
 	local g
@@ -308,6 +309,27 @@ EOF
 	status gateways.gateway.networking.k8s.io "$ns" parity-gw "{\"conditions\":[$(cond Accepted True Accepted "$g"),$(cond Programmed True Programmed "$g")]}"
 	backend parity-backend true
 	route parity-route parity-backend True ResolvedRefs ok false
+	listenerset parity-ls True Accepted ok false
+}
+
+# listenerset <name> <Accepted status> <reason> <role> <included>: a
+# ListenerSet under parity-gw (coverage S7a), its controller's verdict
+listenerset() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: ListenerSet
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks "$4" "$5")
+spec:
+  parentRef: {name: parity-gw}
+  listeners: [{name: extra, port: 8080, protocol: HTTP, hostname: $1.parity.example}]
+EOF
+	local g
+	g=$(gen listenersets.gateway.networking.k8s.io "$ns" "$1")
+	status listenersets.gateway.networking.k8s.io "$ns" "$1" "{\"conditions\":[$(cond Accepted "$2" "$3" "$g"),$(cond Programmed "$2" "$3" "$g")]}"
 }
 
 karpenter_objects() {
@@ -878,6 +900,8 @@ EOF
 	5c) # a route whose backend has no endpoints at all
 		backend parity-empty none
 		route parity-route-empty parity-empty True ResolvedRefs fault true ;;
+	5d) # a ListenerSet its controller did not accept (coverage S7a)
+		listenerset parity-ls-notallowed False NotAllowed fault true ;;
 	6) # cert-manager down, no cert-manager object fault (core: its
 		# Deployment and the Pending pod are faults, declared)
 		stand_in cert-manager cert-manager fault ;;
@@ -899,6 +923,7 @@ revert_case() {
 		k -n "$ns" delete service/parity-unready endpointslice/parity-unready-1 --wait >/dev/null ;;
 	5c) k -n "$ns" delete httproutes.gateway.networking.k8s.io parity-route-empty --wait >/dev/null
 		k -n "$ns" delete service/parity-empty endpointslice/parity-empty-1 --wait >/dev/null ;;
+	5d) k -n "$ns" delete listenersets.gateway.networking.k8s.io parity-ls-notallowed --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
 	6b) stand_in flux-system kustomize-controller "" ;;
 	*) die "unknown case '$1'" ;;
