@@ -64,7 +64,7 @@ Read from `sigs.k8s.io/gateway-api` v1.4.1, v1.5.1 and v1.6.3: `apis/v1`, `apisx
 - **The kinds differ only in their rules:**
   - HTTPRoute: hostnames and matches;
   - GRPCRoute: hostnames and service/method matches;
-  - TLSRoute v1: 1 to 1024 hostnames, required, and exactly one rule of backendRefs;
+  - TLSRoute v1: 1 to 1024 hostnames, required, and exactly one rule of backendRefs. The older shapes differ (revision 1): v1alpha3 has 1 to 16 hostnames and exactly one rule, and v1alpha2 has 0 to 16 hostnames and 1 to 16 rules. Conversion between these versions passes fields through, so an object admitted through v1alpha2 can be read through v1 with no hostnames and several rules;
   - TCPRoute and UDPRoute v1: rules of 1 to 16 backendRefs, with no hostnames and no matches.
 
 **Supported features.** A GatewayClass `status.supportedFeatures[]` lists feature names such as "Gateway", "ListenerSet", "HTTPRoute", "GRPCRoute", "TLSRoute", "TLSRouteModeTerminate", "TCPRoute" and "UDPRoute" (`pkg/features`).
@@ -122,7 +122,10 @@ A listener's conditions are judged only when their `observedGeneration` matches 
 
 Each listener shows the controller's own conditions. Klyx never decides a conflict itself: it shows the order and the controller's Conflicted reason.
 
-**The parent link** is the `parentRef` (namespace defaulting to the ListenerSet's). A ListenerSet whose parent Gateway is not in the model reads "parent Gateway not found" as a Fault, and its listeners join nothing.
+**The parent link** is the `parentRef` (namespace defaulting to the ListenerSet's).
+- **Absence is proven only by a complete, current read** (revision 1, §8): a ListenerSet whose parent Gateway is absent from a Live, complete, untruncated gateways model reads "parent Gateway not found" as a Fault, and its listeners join nothing.
+- **Any other read** (forbidden, stale, checking, or truncated by the budget) makes the parent "not established": Unknown, never "not found".
+- **The ListenerSet's own conditions still decide** when they prove a failure: an Accepted False from the controller is a Fault whatever the parent read.
 
 **Klyx's own allowance check is evidence, never the verdict.** Klyx evaluates the parent's `allowedListeners` against the ListenerSet's namespace:
 - **None** (the default): allows nothing.
@@ -142,18 +145,38 @@ The controller's Accepted condition stays authoritative:
 
 **Identity** is `kind/namespace/name` with the UID. This fixes today's `namespace/name` key, which would collide between kinds.
 
-**Attachments, one per parentRef entry:**
-- A parentRef names a Gateway or a ListenerSet (group `gateway.networking.k8s.io`), with its optional `sectionName` and `port`. It is matched to its `status.parents[]` entry by group, kind, namespace, name, section and port.
-- Two parentRefs to one Gateway with different section names are two attachments, each with its own parent status.
-- The topology draws one lane per attachment. Today they collapse into one.
+**Attachments, one per parentRef entry** (revision 1):
+- **Identity:** the full normalised parentRef tuple: group, kind, namespace (defaulted to the route's), name, `sectionName` and `port`, each kept even when empty. It is the attachment's identity throughout:
+  - the reduction's parent;
+  - the DTOs;
+  - pin and reveal;
+  - the topology lane key.
 
-**A route's verdict** reduces its attachments with `observe.ReduceAttachments` (unchanged). The parent becomes `kind/namespace/name[/section]`.
+  The display label may be shorter ("gw-a · https" or "gw-a · :8443").
+- **Port-only and section-only references:** two parentRefs to one Gateway differing only by `port` (the experimental channel permits it), or only by `sectionName`, are two attachments, each with its own parent status.
+- **The topology** draws one lane per attachment. Today they collapse into one.
+
+**The parent status is the expected controller's** (revision 1). `status.parents[]` is keyed by the parentRef *and* `controllerName`. A Gateway recreated with another class can leave the retired controller's Accepted True beside the current controller's False.
+- **The expected controller** is the parent Gateway's GatewayClass `spec.controllerName`; for a ListenerSet, its parent Gateway's class's.
+- **Klyx judges only the entry** whose parentRef matches and whose `controllerName` is the expected one.
+- **Other controllers' entries** for the same reference are shown as "an entry from another controller (‹name›), not judged".
+- **When the expected controller cannot be established** (the class or the Gateway unread, stale or truncated, or a class whose `controllerName` is absent), the attachment is Unknown ("the controller judging this parent is not established"). Several entries are listed, never chosen between.
+- **GatewayClasses** join the routes and listenersets parts' dependencies.
+
+**A route's verdict** reduces its attachments with `observe.ReduceAttachments` (unchanged). The parent is the attachment identity above.
 
 **Per attachment:**
-- **Parent missing:** a Gateway or ListenerSet not in the model. A ListenerSet parent that exists but is not Accepted reads "parent ListenerSet not accepted".
+- **Parent missing:** only on a complete, current read of the parent's kind (§8). Any other read makes the parent "not established", Unknown. A ListenerSet parent that exists but is not Accepted reads "parent ListenerSet not accepted".
 - **The parent status:** Accepted, then ResolvedRefs, by reason, as today.
 - **The section:** with `sectionName`, the named listener must exist in that parent, whether the Gateway's own listener or the ListenerSet's.
-- **Backends:** judged per rule against Services and EndpointSlices, as today. Rules are matched by index, and by `name` where the kind's rule carries one.
+- **Backends, qualified by port and protocol** (revision 1), for every route kind. Today's resolver counts every EndpointSlice of a Service whatever its port, so a UDP/53 backend on a Service that also serves TCP/80 reads available from TCP endpoints. A backendRef `(Service, port)` now resolves:
+  1. **The Service port:** the one whose `port` equals the backendRef's. None found: "Service has no port N", a backend issue.
+  2. **Its protocol** (TCP, UDP or SCTP; the default is TCP) **and its name.**
+  3. **The EndpointSlices** of that Service whose ports include an entry with that name and protocol. A named Service port matches a slice port by name; an unnamed one matches the slice's single unnamed port.
+  4. **The count:** only endpoints in those slices count.
+
+  Slices whose ports cannot be matched are not counted. An incomplete or unread EndpointSlices model leaves the backend Unknown, as today. This changes HTTPRoute's backend verdict for multi-port Services, where it was optimistic.
+- **Rules:** every returned rule is kept, whatever the version's schema allows (TLSRoute's alpha shapes, §1). Rules are matched by index, and by `name` where the kind's rule carries one.
 
 **Rule shape per kind:**
 
@@ -161,7 +184,7 @@ The controller's Accepted condition stays authoritative:
 |---|---|---|---|
 | HTTPRoute | yes | path and method (unchanged) | method and path, or "every request" |
 | GRPCRoute | yes | service and method | the service and method, or "every call" |
-| TLSRoute | yes, required | none | "SNI ‹hostnames›", one rule |
+| TLSRoute | as returned: required in v1 and v1alpha3, optional in v1alpha2 (none reads "any SNI") | none | "SNI ‹hostnames›" per returned rule; never assumes one rule |
 | TCPRoute, UDPRoute | none | none | "every connection on ‹listener› ‹port›" |
 
 Fingerprints (`RuleFingerprints`) cover the kind and each kind's match fields. L4 rules fingerprint their backends only.
@@ -171,7 +194,7 @@ Fingerprints (`RuleFingerprints`) cover the kind and each kind's match fields. L
 Each piece of evidence explains the controller's status and never replaces it.
 
 **allowedRoutes, per listener:**
-- **Namespaces:** Same, All or Selector, against the route's namespace labels.
+- **Namespaces:** Same, All or Selector, against the route's namespace labels. A selector is evaluated only on a complete, current namespaces read; otherwise "namespace labels not established" (revision 1).
 - **Kinds:** the listener's `status.supportedKinds` when reported, otherwise its declared `allowedRoutes.kinds`, otherwise the protocol's conventional kinds:
   - HTTP and HTTPS: HTTPRoute, GRPCRoute;
   - TLS: TLSRoute;
@@ -187,7 +210,8 @@ Each piece of evidence explains the controller's status and never replaces it.
   - `from` = the route's (or Gateway's, or ListenerSet's) group, kind and namespace;
   - `to` = the target's group and kind, and its name when set.
 - A grant to a Gateway is not counted for its ListenerSets (§1).
-- The controller's ResolvedRefs (RefNotPermitted) stays authoritative. A ResolvedRefs True with no matching grant, or the reverse, is said as a disagreement.
+- The controller's ResolvedRefs (RefNotPermitted) stays authoritative.
+- **A disagreement is said only on complete evidence** (revision 1): "ResolvedRefs True, but no ReferenceGrant allows it" needs a complete, current, untruncated referencegrants read. Otherwise the grant evidence is "not established", and nothing disagrees.
 
 **Supported features.** When the parent's GatewayClass lists `status.supportedFeatures`:
 - a ListenerSet, or a route of a kind the class does not list (by §1's names), carries "the class's controller does not declare support for TLSRoute";
@@ -212,16 +236,30 @@ Nothing in the experimental group is watched or judged.
 | Part | Acquisition | Counted entity | Dependencies | Notifications |
 |---|---|---|---|---|
 | `gateway/gateways` (changed) | watch, as today | Gateway UID | gatewayclasses | faults, as today |
-| `gateway/listenersets` (new) | watch | ListenerSet UID | gateways, namespaces | faults |
-| `gateway/routes` (changed) | watch, five route kinds | the kind-qualified route UID | gateways, listenersets, services, endpointslices, referencegrants, namespaces | as today |
+| `gateway/listenersets` (new) | watch | ListenerSet UID | gateways, gatewayclasses, namespaces | faults |
+| `gateway/routes` (changed) | watch, five route kinds | the kind-qualified route UID | gateways, gatewayclasses, listenersets, services, endpointslices, referencegrants, namespaces | as today |
 
-**Projections:**
-- **ListenerSets and routes** keep spec and status, with `managedFields` and annotations dropped.
-- **ReferenceGrants** keep `from` and `to` whole.
-- **Namespaces** now keep their labels, for the selectors. Namespaces are few, and the labels are kept whole.
-- **Raw-against-projected equality** is tested for every field the rules read.
+**Projections** (revision 1: purpose-built, never the whole object). Each keeps the identity and comparison facts whole, and caps only display lists, after classification and fingerprinting over the whole input:
+- **Gateways:**
+  - spec: class, listeners (name, hostname, port, protocol, TLS mode and certificateRef identities, allowedRoutes whole) and allowedListeners whole;
+  - status: conditions, listeners' status (conditions, supportedKinds, attachedRoutes), addresses (capped at 8 for display) and attachedListenerSets.
+- **ListenerSets:** parentRef, listeners as above, status conditions and listeners' status.
+- **Routes:**
+  - parentRefs whole;
+  - hostnames (capped at 16 for display, with the count);
+  - per rule: name, backendRefs whole (group, kind, namespace, name, port, weight), and matches (capped at 8 for display; fingerprinted whole at projection);
+  - status.parents whole (parentRef, controllerName, conditions with messages clipped to 512 bytes).
+- **GatewayClasses:** controllerName, conditions and supportedFeatures names.
+- **ReferenceGrants:** `from` and `to` whole.
+- **Namespaces:** now keep their labels, for the selectors.
+- **Equality:** raw-against-projected equality is tested for every field the rules read.
 
-**Dependency completeness.** A route whose parent kind is not served reads "parent not readable" (Unknown), never "parent missing", and the same holds for an unread namespaces model.
+**Dependency completeness: only a complete, current read proves absence** (revision 1). A negative claim needs a Live, complete and untruncated read of the kind it is about:
+- "parent not found", "no listener named X";
+- "no ReferenceGrant allows it";
+- "the namespace's labels do not match".
+
+Every other read state makes the evidence "not established" (Unknown), never negative: not served, forbidden, checking, stale (the last good model) or truncated by the budget. A failure the controller itself reports in status (an Accepted or ResolvedRefs False) is still judged whatever the dependencies' state, because it is proven by the object read.
 
 **Clocks:** only the existing Gateway grace.
 
@@ -230,7 +268,25 @@ Nothing in the experimental group is watched or judged.
 - `namespaces` gains no new gate: it is already watched.
 - `referencegrants` opens only when gateways are served.
 
-**Budget:** five new watches (listenersets, grpcroutes, tlsroutes, tcproutes, udproutes) plus referencegrants, each projected. Clusters without these CRDs read Absent, at no cost.
+**Budget** (revision 1): per cluster, each kind admitted in key order (namespace/name) within its bytes. Past its budget a kind reads truncated: its counts become lower bounds, and every join through it is incomplete, so not established.
+
+| Kind | Budget | MaxObject | Roughly holds |
+|---|---|---|---|
+| gatewayclasses | 64 KiB | 4 KiB | 50 classes |
+| gateways | 256 KiB | 16 KiB | 100 Gateways of 10 listeners |
+| listenersets | 256 KiB | 16 KiB | 150 ListenerSets |
+| httproutes | 1 MiB | 16 KiB | 1,000 routes of about 1 KiB |
+| grpcroutes, tlsroutes | 256 KiB each | 16 KiB | 250 routes each |
+| tcproutes, udproutes | 128 KiB each | 8 KiB | 250 routes each |
+| referencegrants | 128 KiB | 4 KiB | 400 grants |
+| namespaces (labels added) | 256 KiB | 4 KiB | 1,000 namespaces with labels |
+
+- **Worst case:** about 2.7 MiB per cluster at every budget's limit, and about 16 MiB across the six-cluster fleet. Typical clusters hold a few kilobytes.
+- **Retained versus transient:** the budget bounds the retained model. List pages during a relist are transient and not budgeted.
+- **The load test** (healthsrc `TestLoad`) is extended with a Gateway fixture at about 500 routes and 50 ListenerSets per cluster. It reports steady retained heap and peak separately, before and after.
+- **A sizing test** measures the projection of a maximal route, ListenerSet and Gateway against their MaxObject.
+
+Clusters without these CRDs read Absent, at no cost.
 
 ## 9. What Klyx shows
 
@@ -247,7 +303,7 @@ Nothing in the experimental group is watched or judged.
 - an L4 route shows its listener and port instead of paths.
 
 **Topology and data path:**
-- one lane per attachment (route, parent and section);
+- one lane per attachment, keyed by the full attachment identity (§5: the route, and the parent with its section and port);
 - L4 lanes and rails draw route, backends and rule (§5's table), with no match step.
 
 **Metrics** stay protocol-qualified:
@@ -264,7 +320,15 @@ Connection metrics for L4 are not in S7.
 - listener status parsing and the Gateway listener rule;
 - ListenerSet verdicts and precedence;
 - `allowedListeners` (None, Same, All, Selector), agreeing with the controller and disagreeing;
-- route attachments per parentRef (Gateway and ListenerSet parents, section and port, two sections to one Gateway);
+- route attachments per parentRef (Gateway and ListenerSet parents; two sections, and two port-only references, to one Gateway);
+- parent status by the expected controller:
+  - a recreated Gateway with the retired controller's Accepted True beside the current one's False;
+  - the class unread;
+  - several entries;
+- completeness: complete absence, forbidden, stale and truncated reads of the parent, grant and namespace kinds, each never negative, while controller-reported failures are still judged;
+- port- and protocol-qualified backends: a Service with UDP/53 and TCP/80 whose only ready endpoints are TCP, so the UDP backend is not available;
+- TLSRoute's v1alpha2 shape: no hostnames and several rules, read through v1;
+- the budget: a truncated route kind makes its joins not established, and the sizing test;
 - each route kind's rule shape and fingerprint;
 - `allowedRoutes` kinds (supportedKinds, declared, conventional) and namespaces;
 - ReferenceGrants, including non-inheritance for ListenerSets;
@@ -314,3 +378,16 @@ Connection metrics for L4 are not in S7.
 - **S7b:** §5, §6 and §7, §8's route kinds and referencegrants, and §9's routes, topology and metrics; the L4, grant and feature fixtures; parity for the L4 route.
 
 Each stage has its own gates and implementation review.
+
+## 13. Revision 1: Codex's design review of 7fc7f82
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Route status needs controller ownership as well as parent identity | §5: the expected controller is the parent's GatewayClass `controllerName` (via the parent Gateway for a ListenerSet); only its entry is judged; other controllers' entries are shown, not judged; an unestablished controller is Unknown. GatewayClasses join the dependencies (§8). |
+| 2 | Model absence is not evidence | §8: only a complete, current, untruncated read proves absence (parent, listener, grant, namespace labels); any other read is "not established". Controller-reported failures are still judged. §4, §5 and §6 apply it; §10 tests each read state. |
+| 3 | Today's backend aggregation cannot establish L4 availability | §5: backends resolve through the Service port, its protocol and name, to the EndpointSlices whose ports match. This applies to every route kind, and changes HTTPRoute for multi-port Services. §10 tests the UDP/53 with TCP/80 case. |
+| 4 | The attachment identity dropped the port | §5: the full normalised parentRef tuple, port included, is the attachment identity throughout (reduction, DTOs, pin and reveal, lane key). §9 and §10 add the port-only case. |
+| 5 | TLSRoute's alpha shapes differ | §1: the v1alpha2 and v1alpha3 shapes, and pass-through conversion. §5: every returned rule is kept, and hostnames are version-aware. §10 adds the v1alpha2 fixture. |
+| 6 | The retained-model budget was not specified | §8: purpose-built projections; numeric per-kind budgets and MaxObject; truncation making joins not established; the fleet worst case; retained versus transient; the load test and a sizing test. |
+
+Codex found the per-resource version table, the GRPCRoute addition and the S7a/S7b split reasonable.
