@@ -100,7 +100,11 @@ One client builder, `internal/safehttp`, serves every external endpoint. It is `
 
 **Proxied endpoints** (`serviceRef`, discovery):
 - They use the kubeconfig credentials only. `Authorization` from `auth` is never added: the apiserver would consume or reject it, and the kube credentials must never leave for an external origin.
-- `tenant` is sent as a header on the proxied request. That the apiserver's service proxy passes such a header on to the Service is to be verified on `kind-klyx` during the build; if it does not, a tenant on a proxied endpoint is a configuration error, said as one.
+- `tenant` is sent as a header on the proxied request. Verified on `kind-klyx` (v1.37, 2026-10-18) with an agnhost `netexec` Service behind `/api/v1/namespaces/<ns>/services/http:echo:80/proxy`:
+  - `X-Scope-OrgID: tenant-a` arrives at the Service as sent.
+  - An `Authorization` header from the client does not arrive.
+
+  An external credential on this path would therefore never reach the Service either, which is one more reason not to send it.
 - The apiserver proxy's own redirect handling is the apiserver's. Klyx adds the same response cap and the caller's timeout.
 
 **Isolation, stated as tests (§7):**
