@@ -338,6 +338,16 @@ func ProjectConfig(u *unstructured.Unstructured, kind string) *Config {
 // warningField is the type checker's own fieldRef form (S3a §8).
 var warningField = regexp.MustCompile(`^spec\.(validations|auditAnnotations|matchConditions|variables|mutations)\[[0-9]{1,4}\]\.(expression|messageExpression|valueExpression|applyConfiguration\.expression|jsonPatch\.expression)$`)
 
+// WarningField is a type-checking warning's fieldRef when it has the type
+// checker's own form, else "(unrecognised field)": the warning's text is
+// never shown (S3a §8).
+func WarningField(f string) string {
+	if warningField.MatchString(f) {
+		return f
+	}
+	return "(unrecognised field)"
+}
+
 // ProjectPolicy builds a policy's projection: counts and presence, never an
 // expression or a warning's text.
 func ProjectPolicy(u *unstructured.Unstructured, kind string) *Policy {
@@ -355,11 +365,7 @@ func ProjectPolicy(u *unstructured.Unstructured, kind string) *Policy {
 				break
 			}
 			m, _ := w.(map[string]any)
-			f := str(m, "fieldRef")
-			if !warningField.MatchString(f) {
-				f = "(unrecognised field)"
-			}
-			p.WarningFields = append(p.WarningFields, f)
+			p.WarningFields = append(p.WarningFields, WarningField(str(m, "fieldRef")))
 		}
 	}
 	if pk, ok, _ := unstructured.NestedMap(u.Object, "spec", "paramKind"); ok {

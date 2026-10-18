@@ -45,7 +45,7 @@ func TestBuildFacts_ValidatingWebhook(t *testing.T) {
 	if f, ok := factByLabel(facts, "cert-manager-webhook"); !ok || f.Value != "cert-manager/cert-manager-webhook:443 (Fail, 10s)" {
 		t.Fatalf("per-webhook row wrong: %+v", f)
 	}
-	if f, ok := factByLabel(facts, "ext.example.com"); !ok || f.Value != "https://hooks.example.com/validate (Ignore, 5s)" {
+	if f, ok := factByLabel(facts, "ext.example.com"); !ok || f.Value != "https://hooks.example.com (path set) (Ignore, 5s)" {
 		t.Fatalf("url webhook row wrong: %+v", f)
 	}
 }
@@ -90,7 +90,7 @@ func TestBuildFacts_MutatingWebhook_Reinvocation(t *testing.T) {
 	if f, ok := factByLabel(facts, "webhooks"); !ok || f.Value != "1" {
 		t.Fatalf("webhooks fact wrong: %+v", f)
 	}
-	if f, ok := factByLabel(facts, "sidecar-injector"); !ok || f.Value != "istio-system/istiod:443/inject (Ignore)" {
+	if f, ok := factByLabel(facts, "sidecar-injector"); !ok || f.Value != "istio-system/istiod:443 (path set) (Ignore)" {
 		t.Fatalf("per-webhook row wrong: %+v", f)
 	}
 	if f, ok := factByLabel(facts, "reinvocation"); !ok || f.Value != "IfNeeded" {

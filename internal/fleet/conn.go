@@ -198,6 +198,7 @@ type ClusterConn struct {
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
 	healthSyncHook func()                    // test seam: runs between reading state and handing it over
+	paramKindsKick func()                    // S3a: refreshes FactParamKinds (set once the Observer runs)
 	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
@@ -779,9 +780,10 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		wk, wd := healthsrc.Gateway(nd)
 		nk, ndoms := healthsrc.Native(nd)
 		vk, vd := healthsrc.Velero(nd)
+		ak, ad := healthsrc.Admission(nd)
 		// the shared network kinds (C3), once, gated by their consumers
-		kinds = append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...)
-		domains = append(append(append(append(domains, gd...), wd...), ndoms...), vd...)
+		kinds = append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...)
+		domains = append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
@@ -792,6 +794,9 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.health = o
 	c.mu.Unlock()
 	o.Start(ctx)
+	if c.dyn != nil {
+		c.startParamKinds(ctx, o) // S3a: FactParamKinds
+	}
 	c.attachIndex()
 	c.syncHealth()
 }
@@ -815,6 +820,12 @@ func (c *ClusterConn) syncHealth() {
 	}
 	word := connectionWord(st, reason)
 	h.SetConnection(word)
+	c.mu.RLock()
+	kick := c.paramKindsKick
+	c.mu.RUnlock()
+	if kick != nil {
+		kick() // the capability re-probe refreshes the param kinds too
+	}
 	if ix != nil {
 		ix.SetConnection(c.name, word) // the same word, in the same handoff
 	}
