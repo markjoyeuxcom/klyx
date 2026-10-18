@@ -1,6 +1,6 @@
 # Coverage S4: on-prem load balancing
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S4. It builds on C3 (S3a §2): the shared Services kind gains a third consumer. Revision 1 answers Codex's design review of b887823 (§10), revision 2 its re-review (§11), revision 3 the next (§12).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S4. It builds on C3 (S3a §2): the shared Services kind gains a third consumer. Revision 1 answers Codex's design review of b887823 (§10), revision 2 its re-review (§11), revision 3 the next (§12). Design accepted at 72cf021; implementation accepted at b5269f0 (§16).
 
 The roadmap's S4 (owner: "yes it should"):
 - **The diagnostic:** a provider-neutral one for a `LoadBalancer` Service with no assigned address. It names the requested class (`loadBalancerClass`) and the controller that should serve it, the allocation status, the Service's events, and how long it has been pending.
@@ -463,4 +463,16 @@ Codex judged the four stated deviations reasonable. Its five findings were fixed
 - golangci-lint: 0 issues;
 - the frontend: 2190 passed, tsc clean, eslint 0 errors.
 
-The parity gate and the four-way smoke are rerun at 8dcf3b4 below.
+**Reruns at 0b1a5ec** (the code of 8dcf3b4 plus this note):
+- the parity gate passes, both stages, clean (run c5669a647adb3d64);
+- the four-way native smoke passes 167/167 in every mode, clean, after re-applying lab-s1b, lab-s1c, lab-s2b and lab-s3a.
+
+## 16. Implementation review 2: Codex's re-review of 0b1a5ec, and ACCEPT
+
+Codex confirmed findings 2 to 5 resolved. One residual of finding 1 remained: the condition reasons inside the lens fields (a Service's Cilium condition, a pool's conflict) were not held to the token policy. `metav1.Condition` admits colons in a reason, so an IPv6 address could pass for one.
+
+- **The fix** (b5269f0): `lbEvidence` walks the lens fields and reduces every `reason` string, at any depth, to its identifier token.
+- **The regression:** Codex's probe, adopted. It fails on both the Service and the pool path with the walk removed.
+- **Gates:** race on appbridge ok; golangci-lint 0. The fix touches only Explain's evidence, which neither the parity gate nor the smoke exercises.
+
+**Codex ACCEPT at b5269f0, 2026-10-18:** all findings resolved, none remaining.
