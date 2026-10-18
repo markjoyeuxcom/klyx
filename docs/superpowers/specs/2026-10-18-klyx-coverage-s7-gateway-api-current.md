@@ -261,7 +261,7 @@ Nothing in the experimental group is watched or judged.
 
 Every other read state makes the evidence "not established" (Unknown), never negative: not served, forbidden, checking, stale (the last good model) or truncated by the budget. A failure the controller itself reports in status (an Accepted or ResolvedRefs False) is still judged whatever the dependencies' state, because it is proven by the object read.
 
-**Clocks:** only the existing Gateway grace.
+**Clocks:** none. Every Gateway API rule is status-driven, as the Gateway and route rules are today.
 
 **C3 (shared kinds):**
 - Services and EndpointSlices keep their gateway consumer.
