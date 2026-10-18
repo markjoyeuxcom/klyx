@@ -286,9 +286,9 @@ export function BackendChain({ config, w }: { config: string; w: AdmissionWebhoo
   ];
   if (!w.url) stations.push({ label: "endpoints", detail: b.state === "ready" ? `${b.clusterRouting} usable` : b.state === "terminating" ? `${b.terminating} terminating` : b.state === "unavailable" ? "none usable" : "unverified", aspect: svcState === "none" ? endpointsState : "checking" });
   return (
-    <div data-testid="admission-chain" role="list" aria-label={`Backend of ${w.name}`} style={{ display: "flex", alignItems: "flex-start", overflowX: "auto", padding: "4px 0 2px" }}>
+    <div data-testid="admission-chain" role="list" aria-label={`Backend of ${w.name}`} style={{ display: "flex", alignItems: "flex-start", padding: "4px 0 2px" }}>
       {stations.map((s, i) => (
-        <div key={s.label} role="listitem" style={{ display: "grid", justifyItems: "center", gap: 2, minWidth: 120, padding: "0 4px" }}>
+        <div key={s.label} role="listitem" title={`${s.label}: ${s.detail}`} style={{ display: "grid", justifyItems: "center", gap: 2, flex: "1 1 0", minWidth: 0, padding: "0 2px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 14, width: "100%",
             backgroundImage: "linear-gradient(var(--color-border-secondary), var(--color-border-secondary))", backgroundSize: i === stations.length - 1 ? "50% 1px" : i === 0 ? "50% 1px" : "100% 1px",
             backgroundRepeat: "no-repeat", backgroundPosition: i === 0 ? "right center" : i === stations.length - 1 ? "left center" : "center" }}>
@@ -296,7 +296,7 @@ export function BackendChain({ config, w }: { config: string; w: AdmissionWebhoo
               : <Aspect kind={s.aspect as never} size={10} label={`${s.label}: ${s.aspect}`} />}
           </div>
           <div className="t-legend" style={{ color: "var(--color-text-tertiary)" }}>{s.label}</div>
-          <div className="t-legend" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={s.detail}>{s.detail}</div>
+          <div className="t-secondary" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>{s.detail}</div>
         </div>
       ))}
     </div>

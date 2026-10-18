@@ -112,7 +112,11 @@ func BackendOf(w *Webhook, b Backends) Backend {
 	out.Selectorless = len(svc.Spec.Selector) == 0
 	switch {
 	case out.EndpointRouting > 0 && out.ClusterRouting > 0:
-		out.State, out.Label, out.Reason = BackendReady, "Backend ready", fmt.Sprintf("%d usable endpoints", out.ClusterRouting)
+		noun := "endpoints"
+		if out.ClusterRouting == 1 {
+			noun = "endpoint"
+		}
+		out.State, out.Label, out.Reason = BackendReady, "Backend ready", fmt.Sprintf("%d usable %s", out.ClusterRouting, noun)
 	case out.EndpointRouting > 0 || out.ClusterRouting > 0:
 		mode := "endpoint"
 		if out.ClusterRouting > 0 {

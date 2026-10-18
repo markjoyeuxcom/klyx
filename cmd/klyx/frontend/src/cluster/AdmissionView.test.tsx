@@ -17,7 +17,7 @@ const { AdmissionView, paramRefText, LIMITS } = await import("./AdmissionView");
 const rule = (role: string, label: string) => ({ included: role === "fault" || role === "degraded", role, label });
 const hook = (name: string, over: Partial<AdmissionWebhookDTO> = {}): AdmissionWebhookDTO => ({ name, failurePolicy: "Fail", failClosed: true, timeoutSeconds: 10,
   serviceNamespace: "sys", serviceName: "hook", servicePort: 443, caBundle: true, rules: [{ operations: ["CREATE"], groups: ["lab.klyx.dev"], versions: ["v1"], resources: ["widgets"] }],
-  ruleCount: 1, backend: { state: "ready", label: "Backend ready", reason: "1 usable endpoints", endpointRouting: 1, clusterRouting: 1, terminating: 0 }, role: "ok", ...over });
+  ruleCount: 1, backend: { state: "ready", label: "Backend ready", reason: "1 usable endpoint", endpointRouting: 1, clusterRouting: 1, terminating: 0 }, role: "ok", ...over });
 const config = (name: string, role: string, label: string, ws: AdmissionWebhookDTO[], over: Partial<AdmissionConfigDTO> = {}): AdmissionConfigDTO => ({
   uid: `uid-${name}`, gvr: "admissionregistration.k8s.io/v1/validatingwebhookconfigurations", name, kind: "Validating", generation: 1, webhookCount: ws.length,
   webhooks: ws, unavailable: 0, unverified: 0, rule: rule(role, label), ...over });
