@@ -94,7 +94,7 @@ func (s *IndexService) Search(ctx context.Context, query string, limit int) (Ind
 
 // readable: a kind state that holds searchable entries.
 var readable = map[string]bool{fleetindex.StateLive: true, fleetindex.StateStale: true, fleetindex.StateCapped: true,
-	fleetindex.StateOversize: true, fleetindex.StateWatchDenied: true}
+	fleetindex.StateOversize: true, fleetindex.StateWatchDenied: true, fleetindex.StatePartial: true}
 
 func searchDTO(res fleetindex.Result) IndexSearchDTO {
 	out := IndexSearchDTO{Hits: make([]IndexHitDTO, 0, len(res.Hits)), Total: res.Total, Coverage: make([]IndexClusterDTO, 0, len(res.Coverage))}

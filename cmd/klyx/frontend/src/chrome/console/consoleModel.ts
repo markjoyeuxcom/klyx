@@ -49,6 +49,7 @@ export function hitAspect(h: IndexHit): AspectKind {
 
 const STATE_WORD: Record<string, string> = {
   stale: "stale", capped: "capped", oversize: "stopped at an oversized object", watchDenied: "not followed",
+  partial: "partly indexed",
 };
 
 /** hitNote: namespace, the role's word, and the kind's state when not live. */
@@ -70,6 +71,8 @@ const KIND_GAP: Record<string, (entries: number) => string> = {
   watchDenied: () => "not followed (watch not permitted)",
   unsupported: () => "not served as metadata",
   stale: () => "stale",
+  // coverage S7a: the Observer's budget left objects of the kind out
+  partial: (n) => `partly indexed (${n.toLocaleString()} kept within Klyx's budget; more exist)`,
 };
 
 const usable = (word: string) => word === "connected" || word.startsWith("connected · ");

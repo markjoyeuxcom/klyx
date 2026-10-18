@@ -3,6 +3,7 @@ package fleetindex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -446,10 +447,14 @@ func (c *coord) visit(gen uint64, obs Observed, p planned) {
 	}
 }
 
-// statusOf is an Observer kind's state as the index's.
+// statusOf is an Observer kind's state as the index's. A live kind the
+// Observer's budget truncated is partial: its entries are a subset.
 func statusOf(st observe.KindState) KindStatus {
 	switch st.Coverage {
 	case observe.Live:
+		if st.Truncated {
+			return KindStatus{State: StatePartial, Err: fmt.Sprintf("%d left out by Klyx's budget for the kind", st.NotRetained)}
+		}
 		return KindStatus{State: StateLive}
 	case observe.Stale:
 		return KindStatus{State: StateStale, AsOf: st.LastGoodAt, Err: st.Err}

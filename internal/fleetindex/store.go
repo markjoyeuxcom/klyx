@@ -7,10 +7,14 @@ import (
 
 // Kind states (slice 9 note §2.8).
 const (
-	StateIndexing      = "indexing"    // the first read is in progress
-	StateLive          = "live"        // read, and following changes
-	StateCapped        = "capped"      // frozen at a cap
-	StateOversize      = "oversize"    // frozen at an object over the scanner's bounds
+	StateIndexing = "indexing" // the first read is in progress
+	StateLive     = "live"     // read, and following changes
+	StateCapped   = "capped"   // frozen at a cap
+	StateOversize = "oversize" // frozen at an object over the scanner's bounds
+	// StatePartial: an Observer kind its budget truncated (coverage S7a):
+	// read and followed, but the Observer left objects out, so the entries
+	// are a subset, never the whole kind.
+	StatePartial       = "partial"
 	StateDenied        = "denied"      // the list was refused (403)
 	StateWatchDenied   = "watchDenied" // the watch was refused after a good list
 	StateUnsupported   = "unsupported" // metadata unsupported (406)
