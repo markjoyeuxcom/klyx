@@ -424,3 +424,12 @@ The three previous findings are resolved, and all fifteen earlier probes pass. O
 - **The four-way native smoke:** 170/170 in all four modes. The tree was dirty only with this section; the labs were re-applied within the hour.
 - **`go test -race ./...`:** ok.
 - **golangci-lint:** 0 issues.
+
+## 18. ACCEPT
+
+Codex accepted the C2/S5 implementation at df4ba7d (handoff 3ea87a45, 2026-10-18), with no further findings. It verified aaa52d1..df4ba7d, re-ran the targeted S5 and review tests under `-race` in identity, fleet and appbridge, and found all sixteen probes passing:
+- the original twelve;
+- the next three;
+- the Linux probe.
+
+Codex did not re-run the native smoke or parity itself; the reported four-way smoke was 170/170 at afc3ff7. The owner's verdict is still to come.
