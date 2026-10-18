@@ -1,6 +1,6 @@
 # Coverage C2 and S5: management is not health; workload identity
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), contract C2 and slice S5. C2 lands first, as the contract S5 uses.
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), contract C2 and slice S5. C2 lands first, as the contract S5 uses. Revision 1 answers Codex's design review of 9b6f020 (§10).
 
 The roadmap's S5:
 - **Provider adapters, non-exhaustive:** EKS IRSA; EKS Pod Identity (in-cluster evidence only; EKS Auto Mode has it without a user-installed agent DaemonSet, C2); Azure Workload Identity (its label matters only where Azure is opted in); GKE (the IAM service account annotation, while direct federation needs none).
@@ -78,92 +78,137 @@ Read at: amazon-eks-pod-identity-webhook v0.6.17, eks-pod-identity-agent v0.2.5,
 - **EKS Pod Identity** declares nothing on the ServiceAccount; it is said so every time ("associations live in AWS").
 - Its `automountServiceAccountToken` is shown; it does not govern the webhooks' own token volumes (an inference from their explicit projected volumes, said as such).
 
-**3.2 What a pod was given,** per container, from the pod's current spec:
-- **The mechanism**, by its env and token volume together:
-  - **IRSA:** `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`, and a mounted projected token volume whose path holds that file;
-  - **Pod Identity:** `AWS_CONTAINER_CREDENTIALS_FULL_URI` and `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, and the token volume (audience `pods.eks.amazonaws.com`), plus the pod label when present;
-  - **Azure:** `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE` and a token volume with audience `api://AzureADTokenExchange` (name by prefix);
-  - **partial:** some of a mechanism's env without the rest, or env without a token volume: "configured in the pod spec, not in the webhook's shape";
-  - **none.**
-- **Exclusions said,** each from its own evidence: a container named in `skip-containers` (comma on AWS, semicolon on Azure); an AWS opt-out label; an Azure pod without the exact `"true"` label; a `hostNetwork` pod on GKE.
-- **Origin is never claimed.** The webhook, the pod template and another tool can all produce the same spec, so Klyx says what the pod has, not who wrote it.
+**3.2 What a pod was given** (revision 1), per container, from the pod's current spec:
+- **A mechanism is recognised only through the container's own token-file chain:** its file variable's literal value resolves, through one of that container's `volumeMounts` (`mountPath`, and `subPath` where set), to a `serviceAccountToken` entry of a projected volume of the pod, with that entry's `path` and the mechanism's audience. The three chains:
+  - **IRSA:** `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE`; any audience, compared with the declared one (default `sts.amazonaws.com`);
+  - **Pod Identity:** `AWS_CONTAINER_CREDENTIALS_FULL_URI` and `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`; audience `pods.eks.amazonaws.com`; the pod label is evidence when present;
+  - **Azure:** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_FEDERATED_TOKEN_FILE`; audience `api://AzureADTokenExchange`; the volume found by its chain, whatever its name (old name or the hashed one).
+- **Partial:** some of a mechanism's variables without the rest, or a file variable whose path resolves to no mounted token entry, to an unmounted volume, to another audience, or to another file. Each says which link is missing.
+- **Unresolved, never partial or matched:** a named variable set by `valueFrom`, one holding `$(VAR)` expansion, an oversized value (§6), or a mount Klyx cannot resolve. `envFrom` and the image's own environment can supply any of these variables invisibly; when a mechanism's variable is absent from `env`, the reading says "not in the pod spec's env; envFrom sources and the image's defaults are not read".
+- **Both AWS mechanisms in one container:** both are reported; which one the SDK uses is never inferred.
+- **Exclusions,** each from its own evidence: a container named in `skip-containers` (comma on AWS, semicolon on Azure); the AWS opt-out label; an Azure pod without the exact `"true"` label; a `hostNetwork` pod on GKE.
+- **Origin is never claimed.** The webhook, the pod template and another tool can all write the same spec, so Klyx says what the pod has, not who wrote it.
 
-**3.3 The comparison,** current against current, per container and adapter:
+**3.3 The comparison** (revision 1), current against current, per container and adapter. It names exactly what it compared:
 
-| Pod has | ServiceAccount declares now | Reading |
+| Pod has (a complete chain) | ServiceAccount declares now | Reading |
 |---|---|---|
-| IRSA with role X | role X | "Matches the ServiceAccount's role." |
-| IRSA with role X | role Y | "Differs: the pod carries X; the ServiceAccount now declares Y. Pods take identity when created; one created before the change keeps X. A value set in the pod template also wins over the webhook." |
-| IRSA with role X | no role | "Configured with X; the ServiceAccount declares no role now (removed later, set in the template, or a self-hosted webhook's ConfigMap)." |
-| Pod Identity | anything | "EKS Pod Identity configured. Its association, and the role, live in AWS: not visible." With a declared IRSA role: "The webhook prefers Pod Identity over IRSA." |
-| none | role Y | Each evidenced exclusion first (a skipped container, the opt-out label); otherwise "Not configured: the pod was created at T. A pod created before the annotation keeps none; when the annotation was set is not visible." |
-| Azure client X | client X | "Matches." |
-| Azure client X | client Y | "Differs" (as IRSA). |
+| IRSA, role X, audience A | role X, audience A | "Role and audience match the ServiceAccount." |
+| IRSA, role X | role Y (or another audience) | "Differs: the pod carries X; the ServiceAccount now declares Y. Pods take identity when created; one created before the change keeps X. A value set in the pod template also wins over the webhook." |
+| IRSA, role X | no role | "Configured with X; the ServiceAccount declares no role now (removed later, set in the template, or a self-hosted webhook's ConfigMap)." |
+| Pod Identity | anything | "EKS Pod Identity configured. Its association and role live in AWS: not visible." With a declared IRSA role: "The webhook prefers Pod Identity over IRSA when both apply." |
+| none | role Y | Each evidenced exclusion first; otherwise "Not configured in the pod spec: it was created at T. A pod created before the annotation keeps none; when the annotation was set is not visible." Plus the envFrom/image limit. |
+| Azure, client X, tenant T | client X and tenant T | "Client ID and tenant match." |
+| Azure, client X, tenant T | client X, no tenant declared | "Client ID matches; the tenant is the webhook's default, which is not visible." |
+| Azure, client X or tenant T | another client or tenant | "Differs" (as IRSA), naming which. |
 | none, Azure declared | client Y | Without the pod label: "Not opted in: the ServiceAccount annotation alone does nothing; the pod needs `azure.workload.identity/use: "true"`." With it: as IRSA's "not configured". |
-| (GKE) | linked GSA G | "Linked to G for impersonation; the IAM binding is not visible." Plus the node: whether it carries the metadata-server label, and its metadata-server pod. |
+| partial or unresolved | anything | The missing link or the unresolved value, and no comparison. |
+| (GKE) | linked GSA G, or none | "Linked to G for impersonation; the IAM binding is not visible", or "No link declared; direct principal access may still be granted in IAM, not visible." Plus the node (3.4). |
 
-**Never inferred:** when an annotation changed (managedFields times cover other changes), whether a role trusts the cluster, whether an association exists, whether credentials work. The limits block says each, every time.
+The comparison runs on the exact retained values (§6), never on display clips.
+
+**Never inferred:** when an annotation changed (managedFields times cover other changes), whether a role trusts the cluster, whether an association exists, whether credentials work, which credential the SDK picks. The limits block says each, every time.
 
 **3.4 The node side** (C2), for a pod using an AWS or GKE mechanism:
-- **Pod Identity:** the pod's node. Auto Mode (its label): "built into EKS Auto Mode; health not directly observed". Otherwise the agent DaemonSet's pod on that node: ready, not ready (a fault the workload will feel, said as evidence, not a verdict), or none ("no Pod Identity agent pod on this node"). Fargate and Windows nodes: "EKS Pod Identity is not supported on this node" (from the node's labels).
-- **GKE:** the node's metadata-server label, and its `gke-metadata-server` pod, ready or not.
-- **The webhook** (`pod-identity-webhook`, `azure-wi-webhook-mutating-webhook-configuration`): present or not, how it is served, and a link to its Admission verdict when Service-backed (§2's table). Azure's `failurePolicy: Fail` is said: while its backend is unavailable, labelled pods cannot be created.
+- **Pod Identity:** the pod's node. Auto Mode (its label): "built into EKS Auto Mode; health not directly observed". Otherwise the agent DaemonSet's pod on that node: ready, not ready (said as evidence the workload will feel, not a verdict), or none ("no Pod Identity agent pod on this node"). Fargate and Windows nodes, from their labels: "EKS Pod Identity is not supported on this node".
+- **GKE:** the node's metadata-server label. On a Linux node, its `gke-metadata-server` pod, ready or not. On a Windows node the metadata server is a native Windows service, so no pod is expected: "runs as a Windows service; not directly observed".
+- **The webhook** (`pod-identity-webhook`, `azure-wi-webhook-mutating-webhook-configuration`): present or not, how it is served, and a link to its Admission verdict when Service-backed (§2's table). Azure's consequence is worded from the configuration Klyx read (S3a's projection): its failure policy and whether object or namespace selectors narrow it. For example: "failurePolicy Fail: while its backend is unavailable, pod creations this webhook matches are refused".
 
-## 4. The ESO chain: who authenticates
+## 4. The ESO chain: who authenticates (revision 1)
 
-**4.1 From a store** ("Authenticates as", in the ESO store inspector):
-- **AWS:** `jwt.serviceAccountRef`: that ServiceAccount (the namespace resolved as §1 says), and whether it carries `eks.amazonaws.com/role-arn` (without it ESO refuses: "an IAM role must be associated", from its source) and that ESO mints its token itself, so Pod Identity cannot apply. `secretRef`: "static credentials from a Secret, not workload identity" (the Secret is never read). None: "the ESO controller's own identity", then the controller's chain (4.3).
-- **Azure:** `WorkloadIdentity` with `serviceAccountRef`: that ServiceAccount and its client ID (or the `authSecretRef` one; both set is ESO's own error). Without it: the controller's own env, which must hold all three variables (4.3). `ManagedIdentity` and `ServicePrincipal`: named, not followed.
-- **GCP:** `workloadIdentity.serviceAccountRef` or `workloadIdentityFederation.serviceAccountRef`: that ServiceAccount and its linked GSA if any. `secretRef`: static. None: the controller's ADC.
-- **Validation ESO enforces, said when violated:** a namespaced store's `serviceAccountRef.namespace` must be empty or its own.
-- **A ClusterSecretStore without a namespace** resolves per ExternalSecret: "each ExternalSecret's own namespace", never one guessed ServiceAccount.
+**4.1 The decision table, from ESO's source per provider and mode.** Each store reads as a base credential and then any requested principal on top of it. A path Klyx cannot resolve says so, and never guesses.
 
-**4.2 From a ServiceAccount:** the stores whose `serviceAccountRef` names it (a SecretStore in its namespace; a ClusterSecretStore naming its namespace, or naming none, said as "for ExternalSecrets in this namespace"). If it is the ESO controller's ServiceAccount, also every store with no auth: they authenticate as it.
+| Provider, mode | Base credential | Requested principal | Unresolved or refused |
+|---|---|---|---|
+| AWS, `auth.jwt.serviceAccountRef` | that ServiceAccount (namespace as §1); ESO mints its token, so Pod Identity cannot apply; its `eks.amazonaws.com/role-arn` | `role`, then each of `additionalRoles` (AssumeRole on top, in order) | the ServiceAccount lacks `role-arn`: ESO refuses ("an IAM role must be associated") |
+| AWS, `auth.secretRef` | static keys from a Secret (never read) | `role`, `additionalRoles` | values unread |
+| AWS, no auth | the controller's credential chain (4.2), a configured source, not a proven principal | `role`, `additionalRoles` | the chain's effective credential is not inferred |
+| Azure, `WorkloadIdentity`, `useAzureSDK: true` | the ServiceAccount (`serviceAccountRef`): client ID from its annotation; tenant from the store's `tenantId`, then the ServiceAccount's | none | without `serviceAccountRef`: the controller's environment (4.2) |
+| Azure, `WorkloadIdentity`, legacy SDK | the ServiceAccount: client ID from `authSecretRef.clientId` (a Secret, unread) or its annotation; tenant from `authSecretRef.tenantId`, then the store, then the ServiceAccount, then the controller's env | none | a Secret-sourced ID is unresolved; the legacy duplicate-client-ID refusal depends on the Secret's value, so it is never claimed |
+| Azure, `ManagedIdentity`, `ServicePrincipal` | named, not followed | none | |
+| GCP, `secretRef` | static (never read) | none | |
+| GCP, `workloadIdentity` | the ServiceAccount (`serviceAccountRef`) | its linked GSA (`iam.gke.io/gcp-service-account`) if any, else the federated principal | |
+| GCP, `workloadIdentityFederation` (v1 only) | `serviceAccountRef`, `credConfig` (a ConfigMap, unread) or `awsSecurityCredentials` | `gcpServiceAccountEmail` when set (it overrides the ServiceAccount's linked GSA), else that link | credConfig and AWS credentials unresolved |
+| GCP, no auth | the controller's ADC (4.2) | none | not inferred |
+| any other provider | | | "not read by Klyx's identity chain" |
 
-**4.3 The controller's identity:** the controller Deployment (its pod template's ServiceAccount), and its running pods read as §3.2 does: what they were given, compared with that ServiceAccount (§3.3). An Azure store relying on the controller's env reads "the controller pods lack AZURE_CLIENT_ID (or the others): ESO will fail this store" only from a complete read of those pods.
+**Validation ESO enforces, said when violated:** a namespaced store's `serviceAccountRef.namespace` must be empty or its own. A ClusterSecretStore with no namespace resolves per ExternalSecret ("each ExternalSecret's own namespace"), never one guessed ServiceAccount.
 
-**Version and adapters:** the stores come from the ESO lens's kinds (`external-secrets.io/v1`, or `v1beta1` where only that is served; the paths are the same). Other providers (Vault and the rest) are named "not read by Klyx's identity chain".
+**4.2 Which controller handles a store, and its identity** (revision 1). ESO processes a store when the store's `spec.controller` is empty or equals the controller's `--controller-class` (default `default`; ESO `ShouldProcessStore`, `--controller-class` in cmd/controller/root.go). Chart names and namespaces are configurable. So:
+- **Candidates:** Deployments labelled `app.kubernetes.io/name=external-secrets` (the chart's controller selector label; the webhook and cert controller carry `-webhook` and `-cert-controller`) in any namespace, plus the capability's conventional `external-secrets/external-secrets`. At most 3 candidates are read, and more are said.
+- **Applicable:** a candidate whose class (its container's `--controller-class` argument, else `default`) the store accepts. An empty `spec.controller` accepts every candidate. A class set by environment or a config file is unresolved.
+- **Exactly one applicable candidate:** its running pods, owned by its current ReplicaSets (fenced by owner UID), grouped by each pod's own `serviceAccountName` (a rolling update can run two). Each group's pods are read as §3.2 does.
+- **None, several, or unresolved:** "the controller handling this store is not resolved (N candidates)". The subject is never named, and the inverse join (4.3) applies the same rule.
+- **The controller's environment** (Azure without `serviceAccountRef`): a variable absent from those pods' `env` reads "not in the pod spec; envFrom and the image's environment are not read", never "ESO will fail".
+
+**4.3 From a ServiceAccount:** the stores whose `serviceAccountRef` names it, by the table's rules (a SecretStore in its namespace; a ClusterSecretStore naming its namespace, or naming none, said as "for ExternalSecrets in this namespace"). If it is the ServiceAccount of a resolved controller's pods, also every store that controller handles with no auth: "authenticate through this ServiceAccount's credential chain".
+
+**Version:** stores come from the ESO lens's kinds (`external-secrets.io/v1`, or `v1beta1` where only that is served; the paths are the same, and v1-only fields are absent there).
 
 ## 5. What Klyx shows
 
 No new lens. Three inspector blocks, each read when its inspector opens and again on request:
 - **ServiceAccount** (the generic inspector): "Identity":
   - its declarations per adapter;
-  - its pods (up to 50, newest first, "+N not read" past that), each with its reading;
+  - its pods (§6's page, each with its reading);
   - the node and webhook side;
   - the ESO stores that use it;
   - the limits.
 - **Pod** (the Pods lens inspector): "Identity": its own containers' readings against its ServiceAccount's current declarations, and its node's side.
-- **ESO store** (the External Secrets lens inspector): "Authenticates as": the subject, the chain to it, and a link to that ServiceAccount's identity.
+- **ESO store** (the External Secrets lens inspector): "Authenticates as": the base credential, any requested principal, the controller resolution, and a link to the ServiceAccount's identity.
 
 **The limits, always said:**
 - cloud trust, associations and permissions are not visible;
 - identity is given at pod creation, and when an annotation changed is not visible;
 - a value in the pod spec wins over the webhook, and Klyx cannot tell which wrote it;
+- envFrom sources and the image's environment are not read;
+- which credential the SDK picks is not inferred;
 - only EKS, Azure and GKE are read.
 
-## 6. The source contract (C1) and the reads
+## 6. The source contract (C1), the reads and their bounds (revision 1)
 
 | Read | How | Identity | Gaps |
 |---|---|---|---|
 | The ServiceAccount | GET, fenced by the UID the inspector holds (another UID: "replaced") | its UID | forbidden or failed: "unreadable", never "no identity" |
-| Its pods | LIST in its namespace, `fieldSelector=spec.serviceAccountName=<name>`, limit 50 | each pod's UID | a continued list: "+N not read"; forbidden: unreadable |
+| Its pods | LIST in its namespace, `fieldSelector=spec.serviceAccountName=<name>`, `limit=50` | each pod's UID | forbidden: unreadable. With `continue` set: "more pods not read". The count is unknown, because the API omits `remainingItemCount` for selected lists. |
 | One pod (the Pods lens) | GET, fenced by UID; then its ServiceAccount (GET) | UIDs | as above |
 | Nodes | the Observer's nodes model (labels, providerID), no read | node name | not live: "node evidence unverified" |
-| The agent and the metadata server | the agent DaemonSet (GET) only when an AWS mechanism is in play; its pods and the metadata-server pods from the Observer's pods model | names | not read: unverified |
-| The webhook configurations | the Observer's admission kinds (S3a) | their names | not read: unverified |
+| The agent and the metadata server | the agent DaemonSet (GET), only when an AWS mechanism is in play; its pods and the metadata-server pods from the Observer's pods model | names | not read: unverified |
+| The webhook configurations | the Observer's admission kinds (S3a's projection) | their names | not read: unverified |
 | The ESO stores | the Observer's ESO kinds, when ESO is installed | store UIDs | not complete: "stores unverified" |
-| The ESO controller | the Deployment (GET) and its pods (LIST by its selector, limit 10) | UIDs | as above |
+| The ESO controllers | candidate Deployments (LIST by label, limit 3; GET the conventional one); for the one applicable controller, its pods (LIST by its selector, limit 10) and their ReplicaSet owners (from the Observer's ReplicaSets model) | UIDs | a gap leaves the subject unresolved |
 
-**Clock:** none. A read says when it was taken; a newer read replaces it, fenced by cluster, ServiceAccount or pod UID and request (the render-time fence of S3a's param check).
+**Order:** the API returns a page in its own key order (by name), not by age. The page is the first 50 by name; Klyx sorts within it by age and says so ("50 of more, by name; newest first within them").
 
-**Budget:** no new watches and no retained model. Per inspector read: at most 1 ServiceAccount GET, 1 pods LIST (50), 1 DaemonSet GET, 1 Deployment GET and 1 pods LIST (10).
+**Bounds on content**, each with its cut said:
+- containers and init containers read per pod: 16;
+- identity variables per container: the named set only (§3.2);
+- a retained identity value: 512 bytes. Past that the value is "oversized", the mechanism is unresolved, and nothing is compared;
+- projected volume sources per pod: 16;
+- ESO stores listed per ServiceAccount: 20;
+- the DTO: 256 KB, past which pods are dropped from the end with the count said.
 
-## 7. Sensitive data
+The comparison uses exact retained values; display clipping comes after.
 
-- **Env:** only the named identity variables (§3.2, and the region and STS ones) are kept, with their values: role ARNs, client and tenant IDs, token file paths and the credentials URI are identifiers, not secrets. Every other variable is dropped when the pod is parsed, name and value; a named variable set from a Secret or ConfigMap (`valueFrom`) reads "set from a Secret/ConfigMap (not read)".
-- **Never read:** token contents (Klyx never reads a mounted file or calls TokenRequest), Secret values, `authSecretRef`/`secretRef` contents.
-- **AI and chat:** nothing of S5 is sent; there is no Explain over these reads. The pod and ServiceAccount Explain targets keep their existing projections, which carry no env.
+**Clock:** none. A read says when it was taken. A newer read replaces it, fenced by cluster, UID and request (the render-time fence of S3a's param check).
+
+**Budget:** no new watches and no retained model. Per inspector read, at most:
+- 1 ServiceAccount GET;
+- 1 pods LIST of 50;
+- 1 DaemonSet GET;
+- 1 Deployment LIST of 3 and 1 GET;
+- 1 pods LIST of 10.
+
+## 7. Sensitive data (revision 1)
+
+**A narrow, recorded exception to the roadmap's "never read env values":** the named identity variables of §3.2 (with the region and STS ones) are read with their values. Every other variable is dropped at parse time, name and value. `envFrom` sources, `valueFrom` targets, Secret and ConfigMap contents, mounted files and token contents are never read; Klyx never calls TokenRequest.
+
+**A variable's name never vouches for its value.** A hand-set value is kept by the webhooks, so an allowlisted variable can carry credentials. Before a value reaches the DTO:
+- **URL-valued** (`AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AZURE_AUTHORITY_HOST`): the outbound URL policy (`urlscrub.Field`). User info is removed, and an undelimitable value is withheld. A query string or a path beyond the documented shape reads "custom path (not shown)".
+- **Shaped identifiers:** `AWS_ROLE_ARN` must match the ARN form (`arn:aws[a-z-]*:iam::<12 digits>:role/...`); `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` a GUID (or, for the tenant, a domain name); a region a region token; a file path an absolute path. Anything else reads "unexpected value (not shown)", and the comparison uses its exact bytes only for equality, never displaying them.
+- **The same policy** applies to the ServiceAccount's annotations and the ESO store fields shown.
+
+**AI and chat:** nothing of S5 is sent; there is no Explain over these reads. The pod and ServiceAccount Explain targets keep their existing projections, which carry no env.
 
 ## 8. Tests, lab, parity, smoke
 
@@ -173,15 +218,20 @@ No new lens. Three inspector blocks, each read when its inspector opens and agai
   - Pod Identity precedence and the optional v0.6.15 label;
   - GKE `hostNetwork`;
   - the C2 table's rows, including an observed agent not ready on a managed cluster (never suppressed);
-  - every ESO subject case of §4 (each provider, store kind and namespace rule, ESO's refusals).
-- **`fleet`:** the reads with fake clients: the UID fence, the field selector, the cap, forbidden as unreadable.
-- **appbridge:** the DTO, and a literal-needle test that no non-identity env value, Secret value or token content crosses.
+  - every ESO subject case of §4 (each provider, store kind and namespace rule, ESO's refusals);
+  - revision 1:
+    - the chains: a wrong file, an unmounted volume, another audience, a `subPath`, `valueFrom`, `$(VAR)` expansion, an oversized value, envFrom-only, an Azure tenant mismatch, and both AWS mechanisms in one container;
+    - ESO's overrides: `useAzureSDK` true and legacy, a Secret-sourced client ID left unresolved, `gcpServiceAccountEmail` over the linked GSA, and AWS `role` and `additionalRoles` on each base;
+    - the controller: one, none, several and unresolved candidates, `spec.controller` classes, and a rolling update with two ServiceAccounts;
+    - unexpected values: an ARN, GUID, URL with user info and custom path, in allowed variables, read as not shown.
+- **`fleet`:** the reads with fake clients: the UID fence, the field selector, the cap, a continuation without `remainingItemCount` (more, count unknown), the content bounds, and forbidden as unreadable.
+- **appbridge:** the DTO and its 256 KB bound, and a literal-needle test: no non-identity env value, Secret value or token content crosses, and no credential planted in an allowed variable (URL user info, a query) crosses either.
 - **Frontend:** the three blocks, their limits, and a fenced reply.
 - **The lab (`lab-s5`, kind-klyx), fixtures per C6** (the webhooks are not lab components there; their output shapes are cited above):
   - ServiceAccounts with IRSA, Azure and GKE annotations;
   - pods in each §3.3 row, their env and volumes written in each webhook's documented shape (current, a stale role, created before the annotation, a skipped container, partial, an Azure pod without the label, Pod Identity with and without the pod label);
   - a stand-in `eks-pod-identity-agent` DaemonSet and a stand-in `pod-identity-webhook` configuration served by URL;
-  - ESO stores of each auth shape on the ESO CRDs already in the lab.
+  - ESO stores of each auth shape on the ESO CRDs already in the lab, with a stand-in controller Deployment (the chart's label, a `--controller-class`) whose pods carry identity env.
 
   Not in the lab: an Auto Mode node, a Fargate node and GKE nodes. Relabelling kind's single node would change every other lab reading, so they are unit-tested.
 - **Parity:** S5 adds no part, so the gate is unchanged.
@@ -194,3 +244,15 @@ No new lens. Three inspector blocks, each read when its inspector opens and agai
 - **The controller-issue "managed" state and Karpenter on Auto Mode:** S10.
 - **Other identity systems** (Vault Kubernetes auth, aad-pod-identity beyond naming `ManagedIdentity`, SPIFFE): named as not read.
 - **Verbs:** none. Recreating pods to pick up an identity is the user's, through the existing restart verb.
+
+## 10. Revision 1: Codex's design review of 9b6f020
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | The subject resolver did not follow ESO's provider branches: `useAzureSDK`, `gcpServiceAccountEmail`, AWS `role`/`additionalRoles` | §4.1: a per-provider, per-mode decision table of base credential and requested principal, from ESO's source. Secret-sourced IDs and the value-dependent legacy refusal stay unresolved. §8: the overrides' tests |
+| 2 | The controller binding was assumed from the conventional Deployment | §4.2: candidates by the chart's label and the conventional name; applicability by `spec.controller` against each candidate's `--controller-class`; one applicable candidate or the subject unresolved; pods fenced by ReplicaSet owner UID and grouped by their own ServiceAccount; the inverse join under the same rule |
+| 3 | An env variable's absence from the pod spec does not prove the process lacks it | §3.2 and §4.2: "not in the pod spec's env; envFrom and the image's environment are not read", never "ESO will fail"; the SDK default chain is a configured source, not a proven principal |
+| 4 | Mechanism recognition needed each container's token-file chain, and the comparison a defined scope | §3.2: env to mount (with `subPath`) to projected token entry and audience, per container; partial vs unresolved; Azure's complete shape includes the tenant. §3.3 names what it compared (role and audience; client ID and tenant) |
+| 5 | The capped read over-promised "+N not read" and "newest 50", and content was unbounded | §6: "more, count unknown" (no `remainingItemCount` for selected lists); the first 50 by name, sorted by age within; bounds on containers, values, volume sources, stores and the DTO; exact comparison before display clipping |
+| 6 | An allowlisted variable's value can still carry credentials | §7: the recorded, narrow exception to "never read env values"; the URL policy for URL-valued variables; shaped-identifier validation, with "unexpected value (not shown)"; needles in allowed variables (§8) |
+| (guidance) | GKE on Windows; Azure's admission consequence from its actual configuration | §3.4 |
