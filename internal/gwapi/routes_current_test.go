@@ -61,12 +61,14 @@ func TestForeignGroupKindDoesNotAdmitAGatewayAPIRoute(t *testing.T) {
 	if got.Allowed != AllowedNo || got.Text != "listener http: HTTPRoute is not among the kinds its controller reports (example.test/HTTPRoute)" {
 		t.Fatalf("foreign group's HTTPRoute admitted the Gateway API HTTPRoute: %+v", got)
 	}
-	// the API's own group, written or defaulted, admits it
-	for _, g := range []string{Group, ""} {
-		ae.Parent.Listeners = listener(RouteKind{Group: g, Kind: KindHTTPRoute})
-		if got := RouteAllowedBy(KindHTTPRoute, "shop", ae, NamespaceLabels{}); got.Allowed != AllowedYes {
-			t.Fatalf("group %q: %+v", g, got)
-		}
+	// the API's own group admits it; the core group (written as "") does not
+	ae.Parent.Listeners = listener(RouteKind{Group: Group, Kind: KindHTTPRoute})
+	if got := RouteAllowedBy(KindHTTPRoute, "shop", ae, NamespaceLabels{}); got.Allowed != AllowedYes {
+		t.Fatalf("the Gateway API's group: %+v", got)
+	}
+	ae.Parent.Listeners = listener(RouteKind{Group: "", Kind: KindHTTPRoute})
+	if got := RouteAllowedBy(KindHTTPRoute, "shop", ae, NamespaceLabels{}); got.Allowed != AllowedNo || !strings.Contains(got.Text, "core/HTTPRoute") {
+		t.Fatalf("the core group: %+v", got)
 	}
 	// a parent from a read that is not current establishes no allowance
 	ae.Parent.Current = false

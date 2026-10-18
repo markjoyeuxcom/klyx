@@ -31,7 +31,9 @@ export function issueGroups(issues: ListenerConditionDTO[]): { heads: string; wh
   return out.map((g) => ({ heads: g.heads.join(", "), why: g.why }));
 }
 
-const kindText = (k: RouteKindDTO) => k.kind;
+// a kind is its group and kind: the Gateway API's by its kind, another
+// group's with its group, the core group's (written as "") as core
+const kindText = (k: RouteKindDTO) => (k.group === "gateway.networking.k8s.io" ? k.kind : `${k.group || "core"}/${k.kind}`);
 
 export function endpointText(l: ListenerDTO): string {
   const tls = l.tlsMode ? ` · TLS ${l.tlsMode}` : (l.certificateRefs?.length ?? 0) > 0 ? " · TLS" : "";

@@ -85,8 +85,8 @@ func TestRouteAllowedBy(t *testing.T) {
 		{Name: "same", Protocol: "HTTP"},
 		{Name: "all-tcp", Protocol: "TCP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}}},
 		{Name: "selected", Protocol: "HTTPS", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "Selector", Selector: sel}}},
-		{Name: "grpc-only", Protocol: "HTTP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}, Kinds: []RouteKind{{Kind: KindGRPCRoute}}}},
-		{Name: "reported", Protocol: "HTTP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}}, Status: &ListenerStatus{SupportedKinds: []RouteKind{{Kind: KindHTTPRoute}}}},
+		{Name: "grpc-only", Protocol: "HTTP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}, Kinds: []RouteKind{{Group: Group, Kind: KindGRPCRoute}}}},
+		{Name: "reported", Protocol: "HTTP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}}, Status: &ListenerStatus{SupportedKinds: []RouteKind{{Group: Group, Kind: KindHTTPRoute}}}},
 	}
 	ae := func(section string) AttachmentEval {
 		return AttachmentEval{Ref: RouteParentRef{Group: Group, Kind: "Gateway", Namespace: "infra", Name: "eg", SectionName: section}, Parent: AttachmentParent{State: ParentFound, Current: true, Listeners: listeners}}

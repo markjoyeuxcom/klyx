@@ -78,7 +78,7 @@ func TestParseListenerStatusAndAllowance(t *testing.T) {
 	}
 	ar := http.AllowedRoutes
 	if ar == nil || !ar.Namespaces.Set || ar.Namespaces.From != "Selector" || ar.Namespaces.Selector == nil ||
-		ar.Namespaces.Selector.MatchLabels["team"] != "shop" || !reflect.DeepEqual(ar.Kinds, []RouteKind{{Kind: "HTTPRoute"}}) {
+		ar.Namespaces.Selector.MatchLabels["team"] != "shop" || !reflect.DeepEqual(ar.Kinds, []RouteKind{{Group: Group, Kind: "HTTPRoute"}}) {
 		t.Errorf("http allowedRoutes: %+v", ar)
 	}
 	if !g.AllowedListeners.Set || g.AllowedListeners.From != "Same" || g.AttachedListenerSets == nil || *g.AttachedListenerSets != 2 {

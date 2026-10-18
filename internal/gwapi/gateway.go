@@ -172,8 +172,12 @@ func parseRouteKinds(v interface{}) []RouteKind {
 		if !ok {
 			continue
 		}
-		rk := RouteKind{}
-		rk.Group, _ = m["group"].(string)
+		// an omitted group is the Gateway API's (its default); a group
+		// written as "" is the core group (Codex's S7b re-review, finding 2)
+		rk := RouteKind{Group: Group}
+		if g, present := m["group"]; present {
+			rk.Group, _ = g.(string)
+		}
 		rk.Kind, _ = m["kind"].(string)
 		if rk.Kind != "" {
 			out = append(out, rk)

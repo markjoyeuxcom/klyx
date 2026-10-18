@@ -310,3 +310,14 @@ describe("the routes budget (review finding 2)", () => {
     expect(document.querySelector(".lens-header")!.textContent).toContain("+");
   });
 });
+
+// Codex's S7b re-review, finding 2: a listener's kinds name their group when
+// it is not the Gateway API's, the core group's ("") as core.
+describe("listener kinds keep their group", () => {
+  it("names a foreign or core group, and the Gateway API's kind plainly", async () => {
+    const { allowedRoutesText } = await import("./gatewayListeners");
+    const l = { name: "http", protocol: "HTTP", hostname: "", port: 80, allowedRoutes: { namespaces: { set: true, from: "All" }, kinds: [
+      { group: "gateway.networking.k8s.io", kind: "HTTPRoute" }, { group: "example.test", kind: "HTTPRoute" }, { group: "", kind: "HTTPRoute" }] } };
+    expect(allowedRoutesText(l)).toBe("routes from All · kinds HTTPRoute, example.test/HTTPRoute, core/HTTPRoute");
+  });
+});

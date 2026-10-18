@@ -339,6 +339,10 @@ type AttachmentParent struct {
 	// implementation review, finding 1). A current object in a capped read
 	// is whole, and counts.
 	Current bool
+	// ListenerSetCurrent: a ListenerSet parent's own read is current. Its own
+	// refusal is proof on that alone, whatever its Gateway's read (Codex's
+	// S7b re-review, finding 1).
+	ListenerSetCurrent bool
 }
 
 // gateway finds a Gateway among those read, and whether its read is current.
@@ -407,6 +411,7 @@ func (ix RouteIndex) Resolve(ref RouteParentRef) AttachmentParent {
 		if p.ListenerSet != nil && p.ListenerSet.Parent.IsGateway() {
 			var gwCurrent bool
 			p.Gateway, _, gwCurrent = ix.gateway(p.ListenerSet.Parent.Namespace, p.ListenerSet.Parent.Name)
+			p.ListenerSetCurrent = ix.ListenerSetsRead.Current
 			p.Current = ix.ListenerSetsRead.Current && gwCurrent
 			switch {
 			case !ix.ListenerSetsRead.Current:
@@ -683,8 +688,8 @@ func attachmentRule(r Route, ae AttachmentEval) health.NativeEval {
 	case ParentNotEstablished:
 		return health.NativeEval{Role: health.Unknown, Label: "parent " + kind + " not established"}
 	}
-	// a ListenerSet's own refusal is proof only from a current read
-	if ls := ae.Parent.ListenerSet; ls != nil && ae.Parent.Current {
+	// a ListenerSet's own refusal is proof from its own current read
+	if ls := ae.Parent.ListenerSet; ls != nil && ae.Parent.ListenerSetCurrent {
 		if a := condState(ls.AcceptedCond, ls.Generation); a.status == "False" && !a.stale {
 			return health.NativeEval{Included: true, Role: health.Fault, Label: "parent ListenerSet not accepted",
 				Reason: health.CapReason(ls.AcceptedCond.Reason, ls.AcceptedCond.Message)}

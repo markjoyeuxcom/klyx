@@ -164,8 +164,8 @@ var conventionalKinds = map[string][]string{
 
 // listenerKinds are the kinds a listener admits and where that list came
 // from: its controller's supportedKinds, its declared allowedRoutes.kinds,
-// or the protocol's convention. A kind is its group and kind: a RouteGroupKind
-// with no group is the Gateway API's (Codex's S7b review, finding 5).
+// or the protocol's convention. A kind is its group and kind, the group's
+// default applied at parsing (Codex's S7b review, finding 5).
 func listenerKinds(l Listener) ([]RouteKind, string) {
 	if l.Status != nil && len(l.Status.SupportedKinds) > 0 {
 		return l.Status.SupportedKinds, "its controller reports"
@@ -180,23 +180,19 @@ func listenerKinds(l Listener) ([]RouteKind, string) {
 	return out, "its protocol " + l.Protocol + " conventionally admits"
 }
 
-func kindGroup(k RouteKind) string {
-	if k.Group == "" {
-		return Group
-	}
-	return k.Group
-}
-
 // kindNames names kinds as the listener lists them: a Gateway API kind by
-// its kind, another group's with its group.
+// its kind, another group's with its group, and the core group's as core.
 func kindNames(ks []RouteKind) []string {
 	out := make([]string, 0, len(ks))
 	for _, k := range ks {
-		if g := kindGroup(k); g != Group {
-			out = append(out, clipLabel(g)+"/"+clipLabel(k.Kind))
-			continue
+		switch k.Group {
+		case Group:
+			out = append(out, clipLabel(k.Kind))
+		case "":
+			out = append(out, "core/"+clipLabel(k.Kind))
+		default:
+			out = append(out, clipLabel(k.Group)+"/"+clipLabel(k.Kind))
 		}
-		out = append(out, clipLabel(k.Kind))
 	}
 	return out
 }
@@ -270,7 +266,7 @@ func RouteAllowedBy(routeKind, routeNS string, ae AttachmentEval, ns NamespaceLa
 // group and kind.
 func containsKind(kinds []RouteKind, kind string) bool {
 	for _, k := range kinds {
-		if kindGroup(k) == Group && k.Kind == kind {
+		if k.Group == Group && k.Kind == kind {
 			return true
 		}
 	}

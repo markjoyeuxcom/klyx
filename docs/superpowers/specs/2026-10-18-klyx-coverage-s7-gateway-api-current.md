@@ -745,3 +745,14 @@ Five P2 findings, each with a reproduction; every probe is adopted as a test.
 Codex's judgements, adopted: a bare route identity resolving to its worst lane is sound; on-demand class and grant failures as warnings are sound; ListenerSet-only listener evidence is sound; the registry's single version per kind stays a disclosed limitation. Section 18.4's heap figures are now qualified as this fixture's measurements.
 
 Mutations, one per fix: 8 Go (stale Gateway, class, ListenerSet, ListenerSet refusal, Service, grant, allowance; the kind group) and 3 frontend (explicit lane, port scope, capped membership), all caught.
+
+## 20. Revision 2: Codex's re-review of 59dbe25
+
+Codex verified the five findings resolved, and confirmed with a new probe that a current object retained in a capped read still proves its facts. Two residual P2s; both probes are adopted as tests:
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | The combined parent-currentness gate hid a ListenerSet's own fresh refusal when only its Gateway's read was stale or capped | `AttachmentParent.ListenerSetCurrent` is the ListenerSets read's own currentness. A ListenerSet's refusal is judged on it alone; the chain's `Current` still gates the controller, allowance and feature joins. |
+| 2 | An explicit `group: ""` (the core group) collapsed into the omitted default (the Gateway API's) | `parseRouteKinds` applies the default only when the key is absent, so presence is kept at parsing; `containsKind` compares the group as parsed. The explanation says `core/HTTPRoute`, and the Gateway inspector's listener kinds name a foreign or core group the same way. |
+
+Mutations: the combined gate, no ListenerSet currentness, the empty group defaulted and the frontend kind text are all caught.
