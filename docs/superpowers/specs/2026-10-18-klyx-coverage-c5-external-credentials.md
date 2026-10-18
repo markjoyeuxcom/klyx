@@ -295,3 +295,127 @@ Codex's answers, adopted:
 - AI's environment proxy kept, and auth on allowed same-origin hops stated (§4).
 
 **Accepted at 58a234c** (Codex, design revision 1, handoff bcd4aa47, 2026-10-18). This accepts the design only; the implementation keeps its own review.
+
+## 13. As built
+
+Built on `feat/coverage` in six stages, after the design's acceptance at 58a234c:
+- 464af65: the shared secret store and the safe HTTP policy.
+- 2409e8c: the guarded proxy client and the diagnostic boundary, fixing today's metrics path.
+- cf5ac9f: the config blocks.
+- c30ac3b: credentials with revisions.
+- f8f0035 and 24fedc7: the fenced actions and the migration.
+- 36b465d: Settings > Endpoints.
+
+### 13.1 The shared pieces (§3, §4)
+
+- **`internal/secretstore`** holds every Klyx secret by account under `io.moomora.klyx`. AI moves onto it: its accounts are unchanged, its `KeychainError` is the shared type (an alias), and it keeps its own `ErrNoKey` and wording.
+- **`internal/safehttp`** carries the shared HTTP policy:
+  - the canonical origin (scheme, IDNA host, IPv6 bracketed, effective port);
+  - `SameOriginRedirect`, at most 5 hops; a downgrade is another origin;
+  - `Cap`, which errors past its limit;
+  - `NewClient` with an explicit environment-proxy policy;
+  - the `Redactor`: the exact forms of a credential, longest first, then `scrub.Credentials`. `Err` keeps only the cancellation and deadline sentinels, so the original error, whose text may hold the secret, cannot be reached.
+- **AI's behaviour is unchanged.** Its cap moves onto `safehttp.Cap`. Its redirect check and its environment proxy stay its own.
+
+### 13.2 The proxy client and the diagnostic boundary (§4, §5), fixing today's path
+
+- **`metrics.NewGuardedProxyREST`** builds the CoreV1 REST client from the cluster's `rest.Config` (`rest.HTTPClientFor`, then `rest.RESTClientForConfigAndClient`), with `CheckRedirect = SameOriginRedirect`.
+  - The metrics service-proxy path uses it whenever the connection has a `rest.Config`. Fake clients without one use their clientset's.
+  - If the guarded client cannot be built, the proxy path reads unavailable with the reason. It never falls back to an unguarded client.
+- **Codex's probe is adopted:** with bearer and with basic kube credentials, the second origin receives no request at all. A same-origin redirect is still followed, and a fleet-level test proves the connection really uses the guarded client.
+- **The transport that holds a secret redacts its own outputs.** The direct transport replaces every exact form of its credential in the response body before any parse can quote it, and in every error. The probe's reason then loses general credential shapes too.
+- **Codex's echo probe is adopted,** and extended to JSON and plain-text echoes, instant and range queries, and a credential shape the endpoint wrote that is not the request's own.
+- **The proxied read's 4 MiB cap is now an error** (`ErrResponseTooLarge`). It used to truncate silently; the direct read's cap is `safehttp`'s.
+
+### 13.3 The config (§2)
+
+- **`metrics`, `alertmanager` and `loki` share one shape:** endpoint, serviceRef, `tlsSkipVerify`, `auth`, `tenant`.
+  - `auth` and `tenant` are flat fields on `MetricsConfig`, beside the legacy `token`, so its 122 literal uses stay valid.
+  - Alertmanager and Loki use `EndpointConfig`.
+- **Load errors**, following the `serviceRef` precedent:
+  - an unknown auth type;
+  - basic auth without a username;
+  - a username with bearer auth;
+  - a legacy `token` beside basic auth;
+  - control characters in a tenant (it is a header).
+- **Warnings:** `auth` on a proxied endpoint, endpoint beside serviceRef, and userinfo.
+- **Userinfo.** An endpoint URL with userinfo reads unavailable ("the endpoint URL carries credentials; set them in Settings > Endpoints"), and its source is shown without them.
+
+### 13.4 Credentials at run time (§3, §7)
+
+- **`internal/endpointcred`** resolves an endpoint's credential into one of ten distinct states:
+  - not needed;
+  - not sent (on a proxied endpoint);
+  - stored;
+  - missing;
+  - for another origin;
+  - unusable record;
+  - keychain unavailable;
+  - removed;
+  - legacy;
+  - endpoint unusable.
+
+  The legacy token wins while it is in the file, the stated exception to origin binding. A keychain copy beside it is reported.
+- **The `Registry`** holds each endpoint's revision and revocation tombstone. `DefaultConnFactory` now takes the store and the registry, created once in `main` and shared with Settings.
+- **Every reader obeys the revision:**
+  - The cached metrics resolution records the revision it was built under, and is rebuilt when it moves. Every reader goes through `ensureMetricsLocked`: cluster, workload, node, route, rule, sparklines and Hubble.
+  - **Beyond the design,** the direct transport checks a liveness gate before every request and refuses once the revision has moved (`ErrCredentialChanged`). Readers snapshot the transport and query outside the lock, and the gate stops their requests too.
+  - A probe that finishes after a change reads "the endpoint's credential changed during the read" and is not cached.
+- **Tests** run on an endpoint that is already available and cached:
+  - Set changes the next request's header;
+  - Remove stops a client a reader already holds;
+  - an in-flight probe is dropped;
+  - another origin sends nothing;
+  - legacy precedence holds;
+  - basic auth and the tenant are carried.
+
+### 13.5 Fenced actions and the migration (§6)
+
+- **`config.Snapshot`** is one read of the file: its bytes, mode and decoded configuration. `EndpointRevision` hashes the endpoint's spec (the tenant included), a legacy token's hash and the file's mode.
+- **`config.MoveMetricsTokenToAuth`** works from that snapshot:
+  - It finds the cluster's `metrics.token` key with `yaml.v3` nodes and rewrites only that line, to `auth: {type: bearer}`, or removes it when `auth` is already there.
+  - It edits only a plain one-line value; a flow or block scalar is left to the person to move by hand.
+  - It checks the decoded diff, then prepares the edit in a private 0600 temporary file and gives it the snapshot's mode.
+  - Just before the rename it compares the live file's bytes and mode with the snapshot.
+- **`EndpointsService`** runs every action under one lock, held across the keychain calls and taken before the writer's lock. Each action re-reads the file and refuses on drift.
+  - **Set** is refused while a legacy token is in the file: move it first.
+  - **Move** tells the live connection (`SetMetricsConfig`) and moves the revision only after the file edit succeeded.
+- **Tests** cover:
+  - a stale review refusing Set, Remove and Test;
+  - a mode change alone counting as drift;
+  - an edit after Set reading "for another origin";
+  - Remove's revocation surviving a failed keychain delete;
+  - the legacy Remove label;
+  - Move's keychain failure (nothing changed, the message redacted);
+  - an edit to fleet.yaml landing between Move's keychain write and its file edit, through a store whose Set edits the file: the newer file untouched, the connection not told, the retry working;
+  - actions serialised.
+
+### 13.6 Settings > Endpoints (§8)
+
+- **Each endpoint** shows its source without credentials, its tenant, its auth type and username, and its state in words.
+- **A password field** stores or replaces the credential and clears itself.
+- **Move to keychain, Remove and Test** carry each row's revision. Test is offered for metrics only; Alertmanager and Loki say Test waits for S8.
+- **Every action button** has an accessible name that includes its endpoint.
+- **The Settings note** now names this fourth place Klyx writes fleet.yaml.
+- **The native smoke** checks that the panel reads.
+
+### 13.7 Verified, and not
+
+- **On kind-klyx (v1.37):** the API server's service proxy passes `X-Scope-OrgID` to the Service, and not a client's `Authorization` (§4).
+- **The native smoke** passes 181/181 in each of night and day at 1440 and 1024 at 36b465d. Its metrics steps read through the guarded proxy client on kind-klyx, and its Settings step reads the panel.
+- **Not exercised on a real keychain.** Every test uses the in-memory store. The OS store's code is the AI keys' (`zalando/go-keyring`), already in use.
+- **The review server was not used for captures of Set or Move,** because those would write to the owner's login keychain.
+
+### 13.8 Gates
+
+- **Go:** `go test -race ./internal/...` passes; golangci-lint reports 0 issues.
+- **Frontend:** vitest 2,266 passed; tsc clean; eslint 0 errors.
+- **Native smoke:** 181/181 in all four modes at 36b465d, the labs re-applied first.
+  - The first run failed one Velero step in every mode because a lab Backup had aged out of Velero's 24-hour "recent" window. The re-apply script now recreates it; that is lab maintenance, not C5.
+- **Mutations:** 18 Go mutations caught (5 in stage B, 7 in D, 6 in E). An equivalent probe mutation was rerun so the import it removed stays in use.
+- **Captures of Settings > Endpoints** in night and day at 1440 and 1024 (`pw/c5.mjs`, review config `cfg-c5`), each with its expected text, no horizontal scroll, and no trace of the legacy token on the page. They show:
+  - metrics missing a credential;
+  - Alertmanager on a serviceRef, with "no credential configured" and Test not yet implemented;
+  - Loki with basic auth, missing;
+  - a legacy plaintext token, with Move to keychain.
+- **From the captures:** every user-facing message now names the section "Settings > External endpoints", its title.

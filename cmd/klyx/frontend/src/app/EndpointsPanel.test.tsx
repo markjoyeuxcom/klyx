@@ -17,7 +17,7 @@ vi.mock("../bridge/endpoints", () => ({
 import { EndpointsPanel, stateText } from "./EndpointsPanel";
 
 const base = (over: Partial<EndpointRow>): EndpointRow => ({
-  cluster: "prd", kind: "metrics", source: "https://mimir.example/prometheus", state: "missing", why: "no credential is stored for it - set one in Settings > Endpoints",
+  cluster: "prd", kind: "metrics", source: "https://mimir.example/prometheus", state: "missing", why: "no credential is stored for it - set one in Settings > External endpoints",
   legacy: false, storedToo: false, revision: "rev-1", canSet: true, canRemove: false, canMove: false, canTest: true, authType: "bearer", ...over,
 });
 const fleet = (rows: EndpointRow[]): EndpointsState => ({ rows });

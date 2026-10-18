@@ -74,7 +74,7 @@ func UserinfoProblem(endpoint string) string {
 	if err != nil || u.User == nil {
 		return ""
 	}
-	return "the endpoint URL carries credentials; set them in Settings > Endpoints"
+	return "the endpoint URL carries credentials; set them in Settings > External endpoints"
 }
 
 // validateEndpoint checks one endpoint block; prefix names it in errors.

@@ -98,7 +98,7 @@ func TestEndpointWarnings(t *testing.T) {
 	}
 	w := strings.Join(cfg.Warnings(), "\n")
 	for _, want := range []string{
-		`cluster "a": metrics: the endpoint URL carries credentials; set them in Settings > Endpoints`,
+		`cluster "a": metrics: the endpoint URL carries credentials; set them in Settings > External endpoints`,
 		`cluster "a": alertmanager.auth is not sent to a proxied or discovered endpoint`,
 		`cluster "a": loki.serviceRef is ignored because loki.endpoint is set`,
 	} {
