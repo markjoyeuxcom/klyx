@@ -834,7 +834,12 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     useFleet.getState().openSettings();
     await within(8000, "the Notifications panel", () => $("[data-testid='notification-settings']"));
     const text = document.body.textContent ?? "";
-    for (const s of ["Appearance", "Git", "Notifications"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
+    // their credential states (the smoke fleet configures none)
+    const ep = await within(8000, "the endpoints panel", () => $("[data-testid='endpoints-settings']"));
+    if ($("[data-testid='endpoints-error']")) throw new Error(`the endpoints panel could not read fleet.yaml: ${$("[data-testid='endpoints-error']")?.textContent}`);
+    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");

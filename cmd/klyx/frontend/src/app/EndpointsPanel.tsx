@@ -1,0 +1,138 @@
+import { useEffect, useState } from "react";
+import {
+  getEndpoints,
+  moveToKeychain,
+  removeCredential,
+  setCredential,
+  testEndpoint,
+  type EndpointAction,
+  type EndpointRow,
+  type EndpointsState,
+} from "../bridge/endpoints";
+
+// EndpointsPanel is Settings > Endpoints (coverage C5 §8): each cluster's
+// metrics, Alertmanager and Loki endpoints with their credential's state.
+// The endpoints are authored in fleet.yaml; this sets, removes, moves and
+// tests credentials only. A secret goes in and never comes back, and every
+// action carries the endpoint as the person saw it.
+
+const KIND_LABEL: Record<string, string> = { metrics: "Metrics", alertmanager: "Alertmanager", loki: "Loki" };
+const hint: React.CSSProperties = { fontSize: 11, color: "var(--color-text-tertiary)" };
+const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "3px 0", flexWrap: "wrap" };
+
+// what the state says, in words; good states read in ink, the rest warn
+export function stateText(r: EndpointRow): { text: string; warn: boolean } {
+  switch (r.state) {
+    case "not needed":
+      return { text: "no credential configured", warn: false };
+    case "not sent":
+      return { text: "not sent: proxied through the Kubernetes API server", warn: false };
+    case "stored":
+      return { text: "stored in the keychain", warn: false };
+    case "legacy":
+      return { text: r.storedToo ? "in fleet.yaml in plain text, and stored in the keychain - finish the move" : "in fleet.yaml in plain text", warn: true };
+  }
+  return { text: r.why ? `${r.state}: ${r.why}` : r.state, warn: true };
+}
+
+export function EndpointsPanel() {
+  const [state, setState] = useState<EndpointsState | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+
+  const load = async () => {
+    const st = await getEndpoints();
+    setLoadFailed(!st);
+    if (st) setState(st);
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const run = async (fn: () => Promise<EndpointAction>) => {
+    setBusy(true);
+    const r = await fn();
+    setBusy(false);
+    setMessage({ ok: r.ok, text: r.message });
+    await load();
+  };
+
+  if (loadFailed && !state) {
+    return (
+      <div data-testid="endpoints-load-failed" style={{ ...hint, color: "var(--color-text-danger)" }}>
+        Could not read the endpoints. <button className="l-btn" onClick={() => void load()}>Retry</button>
+      </div>
+    );
+  }
+  if (!state) return <div style={hint}>Reading endpoints…</div>;
+
+  return (
+    <div data-testid="endpoints-settings">
+      <div style={{ ...hint, marginBottom: 8 }}>
+        Endpoints are set in fleet.yaml (metrics, alertmanager, loki under a cluster). A credential is kept in the keychain for the endpoint's origin only, and is sent nowhere else.
+      </div>
+      {state.error && <div role="status" data-testid="endpoints-error" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>fleet.yaml cannot be read: {state.error}</div>}
+      {message && (
+        <div role="status" data-testid="endpoints-message" style={{ fontSize: 11, marginBottom: 8, color: message.ok ? "var(--color-text-primary)" : "var(--color-text-warning)" }}>{message.text}</div>
+      )}
+      {state.rows.length === 0 && !state.error && <div style={hint}>No cluster configures a metrics, Alertmanager or Loki endpoint.</div>}
+      {state.rows.map((r) => {
+        const k = `${r.cluster}/${r.kind}`;
+        const st = stateText(r);
+        const value = inputs[k] ?? "";
+        return (
+          <div key={k} data-testid="endpoint-row" data-endpoint={k} style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+            <div style={row}>
+              <span style={{ fontWeight: 600, minWidth: 110 }}>{r.cluster} · {KIND_LABEL[r.kind] ?? r.kind}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>{r.source}</span>
+              {r.tenant && <span style={hint}>tenant {r.tenant}</span>}
+              {r.authType && <span style={hint}>{r.authType}{r.username ? ` as ${r.username}` : ""}</span>}
+            </div>
+            <div style={row}>
+              <span data-testid="endpoint-state" style={{ fontSize: 11, color: st.warn ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{st.text}</span>
+            </div>
+            <div style={row}>
+              {r.canSet && (
+                <>
+                  <input
+                    aria-label={`${r.cluster} ${r.kind} ${r.authType === "basic" ? "password" : "token"}`}
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="l-input"
+                    style={{ flex: 1, minWidth: 160 }}
+                    placeholder={r.state === "stored" ? "paste a new one to replace it" : r.authType === "basic" ? "paste the password" : "paste the token"}
+                    value={value}
+                    onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })}
+                  />
+                  <button
+                    className="l-btn"
+                    aria-label={`${r.state === "stored" ? "Replace" : "Store"} the ${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind} credential`}
+                    disabled={busy || value.trim() === ""}
+                    onClick={() => {
+                      setInputs({ ...inputs, [k]: "" });
+                      void run(() => setCredential(r.cluster, r.kind, r.revision, value));
+                    }}
+                  >
+                    {r.state === "stored" ? "Replace" : "Store"}
+                  </button>
+                </>
+              )}
+              {r.canMove && <button className="l-btn" aria-label={`Move the ${r.cluster} metrics token to the keychain`} disabled={busy} onClick={() => void run(() => moveToKeychain(r.cluster, r.revision))}>Move to keychain</button>}
+              {r.canRemove && (
+                <button className="l-btn l-btn-danger" aria-label={`${r.removeLabel ?? "Remove"} (${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind})`} disabled={busy} onClick={() => void run(() => removeCredential(r.cluster, r.kind, r.revision))}>
+                  {r.removeLabel ?? "Remove"}
+                </button>
+              )}
+              {r.canTest
+                ? <button className="l-btn" aria-label={`Test the ${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind} endpoint`} disabled={busy} onClick={() => void run(() => testEndpoint(r.cluster, r.kind, r.revision))}>Test</button>
+                : r.testNote && <span style={hint}>Test: {r.testNote}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
