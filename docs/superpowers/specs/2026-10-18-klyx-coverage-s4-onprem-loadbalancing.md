@@ -421,3 +421,27 @@ ServiceLB acts only on LoadBalancer Services, so they cover §6's "or ServiceLB 
   - Cilium's unsatisfied condition on a classed Service (MetalLB ignores another class);
   - a stand-in svclb DaemonSet under the Service's generated name, whose pod a port-holder pod leaves Pending ("didn't have free ports").
 - **Not in the lab:** a k3s node version. The kubelet rewrites nodeInfo, so it is covered by `internal/lb`'s tests only. The Cilium CRD also makes `cilium.io` served on kind-klyx, so Cilium LB IPAM is listed as a candidate there; that is the detection rule, as §4 says.
+
+## 14. Gates
+
+- **The parity gate:** passes, both stages, with the S4 baseline and its oracle's LoadBalancer filter. It passed first at dd2086a (dirty with the stage's own uncommitted changes) and again at 91607c0 (run a846eba608e998c8; dirty only with this section, uncommitted while the gate ran).
+- **The four-way native smoke:** 167/167 in night-1440, night-1024, day-1440 and day-1024 at 91607c0, clean. The labs (lab-s1b, lab-s1c, lab-s2b, lab-s3a) were re-applied within the hour, and `run4.sh` re-creates lab-s4's within-grace Service before each mode. Two earlier runs missed one step each, both in the smoke's own steps:
+  - the Pools tab's rows were read before they replaced the Services rows (4315381);
+  - at 1024 the configuration check read the Writer column, which the open inspector hides (91607c0).
+
+  A third run stalled when the host slept; the run that passed held idle sleep off with `caffeinate`.
+- **`go test -race`:** ok on lb, observe, healthsrc, appbridge, fleet, capability, crd and healthnotify.
+- **golangci-lint v2.14.0:** 0 issues.
+- **The frontend:**
+  - the suite: 2189 passed;
+  - tsc: clean;
+  - eslint: 0 errors. The 3 warnings are pre-existing, in InstanceDetail and LogsPane.
+- **The live captures** (scratchpad cap-s4, server mode, taken more than 10 minutes after the app started, so past the grace):
+  - all four themes and widths, plus a night-1440 pass with `invalid.sh on`: 52 shots;
+  - no sideways scroll, no page error, and the lab's BGP password never on screen.
+
+  They show the four pending Services as "No address" faults with their own reasons, Load balancers in Needs you, and the withheld pool verdicts under an Invalid speaker. The probe before them found the four fixes in ef187bd.
+- **The load test** (§7), large cluster, two runs each against e56f98c:
+  - **full evaluation:** 51.5 and 59.7 ms before, 42.0 and 46.2 ms after. That is no regression; the difference is within this test's spread (S3a saw 66 to 78 ms on the same tree);
+  - **steady retained heap:** 58.3 MB before, 59.1 MB after (+0.8 MB); large cluster +0.1 MB, six clusters +0.5 MB;
+  - **recovery-storm peak:** 74.3 and 73.4 MB before, 65.0 and 86.4 MB after: noise.
