@@ -51,8 +51,10 @@ type CondDTO struct {
 	ObservedGeneration int64  `json:"observedGeneration"`
 }
 
+// condDTO's message is made safe here too (coverage S7a, Codex's review
+// finding 1): a Cond built elsewhere than condOf reaches no DTO unscrubbed.
 func condDTO(c gwapi.Cond) CondDTO {
-	return CondDTO{Status: c.Status, Reason: c.Reason, Message: c.Message, ObservedGeneration: c.ObservedGeneration}
+	return CondDTO{Status: c.Status, Reason: c.Reason, Message: gwapi.SafeMessage(c.Message), ObservedGeneration: c.ObservedGeneration}
 }
 
 // EndpointCountDTO is one Service's EndpointSlice endpoints (not pods:

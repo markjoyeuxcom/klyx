@@ -6,8 +6,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/moomora/klyx/internal/scrub"
 )
 
 // Projection limits (coverage S7 §8): one projection's encoded size. The
@@ -70,8 +68,8 @@ func SizeOf(v any) int {
 }
 
 // Project builds the projection of one watched object of resource. It never
-// mutates obj. Condition messages are scrubbed of credential shapes, then
-// clipped at 1 KiB; one over its limit is rebuilt tight - the object's own
+// mutates obj. Condition messages are made safe (SafeMessage), then clipped
+// at 1 KiB; one over its limit is rebuilt tight - the object's own
 // messages at 256 bytes, its listeners' dropped - and the observer refuses
 // one still over.
 func Project(resource string) func(obj any) (any, error) {
@@ -120,7 +118,9 @@ type clip struct {
 }
 
 func (c *clip) message(path, s string, limit int) string {
-	s, _ = scrub.Credentials(s)
+	// made safe before it is clipped: a credential crossing the clip is
+	// removed whole, never cut into a readable prefix
+	s = SafeMessage(s)
 	if len(s) <= limit {
 		return s
 	}

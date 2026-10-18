@@ -82,24 +82,39 @@ const (
 )
 
 // ParentLookup is a ListenerSet's parent as established, with the Gateway
-// when found.
+// when found. Current: the Gateway is from a Live read, so its
+// configuration is as the API serves it now; a parent found only in a
+// stale read establishes no current claim about it. NotServed: the
+// Gateways API is confirmed not served.
 type ParentLookup struct {
-	State   ParentState
-	Gateway *GatewayRef
+	State     ParentState
+	Gateway   *GatewayRef
+	Current   bool
+	NotServed bool
 }
 
-// LookupParent finds a ListenerSet's parent among gateways; complete says
-// the gateways read proves absence.
-func LookupParent(ls ListenerSet, gateways []GatewayRef, complete bool) ParentLookup {
+// ParentRead is how the Gateways were read (S7 §8, Codex's S7a
+// implementation review finding 3): Absent, confirmed not served; Current,
+// a Live read; Complete, nothing left out. Only a complete, current read
+// proves a parent missing.
+type ParentRead struct {
+	Absent, Current, Complete bool
+}
+
+// LookupParent finds a ListenerSet's parent among the Gateways read.
+func LookupParent(ls ListenerSet, gateways []GatewayRef, read ParentRead) ParentLookup {
 	if !ls.Parent.IsGateway() {
 		return ParentLookup{State: ParentUnsupported}
 	}
+	if read.Absent {
+		return ParentLookup{State: ParentNotEstablished, NotServed: true}
+	}
 	for i := range gateways {
 		if gateways[i].Namespace == ls.Parent.Namespace && gateways[i].Name == ls.Parent.Name {
-			return ParentLookup{State: ParentFound, Gateway: &gateways[i]}
+			return ParentLookup{State: ParentFound, Gateway: &gateways[i], Current: read.Current}
 		}
 	}
-	if complete {
+	if read.Current && read.Complete {
 		return ParentLookup{State: ParentNotFound}
 	}
 	return ParentLookup{State: ParentNotEstablished}
@@ -197,6 +212,8 @@ func ListenerSetAllowance(ls ListenerSet, parent ParentLookup, ns NamespaceLabel
 	switch {
 	case parent.State == ParentUnsupported:
 		return Allowance{Text: "the parent is a " + clipLabel(ls.Parent.Kind) + ", not a Gateway"}
+	case parent.NotServed:
+		return Allowance{Text: "the parent Gateway is not established: Gateways are not served"}
 	case parent.State != ParentFound || parent.Gateway == nil:
 		return Allowance{Text: "the parent Gateway is " + string(parent.State)}
 	}
@@ -205,6 +222,12 @@ func ListenerSetAllowance(ls ListenerSet, parent ParentLookup, ns NamespaceLabel
 	a := Allowance{From: al.From}
 	if a.From == "" {
 		a.From = "None"
+	}
+	if !parent.Current {
+		// the parent's configuration is its last good read: no current
+		// allowance, and so no disagreement, is established from it
+		a.Text = "the Gateways read is not current: the parent's allowedListeners (" + clipLabel(a.From) + " when last read) is not established"
+		return a
 	}
 	switch a.From {
 	case "None":

@@ -194,7 +194,7 @@ func TestParseListenerSetDefaultsTheParent(t *testing.T) {
 // Coverage S7 §4: the ListenerSet's verdict.
 func TestListenerSetRule(t *testing.T) {
 	gw := ParseGatewayRef(gatewayWithListeners(1, nil))
-	found := ParentLookup{State: ParentFound, Gateway: &gw}
+	found := ParentLookup{State: ParentFound, Gateway: &gw, Current: true}
 	healthy := listenerSetObj("infra", "a", t0, 2, map[string]any{"name": "eg"}, lsConds("True", "Accepted", "True", "Programmed", 2),
 		healthyListener("extra", 2))
 	for _, tc := range []struct {
@@ -234,7 +234,7 @@ func TestListenerSetRule(t *testing.T) {
 	}
 	// the parent of another kind names it
 	other := ParseListenerSet(listenerSetObj("infra", "a", t0, 2, map[string]any{"kind": "XGateway", "name": "eg"}, lsConds("True", "Accepted", "True", "Programmed", 2)))
-	if lk := LookupParent(other, []GatewayRef{gw}, true); lk.State != ParentUnsupported {
+	if lk := LookupParent(other, []GatewayRef{gw}, ParentRead{Current: true, Complete: true}); lk.State != ParentUnsupported {
 		t.Errorf("lookup of another kind: %+v", lk)
 	}
 	if e := ListenerSetRule(other, ParentLookup{State: ParentUnsupported}); e.Label != "parent is a XGateway, not a Gateway" {
@@ -245,14 +245,28 @@ func TestListenerSetRule(t *testing.T) {
 func TestLookupParentProvesAbsenceOnlyFromACompleteRead(t *testing.T) {
 	gw := ParseGatewayRef(gatewayWithListeners(1, nil))
 	ls := ParseListenerSet(listenerSetObj("team-a", "a", t0, 1, map[string]any{"name": "eg", "namespace": "infra"}, nil))
-	if lk := LookupParent(ls, []GatewayRef{gw}, false); lk.State != ParentFound || lk.Gateway.Name != "eg" {
-		t.Errorf("found in a partial read: %+v", lk)
+	current, truncated, stale, absent := ParentRead{Current: true, Complete: true}, ParentRead{Current: true}, ParentRead{}, ParentRead{Absent: true, Complete: true}
+	if lk := LookupParent(ls, []GatewayRef{gw}, truncated); lk.State != ParentFound || lk.Gateway.Name != "eg" || !lk.Current {
+		t.Errorf("found in a truncated, current read: %+v", lk)
 	}
-	if lk := LookupParent(ls, nil, true); lk.State != ParentNotFound {
-		t.Errorf("complete absence: %+v", lk)
+	if lk := LookupParent(ls, []GatewayRef{gw}, stale); lk.State != ParentFound || lk.Current {
+		t.Errorf("found only in a stale read is found, never current: %+v", lk)
 	}
-	if lk := LookupParent(ls, nil, false); lk.State != ParentNotEstablished {
-		t.Errorf("incomplete absence: %+v", lk)
+	if lk := LookupParent(ls, nil, current); lk.State != ParentNotFound {
+		t.Errorf("complete, current absence: %+v", lk)
+	}
+	for name, read := range map[string]ParentRead{"truncated": truncated, "stale": stale} {
+		if lk := LookupParent(ls, nil, read); lk.State != ParentNotEstablished || lk.NotServed {
+			t.Errorf("%s absence: %+v", name, lk)
+		}
+	}
+	// Codex's S7a implementation review, finding 3: a confirmed-absent
+	// Gateways API is complete, but proves no parent missing
+	if lk := LookupParent(ls, nil, absent); lk.State != ParentNotEstablished || !lk.NotServed {
+		t.Errorf("Gateways not served: %+v", lk)
+	}
+	if e := ListenerSetRule(ls, LookupParent(ls, nil, absent)); e.Role != health.Unknown {
+		t.Errorf("a parent kind not served reads %v %q", e.Role, e.Label)
 	}
 }
 
@@ -303,14 +317,23 @@ func TestListenerSetAllowance(t *testing.T) {
 		{"a value Klyx does not read", gwWith(from("Mesh", nil)), "team-b", accepted, known, "Mesh", "", false, "not a value Klyx reads"},
 	} {
 		ls := ParseListenerSet(listenerSetObj(tc.ns, "x", t0, 1, map[string]any{"name": "eg", "namespace": "infra"}, tc.conds))
-		a := ListenerSetAllowance(ls, ParentLookup{State: ParentFound, Gateway: tc.gw}, tc.labels)
+		a := ListenerSetAllowance(ls, ParentLookup{State: ParentFound, Gateway: tc.gw, Current: true}, tc.labels)
 		if a.From != tc.from || a.Allowed != tc.allowed || a.Disagrees != tc.disagrees || !strings.Contains(a.Text, tc.text) {
 			t.Errorf("%s: %+v", tc.name, a)
 		}
 	}
+	// a parent from a stale read establishes no current allowance, and so
+	// no disagreement (Codex's S7a implementation review, finding 3)
+	none := ParseListenerSet(listenerSetObj("team-b", "y", t0, 1, map[string]any{"name": "eg", "namespace": "infra"}, accepted))
+	if a := ListenerSetAllowance(none, ParentLookup{State: ParentFound, Gateway: gwWith(from("None", nil))}, known); a.Allowed != "" || a.Disagrees || !strings.Contains(a.Text, "not current") {
+		t.Errorf("stale parent: %+v", a)
+	}
+	if a := ListenerSetAllowance(none, ParentLookup{State: ParentNotEstablished, NotServed: true}, known); a.Allowed != "" || !strings.Contains(a.Text, "Gateways are not served") {
+		t.Errorf("not served: %+v", a)
+	}
 	// a stale Accepted condition is never compared
 	ls := ParseListenerSet(listenerSetObj("team-b", "x", t0, 2, map[string]any{"name": "eg", "namespace": "infra"}, accepted))
-	if a := ListenerSetAllowance(ls, ParentLookup{State: ParentFound, Gateway: gwWith(from("None", nil))}, known); a.Disagrees {
+	if a := ListenerSetAllowance(ls, ParentLookup{State: ParentFound, Gateway: gwWith(from("None", nil)), Current: true}, known); a.Disagrees {
 		t.Errorf("stale: %+v", a)
 	}
 	for _, st := range []ParentState{ParentNotFound, ParentNotEstablished} {
@@ -504,6 +527,42 @@ func TestProjectionSizing(t *testing.T) {
 			if n <= 10 && len(o.Clipped) > 0 {
 				t.Errorf("%s with %d listeners was clipped: %v", tc.resource, n, o.Clipped)
 			}
+		}
+	}
+}
+
+// Codex's S7a implementation review, finding 1: every Gateway API condition
+// message takes the accepted URL rule - user info removed, encoded
+// separators included - on the read path and through the projection, and a
+// credential crossing the clip is removed whole.
+func TestConditionMessagesTakeTheURLRule(t *testing.T) {
+	const needle = "S7needle"
+	for _, msg := range []string{
+		"cannot fetch https://alice:" + needle + "@example.test/cert",
+		"cannot fetch https://alice:" + needle + "%40example.test/cert",
+		strings.Repeat("x", 1000) + " https://alice:" + needle + "@example.test/" + strings.Repeat("p", 40),
+	} {
+		if got := SafeMessage(msg); strings.Contains(got, needle) {
+			t.Errorf("SafeMessage kept the credential: %q", got)
+		}
+		st := listenerStatus("https", 0, map[string]any{"type": "ResolvedRefs", "status": "False", "reason": "InvalidCertificateRef", "message": msg, "observedGeneration": int64(1)})
+		u := gatewayWithListeners(1, nil, st)
+		u.Object["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "Accepted", "status": "False", "reason": "Invalid", "message": msg, "observedGeneration": int64(1)}}
+		raw := ParseGatewayRef(u)
+		p, _ := Project("gateways")(u)
+		proj := *p.(*Object).Gateway
+		for name, g := range map[string]GatewayRef{"read": raw, "projected": proj} {
+			if strings.Contains(g.AcceptedCond.Message, needle) || strings.Contains(g.Listeners[0].Status.Of("ResolvedRefs").Message, needle) {
+				t.Errorf("%s path kept the credential: %q", name, msg[:40])
+			}
+		}
+		lsU := listenerSetObj("infra", "a", t0, 1, map[string]any{"name": "eg"}, []any{map[string]any{"type": "Accepted", "status": "False", "reason": "Invalid", "message": msg, "observedGeneration": int64(1)}})
+		lp, _ := Project("listenersets")(lsU)
+		if strings.Contains(lp.(*Object).ListenerSet.AcceptedCond.Message, needle) || strings.Contains(ParseListenerSet(lsU).AcceptedCond.Message, needle) {
+			t.Errorf("a ListenerSet's own condition kept the credential")
+		}
+		if e := GatewayVerdict(raw.AcceptedCond, raw.ProgrammedCond, raw.Generation, raw.Listeners); strings.Contains(e.Reason, needle) {
+			t.Errorf("the verdict's reason kept the credential")
 		}
 	}
 }

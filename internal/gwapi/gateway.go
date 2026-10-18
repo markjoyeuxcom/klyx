@@ -6,6 +6,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/moomora/klyx/internal/scrub"
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // condTrue reports whether status.conditions has an entry of the given type with
@@ -25,8 +28,22 @@ func condTrue(obj map[string]interface{}, condType string) bool {
 	return false
 }
 
-// condOf returns the named condition as observed; an absent condition has
-// Status "".
+// SafeMessage applies the accepted URL rule (urlscrub: user info removed,
+// encoded separators included) and then the credential heuristic to a
+// condition message, so no Gateway API message carries a credential into a
+// row, a DTO, a reason or a prompt (coverage S7a, Codex's implementation
+// review finding 1). Idempotent.
+func SafeMessage(s string) string {
+	if s == "" {
+		return s
+	}
+	s = urlscrub.Text(s).Text
+	s, _ = scrub.Credentials(s)
+	return s
+}
+
+// condOf returns the named condition as observed, its message made safe; an
+// absent condition has Status "".
 func condOf(conds []interface{}, condType string) Cond {
 	for _, c := range conds {
 		m, ok := c.(map[string]interface{})
@@ -39,7 +56,8 @@ func condOf(conds []interface{}, condType string) Cond {
 		out := Cond{}
 		out.Status, _ = m["status"].(string)
 		out.Reason, _ = m["reason"].(string)
-		out.Message, _ = m["message"].(string)
+		msg, _ := m["message"].(string)
+		out.Message = SafeMessage(msg)
 		switch og := m["observedGeneration"].(type) {
 		case int64:
 			out.ObservedGeneration = og

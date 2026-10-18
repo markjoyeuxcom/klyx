@@ -98,6 +98,13 @@ type Capture struct {
 	// there is: live, with nothing left out by a budget or a cap. Only a
 	// complete source proves an absent object departed.
 	Complete map[string]bool
+	// Current names the sources whose read is Live: their objects are as
+	// the API serves them now, though a budget may have left others out
+	// (coverage S7a, Codex's implementation review finding 3). A confirmed
+	// absence is complete but not current; a stale read is neither. Only a
+	// source both complete and current proves an object of a served kind
+	// absent.
+	Current map[string]bool
 	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
 	// rank of its first left-out object: every object that ranks before it
 	// is here, so a question confined to those has a complete answer

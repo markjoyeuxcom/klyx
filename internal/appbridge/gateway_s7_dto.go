@@ -85,6 +85,7 @@ type ListenerSetRowDTO struct {
 	Created            string            `json:"created,omitempty"` // RFC3339
 	Parent             ListenerParentDTO `json:"parent"`
 	ParentState        string            `json:"parentState"`
+	ParentCurrent      bool              `json:"parentCurrent"` // a found parent is from a current read
 	Listeners          []ListenerDTO     `json:"listeners"`
 	AcceptedCond       CondDTO           `json:"acceptedCond"`
 	ProgrammedCond     CondDTO           `json:"programmedCond"`
@@ -113,7 +114,7 @@ func listenerDTO(l gwapi.Listener, generation int64) ListenerDTO {
 	if st := l.Status; st != nil {
 		sd := &ListenerStatusDTO{SupportedKinds: routeKindDTOs(st.SupportedKinds), AttachedRoutes: st.AttachedRoutes, Conditions: make([]ListenerConditionDTO, 0, len(st.Conditions))}
 		for _, c := range st.Conditions {
-			cd := ListenerConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message, ObservedGeneration: c.ObservedGeneration,
+			cd := ListenerConditionDTO{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: gwapi.SafeMessage(c.Message), ObservedGeneration: c.ObservedGeneration,
 				Stale: generation > 0 && c.ObservedGeneration < generation}
 			if !c.LastTransitionTime.IsZero() {
 				cd.LastTransitionTime = c.LastTransitionTime.UTC().Format(time.RFC3339)
@@ -147,7 +148,7 @@ func listenerSetRowDTO(r healthsrc.Row[healthsrc.ListenerSetRow]) ListenerSetRow
 	ls := r.Data.Set
 	d := ListenerSetRowDTO{UID: r.Ref.UID, GVR: r.Ref.GVR, Generation: r.Ref.Generation, Namespace: ls.Namespace, Name: ls.Name,
 		Parent:      ListenerParentDTO{Group: ls.Parent.Group, Kind: ls.Parent.Kind, Namespace: ls.Parent.Namespace, Name: ls.Parent.Name},
-		ParentState: string(r.Data.ParentState), Listeners: listenerDTOs(ls.Listeners, ls.Generation),
+		ParentState: string(r.Data.ParentState), ParentCurrent: r.Data.ParentCurrent, Listeners: listenerDTOs(ls.Listeners, ls.Generation),
 		AcceptedCond: condDTO(ls.AcceptedCond), ProgrammedCond: condDTO(ls.ProgrammedCond), Stale: ls.Stale, ObservedGeneration: ls.ObservedGeneration,
 		Allowance:  AllowanceDTO{From: r.Data.Allowance.From, Allowed: r.Data.Allowance.Allowed, Text: r.Data.Allowance.Text, Disagrees: r.Data.Allowance.Disagrees},
 		Precedence: r.Data.Precedence, Siblings: r.Data.Siblings, PrecedenceComplete: r.Data.PrecedenceComplete, Rule: toRuleDTO(r.Eval)}

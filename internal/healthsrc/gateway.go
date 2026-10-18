@@ -115,7 +115,9 @@ func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 type ListenerSetRow struct {
 	Set         gwapi.ListenerSet
 	ParentState gwapi.ParentState
-	Allowance   gwapi.Allowance
+	// ParentCurrent: a found parent is from a Live read of the Gateways.
+	ParentCurrent bool
+	Allowance     gwapi.Allowance
 	// Precedence is the set's place among the ListenerSets naming the same
 	// parent in this read (1 = first after the Gateway's own listeners),
 	// Siblings how many the read holds, and PrecedenceComplete whether the
@@ -126,9 +128,10 @@ type ListenerSetRow struct {
 }
 
 // evalListenerSets judges each ListenerSet (S7 §4) against its parent in
-// the gateways model - absent proves "not found" only from a complete read -
-// and evaluates the parent's allowedListeners against the namespace's
-// labels, established only from a complete namespaces read.
+// the gateways model - absent proves "not found" only from a complete,
+// current read of a served kind - and evaluates a current parent's
+// allowedListeners against the namespace's labels, established only from a
+// complete, current namespaces read.
 func evalListenerSets(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		gws := gwObjects(c.Objects[KindGateways])
@@ -159,17 +162,20 @@ func evalListenerSets(cluster string) func(observe.Capture) observe.PartResult {
 				place[ls.UID] = [2]int{i + 1, len(group)}
 			}
 		}
+		// a confirmed absence is complete but not current (Capture.Current)
+		read := gwapi.ParentRead{Absent: c.Complete[KindGateways] && !c.Current[KindGateways],
+			Current: c.Current[KindGateways], Complete: c.Complete[KindGateways]}
 		var items []nativeItem
 		var rows []Row[ListenerSetRow]
 		for i, o := range objs {
 			ls := sets[i]
-			lk := gwapi.LookupParent(ls, gateways, c.Complete[KindGateways])
+			lk := gwapi.LookupParent(ls, gateways, read)
 			labels, present := nsLabels[ls.Namespace]
-			ns := gwapi.NamespaceLabels{Known: present && c.Complete[KindNamespaces], Labels: labels}
+			ns := gwapi.NamespaceLabels{Known: present && c.Complete[KindNamespaces] && c.Current[KindNamespaces], Labels: labels}
 			it := nativeItem{gwapi.ListenerSetRule(ls, lk), gwRef(o, KindListenerSets)}
 			items = append(items, it)
 			pl := place[ls.UID]
-			rows = append(rows, nativeRow(it, ListenerSetRow{Set: ls, ParentState: lk.State, Allowance: gwapi.ListenerSetAllowance(ls, lk, ns),
+			rows = append(rows, nativeRow(it, ListenerSetRow{Set: ls, ParentState: lk.State, ParentCurrent: lk.Current, Allowance: gwapi.ListenerSetAllowance(ls, lk, ns),
 				Precedence: pl[0], Siblings: pl[1], PrecedenceComplete: c.Complete[KindListenerSets]}))
 		}
 		r := nativeResult(c.RoleCap, cluster, TaskGateway, "need attention", items)

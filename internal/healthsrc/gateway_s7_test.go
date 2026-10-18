@@ -9,8 +9,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	metafake "k8s.io/client-go/metadata/fake"
 
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
@@ -71,7 +74,8 @@ func TestListenerSetsPart(t *testing.T) {
 			KindListenerSets: objs,
 			KindGateways:     {projected(t, KindGateways, gwAllowing("eg", "Same"))},
 			KindNamespaces:   {namespaceMeta("infra", nil), namespaceMeta("team-b", map[string]string{"team": "b"})},
-		}, Complete: map[string]bool{KindGateways: gatewaysComplete, KindNamespaces: namespacesComplete, KindListenerSets: true}}
+		}, Complete: map[string]bool{KindGateways: gatewaysComplete, KindNamespaces: namespacesComplete, KindListenerSets: true},
+			Current: map[string]bool{KindGateways: true, KindNamespaces: true, KindListenerSets: true}}
 	}
 	res := evalListenerSets("c1")(capture(true, true))
 	if res.Native.Total != 4 || res.Native.Included != 3 || res.Native.Roles.Fault != 2 || res.Native.Roles.Degraded != 1 {
@@ -130,7 +134,7 @@ func TestListenerSetSelectorNeedsCompleteNamespaces(t *testing.T) {
 			KindListenerSets: {projected(t, KindListenerSets, listenerSet("team-b", "x", "eg", s7t0, "True", "Accepted"))},
 			KindGateways:     {projected(t, KindGateways, g)},
 			KindNamespaces:   ns,
-		}, Complete: map[string]bool{KindGateways: true, KindNamespaces: nsComplete}}
+		}, Complete: map[string]bool{KindGateways: true, KindNamespaces: nsComplete}, Current: map[string]bool{KindGateways: true, KindNamespaces: true}}
 	}
 	labelled := namespaceMeta("team-b", map[string]string{"team": "b"})
 	for _, tc := range []struct {
@@ -239,5 +243,74 @@ func TestGatewayKindsProbeTheirCandidates(t *testing.T) {
 	kinds, _ = Gateway(old)
 	if _, err := kinds[1].Probe(context.Background()); err == nil || !strings.Contains(err.Error(), "served at v2; Klyx reads v1 or v1beta1") {
 		t.Errorf("a version outside the candidates: %v", err)
+	}
+}
+
+// Codex's S7a implementation review, finding 3: a parent present only in a
+// stale read is found, but its allowedListeners establishes no current
+// allowance and no disagreement; a stale namespaces read establishes no
+// labels.
+func TestAStaleParentEstablishesNoAllowance(t *testing.T) {
+	c := observe.Capture{Rows: true, Objects: map[string][]any{
+		KindGateways:     {projected(t, KindGateways, gwAllowing("eg", "None"))},
+		KindListenerSets: {projected(t, KindListenerSets, listenerSet("infra", "x", "eg", s7t0, "True", "Accepted"))},
+		KindNamespaces:   {namespaceMeta("infra", nil)},
+	}, Complete: map[string]bool{KindListenerSets: true}, Current: map[string]bool{KindListenerSets: true}}
+	r := listenerSetRows(t, evalListenerSets("c1")(c))["infra/x"]
+	if r.Data.ParentState != gwapi.ParentFound || r.Data.ParentCurrent {
+		t.Errorf("parent: %s current %v", r.Data.ParentState, r.Data.ParentCurrent)
+	}
+	if r.Data.Allowance.Allowed != "" || r.Data.Allowance.Disagrees || !strings.Contains(r.Data.Allowance.Text, "not current") {
+		t.Errorf("a stale parent manufactured an allowance claim: %+v", r.Data.Allowance)
+	}
+	if r.Eval.Role != health.OK {
+		t.Errorf("the controller's verdict stands: %+v", r.Eval)
+	}
+}
+
+// Codex's S7a implementation review, finding 3, through the real Observer:
+// with ListenerSets served and the Gateways API confirmed absent, the parent
+// is not established, never "not found".
+func TestAParentKindNotServedIsNotMissing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gatewayListKinds())
+	gvr := schema.GroupVersionResource{Group: gwapi.Group, Version: "v1", Resource: "listenersets"}
+	if _, err := dyn.Resource(gvr).Namespace("infra").Create(context.Background(), listenerSet("infra", "x", "eg", s7t0, "True", "Accepted"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	probe := func(_ context.Context, group, res, _ string) (observe.Probe, error) {
+		return observe.Probe{Served: group == gwapi.Group && res == "listenersets", Version: "v1"}, nil
+	}
+	nd := NativeDeps{Cluster: "c1", Dyn: dyn, Typed: fake.NewClientset(), Meta: metafake.NewSimpleMetadataClient(scheme), Served: probe}
+	kinds, domains := Gateway(nd)
+	kinds = append(append(SharedNetworkKinds(nd), namespacesKind(nd.Meta)), kinds...)
+	s := &sink{}
+	o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: kinds, Domains: domains, Throttle: time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	o.Start(ctx)
+	defer func() { cancel(); <-o.Done() }()
+	o.SubscribeRows(TaskGateway, "listenersets", observe.Owner{Kind: "lens", ID: "t"})
+	waitFor(t, "the ListenerSet read beside an absent Gateways API", func() bool {
+		p, ok := nativePart(s, TaskGateway, "listenersets")
+		if !ok || p.Native == nil || p.Native.Total != 1 {
+			return false
+		}
+		for _, k := range p.Kinds {
+			if k.Kind == KindGateways && k.Coverage == observe.Absent {
+				return true
+			}
+		}
+		return false
+	})
+	r, ok := o.RowsNow(TaskGateway, "listenersets")
+	if !ok {
+		t.Fatal("no rows")
+	}
+	row := r.Rows.(RowSet[ListenerSetRow]).Rows[0]
+	if row.Eval.Role != health.Unknown || row.Data.ParentState != gwapi.ParentNotEstablished || !strings.Contains(row.Data.Allowance.Text, "not served") {
+		t.Errorf("not-served parent kind: %v %q parent %s, allowance %q", row.Eval.Role, row.Eval.Label, row.Data.ParentState, row.Data.Allowance.Text)
 	}
 }
