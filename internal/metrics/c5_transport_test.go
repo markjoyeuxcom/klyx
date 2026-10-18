@@ -26,7 +26,9 @@ func TestGuardedProxyRedirectDoesNotExportKubeCredential(t *testing.T) {
 		name string
 		cfg  func(host string) *rest.Config
 	}{
-		{"bearer", func(h string) *rest.Config { return &rest.Config{Host: h, BearerToken: "C5_SYNTHETIC_KUBE_TOKEN", Timeout: 3 * time.Second} }},
+		{"bearer", func(h string) *rest.Config {
+			return &rest.Config{Host: h, BearerToken: "C5_SYNTHETIC_KUBE_TOKEN", Timeout: 3 * time.Second}
+		}},
 		{"basic", func(h string) *rest.Config {
 			return &rest.Config{Host: h, Username: "kube", Password: "C5_SYNTHETIC_KUBE_PASSWORD", Timeout: 3 * time.Second}
 		}},

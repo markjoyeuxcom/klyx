@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/moomora/klyx/internal/config"
@@ -21,6 +22,11 @@ func sourceStr(c ServiceCandidate) string {
 // unavailable. disco is the single reduced discovery outcome.
 func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactory) Resolution {
 	if cfg.Endpoint != "" {
+		// an endpoint URL carrying credentials is refused for use, and
+		// never shown with them (coverage C5 §2)
+		if p := config.UserinfoProblem(cfg.Endpoint); p != "" {
+			return Resolution{Mode: ModeUnavailable, Source: withoutUserinfo(cfg.Endpoint), Reason: p}
+		}
 		base := strings.TrimRight(cfg.Endpoint, "/")
 		warn := ""
 		if cfg.ServiceRef != nil {
@@ -47,3 +53,13 @@ func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactor
 // ReasonNoService: no endpoint or Service is configured and discovery found
 // none - the one case where the remedy is to configure a metrics endpoint.
 const ReasonNoService = "no Prometheus Service found"
+
+// withoutUserinfo is an endpoint URL with any credentials it carries removed.
+func withoutUserinfo(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	u.User = nil
+	return strings.TrimRight(u.String(), "/")
+}

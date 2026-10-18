@@ -117,13 +117,21 @@ type ClusterConfig struct {
 	Environment string            `yaml:"environment"`
 	Protected   bool              `yaml:"protected"`
 	Metrics     *MetricsConfig    `yaml:"metrics"`
+	// Alertmanager and Loki (coverage C5 §2): parsed, validated and shown
+	// with their credential state; S8 reads them.
+	Alertmanager *EndpointConfig `yaml:"alertmanager"`
+	Loki         *EndpointConfig `yaml:"loki"`
 }
 
 type MetricsConfig struct {
-	Endpoint      string             `yaml:"endpoint"`
+	Endpoint string `yaml:"endpoint"`
+	// Token is the legacy plaintext bearer token (coverage C5 §6): still
+	// read until Settings > Endpoints moves it into the keychain.
 	Token         string             `yaml:"token"`
 	TLSSkipVerify bool               `yaml:"tlsSkipVerify"`
 	ServiceRef    *MetricsServiceRef `yaml:"serviceRef"`
+	Auth          *EndpointAuth      `yaml:"auth"`   // C5 §2: the secret is in the keychain
+	Tenant        string             `yaml:"tenant"` // C5 §2: X-Scope-OrgID
 }
 
 type MetricsServiceRef struct {
@@ -181,7 +189,7 @@ func looksProd(s string) bool {
 // classic `tags: {protected: true}` trap, where Protected never gets set).
 var reservedTagKeys = map[string]bool{
 	"name": true, "context": true, "kubeconfig": true, "group": true,
-	"environment": true, "protected": true, "metrics": true,
+	"environment": true, "protected": true, "metrics": true, "alertmanager": true, "loki": true,
 }
 
 // Warnings returns non-fatal config problems worth surfacing at startup, chiefly
@@ -201,8 +209,8 @@ func (c *Config) Warnings() []string {
 		}
 	}
 	for _, cl := range c.Clusters {
-		if m := cl.Metrics; m != nil && m.Endpoint != "" && m.ServiceRef != nil {
-			w = append(w, fmt.Sprintf("cluster %q: metrics.serviceRef is ignored because metrics.endpoint is set", cl.Name))
+		for _, e := range cl.Endpoints() {
+			w = append(w, endpointWarnings(cl.Name, e.Kind, e.Spec)...)
 		}
 	}
 	_, notes := c.ApprovedGitRepos()
@@ -352,13 +360,10 @@ func (c *Config) validate() error {
 					return fmt.Errorf("cluster %q: metrics.endpoint must be the Prometheus base URL without a trailing /api/v1", cl.Name)
 				}
 			}
-			if sr := m.ServiceRef; sr != nil {
-				if sr.Namespace == "" || sr.Name == "" || sr.Port == "" {
-					return fmt.Errorf("cluster %q: metrics.serviceRef requires namespace, name, and port", cl.Name)
-				}
-				if sr.Scheme != "" && sr.Scheme != "http" && sr.Scheme != "https" {
-					return fmt.Errorf("cluster %q: metrics.serviceRef.scheme must be http or https", cl.Name)
-				}
+		}
+		for _, e := range cl.Endpoints() {
+			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
+				return fmt.Errorf("cluster %q: %w", cl.Name, err)
 			}
 		}
 	}

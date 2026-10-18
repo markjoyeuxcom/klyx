@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/moomora/klyx/internal/config"
@@ -70,4 +71,16 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("got %+v", r)
 		}
 	})
+}
+
+// Coverage C5 §2: an endpoint URL with userinfo is refused for use - nothing
+// is sent to it, and its source is shown without the credentials.
+func TestResolveRefusesUserinfo(t *testing.T) {
+	r := Resolve(config.MetricsConfig{Endpoint: "https://admin:hunter2@prom.example/prometheus"}, DiscoveryResult{}, &fakeFactory{})
+	if r.Transport != nil || r.Mode != ModeUnavailable || !strings.Contains(r.Reason, "carries credentials") {
+		t.Fatalf("refused for use: %+v", r)
+	}
+	if strings.Contains(r.Source, "hunter2") || strings.Contains(r.Source, "admin") || r.Source != "https://prom.example/prometheus" {
+		t.Fatalf("source without credentials: %q", r.Source)
+	}
 }
