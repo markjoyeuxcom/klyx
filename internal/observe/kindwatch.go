@@ -20,7 +20,13 @@ type KindState struct {
 	Generation uint64
 	// Seq is the kind's watermark: it advances on every model mutation,
 	// freshness change, complete read and generation change.
-	Seq        uint64
+	Seq uint64
+	// Epoch is the generation's continuity epoch (The Line slice 2b §2): it
+	// advances on every recorded error and every complete list, so two
+	// states of one generation with one epoch saw every change between
+	// them; a changed epoch proves nothing about what happened between
+	// (coverage S4 §3, the pending-episode tracker).
+	Epoch      uint64
 	Coverage   Coverage
 	Class, Err string
 	// CountKnown: a complete read happened in this generation, so Objects is
@@ -149,7 +155,7 @@ func (o *Observer) kindStateWith(ks *kindState, tally bool) KindState {
 		st.Coverage, st.Class, st.Err = o.kindCoverageLocked(ks)
 		return st
 	}
-	st.Generation = g.id
+	st.Generation, st.Epoch = g.id, g.epoch
 	f := g.fresh
 	st.Coverage, st.Class, st.Err = f.cov, f.class, f.err
 	if f.cov == Live || f.cov == Stale {

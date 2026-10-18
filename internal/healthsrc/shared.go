@@ -9,7 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
+	"github.com/moomora/klyx/internal/lb"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // The shared network kinds (roadmap C3, coverage S3a §2): Services and
@@ -21,9 +23,10 @@ const (
 	KindServices       = "services"
 	KindEndpointSlices = "endpointslices"
 	// The consumers.
-	ConsumerGateway   = "gateway"
-	ConsumerAdmission = "admission"
-	admissionGroup    = "admissionregistration.k8s.io"
+	ConsumerGateway       = "gateway"
+	ConsumerAdmission     = "admission"
+	ConsumerLoadBalancing = "loadbalancing" // coverage S4: Services only
+	admissionGroup        = "admissionregistration.k8s.io"
 )
 
 // AddressPresent stands in a projected endpoint for its addresses: a rule
@@ -52,9 +55,13 @@ func SharedNetworkKinds(d NativeDeps) []observe.KindSpec {
 		{Name: ConsumerGateway, Demand: served(gatewayGroup, "gateways")},
 		{Name: ConsumerAdmission, Demand: served(admissionGroup, "validatingwebhookconfigurations")},
 	}
+	// S4's consumer reads the core Services API, served on every supported
+	// cluster: Services are watched wherever Klyx connects.
+	always := func(context.Context) (bool, error) { return true, nil }
+	svcConsumers := append(append([]observe.Consumer(nil), consumers...), observe.Consumer{Name: ConsumerLoadBalancing, Demand: always})
 	typed := d.Typed
 	services := observe.KindSpec{Name: KindServices, GVR: "v1/services", Scope: "all namespaces", ExpectedType: &corev1.Service{},
-		Project: ProjectService, Consumers: consumers, Version: coreKindProbeVersion,
+		Project: ProjectService, Consumers: svcConsumers, Version: coreKindProbeVersion,
 		NewListWatch: lw(typed, func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
 			return typed.CoreV1().Services("").List(ctx, o)
 		}, func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
@@ -76,6 +83,14 @@ func SharedNetworkKinds(d NativeDeps) []observe.KindSpec {
 // ClusterIP, an ExternalName, the ports (name, number, protocol), whether
 // a selector is set, and publishNotReadyAddresses. It is a *corev1.Service
 // so meta.Accessor readers keep working.
+//
+// A LoadBalancer Service also keeps what S4's rule reads (S4 §2): its
+// class, externalTrafficPolicy, families and their policy, the deprecated
+// loadBalancerIP, the allowlisted address-request annotations, and its
+// status - every ingress entry (ip, hostname, ipMode; per port its number,
+// protocol and whether an error is set) and its conditions (message
+// scrubbed and clipped). The lists are kept whole so a rule classifies
+// over all of them; only displays are capped.
 func ProjectService(obj any) (any, error) {
 	s, ok := obj.(*corev1.Service)
 	if !ok {
@@ -83,6 +98,9 @@ func ProjectService(obj any) (any, error) {
 	}
 	out := &corev1.Service{ObjectMeta: projectMeta(s.ObjectMeta, false), Spec: corev1.ServiceSpec{Type: s.Spec.Type,
 		ExternalName: s.Spec.ExternalName, PublishNotReadyAddresses: s.Spec.PublishNotReadyAddresses}}
+	if s.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		projectLoadBalancer(s, out)
+	}
 	if s.Spec.ClusterIP == corev1.ClusterIPNone {
 		out.Spec.ClusterIP = corev1.ClusterIPNone
 	}
@@ -123,4 +141,60 @@ func ProjectEndpointSlice(obj any) (any, error) {
 		out.Endpoints = append(out.Endpoints, pe)
 	}
 	return out, nil
+}
+
+// projectLoadBalancer copies S4's LoadBalancer fields (S4 §2).
+func projectLoadBalancer(s, out *corev1.Service) {
+	if c := s.Spec.LoadBalancerClass; c != nil {
+		v := clipText(*c, 253)
+		out.Spec.LoadBalancerClass = &v
+	}
+	out.Spec.ExternalTrafficPolicy = s.Spec.ExternalTrafficPolicy
+	out.Spec.IPFamilies = append([]corev1.IPFamily(nil), s.Spec.IPFamilies...)
+	if p := s.Spec.IPFamilyPolicy; p != nil {
+		v := *p
+		out.Spec.IPFamilyPolicy = &v
+	}
+	out.Spec.LoadBalancerIP = clipText(s.Spec.LoadBalancerIP, 64)
+	for _, k := range lb.AddressAnnotations {
+		if v, ok := s.Annotations[k]; ok {
+			if out.Annotations == nil {
+				out.Annotations = map[string]string{}
+			}
+			out.Annotations[k] = clipText(v, 256)
+		}
+	}
+	for _, in := range s.Status.LoadBalancer.Ingress {
+		e := corev1.LoadBalancerIngress{IP: clipText(in.IP, 64), Hostname: clipText(in.Hostname, 253)}
+		if in.IPMode != nil {
+			m := *in.IPMode
+			e.IPMode = &m
+		}
+		for _, p := range in.Ports {
+			ps := corev1.PortStatus{Port: p.Port, Protocol: p.Protocol}
+			if p.Error != nil && *p.Error != "" {
+				set := lb.ErrorSet // whether one is set, never its text
+				ps.Error = &set
+			}
+			e.Ports = append(e.Ports, ps)
+		}
+		out.Status.LoadBalancer.Ingress = append(out.Status.LoadBalancer.Ingress, e)
+	}
+	for _, c := range s.Status.Conditions {
+		out.Status.Conditions = append(out.Status.Conditions, metav1.Condition{Type: clipText(c.Type, 316), Status: c.Status,
+			Reason: clipText(c.Reason, 128), Message: clipText(urlscrub.Text(c.Message).Text, 400),
+			ObservedGeneration: c.ObservedGeneration, LastTransitionTime: c.LastTransitionTime})
+	}
+}
+
+// clipText cuts s to n bytes on a rune boundary, marking the cut.
+func clipText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut] + "…"
 }
