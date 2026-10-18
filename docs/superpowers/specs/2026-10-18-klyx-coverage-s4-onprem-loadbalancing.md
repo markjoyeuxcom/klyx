@@ -445,3 +445,22 @@ ServiceLB acts only on LoadBalancer Services, so they cover §6's "or ServiceLB 
   - **full evaluation:** 51.5 and 59.7 ms before, 42.0 and 46.2 ms after. That is no regression; the difference is within this test's spread (S3a saw 66 to 78 ms on the same tree);
   - **steady retained heap:** 58.3 MB before, 59.1 MB after (+0.8 MB); large cluster +0.1 MB, six clusters +0.5 MB;
   - **recovery-storm peak:** 74.3 and 73.4 MB before, 65.0 and 86.4 MB after: noise.
+
+## 15. Implementation review 1: Codex's review of 195d81d
+
+Codex judged the four stated deviations reasonable. Its five findings were fixed in 8dcf3b4:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 (P1) | Explain still carried the excluded values: through the rule's derived reason (an event's message), the target's facts and condition messages, and its Warning events | `lbEvidence` applies the policy to the whole document for the lb task: conditions without messages, facts from an address-free allowlist (type, traffic policy, session affinity, LB class), and events and condition reasons as identifier tokens only. The lens fields carry a structural `cause` (the speaking source and its reason token, or the silent case) instead of the free-text reason. The regression runs the serialized prompt through the fake completer, for a Service and a Cilium pool, and fails on all five leaks with the policy removed. |
+| 2 | `WatchKind` is newest-wins, so an allocated state between two pending snapshots could vanish, and the old episode carried on into a fault | A LoadBalancer Service's projection keeps its resourceVersion, and the driver passes `contiguous` (the kind's `Seq` advanced by one at most). A pending Service keeps its episode only when it was unwritten since the last snapshot, or the snapshots were contiguous (one write in the whole kind, pending to pending). Otherwise the episode restarts as a lower bound, for that Service alone. |
+| 3 | The Pools tab's evidence read only IPAddressPool, so a checking Cilium read showed "No address pools" | The tab's evidence combines both pool kinds (`combineEvidence`), and a pinned pool is proven gone only by its own kind's read. |
+| 4 | A failed second selector discarded a proven not-ready controller; a continued list certified health | Both selectors' reads accumulate. A proven not-ready controller stands beside any gap. A failed or continued (cut) list leaves `ControllersRead` false and certifies neither health nor absence. |
+| 5 | A family with one count missing was skipped, so "Exhausted" was claimed | A family reporting one count but not the other makes capacity unknown ("Counts incomplete"), unless another family proves free capacity. |
+
+**Gates after the fixes:**
+- `go test -race` on the eight packages: ok;
+- golangci-lint: 0 issues;
+- the frontend: 2190 passed, tsc clean, eslint 0 errors.
+
+The parity gate and the four-way smoke are rerun at 8dcf3b4 below.
