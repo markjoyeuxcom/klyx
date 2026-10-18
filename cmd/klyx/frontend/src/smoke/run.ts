@@ -445,6 +445,40 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(8000, "the partial schedule", () => $("[data-testid$='-partial-weekly']"));
     noVeleroNeedle("the fleet Backups view");
   });
+  // Coverage S3a (scratchpad lab-s3a): configurations broken first, a
+  // backend chain and the limits, routing-dependent states, a policy's
+  // verdict, and no needle on screen (a URL path, a CEL literal in a
+  // type-checking warning).
+  const noAdmissionNeedle = (where: string) => {
+    if ((document.body.textContent ?? "").includes("S3aLABneedle")) throw new Error(`a protected value is on screen: ${where}`);
+  };
+  await step(steps, "Admission webhooks", async () => {
+    await open("admission");
+    await closeDrawer();
+    (await within(4000, "the Webhooks tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Webhooks/))).click();
+    const first = await within(10_000, "configuration rows", () => $<HTMLElement>(".lens-row"));
+    if (!/lab-fail-missing|lab-fail-noready/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the missing backend", () => byText<HTMLElement>(".lens-row", /lab-fail-missing/))).click();
+    const panel = await within(8000, "the configuration inspector", () => $("[data-testid='admission-config-panel']"));
+    if (!/matching requests may fail/.test(panel.textContent ?? "")) throw new Error(`the fault: ${(panel.textContent ?? "").slice(0, 200)}`);
+    await within(8000, "the backend chain", () => $("[data-testid='admission-chain']"));
+    const limits = await within(8000, "the limits", () => $("[data-testid='admission-limits']"));
+    if (!/routing mode/.test(limits.textContent ?? "")) throw new Error("the routing-mode limit is not said");
+    (await within(4000, "the headless backend", () => byText<HTMLElement>(".lens-row", /lab-headless/))).click();
+    await within(8000, "routing-dependent", () => /Routing-dependent/.test($("[data-testid='admission-config-panel']")?.textContent ?? ""));
+    noAdmissionNeedle("the webhooks");
+  });
+  await step(steps, "Admission policies", async () => {
+    await open("admission");
+    await closeDrawer();
+    (await within(4000, "the Policies tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Policies/))).click();
+    (await within(10_000, "the params policy", () => byText<HTMLElement>(".lens-row", /lab-params/))).click();
+    await within(8000, "paramKind not served", () => /paramKind not served/.test($("[data-testid='admission-policy-panel']")?.textContent ?? ""));
+    (await within(4000, "the warning policy", () => byText<HTMLElement>(".lens-row", /lab-warning/))).click();
+    const warn = await within(8000, "the warnings", () => $("[data-testid='admission-warnings']"));
+    if (!/text is not shown/.test(warn.textContent ?? "")) throw new Error(`the warnings: ${warn.textContent}`);
+    noAdmissionNeedle("the policies");
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");

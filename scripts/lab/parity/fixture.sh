@@ -659,6 +659,56 @@ EOF
 	vstatus backups.velero.io parity-manual "{\"phase\":\"Completed\",\"startTimestamp\":\"$t\",\"completionTimestamp\":\"$t\"}"
 }
 
+admission_objects() {
+	# Admission (coverage S3a): a healthy baseline that admits nothing. The
+	# webhook targets a group and resource that do not exist, fails open,
+	# and is backed by a Service over the Velero stand-in's ready pod; the
+	# policy's expression is true and its binding matches no namespace.
+	# Faults and every backend and policy state are covered by
+	# internal/admission's tests and the kind-klyx lab (lab-s3a).
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Service
+metadata: {name: parity-admission-hook, namespace: velero}
+spec:
+  selector: {app: velero}
+  ports: [{name: https, port: 443, targetPort: 8443, protocol: TCP}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: parity-admission
+  annotations:
+    $(marks ok false)
+webhooks:
+- name: parity.lab.klyx.dev
+  failurePolicy: Ignore
+  sideEffects: None
+  admissionReviewVersions: [v1]
+  clientConfig: {service: {namespace: velero, name: parity-admission-hook, port: 443}}
+  rules: [{operations: [CREATE], apiGroups: [lab.klyx.dev], apiVersions: [v1], resources: [widgets]}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: parity-policy
+  annotations:
+    $(marks ok false)
+spec:
+  failurePolicy: Ignore
+  matchConstraints: {resourceRules: [{operations: [CREATE], apiGroups: [lab.klyx.dev], apiVersions: [v1], resources: [widgets]}]}
+  validations: [{expression: "true"}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: parity-policy-b}
+spec:
+  policyName: parity-policy
+  validationActions: [Deny]
+  matchResources: {namespaceSelector: {matchLabels: {klyx.dev/parity: none}}}
+EOF
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -671,6 +721,7 @@ baseline() {
 	gateway_objects
 	karpenter_objects
 	velero_objects
+	admission_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 

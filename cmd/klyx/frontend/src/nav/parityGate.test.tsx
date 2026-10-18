@@ -63,9 +63,9 @@ type Capture = {
   rows: { cluster: string; incarnation: number; task: string; evaluatedAt: string; part: HealthPart }[];
   dtos: Record<string, RowsDTO<DtoRow>>; // the production sink's emitted messages: the lens DTOs
 };
-type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string } };
+type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
-const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "argo/applications", "argo/applicationsets",
+const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "argo/applications", "argo/applicationsets",
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
 
 const OUT = process.env.KLYX_PARITY_OUT;
@@ -116,6 +116,9 @@ function assertRowDTOs(c: Capture) {
     let included = 0;
     const seen = new Set<string>();
     for (const row of dto.rows ?? []) {
+      // a listed fact (coverage S2b, S3a: an uncounted Backup, a binding)
+      // carries no evaluation and is no member of the counted set
+      if (native && !row.rule && (row.counted === false || row.entity === "binding")) continue;
       const uid = row.uid ?? "";
       const role = native ? row.rule?.role : row.health?.kind;
       expect(role, `${c.case} ${key} ${uid}: no evaluation`).toBeTruthy();

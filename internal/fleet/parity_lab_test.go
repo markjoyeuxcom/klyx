@@ -211,6 +211,8 @@ var parityParts = []parityPart{
 	{"velero", "schedules", "native", []string{"schedules"}},
 	{"velero", "locations", "native", []string{"backupstoragelocations"}},
 	{"velero", "backups", "native", []string{"backups"}},
+	{"admission", "webhooks", "native", []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"}},
+	{"admission", "policies", "native", []string{"validatingadmissionpolicies", "mutatingadmissionpolicies"}},
 }
 
 var parityResource = map[string]string{
@@ -233,6 +235,10 @@ var parityResource = map[string]string{
 	"artifactgenerators":     "artifactgenerators.source.extensions.fluxcd.io", "externalartifacts": "externalartifacts.source.toolkit.fluxcd.io",
 	"receivers": "receivers.notification.toolkit.fluxcd.io",
 	"schedules": "schedules.velero.io", "backupstoragelocations": "backupstoragelocations.velero.io", "backups": "backups.velero.io",
+	"validatingwebhookconfigurations": "validatingwebhookconfigurations.admissionregistration.k8s.io",
+	"mutatingwebhookconfigurations":   "mutatingwebhookconfigurations.admissionregistration.k8s.io",
+	"validatingadmissionpolicies":     "validatingadmissionpolicies.admissionregistration.k8s.io",
+	"mutatingadmissionpolicies":       "mutatingadmissionpolicies.admissionregistration.k8s.io",
 }
 
 // parityMember is one counted object's declared evaluation.
