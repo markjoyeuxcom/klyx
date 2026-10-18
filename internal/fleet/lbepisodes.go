@@ -23,8 +23,9 @@ type lbObserver interface {
 // LoadBalancer Service's current episode, from the Services kind's states.
 // A state that is not live and complete breaks continuity; the tracker
 // then restarts every episode as a lower bound, and the fact keeps the
-// last episodes while the kind's evidence is stale.
-func startLBEpisodes(ctx context.Context, h lbObserver, now func() time.Time) {
+// last episodes while the kind's evidence is stale. seen reports, from
+// each complete live read, whether any LoadBalancer Service exists.
+func startLBEpisodes(ctx context.Context, h lbObserver, now func() time.Time, seen func(bool)) {
 	var mu sync.Mutex
 	var tr lb.Tracker
 	h.WatchKind(healthsrc.KindServices, func(observe.KindState) {
@@ -45,5 +46,12 @@ func startLBEpisodes(ctx context.Context, h lbObserver, now func() time.Time) {
 			return
 		}
 		h.SetFact(healthsrc.FactLBEpisodes, tr.Observe(lb.Continuity{Generation: st.Generation, Epoch: st.Epoch}, now(), states))
+		lbSeen := false
+		for _, s := range states {
+			lbSeen = lbSeen || s != lb.StateOther
+		}
+		if seen != nil {
+			seen(lbSeen)
+		}
 	})
 }

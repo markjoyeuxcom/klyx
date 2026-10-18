@@ -43,6 +43,18 @@ type LoadBalancingCapability struct {
 	ControllersRead bool
 	Controllers     []MetalLBController
 	AWSLBC          bool
+	// ServicesSeen is set by the connection from the Observer's Services
+	// kind: a LoadBalancer Service exists, from a complete live read. With
+	// the controllers it gates the Load balancers lens (S4 §6); ServiceLB
+	// acts only on LoadBalancer Services, so they cover it.
+	ServicesSeen bool
+}
+
+// Present gates the Load balancers lens: a controller detected (MetalLB,
+// the AWS Load Balancer Controller, or Cilium, whose LB IPAM pools come
+// with it) or a LoadBalancer Service seen.
+func (c LoadBalancingCapability) Present(ciliumPresent bool) bool {
+	return c.MetalLB || c.AWSLBC || ciliumPresent || c.ServicesSeen
 }
 
 // detectLoadBalancing classifies MetalLB like the other controllers: not

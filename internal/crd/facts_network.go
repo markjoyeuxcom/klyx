@@ -289,6 +289,9 @@ func serviceFacts(u *unstructured.Unstructured) []Fact {
 	} else if svcType == "LoadBalancer" {
 		facts = append(facts, row("", "LB address", "pending", "warning"))
 	}
+	if cls := gstr(u, "spec", "loadBalancerClass"); cls != "" && svcType == "LoadBalancer" {
+		facts = append(facts, row("", "LB class", cls, "")) // coverage S4 §4
+	}
 	if ext := stringSlice(gslice(u, "spec", "externalIPs")); len(ext) > 0 {
 		facts = append(facts, row("", "external IPs", joinLimited(ext, 6), ""))
 	}

@@ -314,7 +314,7 @@ func MetalLBPoolRule(in MetalLBPoolInput) health.NativeEval {
 // available above zero), none is available, and some are assigned.
 func exhausted(s PoolStatus) bool {
 	type fam struct{ a, v *int64 }
-	any := false
+	assigned := false
 	for _, f := range []fam{{s.AssignedV4, s.AvailableV4}, {s.AssignedV6, s.AvailableV6}} {
 		if f.a == nil || f.v == nil {
 			if f.v != nil && *f.v > 0 {
@@ -328,9 +328,9 @@ func exhausted(s PoolStatus) bool {
 		if *f.v > 0 {
 			return false
 		}
-		any = any || *f.a > 0
+		assigned = assigned || *f.a > 0
 	}
-	return any
+	return assigned
 }
 
 func availableLabel(s PoolStatus) string {

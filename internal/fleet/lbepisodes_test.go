@@ -22,7 +22,10 @@ type fakeLBObserver struct {
 	facts []map[string]lb.Episode
 }
 
-func (o *fakeLBObserver) WatchKind(_ string, f func(observe.KindState)) func() { o.f = f; return func() {} }
+func (o *fakeLBObserver) WatchKind(_ string, f func(observe.KindState)) func() {
+	o.f = f
+	return func() {}
+}
 func (o *fakeLBObserver) VisitKind(_ string, visit func(any) bool) (observe.KindState, bool, bool) {
 	for _, x := range o.objs {
 		visit(x)
@@ -44,13 +47,17 @@ func TestS4LBEpisodesDriver(t *testing.T) {
 	allocated := pending.DeepCopy()
 	allocated.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.1"}}
 	o := &fakeLBObserver{st: observe.KindState{Kind: healthsrc.KindServices, Generation: 1, Epoch: 1, Coverage: observe.Live, CountKnown: true}, objs: []any{allocated}}
-	startLBEpisodes(context.Background(), o, clock)
+	var seen bool
+	startLBEpisodes(context.Background(), o, clock, func(b bool) { seen = b })
 	o.f(o.st)
 	now = now.Add(time.Minute)
 	o.objs = []any{pending}
 	o.f(o.st)
 	if last := o.facts[len(o.facts)-1]; !last["u1"].Observed || !last["u1"].Start.Equal(now) {
 		t.Fatalf("an observed loss of the address: %+v", last)
+	}
+	if !seen {
+		t.Fatal("a LoadBalancer Service is seen")
 	}
 	n := len(o.facts)
 	o.st.Coverage = observe.Stale

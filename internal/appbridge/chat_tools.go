@@ -1026,6 +1026,11 @@ var chatParts = map[string][2]string{
 	"admissionregistration.k8s.io/mutatingadmissionpolicies":         {healthsrc.TaskAdmission, "policies"},
 	"admissionregistration.k8s.io/validatingadmissionpolicybindings": {healthsrc.TaskAdmission, "policies"},
 	"admissionregistration.k8s.io/mutatingadmissionpolicybindings":   {healthsrc.TaskAdmission, "policies"},
+	// coverage S4: only a LoadBalancer Service has a verdict
+	"/services":                           {healthsrc.TaskLB, "services"},
+	"metallb.io/ipaddresspools":           {healthsrc.TaskLB, "pools"},
+	"cilium.io/ciliumloadbalancerippools": {healthsrc.TaskLB, "pools"},
+	"metallb.io/configurationstates":      {healthsrc.TaskLB, "metallb"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer

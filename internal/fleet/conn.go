@@ -201,6 +201,7 @@ type ClusterConn struct {
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
 	healthSyncHook func()                    // test seam: runs between reading state and handing it over
 	paramKindsKick func()                    // S3a: refreshes FactParamKinds (set once the Observer runs)
+	lbServicesSeen bool                      // S4: a LoadBalancer Service exists (the lens's gate)
 	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
@@ -734,8 +735,23 @@ func (c *ClusterConn) Snapshot() Snapshot {
 		PodsKnown:    c.podsKnown,
 		PodsStale:    c.podsStale,
 		Version:      c.snapVersion,
-		Capabilities: c.caps,
+		Capabilities: c.capsLocked(),
 	}
+}
+
+// capsLocked is the capability set with what the Observer adds (S4: a
+// LoadBalancer Service seen). Called under c.mu.
+func (c *ClusterConn) capsLocked() capability.Set {
+	caps := c.caps
+	caps.LoadBalancing.ServicesSeen = c.lbServicesSeen
+	return caps
+}
+
+// setLBServicesSeen records whether a LoadBalancer Service exists.
+func (c *ClusterConn) setLBServicesSeen(seen bool) {
+	c.mu.Lock()
+	c.lbServicesSeen = seen
+	c.mu.Unlock()
 }
 
 // SetHealthSink gives the conn its health publication sink; it must be called
@@ -798,8 +814,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.mu.Unlock()
 	o.Start(ctx)
 	if c.dyn != nil {
-		c.startParamKinds(ctx, o)          // S3a: FactParamKinds
-		startLBEpisodes(ctx, o, c.clk.Now) // S4: FactLBEpisodes
+		c.startParamKinds(ctx, o)                               // S3a: FactParamKinds
+		startLBEpisodes(ctx, o, c.clk.Now, c.setLBServicesSeen) // S4: FactLBEpisodes
 	}
 	c.attachIndex()
 	c.syncHealth()

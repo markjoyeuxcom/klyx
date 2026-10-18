@@ -794,4 +794,6 @@ var kinds = map[string]string{
 	"schedules": "Schedule", "backupstoragelocations": "BackupStorageLocation", "backups": "Backup",
 	"validatingwebhookconfigurations": "ValidatingWebhookConfiguration", "mutatingwebhookconfigurations": "MutatingWebhookConfiguration",
 	"validatingadmissionpolicies": "ValidatingAdmissionPolicy", "mutatingadmissionpolicies": "MutatingAdmissionPolicy",
+	"services": "Service", "ipaddresspools": "IPAddressPool", "ciliumloadbalancerippools": "CiliumLoadBalancerIPPool",
+	"configurationstates": "ConfigurationState",
 }
