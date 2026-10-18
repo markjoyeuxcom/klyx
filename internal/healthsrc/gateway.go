@@ -1,15 +1,10 @@
 package healthsrc
 
 import (
-	"context"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/observe"
@@ -17,15 +12,13 @@ import (
 
 // Gateway API kinds and the Gateways task (1c addendum §1, §1.3). Routes
 // are their own part: a healthy Gateway with a broken route lights the
-// task. Service existence and EndpointSlices are the routes part's evidence
-// - watched only where the Gateway API is served (their probes follow it),
-// never on clusters without it.
+// task. Service existence and EndpointSlices are the routes part's evidence:
+// the shared network kinds (shared.go, C3), read through the gateway
+// consumer, so they are this part's only where the Gateway API is served.
 const (
 	KindGatewayClasses   = "gatewayclasses"
 	KindGateways         = "gateways"
 	KindHTTPRoutes       = "httproutes"
-	KindGatewayServices  = "services"
-	KindGatewayEndpoints = "endpointslices"
 	TaskGateway          = "gateway"
 	gatewayGroup         = "gateway.networking.k8s.io"
 	coreKindProbeVersion = "v1" // core kinds: a fixed generation identity
@@ -33,58 +26,20 @@ const (
 
 // Gateway returns the Gateway API kinds and the Gateways task.
 func Gateway(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
-	whenGatewayAPI := func(ctx context.Context) (observe.Probe, error) {
-		p, err := d.Served(ctx, gatewayGroup, "gateways", "v1")
-		if err != nil || !p.Served {
-			return observe.Probe{Served: false}, err
-		}
-		return observe.Probe{Served: true, Version: coreKindProbeVersion}, nil
-	}
-	services := metaKind(d.Meta, KindGatewayServices, schema.GroupVersionResource{Version: "v1", Resource: "services"}, "all namespaces", ProjectOwnerMeta)
-	services.Probe = whenGatewayAPI
-	typed := d.Typed
-	endpoints := observe.KindSpec{Name: KindGatewayEndpoints, GVR: "discovery.k8s.io/v1/endpointslices", Scope: "all namespaces",
-		ExpectedType: &discoveryv1.EndpointSlice{}, Project: ProjectEndpointSlice, Probe: whenGatewayAPI,
-		NewListWatch: lw(typed, func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
-			return typed.DiscoveryV1().EndpointSlices("").List(ctx, o)
-		}, func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
-			return typed.DiscoveryV1().EndpointSlices("").Watch(ctx, o)
-		})}
 	kinds := []observe.KindSpec{
 		crdKind(d, KindGatewayClasses, gatewayGroup, "gatewayclasses", "v1", "cluster-scoped"),
 		crdKind(d, KindGateways, gatewayGroup, "gateways", "v1", "all namespaces"),
 		crdKind(d, KindHTTPRoutes, gatewayGroup, "httproutes", "v1", "all namespaces"),
-		services, endpoints,
 	}
 	c := d.Cluster
 	domains := []observe.DomainSpec{{ID: TaskGateway, Parts: []observe.PartSpec{
 		{ID: "gateways", Entity: "Gateways", Scope: "all namespaces", Classifier: "native",
 			Counted: []string{KindGateways}, Deps: []string{KindGatewayClasses}, Evaluate: evalGateways(c), Ledger: true},
 		{ID: "routes", Entity: "HTTPRoutes with a failing attachment", Scope: "routes attached to a Gateway", Classifier: "native",
-			Counted: []string{KindHTTPRoutes}, Deps: []string{KindGateways, KindGatewayServices, KindGatewayEndpoints}, Evaluate: evalRoutes(c), Ledger: true},
+			Counted: []string{KindHTTPRoutes}, Deps: []string{KindGateways, KindServices, KindEndpointSlices}, Evaluate: evalRoutes(c), Ledger: true,
+			Consumer: ConsumerGateway},
 	}}}
 	return kinds, domains
-}
-
-// ProjectEndpointSlice keeps what CountEndpoints reads: identity, the
-// service-name label, and per endpoint its ready condition and target ref.
-func ProjectEndpointSlice(obj any) (any, error) {
-	es, ok := obj.(*discoveryv1.EndpointSlice)
-	if !ok {
-		return nil, errWant("*EndpointSlice", obj)
-	}
-	out := &discoveryv1.EndpointSlice{
-		ObjectMeta:  metav1.ObjectMeta{Name: es.Name, Namespace: es.Namespace, UID: es.UID, Labels: map[string]string{discoveryv1.LabelServiceName: es.Labels[discoveryv1.LabelServiceName]}},
-		AddressType: es.AddressType,
-	}
-	for _, e := range es.Endpoints {
-		pe := discoveryv1.Endpoint{Conditions: discoveryv1.EndpointConditions{Ready: e.Conditions.Ready}}
-		if e.TargetRef != nil {
-			pe.TargetRef = &corev1.ObjectReference{Kind: e.TargetRef.Kind, Namespace: e.TargetRef.Namespace, Name: e.TargetRef.Name, UID: e.TargetRef.UID}
-		}
-		out.Endpoints = append(out.Endpoints, pe)
-	}
-	return out, nil
 }
 
 func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
@@ -119,7 +74,7 @@ func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 		svcObjs, servicesRead := c.Objects[KindGatewayServices]
 		services := map[string]bool{}
 		for _, o := range svcObjs {
-			m := o.(*metav1.PartialObjectMetadata)
+			m := o.(*corev1.Service)
 			services[m.Namespace+"/"+m.Name] = true
 		}
 		sliceObjs, slicesRead := c.Objects[KindGatewayEndpoints]

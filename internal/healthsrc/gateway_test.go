@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	metafake "k8s.io/client-go/metadata/fake"
@@ -66,7 +67,13 @@ func gatewayListKinds() map[schema.GroupVersionResource]string {
 	}
 }
 
-func startGateway(t *testing.T, served bool, dynObjs []runtime.Object, typed *fake.Clientset, metaObjs ...runtime.Object) (*sink, *observe.Observer) {
+func startGateway(t *testing.T, served bool, dynObjs []runtime.Object, typed *fake.Clientset, services ...*corev1.Service) (*sink, *observe.Observer) {
+	return startGatewayWith(t, served, false, dynObjs, typed, services...)
+}
+
+// startGatewayWith adds the shared network kinds (C3): admission is the
+// other consumer, served or not.
+func startGatewayWith(t *testing.T, served, admission bool, dynObjs []runtime.Object, typed *fake.Clientset, services ...*corev1.Service) (*sink, *observe.Observer) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := metav1.AddMetaToScheme(scheme); err != nil {
@@ -84,12 +91,19 @@ func startGateway(t *testing.T, served bool, dynObjs []runtime.Object, typed *fa
 		}
 	}
 	probe := func(_ context.Context, group, _, _ string) (observe.Probe, error) {
-		if group == "gateway.networking.k8s.io" && served {
+		if (group == "gateway.networking.k8s.io" && served) || (group == admissionGroup && admission) {
 			return observe.Probe{Served: true, Version: "v1"}, nil
 		}
 		return observe.Probe{Served: false}, nil
 	}
-	kinds, domains := Gateway(NativeDeps{Cluster: "c1", Dyn: dyn, Served: probe, Typed: typed, Meta: metafake.NewSimpleMetadataClient(scheme, metaObjs...)})
+	for _, svc := range services {
+		if _, err := typed.CoreV1().Services(svc.Namespace).Create(context.Background(), svc, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nd := NativeDeps{Cluster: "c1", Dyn: dyn, Served: probe, Typed: typed, Meta: metafake.NewSimpleMetadataClient(scheme)}
+	kinds, domains := Gateway(nd)
+	kinds = append(SharedNetworkKinds(nd), kinds...)
 	s := &sink{}
 	o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: kinds, Domains: domains, Throttle: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,8 +112,9 @@ func startGateway(t *testing.T, served bool, dynObjs []runtime.Object, typed *fa
 	return s, o
 }
 
-func serviceMeta(name string) *metav1.PartialObjectMetadata {
-	return &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID("svc-" + name)}}
+func serviceMeta(name string) *corev1.Service {
+	return &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID("svc-" + name)},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Ports: []corev1.ServicePort{{Name: "http", Port: 80, Protocol: corev1.ProtocolTCP}}}}
 }
 
 func TestGatewayTaskOnFixtures(t *testing.T) {
@@ -133,7 +148,9 @@ func TestGatewayTaskOnFixtures(t *testing.T) {
 	})
 }
 
-func TestGatewayEvidenceIsNotWatchedWithoutTheGatewayAPI(t *testing.T) {
+// C3: the shared kinds are watched when any consumer needs them, and only
+// then; the Gateway task never borrows admission's presence.
+func TestGatewayEvidenceIsNotWatchedWithoutAConsumer(t *testing.T) {
 	typed := fake.NewClientset(slice("web", true))
 	s, _ := startGateway(t, false, nil, typed)
 	waitFor(t, "the task is absent", func() bool {
@@ -143,8 +160,55 @@ func TestGatewayEvidenceIsNotWatchedWithoutTheGatewayAPI(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	for _, a := range typed.Actions() {
 		if a.GetResource().Resource == "endpointslices" {
-			t.Fatalf("EndpointSlices are watched only where the Gateway API is served: %v", a)
+			t.Fatalf("EndpointSlices are watched only where a consumer needs them: %v", a)
 		}
+	}
+}
+
+func TestGatewayNeverBorrowsAdmissionsServices(t *testing.T) {
+	typed := fake.NewClientset(slice("web", true))
+	s, o := startGatewayWith(t, false, true, nil, typed, serviceMeta("web"))
+	waitFor(t, "admission's demand opens the slices", func() bool {
+		for _, a := range typed.Actions() {
+			if a.GetResource().Resource == "endpointslices" && a.GetVerb() == "list" {
+				return true
+			}
+		}
+		return false
+	})
+	waitFor(t, "the gateway task stays absent", func() bool {
+		tk, ok := task(s, TaskGateway)
+		return ok && tk.Coverage == observe.Absent
+	})
+	rows, _ := o.RowsNow(TaskGateway, "routes")
+	for _, k := range rows.Part.Kinds {
+		if (k.Kind == KindServices || k.Kind == KindEndpointSlices) && k.Coverage != observe.Absent {
+			t.Fatalf("the routes part reads %s as %s through its own no", k.Kind, k.Coverage)
+		}
+	}
+}
+
+// Every field a rule reads survives the Service projection (S3a §2).
+func TestServiceProjectionParity(t *testing.T) {
+	raw := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "hook", Namespace: "sys", UID: "u1", Annotations: map[string]string{"big": "x"}, Labels: map[string]string{"a": "b"}},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone, Selector: map[string]string{"app": "hook"}, PublishNotReadyAddresses: true,
+			Ports: []corev1.ServicePort{{Name: "https", Port: 443, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(8443)}}}}
+	v, err := ProjectService(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := v.(*corev1.Service)
+	if p.Name != "hook" || p.UID != "u1" || p.Spec.ClusterIP != corev1.ClusterIPNone || len(p.Spec.Selector) == 0 || !p.Spec.PublishNotReadyAddresses ||
+		len(p.Spec.Ports) != 1 || p.Spec.Ports[0].Port != 443 || p.Spec.Ports[0].Name != "https" || p.Spec.Ports[0].Protocol != corev1.ProtocolTCP {
+		t.Fatalf("%+v", p)
+	}
+	if p.Annotations != nil || p.Labels != nil || p.Spec.Selector["app"] != "" {
+		t.Fatalf("kept more than the readers read: %+v", p.ObjectMeta)
+	}
+	raw.Spec.ClusterIP = "10.0.0.1"
+	v, _ = ProjectService(raw)
+	if v.(*corev1.Service).Spec.ClusterIP != "" {
+		t.Fatal("only a headless ClusterIP is kept")
 	}
 }
 
@@ -163,8 +227,8 @@ func TestEndpointSliceProjectionParity(t *testing.T) {
 	if a, b := gwapi.CountEndpoints(raw), gwapi.CountEndpoints(proj); !reflect.DeepEqual(a, b) || a.Total != 3 {
 		t.Fatalf("endpoint counts differ after projection: raw %+v proj %+v", a, b)
 	}
-	if proj[0].Endpoints[0].Addresses != nil {
-		t.Fatal("the projection keeps addresses it should drop")
+	if a := proj[0].Endpoints[0].Addresses; len(a) != 1 || a[0] != AddressPresent {
+		t.Fatalf("the projection keeps whether an endpoint has an address, never the address: %v", a)
 	}
 }
 

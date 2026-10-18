@@ -779,7 +779,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		wk, wd := healthsrc.Gateway(nd)
 		nk, ndoms := healthsrc.Native(nd)
 		vk, vd := healthsrc.Velero(nd)
-		kinds = append(append(append(append(kinds, gk...), wk...), nk...), vk...)
+		// the shared network kinds (C3), once, gated by their consumers
+		kinds = append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...)
 		domains = append(append(append(append(domains, gd...), wd...), ndoms...), vd...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
