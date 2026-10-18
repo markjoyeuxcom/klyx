@@ -90,7 +90,7 @@ The flag's default was `legacy` through at least kubectl 1.32 and is `general` i
 
 **The model, and how sure it is** (revision 1). The API server's minor does not prove the scheduler's. The version-skew policy lets kube-scheduler run one minor behind the API server during an upgrade, and with gates off their defaults. So Klyx states its model as an assumption:
 - **Version read** (`snapVersion`, at connect): the model of that minor, said "assuming kube-scheduler 1.N at its default gates".
-- **The alternative:** the model of the previous minor, which the skew policy allows. For each pod whose two reservations differ (only pods mid-resize, or with pod-level status), Klyx keeps the larger difference per resource.
+- **The alternative:** the model of the previous minor, which the skew policy allows. Every pod is compared under both models, not only pods mid-resize: the PodLevelResources default change between 1.33 and 1.34 alone changes a normal pod-level-spec pod. Klyx keeps the positive difference per resource.
 - **Version unknown:** the per-resource maximum over every supported model, said "scheduler version unknown: the largest reservation any supported version would make". This is never the newest, optimistic rule.
 - **Gates not at their default, and DRA node-allocatable claims (S11):** not modelled, and said.
 
@@ -214,7 +214,7 @@ That is already enough for §2-§4, so the projection does not change. A raw/pro
 | | |
 |---|---|
 | **Counted entity** | The pod UID, unchanged. |
-| **Dependency completeness** | Nothing new. The server version is read at connect; an unread version selects the newest rule and says so. |
+| **Dependency completeness** | Nothing new. The server version is read at connect. An unread version takes the per-resource maximum over every model, per pod, and says so (§2). |
 | **Clock** | None new: the two rules are status-driven. |
 | **Notifications** | Unchanged. Faults only, so the new degraded rules do not notify. |
 | **The detail read** | The Pods inspector's GET, as today, now also mapping `ephemeralContainers`, `ephemeralContainerStatuses`, `resizePolicy` and the per-container status resources. |
@@ -311,3 +311,10 @@ That is already enough for §2-§4, so the projection does not change. A raw/pro
 | 3 | The pod-level table collapsed different helper behaviour and options | §1: the scheduler's options from `CalculateResource`, and a per-minor table of helper version, options at default gates, container rule and pod-level rule. Key-set semantics: 1.36 writes spec's keys and can write zero; 1.37 writes the effective map's keys. Pod-level is skipped on 1.32-1.33. §2: golden provenance records the options per minor, plus partial-key, nil, allocated-only, empty and Infeasible-without-status fixtures. "Never zero" is retired: upstream edges are reproduced. |
 | 4 | The API server's version does not establish the scheduler's model | §2: the model is an assumption, "kube-scheduler 1.N at its default gates". The previous minor's model (allowed by the skew policy) gives a per-pod difference. An unknown version takes the per-resource maximum over every model. The headroom module states the model, the difference, and "depends on the scheduler version" when the spare capacity is below it. |
 | (guidance) | `--target` needs runtime support; `restricted` chooses no numeric user | §1 and §6: process visibility "where the runtime supports it"; the image-compatibility row; the lab's `runAsUser: 65534`. |
+
+**Accepted at face042** (Codex, design revision 1, handoff cbd3c119). This accepts the design only. Implementation guidance carried from the acceptance:
+- **The headroom guard:**
+  - on each surviving node, sum the positive per-pod differences between the alternative and assumed reservations;
+  - compare both CPU and memory with that node's spare capacity *after* placement;
+  - equality fits.
+- **Version unknown:** the maximum is taken per resource per pod, before node aggregation.
