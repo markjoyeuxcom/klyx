@@ -1,6 +1,6 @@
 # Coverage C2 and S5: management is not health; workload identity
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), contract C2 and slice S5. C2 lands first, as the contract S5 uses. Revision 1 answers Codex's design review of 9b6f020 (§10), revision 2 its re-review (§11).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), contract C2 and slice S5. C2 lands first, as the contract S5 uses. Revision 1 answers Codex's design review of 9b6f020 (§10), revision 2 its re-review (§11), revision 3 the next (§12).
 
 The roadmap's S5:
 - **Provider adapters, non-exhaustive:** EKS IRSA; EKS Pod Identity (in-cluster evidence only; EKS Auto Mode has it without a user-installed agent DaemonSet, C2); Azure Workload Identity (its label matters only where Azure is opted in); GKE (the IAM service account annotation, while direct federation needs none).
@@ -123,8 +123,8 @@ The comparison runs on the exact retained values (§6), never on display clips.
 | AWS, `auth.jwt.serviceAccountRef` | that ServiceAccount (namespace as §1); ESO mints its token, so Pod Identity cannot apply; its `eks.amazonaws.com/role-arn` | each of `additionalRoles` in order, then `role` (AssumeRole on top; the last one assumed is the requested principal) | the ServiceAccount lacks `role-arn`: ESO refuses ("an IAM role must be associated") |
 | AWS, `auth.secretRef` | static keys from a Secret (never read) | each of `additionalRoles` in order, then `role` | values unread |
 | AWS, no auth | the controller's credential chain (4.2), a configured source, not a proven principal | each of `additionalRoles` in order, then `role` | the chain's effective credential is not inferred |
-| Azure, `WorkloadIdentity`, `useAzureSDK: true` | the ServiceAccount (`serviceAccountRef`): client ID from its annotation only; tenant from the store's `tenantId`, else the ServiceAccount's annotation (`keyvault_new_sdk.go` 548-566) | none | no client annotation, or no tenant from either: ESO refuses (deterministic). Without `serviceAccountRef`: the controller's environment (4.2) |
-| Azure, `WorkloadIdentity`, legacy SDK, with `serviceAccountRef` | the ServiceAccount: client ID from `authSecretRef.clientId` (a Secret, unread) or its annotation; tenant from `authSecretRef.tenantId` (unread), else the store's `tenantId`, then the ServiceAccount's annotation, else the controller's `AZURE_TENANT_ID` (`keyvault.go` 1156-1195) | none | revision 2, deterministic refusals (no Secret read): the store's `tenantId` set and the ServiceAccount's tenant annotation present (`errMultipleTenantID`, equal values included); neither a client ID reference nor a client annotation. Value-dependent, never claimed: a Secret-sourced client or tenant ID beside the annotation (the duplicate refusals depend on the Secret's value) |
+| Azure, `WorkloadIdentity`, `useAzureSDK: true` | the ServiceAccount (`serviceAccountRef`): client ID from its annotation only; tenant from the store's `tenantId` whenever the field is set (an empty string included, used as is), else the ServiceAccount's annotation (`keyvault_new_sdk.go` 548-566) | none | no client annotation, or neither tenant source: ESO refuses (deterministic). Without `serviceAccountRef`: the controller's environment (4.2) |
+| Azure, `WorkloadIdentity`, legacy SDK, with `serviceAccountRef` | the ServiceAccount, by the guards below (`keyvault.go` 1111-1195) | none | the guards below |
 | Azure, `WorkloadIdentity`, legacy SDK, no `serviceAccountRef` | the controller's own environment (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`), read as 4.2 says | none | an absent variable reads "not in the pod spec" (4.2), never a refusal |
 | Azure, `ManagedIdentity`, `ServicePrincipal` | named, not followed | none | |
 | GCP, `secretRef` | static (never read) | none | |
@@ -132,6 +132,19 @@ The comparison runs on the exact retained values (§6), never on display clips.
 | GCP, `workloadIdentityFederation` (v1 only) | `serviceAccountRef`, `credConfig` (a ConfigMap, unread) or `awsSecurityCredentials` | `gcpServiceAccountEmail` when set (it overrides the ServiceAccount's linked GSA), else that link | credConfig and AWS credentials unresolved |
 | GCP, no auth | the controller's ADC (4.2) | none | not inferred |
 | any other provider | | | "not read by Klyx's identity chain" |
+
+**The legacy Azure guards** (revision 3), in ESO's order, with `serviceAccountRef` set (`keyvault.go` 1111-1195):
+- **Client ID:**
+  - `authSecretRef` present without a `clientId` reference (`{}`, or tenant-only): ESO refuses (`errMissingClientIDSecret`) before it looks at the annotation. Deterministic.
+  - `authSecretRef.clientId` present: the client ID is that Secret's value, unread. With the client annotation also present, ESO refuses only if the value is non-empty, so this is unresolved and never claimed.
+  - No `authSecretRef`: the client annotation. Absent: ESO refuses (`errMissingClient`). Deterministic.
+- **Tenant,** accumulated in order:
+  1. `authSecretRef.tenantId` (a Secret, unread);
+  2. if still empty, the store's `tenantId` (an empty string adds nothing);
+  3. the ServiceAccount's tenant annotation, refused (`errMultipleTenantID`) when the accumulated tenant is non-empty;
+  4. else the controller's `AZURE_TENANT_ID`.
+
+  Deterministic refusal: no `authSecretRef.tenantId` reference, a non-empty store `tenantId`, and the annotation present (equal values included). With a Secret-sourced tenant reference beside the annotation it is unresolved. An empty store `tenantId` falls through to the annotation and is no refusal. With no source in the store or on the ServiceAccount, the tenant comes from the controller's environment: not visible, said so.
 
 **Validation ESO enforces, said when violated:** a namespaced store's `serviceAccountRef.namespace` must be empty or its own. A ClusterSecretStore with no namespace resolves per ExternalSecret ("each ExternalSecret's own namespace"), never one guessed ServiceAccount.
 
@@ -232,6 +245,7 @@ The comparison uses exact retained values; display clipping comes after.
   - revision 2:
     - AWS `additionalRoles` [B, C] with `role` D on each base (the chain A, B, C, D);
     - legacy Azure tenant: the store's tenant with the annotation, equal and different (both refused), each single source, a Secret-sourced tenant beside the annotation (never claimed), and the no-`serviceAccountRef` controller-env branch;
+  - revision 3: an empty `authSecretRef` and a tenant-only `authSecretRef` beside a client annotation (both refused before the annotation), and an empty-string store `tenantId` with the annotation (falls through, no refusal); the new SDK's empty store tenant used as is;
     - the new SDK's store-tenant preference;
     - a class A to B rollout with SA_A and SA_B pods running together, for a class-A store and a class-B store;
     - a capped candidate pod read, which certifies no handler;
@@ -278,3 +292,9 @@ The comparison uses exact retained values; display clipping comes after.
 | 2 | Legacy Azure's tenant refusal is deterministic: a store tenant beside the ServiceAccount's annotation | §4.1: the legacy row split by `serviceAccountRef`; deterministic refusals (no Secret read) apart from the value-dependent ones; the new SDK's store-tenant preference kept separate; the no-`serviceAccountRef` controller-env branch kept |
 | 3 | Applicability came from the Deployment template, identity from running pods | §4.2: each running pod's own `--controller-class`; applicability filtered per pod before grouping by ServiceAccount; an incomplete read or an unresolved class certifies no handler; several applicable groups each listed; §8 the mixed-class rollout for both stores |
 | 4 (P3) | "The tenant is the webhook's default" claimed origin | §3.3: the pod carries tenant T, none is declared now, its origin is not visible |
+
+## 12. Revision 3: Codex's re-review of ad12a3c
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | The legacy Azure guards did not match ESO's branch: an `authSecretRef` without `clientId` is refused before the annotation; an empty store `tenantId` is no duplicate | §4.1: "The legacy Azure guards", in ESO's order, deterministic refusals apart from value-dependent ones; the new SDK's empty store tenant said; §8 the three regressions |
