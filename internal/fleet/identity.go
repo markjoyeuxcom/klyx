@@ -66,7 +66,14 @@ func visitLive(h identityObserver, kind string, visit func(any)) bool {
 		return false
 	}
 	st, complete, ok := h.VisitKind(kind, func(o any) bool { visit(o); return true })
-	return ok && complete && (st.Coverage == observe.Live || st.Coverage == observe.Absent)
+	return ok && readLive(st, complete)
+}
+
+// readLive: a kind read completely and live, or confirmed absent. VisitKind
+// visits nothing for an absent kind and so reports it incomplete: absence
+// is a complete, empty source. Stale, checking and unreadable are not.
+func readLive(st observe.KindState, complete bool) bool {
+	return st.Coverage == observe.Absent || (complete && st.Coverage == observe.Live)
 }
 
 func podReady(p *corev1.Pod) bool {
@@ -331,7 +338,7 @@ func esoStores(h identityObserver) ([]*unstructured.Unstructured, bool) {
 			continue
 		}
 		served = served || st.Coverage != observe.Absent
-		complete = complete && all && (st.Coverage == observe.Live || st.Coverage == observe.Absent)
+		complete = complete && readLive(st, all)
 	}
 	if !complete {
 		return nil, false

@@ -34,7 +34,7 @@ func annValue(a map[string]string, key string, sh shape) *Value {
 		return nil
 	}
 	if len(s) > MaxValue {
-		v := Value{raw: s, Shown: "oversized value (not shown)", Unexpected: true}
+		v := Value{raw: s, oversized: true, Shown: "oversized value (not shown)", Unexpected: true}
 		return &v
 	}
 	v := valueOf(s, sh)

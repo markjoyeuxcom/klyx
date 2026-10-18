@@ -99,6 +99,9 @@ type Pod struct {
 // tokenEntry is one projected serviceAccountToken source.
 type tokenEntry struct {
 	path, audience string
+	// oversized: the audience is past MaxValue, so the chain is unresolved
+	// and nothing is compared (S5 §6)
+	oversized bool
 }
 
 // skipSet splits a skip-containers annotation by sep.
@@ -146,7 +149,8 @@ func PodOf(p *corev1.Pod) Pod {
 				break
 			}
 			sources++
-			vols.tokens[v.Name] = append(vols.tokens[v.Name], tokenEntry{path: src.ServiceAccountToken.Path, audience: src.ServiceAccountToken.Audience})
+			aud := src.ServiceAccountToken.Audience
+			vols.tokens[v.Name] = append(vols.tokens[v.Name], tokenEntry{path: src.ServiceAccountToken.Path, audience: aud, oversized: len(aud) > MaxValue})
 		}
 	}
 	awsSkip := skipSet(p.Annotations[AnnAWSSkip], ",")
@@ -193,7 +197,7 @@ func containerOf(c corev1.Container, init bool, vols volumes, awsSkip, azSkip ma
 			ev.Value = Value{Shown: "set from a reference (not read)"}
 		case len(e.Value) > MaxValue:
 			ev.Oversized = true
-			ev.Value = Value{raw: e.Value, Shown: "oversized value (not shown)", Unexpected: true}
+			ev.Value = Value{raw: e.Value, oversized: true, Shown: "oversized value (not shown)", Unexpected: true}
 		case strings.Contains(e.Value, "$("):
 			ev.Expansion = true
 			ev.Value = Value{raw: e.Value, Shown: "expands at runtime (not shown)", Unexpected: true}
@@ -257,7 +261,7 @@ func mechanismOf(kind string, env map[string]EnvValue, vars []string, fileVar, w
 	}
 	aud, gap := ch.resolve(env[fileVar].Value.raw)
 	switch {
-	case gap == errUnresolvedMount || gap == errVolumesCut:
+	case gap == errUnresolvedMount || gap == errVolumesCut || gap == errRelativePath || gap == errOversizedAudience:
 		m.State, m.Missing = ChainUnresolved, gap
 	case gap != "":
 		m.State, m.Missing = ChainPartial, gap
@@ -282,8 +286,10 @@ func audienceValue(a string) *Value {
 func audienceShown(a string) string { return audienceValue(a).Shown }
 
 const (
-	errUnresolvedMount = "a mount uses subPathExpr, resolved only at runtime"
-	errVolumesCut      = "the pod's projected volumes were cut at the bound, so the token was not read"
+	errUnresolvedMount   = "a mount uses subPathExpr, resolved only at runtime"
+	errVolumesCut        = "the pod's projected volumes were cut at the bound, so the token was not read"
+	errRelativePath      = "the token file's path is relative, resolved against the process's working directory, which Klyx does not read"
+	errOversizedAudience = "the token's audience is oversized, so nothing is compared"
 )
 
 // volumes is what a pod's projected volumes hold, as far as they were read.
@@ -298,6 +304,16 @@ type volumes struct {
 type chainer struct {
 	mounts []corev1.VolumeMount
 	vols   volumes
+}
+
+// absolutePath: a path from the root ("/x", "\\x", on Windows the
+// current drive's, C: in a container) or a drive's root ("C:\\x", "C:/x").
+// "x" and "C:x" are relative to a working directory Klyx does not read.
+func absolutePath(p string) bool {
+	if len(p) >= 2 && p[1] == ':' {
+		return len(p) >= 3 && (p[2] == '\\' || p[2] == '/')
+	}
+	return strings.HasPrefix(p, "/") || strings.HasPrefix(p, "\\")
 }
 
 // splitDrive turns a Windows path (D:\var\run\...) into its lower-case
@@ -324,10 +340,16 @@ func sameDrive(a, b string) bool {
 
 // resolve returns the token's audience, or the missing link.
 func (c chainer) resolve(file string) (string, string) {
+	if !absolutePath(file) {
+		return "", errRelativePath
+	}
 	fd, f := splitDrive(file)
 	var best *corev1.VolumeMount
 	bestPath := ""
 	for i := range c.mounts {
+		if !absolutePath(c.mounts[i].MountPath) {
+			continue // never a match: where it lands is not known
+		}
 		md, mp := splitDrive(c.mounts[i].MountPath)
 		if !sameDrive(fd, md) {
 			continue
@@ -350,6 +372,9 @@ func (c chainer) resolve(file string) (string, string) {
 	}
 	for _, e := range c.vols.tokens[best.Name] {
 		if path.Clean(e.path) == path.Clean(rel) {
+			if e.oversized {
+				return "", errOversizedAudience
+			}
 			return e.audience, ""
 		}
 	}

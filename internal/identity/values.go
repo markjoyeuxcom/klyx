@@ -68,12 +68,17 @@ const MaxValue = 512
 // Value is one identity value: the exact bytes for comparison, kept
 // unexported so they never serialise, and what may be shown.
 type Value struct {
-	raw   string
-	Shown string `json:"shown"`
+	raw string
+	// oversized: past MaxValue; it is never compared (S5 §6).
+	oversized bool
+	Shown     string `json:"shown"`
 	// Unexpected: the value does not have its documented shape, so it is
 	// not shown (S5 §7); it still compares by its exact bytes.
 	Unexpected bool `json:"unexpected,omitempty"`
 }
+
+// Oversized reports a value past MaxValue, which is never compared.
+func (v Value) Oversized() bool { return v.oversized }
 
 // Equal compares exact bytes.
 func (v Value) Equal(o Value) bool { return v.raw == o.raw }

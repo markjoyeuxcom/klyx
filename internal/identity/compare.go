@@ -1,6 +1,8 @@
 package identity
 
 import (
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -92,6 +94,24 @@ func bothAWS(r Reading, irsa, pi *Mechanism) Reading {
 	return r
 }
 
+// oversizedAnn names a declared value past MaxValue, which is never
+// compared (S5 §6); "" when none is.
+func oversizedAnn(vs map[string]*Value) string {
+	var names []string
+	for name, v := range vs {
+		if v != nil && v.Oversized() {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+func unresolvedDeclared(r Reading, ann string) Reading {
+	r.State, r.Text = StateUnresolved, "Unresolved: the ServiceAccount's "+ann+" annotation is oversized; nothing is compared."
+	return r
+}
+
 func chainReading(adapter, container string, m *Mechanism) Reading {
 	if m.State == ChainUnresolved {
 		return Reading{Adapter: adapter, Container: container, State: StateUnresolved, Text: "Unresolved: " + m.Missing + "; nothing is compared."}
@@ -161,6 +181,9 @@ func compareAWS(d Declared, p Pod, c Container) (Reading, bool) {
 		if irsa.State != ChainComplete {
 			return chainReading(AdapterAWS, c.Name, irsa), true
 		}
+		if ann := oversizedAnn(map[string]*Value{AnnRoleARN: d.RoleARN, AnnAudience: d.Audience}); ann != "" {
+			return unresolvedDeclared(r, ann), true
+		}
 		r.Compared = "role and audience"
 		if d.RoleARN == nil {
 			r.State, r.Text = StateUndeclared, "Configured with "+irsa.Role.Shown+"; the ServiceAccount declares no role now (removed later, set in the template, or a self-hosted webhook's ConfigMap)."
@@ -198,6 +221,9 @@ func compareAzure(d Declared, p Pod, c Container) (Reading, bool) {
 	if az != nil {
 		if az.State != ChainComplete {
 			return chainReading(AdapterAzure, c.Name, az), true
+		}
+		if ann := oversizedAnn(map[string]*Value{AnnAzureClient: d.AzureClient, AnnAzureTenant: d.AzureTenant}); ann != "" {
+			return unresolvedDeclared(r, ann), true
 		}
 		r.Compared = "client ID and tenant"
 		if d.AzureClient == nil {
