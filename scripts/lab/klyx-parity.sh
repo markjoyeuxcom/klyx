@@ -77,6 +77,8 @@ crds=(
 	imagerepositories.image.toolkit.fluxcd.io imagepolicies.image.toolkit.fluxcd.io imageupdateautomations.image.toolkit.fluxcd.io
 	artifactgenerators.source.extensions.fluxcd.io externalartifacts.source.toolkit.fluxcd.io receivers.notification.toolkit.fluxcd.io
 	schedules.velero.io backupstoragelocations.velero.io backups.velero.io
+	ipaddresspools.metallb.io l2advertisements.metallb.io bgpadvertisements.metallb.io configurationstates.metallb.io
+	ciliumloadbalancerippools.cilium.io
 )
 
 copy_crds() {

@@ -213,6 +213,10 @@ var parityParts = []parityPart{
 	{"velero", "backups", "native", []string{"backups"}},
 	{"admission", "webhooks", "native", []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"}},
 	{"admission", "policies", "native", []string{"validatingadmissionpolicies", "mutatingadmissionpolicies"}},
+	// coverage S4: only a LoadBalancer Service is a member (parityMemberOf)
+	{"lb", "services", "native", []string{"services"}},
+	{"lb", "pools", "native", []string{"ipaddresspools", "ciliumloadbalancerippools"}},
+	{"lb", "metallb", "native", []string{"configurationstates"}},
 }
 
 var parityResource = map[string]string{
@@ -239,6 +243,8 @@ var parityResource = map[string]string{
 	"mutatingwebhookconfigurations":   "mutatingwebhookconfigurations.admissionregistration.k8s.io",
 	"validatingadmissionpolicies":     "validatingadmissionpolicies.admissionregistration.k8s.io",
 	"mutatingadmissionpolicies":       "mutatingadmissionpolicies.admissionregistration.k8s.io",
+	"services":                        "services", "ipaddresspools": "ipaddresspools.metallb.io",
+	"ciliumloadbalancerippools": "ciliumloadbalancerippools.cilium.io", "configurationstates": "configurationstates.metallb.io",
 }
 
 // parityMember is one counted object's declared evaluation.
@@ -272,6 +278,18 @@ type parityObj struct {
 		UID         string            `json:"uid"`
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
+	Spec struct {
+		Type string `json:"type"`
+	} `json:"spec"`
+}
+
+// parityMemberOf: whether a counted kind's object is a member of the part
+// (coverage S4: the lb services part counts only LoadBalancer Services).
+func parityMemberOf(task, part string, o parityObj) bool {
+	if task == "lb" && part == "services" {
+		return o.Spec.Type == "LoadBalancer"
+	}
+	return true
 }
 
 func addRole(c *observe.Counts, role string) {
@@ -296,7 +314,7 @@ func addRole(c *observe.Counts, role string) {
 // coverage overrides a kind's expected coverage.
 func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
 	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
-	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero"} {
+	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
@@ -315,6 +333,9 @@ func (l *parityLab) oracle(name, state string, coverage map[string]string, contr
 				l.t.Fatalf("oracle %s: %v", kind, err)
 			}
 			for _, o := range list.Items {
+				if !parityMemberOf(p.Task, p.Part, o) {
+					continue
+				}
 				m := parityMember{Role: o.Metadata.Annotations["klyx.dev/parity-role"], Included: o.Metadata.Annotations["klyx.dev/parity-included"] == "true"}
 				if m.Role == "" {
 					m.Role = "ok"

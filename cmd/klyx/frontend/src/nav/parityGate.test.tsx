@@ -65,7 +65,7 @@ type Capture = {
 };
 type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
-const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "argo/applications", "argo/applicationsets",
+const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
 
 const OUT = process.env.KLYX_PARITY_OUT;

@@ -709,6 +709,91 @@ spec:
 EOF
 }
 
+lb_objects() {
+	# Load balancing (coverage S4): a healthy baseline with no controller
+	# writing. A stand-in MetalLB controller (its native labels); a pool
+	# with written counts, selected by an L2Advertisement, in the namespace
+	# of a Valid controller ConfigurationState; a LoadBalancer Service whose
+	# address the fixture writes (kind runs no load-balancer controller, and
+	# a Service of another class is ignored by every controller); and a
+	# Cilium pool with current counts. Pending, exhaustion, conflict,
+	# advertisement and configuration faults are covered by internal/lb's
+	# tests and the kind-klyx lab (lab-s4, a real MetalLB).
+	k create namespace metallb-system --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  namespace: metallb-system
+  labels: {app: metallb, component: controller}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: metallb-stand-in}}
+  template:
+    metadata:
+      labels: {app: metallb-stand-in}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: controller, image: $pause, imagePullPolicy: Never}]
+EOF
+	k -n metallb-system rollout status deployment/controller --timeout=120s >/dev/null
+	settled_pods metallb-system metallb-stand-in Running
+	k apply -f - >/dev/null <<EOF
+apiVersion: metallb.io/v1beta1
+kind: ConfigurationState
+metadata:
+  name: controller
+  namespace: metallb-system
+  annotations:
+    $(marks ok false)
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: parity-pool
+  namespace: metallb-system
+  labels: {tier: gold}
+  annotations:
+    $(marks ok false)
+spec: {addresses: ["192.0.2.0/28"], autoAssign: false}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata: {name: parity-l2, namespace: metallb-system}
+spec:
+  ipAddressPoolSelectors: [{matchLabels: {tier: gold}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: parity-lb
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  type: LoadBalancer
+  loadBalancerClass: parity.klyx.dev/written
+  selector: {app: parity-none}
+  ports: [{name: http, port: 80, targetPort: 8080, protocol: TCP}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: parity-cilium
+  annotations:
+    $(marks ok false)
+spec: {blocks: [{cidr: "198.51.100.0/28"}]}
+EOF
+	status configurationstates.metallb.io metallb-system controller '{"result":"Valid"}'
+	status ipaddresspools.metallb.io metallb-system parity-pool '{"assignedIPv4":1,"availableIPv4":15,"assignedIPv6":0,"availableIPv6":0}'
+	status services "$ns" parity-lb '{"loadBalancer":{"ingress":[{"ip":"192.0.2.1"}]}}'
+	local g
+	g=$(gen ciliumloadbalancerippools.cilium.io - parity-cilium)
+	status ciliumloadbalancerippools.cilium.io - parity-cilium "{\"conditions\":[$(cond cilium.io/IPsTotal Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsAvailable Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsUsed Unknown noreason "$g" | sed 's/klyx parity fixture/0/')]}"
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -722,6 +807,7 @@ baseline() {
 	karpenter_objects
 	velero_objects
 	admission_objects
+	lb_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 

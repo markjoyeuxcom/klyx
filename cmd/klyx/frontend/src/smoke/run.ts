@@ -479,6 +479,43 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/text is not shown/.test(warn.textContent ?? "")) throw new Error(`the warnings: ${warn.textContent}`);
     noAdmissionNeedle("the policies");
   });
+  // Coverage S4 (scratchpad lab-s4: a real MetalLB v0.16.1 on kind-klyx,
+  // with Cilium pool and svclb fixtures): Services pending first with a
+  // lower-bound start, a UID-joined MetalLB event, the chain and the
+  // limits; pools broken first with exact counts; MetalLB's states.
+  await step(steps, "Load balancer Services", async () => {
+    await open("loadbalancers");
+    await closeDrawer();
+    (await within(4000, "the Services tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^Services/))).click();
+    const first = await within(10_000, "service rows", () => $<HTMLElement>(".lens-row"));
+    if (!/Pending|No address/.test(first.textContent ?? "")) throw new Error(`not pending first: the first row is ${first.textContent}`);
+    (await within(4000, "the exhausted request", () => byText<HTMLElement>(".lens-row", /lab-s4\/one-b/))).click();
+    const panel = await within(8000, "the Service inspector", () => $("[data-testid='lb-service-panel']"));
+    await within(8000, "MetalLB's own event", () => /AllocationFailed/.test($("[data-testid='lb-evidence']")?.textContent ?? ""));
+    await within(8000, "the chain", () => $("[data-testid='lb-chain']"));
+    if (!/proves allocation/.test($("[data-testid='lb-limits']")?.textContent ?? "")) throw new Error("the allocation limit is not said");
+    if (!/Pending at least|Pending for|No address/.test(panel.textContent ?? "")) throw new Error(`the pending time: ${(panel.textContent ?? "").slice(0, 200)}`);
+    (await within(4000, "the unknown class", () => byText<HTMLElement>(".lens-row", /lab-s4\/fresh/))).click();
+    await within(8000, "no known controller", () => /no controller Klyx knows serves class lab\.klyx\.dev\/none/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+    (await within(4000, "the svclb Service", () => byText<HTMLElement>(".lens-row", /lab-s4\/svclb-demo/))).click();
+    await within(8000, "the host port conflict", () => /no node has the Service's ports free/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+    (await within(4000, "the Cilium Service", () => byText<HTMLElement>(".lens-row", /lab-s4\/cilium-l2/))).click();
+    await within(8000, "Cilium's condition", () => /out_of_ips/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+  });
+  await step(steps, "Load balancer pools", async () => {
+    await open("loadbalancers");
+    await closeDrawer();
+    (await within(4000, "the Pools tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^Pools/))).click();
+    const first = await within(10_000, "pool rows", () => $<HTMLElement>(".lens-row"));
+    if (!/lab-s4-cilium-conflict/.test(first.textContent ?? "")) throw new Error(`not broken first: the first row is ${first.textContent}`);
+    (await within(4000, "the unadvertised pool", () => byText<HTMLElement>(".lens-row", /lab-s4-silent/))).click();
+    await within(8000, "no advertisement", () => /No advertisement/.test($("[data-testid='lb-pool-panel']")?.textContent ?? ""));
+    if (!/announcement state/.test($("[data-testid='lb-pool-limits']")?.textContent ?? "")) throw new Error("the advertisement limit is not said");
+    (await within(4000, "the IPv6 pool", () => byText<HTMLElement>(".lens-row", /lab-s4-cilium-v6/))).click();
+    await within(8000, "exact counts", () => /18446744073709551614 of 18446744073709551616/.test($("[data-testid='lb-counts']")?.textContent ?? ""));
+    (await within(4000, "the configuration tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^MetalLB configuration/))).click();
+    await within(8000, "MetalLB's states", () => [...document.querySelectorAll(".lens-row")].some((r) => /speaker on/.test(r.textContent ?? "")));
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
