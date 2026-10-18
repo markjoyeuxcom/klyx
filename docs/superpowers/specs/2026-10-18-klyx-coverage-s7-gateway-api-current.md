@@ -515,3 +515,62 @@ At 60161d9, clean:
 - Native smoke: 176/176 in each of night and day at 1440 and 1024, the labs re-applied first.
 - Mutations: 12 caught of 12. They covered the exact namespace count, not-established read as not-found, older listener conditions judged, the order explaining a conflict, discovery's order in place of the candidates', Same allowing every namespace, labels from an incomplete read, a truncated index kind read live, newest-first precedence, a projection dropping listener status, a reveal overridden by auto-selection, and the listener column counting unaccepted ListenerSets.
 - Captures: 32 clean (§15.6).
+
+### 15.9 On a real cluster: AKS with Envoy Gateway
+
+The owner authorised the AKS dev cluster `aks-dev-sc-b0b59a671015` on 2026-10-18 (Kubernetes 1.36.4, one 2-vCPU node, Azure CNI powered by Cilium).
+
+**The baseline** (before anything was installed): the S7a build connected watch-backed, read 1/1 nodes, 17 pods and 4 namespaces, and named every tool that was not installed. It surfaced three AKS facts worth a later decision:
+- `aks-managed-deny-endpointslice-wireserver-ip`, an AKS-managed ValidatingAdmissionPolicy, carries a CEL type-checking warning (it compares a list with `null`) on 1.36. Klyx reports it correctly ("may fail when it runs", look at), but every AKS 1.36 cluster will show it and the owner cannot change it.
+- AKS's three control-plane webhooks are called by URL (`ccp-webhook...svc.cluster.local`), with no Service to check. They read unknown, which leaves Admission permanently unverified on AKS.
+- The resource meters read "no Prometheus Service found": AKS's managed Prometheus is outside the cluster.
+
+**Envoy Gateway v1.9.2** (its chart pulled and inspected first) installs Gateway API v1.6.1's experimental CRDs. The pod webhook is scoped to its own namespace with `failurePolicy: Ignore`. Envoy Gateway is installed as helm release `eg` in `envoy-gateway-system`.
+
+**The fixtures** (`scratchpad/lab-aks-s7`, labelled `klyx.dev/lab=aks-s7`, with `teardown.sh`) mirror the kind lab with a real controller writing every status. A GatewayClass `klyx-eg` points at an EnvoyProxy that makes every proxy Service ClusterIP: no Azure load balancer or public IP. They are:
+- `lab-gw`, allowing Same, with an echo backend and an HTTPRoute;
+- ListenerSets `ls-first`, `ls-other` (another namespace) and `ls-conflict` (the same hostname and port as `ls-first`);
+- `lab-gw-cert`, with a missing certificate.
+
+**What the real controller wrote, and how Klyx read it:**
+- `ls-other`: Accepted False NotAllowed. Klyx reads "not accepted: NotAllowed", and its own allowance reading (Same, another namespace) agrees.
+- `ls-conflict`: Envoy Gateway does not accept the set at all. It reports Accepted and Programmed False ListenersNotValid, and the listener Accepted False, Conflicted True and Programmed False, all HostnameConflict with one message. Klyx reads a Fault "not accepted: ListenersNotValid". The stand-in in the kind lab had it accepted.
+- `lab-gw`: attachedListenerSets 1. Klyx reads "3 found naming this Gateway, 1 accepted · the controller reports 1 attached".
+- `lab-gw-cert`: Accepted True, Programmed False AddressNotAssigned (no proxy for a Gateway with no valid listener), and the listener ResolvedRefs False InvalidCertificateRef. Klyx reads "not programmed", and the listener's issue is named.
+- Envoy Gateway stamps `observedGeneration` on every listener condition, so Klyx judges them.
+- The GatewayClass reports no `supportedFeatures`: S7b's feature evidence will say nothing for Envoy Gateway 1.9.2.
+- **One change from the real data:** Envoy Gateway writes the same message on three conditions of a conflicted listener, and the inspector repeated it three times. Failing conditions with one reason and message are now said once ("Accepted False, Conflicted True, Programmed False - HostnameConflict: ...").
+
+Captures: `scratchpad/cap-aks0` (the baseline), `cap-aks-s7a` and `cap-aks-s7a-r1` (night 1440, day 1024).
+
+## 16. Revision 1: Codex's implementation review of 0ad4ccc
+
+Codex returned REQUEST CHANGES: one P1 and four P2s. It accepted every deviation in §15: the 64 KiB limits and budgets, typed projections, the partial index state, the exact namespace count, the kept last-observed Degraded, the lab without the safe-upgrades policy, and the one-shot reveal. It noted that 1.69 heap bytes per budget byte is a calibration for that fixture, not a universal bound: the fake client already holds the source strings.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 (P1) | Listener condition messages reached the Gateway list, topology and ListenerSet row DTOs verbatim, and the projection used the credential heuristic, which keeps user info with an encoded separator (`alice:secret%40host`) | `gwapi.SafeMessage` applies the accepted URL rule (`urlscrub.Text`), then the heuristic. It runs at parse (`condOf`, so every Gateway API condition: Gateways, listeners, ListenerSets, route parents), in the projection before the clip, and again at `condDTO` and the listener DTO. Tests cover plain and encoded user info, serialized DTOs (built through the parser and directly), the verdict's reason, and a credential the clip would cut through. |
+| 2 (P2) | Truncated live reads were treated as complete, and a stale ListenerSet read fed a live Gateway's counts | A truncated ListenerSet or Gateway read is current but not complete. Pins keep an evicted selection unverified (never removed); empty states say what the budget left out; counts carry the lower-bound mark; a capped notice names it. Merged listener counts come only from a current ListenerSets read, marked "or more" when truncated. The Gateway inspector dates a stale read and claims a difference only between complete, current readings. |
+| 3 (P2) | `Capture.Complete` is true for a confirmed absence, so an unserved Gateways API made "parent not found"; a stale parent lent its old allowance to a disagreement | `Capture.Current` names the Live sources. `gwapi.ParentRead{Absent, Current, Complete}`: only a complete, current read of a served kind proves a parent missing; an absent kind leaves it not established; a parent found only in a stale read is found but not current, and establishes no allowance or disagreement. Namespace labels need a complete, current read. A parent found in a current but truncated read keeps its allowance: a retained object in a live model is updated by the watch, so its configuration is current. |
+| 4 (P2) | A pinned old Gateway joined its replacement's new ListenerSets by name | A Gateway that is removed, replaced or unverified joins no live ListenerSet: its block says it is not the current one of its name. |
+| 5 (P2) | The ListenerSet detail said "accepted and programmed" for pending or absent programming, and for a historical rejection | The detail follows the rule's order and covers programming absent and pending, and last-observed negatives ("Accepted was False for generation 1 ...; whether it is accepted now is unverified"). "Accepted and programmed" is said only when both conditions establish it. |
+
+Codex's probes all pass on the revision: its three Go probes (`-overlay`) and its eight mounted UI cases. They are adopted as permanent tests, with sharper assertions.
+
+**Gates at c7ee257, clean:**
+- Go: `go test -race ./...` pass; golangci-lint 0 issues.
+- Frontend: vitest 2,233 passed; tsc clean; eslint 0 errors (the 3 earlier warnings).
+- Parity: Go stage PASS (run e7a771d9ff9780f9); frontend stage pass.
+- Native smoke: 176/176 in each of night and day at 1440 and 1024.
+- Mutations: 10 of 10 caught on the revision:
+  - the heuristic without the URL rule;
+  - clipping before scrubbing;
+  - a DTO trusting its condition;
+  - an absent kind proving a parent missing;
+  - a stale parent setting the allowance;
+  - a truncated read counted complete;
+  - a replaced Gateway joining;
+  - a stale read merging counts;
+  - no grouping;
+  - absent programming read as programmed.
+- Captures: the kind lab (32) and AKS (16), clean.
