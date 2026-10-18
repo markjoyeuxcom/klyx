@@ -1,0 +1,659 @@
+{
+ "about": "Coverage S6 \u00a72: kube-scheduler pod requests per minor at default feature gates, computed by each unmodified upstream k8s.io/component-helpers resource.PodRequests over fixtures.json. Generator: scratchpad s6-golden/gen-<minor> (one module per version). cpuMilli is the CPU request in millicores, memoryBytes the memory request in bytes.",
+ "models": [
+  {
+   "goSum": [
+    "k8s.io/api v0.32.13 h1:CAtHUTtSau6UhSGcrypjKXc2365TncaxUtrIfnjUPGE=",
+    "k8s.io/api v0.32.13/go.mod h1:PXqm+/G56aRPUJWUb8nGwBDovaXcqQ+e3o6+ZJIITPY=",
+    "k8s.io/component-helpers v0.32.13 h1:3QkTkm4K8ESUof270faqsQGShad1OxYvLGquLoKlDog=",
+    "k8s.io/component-helpers v0.32.13/go.mod h1:Hp7dV/PAyotFPhYwHDsv3Udk+X+4w+Yo+J6vF5v/Ilg="
+   ],
+   "minor": "1.32",
+   "module": "k8s.io/component-helpers@v0.32.13",
+   "options": "UseStatusResources: false, SkipPodLevelResources: true",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "down-infeasible": {
+     "cpuMilli": 50,
+     "memoryBytes": 67108864
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 41000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 300,
+     "memoryBytes": 314572800
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "podlevel-status": {
+     "cpuMilli": 0,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 64000,
+     "memoryBytes": 134217728
+    }
+   }
+  },
+  {
+   "goSum": [
+    "k8s.io/api v0.33.13 h1:Au/I/J8SXmcCBxp+KiS82451AEaKjVHouB1x3lUm1Wk=",
+    "k8s.io/api v0.33.13/go.mod h1:XCIdoR5NWEBB8xORizkh3zBSUk4Pz5KnfnGuOesy0+k=",
+    "k8s.io/component-helpers v0.33.13 h1:tJYLJKzb2zXoL4aLwJ4T0ySoFlLGwfS0VgoqImsYgrE=",
+    "k8s.io/component-helpers v0.33.13/go.mod h1:n9Ruxgkz8jvq9I2W3hO0vw3e0VNOASbJTp9cV9oQ7ho="
+   ],
+   "minor": "1.33",
+   "module": "k8s.io/component-helpers@v0.33.13",
+   "options": "UseStatusResources: true, SkipPodLevelResources: true",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 268435456
+    },
+    "down-infeasible": {
+     "cpuMilli": 200,
+     "memoryBytes": 268435456
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 500,
+     "memoryBytes": 524288000
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "podlevel-status": {
+     "cpuMilli": 0,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 100,
+     "memoryBytes": 67108864
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    }
+   }
+  },
+  {
+   "goSum": [
+    "k8s.io/api v0.34.12 h1:c8OgD3NECSLcP2WKxVmkzVomGmxKMrXFQKZ/O2p2LT8=",
+    "k8s.io/api v0.34.12/go.mod h1:bA8Jir6qTiRf64CFWBeSM4RfmASjdkMeqUyXWe7kJ88=",
+    "k8s.io/component-helpers v0.34.12 h1:8/VBjUhrfVA3EBaihWTWj68i8NjpLEw0ie9ts/3he9E=",
+    "k8s.io/component-helpers v0.34.12/go.mod h1:778itUJp3i3DgDfHtisBXlUio0EORQ3LVhc+H/yjrwU="
+   ],
+   "minor": "1.34",
+   "module": "k8s.io/component-helpers@v0.34.12",
+   "options": "UseStatusResources: true, SkipPodLevelResources: false",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 268435456
+    },
+    "down-infeasible": {
+     "cpuMilli": 200,
+     "memoryBytes": 268435456
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 500,
+     "memoryBytes": 524288000
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 8000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status": {
+     "cpuMilli": 1000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 1000,
+     "memoryBytes": 67108864
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    }
+   }
+  },
+  {
+   "goSum": [
+    "k8s.io/api v0.35.9 h1:lF426irCSwVKeukmRgeTMJtHVIETx2+3HLfoslTv9Xg=",
+    "k8s.io/api v0.35.9/go.mod h1:MNhexKzNrNryBqZMWLx6p6L2rFOAs3PWRdMnKU3Gmjk=",
+    "k8s.io/component-helpers v0.35.9 h1:iLg5kII3QtkCNtYN7nEbQ15VdDKXOezCruDPV98YChg=",
+    "k8s.io/component-helpers v0.35.9/go.mod h1:8hJ/IWWApnMvEYLhgzAuQB8THBpdeXlxzku6njYhtac="
+   ],
+   "minor": "1.35",
+   "module": "k8s.io/component-helpers@v0.35.9",
+   "options": "UseStatusResources: true, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: false",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 268435456
+    },
+    "down-infeasible": {
+     "cpuMilli": 200,
+     "memoryBytes": 268435456
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 500,
+     "memoryBytes": 524288000
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 8000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status": {
+     "cpuMilli": 1000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 1000,
+     "memoryBytes": 67108864
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    }
+   }
+  },
+  {
+   "goSum": [
+    "k8s.io/api v0.36.5 h1:vtL/ByHmw7suLt+SGVMPZnuj8QdfZ0kN1vvMvHRCY9c=",
+    "k8s.io/api v0.36.5/go.mod h1:erfc3/3d6z30KO2Kf+BmOewE6CajqZTz1Hcd+FQqg60=",
+    "k8s.io/component-helpers v0.36.5 h1:ZRChXMmBeKd0U34CgYHgQiQLzV0O971DTR3JSMUpgRU=",
+    "k8s.io/component-helpers v0.36.5/go.mod h1:cSPYaE5E3h0f8kHMCNYX7h9+XBWUNZ7Qt0VPzepw8z0="
+   ],
+   "minor": "1.36",
+   "module": "k8s.io/component-helpers@v0.36.5",
+   "options": "UseStatusResources: true, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: true, UseDRANodeAllocatableResourceClaimStatus: false",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 268435456
+    },
+    "down-infeasible": {
+     "cpuMilli": 200,
+     "memoryBytes": 268435456
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 8000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 500,
+     "memoryBytes": 524288000
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status": {
+     "cpuMilli": 4000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 1000,
+     "memoryBytes": 67108864
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    }
+   }
+  },
+  {
+   "goSum": [
+    "k8s.io/api v0.37.1 h1:l6N77U7tjwB5L056bgrBTJIEdevac/naBZ3iSvDNfpM=",
+    "k8s.io/api v0.37.1/go.mod h1:zSlbB1YpJ1YQlFVQy20UYll81UJSJJUMLhkhvg6Z78M=",
+    "k8s.io/component-helpers v0.37.1 h1:V6ueiH2SBqpZil1X9+uMK8GAwsGYPVfoRN9eA5vY2G8=",
+    "k8s.io/component-helpers v0.37.1/go.mod h1:Ib5+txJA7lG9/xCdRrPshX8GnRRTXPElxtxo+bFQ0Y8="
+   ],
+   "minor": "1.37",
+   "module": "k8s.io/component-helpers@v0.37.1",
+   "options": "UseStatusResources: true, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: true, UseDRANodeAllocatableResourceClaimStatus: false",
+   "results": {
+    "allocated-only-infeasible": {
+     "cpuMilli": 2000,
+     "memoryBytes": 0
+    },
+    "down-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 268435456
+    },
+    "down-infeasible": {
+     "cpuMilli": 200,
+     "memoryBytes": 268435456
+    },
+    "empty-maps": {
+     "cpuMilli": 300,
+     "memoryBytes": 67108864
+    },
+    "in-progress-up": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "infeasible-no-status": {
+     "cpuMilli": 0,
+     "memoryBytes": 0
+    },
+    "init-after-sidecar": {
+     "cpuMilli": 1300,
+     "memoryBytes": 0
+    },
+    "nil-status-resources-allocated": {
+     "cpuMilli": 4000,
+     "memoryBytes": 0
+    },
+    "older-kubelet-inprogress": {
+     "cpuMilli": 300,
+     "memoryBytes": 134217728
+    },
+    "opposite": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "opposite-infeasible": {
+     "cpuMilli": 5000,
+     "memoryBytes": 0
+    },
+    "overhead": {
+     "cpuMilli": 350,
+     "memoryBytes": 192937984
+    },
+    "partial-keys": {
+     "cpuMilli": 500,
+     "memoryBytes": 524288000
+    },
+    "plain": {
+     "cpuMilli": 300,
+     "memoryBytes": 402653184
+    },
+    "plain-status-equal": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    },
+    "podlevel-infeasible": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "podlevel-infeasible-missing-key": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "podlevel-spec-only": {
+     "cpuMilli": 2000,
+     "memoryBytes": 1073741824
+    },
+    "podlevel-status": {
+     "cpuMilli": 4000,
+     "memoryBytes": 2147483648
+    },
+    "podlevel-status-keys-spec-lacks": {
+     "cpuMilli": 1000,
+     "memoryBytes": 536870912
+    },
+    "regular-init": {
+     "cpuMilli": 1000,
+     "memoryBytes": 0
+    },
+    "sidecar-resize": {
+     "cpuMilli": 300,
+     "memoryBytes": 0
+    },
+    "up-deferred": {
+     "cpuMilli": 500,
+     "memoryBytes": 134217728
+    },
+    "up-infeasible": {
+     "cpuMilli": 100,
+     "memoryBytes": 134217728
+    }
+   }
+  }
+ ]
+}

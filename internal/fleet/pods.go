@@ -34,9 +34,18 @@ func (c *ClusterConn) ListPods(ctx context.Context, namespace string) ([]workloa
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	sums := workloads.SummarizePods(pods.Items, clk.Now())
+	sums := workloads.SummarizePodsModel(pods.Items, clk.Now(), c.schedModel())
 	c.resolveReplicaSetOwners(ctx, namespace, sums)
 	return sums, pods.GetContinue() != "", nil
+}
+
+// schedModel is the scheduler model the server's minor implies (coverage
+// S6 §2), read at connect; unknown when the version was not read.
+func (c *ClusterConn) schedModel() workloads.SchedModel {
+	c.mu.RLock()
+	v := c.snapVersion
+	c.mu.RUnlock()
+	return workloads.SchedModelForVersion(v)
 }
 
 var replicaSetGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}

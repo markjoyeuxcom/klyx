@@ -26,6 +26,9 @@ type HeadroomReport struct {
 	// PodListCapped: the 5000-row list cap hit - displaced counts may
 	// under-count and the verdict is optimistic. Stated, never silent.
 	PodListCapped bool
+	// SchedAssumption says which scheduler model the survivors' reservations
+	// assume (coverage S6 §2): an estimate, never the deployed scheduler.
+	SchedAssumption string
 }
 
 // NodeHeadroom simulates losing a node, zone, or pool: requests-based
@@ -63,14 +66,16 @@ func (c *ClusterConn) NodeHeadroom(ctx context.Context, loseKind, loseName strin
 		// actually have free to take the pod.
 		simPods = append(simPods, workloads.SimPod{
 			Namespace: p.Namespace, Name: p.Name, Node: p.Node,
-			CPUReq: p.SchedCPU, MemReq: p.SchedMem,
+			CPUReq: p.SchedCPU, MemReq: p.SchedMem, CPUNeed: p.DesiredCPU, MemNeed: p.DesiredMem,
+			AltCPU: p.SchedAltCPU, AltMem: p.SchedAltMem,
 			DaemonSet: p.OwnerKind == "DaemonSet",
 		})
 	}
 
 	report := HeadroomReport{
-		Result:        workloads.SimulateLoss(simNodes, simPods, workloads.LossTarget{Kind: loseKind, Name: loseName}),
-		PodListCapped: capped,
+		Result:          workloads.SimulateLoss(simNodes, simPods, workloads.LossTarget{Kind: loseKind, Name: loseName}),
+		PodListCapped:   capped,
+		SchedAssumption: c.schedModel().Assumption(),
 	}
 
 	if pdbs, perr := c.typed.PolicyV1().PodDisruptionBudgets("").List(ctx, metav1.ListOptions{}); perr == nil && pdbs != nil {

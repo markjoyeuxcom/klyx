@@ -53,6 +53,11 @@ type PodSummaryDTO struct {
 	// Health is the shared verdict; Rank/Reason/Phase are legacy fields kept
 	// until every consumer has migrated.
 	Health HealthDTO `json:"health"`
+	// Coverage S6: the generation the kubelet acknowledged (0: not
+	// reported), the resize state, and the reservation figures.
+	ObservedGeneration int64      `json:"observedGeneration,omitempty"`
+	Resize             *ResizeDTO `json:"resize,omitempty"`
+	Sched              SchedDTO   `json:"sched"`
 }
 
 // PodRowDTO is a pod on the rows transport (1c slice 3 addendum §3.2): what
@@ -78,6 +83,10 @@ type PodRowDTO struct {
 	// Health is the captured verdict without its message.
 	Health     HealthDTO            `json:"health"`
 	Containers []PodRowContainerDTO `json:"containers"`
+	// Coverage S6: the acknowledged generation (0: not reported) and the
+	// resize state; the Syncing presentation reads them.
+	ObservedGeneration int64      `json:"observedGeneration,omitempty"`
+	Resize             *ResizeDTO `json:"resize,omitempty"`
 }
 
 // PodRowContainerDTO is a container on a pod row: its live state only.
@@ -106,4 +115,9 @@ type PodDetailDTO struct {
 	AsOfUnix int64 `json:"asOfUnix,omitempty"`
 	// Error is set when the detail read failed; the zero DTO is never a pod.
 	Error string `json:"error,omitempty"`
+	// Coverage S6: every resizable unit, the debug containers (at most 20,
+	// ephemeralMore not listed).
+	Resources     []ResizeResourcesDTO `json:"resources"`
+	Ephemeral     []EphemeralDTO       `json:"ephemeral"`
+	EphemeralMore int                  `json:"ephemeralMore,omitempty"`
 }

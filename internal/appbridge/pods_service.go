@@ -69,8 +69,14 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	for _, e := range d.Events {
 		events = append(events, EventDTO{Type: e.Type, Reason: e.Reason, Message: urlscrub.Text(e.Message).Text, Count: int(e.Count), LastSeen: rfc3339(e.Last)})
 	}
+	resources, eph := toS6Detail(d.Resources, d.Ephemeral)
+	summary := toPodSummaryDTO(d.Summary)
+	summary.Sched.Assumption = d.SchedAssumption
 	return PodDetailDTO{
-		Summary:        toPodSummaryDTO(d.Summary),
+		Summary:        summary,
+		Resources:      resources,
+		Ephemeral:      eph,
+		EphemeralMore:  d.EphemeralMore,
 		Labels:         labels,
 		Annotations:    annotations,
 		Conditions:     conds,
@@ -131,6 +137,7 @@ func toPodRowDTO(p workloads.PodSummary) PodRowDTO {
 		OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, OwnerUID: string(p.OwnerUID),
 		Node: p.Node, IP: p.IP, Ready: p.Ready, Restarts: p.Restarts, Created: unixOrZero(p.Created),
 		Health: h, Containers: containers,
+		ObservedGeneration: p.ObservedGeneration, Resize: toResizeDTO(p.Resize),
 	}
 }
 
@@ -159,23 +166,27 @@ func toPodSummaryDTO(p workloads.PodSummary) PodSummaryDTO {
 		})
 	}
 	return PodSummaryDTO{
-		Namespace:  p.Namespace,
-		Name:       p.Name,
-		UID:        string(p.UID),
-		Ready:      p.Ready,
-		Phase:      p.Phase,
-		Reason:     p.Reason,
-		Rank:       p.Rank.String(),
-		Restarts:   p.Restarts,
-		Node:       p.Node,
-		IP:         p.IP,
-		OwnerKind:  p.OwnerKind,
-		OwnerName:  p.OwnerName,
-		OwnerUID:   string(p.OwnerUID),
-		Generation: p.Generation,
-		Created:    unixOrZero(p.Created),
-		AgeSeconds: p.AgeSeconds,
-		Containers: containers,
-		Health:     toHealthDTO(p.Health),
+		Namespace:          p.Namespace,
+		Name:               p.Name,
+		UID:                string(p.UID),
+		Ready:              p.Ready,
+		Phase:              p.Phase,
+		Reason:             p.Reason,
+		Rank:               p.Rank.String(),
+		Restarts:           p.Restarts,
+		Node:               p.Node,
+		IP:                 p.IP,
+		OwnerKind:          p.OwnerKind,
+		OwnerName:          p.OwnerName,
+		OwnerUID:           string(p.OwnerUID),
+		Generation:         p.Generation,
+		Created:            unixOrZero(p.Created),
+		AgeSeconds:         p.AgeSeconds,
+		Containers:         containers,
+		Health:             toHealthDTO(p.Health),
+		ObservedGeneration: p.ObservedGeneration,
+		Resize:             toResizeDTO(p.Resize),
+		Sched: SchedDTO{CPU: p.SchedCPU, Mem: p.SchedMem, DesiredCPU: p.DesiredCPU, DesiredMem: p.DesiredMem,
+			AltCPU: p.SchedAltCPU, AltMem: p.SchedAltMem},
 	}
 }

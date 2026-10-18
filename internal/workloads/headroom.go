@@ -21,13 +21,21 @@ type SimNode struct {
 	Schedulable bool // Ready && !Unschedulable
 }
 
-// SimPod is one running pod's requests footprint.
+// SimPod is one running pod's requests footprint (coverage S6 §2):
+// CPUReq/MemReq are its scheduled reservation where it runs, under the
+// assumed scheduler model; CPUNeed/MemNeed its desired request, what a
+// replacement is admitted with elsewhere; AltCPU/AltMem how much more the
+// alternative model (a scheduler one minor behind) would reserve.
 type SimPod struct {
 	Namespace string
 	Name      string
 	Node      string
 	CPUReq    float64
 	MemReq    float64
+	CPUNeed   float64
+	MemNeed   float64
+	AltCPU    float64
+	AltMem    float64
 	DaemonSet bool
 }
 
@@ -54,6 +62,12 @@ type HeadroomResult struct {
 	Unplaced      []PodRef // pods that do NOT fit - the shortfall, largest first
 	CPUShortfall  float64  // sum of unplaced cpu requests
 	MemShortfall  float64
+	// AltCPU/AltMem: on the survivors, how much more the alternative
+	// scheduler model would reserve. VersionDependent names the survivors
+	// whose spare capacity after placement is below that difference: there
+	// the result depends on the scheduler's version, never "survives".
+	AltCPU, AltMem   float64
+	VersionDependent []string
 }
 
 func (t LossTarget) matches(n SimNode) bool {
@@ -79,9 +93,10 @@ func SimulateLoss(nodes []SimNode, pods []SimPod, lose LossTarget) HeadroomResul
 
 	lost := map[string]bool{}
 	type survivor struct {
-		name    string
-		cpuFree float64
-		memFree float64
+		name           string
+		cpuFree        float64
+		memFree        float64
+		altCPU, altMem float64
 	}
 	var survivors []*survivor
 	for _, n := range nodes {
@@ -113,36 +128,51 @@ func SimulateLoss(nodes []SimNode, pods []SimPod, lose LossTarget) HeadroomResul
 		if s := byName[p.Node]; s != nil {
 			s.cpuFree -= p.CPUReq
 			s.memFree -= p.MemReq
+			s.altCPU += p.AltCPU
+			s.altMem += p.AltMem
 		}
 	}
 	out.Displaced = len(displaced)
 
 	// First-fit-decreasing by CPU (mem as tiebreak) onto the survivor with the
 	// most remaining CPU that fits both dimensions.
+	// A displaced pod is placed by its desired request: a replacement is
+	// admitted from its spec, not from the old pod's allocation.
 	sort.Slice(displaced, func(i, j int) bool {
-		if displaced[i].CPUReq != displaced[j].CPUReq {
-			return displaced[i].CPUReq > displaced[j].CPUReq
+		if displaced[i].CPUNeed != displaced[j].CPUNeed {
+			return displaced[i].CPUNeed > displaced[j].CPUNeed
 		}
-		return displaced[i].MemReq > displaced[j].MemReq
+		return displaced[i].MemNeed > displaced[j].MemNeed
 	})
 	for _, p := range displaced {
 		var best *survivor
 		for _, s := range survivors {
-			if s.cpuFree >= p.CPUReq && s.memFree >= p.MemReq {
+			if s.cpuFree >= p.CPUNeed && s.memFree >= p.MemNeed {
 				if best == nil || s.cpuFree > best.cpuFree {
 					best = s
 				}
 			}
 		}
 		if best == nil {
-			out.Unplaced = append(out.Unplaced, PodRef{Namespace: p.Namespace, Name: p.Name, CPUReq: p.CPUReq, MemReq: p.MemReq})
-			out.CPUShortfall += p.CPUReq
-			out.MemShortfall += p.MemReq
+			out.Unplaced = append(out.Unplaced, PodRef{Namespace: p.Namespace, Name: p.Name, CPUReq: p.CPUNeed, MemReq: p.MemNeed})
+			out.CPUShortfall += p.CPUNeed
+			out.MemShortfall += p.MemNeed
 			continue
 		}
-		best.cpuFree -= p.CPUReq
-		best.memFree -= p.MemReq
+		best.cpuFree -= p.CPUNeed
+		best.memFree -= p.MemNeed
 		out.Rescheduled++
 	}
+	// The guard: a survivor whose spare capacity after placement is below
+	// the alternative model's difference depends on the scheduler version.
+	// Equality fits.
+	for _, s := range survivors {
+		out.AltCPU += s.altCPU
+		out.AltMem += s.altMem
+		if s.altCPU > s.cpuFree || s.altMem > s.memFree {
+			out.VersionDependent = append(out.VersionDependent, s.name)
+		}
+	}
+	sort.Strings(out.VersionDependent)
 	return out
 }
