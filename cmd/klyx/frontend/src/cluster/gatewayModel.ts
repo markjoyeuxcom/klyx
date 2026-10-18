@@ -214,17 +214,16 @@ export const routeId = (r: { kind?: string; namespace: string; name: string }) =
 /** laneKey names a topology lane: the route and the attachment it draws. */
 export const laneKey = (r: { kind?: string; namespace: string; name: string; attachment?: string }) => (r.attachment ? `${routeId(r)}@${r.attachment}` : routeId(r));
 /**
- * resolveLane finds a selection's lane: the lane key itself; else a route's
- * identity - kind/namespace/name, or the older namespace/name of an
- * HTTPRoute - names that route's worst lane.
+ * resolveLane finds a selection's lane: a lane key names exactly that lane
+ * (gone when the attachment is - never another one, Codex's S7b review,
+ * finding 3); a bare route identity - kind/namespace/name, or the older
+ * namespace/name of an HTTPRoute - names that route's worst lane.
  */
 export function resolveLane(key: string | null, lanes: RouteNodeDTO[]): RouteNodeDTO | undefined {
   if (!key) return undefined;
   const exact = lanes.find((r) => laneKey(r) === key);
-  if (exact) return exact;
-  const id = key.split("@")[0];
-  const parts = id.split("/");
-  const want = parts.length === 2 ? `HTTPRoute/${id}` : id;
+  if (exact || key.includes("@")) return exact;
+  const want = key.split("/").length === 2 ? `HTTPRoute/${key}` : key;
   const mine = lanes.filter((r) => routeId(r) === want);
   return mine.sort((a, b) => RANK[routeRole(a).kind] - RANK[routeRole(b).kind])[0];
 }
@@ -232,6 +231,19 @@ export function resolveLane(key: string | null, lanes: RouteNodeDTO[]): RouteNod
 export function routeRef(kind: string, apiVersion?: string): ResourceRef {
   const version = apiVersion?.includes("/") ? apiVersion.split("/")[1] : "v1";
   return { group: "gateway.networking.k8s.io", version, plural: ROUTE_PLURALS[kind] ?? "httproutes", kind: ROUTE_PLURALS[kind] ? kind : "HTTPRoute", scope: "Namespaced" };
+}
+
+/**
+ * targetListeners are the parent listeners an attachment names: its section
+ * and its port, each when set (the Go model's targetListeners; Codex's S7b
+ * review, finding 4). Through a ListenerSet the Gateway's listeners are not
+ * its parent's, so none are.
+ */
+export function targetListeners(r: Pick<RouteNodeDTO, "parentRef" | "parentSectionName">, listeners: ListenerDTO[]): ListenerDTO[] {
+  if (r.parentRef?.kind === "ListenerSet") return [];
+  const section = r.parentRef?.sectionName ?? r.parentSectionName ?? "";
+  const port = r.parentRef?.port ?? 0;
+  return listeners.filter((l) => (!section || l.name === section) && (!port || l.port === port));
 }
 
 /** Where a lane attaches: its listener, port or ListenerSet. */

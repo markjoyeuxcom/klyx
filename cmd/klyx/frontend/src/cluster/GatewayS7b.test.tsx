@@ -252,3 +252,61 @@ describe("the Routes view's kinds (S7b §9)", () => {
     expect(screen.getByTestId("gateway-experimental").textContent).toBe("Experimental Gateway API kinds served: XMesh; Klyx does not read them.");
   });
 });
+
+// Codex's S7b implementation review, findings 2-4 (its probes, adopted).
+describe("an explicit lane stays its attachment (review finding 3)", () => {
+  it("does not switch an explicitly selected lane when that attachment disappears", () => {
+    const a = lane("HTTPRoute", "web", "https");
+    const b = lane("HTTPRoute", "web", "pg");
+    seed(topo([a, b]), laneKey(a));
+    render(<GatewayTopology cluster="x" gateway={gateway} />);
+    act(() => { useFleet.setState((s) => ({ network: { ...s.network, topology: topo([b]), topologyAt: Date.now(), routesAt: Date.now() } })); });
+    expect(useFleet.getState().network.selectedRoute).toBe(laneKey(a));
+    expect(screen.getByTestId("route-panel").textContent).toContain("No longer attached");
+  });
+});
+
+describe("a port-only parentRef (review finding 4)", () => {
+  it("scopes the rule to that listener", () => {
+    const db = lane("TCPRoute", "db", "", { parentRef: { ...egRef(), port: 5432 } });
+    const t = topo([db]);
+    render(<DataPath gateway={t.gateway} route={t.routes[0]} listeners={t.gateway.listeners} metrics={null} />);
+    expect(screen.getByTestId("data-path").textContent).toContain("every connection on pg :5432");
+    expect(screen.getByTestId("data-path").textContent).not.toContain("every connection on https");
+  });
+});
+
+describe("the routes budget (review finding 2)", () => {
+  const rc = (cut: boolean): KindCoverage[] => [
+    { kind: "httproutes", role: "counted", scope: "", coverage: "live", objects: 1, ...(cut ? { truncated: true, notRetained: 1 } : {}) },
+    ...["grpcroutes", "tlsroutes", "tcproutes", "udproutes"].map((kind) => ({ kind, role: "counted" as const, scope: "", coverage: "absent" as const, objects: 0 })),
+    ...["gateways", "gatewayclasses", "listenersets", "services", "endpointslices", "referencegrants", "namespaces"].map((kind) => ({ kind, role: "dependency" as const, scope: "", coverage: "live" as const, objects: 1 })),
+  ];
+  const rr: GatewayRouteRowDTO = { uid: "review-web", gvr: "gateway.networking.k8s.io/v1/httproutes", kind: "HTTPRoute", namespace: "apps", name: "web", parent: key(egRef("https")), parentLabel: "infra/eg · https", gateway: "infra/eg", hostnames: [], hostnameCount: 0, rule: { included: false, role: "ok", label: "resolved" }, attachments: [] };
+  let ver = 0;
+  const publish = (rows: GatewayRouteRowDTO[], cut: boolean) => applyRows("review-r", { cluster: "x", incarnation: 1, task: "gateway", evaluatedAt: "2026-10-18T12:00:00Z", rows,
+    part: { id: "routes", entity: "routes", scope: "", classifier: "native", coverage: "live", kinds: rc(cut), obs: ++ver, ver, native: { total: rows.length, included: 0, word: "", roles: { total: rows.length, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: rows.length } } } });
+  const mount = (rows: GatewayRouteRowDTO[], cut: boolean) => {
+    addSub("review-r", "x", "gateway", "routes"); openStarted("review-r", "review-t"); openSucceeded("review-r", "review-t", 1); publish(rows, cut);
+    useFleet.setState({ route: { name: "cluster", cluster: "x", section: "gatewayApi" }, clusters: [] });
+    render(<GatewayApiView cluster="x" />); fireEvent.click(screen.getByRole("button", { name: /^Routes/ }));
+  };
+  it("does not call a wholly omitted route kind an empty attached set", () => {
+    mount([], true);
+    expect(screen.queryByText("No routes attached to a Gateway.")).toBeNull();
+    expect(screen.getByText("No routes kept within Klyx's budget.")).toBeTruthy();
+    expect(screen.getAllByText(/budget/i).length).toBeGreaterThan(0);
+  });
+  it("does not call a route omitted by the budget detached", () => {
+    mount([rr], false);
+    fireEvent.click(screen.getByText("web"));
+    act(() => publish([], true));
+    expect(screen.queryByTestId("route-detached")).toBeNull();
+    expect(screen.getByTestId("selection-unverified").textContent).toContain("Klyx's budget left routes out of the read");
+  });
+  it("says the cap beside a bounded list, and its count is a lower bound", () => {
+    mount([rr], true);
+    expect(screen.getByTestId("routes-capped").textContent).toContain("1 HTTPRoute not retained");
+    expect(document.querySelector(".lens-header")!.textContent).toContain("+");
+  });
+});

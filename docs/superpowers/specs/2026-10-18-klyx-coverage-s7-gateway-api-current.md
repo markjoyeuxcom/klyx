@@ -631,7 +631,7 @@ Capability detection reads the resources of every served `gateway.networking.x-k
   | 8.11 MiB with the Routes view closed | 3.69 MiB of encoded budget | 2.20 |
   | 11.31 MiB with the routes rows subscribed | the same | 3.07 |
 
-  S7a's kinds alone were 1.69. The typed route keeps its parsed rules and per-backend state, which cost more per encoded byte than a Gateway's listeners. The 3.2 MiB of route rows are held only while the Routes view is open. This is a worst case per cluster at every budget's limit.
+  S7a's kinds alone were 1.69. The typed route keeps its parsed rules and per-backend state, which cost more per encoded byte than a Gateway's listeners. The 3.2 MiB of route rows are held only while the Routes view is open. These are measurements of this full-budget fixture's shapes (four-rule routes of two backends), not a bound: other shapes at the same encoded budget hold more or less heap.
 
 ### 18.5 The on-demand topology (§9)
 
@@ -729,3 +729,19 @@ Klyx against these statuses, as captured (`pw/s7b-aks.mjs`): 48 captures, night 
 - Native smoke: 181/181 in each of night and day at 1440 and 1024, the labs re-applied first.
 - Mutations: 5 Go and 10 frontend, all caught.
 - Captures: 52 on the kind lab and 48 on AKS, all clean.
+
+## 19. Revision 1: Codex's implementation review of c72224e
+
+Five P2 findings, each with a reproduction; every probe is adopted as a test.
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Retained stale dependencies were used as current proof: a stale Gateway, GatewayClass or ListenerSet established the expected controller and its status was judged; a stale Service's port resolved a healthy backend; a stale grant read "allowed" and then disagreed with a current RefNotPermitted | `AttachmentParent.Current`: a parent established through a read that is not current (the Gateways read; for a ListenerSet the ListenerSets read too) is last observed. It establishes no controller ("the Gateways read is not current: Gateway infra/eg is last observed"), no allowedRoutes or feature evidence, and a stale ListenerSet's own refusal is not a Fault. A class from a read that is not current establishes no controller and no features. A stale Service is "unreadable: the Services read is not current". A grant from a stale read is "allowed it when last read", never "yes", so nothing disagrees. A current object in a capped read is still whole and counts. |
+| 2 | The Routes view ignored the route kinds' budget: a wholly omitted kind read "No routes attached", a route left out read "No longer attached ... both read in full", reveal likewise, counts unqualified | A truncated route kind makes the membership incomplete: counts carry "+", a cap notice names the kinds and how many were left out ("Capped: 1 HTTPRoute not retained ... a route left out is unverified, never detached"), an empty capped read is "No routes kept within Klyx's budget.", a pinned route left out is unverified ("Klyx's budget left routes out of the read"), and a reveal into a capped read says "not among the routes Klyx keeps within its budget - unverified". |
+| 3 | An explicit lane whose attachment disappeared moved to another attachment of the route | A lane key resolves only to itself; only a bare route identity resolves to its worst lane. The missing attachment keeps its last evidence and reads "No longer attached". |
+| 4 | Port-only parentRefs scoped the inspector and data path to every listener | `targetListeners` filters by the reference's section and port, each when set, as the Go model does (none through a ListenerSet). |
+| 5 | The allowed-kinds check compared kinds without their group | Listener kinds are group-qualified (an empty group is the Gateway API's); a foreign group's HTTPRoute admits nothing of the Gateway API, and the explanation names it ("example.test/HTTPRoute"). |
+
+Codex's judgements, adopted: a bare route identity resolving to its worst lane is sound; on-demand class and grant failures as warnings are sound; ListenerSet-only listener evidence is sound; the registry's single version per kind stays a disclosed limitation. Section 18.4's heap figures are now qualified as this fixture's measurements.
+
+Mutations, one per fix: 8 Go (stale Gateway, class, ListenerSet, ListenerSet refusal, Service, grant, allowance; the kind group) and 3 frontend (explicit lane, port scope, capped membership), all caught.

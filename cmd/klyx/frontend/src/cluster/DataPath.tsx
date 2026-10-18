@@ -3,7 +3,7 @@ import { Sparkline } from "../chrome/Sparkline";
 import type { GatewayNodeDTO, ListenerDTO, RouteNodeDTO, RouteRuleDTO } from "../store/fleet";
 import type { RuleMetric, RuleMetrics, RulePoint, RuleSeries } from "../bridge/ruleMetrics";
 import { fmtRate, fmtShare, latest, onset, onsetText, proximityText, weightShares } from "../line/dataPath";
-import { httpMetricsApply, isL4, noHttpMetricsText, routeKindOf, ruleMatchText } from "./gatewayModel";
+import { httpMetricsApply, isL4, noHttpMetricsText, routeKindOf, ruleMatchText, targetListeners } from "./gatewayModel";
 
 // The Gateway data path (The Line slice 8d, parent §5.2): the Gateway, the
 // route, one branch per rule with a bar per backend for its configured
@@ -19,7 +19,7 @@ const DANGER = new Set(["fault", "degraded"]);
 export function DataPath({ gateway, route, listeners, metrics }: { gateway: GatewayNodeDTO; route: RouteNodeDTO; listeners: ListenerDTO[]; metrics: RuleMetrics | null }) {
   const kind = routeKindOf(route);
   const viaSet = route.parentRef?.kind === "ListenerSet";
-  const scoped = viaSet ? [] : route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
+  const scoped = targetListeners(route, listeners);
   const rules = route.rules ?? [];
   const m = httpMetricsApply(route) ? metrics : null;
   const steps: RailStep[] = [

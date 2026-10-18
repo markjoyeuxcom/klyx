@@ -21,7 +21,7 @@ import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
   gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeRole, routeKey, sortWarnings,
   type CertLookup, type Role,
-  attachmentWhere, carriesTraffic, httpMetricsApply, isL4, laneIssues, laneKey, laneMatchText, noHttpMetricsText, resolveLane, routeId, routeKindOf, routeRef,
+  attachmentWhere, carriesTraffic, httpMetricsApply, isL4, laneIssues, laneKey, laneMatchText, noHttpMetricsText, resolveLane, routeId, routeKindOf, routeRef, targetListeners,
 } from "./gatewayModel";
 
 // GatewayTopology - one Gateway's data path on the canvas-detail template
@@ -500,7 +500,7 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
   const gwRole = gatewayRole(gateway);
   const primary = route.backends[0];
   const carrying = route.backends.filter(carriesTraffic);
-  const scoped = route.parentSectionName ? laneListeners.filter((l) => l.name === route.parentSectionName) : laneListeners;
+  const scoped = targetListeners(route, listeners);
   const policies = [...route.policies, ...route.services.flatMap((s) => s.policies)];
   const cnps = route.services.flatMap((s) => s.cnps);
   const services = route.backends.filter((b) => b.kind === "Service" && b.state !== "not-found");

@@ -86,6 +86,13 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   const gatewaysDep = rows.dependencies.find((k) => k.kind === "Gateway");
   const parentsEv: KindEvidence = gatewaysDep ? kindEvidence(true, [gatewaysDep], "Gateway", null) : rows.loading ? "pending" : "complete";
   const memberEv = combineEvidence([ev, parentsEv]);
+  // the route kinds are budgeted (coverage S7b §8): a truncated read is
+  // current but not complete - counts are lower bounds, and a route left out
+  // is unverified, never detached (Codex's S7b review, finding 2)
+  const capped = kindCoverage.filter((k) => k.truncated);
+  const cappedN = capped.reduce((n, k) => n + (k.notRetained ?? 0), 0);
+  const cappedKinds = capped.map((k) => k.kind).join(", ");
+  const memberComplete = memberEv === "complete" && capped.length === 0;
   const dep = depQualifier(rows.dependencies);
   const routes = rows.routes;
   const rowsRefreshing = rows.rowsState.refreshing;
@@ -94,7 +101,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   const lastGood = lastGoodAt(rows.coverage, [...ROUTE_KINDS]);
   // a discovery gap of the route kind or of anything it was joined with
   const discoveryGap = coverageGaps([...rows.coverage, ...rows.dependencies]);
-  const mark = memberEv === "complete" ? "" : memberEv === "stale" ? "*" : "+";
+  const mark = memberComplete ? "" : memberEv === "stale" ? "*" : "+";
   // global: the count selector's (slice 3 §4a) - the header and the filter
   // count equal the part's Included
   const total = rows.partCounts?.total ?? routes.length;
@@ -136,6 +143,11 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
     }
     if (!row) {
       if (ev !== "complete" || parentsEv !== "complete") return "wait";
+      // absent from a read the budget capped: unverified, never detached
+      if (capped.length > 0) {
+        useFleet.getState().setActionStatus({ kind: "error", message: `${kind} ${key.slice(kind.length + 1)} is not among the routes Klyx keeps within its budget - unverified` });
+        return "consumed";
+      }
       // absent from a complete membership read: detached, not proven deleted
       useFleet.getState().setActionStatus({ kind: "error", message: `${kind} ${key.slice(kind.length + 1)} is no longer attached to a Gateway - it may still exist` });
       return "consumed";
@@ -144,7 +156,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
     setCursorKey(key);
     setSelKey(key);
     return "consumed";
-  }, [routes, ev, parentsEv]);
+  }, [routes, ev, parentsEv, capped.length]);
 
   // A selection keeps its last row. Missing from a membership read that is
   // complete (routes AND parent Gateways current) it is no longer attached -
@@ -153,7 +165,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // with a new UID on a complete read is "replaced", never followed.
   const found = selKey ? routes.find((r) => keyOf(r) === selKey) : undefined;
   const selKind = selKey ? splitKey(selKey).kind : "HTTPRoute";
-  const pin = usePinnedSubject(cluster, selKey, found, memberEv === "complete", selKind);
+  const pin = usePinnedSubject(cluster, selKey, found, memberComplete, selKind);
   const selected = pin.subject ?? undefined;
   const gone: "detached" | "unverified" | null = pin.gone === "replaced" || pin.gone === "removed" ? "detached" : pin.gone;
   const close = () => setSelKey(null);
@@ -200,6 +212,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
       ? <EmptyState icon={icon} title="Could not list the routes." hint={rows.watchError ?? undefined} />
       : <EmptyState icon={icon} title="Attached routes are unverified." hint={`The parent Gateways could not be read${gatewaysDep?.error ? `: ${gatewaysDep.error}` : ""} - which routes are attached is unknown, not none.`} />)
     : state === "empty" && absent ? <EmptyState icon={icon} title="Routes are not served on this cluster." hint="Klyx observes no gateway.networking.k8s.io route API here (HTTPRoute, GRPCRoute, TLSRoute, TCPRoute or UDPRoute)." />
+    : state === "empty" && capped.length > 0 ? <EmptyState icon={icon} title="No routes kept within Klyx's budget." hint={`${cappedN || "Some"} ${cappedKinds} left out by the budget: they exist, but Klyx keeps none of them, so which are attached is unverified.`} />
     : state === "empty" && rowsRefreshing && total > 0 ? <EmptyState icon={icon} title={`No routes as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${total}.`} />
     : state === "empty" && memberEv === "stale" ? <EmptyState icon={icon} title="No attached routes in the last good read." hint={ev === "stale" ? `The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${rows.watchError ?? "unverified"}.` : "The parent Gateways read is failing: the attachments are last observed."} />
     : state === "empty" ? <EmptyState icon={icon} title="No routes attached to a Gateway." hint="A route whose only parent is gone is not counted." />
@@ -208,6 +221,8 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
   // Notices stack: each is its own evidence, none hides another.
   const notices: React.ReactNode[] = [];
   if (rows.watchError && routes.length > 0) notices.push(<WatchErrorBanner key="read" tool="routes" failure={`read failed - showing the last good list${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={rows.watchError} />);
+  if (capped.length > 0 && routes.length > 0) notices.push(<div key="capped" role="status" data-testid="routes-capped" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)" }}>
+    Capped: {cappedN || "some"} {cappedKinds} not retained - Klyx keeps a bounded amount per cluster, so counts are lower bounds and a route left out is unverified, never detached.</div>);
   if (dep.word) notices.push(<div key="deps" role="status" data-testid="route-deps" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Route verdicts are {dep.word}: they were evaluated against {dep.kinds.join(", ")} {dep.word === "unverified" ? "without a current read" : "from a failing read"}.</div>);
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
@@ -296,7 +311,7 @@ export function RouteList({ cluster, rows, toggle }: { cluster: string; rows: Ga
               </div>
             ) : gone === "unverified" ? (
               <div role="status" data-testid="selection-unverified" className="t-body" style={{ padding: "8px 10px", borderRadius: 4, background: "var(--color-background-secondary)", boxShadow: "inset 0 0 0 1px var(--color-border-warning)" }}>
-                <span className="t-status">Not in the current attached-route read.</span> The route or parent Gateway read is incomplete, so this is unverified - it may still be attached. The details below are its last observed row.
+                <span className="t-status">Not in the current attached-route read.</span> {capped.length > 0 ? "Klyx's budget left routes out of the read" : "The route or parent Gateway read is incomplete"}, so this is unverified - it may still be attached. The details below are its last observed row.
               </div>
             ) : (
               <div>

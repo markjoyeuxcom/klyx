@@ -332,21 +332,29 @@ type AttachmentParent struct {
 	// ControllerWhy says why it is not established when it is "".
 	Controller    string
 	ControllerWhy string
+	// Current: every read the parent was established through is current -
+	// the Gateways read, and for a ListenerSet the ListenerSets read too. A
+	// parent retained from a read that is not current is last observed: it
+	// establishes no controller and no evidence (S7b §5, §8; Codex's S7b
+	// implementation review, finding 1). A current object in a capped read
+	// is whole, and counts.
+	Current bool
 }
 
-func (ix RouteIndex) gateway(ns, name string) (*GatewayRef, ParentState) {
+// gateway finds a Gateway among those read, and whether its read is current.
+func (ix RouteIndex) gateway(ns, name string) (*GatewayRef, ParentState, bool) {
 	if ix.GatewaysRead.Absent {
-		return nil, ParentNotEstablished
+		return nil, ParentNotEstablished, false
 	}
 	for i := range ix.Gateways {
 		if ix.Gateways[i].Namespace == ns && ix.Gateways[i].Name == name {
-			return &ix.Gateways[i], ParentFound
+			return &ix.Gateways[i], ParentFound, ix.GatewaysRead.Current
 		}
 	}
 	if ix.GatewaysRead.Current && ix.GatewaysRead.Complete {
-		return nil, ParentNotFound
+		return nil, ParentNotFound, false
 	}
-	return nil, ParentNotEstablished
+	return nil, ParentNotEstablished, false
 }
 
 func (ix RouteIndex) class(name string) (string, string) {
@@ -355,6 +363,9 @@ func (ix RouteIndex) class(name string) (string, string) {
 	}
 	for _, c := range ix.Classes {
 		if c.Name == name {
+			if !ix.ClassesRead.Current {
+				return "", "the GatewayClasses read is not current: GatewayClass " + name + " is last observed"
+			}
 			if c.ControllerName == "" {
 				return "", "the GatewayClass " + name + " names no controller"
 			}
@@ -370,11 +381,15 @@ func (ix RouteIndex) class(name string) (string, string) {
 // Resolve establishes an attachment's parent and its expected controller.
 func (ix RouteIndex) Resolve(ref RouteParentRef) AttachmentParent {
 	var p AttachmentParent
+	stale := ""
 	switch {
 	case ref.IsGateway():
-		p.Gateway, p.State = ix.gateway(ref.Namespace, ref.Name)
+		p.Gateway, p.State, p.Current = ix.gateway(ref.Namespace, ref.Name)
 		if p.Gateway != nil {
 			p.Listeners = p.Gateway.Listeners
+			if !p.Current {
+				stale = "the Gateways read is not current: Gateway " + ref.Namespace + "/" + ref.Name + " is last observed"
+			}
 		}
 	case ref.IsListenerSet():
 		p.State = ParentNotEstablished
@@ -390,7 +405,15 @@ func (ix RouteIndex) Resolve(ref RouteParentRef) AttachmentParent {
 			}
 		}
 		if p.ListenerSet != nil && p.ListenerSet.Parent.IsGateway() {
-			p.Gateway, _ = ix.gateway(p.ListenerSet.Parent.Namespace, p.ListenerSet.Parent.Name)
+			var gwCurrent bool
+			p.Gateway, _, gwCurrent = ix.gateway(p.ListenerSet.Parent.Namespace, p.ListenerSet.Parent.Name)
+			p.Current = ix.ListenerSetsRead.Current && gwCurrent
+			switch {
+			case !ix.ListenerSetsRead.Current:
+				stale = "the ListenerSets read is not current: ListenerSet " + ref.Namespace + "/" + ref.Name + " is last observed"
+			case p.Gateway != nil && !gwCurrent:
+				stale = "the Gateways read is not current: Gateway " + p.Gateway.Namespace + "/" + p.Gateway.Name + " is last observed"
+			}
 		}
 	default:
 		p.State = ParentUnsupported
@@ -398,6 +421,8 @@ func (ix RouteIndex) Resolve(ref RouteParentRef) AttachmentParent {
 		return p
 	}
 	switch {
+	case stale != "":
+		p.ControllerWhy = stale
 	case p.Gateway == nil:
 		p.ControllerWhy = "the parent Gateway is not established"
 	case p.Gateway.ClassName == "":
@@ -552,13 +577,14 @@ func ResolveBackend(b *Backend, kind string, rd BackendReads) {
 	case !found:
 		b.State, b.Error = BackendUnreadable, "the Services read is not complete and current"
 		return
+	case !rd.ServicesCurrent:
+		// a retained Service from a read that is not current proves neither
+		// its port nor its absence (Codex's S7b review, finding 1)
+		b.State, b.Error = BackendUnreadable, "the Services read is not current: the Service is last observed"
+		return
 	}
 	sp, ok, other := SelectServicePort(ports, b.Port, b.Transport)
 	if !ok {
-		if !rd.ServicesCurrent {
-			b.State, b.Error = BackendUnreadable, "the Service's ports are from a read that is not current"
-			return
-		}
 		b.State = BackendNoPort
 		b.Error = fmt.Sprintf("Service has no %s port %d", b.Transport, b.Port)
 		if other != "" {
@@ -657,7 +683,8 @@ func attachmentRule(r Route, ae AttachmentEval) health.NativeEval {
 	case ParentNotEstablished:
 		return health.NativeEval{Role: health.Unknown, Label: "parent " + kind + " not established"}
 	}
-	if ls := ae.Parent.ListenerSet; ls != nil {
+	// a ListenerSet's own refusal is proof only from a current read
+	if ls := ae.Parent.ListenerSet; ls != nil && ae.Parent.Current {
 		if a := condState(ls.AcceptedCond, ls.Generation); a.status == "False" && !a.stale {
 			return health.NativeEval{Included: true, Role: health.Fault, Label: "parent ListenerSet not accepted",
 				Reason: health.CapReason(ls.AcceptedCond.Reason, ls.AcceptedCond.Message)}

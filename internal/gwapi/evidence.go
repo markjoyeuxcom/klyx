@@ -61,8 +61,9 @@ type GrantsRead struct {
 }
 
 // GrantEvidence is whether a cross-namespace reference is granted: Allowed
-// "yes" (By names the grant), "no" (only from a complete, current read), or
-// "" when the grants are not established.
+// "yes" (By names the grant, from a current read), "no" (only from a
+// complete, current read), or "" when the grants are not established - a
+// grant retained from a read that is not current is last observed.
 type GrantEvidence struct {
 	Allowed string
 	By      string
@@ -85,7 +86,11 @@ func GrantFor(gr GrantsRead, from GrantFrom, toNS string, to GrantTo) GrantEvide
 		}
 		for _, t := range g.To {
 			if t.Group == to.Group && t.Kind == to.Kind && (t.Name == "" || t.Name == to.Name) {
-				return GrantEvidence{Allowed: AllowedYes, By: g.Namespace + "/" + g.Name, Text: what + ": granted by ReferenceGrant " + g.Namespace + "/" + g.Name}
+				by := g.Namespace + "/" + g.Name
+				if !gr.Read.Current {
+					return GrantEvidence{By: by, Text: what + ": ReferenceGrant " + by + " allowed it when last read; the ReferenceGrants read is not current"}
+				}
+				return GrantEvidence{Allowed: AllowedYes, By: by, Text: what + ": granted by ReferenceGrant " + by}
 			}
 		}
 	}
@@ -159,21 +164,39 @@ var conventionalKinds = map[string][]string{
 
 // listenerKinds are the kinds a listener admits and where that list came
 // from: its controller's supportedKinds, its declared allowedRoutes.kinds,
-// or the protocol's convention.
-func listenerKinds(l Listener) ([]string, string) {
+// or the protocol's convention. A kind is its group and kind: a RouteGroupKind
+// with no group is the Gateway API's (Codex's S7b review, finding 5).
+func listenerKinds(l Listener) ([]RouteKind, string) {
 	if l.Status != nil && len(l.Status.SupportedKinds) > 0 {
-		return kindNames(l.Status.SupportedKinds), "its controller reports"
+		return l.Status.SupportedKinds, "its controller reports"
 	}
 	if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) > 0 {
-		return kindNames(l.AllowedRoutes.Kinds), "it declares"
+		return l.AllowedRoutes.Kinds, "it declares"
 	}
-	return conventionalKinds[l.Protocol], "its protocol " + l.Protocol + " conventionally admits"
+	var out []RouteKind
+	for _, k := range conventionalKinds[l.Protocol] {
+		out = append(out, RouteKind{Group: Group, Kind: k})
+	}
+	return out, "its protocol " + l.Protocol + " conventionally admits"
 }
 
+func kindGroup(k RouteKind) string {
+	if k.Group == "" {
+		return Group
+	}
+	return k.Group
+}
+
+// kindNames names kinds as the listener lists them: a Gateway API kind by
+// its kind, another group's with its group.
 func kindNames(ks []RouteKind) []string {
 	out := make([]string, 0, len(ks))
 	for _, k := range ks {
-		out = append(out, k.Kind)
+		if g := kindGroup(k); g != Group {
+			out = append(out, clipLabel(g)+"/"+clipLabel(k.Kind))
+			continue
+		}
+		out = append(out, clipLabel(k.Kind))
 	}
 	return out
 }
@@ -211,6 +234,9 @@ func RouteAllowedBy(routeKind, routeNS string, ae AttachmentEval, ns NamespaceLa
 	if p.State != ParentFound {
 		return RouteAllowance{Text: "the parent is " + string(p.State)}
 	}
+	if !p.Current {
+		return RouteAllowance{Text: "the parent's listeners are last observed: " + p.ControllerWhy}
+	}
 	owner := ae.Ref.Namespace
 	targets := targetListeners(ae.Ref, p.Listeners)
 	if len(targets) == 0 {
@@ -229,7 +255,7 @@ func RouteAllowedBy(routeKind, routeNS string, ae AttachmentEval, ns NamespaceLa
 			unknown = true
 			reasons = append(reasons, "listener "+l.Name+": "+nsText)
 		case !kindOK:
-			reasons = append(reasons, "listener "+l.Name+": "+routeKind+" is not among the kinds "+src+" ("+strings.Join(kinds, ", ")+")")
+			reasons = append(reasons, "listener "+l.Name+": "+routeKind+" is not among the kinds "+src+" ("+strings.Join(kindNames(kinds), ", ")+")")
 		default:
 			reasons = append(reasons, "listener "+l.Name+": "+nsText)
 		}
@@ -240,9 +266,11 @@ func RouteAllowedBy(routeKind, routeNS string, ae AttachmentEval, ns NamespaceLa
 	return RouteAllowance{Allowed: AllowedNo, Text: strings.Join(reasons, "; ")}
 }
 
-func containsKind(kinds []string, kind string) bool {
+// containsKind reports whether the Gateway API's kind is among kinds, by
+// group and kind.
+func containsKind(kinds []RouteKind, kind string) bool {
 	for _, k := range kinds {
-		if k == kind {
+		if kindGroup(k) == Group && k.Kind == kind {
 			return true
 		}
 	}
@@ -304,8 +332,12 @@ func FeatureNote(class *GatewayClass, feature string) string {
 	return "the class's controller does not declare support for " + feature
 }
 
-// ClassOf finds a class by name among those read.
+// ClassOf finds a class by name among those read; a class from a read that
+// is not current is last observed, and establishes nothing.
 func (ix RouteIndex) ClassOf(name string) *GatewayClass {
+	if !ix.ClassesRead.Current {
+		return nil
+	}
 	for i := range ix.Classes {
 		if ix.Classes[i].Name == name {
 			return &ix.Classes[i]
@@ -333,7 +365,7 @@ type AttachmentEvidence struct {
 // backend granted.
 func Evidence(r Route, ae AttachmentEval, ix RouteIndex, gr GrantsRead, ns NamespaceLabels) AttachmentEvidence {
 	ev := AttachmentEvidence{Allowance: RouteAllowedBy(r.Kind, r.Namespace, ae, ns), Grants: r.BackendGrants(gr)}
-	if ae.Parent.Gateway != nil {
+	if ae.Parent.Gateway != nil && ae.Parent.Current {
 		class := ix.ClassOf(ae.Parent.Gateway.ClassName)
 		for _, f := range []string{r.Kind, map[bool]string{true: "ListenerSet"}[ae.Ref.IsListenerSet()]} {
 			if n := FeatureNote(class, f); f != "" && n != "" {

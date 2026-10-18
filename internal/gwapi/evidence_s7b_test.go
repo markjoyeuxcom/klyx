@@ -89,7 +89,7 @@ func TestRouteAllowedBy(t *testing.T) {
 		{Name: "reported", Protocol: "HTTP", AllowedRoutes: &AllowedRoutes{Namespaces: NamespaceAllowance{Set: true, From: "All"}}, Status: &ListenerStatus{SupportedKinds: []RouteKind{{Kind: KindHTTPRoute}}}},
 	}
 	ae := func(section string) AttachmentEval {
-		return AttachmentEval{Ref: RouteParentRef{Group: Group, Kind: "Gateway", Namespace: "infra", Name: "eg", SectionName: section}, Parent: AttachmentParent{State: ParentFound, Listeners: listeners}}
+		return AttachmentEval{Ref: RouteParentRef{Group: Group, Kind: "Gateway", Namespace: "infra", Name: "eg", SectionName: section}, Parent: AttachmentParent{State: ParentFound, Current: true, Listeners: listeners}}
 	}
 	known := NamespaceLabels{Known: true, Labels: map[string]string{"team": "shop"}}
 	for _, tc := range []struct {
