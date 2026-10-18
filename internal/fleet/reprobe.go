@@ -54,6 +54,7 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	c.caps.Karpenter = set.Karpenter
 	c.caps.Reloader = set.Reloader
 	c.caps.Network = set.Network
+	c.caps.Admission = set.Admission
 	switch {
 	case set.Network.Tier == capability.Degraded:
 		if next, ok := Transition(c.state, EvCapUnhealthy); ok {

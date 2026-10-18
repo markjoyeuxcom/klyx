@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -74,6 +74,19 @@ export const NAV_GROUPS: NavGroup[] = [
       res("PriorityClasses", r("scheduling.k8s.io", "v1", "priorityclasses", "PriorityClass", "Cluster")),
       res("RuntimeClasses", r("node.k8s.io", "v1", "runtimeclasses", "RuntimeClass", "Cluster")),
       res("Leases", r("coordination.k8s.io", "v1", "leases", "Lease", "Namespaced")),
+    ],
+  },
+  {
+    // coverage S3a: read-only; one view with its own tabs (Webhooks,
+    // Policies, Bindings). Detected, not assumed: admissionregistration v1.
+    id: "admission", label: "Admission", cap: "admission", lens: "group", destinations: [
+      task("admission", "Admission", section("admission"), { keywords: ["webhook", "admission webhook", "validating", "mutating", "policy", "vap", "cel", "binding"] }),
+      res("ValidatingWebhookConfigurations", r("admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "Cluster")),
+      res("MutatingWebhookConfigurations", r("admissionregistration.k8s.io", "v1", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "Cluster")),
+      res("ValidatingAdmissionPolicies", r("admissionregistration.k8s.io", "v1", "validatingadmissionpolicies", "ValidatingAdmissionPolicy", "Cluster")),
+      res("ValidatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBinding", "Cluster")),
+      res("MutatingAdmissionPolicies", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicies", "MutatingAdmissionPolicy", "Cluster")),
+      res("MutatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBinding", "Cluster")),
     ],
   },
   {
@@ -240,6 +253,7 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     gatewayAPI: Boolean(c.gatewayAPIVersion),
     karpenter: c.karpenterPresent ?? false,
     velero: c.veleroPresent ?? false,
+    admission: c.admissionPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

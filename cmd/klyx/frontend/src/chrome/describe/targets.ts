@@ -47,6 +47,13 @@ const GROUPS: Record<string, string> = {
   Backup: "velero.io",
   Restore: "velero.io",
   BackupStorageLocation: "velero.io",
+  // admission (coverage S3a)
+  ValidatingWebhookConfiguration: "admissionregistration.k8s.io",
+  MutatingWebhookConfiguration: "admissionregistration.k8s.io",
+  ValidatingAdmissionPolicy: "admissionregistration.k8s.io",
+  MutatingAdmissionPolicy: "admissionregistration.k8s.io",
+  ValidatingAdmissionPolicyBinding: "admissionregistration.k8s.io",
+  MutatingAdmissionPolicyBinding: "admissionregistration.k8s.io",
   // workloads
   Deployment: "apps",
   StatefulSet: "apps",

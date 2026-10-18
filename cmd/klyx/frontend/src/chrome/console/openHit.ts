@@ -37,6 +37,10 @@ const LENSES: Record<string, Lens> = {
   "velero.io/schedules": { task: "velero", part: "schedules", label: "Velero" },
   "velero.io/backupstoragelocations": { task: "velero", part: "locations", label: "Velero" },
   "velero.io/backups": { task: "velero", part: "backups", label: "Velero" },
+  "admissionregistration.k8s.io/validatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
+  "admissionregistration.k8s.io/mutatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
+  "admissionregistration.k8s.io/validatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  "admissionregistration.k8s.io/mutatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;

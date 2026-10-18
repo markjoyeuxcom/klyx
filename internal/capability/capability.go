@@ -147,6 +147,14 @@ type KarpenterCapability struct {
 	Verified bool // as CertManagerCapability
 }
 
+// AdmissionCapability is the admission API (coverage S3a): served on every
+// supported cluster, detected rather than assumed. Present when
+// admissionregistration.k8s.io/v1 is served.
+type AdmissionCapability struct {
+	Base
+	Present bool
+}
+
 // Set is the full per-cluster capability snapshot handed to the view layer.
 type Set struct {
 	GitOps          GitOpsCapability
@@ -156,4 +164,5 @@ type Set struct {
 	Reloader        ReloaderCapability
 	Karpenter       KarpenterCapability
 	Velero          VeleroCapability
+	Admission       AdmissionCapability
 }

@@ -36,6 +36,8 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
   { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
     parts: [{ part: "schedules", label: "Schedules", destinationId: "velero" }, { part: "locations", label: "Storage locations" }, { part: "backups", label: "Unscheduled backups" }] },
+  { task: "admission", label: "Admission", groupId: "admission", destinationId: "admission", cap: "admission",
+    parts: [{ part: "webhooks", label: "Webhook configurations", destinationId: "admission" }, { part: "policies", label: "Admission policies" }] },
 ];
 
 const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence" };
