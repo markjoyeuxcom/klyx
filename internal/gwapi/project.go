@@ -16,8 +16,13 @@ const (
 	MaxGatewayClass = 4 << 10
 	MaxGateway      = 64 << 10
 	MaxListenerSet  = 64 << 10
-	messageClip     = 1 << 10 // a condition message, for display
-	tightClip       = 256     // the object's own condition messages, when over the limit
+	// S7b §8: a route and a ReferenceGrant
+	MaxRoute         = 16 << 10
+	MaxL4Route       = 8 << 10
+	MaxGrant         = 4 << 10
+	routeMessageClip = 512
+	messageClip      = 1 << 10 // a condition message, for display
+	tightClip        = 256     // the object's own condition messages, when over the limit
 )
 
 // MaxObject is a projected resource's size limit: a larger projection is
@@ -30,6 +35,12 @@ func MaxObject(resource string) int {
 		return MaxGateway
 	case "listenersets":
 		return MaxListenerSet
+	case "httproutes", "grpcroutes", "tlsroutes":
+		return MaxRoute
+	case "tcproutes", "udproutes":
+		return MaxL4Route
+	case "referencegrants":
+		return MaxGrant
 	}
 	return 0
 }
@@ -49,9 +60,11 @@ type Object struct {
 	metav1.ObjectMeta
 	APIVersion string
 
-	Gateway     *GatewayRef   // gateways
-	ListenerSet *ListenerSet  // listenersets
-	Class       *GatewayClass // gatewayclasses
+	Gateway     *GatewayRef     // gateways
+	ListenerSet *ListenerSet    // listenersets
+	Class       *GatewayClass   // gatewayclasses
+	Route       *Route          // the five route kinds (S7b)
+	Grant       *ReferenceGrant // referencegrants
 
 	// Size is the API-shaped projection's JSON-encoded length.
 	Size int
@@ -78,10 +91,14 @@ func Project(resource string) func(obj any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("gwapi: want *Unstructured, got %T", obj)
 		}
-		pu, c := build(resource, u, &clip{limit: messageClip, listenerLimit: messageClip})
+		first := &clip{limit: messageClip, listenerLimit: messageClip}
+		if RouteKindOf(resource) != "" {
+			first.limit = routeMessageClip
+		}
+		pu, c := build(resource, u, first)
 		size := encodedSize(pu)
 		if size > MaxObject(resource) {
-			pu, c = build(resource, u, &clip{limit: tightClip, listenerLimit: 0})
+			pu, c = build(resource, u, &clip{limit: tightClip, listenerLimit: 0, tight: true})
 			size = encodedSize(pu)
 		}
 		out := &Object{APIVersion: u.GetAPIVersion(), Size: size, Clipped: c.clipped}
@@ -97,6 +114,28 @@ func Project(resource string) func(obj any) (any, error) {
 		case "gatewayclasses":
 			gc := ParseGatewayClass(pu)
 			out.Class = &gc
+		case "referencegrants":
+			g := ParseReferenceGrant(pu)
+			out.Grant = &g
+		default:
+			if kind := RouteKindOf(resource); kind != "" {
+				// the display lists are capped in the projection; the counts
+				// and fingerprints are the whole object's (S7b §8)
+				r := ParseRoute(kind, pu)
+				r.Fingerprints = KindRuleFingerprints(kind, u)
+				hosts, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "hostnames")
+				r.HostnameCount = len(hosts)
+				rawRules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+				for i := range r.Rules {
+					if i < len(rawRules) {
+						if rm, ok := rawRules[i].(map[string]any); ok {
+							ms, _ := rm["matches"].([]any)
+							r.Rules[i].MatchCount = len(ms)
+						}
+					}
+				}
+				out.Route = &r
+			}
 		}
 		return out, nil
 	}
@@ -114,6 +153,7 @@ func encodedSize(u *unstructured.Unstructured) int {
 // listeners' at listenerLimit (0 drops them), and records what it clipped.
 type clip struct {
 	limit, listenerLimit int
+	tight                bool
 	clipped              []string
 }
 
@@ -167,6 +207,12 @@ func build(resource string, u *unstructured.Unstructured, c *clip) (*unstructure
 			spec["parentRef"] = pr
 		}
 		listenersInto(spec, status, src, c)
+	case "referencegrants":
+		copyKeys(spec, mapAt(src, "spec"), "from", "to")
+	default:
+		if RouteKindOf(resource) != "" {
+			routeInto(spec, status, src, c)
+		}
 	}
 	if len(spec) > 0 {
 		m["spec"] = spec
@@ -372,4 +418,52 @@ func copyJSON(v any) any {
 		return out
 	}
 	return v
+}
+
+// routeInto projects a route (S7b §8): parentRefs whole; hostnames capped at
+// 16; per rule its name, its backendRefs whole and its matches capped at 8;
+// status.parents whole, condition messages made safe and clipped.
+func routeInto(spec, status, src map[string]any, c *clip) {
+	sp := mapAt(src, "spec")
+	copyKeys(spec, sp, "parentRefs")
+	if hs, ok := sp["hostnames"].([]any); ok {
+		if len(hs) > maxHostnamesShown {
+			c.clipped = append(c.clipped, "spec.hostnames")
+			hs = hs[:maxHostnamesShown]
+		}
+		spec["hostnames"] = copyJSON(hs)
+	}
+	if rules, ok := sp["rules"].([]any); ok {
+		out := make([]any, 0, len(rules))
+		for i, x := range rules {
+			rm, _ := x.(map[string]any)
+			pr := map[string]any{}
+			copyKeys(pr, rm, "name", "backendRefs")
+			if ms, ok := rm["matches"].([]any); ok {
+				if len(ms) > maxMatchesShown {
+					c.clipped = append(c.clipped, fmt.Sprintf("spec.rules[%d].matches", i))
+					ms = ms[:maxMatchesShown]
+				}
+				pr["matches"] = copyJSON(ms)
+			}
+			out = append(out, pr)
+		}
+		spec["rules"] = out
+	}
+	if ps, ok := nested(src, "status", "parents").([]any); ok {
+		out := make([]any, 0, len(ps))
+		for i, x := range ps {
+			pm, ok := x.(map[string]any)
+			if !ok {
+				continue
+			}
+			pp := map[string]any{}
+			copyKeys(pp, pm, "parentRef", "controllerName")
+			if conds := conditionsOf(pm["conditions"], fmt.Sprintf("status.parents[%d].conditions", i), c, c.limit); conds != nil {
+				pp["conditions"] = conds
+			}
+			out = append(out, pp)
+		}
+		status["parents"] = out
+	}
 }
