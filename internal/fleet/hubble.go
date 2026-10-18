@@ -26,11 +26,8 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "Hubble not detected on this cluster"}
 	}
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -44,6 +41,9 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 	stats, st, err := src.QueryFlowStats(ctx)
 	if err != nil {
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "hubble metrics query failed: " + err.Error()}
+	}
+	if c.credentialMoved(mr.rev) {
+		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
 	return stats, st

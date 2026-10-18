@@ -53,10 +53,36 @@ func NewDirectTransport(base, token string, client *http.Client) Querier {
 }
 
 // NewDirectTransportAuth builds a direct HTTP transport with an endpoint's
-// resolved credential and tenant.
+// resolved credential and tenant. With a revision gate, every round trip -
+// the first request and each redirect hop - is refused once the
+// credential's revision has moved (C5 §7).
 func NewDirectTransportAuth(base string, auth Auth, client *http.Client) Querier {
+	if auth.Live != nil && client != nil {
+		gated := *client
+		base := gated.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		gated.Transport = liveRoundTripper{base: base, live: auth.Live}
+		client = &gated
+	}
 	return &directTransport{base: base, auth: auth, client: client}
 }
+
+// liveRoundTripper sends nothing once the credential's revision has moved.
+type liveRoundTripper struct {
+	base http.RoundTripper
+	live func() bool
+}
+
+func (t liveRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !t.live() {
+		return nil, ErrCredentialChanged
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (t *directTransport) redactor() safehttp.Redactor { return t.auth.Redactor }
 
 func (t *directTransport) InstantQuery(ctx context.Context, promql string) (int, []byte, error) {
 	u := t.base + "/api/v1/query?query=" + url.QueryEscape(promql)
@@ -95,11 +121,16 @@ func (t *directTransport) do(req *http.Request) (int, []byte, error) {
 	red := t.auth.Redactor
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return 0, nil, red.Err(err)
+		return 0, nil, red.Err(err, ErrCredentialChanged, ErrResponseTooLarge)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := readCapped(resp.Body)
-	return resp.StatusCode, red.ExactBytes(body), red.Err(err)
+	// a response that completes after the credential changed is dropped:
+	// no reader may show or cache it (C5 §7)
+	if t.auth.Live != nil && !t.auth.Live() {
+		return 0, nil, ErrCredentialChanged
+	}
+	return resp.StatusCode, red.ExactBytes(body), red.Err(err, ErrResponseTooLarge)
 }
 
 // readCapped reads at most maxResponseBytes; one byte more is
@@ -135,6 +166,9 @@ func NewGuardedProxyREST(cfg *rest.Config) (rest.Interface, error) {
 		return nil, err
 	}
 	hc.CheckRedirect = safehttp.SameOriginRedirect(safehttp.MaxRedirects)
+	// the cap sits below client-go's decoding, so a non-2xx body - which
+	// client-go reads whole - is bounded too
+	hc.Transport = safehttp.Cap(hc.Transport, maxResponseBytes, ErrResponseTooLarge)
 	return rest.RESTClientForConfigAndClient(c, hc)
 }
 

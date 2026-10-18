@@ -77,3 +77,22 @@ describe("stateText", () => {
     expect(stateText(base({ state: "legacy", storedToo: false })).text).toBe("in fleet.yaml in plain text");
   });
 });
+
+// Codex's C5 implementation review, finding 1 (its probe, adopted): a typed
+// credential is never stored for an endpoint that changed under it.
+describe("a draft belongs to the endpoint as reviewed", () => {
+  it("drops the draft when the endpoint's revision changes", async () => {
+    const row = (revision: string, source: string) => base({ revision, source });
+    getEndpoints.mockResolvedValueOnce(fleet([row("A", "https://a.example")])).mockResolvedValue(fleet([row("B", "https://b.example")]));
+    testEndpoint.mockResolvedValue({ ok: false, message: "fleet.yaml changed" });
+    setCredential.mockResolvedValue({ ok: true, message: "stored" });
+    render(<EndpointsPanel />);
+    fireEvent.change(await screen.findByLabelText("prd metrics token"), { target: { value: "SECRET-FOR-A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test the prd Metrics endpoint" }));
+    await screen.findByText("https://b.example");
+    expect((screen.getByLabelText("prd metrics token") as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("button", { name: "Store the prd Metrics credential" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Store the prd Metrics credential" }));
+    expect(setCredential).not.toHaveBeenCalled();
+  });
+});

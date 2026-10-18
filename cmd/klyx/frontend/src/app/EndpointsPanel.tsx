@@ -20,6 +20,12 @@ const KIND_LABEL: Record<string, string> = { metrics: "Metrics", alertmanager: "
 const hint: React.CSSProperties = { fontSize: 11, color: "var(--color-text-tertiary)" };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "3px 0", flexWrap: "wrap" };
 
+// A typed credential belongs to the endpoint as the person saw it: its draft
+// is keyed by the revision, and dropped when that revision is gone, so it is
+// never stored for an endpoint that changed under it (Codex's C5
+// implementation review, finding 1).
+const draftKey = (r: Pick<EndpointRow, "cluster" | "kind" | "revision">) => `${r.cluster}/${r.kind}@${r.revision}`;
+
 // what the state says, in words; good states read in ink, the rest warn
 export function stateText(r: EndpointRow): { text: string; warn: boolean } {
   switch (r.state) {
@@ -45,7 +51,11 @@ export function EndpointsPanel() {
   const load = async () => {
     const st = await getEndpoints();
     setLoadFailed(!st);
-    if (st) setState(st);
+    if (st) {
+      setState(st);
+      const live = new Set(st.rows.map(draftKey));
+      setInputs((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => live.has(k))));
+    }
   };
   useEffect(() => {
     void load();
@@ -80,8 +90,9 @@ export function EndpointsPanel() {
       {state.rows.length === 0 && !state.error && <div style={hint}>No cluster configures a metrics, Alertmanager or Loki endpoint.</div>}
       {state.rows.map((r) => {
         const k = `${r.cluster}/${r.kind}`;
+        const dk = draftKey(r);
         const st = stateText(r);
-        const value = inputs[k] ?? "";
+        const value = inputs[dk] ?? "";
         return (
           <div key={k} data-testid="endpoint-row" data-endpoint={k} style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
             <div style={row}>
@@ -105,14 +116,14 @@ export function EndpointsPanel() {
                     style={{ flex: 1, minWidth: 160 }}
                     placeholder={r.state === "stored" ? "paste a new one to replace it" : r.authType === "basic" ? "paste the password" : "paste the token"}
                     value={value}
-                    onChange={(e) => setInputs({ ...inputs, [k]: e.target.value })}
+                    onChange={(e) => setInputs({ ...inputs, [dk]: e.target.value })}
                   />
                   <button
                     className="l-btn"
                     aria-label={`${r.state === "stored" ? "Replace" : "Store"} the ${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind} credential`}
                     disabled={busy || value.trim() === ""}
                     onClick={() => {
-                      setInputs({ ...inputs, [k]: "" });
+                      setInputs({ ...inputs, [dk]: "" });
                       void run(() => setCredential(r.cluster, r.kind, r.revision, value));
                     }}
                   >

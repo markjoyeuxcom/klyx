@@ -154,7 +154,7 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	// nor shown as the endpoint's availability (C5 §7)
 	if revs.Revision(c.name, config.EndpointMetrics) != rev {
 		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: res.Mode, Source: res.Source,
-			Reason: "the endpoint's credential changed during the read; it is read again next time"}}
+			Reason: reasonCredentialChanged}}
 		return
 	}
 	c.metricsState.credRev = rev
@@ -169,6 +169,36 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	// re-probe invalidates any cached samples
 	c.metricsState.samples = metrics.ClusterMetrics{}
 	c.metricsState.samplesExp = time.Time{}
+}
+
+// reasonCredentialChanged is what a read that crossed a change to the
+// endpoint's credential or configuration says (C5 §7).
+const reasonCredentialChanged = "the endpoint's credential changed during the read; it is read again next time"
+
+// metricsRead is what a reader takes under c.metricsMu and queries outside
+// it: the capability, the transport, and the credential revision both were
+// built under.
+type metricsRead struct {
+	cap       metrics.MetricsCapability
+	transport metrics.Querier
+	rev       uint64
+}
+
+// readMetrics resolves the capability (the lazy probe and its cache) and
+// takes a metricsRead of it.
+func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	c.ensureMetricsLocked(ctx, false, now)
+	return metricsRead{cap: c.metricsState.cap, transport: c.metricsState.transport, rev: c.metricsState.credRev}
+}
+
+// credentialMoved reports whether the endpoint's revision moved since rev.
+// A result read across the move is neither shown nor cached, whichever of a
+// reader's queries the move landed in (C5 §7): the transport's own gate
+// refuses a response still arriving, not one already read.
+func (c *ClusterConn) credentialMoved(rev uint64) bool {
+	return c.creds.Revisions.Revision(c.name, config.EndpointMetrics) != rev
 }
 
 // ClusterMetrics returns the proof-of-life metrics and probe-confirmed
@@ -192,7 +222,14 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 	}
 
 	if c.metricsState.samplesExp.IsZero() || now.After(c.metricsState.samplesExp) {
-		c.metricsState.samples = querySamples(ctx, c.metricsState.transport)
+		rev := c.metricsState.credRev
+		samples := querySamples(ctx, c.metricsState.transport)
+		if c.credentialMoved(rev) {
+			c.metricsState = metricsCache{}
+			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
+				Reason: reasonCredentialChanged}
+		}
+		c.metricsState.samples = samples
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)
 	}
 	return c.metricsState.samples, cap

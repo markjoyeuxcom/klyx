@@ -63,18 +63,23 @@ type NamedEndpoint struct {
 	LegacyToken bool // a plaintext metrics.token is in the file (C5 §6)
 }
 
-// UserinfoProblem says why an endpoint URL cannot be used because it carries
-// credentials (C5 §2): such an endpoint is unavailable, never sent to and
-// never shown with them. "" when the URL carries none.
-func UserinfoProblem(endpoint string) string {
+// EndpointURLProblem says why an endpoint URL cannot be used (C5 §2): it
+// carries credentials, or it does not parse - in which case nothing in it
+// can be trusted not to be a credential. Such an endpoint is unavailable,
+// never sent to, and its text is never echoed: the message is fixed. ""
+// when the URL is usable.
+func EndpointURLProblem(endpoint string) string {
 	if endpoint == "" {
 		return ""
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.User == nil {
-		return ""
+	switch {
+	case err != nil:
+		return "the endpoint URL does not parse; fix it in fleet.yaml"
+	case u.User != nil:
+		return "the endpoint URL carries credentials; set them in Settings > External endpoints"
 	}
-	return "the endpoint URL carries credentials; set them in Settings > External endpoints"
+	return ""
 }
 
 // validateEndpoint checks one endpoint block; prefix names it in errors.
@@ -120,7 +125,7 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	if e.Endpoint == "" && e.Auth != nil {
 		w = append(w, fmt.Sprintf("cluster %q: %s.auth is not sent to a proxied or discovered endpoint; external credentials never ride the Kubernetes API server's authentication", cluster, prefix))
 	}
-	if p := UserinfoProblem(e.Endpoint); p != "" {
+	if p := EndpointURLProblem(e.Endpoint); p != "" {
 		w = append(w, fmt.Sprintf("cluster %q: %s: %s", cluster, prefix, p))
 	}
 	return w

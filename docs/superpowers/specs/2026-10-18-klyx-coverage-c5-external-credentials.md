@@ -419,3 +419,33 @@ Built on `feat/coverage` in six stages, after the design's acceptance at 58a234c
   - Loki with basic auth, missing;
   - a legacy plaintext token, with Move to keychain.
 - **From the captures:** every user-facing message now names the section "Settings > External endpoints", its title.
+
+## 14. Revision 1: Codex's implementation review of c8d9a3e
+
+Codex requested changes (handoff b928765a, 2026-10-19) with seven findings, each reproduced by a probe. Every probe is adopted as a test, and each fix is mutation-checked.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 (P1) | A credential draft could be submitted with another endpoint's revision after a reload, binding it to the new origin | `EndpointsPanel` keys each draft by `cluster/kind@revision`, and a reload drops every draft whose revision is gone, a remove and re-add included | "drops the draft when the endpoint's revision changes" (Codex's mounted probe) |
+| 2 (P1) | JSON decoding restores a credential the pre-parse redaction missed (`c5\u002fSECRET`) | `metrics.Client` redacts after decoding: every error from an instant, scalar, liveness, vector or range read passes through its transport's own redactor, and decoded label names and values lose the exact secret. The pre-parse body redaction stays | `TestDecodedEchoOfTheCredentialDoesNotLeak` |
+| 3 (P1) | A URL that does not parse kept its userinfo in Settings and in the capability | `config.EndpointURLProblem` (was `UserinfoProblem`) refuses an unparseable URL with a fixed message; `safehttp`'s origin errors are fixed text; `Resolve` shows such a source as "an endpoint URL that does not parse" | `TestMalformedEndpointURLDoesNotLeakToSettings`, `TestMalformedEndpointURLNeverBecomesAReason`, `TestUnparseableEndpointURL`, `TestOriginErrorsNeverEchoTheURL` |
+| 4 (P1) | Remove did not stop a later same-origin redirect hop | A direct transport with a revision gate wraps its client's round tripper, so every send (the first request and each redirect hop) is refused once the revision moves; the same-origin `CheckRedirect` is unchanged. A response that finishes arriving after the move is dropped | `TestRemoveStopsAnAuthenticatedRedirectHop`, `TestResponseCompletingAfterARevocationIsDropped` |
+| 5 (P2) | The proxy cap missed non-2xx bodies, which client-go reads whole | `NewGuardedProxyREST` puts `safehttp.Cap` on the client's transport, below client-go's decoding; `ErrResponseTooLarge` survives client-go's wrapping | `TestProxiedNon2xxBodyIsCapped` |
+| 6 (P2) | Only the probe was fenced; later query results crossed a credential change | Every reader takes one snapshot (capability, transport and revision) under the lock and, after its queries, drops the result if the revision moved: cluster samples (not cached either), workload, node and container usage, route and rule metrics, Hubble flows, cluster and workload sparklines | `TestSampleReadAcrossARevocationIsDropped`, `TestEveryMetricsReaderDropsAReadAcrossARevisionMove` (each reader, with a control read that must be available) |
+| 7 (P2) | Test and Set used the live connection's startup configuration, not the reviewed one | Under the service lock, after the review check, Set (metrics) and Test bring the live connection to the snapshot's configuration when it differs. `ClusterConn.SetMetricsConfig` moves the revision in the same critical section as the configuration and the cache, so a read in flight on the old configuration is dropped and none rebuilds from it in between. Test refuses a kind with no reader before anything else | `TestSettingsTestReadsTheReviewedEndpoint` (now requiring a passing Test that reached only the reviewed endpoint), `TestSetUsesTheReviewedEndpointConfiguration`, `TestAConfigurationChangeDropsAReadInFlight` |
+
+Codex's choices, kept as stated: Set stays refused while the legacy token wins; automatic migration stays limited to a safely editable one-line token; the tombstone holds until an explicit credential installation; and there is no unguarded proxy fallback.
+
+**Where the fixes reach beyond the findings:**
+- The reader fence covers every change of the endpoint's revision, not only a credential change: a Settings-driven change of configuration also drops a read in flight.
+- The revision moves inside `SetMetricsConfig`, not after it. A first version moved it in the service after the connection's lock was released; a mutation that removed that move survived every test, so the move went where a reader cannot slip between the two.
+
+### 14.1 Gates
+
+- **Go:** `go test -race ./internal/...` passes; golangci-lint reports 0 issues; gofmt is clean on every changed file.
+- **Frontend:** vitest 2,267 passed; tsc clean; eslint 0 errors (three warnings, all in files this revision does not touch).
+- **Mutations:** 18 Go and 1 frontend, all caught:
+  - the round-trip gate, the completion gate, decoded redaction, the proxy cap, the unparseable-URL refusal and the origin error text;
+  - Test's and Set's synchronisation, and the in-lock revision move;
+  - each reader's fence, and `credentialMoved` itself.
+- **Native smoke:** 181/181 in each of night and day at 1440 and 1024, on this revision's tree, the labs re-applied first.

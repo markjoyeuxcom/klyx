@@ -116,7 +116,7 @@ func Resolve(store secretstore.Store, in Input) Credential {
 		}
 		return out
 	}
-	if p := config.UserinfoProblem(in.Spec.Endpoint); p != "" {
+	if p := config.EndpointURLProblem(in.Spec.Endpoint); p != "" {
 		return Credential{State: BadEndpoint, Why: p}
 	}
 	origin, err := safehttp.OriginOf(in.Spec.Endpoint)

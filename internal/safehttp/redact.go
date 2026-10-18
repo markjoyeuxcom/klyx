@@ -82,14 +82,15 @@ func (r Redactor) Text(s string) string {
 }
 
 // Err is err with its text redacted. It keeps errors.Is for the
-// cancellation and deadline sentinels a caller tests for, and nothing else:
-// the original error, whose text may hold the secret, is not reachable.
-func (r Redactor) Err(err error) error {
+// cancellation and deadline sentinels, and for the caller's own (keep),
+// and nothing else: the original error, whose text may hold the secret, is
+// not reachable.
+func (r Redactor) Err(err error, keep ...error) error {
 	if err == nil {
 		return nil
 	}
 	re := &redactedError{msg: r.Text(err.Error())}
-	for _, s := range []error{context.Canceled, context.DeadlineExceeded} {
+	for _, s := range append([]error{context.Canceled, context.DeadlineExceeded}, keep...) {
 		if errors.Is(err, s) {
 			re.is = append(re.is, s)
 		}

@@ -37,6 +37,7 @@ const endpointsDoc = `clusters:
 type endpointConnFake struct {
 	mu   sync.Mutex
 	set  []config.MetricsConfig
+	cfg  config.MetricsConfig
 	capb metrics.MetricsCapability
 }
 
@@ -47,6 +48,12 @@ func (f *endpointConnFake) SetMetricsConfig(mc config.MetricsConfig) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.set = append(f.set, mc)
+	f.cfg = mc
+}
+func (f *endpointConnFake) MetricsConfig() config.MetricsConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cfg
 }
 
 // hookStore is a Memory store whose Set runs a hook first (an editor

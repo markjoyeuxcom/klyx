@@ -32,9 +32,10 @@ func CanonicalOrigin(u *url.URL) (string, error) {
 	if u == nil {
 		return "", errors.New("no URL")
 	}
+	// the messages are fixed: a URL is never echoed, it may carry a secret
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", fmt.Errorf("the scheme %q is not http or https", u.Scheme)
+		return "", errors.New("the URL's scheme is not http or https")
 	}
 	host := u.Hostname()
 	if host == "" {
@@ -48,7 +49,7 @@ func CanonicalOrigin(u *url.URL) (string, error) {
 	} else {
 		ascii, err := idna.Lookup.ToASCII(strings.TrimSuffix(host, "."))
 		if err != nil {
-			return "", fmt.Errorf("the host is not a valid name: %v", err)
+			return "", errors.New("the URL's host is not a valid name")
 		}
 		host = strings.ToLower(ascii)
 	}
@@ -63,7 +64,7 @@ func CanonicalOrigin(u *url.URL) (string, error) {
 func OriginOf(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("the URL does not parse: %v", err)
+		return "", errors.New("the URL does not parse")
 	}
 	return CanonicalOrigin(u)
 }

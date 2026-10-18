@@ -25,7 +25,7 @@ func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf Tran
 	if cfg.Endpoint != "" {
 		// an endpoint URL carrying credentials is refused for use, and
 		// never shown with them (coverage C5 §2)
-		if p := config.UserinfoProblem(cfg.Endpoint); p != "" {
+		if p := config.EndpointURLProblem(cfg.Endpoint); p != "" {
 			return Resolution{Mode: ModeUnavailable, Source: withoutUserinfo(cfg.Endpoint), Reason: p}
 		}
 		base := strings.TrimRight(cfg.Endpoint, "/")
@@ -59,11 +59,12 @@ func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf Tran
 // none - the one case where the remedy is to configure a metrics endpoint.
 const ReasonNoService = "no Prometheus Service found"
 
-// withoutUserinfo is an endpoint URL with any credentials it carries removed.
+// withoutUserinfo is an endpoint URL with any credentials it carries
+// removed; a URL that does not parse is never echoed.
 func withoutUserinfo(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return ""
+		return "an endpoint URL that does not parse"
 	}
 	u.User = nil
 	return strings.TrimRight(u.String(), "/")

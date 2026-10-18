@@ -164,3 +164,12 @@ func TestRedactor(t *testing.T) {
 		t.Fatalf("Err: %v", err)
 	}
 }
+
+// An origin error never echoes the URL: it may carry a credential.
+func TestOriginErrorsNeverEchoTheURL(t *testing.T) {
+	for _, raw := range []string{"https://user:C5-URL-SECRET@bad%host", "C5-URL-SECRET://x", "https://C5-URL-SECRET\x00.example"} {
+		if _, err := OriginOf(raw); err == nil || strings.Contains(err.Error(), "C5-URL-SECRET") {
+			t.Fatalf("%q: %v", raw, err)
+		}
+	}
+}

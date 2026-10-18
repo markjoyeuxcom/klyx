@@ -32,7 +32,8 @@ type matrixElem struct {
 // aggregate with sum()/avg() so the matrix has 0 or 1 elements). An empty
 // matrix returns an empty slice and nil error; >1 series is an error.
 // Non-finite (NaN/Inf) points are skipped, leaving a gap.
-func (c *Client) RangeSeries(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]Point, error) {
+func (c *Client) RangeSeries(ctx context.Context, promql string, start, end time.Time, step time.Duration) (pts []Point, err error) {
+	defer func() { err = c.redact(err) }()
 	series, err := c.RangeMatrix(ctx, promql, start, end, step)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,13 @@ type LabeledSeries struct {
 // RangeMatrix runs a range query and returns every series with its labels.
 // Non-finite points are skipped, leaving a gap. An empty matrix returns an
 // empty slice and nil error.
-func (c *Client) RangeMatrix(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]LabeledSeries, error) {
+func (c *Client) RangeMatrix(ctx context.Context, promql string, start, end time.Time, step time.Duration) (res []LabeledSeries, err error) {
+	defer func() {
+		for i := range res {
+			res[i].Labels = c.redactLabels(res[i].Labels)
+		}
+		err = c.redact(err)
+	}()
 	rq, ok := c.q.(RangeQuerier)
 	if !ok {
 		return nil, fmt.Errorf("transport does not support range queries")

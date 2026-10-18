@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -22,10 +23,28 @@ import (
 // refuses on drift; no secret is ever read back into the page.
 
 // EndpointConn is what the endpoints service needs of a cluster's
-// connection. fleet.ClusterConn satisfies it.
+// connection. fleet.ClusterConn satisfies it; its SetMetricsConfig moves
+// the endpoint's revision with the configuration (C5 §7).
 type EndpointConn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	SetMetricsConfig(config.MetricsConfig)
+	MetricsConfig() config.MetricsConfig
+}
+
+// syncMetrics makes the live connection read the metrics endpoint the
+// person reviewed (Codex's C5 implementation review, finding 7): a
+// connection still on an older configuration adopts the snapshot's, which
+// moves the revision so nothing read through the old one is shown. Caller
+// holds s.mu.
+func (s *EndpointsService) syncMetrics(cluster string, cl *config.ClusterConfig) {
+	if cl == nil || cl.Metrics == nil {
+		return
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok || reflect.DeepEqual(conn.MetricsConfig(), *cl.Metrics) {
+		return
+	}
+	conn.SetMetricsConfig(*cl.Metrics)
 }
 
 // EndpointsService is bound to JS.
@@ -111,7 +130,7 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	if a := ne.Spec.Auth; a != nil {
 		r.AuthType, r.Username = a.Type, a.Username
 	}
-	direct := ne.Spec.Endpoint != "" && config.UserinfoProblem(ne.Spec.Endpoint) == ""
+	direct := ne.Spec.Endpoint != "" && config.EndpointURLProblem(ne.Spec.Endpoint) == ""
 	r.CanSet = direct && ne.Spec.Auth != nil && legacy == ""
 	r.CanMove = ne.Kind == config.EndpointMetrics && legacy != "" && direct
 	if s.store != nil {
@@ -190,7 +209,7 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 	case kind == config.EndpointMetrics && cl.Metrics != nil && cl.Metrics.Token != "":
 		return EndpointActionDTO{Message: "fleet.yaml still holds a plaintext token for this endpoint; move it to the keychain first"}
 	}
-	if p := config.UserinfoProblem(ne.Spec.Endpoint); p != "" {
+	if p := config.EndpointURLProblem(ne.Spec.Endpoint); p != "" {
 		return EndpointActionDTO{Message: p}
 	}
 	origin, err := safehttp.OriginOf(ne.Spec.Endpoint)
@@ -205,6 +224,9 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 		return fail(red, err)
 	}
 	s.revs.Bump(cluster, kind, true)
+	if kind == config.EndpointMetrics {
+		s.syncMetrics(cluster, cl)
+	}
 	return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 }
 
@@ -252,7 +274,7 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 	if s.store == nil {
 		return EndpointActionDTO{Message: "keychain unavailable: no credential store; nothing changed"}
 	}
-	if p := config.UserinfoProblem(ne.Spec.Endpoint); p != "" || ne.Spec.Endpoint == "" {
+	if p := config.EndpointURLProblem(ne.Spec.Endpoint); p != "" || ne.Spec.Endpoint == "" {
 		return EndpointActionDTO{Message: "the token can only move for a direct endpoint URL without credentials in it; nothing changed"}
 	}
 	origin, err := safehttp.OriginOf(ne.Spec.Endpoint)
@@ -288,14 +310,19 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 // TestEndpoint reads the endpoint the person reviewed once. Metrics only:
 // Alertmanager and Loki have no reader until S8.
 func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) EndpointActionDTO {
+	if kind != config.EndpointMetrics {
+		return EndpointActionDTO{Message: "Test is not implemented until S8."}
+	}
 	s.mu.Lock()
-	_, _, _, err := s.reviewed(cluster, kind, revision)
+	_, _, cl, err := s.reviewed(cluster, kind, revision)
+	if err == nil {
+		// the test reads the endpoint as reviewed, never the connection's
+		// older configuration
+		s.syncMetrics(cluster, cl)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return fail(safehttp.NewRedactor(), err)
-	}
-	if kind != config.EndpointMetrics {
-		return EndpointActionDTO{Message: "Test is not implemented until S8."}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {

@@ -33,11 +33,8 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 		return nil, workloads.UsageStatus{Available: false, Message: "workload list failed: " + err.Error()}
 	}
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -61,6 +58,9 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
+	if c.credentialMoved(mr.rev) {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	}
 	return workloads.AggregateUsage(ws, cpuByPod, memByPod), workloads.UsageStatus{Available: true, UpdatedAt: now}
 }
 

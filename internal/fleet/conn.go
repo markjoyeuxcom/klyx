@@ -278,13 +278,19 @@ func (c *ClusterConn) WithCredentials(cr Credentials) *ClusterConn {
 }
 
 // SetMetricsConfig replaces the metrics endpoint's configuration (a Move to
-// the keychain rewrote it, C5 §6) and drops every cached client built from
-// the old one.
+// the keychain rewrote it, C5 §6; Settings reviewed a newer one) and drops
+// every cached client built from the old one. The endpoint's revision moves
+// in the same critical section (C5 §7): a reader already holding the old
+// transport drops what it reads, and none rebuilds from the old
+// configuration in between.
 func (c *ClusterConn) SetMetricsConfig(mc config.MetricsConfig) {
 	c.metricsMu.Lock()
 	defer c.metricsMu.Unlock()
 	c.metricsCfg = mc
 	c.metricsState = metricsCache{}
+	if c.creds.Revisions != nil {
+		c.creds.Revisions.Bump(c.name, config.EndpointMetrics, false)
+	}
 }
 
 // MetricsConfig is the metrics endpoint's configuration as this connection

@@ -109,7 +109,15 @@ func TestEndpointWarnings(t *testing.T) {
 	if strings.Contains(w, "pass") {
 		t.Fatalf("a warning shows the password: %s", w)
 	}
-	if UserinfoProblem("https://prom.example") != "" || UserinfoProblem("") != "" {
+	if EndpointURLProblem("https://prom.example") != "" || EndpointURLProblem("") != "" {
 		t.Fatal("no userinfo, no problem")
+	}
+}
+
+// A URL that does not parse is refused for use with a fixed message.
+func TestUnparseableEndpointURL(t *testing.T) {
+	p := EndpointURLProblem("https://user:C5-URL-SECRET@bad%host")
+	if p == "" || strings.Contains(p, "C5-URL-SECRET") {
+		t.Fatalf("problem: %q", p)
 	}
 }
