@@ -522,7 +522,7 @@ export type PodRowDTO = {
   namespace: string; name: string; uid: string; gvr?: string; generation?: number;
   ownerKind: string; ownerName: string; ownerUid?: string; node: string; ip: string;
   ready: boolean; restarts: number; createdUnix?: number; health?: HealthLike; containers: PodRowContainerDTO[];
-  observedGeneration?: number; resize?: ResizeDTO;
+  observedGeneration?: number; resize?: ResizeDTO; evidenceRev?: string;
 };
 // RowsVer is the (incarnation, Ver) of the rows a slice holds - the §6a
 // probe anchors a push's timing to the lens commit that shows it.

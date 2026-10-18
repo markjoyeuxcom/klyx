@@ -1,6 +1,9 @@
 package workloads
 
 import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -211,4 +214,68 @@ func EphemeralOf(p *corev1.Pod) (out []EphemeralContainer, more int) {
 		out = append(out, e)
 	}
 	return out, more
+}
+
+// EvidenceRev is a bounded revision of what the inspector's Resources and
+// Debug containers blocks show and the row's other fields do not
+// (implementation review 1): the acknowledged generation, the resize
+// conditions, each container's allocated and actual resources, the
+// pod-level status maps, the legacy resize field and each debug
+// container's state. A status-only change (an acknowledgement, an
+// actuation, a debug container exiting) changes it, so the selected pod's
+// detail is read again. 16 hex characters (FNV-64a); never a value.
+func EvidenceRev(p *corev1.Pod) string {
+	type cs struct {
+		Name      string
+		Allocated corev1.ResourceList
+		Resources *corev1.ResourceRequirements
+	}
+	type eph struct {
+		Name, State, Reason string
+		ExitCode            int32
+		Started, Finished   time.Time
+	}
+	type cond struct {
+		Type, Status, Reason, Message string
+		Generation                    int64
+	}
+	var e struct {
+		Observed     int64
+		Conds        []cond
+		Containers   []cs
+		PodAllocated corev1.ResourceList
+		PodResources *corev1.ResourceRequirements
+		Legacy       string
+		Ephemeral    []eph
+	}
+	e.Observed = p.Status.ObservedGeneration
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodResizePending || c.Type == corev1.PodResizeInProgress {
+			e.Conds = append(e.Conds, cond{string(c.Type), string(c.Status), c.Reason, c.Message, c.ObservedGeneration})
+		}
+	}
+	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
+		for _, c := range list {
+			e.Containers = append(e.Containers, cs{c.Name, c.AllocatedResources, c.Resources})
+		}
+	}
+	e.PodAllocated, e.PodResources = p.Status.AllocatedResources, p.Status.Resources
+	e.Legacy = string(p.Status.Resize) //nolint:staticcheck // the deprecated field is shown, so it is part of the evidence
+	for _, c := range p.Status.EphemeralContainerStatuses {
+		x := eph{Name: c.Name}
+		switch st := c.State; {
+		case st.Running != nil:
+			x.State, x.Started = "running", st.Running.StartedAt.Time
+		case st.Waiting != nil:
+			x.State, x.Reason = "waiting", st.Waiting.Reason
+		case st.Terminated != nil:
+			x.State, x.Reason, x.ExitCode = "terminated", st.Terminated.Reason, st.Terminated.ExitCode
+			x.Started, x.Finished = st.Terminated.StartedAt.Time, st.Terminated.FinishedAt.Time
+		}
+		e.Ephemeral = append(e.Ephemeral, x)
+	}
+	raw, _ := json.Marshal(e) // ResourceList keys marshal sorted; quantities canonically
+	h := fnv.New64a()
+	_, _ = h.Write(raw)
+	return fmt.Sprintf("%016x", h.Sum64())
 }

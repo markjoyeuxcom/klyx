@@ -84,9 +84,12 @@ type PodRowDTO struct {
 	Health     HealthDTO            `json:"health"`
 	Containers []PodRowContainerDTO `json:"containers"`
 	// Coverage S6: the acknowledged generation (0: not reported) and the
-	// resize state; the Syncing presentation reads them.
+	// resize state; the Syncing presentation reads them. EvidenceRev
+	// revises the detail's resize and debug evidence, so a status-only
+	// change re-reads the selected pod's detail.
 	ObservedGeneration int64      `json:"observedGeneration,omitempty"`
 	Resize             *ResizeDTO `json:"resize,omitempty"`
+	EvidenceRev        string     `json:"evidenceRev,omitempty"`
 }
 
 // PodRowContainerDTO is a container on a pod row: its live state only.

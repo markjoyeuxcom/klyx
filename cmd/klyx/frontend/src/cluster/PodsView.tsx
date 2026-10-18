@@ -79,8 +79,12 @@ const byTriage = (a: PodRowDTO, b: PodRowDTO) =>
   || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name);
 // What a selected row's detail is re-read on: its identity and the facts the
 // detail explains. A capture that changes none of them re-reads nothing.
+// evidenceRev revises the resize and debug evidence (coverage S6 review 1):
+// an acknowledgement, an actuation or a debug container exiting changes no
+// other field, and must still re-read the detail.
 const detailSig = (cluster: string, p: PodRowDTO) =>
-  [cluster, p.namespace, p.name, p.uid, p.generation ?? 0, kindOf(p.health), p.health?.label ?? "", p.health?.reason ?? "", p.ready, p.restarts, p.node].join("|");
+  [cluster, p.namespace, p.name, p.uid, p.generation ?? 0, kindOf(p.health), p.health?.label ?? "", p.health?.reason ?? "", p.ready, p.restarts, p.node,
+    p.observedGeneration ?? 0, JSON.stringify(p.resize ?? null), p.evidenceRev ?? ""].join("|");
 
 // A verb's target: the pod OBJECT (its UID) it was armed against.
 type PodTarget = { namespace: string; name: string; uid: string };

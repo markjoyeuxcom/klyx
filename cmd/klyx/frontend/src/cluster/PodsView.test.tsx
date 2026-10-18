@@ -1050,3 +1050,37 @@ describe("PodsView open-scratch intent", () => {
     expect(useFleet.getState().navIntent).toEqual({ kind: "open-scratch", cluster: "elsewhere" });
   });
 });
+
+// Coverage S6 implementation review 1: a status-only change to the resize
+// or debug evidence (an acknowledgement, an actuation, a debug container
+// exiting) changes no other row field; its evidence revision re-reads the
+// selected pod's detail, under the same UID.
+describe("S6 detail continuity", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+  const setRow = (overrides: Record<string, unknown>) => useFleet.setState((s) => ({
+    pods: { ...s.pods, items: s.pods.items.map((p) => ({ ...p, ...overrides })) },
+  }));
+  it("re-reads the detail when only the evidence revision changes", async () => {
+    seed([{ ...healthy, generation: 2 }]);
+    setRow({ observedGeneration: 1, resize: { inProgress: { reason: "", generation: 2 } }, evidenceRev: "aaaaaaaaaaaaaaaa" });
+    const view = render(<PodsView cluster="homelab" />);
+    fireEvent.click(view.getByText("grafana-xyz"));
+    act(() => useFleet.setState((s) => ({ pods: { ...s.pods,
+      selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
+      detail: { ...fakeDetail, summary: { ...healthy, generation: 2, observedGeneration: 1, resize: { inProgress: { reason: "", generation: 2 } } } }, detailLoading: false,
+    } })));
+    await act(async () => {});
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ observedGeneration: 2, resize: undefined, evidenceRev: "bbbbbbbbbbbbbbbb" }));
+    await act(async () => {});
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz");
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ evidenceRev: "cccccccccccccccc" })); // an actuation or a debug exit alone
+    await act(async () => {});
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ ip: "10.9.9.9" })); // not evidence: nothing re-read
+    await act(async () => {});
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+});

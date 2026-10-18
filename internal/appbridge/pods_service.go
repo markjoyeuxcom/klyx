@@ -137,7 +137,7 @@ func toPodRowDTO(p workloads.PodSummary) PodRowDTO {
 		OwnerKind: p.OwnerKind, OwnerName: p.OwnerName, OwnerUID: string(p.OwnerUID),
 		Node: p.Node, IP: p.IP, Ready: p.Ready, Restarts: p.Restarts, Created: unixOrZero(p.Created),
 		Health: h, Containers: containers,
-		ObservedGeneration: p.ObservedGeneration, Resize: toResizeDTO(p.Resize),
+		ObservedGeneration: p.ObservedGeneration, Resize: toResizeDTO(p.Resize), EvidenceRev: p.EvidenceRev,
 	}
 }
 

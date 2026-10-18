@@ -42,6 +42,9 @@ type PodSummary struct {
 	ObservedGeneration int64
 	// Resize is the pod's resize state (coverage S6 §3).
 	Resize ResizeState
+	// EvidenceRev revises the inspector's resize and debug evidence: a
+	// status-only change re-reads the selected pod's detail.
+	EvidenceRev string
 	// Health is the shared verdict (internal/health); Rank/Reason are legacy
 	// and stay only until every consumer has migrated.
 	Health health.Verdict
@@ -143,6 +146,7 @@ func SummarizePodsModel(pods []corev1.Pod, now time.Time, model SchedModel) []Po
 			Generation:         p.Generation,
 			ObservedGeneration: p.Status.ObservedGeneration,
 			Resize:             ResizeStateOf(p),
+			EvidenceRev:        EvidenceRev(p),
 		}
 		ps.SchedCPU, ps.SchedMem = cpuMem(model.Requests(p))
 		ps.DesiredCPU, ps.DesiredMem = cpuMem(model.Desired(p))
