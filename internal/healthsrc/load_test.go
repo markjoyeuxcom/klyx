@@ -39,12 +39,14 @@ import (
 //	KLYX_LOAD=1 go test ./internal/healthsrc -run TestLoad -v -timeout 10m
 
 type loadScale struct {
-	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims int
+	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims, listenersets int
 }
 
+// Coverage S7 §8: the large cluster carries about 500 routes and 50
+// ListenerSets, its Gateways and ListenerSets with listener status.
 var (
-	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 300, claims: 50}
-	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 30, claims: 5}
+	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50}
+	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5}
 )
 
 // chaos is an API outage switch for one cluster's list/watch: while down,
@@ -465,6 +467,7 @@ func init() {
 	add("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClassList")
 	add("gateway.networking.k8s.io", "v1", "gateways", "GatewayList")
 	add("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRouteList")
+	add("gateway.networking.k8s.io", "v1", "listenersets", "ListenerSetList")
 	// coverage S1a-S1c: every group is served here, so every watched kind
 	// is registered
 	add("fluxcd.controlplane.io", "v1", "fluxinstances", "FluxInstanceList")
@@ -570,7 +573,8 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}})
 	}
 	for i := 0; i < 50; i++ {
-		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i))}})
+		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i)),
+			Labels: map[string]string{"kubernetes.io/metadata.name": ns(i), "team": fmt.Sprintf("team-%d", i%8)}}})
 	}
 	svcs := sc.routes
 	for i := 0; i < svcs; i++ {
@@ -696,7 +700,17 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	for i := 0; i < sc.gateways; i++ {
 		u := gw(fmt.Sprintf("gw-%02d", i), "True")
 		u.SetUID(types.UID(fmt.Sprintf("gw-%02d", i)))
+		loadListeners(u, 1)
+		u.Object["spec"].(map[string]any)["allowedListeners"] = map[string]any{"namespaces": map[string]any{"from": "All"}}
 		create("gateway.networking.k8s.io", "v1", "gateways", u)
+	}
+	for i := 0; i < sc.listenersets; i++ {
+		u := cr("gateway.networking.k8s.io/v1", "ListenerSet", ns(i), fmt.Sprintf("ls-%03d", i), map[string]any{"parentRef": map[string]any{"name": fmt.Sprintf("gw-%02d", i%sc.gateways), "namespace": "infra"}},
+			[]any{cond("Accepted", "True", "Accepted"), cond("Programmed", "True", "Programmed")}, nil)
+		u.SetUID(types.UID(fmt.Sprintf("ls-%03d", i)))
+		u.SetCreationTimestamp(created)
+		loadListeners(u, 2)
+		create("gateway.networking.k8s.io", "v1", "listenersets", u)
 	}
 	for i := 0; i < sc.routes; i++ {
 		u := httpRoute(fmt.Sprintf("route-%04d", i), []string{fmt.Sprintf("gw-%02d", i%sc.gateways)}, fmt.Sprintf("svc-%04d", i%svcs), nil)
@@ -758,4 +772,29 @@ func TestLoadCompletenessWaitsForNamespaces(t *testing.T) {
 	if complete(live) {
 		t.Fatal("a stale task: not complete")
 	}
+}
+
+// loadListeners gives an object n listeners and the status a controller
+// writes for them (coverage S7 §8's load fixture).
+func loadListeners(u *unstructured.Unstructured, n int) {
+	var spec, status []any
+	for l := 0; l < n; l++ {
+		name := fmt.Sprintf("https-%d", l)
+		spec = append(spec, map[string]any{"name": name, "protocol": "HTTPS", "port": int64(8443 + l), "hostname": fmt.Sprintf("%s-%d.apps.example.com", u.GetName(), l),
+			"tls": map[string]any{"mode": "Terminate", "certificateRefs": []any{map[string]any{"name": u.GetName() + "-tls"}}}})
+		var cs []any
+		for _, c := range [][2]string{{"Accepted", "Accepted"}, {"Conflicted", "NoConflicts"}, {"ResolvedRefs", "ResolvedRefs"}, {"Programmed", "Programmed"}} {
+			cs = append(cs, map[string]any{"type": c[0], "status": map[bool]string{true: "False", false: "True"}[c[0] == "Conflicted"], "reason": c[1],
+				"message": "Listener has been successfully translated", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T09:00:00Z"})
+		}
+		status = append(status, map[string]any{"name": name, "attachedRoutes": int64(3), "conditions": cs,
+			"supportedKinds": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute"}}})
+	}
+	u.Object["spec"].(map[string]any)["listeners"] = spec
+	st, _ := u.Object["status"].(map[string]any)
+	if st == nil {
+		st = map[string]any{}
+		u.Object["status"] = st
+	}
+	st["listeners"] = status
 }
