@@ -170,9 +170,11 @@ The controller's Accepted condition stays authoritative:
 - **The parent status:** Accepted, then ResolvedRefs, by reason, as today.
 - **The section:** with `sectionName`, the named listener must exist in that parent, whether the Gateway's own listener or the ListenerSet's.
 - **Backends, qualified by port and protocol** (revision 1), for every route kind. Today's resolver counts every EndpointSlice of a Service whatever its port, so a UDP/53 backend on a Service that also serves TCP/80 reads available from TCP endpoints. A backendRef `(Service, port)` now resolves:
-  1. **The Service port:** the one whose `port` equals the backendRef's. None found: "Service has no port N", a backend issue.
-  2. **Its protocol** (TCP, UDP or SCTP; the default is TCP) **and its name.**
-  3. **The EndpointSlices** of that Service whose ports include an entry with that name and protocol. A named Service port matches a slice port by name; an unnamed one matches the slice's single unnamed port.
+  1. **The Service port, by number and transport** (revision 2). Kubernetes keys a Service's ports by `(port, protocol)`, so TCP/53 and UDP/53 can both exist. The transport comes from the route kind: UDP for UDPRoute, TCP for HTTPRoute, GRPCRoute, TLSRoute and TCPRoute. Klyx selects the one ServicePort whose `port` equals the backendRef's and whose protocol (defaulting to TCP) is that transport, never the first numeric match.
+     - None found: "Service has no ‹transport› port N", a backend issue, said only on a complete Services read.
+     - A same-number port of another protocol is named beside it ("port 53 exists for TCP only").
+  2. **Its name.**
+  3. **The EndpointSlices** of that Service whose ports include an entry with that name *and* that protocol. A named Service port matches a slice port by name and protocol; an unnamed one matches the slice's single unnamed port of that protocol.
   4. **The count:** only endpoints in those slices count.
 
   Slices whose ports cannot be matched are not counted. An incomplete or unread EndpointSlices model leaves the backend Unknown, as today. This changes HTTPRoute's backend verdict for multi-port Services, where it was optimistic.
@@ -268,7 +270,7 @@ Every other read state makes the evidence "not established" (Unknown), never neg
 - `namespaces` gains no new gate: it is already watched.
 - `referencegrants` opens only when gateways are served.
 
-**Budget** (revision 1): per cluster, each kind admitted in key order (namespace/name) within its bytes. Past its budget a kind reads truncated: its counts become lower bounds, and every join through it is incomplete, so not established.
+**Budget** (revision 1; units, revision 2): per cluster, each kind admitted in key order (namespace/name) within its budget. A projection's size is its JSON-encoded length, as the Velero and Flux Operator kinds measure it (`Size`), not its heap footprint. Past its budget a kind reads truncated: its counts become lower bounds, and every join through it is incomplete, so not established.
 
 | Kind | Budget | MaxObject | Roughly holds |
 |---|---|---|---|
@@ -281,9 +283,9 @@ Every other read state makes the evidence "not established" (Unknown), never neg
 | referencegrants | 128 KiB | 4 KiB | 400 grants |
 | namespaces (labels added) | 256 KiB | 4 KiB | 1,000 namespaces with labels |
 
-- **Worst case:** about 2.7 MiB per cluster at every budget's limit, and about 16 MiB across the six-cluster fleet. Typical clusters hold a few kilobytes.
+- **Admission totals:** about 2.7 MiB of encoded projections per cluster at every budget's limit, and about 16 MiB across the six-cluster fleet. These are encoded admission totals, not a heap claim. Typical clusters hold a few kilobytes.
 - **Retained versus transient:** the budget bounds the retained model. List pages during a relist are transient and not budgeted.
-- **The load test** (healthsrc `TestLoad`) is extended with a Gateway fixture at about 500 routes and 50 ListenerSets per cluster. It reports steady retained heap and peak separately, before and after.
+- **The load test** (healthsrc `TestLoad`) is extended with a Gateway fixture at about 500 routes and 50 ListenerSets per cluster, and a full-budget case filling every Gateway API kind to its budget. It records the actual retained Observer heap, steady and peak, separately from the encoded totals, before and after. The as-built notes report the measured heap, not the admission totals.
 - **A sizing test** measures the projection of a maximal route, ListenerSet and Gateway against their MaxObject.
 
 Clusters without these CRDs read Absent, at no cost.
@@ -326,7 +328,10 @@ Connection metrics for L4 are not in S7.
   - the class unread;
   - several entries;
 - completeness: complete absence, forbidden, stale and truncated reads of the parent, grant and namespace kinds, each never negative, while controller-reported failures are still judged;
-- port- and protocol-qualified backends: a Service with UDP/53 and TCP/80 whose only ready endpoints are TCP, so the UDP backend is not available;
+- port- and protocol-qualified backends:
+  - a Service with UDP/53 and TCP/80 whose only ready endpoints are TCP: the UDP backend is not available;
+  - a Service with TCP/53 (dns-tcp) and UDP/53 (dns-udp), in both ServicePort orders, with only TCP endpoints: a UDPRoute backend is not available, and a TCPRoute's is;
+  - the converse, only UDP endpoints;
 - TLSRoute's v1alpha2 shape: no hostnames and several rules, read through v1;
 - the budget: a truncated route kind makes its joins not established, and the sizing test;
 - each route kind's rule shape and fingerprint;
@@ -391,3 +396,12 @@ Each stage has its own gates and implementation review.
 | 6 | The retained-model budget was not specified | §8: purpose-built projections; numeric per-kind budgets and MaxObject; truncation making joins not established; the fleet worst case; retained versus transient; the load test and a sizing test. |
 
 Codex found the per-resource version table, the GRPCRoute addition and the S7a/S7b split reasonable.
+
+## 14. Revision 2: Codex's re-review of aaff54f
+
+Five of revision 1's answers were accepted, with one residual P2 and one P3:
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 (P2) | Service-port selection by number alone is ambiguous for a valid same-number TCP/UDP Service | §5: the ServicePort is selected by number *and* the route kind's transport (UDP for UDPRoute, TCP otherwise), never the first numeric match; slices match by name and protocol. §10: both ServicePort orders, with only TCP endpoints and the converse. |
+| (P3) | Budget units and heap wording | §8: sizes are JSON-encoded projection lengths; the totals are encoded admission totals, not heap; the load test's full-budget case records the actual retained heap, which the as-built notes report. |
