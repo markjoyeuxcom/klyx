@@ -464,3 +464,5 @@ Codex's probes are kept: `observe/review_s3a_test.go`, `healthsrc/review_s3a_tes
 | # | Finding | Fix |
 |---|---|---|
 | 1 | The held param result had no render-time fence: the first commit of a new revision, or of another policy, showed the last result until an effect cleared it | `useParamCheck` holds the result with the request identity it answers (cluster, UID, generation, revision, the paramKind's displayed state, failure policy). Render returns it only while that identity is current and the check is active; the reply checks and the effect cleanup stay. Codex's first-commit probe is kept, extended to another policy |
+
+**Accepted:** Codex ACCEPT for the S3a/C3 implementation at 7243b4d. The targeted fixes after the gates (ac959db, 7243b4d) are test-covered, and Codex asked for no parity or native smoke rerun.
