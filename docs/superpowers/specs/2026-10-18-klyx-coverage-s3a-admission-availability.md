@@ -387,3 +387,63 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
 |---|---|---|
 | 1 | Endpoint routing does not check the slice port's protocol, so a protocol-only mismatch is routing-dependent | §5 row 10: eligibility per mode; usable in one mode only reads unknown; a test beside the non-TCP Service port |
 | 2 | Deny on a missing param denies only under Fail; Ignore skips | §6: the not-found wording by failure policy, for a name and a selector, independent of validation actions; tests for each |
+
+## 13. As built (585f6f6 to e0457a1)
+
+**C3** (`internal/observe`, 585f6f6; the shared kinds, 94aa907):
+- **The gate:** `KindSpec.Consumers` and `Version`. A kind with consumers runs `consumersProbe` in its discovery loop:
+  - served when any is yes;
+  - absent when all are no;
+  - otherwise a probe error naming each unknown consumer.
+- **Dirtying:** the demand vector is held on the kind, and a change in it marks the kind's parts dirty even while the generation runs on.
+- **The per-consumer view:** `PartSpec.Consumer` makes `captureLocked` rebuild the part's view of a shared kind:
+  - **yes:** as it is;
+  - **no:** Absent and complete, with no objects;
+  - **unknown:** Unreadable with class `demand`, or Checking before the first probe.
+
+  The view covers objects, completeness, windows, coverage and the ledger's source identity. `New` panics on a part that names a consumer the kind lacks.
+- **`healthsrc.SharedNetworkKinds`:** declared once in `fleet/conn.go`, with consumers `gateway` and `admission`.
+  - **Services** become a typed watch. They are projected to a `*corev1.Service`, so `meta.Accessor` readers (the fleet index) keep working.
+  - **EndpointSlices** keep port names, numbers and protocols (nil kept) and the three conditions. An address is a marker (`(address)`), never the address.
+  - **The Gateway routes part** reads them through `ConsumerGateway`.
+
+**S3a:**
+- **`internal/admission`** (46753ab): the projections and both rules, as §5 and §6. `ConfigVerdict` takes the worst webhook in the order fault, degraded, unknown, ok, with "+N more"; a cut reads unknown.
+- **`healthsrc.Admission`** (715f511): the webhooks part (configurations, through the admission consumer) and the policies part (policies with their verdicts, and every binding as a `FactRow` naming its policy's state).
+- **`FactParamKinds`** (`fleet/admissionparams.go`):
+  - **source:** the connection follows both policy kinds with `WatchKind`;
+  - **discovery:** each referenced group/version is discovered exactly through the discovery cache, recording served (with scope and resource), not served (NotFound, or the kind absent), or unknown (any other failure);
+  - **refresh:** the fact is set on every resolution, so its read time stays current: on policy changes and on every health sync.
+- **The instance facts** (`crd/facts_admission*.go`):
+  - a warning's validated field instead of its text;
+  - a webhook URL's origin with "(path set)";
+  - a Service path as "(path set)".
+- **The chat projection** (6fba312): a finding of the build. The default CRD branch sent the spec's strings to depth 4, CEL expressions included, and the warning text in status. Policies and bindings now have their own cases, built from the admission projections: counts and presence only.
+- **`AdmissionService.CheckParams`** (`fleet/admissioncheck.go`): it reads the bindings fresh, so a selector is the current one, used for the read and never returned. The reads are metadata get or list (limit 1), capped at 20 bindings. Forbidden is "unreadable", never "not found".
+- **The lens** (ff5bbd7, e0457a1):
+  - **`AdmissionView`:** Webhooks, Policies and Bindings tabs;
+  - **`BackendChain`:** each webhook's stations, sharing the width;
+  - **the limits block**, including the routing mode and static manifests;
+  - **historical warnings**;
+  - **the param check:** fenced by cluster and policy UID.
+- **A deviation from §3: the capability.** §3 said "always present: the API is core". The build detects it instead (`capability.Admission`: `admissionregistration.k8s.io/v1` served, carried to `ClusterDTO.admissionPresent` and the re-probe). The attention task and registry group are gated on it. That keeps capability detection over assumption, and keeps an always-on task out of every fixture that predates it.
+- **The parity frontend stage** now skips listed facts (a binding, an uncounted Backup), which the oracle does not count.
+
+**Found by the live captures** (kind-klyx, lab-s3a): the backend chain overflowed the inspector at 1440; and "1 usable endpoints". Both fixed in e0457a1.
+
+**The load test** (`healthsrc/load_test.go`) assembled the Gateway task without the shared kinds after 94aa907. It is opt-in, so the gate missed it. It now builds typed Services, the shared kinds and the admission task, with webhook configurations and bound policies at scale.
+
+**Gates:**
+- **The parity gate:** passes at e0457a1 (Go stage and frontend stage; the parity-test fixes in 71c2f10).
+  - The first run failed: the Go stage required a rule on every row, as the frontend stage did, and a binding's row is a fact.
+  - A first fix that read a generic `Binding` field also skipped FluxInstance rows, which carry an unrelated `Binding`. The skip is per part (`admission/policies`, `velero/backups`).
+- **The four-way native smoke** passes 159/159 in night-1440, night-1024, day-1440 and day-1024, run within the hour after re-applying lab-s1b, lab-s1c, lab-s2b and lab-s3a.
+- **The rest:**
+  - `go test -race` on admission, healthsrc, appbridge, fleet, observe, crd and capability: ok;
+  - golangci-lint v2.14.0: 0 issues;
+  - the frontend suite: 2181 passed.
+- **The live captures** (scratchpad cap-s3a, all four themes and widths): no needle on screen and no sideways scroll.
+- **The load test** (§7), large cluster, two runs each:
+  - **full evaluation:** 66.1 and 72.1 ms before (5be4ec7, the known 50 ms miss) against 72.9 and 78.4 ms after, about +6 ms (9%);
+  - **steady retained heap:** +0.5 MB on the large cluster, +1.1 MB across six;
+  - **recovery-storm peak:** 64.0 and 86.3 MB before, 79.1 and 80.7 MB after; noise, no regression.
