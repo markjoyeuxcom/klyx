@@ -565,4 +565,20 @@ func TestConditionMessagesTakeTheURLRule(t *testing.T) {
 			t.Errorf("the verdict's reason kept the credential")
 		}
 	}
+	// the clip falls inside the password: scrubbing after it would leave a
+	// readable prefix with no '@' for the URL rule to find
+	secret := "S7SECRETPASSWORDxyz"
+	msg := strings.Repeat("x", messageClip-24) + " https://alice:" + secret + "@example.test/cert"
+	if i := strings.Index(msg, secret); i >= messageClip || i+len(secret) <= messageClip {
+		t.Fatalf("the fixture must cross the clip: the secret spans %d-%d", i, i+len(secret))
+	}
+	st := listenerStatus("https", 0, map[string]any{"type": "ResolvedRefs", "status": "False", "reason": "InvalidCertificateRef", "message": msg, "observedGeneration": int64(1)})
+	p, _ := Project("gateways")(gatewayWithListeners(1, nil, st))
+	if got := p.(*Object).Gateway.Listeners[0].Status.Of("ResolvedRefs").Message; strings.Contains(got, secret[:6]) {
+		t.Errorf("a credential crossing the clip left a prefix: %q", got[len(got)-40:])
+	}
+	// the clip itself, whose output the budget measures, scrubs first
+	if got := (&clip{limit: messageClip}).message("m", msg, messageClip); strings.Contains(got, secret[:6]) {
+		t.Errorf("the clip cut through the credential: %q", got[len(got)-40:])
+	}
 }
