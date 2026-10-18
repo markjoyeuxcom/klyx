@@ -162,10 +162,16 @@ type CertificateRef struct {
 type Match struct {
 	PathType, PathValue, Method string
 	Rule                        int
+	// GRPCRoute's method match (S7b §5): service and method, either empty
+	// when the match leaves it open.
+	GRPCService, GRPCMethod string
 }
 type Backend struct {
-	Kind, Name, Namespace string
-	Port, Weight          int32
+	Group, Kind, Name, Namespace string
+	Port, Weight                 int32
+	// Transport is the protocol the route reaches it over (S7b §5): UDP
+	// for a UDPRoute, TCP otherwise; "" before resolution.
+	Transport string
 	// WeightSet: the backendRef wrote a weight. Unset means the Gateway API
 	// default of 1; an explicit 0 sends this backend no traffic.
 	WeightSet bool
@@ -192,6 +198,9 @@ const (
 	BackendNotFound    BackendState = "not-found"   // the API said NotFound
 	BackendUnreadable  BackendState = "unreadable"  // forbidden, timeout, ... - existence unknown
 	BackendUnsupported BackendState = "unsupported" // not a core Service; Klyx does not evaluate it
+	// BackendNoPort: the Service was read (current) and has no port of the
+	// backendRef's number for the route's transport (S7b §5).
+	BackendNoPort BackendState = "no-port"
 )
 
 // EndpointCount is a Service's EndpointSlice endpoints - endpoints, not

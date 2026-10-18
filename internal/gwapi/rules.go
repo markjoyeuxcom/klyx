@@ -398,6 +398,8 @@ func BackendIssue(b Backend) (health.Kind, string) {
 		return health.Unknown, b.Kind + " backend not evaluated"
 	case BackendNotFound:
 		return health.Fault, "backend not found"
+	case BackendNoPort:
+		return health.Fault, fmt.Sprintf("no %s port %d", b.Transport, b.Port)
 	case BackendUnreadable:
 		return health.Unknown, "backend unreadable"
 	case BackendResolved:
