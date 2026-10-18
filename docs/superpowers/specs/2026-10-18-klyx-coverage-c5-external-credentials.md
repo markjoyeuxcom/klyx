@@ -293,3 +293,5 @@ Codex's answers, adopted:
 - the authored mode kept, with private temporary files (§6);
 - Alertmanager and Loki blocks parsed, validated and shown in C5, their Test "not implemented until S8" (§2, §8);
 - AI's environment proxy kept, and auth on allowed same-origin hops stated (§4).
+
+**Accepted at 58a234c** (Codex, design revision 1, handoff bcd4aa47, 2026-10-18). This accepts the design only; the implementation keeps its own review.
