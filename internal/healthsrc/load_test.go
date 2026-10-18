@@ -485,6 +485,11 @@ func init() {
 		{"validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBindingList"}, {"mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBindingList"}} {
 		add("admissionregistration.k8s.io", "v1", r[0], r[1])
 	}
+	add("metallb.io", "v1beta1", "ipaddresspools", "IPAddressPoolList")
+	add("metallb.io", "v1beta1", "l2advertisements", "L2AdvertisementList")
+	add("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisementList")
+	add("metallb.io", "v1beta1", "configurationstates", "ConfigurationStateList")
+	add("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPoolList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -570,8 +575,16 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	svcs := sc.routes
 	for i := 0; i < svcs; i++ {
 		// the shared Services kind is a typed watch (C3)
-		typedObjs = append(typedObjs, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))},
-			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "https", Port: 443, Protocol: corev1.ProtocolTCP}}}})
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "https", Port: 443, Protocol: corev1.ProtocolTCP}}}}
+		if i%10 == 0 { // coverage S4: every tenth a LoadBalancer, half of them pending
+			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+			svc.Annotations = map[string]string{"metallb.io/address-pool": "pool-00"}
+			if i%20 == 0 {
+				svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: fmt.Sprintf("192.168.%d.%d", i/250, i%250)}}
+			}
+		}
+		typedObjs = append(typedObjs, svc)
 	}
 	for i := 0; i < sc.slices; i++ {
 		svc := fmt.Sprintf("svc-%04d", i%svcs)
@@ -616,6 +629,26 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicyBinding",
 			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d-b", i), "uid": fmt.Sprintf("vapb-%03d", i)}, "spec": map[string]any{"policyName": fmt.Sprintf("load-%03d", i), "validationActions": []any{"Deny"}}}})
 	}
+	// coverage S4: MetalLB pools with an advertisement and a controller
+	// ConfigurationState, and Cilium pools with their counts
+	for i := 0; i < sc.gateways; i++ {
+		create("metallb.io", "v1beta1", "ipaddresspools", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "IPAddressPool",
+			"metadata": map[string]any{"name": fmt.Sprintf("pool-%02d", i), "namespace": "metallb-system", "uid": fmt.Sprintf("mp-%02d", i), "labels": map[string]any{"tier": "gold"}},
+			"spec":     map[string]any{"addresses": []any{fmt.Sprintf("192.168.%d.0/24", i)}},
+			"status":   map[string]any{"assignedIPv4": int64(10), "availableIPv4": int64(244), "assignedIPv6": int64(0), "availableIPv6": int64(0)}}})
+		create("cilium.io", "v2", "ciliumloadbalancerippools", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cilium.io/v2", "kind": "CiliumLoadBalancerIPPool",
+			"metadata": map[string]any{"name": fmt.Sprintf("cpool-%02d", i), "uid": fmt.Sprintf("cp-%02d", i), "generation": int64(1)},
+			"spec":     map[string]any{"blocks": []any{map[string]any{"cidr": fmt.Sprintf("10.200.%d.0/24", i)}}},
+			"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "cilium.io/IPsTotal", "status": "Unknown", "reason": "noreason", "message": "256", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"},
+				map[string]any{"type": "cilium.io/IPsAvailable", "status": "Unknown", "reason": "noreason", "message": "250", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"},
+				map[string]any{"type": "cilium.io/IPsUsed", "status": "Unknown", "reason": "noreason", "message": "6", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"}}}}})
+	}
+	create("metallb.io", "v1beta1", "l2advertisements", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "L2Advertisement",
+		"metadata": map[string]any{"name": "l2", "namespace": "metallb-system", "uid": "l2-0"},
+		"spec":     map[string]any{"ipAddressPoolSelectors": []any{map[string]any{"matchLabels": map[string]any{"tier": "gold"}}}}}})
+	create("metallb.io", "v1beta1", "configurationstates", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "ConfigurationState",
+		"metadata": map[string]any{"name": "controller", "namespace": "metallb-system", "uid": "cs-0"}, "status": map[string]any{"result": "Valid"}}})
 	readyIf := func(i int) string {
 		if i%25 == 0 {
 			return "False"
@@ -688,7 +721,7 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
 	kinds = append(kinds, SharedNetworkKinds(nd)...)
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission} {
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}

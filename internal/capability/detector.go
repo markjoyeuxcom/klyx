@@ -173,6 +173,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 			Karpenter:       KarpenterCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Velero:          VeleroCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Admission:       AdmissionCapability{Base: Base{Tier: Absent, Reason: msg}},
+			LoadBalancing:   LoadBalancingCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}, err
 	}
 	return Set{
@@ -184,6 +185,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 		Karpenter:       d.detectKarpenter(ctx, served),
 		Velero:          d.detectVelero(ctx, served),
 		Admission:       AdmissionCapability{Present: served["admissionregistration.k8s.io/v1"]},
+		LoadBalancing:   d.detectLoadBalancing(ctx, served),
 	}, nil
 }
 

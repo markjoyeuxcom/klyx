@@ -51,6 +51,8 @@ const (
 
 // Meta is a projected object's identity.
 type Meta struct {
+	// APIVersion is the version the object was served at (a ref's GVR).
+	APIVersion string    `json:"av,omitempty"`
 	Namespace  string    `json:"ns,omitempty"`
 	Name       string    `json:"n"`
 	UID        string    `json:"u"`
@@ -188,7 +190,7 @@ func Project(resource string) func(obj any) (any, error) {
 }
 
 func metaOf(u *unstructured.Unstructured) Meta {
-	return Meta{Namespace: clip(u.GetNamespace(), maxName), Name: clip(u.GetName(), maxName), UID: string(u.GetUID()),
+	return Meta{APIVersion: clip(u.GetAPIVersion(), 128), Namespace: clip(u.GetNamespace(), maxName), Name: clip(u.GetName(), maxName), UID: string(u.GetUID()),
 		Generation: u.GetGeneration(), Created: u.GetCreationTimestamp().Time}
 }
 

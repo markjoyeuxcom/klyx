@@ -783,9 +783,10 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		nk, ndoms := healthsrc.Native(nd)
 		vk, vd := healthsrc.Velero(nd)
 		ak, ad := healthsrc.Admission(nd)
+		lk, ld := healthsrc.LoadBalancing(nd)
 		// the shared network kinds (C3), once, gated by their consumers
-		kinds = append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...)
-		domains = append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...)
+		kinds = append(append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...), lk...)
+		domains = append(append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...), ld...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
@@ -797,7 +798,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.mu.Unlock()
 	o.Start(ctx)
 	if c.dyn != nil {
-		c.startParamKinds(ctx, o) // S3a: FactParamKinds
+		c.startParamKinds(ctx, o)          // S3a: FactParamKinds
+		startLBEpisodes(ctx, o, c.clk.Now) // S4: FactLBEpisodes
 	}
 	c.attachIndex()
 	c.syncHealth()
@@ -834,6 +836,7 @@ func (c *ClusterConn) syncHealth() {
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
 	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
+	h.SetFact(healthsrc.FactLB, healthsrc.LoadBalancingFact(caps.LoadBalancing))
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])

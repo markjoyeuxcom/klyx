@@ -165,4 +165,5 @@ type Set struct {
 	Karpenter       KarpenterCapability
 	Velero          VeleroCapability
 	Admission       AdmissionCapability
+	LoadBalancing   LoadBalancingCapability
 }
