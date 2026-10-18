@@ -206,11 +206,55 @@ type GatewayRefDTO struct {
 	Rule RuleDTO `json:"rule"`
 }
 
-// GatewayRouteAttachmentDTO is one route x parent Gateway attachment with
-// its captured evaluation.
+// GatewayRouteAttachmentDTO is one attachment - one parentRef (coverage S7b
+// §5) - with its captured evaluation and evidence. parent is its identity
+// (the whole normalised reference); parentLabel names it; gateway is
+// "namespace/name" of the Gateway it lands on ("" when not established).
 type GatewayRouteAttachmentDTO struct {
-	Parent string  `json:"parent"` // "namespace/name" of the parent Gateway
-	Rule   RuleDTO `json:"rule"`
+	Parent      string           `json:"parent"`
+	ParentLabel string           `json:"parentLabel"`
+	ParentRef   *ParentRefDTO    `json:"parentRef,omitempty"`
+	Gateway     string           `json:"gateway"`
+	Rule        RuleDTO          `json:"rule"`
+	Evidence    *AttachmentEvDTO `json:"evidence,omitempty"`
+}
+
+// ParentRefDTO is a parentRef with its defaults applied.
+type ParentRefDTO struct {
+	Group       string `json:"group"`
+	Kind        string `json:"kind"`
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	SectionName string `json:"sectionName,omitempty"`
+	Port        int32  `json:"port,omitempty"`
+}
+
+// AttachmentEvDTO is an attachment's evidence (S7b §5, §6): the expected
+// controller (or why it is not established), other controllers' entries
+// for the same reference (shown, never judged), and Klyx's own readings.
+type AttachmentEvDTO struct {
+	Controller    string           `json:"controller,omitempty"`
+	ControllerWhy string           `json:"controllerWhy,omitempty"`
+	Others        []OtherStatusDTO `json:"others,omitempty"`
+	Allowance     AllowanceDTO     `json:"allowance"`
+	Grants        []GrantDTO       `json:"grants,omitempty"`
+	Features      []string         `json:"features,omitempty"`
+	Disagreements []string         `json:"disagreements,omitempty"`
+}
+
+type OtherStatusDTO struct {
+	Controller   string `json:"controller"`
+	Accepted     string `json:"accepted"`
+	ResolvedRefs string `json:"resolvedRefs"`
+}
+
+// GrantDTO is one cross-namespace backend's ReferenceGrant evidence.
+type GrantDTO struct {
+	Rule    int    `json:"rule"`
+	Backend string `json:"backend"`
+	Allowed string `json:"allowed"`
+	By      string `json:"by,omitempty"`
+	Text    string `json:"text"`
 }
 
 // GatewayRouteRowDTO is one HTTPRoute of the Gateways task's routes part
@@ -218,14 +262,21 @@ type GatewayRouteAttachmentDTO struct {
 // label and parent - the captured evaluation, never a new one - and every
 // attachment. The topology stays the route's data path.
 type GatewayRouteRowDTO struct {
-	UID         string                      `json:"uid,omitempty"`
-	GVR         string                      `json:"gvr,omitempty"`
-	Generation  int64                       `json:"generation,omitempty"`
-	Namespace   string                      `json:"namespace"`
-	Name        string                      `json:"name"`
-	Parent      string                      `json:"parent"` // the worst attachment's parent
-	Rule        RuleDTO                     `json:"rule"`
-	Attachments []GatewayRouteAttachmentDTO `json:"attachments"`
+	UID        string `json:"uid,omitempty"`
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	// Kind is the route's kind (S7b §5): identity is kind/namespace/name.
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Parent, ParentLabel and Gateway are the worst attachment's.
+	Parent        string                      `json:"parent"`
+	ParentLabel   string                      `json:"parentLabel"`
+	Gateway       string                      `json:"gateway"`
+	Hostnames     []string                    `json:"hostnames"`
+	HostnameCount int                         `json:"hostnameCount"`
+	Rule          RuleDTO                     `json:"rule"`
+	Attachments   []GatewayRouteAttachmentDTO `json:"attachments"`
 }
 
 // RouteMetricDTO is a route's traffic readout. Nil fractions serialize as JSON

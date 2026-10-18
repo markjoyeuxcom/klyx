@@ -72,7 +72,7 @@ func (h *routeHistory) OnRows(r observe.Rows) {
 	if r.Task != healthsrc.TaskGateway || r.Part.ID != "routes" {
 		return
 	}
-	rs, ok := r.Rows.(healthsrc.RowSet[observe.Attached])
+	rs, ok := r.Rows.(healthsrc.RowSet[healthsrc.RouteRow])
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.st[r.Cluster]

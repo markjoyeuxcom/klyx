@@ -32,7 +32,10 @@ type allow map[string]allow
 var (
 	condAllow  = allow{"status": nil, "reason": nil, "message": nil, "observedGeneration": nil}
 	argoCond   = allow{"type": nil, "status": nil, "reason": nil, "message": nil}
-	attachment = allow{"parent": nil, "rule": allow{"included": nil, "role": nil, "label": nil}}
+	attachment = allow{"parent": nil, "parentLabel": nil, "gateway": nil, "rule": allow{"included": nil, "role": nil, "label": nil},
+		// coverage S7b: an attachment's evidence
+		"evidence": allow{"controller": nil, "controllerWhy": nil, "others": allow{"controller": nil, "accepted": nil, "resolvedRefs": nil},
+			"allowance": allow{"allowed": nil, "text": nil}, "grants": allow{"backend": nil, "allowed": nil, "text": nil}, "features": nil, "disagreements": nil}}
 	// coverage S7a: a listener with its status and allowedRoutes
 	routeKind     = allow{"group": nil, "kind": nil}
 	listenerAllow = allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil, "tlsMode": nil,
@@ -71,7 +74,7 @@ var aiEvidenceFields = map[string]allow{
 	healthsrc.TaskGateway + "/listenersets": {"parent": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil}, "parentState": nil,
 		"listeners": listenerAllow, "acceptedCond": condAllow, "programmedCond": condAllow, "stale": nil, "generation": nil, "observedGeneration": nil,
 		"allowance": allow{"from": nil, "allowed": nil, "text": nil, "disagrees": nil}, "precedence": nil, "siblings": nil, "precedenceComplete": nil},
-	healthsrc.TaskGateway + "/routes": {"parent": nil, "attachments": attachment, "generation": nil},
+	healthsrc.TaskGateway + "/routes": {"kind": nil, "parent": nil, "parentLabel": nil, "gateway": nil, "hostnames": nil, "hostnameCount": nil, "attachments": attachment, "generation": nil},
 	healthsrc.TaskNodes + "/nodes": {"roles": nil, "ready": nil, "unschedulable": nil, "problems": nil, "version": nil, "os": nil, "arch": nil,
 		"taintCount": nil, "cpuCapacity": nil, "cpuAllocatable": nil, "memCapacity": nil, "memAllocatable": nil, "podCapacity": nil,
 		"ageSeconds": nil, "pool": nil, "zone": nil},

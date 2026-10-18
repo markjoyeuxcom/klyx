@@ -468,6 +468,11 @@ func init() {
 	add("gateway.networking.k8s.io", "v1", "gateways", "GatewayList")
 	add("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRouteList")
 	add("gateway.networking.k8s.io", "v1", "listenersets", "ListenerSetList")
+	add("gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRouteList")
+	add("gateway.networking.k8s.io", "v1", "tlsroutes", "TLSRouteList")
+	add("gateway.networking.k8s.io", "v1", "tcproutes", "TCPRouteList")
+	add("gateway.networking.k8s.io", "v1", "udproutes", "UDPRouteList")
+	add("gateway.networking.k8s.io", "v1", "referencegrants", "ReferenceGrantList")
 	// coverage S1a-S1c: every group is served here, so every watched kind
 	// is registered
 	add("fluxcd.controlplane.io", "v1", "fluxinstances", "FluxInstanceList")
@@ -580,7 +585,7 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	for i := 0; i < svcs; i++ {
 		// the shared Services kind is a typed watch (C3)
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))},
-			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "https", Port: 443, Protocol: corev1.ProtocolTCP}}}}
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "http", Port: 80, Protocol: corev1.ProtocolTCP}}}}
 		if i%10 == 0 { // coverage S4: every tenth a LoadBalancer, half of them pending
 			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
 			svc.Annotations = map[string]string{"metallb.io/address-pool": "pool-00"}
@@ -594,7 +599,8 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 		svc := fmt.Sprintf("svc-%04d", i%svcs)
 		ready := true
 		es := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%05d", svc, i), Namespace: ns(i % svcs), UID: types.UID(fmt.Sprintf("es-%05d", i)),
-			Labels: map[string]string{discoveryv1.LabelServiceName: svc}}, AddressType: discoveryv1.AddressTypeIPv4}
+			Labels: map[string]string{discoveryv1.LabelServiceName: svc}}, AddressType: discoveryv1.AddressTypeIPv4,
+			Ports: []discoveryv1.EndpointPort{{Name: ptr("http"), Protocol: ptr(corev1.ProtocolTCP)}}}
 		for e := 0; e < 3; e++ {
 			es.Endpoints = append(es.Endpoints, discoveryv1.Endpoint{Addresses: []string{fmt.Sprintf("10.%d.%d.%d", i/250, i%250, e)}, Conditions: discoveryv1.EndpointConditions{Ready: &ready},
 				TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: ns(i % svcs), Name: fmt.Sprintf("p-%05d-%d", i, e), UID: types.UID(fmt.Sprintf("p-%05d-%d", i, e))}})

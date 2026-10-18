@@ -157,3 +157,36 @@ func listenerSetRowDTO(r healthsrc.Row[healthsrc.ListenerSetRow]) ListenerSetRow
 	}
 	return d
 }
+
+// routeRowDTO is one row of the routes part (S7b §5): the reduced
+// attachment's captured verdict, the route's kind and hostnames, and every
+// attachment with its evidence.
+func routeRowDTO(r healthsrc.Row[healthsrc.RouteRow]) GatewayRouteRowDTO {
+	a := r.Data.Attached
+	dto := GatewayRouteRowDTO{UID: r.Ref.UID, GVR: r.Ref.GVR, Generation: r.Ref.Generation, Kind: a.Kind,
+		Namespace: a.Namespace, Name: a.Name, Parent: a.Parent, ParentLabel: a.ParentLabel, Gateway: a.Gateway,
+		Hostnames: sliceOrEmpty(r.Data.Hostnames), HostnameCount: r.Data.HostnameCount,
+		Rule:        RuleDTO{Included: a.Included, Role: a.Role, Label: a.Label},
+		Attachments: make([]GatewayRouteAttachmentDTO, 0, len(a.Attachments))}
+	for i, at := range a.Attachments {
+		ad := GatewayRouteAttachmentDTO{Parent: at.Parent, ParentLabel: at.ParentLabel, Gateway: at.Gateway,
+			Rule: RuleDTO{Included: at.Included, Role: at.Role, Label: at.Label}}
+		if p := at.ParentRef; p != nil {
+			ad.ParentRef = &ParentRefDTO{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name, SectionName: p.SectionName, Port: p.Port}
+		}
+		if i < len(r.Data.Evidence) {
+			ev := r.Data.Evidence[i]
+			ed := &AttachmentEvDTO{Controller: ev.Controller, ControllerWhy: ev.ControllerWhy, Features: ev.Features, Disagreements: ev.Disagreements,
+				Allowance: AllowanceDTO{Allowed: ev.Allowance.Allowed, Text: ev.Allowance.Text}}
+			for _, o := range ev.Others {
+				ed.Others = append(ed.Others, OtherStatusDTO{Controller: o.Controller, Accepted: o.Accepted, ResolvedRefs: o.ResolvedRefs})
+			}
+			for _, g := range ev.Grants {
+				ed.Grants = append(ed.Grants, GrantDTO{Rule: g.Rule, Backend: g.Backend, Allowed: g.Allowed, By: g.By, Text: g.Text})
+			}
+			ad.Evidence = ed
+		}
+		dto.Attachments = append(dto.Attachments, ad)
+	}
+	return dto
+}

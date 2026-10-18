@@ -683,3 +683,15 @@ func (r Route) Attachments(ix RouteIndex) []AttachmentEval {
 	}
 	return out
 }
+
+// Clone copies a route deeply enough to resolve its backends without
+// writing the original (the Observer's model).
+func (r Route) Clone() Route {
+	out := r
+	out.Rules = make([]RouteRuleSpec, len(r.Rules))
+	for i, rule := range r.Rules {
+		rule.Backends = append([]Backend(nil), rule.Backends...)
+		out.Rules[i] = rule
+	}
+	return out
+}

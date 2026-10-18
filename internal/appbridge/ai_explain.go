@@ -324,7 +324,7 @@ func anchorVerdict(rows observe.Rows, row capturedRow) (evidenceVerdict, error) 
 	case "native":
 		included := row.eval.Included
 		role, label := row.eval.Role.String(), row.eval.Label
-		if a, ok := row.data.(observe.Attached); ok { // routes carry the reduced attachment
+		if a, ok := row.data.(healthsrc.RouteRow); ok { // routes carry the reduced attachment
 			included, role, label = a.Included, a.Role, a.Label
 		}
 		v.Role, v.Label, v.IncludedInAttention = role, label, &included

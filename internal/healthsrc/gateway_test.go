@@ -30,6 +30,35 @@ func gw(name string, accepted string) *unstructured.Unstructured {
 	return u
 }
 
+// egController is the class controller the route fixtures' status names.
+const egController = "gateway.envoyproxy.io/gatewayclass-controller"
+
+// gwClass is the class the Gateway fixtures name: its controller is the one
+// expected to judge their routes (S7b §5).
+func gwClass() *unstructured.Unstructured {
+	return cr("gateway.networking.k8s.io/v1", "GatewayClass", "", "eg", map[string]any{"controllerName": egController}, []any{cond("Accepted", "True", "Accepted")}, nil)
+}
+
+// routesCapture is a capture of the routes part with every dependency
+// complete and current: the class, the Gateways, the Services and slices.
+func routesCapture(t *testing.T, routes []*unstructured.Unstructured, gateways ...*unstructured.Unstructured) observe.Capture {
+	t.Helper()
+	c := observe.Capture{Now: time.Now(), Rows: true, RoleCap: 10, Objects: map[string][]any{
+		KindGatewayClasses:  {projected(t, KindGatewayClasses, gwClass())},
+		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
+	}, Complete: map[string]bool{}, Current: map[string]bool{}}
+	for _, r := range routes {
+		c.Objects[KindHTTPRoutes] = append(c.Objects[KindHTTPRoutes], projected(t, KindHTTPRoutes, r))
+	}
+	for _, g := range gateways {
+		c.Objects[KindGateways] = append(c.Objects[KindGateways], projected(t, KindGateways, g))
+	}
+	for _, k := range []string{KindGatewayClasses, KindGateways, KindListenerSets, KindGatewayServices, KindGatewayEndpoints, KindReferenceGrants, KindNamespaces, KindHTTPRoutes} {
+		c.Complete[k], c.Current[k] = true, true
+	}
+	return c
+}
+
 func httpRoute(name string, parents []string, backend string, accepted map[string]string) *unstructured.Unstructured {
 	var refs, status []any
 	for _, p := range parents {
@@ -51,6 +80,10 @@ func slice(svc string, ready ...bool) *discoveryv1.EndpointSlice {
 	es := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: svc + "-abc", Namespace: "shop", UID: types.UID("es-" + svc),
 		Labels: map[string]string{discoveryv1.LabelServiceName: svc, "endpointslice.kubernetes.io/managed-by": "endpointslice-controller.k8s.io"}},
 		AddressType: discoveryv1.AddressTypeIPv4}
+	// a Service's slices carry its port's name and protocol (serviceMeta's
+	// "http"): a backend counts only slices carrying its port (S7b §5)
+	portName, proto := "http", corev1.ProtocolTCP
+	es.Ports = []discoveryv1.EndpointPort{{Name: &portName, Protocol: &proto}}
 	for i, r := range ready {
 		rr := r
 		es.Endpoints = append(es.Endpoints, discoveryv1.Endpoint{Addresses: []string{"10.0.0.1"}, Conditions: discoveryv1.EndpointConditions{Ready: &rr},
@@ -61,10 +94,15 @@ func slice(svc string, ready ...bool) *discoveryv1.EndpointSlice {
 
 func gatewayListKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
-		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}: "GatewayClassList",
-		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}:       "GatewayList",
-		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}:     "HTTPRouteList",
-		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "listenersets"}:   "ListenerSetList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}:  "GatewayClassList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}:        "GatewayList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}:      "HTTPRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "listenersets"}:    "ListenerSetList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "grpcroutes"}:      "GRPCRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "tlsroutes"}:       "TLSRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "tcproutes"}:       "TCPRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "udproutes"}:       "UDPRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "referencegrants"}: "ReferenceGrantList",
 	}
 }
 
@@ -85,7 +123,8 @@ func startGatewayWith(t *testing.T, served, admission bool, dynObjs []runtime.Ob
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gatewayListKinds())
 	for _, o := range dynObjs {
 		u := o.(*unstructured.Unstructured)
-		res := map[string]string{"Gateway": "gateways", "HTTPRoute": "httproutes", "GatewayClass": "gatewayclasses", "ListenerSet": "listenersets"}[u.GetKind()]
+		res := map[string]string{"Gateway": "gateways", "HTTPRoute": "httproutes", "GatewayClass": "gatewayclasses", "ListenerSet": "listenersets",
+			"GRPCRoute": "grpcroutes", "TLSRoute": "tlsroutes", "TCPRoute": "tcproutes", "UDPRoute": "udproutes", "ReferenceGrant": "referencegrants"}[u.GetKind()]
 		gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: res}
 		if _, err := dyn.Resource(gvr).Namespace(u.GetNamespace()).Create(context.Background(), u, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
@@ -121,11 +160,11 @@ func serviceMeta(name string) *corev1.Service {
 
 func TestGatewayTaskOnFixtures(t *testing.T) {
 	dynObjs := []runtime.Object{
-		gw("eg", "True"), gw("rejecting", "False"),
+		gwClass(), gw("eg", "True"), gw("rejecting", "False"),
 		httpRoute("web", []string{"eg"}, "web", nil),                                                   // healthy
 		httpRoute("api", []string{"eg"}, "api", nil),                                                   // healthy Gateway, backend Service missing
 		httpRoute("dual", []string{"eg", "rejecting"}, "web", map[string]string{"rejecting": "False"}), // one healthy, one failing parent
-		httpRoute("orphan", []string{"gone"}, "web", nil),                                              // its only parent is not in the model
+		httpRoute("orphan", []string{"gone"}, "web", nil),                                              // its only parent is absent from a complete read
 		httpRoute("thin", []string{"eg"}, "thin", nil),                                                 // 1 of 3 endpoints ready
 	}
 	typed := fake.NewClientset(slice("web", true, true, true), slice("thin", true, false, false))
@@ -135,16 +174,16 @@ func TestGatewayTaskOnFixtures(t *testing.T) {
 		p, ok := nativePart(s, TaskGateway, "gateways")
 		return ok && p.Coverage == observe.Live && p.Native.Total == 2 && p.Native.Included == 1 && p.Top[0].Name == "rejecting" && p.Top[0].Label == "not accepted"
 	})
-	waitFor(t, "routes: counted once each, worst attachment, orphan not counted", func() bool {
+	waitFor(t, "routes: counted once each, worst attachment, the orphan's parent not found", func() bool {
 		p, ok := nativePart(s, TaskGateway, "routes")
-		if !ok || p.Coverage != observe.Live || p.Native.Total != 4 || p.Native.Included != 3 {
+		if !ok || p.Coverage != observe.Live || p.Native.Total != 5 || p.Native.Included != 4 {
 			return false
 		}
 		byName := map[string]observe.Ref{}
 		for _, r := range p.Top {
 			byName[r.Name] = r
 		}
-		return byName["api"].Label == "backend not found" && byName["api"].Parent == "infra/eg" &&
+		return byName["api"].Label == "backend not found" && byName["api"].Parent == "infra/eg" && byName["orphan"].Label == "parent Gateway not found" &&
 			byName["dual"].Role == "fault" && byName["dual"].Parent == "infra/rejecting" && byName["dual"].Label == "not accepted" &&
 			byName["thin"].Role == "degraded" && byName["thin"].Label == "1/3 endpoints ready" && byName["api"].UID == "uid-api"
 	})
@@ -241,10 +280,7 @@ func TestRouteReasonReachesTop(t *testing.T) {
 	parents := r.Object["status"].(map[string]any)["parents"].([]any)
 	bad := parents[1].(map[string]any)["conditions"].([]any)[0].(map[string]any)
 	bad["reason"], bad["message"] = "NotAllowedByListeners", "denied token=secret-value"
-	c := observe.Capture{Rows: true, Objects: map[string][]any{
-		KindHTTPRoutes: {r}, KindGateways: {projected(t, KindGateways, gw("a", "True")), projected(t, KindGateways, gw("b", "True"))},
-		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
-	}}
+	c := routesCapture(t, []*unstructured.Unstructured{r}, gw("a", "True"), gw("b", "True"))
 	res := evalRoutes("test")(c)
 	if len(res.Top) != 1 || res.Top[0].Parent != "infra/b" {
 		t.Fatalf("bad fixture: %+v", res.Top)
@@ -252,7 +288,7 @@ func TestRouteReasonReachesTop(t *testing.T) {
 	if got := res.Top[0].Reason; !strings.HasPrefix(got, "NotAllowedByListeners: denied ") || strings.Contains(got, "secret-value") {
 		t.Fatalf("Top reason: got %q", got)
 	}
-	rows := res.Rows.(RowSet[observe.Attached]).Rows
+	rows := res.Rows.(RowSet[RouteRow]).Rows
 	if len(rows) != 1 || rows[0].Data.Reason != res.Top[0].Reason {
 		t.Fatalf("the reduced row carries the same reason: %+v", rows)
 	}
@@ -262,11 +298,8 @@ func TestRouteReasonReachesTop(t *testing.T) {
 // index, the same whatever Gateway the reduction picked.
 func TestRouteRowsCarryRuleFingerprints(t *testing.T) {
 	r := httpRoute("web", []string{"a", "b"}, "web", nil)
-	c := observe.Capture{Rows: true, Objects: map[string][]any{
-		KindHTTPRoutes: {r}, KindGateways: {projected(t, KindGateways, gw("a", "True")), projected(t, KindGateways, gw("b", "True"))},
-		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
-	}}
-	rows := evalRoutes("test")(c).Rows.(RowSet[observe.Attached]).Rows
+	c := routesCapture(t, []*unstructured.Unstructured{r}, gw("a", "True"), gw("b", "True"))
+	rows := evalRoutes("test")(c).Rows.(RowSet[RouteRow]).Rows
 	want := gwapi.RuleFingerprints(r)
 	if len(rows) != 1 || len(want) == 0 || !reflect.DeepEqual(rows[0].Data.Rules, want) {
 		t.Fatalf("rules %v, want %v", rows, want)

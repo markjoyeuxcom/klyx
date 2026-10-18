@@ -226,14 +226,15 @@ func TestGatewayKindsProbeTheirCandidates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := strings.Join(asked, " "); got != "gatewayclasses=v1,v1beta1 gateways=v1,v1beta1 listenersets=v1 httproutes=v1,v1beta1" {
+	if got := strings.Join(asked, " "); got != "gatewayclasses=v1,v1beta1 gateways=v1,v1beta1 listenersets=v1 httproutes=v1,v1beta1 grpcroutes=v1 tlsroutes=v1,v1alpha3,v1alpha2 tcproutes=v1,v1alpha2 udproutes=v1,v1alpha2 referencegrants=v1,v1beta1" {
 		t.Errorf("probes: %s", got)
 	}
 	budgets := map[string]int{}
 	for _, k := range kinds {
 		budgets[k.Name] = k.Budget
 	}
-	if budgets[KindGateways] != 1<<20 || budgets[KindListenerSets] != 512<<10 || budgets[KindGatewayClasses] != 64<<10 || budgets[KindHTTPRoutes] != 0 {
+	if budgets[KindGateways] != 1<<20 || budgets[KindListenerSets] != 512<<10 || budgets[KindGatewayClasses] != 64<<10 || budgets[KindHTTPRoutes] != 1<<20 ||
+		budgets[KindGRPCRoutes] != 256<<10 || budgets[KindTLSRoutes] != 256<<10 || budgets[KindTCPRoutes] != 128<<10 || budgets[KindUDPRoutes] != 128<<10 || budgets[KindReferenceGrants] != 128<<10 {
 		t.Errorf("budgets: %v", budgets)
 	}
 	// without ServedAmong, Served's answer is checked against the candidates
