@@ -716,3 +716,16 @@ Capability detection reads the resources of every served `gateway.networking.x-k
 - **The denied cross-namespace backend** reads ResolvedRefs False RefNotPermitted.
 - **The route from another namespace** reads Accepted False NotAllowedByListeners.
 - **Listener kinds.** Each listener reports `supportedKinds` by protocol: HTTPRoute and GRPCRoute on HTTP, and one kind each on TLS, TCP and UDP.
+
+Klyx against these statuses, as captured (`pw/s7b-aks.mjs`): 48 captures, night and day at 1440 and 1024, each with its expected text and no horizontal scroll.
+- **The Routes view** counts 11 routes across all five kinds.
+- **dns-tcponly's inspector** shows the controller's verdict and Klyx's own check side by side, and they agree: "References not resolved - PortNotFound: UDP Port 53 not found on Service klyx-gw-lab/dns-tcponly" and "Backend Service klyx-gw-lab/dns-tcponly has no UDP port 53 - port 53 exists for TCP only".
+- **The data path** reads "every connection on dns :53" and draws the failing backend step "no UDP port 53".
+
+**Gates at 4bc0632:**
+- `go test -race ./internal/...`: pass. golangci-lint: 0 issues.
+- vitest: 2,256 passed. tsc: clean. eslint: 0 errors.
+- Parity: pass, with case 5e.
+- Native smoke: 181/181 in each of night and day at 1440 and 1024, the labs re-applied first.
+- Mutations: 5 Go and 10 frontend, all caught.
+- Captures: 52 on the kind lab and 48 on AKS, all clean.
