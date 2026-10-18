@@ -574,3 +574,18 @@ Codex's probes all pass on the revision: its three Go probes (`-overlay`) and it
   - no grouping;
   - absent programming read as programmed.
 - Captures: the kind lab (32) and AKS (16), clean.
+
+## 17. Revision 2: Codex's re-review of dbba713
+
+Codex resolved the message safety, the parent reads and the pins, and accepted keeping the allowance of a current parent found in a truncated read: it is a whole retained object, and namespace-selector proof stays gated. Two residual P2s:
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | "All programmed" used the Gateway read's coverage without its truncation; a stale Gateway's `attachedListenerSets` disagreed with a current ListenerSets read | "All programmed" needs the truncation-aware complete read. A stale Gateway's count is said as last read ("the controller reported 0 attached when the Gateways were last read") and disagrees with nothing. A retained, current Gateway's count still stands beside other Gateways left out. |
+| 2 | A current Programmed False beside an Accepted True from an older generation was explained as an unreported generation | The deciding condition's own freshness decides: "Accepted, but not programmed - Invalid. Its acceptance was last reported for generation 1." |
+
+Codex's three new mounted probes pass unchanged and are adopted as tests. Three mutations, one per guard, are caught.
+
+**Gates at c833250** (frontend-only), clean:
+- vitest: 2,236 passed. tsc: clean. eslint: 0 errors.
+- Native smoke: 176/176 in each of night and day at 1440 and 1024, the labs re-applied first.
