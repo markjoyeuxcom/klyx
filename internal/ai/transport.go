@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/moomora/klyx/internal/safehttp"
 )
 
 // maxResponseBytes caps every response body a provider reads - completions,
@@ -50,7 +52,7 @@ func Harden(c *http.Client) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	hc.Transport = cappedTransport{base: base}
+	hc.Transport = safehttp.Cap(base, maxResponseBytes, ErrResponseTooLarge)
 	hc.CheckRedirect = checkRedirect
 	return &hc
 }
@@ -76,44 +78,6 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	}
 	return nil
 }
-
-// cappedTransport wraps every response body in a reader that fails - rather
-// than silently truncating - once it passes maxResponseBytes.
-type cappedTransport struct{ base http.RoundTripper }
-
-func (t cappedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil || resp.Body == nil {
-		return resp, err
-	}
-	resp.Body = &cappedBody{rc: resp.Body, remaining: maxResponseBytes}
-	return resp, nil
-}
-
-type cappedBody struct {
-	rc        io.ReadCloser
-	remaining int64
-}
-
-func (b *cappedBody) Read(p []byte) (int, error) {
-	if b.remaining <= 0 {
-		// At the cap: one more byte means the body is over it.
-		var probe [1]byte
-		n, err := b.rc.Read(probe[:])
-		if n > 0 {
-			return 0, ErrResponseTooLarge
-		}
-		return 0, err
-	}
-	if int64(len(p)) > b.remaining {
-		p = p[:b.remaining]
-	}
-	n, err := b.rc.Read(p)
-	b.remaining -= int64(n)
-	return n, err
-}
-
-func (b *cappedBody) Close() error { return b.rc.Close() }
 
 // IsLoopbackEndpoint reports whether baseURL points at THIS machine (localhost
 // or a loopback IP). Only such an endpoint keeps data on the machine: an
