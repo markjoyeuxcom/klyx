@@ -40,6 +40,8 @@ import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
 import { PodIdentity } from "./IdentityBlocks";
+import { DebugChooser, DebugContainersBlock, PodResourcesBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
+import { SyncingChip } from "./staleness";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -576,7 +578,7 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
     >
-      <VerdictMark health={p.health} />
+      <VerdictMark health={p.health} stale={podStale(p)} />
       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <input
           type="checkbox"
@@ -593,7 +595,11 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
         </span>
         <CopyButton text={p.name} label={`copy pod name ${p.name}`} appearOnRowHover />
       </span>
-      <span style={{ ...ellipsis }}><VerdictLabel health={p.health} /></span>
+      {/* coverage S6 §4: the kubelet has not acknowledged the latest spec;
+          only where the verdict draws no mark - a lag never hides a fault */}
+      <span style={{ ...ellipsis }}>{podStale(p) && kindOf(p.health) === "ok"
+        ? <SyncingChip generation={p.generation} observedGeneration={p.observedGeneration} />
+        : <VerdictLabel health={p.health} />}</span>
       <span style={{ color: "var(--color-text-secondary)" }}>{ready}/{nonInit.length}</span>
       <span className="col-restarts" style={{ color: p.restarts > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{p.restarts}</span>
       <span className="col-node" style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={p.node}>{p.node || "-"}</span>
@@ -617,7 +623,7 @@ function PodRow({ p, nowS, cursor, selected, bulkSelected, onToggleBulk, onOpen,
 
 // A pending verb is pinned to the pod OBJECT (and, for an owner restart, the
 // owner object) it was armed on.
-type Pending = { verb: "restart" | "delete"; summary: PodRowDTO } | { verb: "debug"; summary: PodRowDTO; container: string };
+type Pending = { verb: "restart" | "delete"; summary: PodRowDTO } | { verb: "debug"; summary: PodRowDTO; container: string; choice?: DebugChoice };
 
 // PodInspector - investigation order: verdict, actions, runtime, events,
 // placement, then collapsed metadata. The row (live, or the selection's last)
@@ -708,7 +714,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
     ...(showRestart ? [{ label: `Restart ${p.ownerKind.toLowerCase()} ${p.ownerName}`, onSelect: () => setPending({ verb: "restart", summary: p }) }] : []),
     { label: "Port-forward…", onSelect: () => setForwarding(true) },
     { kind: "choose", label: "Copy kubectl exec command", options: per((c) => void copyExecCommand(cluster, namespace, name, c).then((r) => useFleet.getState().setActionStatus(r === "copied" ? { kind: "success", message: "kubectl exec command copied" } : { kind: "error", message: "could not copy the exec command" }))) },
-    { kind: "choose", label: "Debug shell (ephemeral container)", hint: "kubectl debug adds an ephemeral busybox container to this pod; it stays until the pod is recreated", options: per((c) => setPending({ verb: "debug", summary: p, container: c })) },
+    { kind: "choose", label: "Debug shell (ephemeral container)", hint: "kubectl debug adds an ephemeral container (image and profile chosen next); it stays until the pod is recreated", options: per((c) => setPending({ verb: "debug", summary: p, container: c })) },
     { label: "Describe", onSelect: () => setDescribing(true) },
     ...(manifestRef ? [{ label: "Edit manifest in Resources", onSelect: () => { const nav = useFleet.getState(); nav.openResource(manifestRef); nav.openInstance(namespace, name); } }] : []),
     { kind: "separator" },
@@ -775,6 +781,9 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
 
         {uid && !gone && <PodIdentity cluster={cluster} namespace={namespace} name={name} uid={uid} active />}
 
+        {shown && <PodResourcesBlock detail={shown} />}
+        {shown && <DebugContainersBlock detail={shown} />}
+
         <InspectorBlock title="Placement">
           <div className="insp-kv">
             <span>owner</span>
@@ -835,7 +844,11 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         )}
       </InspectorLayout>
 
-      {pending && pendingLive(pending) && (
+      {pending && pendingLive(pending) && pending.verb === "debug" && !pending.choice && (
+        <DebugChooser cluster={cluster} target={pending.container} onCancel={() => setPending(null)}
+          onContinue={(choice) => setPending({ ...pending, choice })} />
+      )}
+      {pending && pendingLive(pending) && (pending.verb !== "debug" || pending.choice) && (
         <ConfirmDialog
           title={pending.verb === "delete" ? "delete pod" : pending.verb === "debug" ? "debug shell" : "restart owner"}
           cluster={cluster}
@@ -843,10 +856,14 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
             ? (pending.summary.ownerKind === ""
               ? `${pending.summary.namespace}/${pending.summary.name} - this pod has no controller; it will NOT be recreated.`
               : `${pending.summary.namespace}/${pending.summary.name} - the controller will recreate it.`)
-            : pending.verb === "debug"
-              ? `${pending.summary.namespace}/${pending.summary.name}${pending.container ? ` (target ${pending.container})` : ""} - kubectl debug adds an ephemeral busybox container to this pod. It stays on the pod spec until the pod is recreated; Kubernetes cannot remove it.`
+            : pending.verb === "debug" && pending.choice
+              ? debugConfirmText(pending.summary.namespace, pending.summary.name, pending.container, pending.choice)
               : `${pending.summary.ownerKind} ${pending.summary.namespace}/${pending.summary.ownerName}`}
-          protected={isProtected}
+          // a privileged debug container takes a typed interlock even off a
+          // protected cluster (S6 §6); a protected cluster's own lock covers it
+          {...(pending.verb === "debug" && pending.choice?.profile === "sysadmin" && !isProtected
+            ? { protected: true, cluster: "privileged", lockName: "privileged profile", showScope: false, arm: async () => ({ ok: true, error: "" }) }
+            : { protected: isProtected })}
           danger
           confirmLabel={pending.verb === "delete" ? "Delete" : pending.verb === "debug" ? "Attach" : "Restart"}
           onCancel={() => setPending(null)}
@@ -860,7 +877,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
               return;
             }
             if (pd.verb === "delete") void deletePod(cluster, pd.summary.namespace, pd.summary.name, pd.summary.uid ?? "");
-            else if (pd.verb === "debug") void openDebugTerminal(cluster, pd.summary.namespace, pd.summary.name, pd.summary.uid ?? "", pd.container);
+            else if (pd.verb === "debug") void openDebugTerminal(cluster, pd.summary.namespace, pd.summary.name, pd.summary.uid ?? "", pd.container, pd.choice?.image ?? "", pd.choice?.profile ?? "");
             // The backend resolves the controller chain into ownerKind/ownerName/ownerUid.
             else void rolloutRestart(cluster, pd.summary.ownerKind, pd.summary.namespace, pd.summary.ownerName, pd.summary.ownerUid ?? "");
           }}
@@ -962,7 +979,7 @@ function ContainerBlock({ c, d, detailState, u }: { c: PodRowContainerDTO; d?: C
         <><span>usage</span><span>cpu {fmtRes(u.cpu, fmtCpu)} · mem {fmtRes(u.mem, fmtMem)}</span></>
       )}
       {d && (d.cpuRequest != null || d.memRequest != null || d.cpuLimit != null || d.memLimit != null) && (
-        <><span>req / lim</span><span>cpu {fmtRes(d.cpuRequest, fmtCpu)}/{fmtRes(d.cpuLimit, fmtCpu)} · mem {fmtRes(d.memRequest, fmtMem)}/{fmtRes(d.memLimit, fmtMem)}</span></>
+        <><span>desired req / lim</span><span>cpu {fmtRes(d.cpuRequest, fmtCpu)}/{fmtRes(d.cpuLimit, fmtCpu)} · mem {fmtRes(d.memRequest, fmtMem)}/{fmtRes(d.memLimit, fmtMem)}</span></>
       )}
       {findings.map((f) => (
         <span key={f.label} style={{ gridColumn: "1 / -1", fontSize: 11, color: f.tier === "danger" ? "var(--color-text-danger)" : f.tier === "warn" ? "var(--color-text-warning)" : "var(--color-text-info)" }}>{f.label}</span>

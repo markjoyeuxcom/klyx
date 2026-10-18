@@ -425,8 +425,12 @@ export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdic
 // Survivability headroom simulation.
 export type HeadroomPodRefDTO = { namespace: string; name: string; cpuReq: number; memReq: number };
 export type PDBBlockerDTO = { namespace: string; name: string; disruptionsAllowed: number };
-export type HeadroomResultDTO = { lostNodes: number; survivorNodes: number; displaced: number; rescheduled: number; unplaced: HeadroomPodRefDTO[]; cpuShortfall: number; memShortfall: number };
-export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlockerDTO[]; podListCapped: boolean; error?: string };
+// Coverage S6 §2: altCpu/altMem are how much more a scheduler one minor
+// behind would reserve on the survivors; versionDependent names the
+// survivors whose spare after placement is below that difference.
+export type HeadroomResultDTO = { lostNodes: number; survivorNodes: number; displaced: number; rescheduled: number; unplaced: HeadroomPodRefDTO[]; cpuShortfall: number; memShortfall: number;
+  altCpu?: number; altMem?: number; versionDependent?: string[] };
+export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlockerDTO[]; podListCapped: boolean; schedAssumption?: string; error?: string };
 
 // Fleet expiry horizon: one cluster's expiring certificate material.
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
@@ -500,7 +504,15 @@ export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | nul
 export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
-export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
+export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike;
+  observedGeneration?: number; resize?: ResizeDTO; sched?: SchedDTO };
+// Coverage S6: a pod's resize state, its reservation and its debug containers.
+export type ResizeConditionDTO = { reason: string; message?: string; generation: number; sinceUnix?: number };
+export type ResizeDTO = { pending?: ResizeConditionDTO; inProgress?: ResizeConditionDTO; legacy?: string };
+export type TripleDTO = { desired: number | null; allocated: number | null; actual: number | null; differs?: boolean };
+export type ResizeResourcesDTO = { name: string; sidecar?: boolean; cpuReq: TripleDTO; memReq: TripleDTO; cpuLim: TripleDTO; memLim: TripleDTO; cpuRestart?: string; memoryRestart?: string };
+export type SchedDTO = { cpu: number; mem: number; desiredCpu: number; desiredMem: number; altCpu?: number; altMem?: number; assumption: string };
+export type EphemeralDTO = { name: string; image: string; target?: string; privileged?: boolean; capsAdded?: string[]; runAsNonRoot?: boolean | null; state: string; reason?: string; exitCode?: number; startedUnix?: number; finishedUnix?: number };
 // A pod on the rows transport (1c slice 3 addendum §3.2): bounded and
 // time-stable - no relative age (ticked from createdUnix), no legacy
 // rank/reason/phase. The verdict message and each container's image, ports,
@@ -510,11 +522,13 @@ export type PodRowDTO = {
   namespace: string; name: string; uid: string; gvr?: string; generation?: number;
   ownerKind: string; ownerName: string; ownerUid?: string; node: string; ip: string;
   ready: boolean; restarts: number; createdUnix?: number; health?: HealthLike; containers: PodRowContainerDTO[];
+  observedGeneration?: number; resize?: ResizeDTO;
 };
 // RowsVer is the (incarnation, Ver) of the rows a slice holds - the §6a
 // probe anchors a push's timing to the lens commit that shows it.
 export type RowsVer = { incarnation: number; ver: number };
-export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string };
+export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
+  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.

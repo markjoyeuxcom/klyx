@@ -17,6 +17,7 @@ vi.mock("../bridge/exec", () => ({
   copyExecCommand: vi.fn(async () => "copied"),
   openExecTerminal: vi.fn(async () => {}),
   openDebugTerminal: vi.fn(async () => {}),
+  debugPreflight: vi.fn(async () => ({ profiles: [{ name: "general", adds: "adds SYS_PTRACE" }], defaultImage: "busybox:1.36", defaultProfile: "general", kubectl: "v1.37.1", ok: true })),
   describeResource: vi.fn(async () => ({ ok: true, output: "", error: "" })),
 }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
@@ -330,7 +331,7 @@ describe("verbs are pinned to the armed pod and owner", () => {
     expect(rolloutRestart).not.toHaveBeenCalled();
   });
 
-  it("the dispatch carries the armed UIDs - delete, debug and the owner restart", () => {
+  it("the dispatch carries the armed UIDs - delete, debug and the owner restart", async () => {
     seed([pod("a")]);
     render(<PodsView cluster="x" />);
     select("a");
@@ -340,9 +341,11 @@ describe("verbs are pinned to the armed pod and owner", () => {
     chooseMore(/^Restart deployment web/);
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Restart" }));
     expect(rolloutRestart).toHaveBeenCalledWith("x", "Deployment", "app", "web", "uid-web");
-    chooseMore(/Debug shell/); // one container: no picker
+    chooseMore(/Debug shell/); // one container: no container picker
+    await screen.findByTestId("debug-kubectl"); // the chooser read its preflight
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Continue" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Attach" }));
-    expect(openDebugTerminal).toHaveBeenCalledWith("x", "app", "a", "uid-a", "app");
+    expect(openDebugTerminal).toHaveBeenCalledWith("x", "app", "a", "uid-a", "app", "busybox:1.36", "general");
   });
 
   it("an armed delete survives an incomplete read without its pod; the backend checks the UID", () => {
