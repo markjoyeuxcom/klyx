@@ -393,3 +393,22 @@ That is already enough for §2-§4, so the projection does not change. A raw/pro
 
   None scrolls sideways and none has a page error.
 - **The load test:** not run. S6 adds no watch and no model. The summary computes the reservation once per pod under the unknown model in the Observer path (the maximum over six models), and once per pod in the on-demand reads.
+
+## 14. Implementation review 1: Codex's review of 25f0200
+
+| # | Finding | Fix (7916196) |
+|---|---|---|
+| 1 (P2) | The Resources and Debug containers evidence could stay stale. The detail is re-read only when the row's signature changes, and an acknowledgement, an actuation or a debug container exiting changes none of its fields; Codex found the serialised rows byte-identical across such changes. | The row carries `evidenceRev`, a 16-hex FNV-64a revision of exactly what those blocks show: the acknowledged generation, the resize conditions, each container's allocated and actual resources, the pod-level status maps, the legacy resize field and each debug container's state. The detail signature includes it, and `observedGeneration` and the resize state directly. UID and request fencing are unchanged. |
+
+**Regressions,** mutation-checked:
+- the revision changes with each kind of evidence, and not with the pod IP, restarts or readiness;
+- the row differs where Codex's probe found it identical;
+- a mounted Pods lens re-reads the detail on an evidence-only change, and not on an unrelated one.
+
+**Gates at 7916196:**
+- `go test -race ./...`: ok.
+- golangci-lint: 0 issues.
+- The frontend suite: 2212 passed; eslint 0 errors.
+- The four-way native smoke: 173/173 in all four modes, clean, with the labs re-applied within the hour.
+
+The review judged the disclosed deviations acceptable, provided the notes keep the distinction between real observations (a completed resize, debug containers) and synthetic evidence (Infeasible, Deferred and Error in tests). Omitting scheduled figures from the Observer rows, and showing debug containers' evidence rather than inferring their profile, were accepted.
