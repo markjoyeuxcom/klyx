@@ -358,23 +358,25 @@ function ConfigInspector({ cluster, c, gone, onClose }: { cluster: string; c: Ad
 // whenever the policy's reading changes (its generation, its paramKind's
 // discovered state): a reply lands only for this cluster, this policy and
 // this revision (S3a §6; Codex's S3a implementation review, finding 2).
-function useParamCheck(cluster: string, p: AdmissionPolicyDTO, active: boolean): AdmissionParamsDTO | null {
-  const [res, setRes] = useState<AdmissionParamsDTO | null>(null);
+export function useParamCheck(cluster: string, p: AdmissionPolicyDTO, active: boolean): AdmissionParamsDTO | null {
+  // a result is held with the request it answers, and shown only while that
+  // request is the current one: a new revision or policy never commits the
+  // last one's result, not even for one frame (Codex's S3a re-review)
+  const [held, setHeld] = useState<{ id: string; res: AdmissionParamsDTO } | null>(null);
   const uid = p.uid;
   const revision = p.paramRevision;
-  const key = `${p.generation}|${revision ?? ""}|${p.paramKind?.state ?? ""}|${p.paramKind?.apiVersion ?? ""}/${p.paramKind?.kind ?? ""}|${p.failClosed}`;
+  const id = `${cluster}|${uid}|${p.generation}|${revision ?? ""}|${p.paramKind?.state ?? ""}|${p.paramKind?.apiVersion ?? ""}/${p.paramKind?.kind ?? ""}|${p.failClosed}`;
   useEffect(() => {
-    setRes(null);
     if (!active || !uid) return;
     let live = true;
     void checkAdmissionParams(cluster, uid).then((r) => {
       if (!live || r.cluster !== cluster || r.policyUid !== uid) return;
       if (r.revision && revision && r.revision !== revision) return; // read for another revision
-      setRes(r);
+      setHeld({ id, res: r });
     });
     return () => { live = false; };
-  }, [cluster, uid, active, key, revision]);
-  return res;
+  }, [cluster, uid, active, id, revision]);
+  return active && held && held.id === id ? held.res : null;
 }
 
 function PolicyInspector({ cluster, p, gone, onOpen, onClose }: { cluster: string; p: AdmissionPolicyDTO; gone: Gone; onOpen: (k: string) => void; onClose: () => void }) {

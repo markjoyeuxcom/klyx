@@ -458,3 +458,9 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
 | 4 | `paramKind.apiVersion` was clipped before exact discovery | The paramKind is kept whole; past 400 characters it is not kept and reads unknown, never a truncated name |
 
 Codex's probes are kept: `observe/review_s3a_test.go`, `healthsrc/review_s3a_test.go`, `admission/review_s3a_test.go`, and the "review:" cases in `AdmissionView.test.tsx`.
+
+## 15. Implementation review 2: Codex's re-review of ac959db
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | The held param result had no render-time fence: the first commit of a new revision, or of another policy, showed the last result until an effect cleared it | `useParamCheck` holds the result with the request identity it answers (cluster, UID, generation, revision, the paramKind's displayed state, failure policy). Render returns it only while that identity is current and the check is active; the reply checks and the effect cleanup stay. Codex's first-commit probe is kept, extended to another policy |

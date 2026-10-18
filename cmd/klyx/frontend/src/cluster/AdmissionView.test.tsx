@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen, within, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
+import { render, renderHook, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import type { AdmissionPartRows } from "../health/useAdmissionRows";
 import type { AdmissionConfigDTO, AdmissionParamsDTO, AdmissionPolicyDTO, AdmissionWebhookDTO } from "../bridge/admission";
 import { useFleet } from "../store/fleet";
@@ -12,7 +13,7 @@ let policies: AdmissionPartRows<AdmissionPolicyDTO>;
 vi.mock("../health/useAdmissionRows", () => ({ useAdmissionWebhooks: () => webhooks, useAdmissionPolicies: () => policies }));
 let paramsReply: (cluster: string, uid: string) => Promise<AdmissionParamsDTO>;
 vi.mock("../bridge/admission", () => ({ checkAdmissionParams: (c: string, u: string) => paramsReply(c, u) }));
-const { AdmissionView, paramRefText, LIMITS } = await import("./AdmissionView");
+const { AdmissionView, paramRefText, LIMITS, useParamCheck } = await import("./AdmissionView");
 
 const rule = (role: string, label: string) => ({ included: role === "fault" || role === "degraded", role, label });
 const hook = (name: string, over: Partial<AdmissionWebhookDTO> = {}): AdmissionWebhookDTO => ({ name, failurePolicy: "Fail", failClosed: true, timeoutSeconds: 10,
@@ -131,5 +132,24 @@ describe("AdmissionView (coverage S3a)", () => {
     const panel = screen.getByTestId("admission-policy-panel");
     expect(panel.textContent).not.toContain("No binding names it: it has no effect");
     expect(within(panel).getByTestId("admission-no-bindings").textContent).toContain("is not known");
+  });
+
+  it("review r1: a completed param result is fenced during the first render of a new revision", async () => {
+    const rev1 = "1|served/true/limits", rev2 = "2|served/true/others";
+    paramsReply = async (c, u) => ({ cluster: c, policyUid: u, revision: rev1, state: "read", checks: [{ binding: "b", state: "not-found", text: "OLD-DENIAL" }] });
+    const p1 = policy("p", "ok", "Bound", { generation: 1, paramRevision: rev1, paramKind: { apiVersion: "example.com/v1", kind: "Limits", state: "served" } });
+    const commits: { generation: number; text: string }[] = [];
+    const h = renderHook(({ p }: { p: AdmissionPolicyDTO }) => {
+      const r = useParamCheck("c", p, true);
+      useLayoutEffect(() => { commits.push({ generation: p.generation, text: r?.checks[0]?.text ?? "" }); });
+      return r;
+    }, { initialProps: { p: p1 } });
+    await waitFor(() => expect(h.result.current?.checks[0]?.text).toBe("OLD-DENIAL"));
+    paramsReply = () => new Promise(() => {});
+    h.rerender({ p: { ...p1, generation: 2, paramRevision: rev2, paramKind: { apiVersion: "example.com/v1", kind: "Other", state: "served" } } });
+    expect(commits.filter((c) => c.generation === 2).map((c) => c.text)).not.toContain("OLD-DENIAL");
+    // and another policy's first commit never shows this one's result
+    h.rerender({ p: { ...p1, uid: "uid-other", name: "other" } });
+    expect(h.result.current).toBeNull();
   });
 });
