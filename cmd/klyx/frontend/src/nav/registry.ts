@@ -104,7 +104,7 @@ export const NAV_GROUPS: NavGroup[] = [
       task("connectivity", "Connectivity check", section("connectivity"), { keywords: ["can reach", "network policy"] }),
       // The list of Gateways and their routes; "Gateway topology" is the graph
       // a Gateway opens (UI review 2026-10-13).
-      task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "envoy", "topology"] }),
+      task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "listenerset", "envoy", "topology"] }),
       // coverage S4: LoadBalancer Services and the on-prem controllers that
       // serve them; read-only
       task("loadbalancers", "Load balancers", section("loadbalancers"), { cap: "loadBalancing",
@@ -123,6 +123,7 @@ export const NAV_GROUPS: NavGroup[] = [
       res("Gateways", r("gateway.networking.k8s.io", "v1", "gateways", "Gateway", "Namespaced"), { cap: "gatewayAPI" }),
       res("HTTPRoutes", r("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRoute", "Namespaced"), { cap: "gatewayAPI" }),
       res("GRPCRoutes", r("gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRoute", "Namespaced"), { cap: "gatewayAPI" }),
+      res("ListenerSets", r("gateway.networking.k8s.io", "v1", "listenersets", "ListenerSet", "Namespaced"), { cap: "gatewayAPI" }),
       res("GatewayClasses", r("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClass", "Cluster"), { cap: "gatewayAPI" }),
       res("ReferenceGrants", r("gateway.networking.k8s.io", "v1beta1", "referencegrants", "ReferenceGrant", "Namespaced"), { cap: "gatewayAPI" }),
       res("BackendTLSPolicies", r("gateway.networking.k8s.io", "v1alpha3", "backendtlspolicies", "BackendTLSPolicy", "Namespaced"), { cap: "gatewayAPI" }),

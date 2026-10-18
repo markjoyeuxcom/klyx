@@ -3,10 +3,13 @@ import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconRoute } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
-import type { GatewayRefDTO } from "../store/fleet";
+import type { GatewayRefDTO, ListenerSetRowDTO } from "../store/fleet";
 import { useGatewayRows, type GatewayRows } from "../health/useGatewayRows";
 import { useGatewayRouteRows } from "../health/useGatewayRouteRows";
+import { useListenerSetRows, type ListenerSetRows } from "../health/useListenerSetRows";
 import { RouteList } from "./GatewayRoutesView";
+import { ListenerSetList } from "./ListenerSetsView";
+import { ListenerList, PARENT_TEXT, allowedListenersText, ordinal } from "./gatewayListeners";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
@@ -43,34 +46,55 @@ export function GatewayApiView({ cluster }: { cluster: string }) {
   return <GatewayLists key={cluster} cluster={cluster} />;
 }
 
-// GatewayLists - the Gateways task's two parts as two views of one list
-// (1c slice 3 §4a): the Gateways, and the HTTPRoutes counted once by UID
-// with their worst attachment. Each view's counts are its own part's.
+// GatewayLists - the Gateways task's parts as views of one list (1c slice 3
+// §4a, coverage S7a §9): the Gateways, the ListenerSets (offered unless the
+// kind is confirmed not served), and the HTTPRoutes counted once by UID with
+// their worst attachment. Each view's counts are its own part's.
+type View = "gateways" | "listenersets" | "routes";
 function GatewayLists({ cluster }: { cluster: string }) {
-  const [view, setView] = useState<"gateways" | "routes">("gateways");
+  const [view, setView] = useState<View>("gateways");
   const rows = useGatewayRows(cluster);
+  const lsRows = useListenerSetRows(cluster);
   const routeRows = useGatewayRouteRows(cluster);
+  const openGateway = useFleet((s) => s.openGateway);
   const gwAttention = rows.partCounts?.included ?? rows.gateways.filter((g) => g.rule.included).length;
+  const lsAttention = lsRows.partCounts?.included ?? lsRows.sets.filter((s) => s.rule.included).length;
   const routeAttention = routeRows.partCounts?.included ?? routeRows.routes.filter((r) => r.rule.included).length;
+  // capability over assumption: a confirmed absence hides the view
+  const lsServed = lsRows.coverage.find((k) => k.kind === "ListenerSet")?.coverage !== "absent";
   // A summary Top link (health 1c slice 4 §5.4): this switches to the
   // part's view and leaves the intent for that view's list to select.
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind === "reveal" && intent.task === "gateway") {
-      const target = intent.part === "routes" ? "routes" : "gateways";
+      const target: View = intent.part === "routes" ? "routes" : intent.part === "listenersets" ? "listenersets" : "gateways";
       if (view !== target) setView(target);
     }
     return "wait";
   }, [view]);
+  const shown: View = view === "listenersets" && !lsServed ? "gateways" : view;
+  const chip = (v: View, label: string, n: number) => (
+    <button className="l-chip" data-view={v} aria-pressed={shown === v} onClick={() => setView(v)}>{label} {n > 0 && <span style={{ color: "var(--color-text-warning)" }}>{n}</span>}</button>
+  );
   const toggle = (
     <div role="group" aria-label="Gateway API view" className="l-seg" data-testid="gateway-views">
-      <button className="l-chip" data-view="gateways" aria-pressed={view === "gateways"} onClick={() => setView("gateways")}>Gateways {gwAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{gwAttention}</span>}</button>
-      <button className="l-chip" data-view="routes" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes {routeAttention > 0 && <span style={{ color: "var(--color-text-warning)" }}>{routeAttention}</span>}</button>
+      {chip("gateways", "Gateways", gwAttention)}
+      {lsServed && chip("listenersets", "ListenerSets", lsAttention)}
+      {chip("routes", "Routes", routeAttention)}
     </div>
   );
-  return view === "routes"
+  return shown === "routes"
     ? <RouteList cluster={cluster} rows={routeRows} toggle={toggle} />
-    : <GatewayList cluster={cluster} rows={rows} toggle={toggle} />;
+    : shown === "listenersets"
+      ? <ListenerSetList cluster={cluster} rows={lsRows} toggle={toggle} onOpenGateway={openGateway} />
+      : <GatewayList cluster={cluster} rows={rows} sets={lsRows} toggle={toggle} />;
 }
+
+// accepted: the controller accepted the ListenerSet now, so its listeners
+// merge into the parent (the list column's count).
+const acceptedNow = (s: ListenerSetRowDTO) => s.acceptedCond.status === "True" && !(s.generation && s.acceptedCond.observedGeneration < s.generation);
+const setsOf = (sets: ListenerSetRowDTO[], g: { namespace: string; name: string }) =>
+  sets.filter((s) => s.parent.kind === "Gateway" && s.parent.group === "gateway.networking.k8s.io" && s.parent.namespace === g.namespace && s.parent.name === g.name)
+    .sort((a, b) => a.precedence - b.precedence || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name));
 
 type Mode = "all" | "attention" | "programmed";
 const keyOf = (g: { namespace: string; name: string }) => `${g.namespace}/${g.name}`;
@@ -86,7 +110,7 @@ const COLUMNS: (ColumnDef & { label: string })[] = [
 ];
 
 
-function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: GatewayRows; toggle: React.ReactNode }) {
+function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: GatewayRows; sets: ListenerSetRows; toggle: React.ReactNode }) {
   // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
   // a snapshot; the topology stays a fetch.
   const openGateway = useFleet((s) => s.openGateway);
@@ -131,6 +155,9 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     return [g.namespace, g.name, g.className, role.label, addressText(g.addresses), ...(g.listeners ?? []).map(listenerText)].some((v) => v.toLowerCase().includes(q));
   }), [ordered, mode, q]);
 
+  // the one-shot first-broken selection; a consumed reveal is that selection
+  // (a view mounting with a pending reveal runs both in one commit)
+  const autoDone = useRef(false);
   // A summary Top link for a Gateway: select it past the filters.
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "gateway" || intent.part !== "gateways") return "wait";
@@ -143,6 +170,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
     setMode("all"); setQuery("");
     setCursorKey(key);
     setSelKey(key);
+    autoDone.current = true;
     return "consumed";
   }, [gateways, ev]);
 
@@ -157,7 +185,6 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   const close = () => setSelKey(null);
 
   // First fresh read: select the first Gateway needing attention, once.
-  const autoDone = useRef(false);
   useEffect(() => {
     if (autoDone.current || ev !== "complete") return;
     autoDone.current = true;
@@ -254,6 +281,8 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
               const k = keyOf(g);
               const role = gatewayRole(g);
               const address = addressText(g.addresses);
+              const merged = setsOf(sets.sets, g).filter(acceptedNow);
+              const extra = merged.reduce((n, s) => n + s.listeners.length, 0);
               return (
                 <div key={k} role="button" tabIndex={0} className="lens-row" {...staleProps(g.stale)} style={gridStyle}
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
@@ -266,7 +295,9 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
                     title={g.stale ? `Observed Gen: ${g.observedGeneration ?? "?"} vs Current: ${g.generation ?? "?"}` : undefined}>{role.label}</span>}
                   {show("address") && <span style={{ ...cellStyle, color: address ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>{address || "none"}</span>}
                   {show("class") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{g.className || "-"}</span>}
-                  {show("listeners") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{(g.listeners ?? []).map(listenerText).join(", ") || "-"}</span>}
+                  {show("listeners") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}
+                    title={extra > 0 ? `${extra} more from ${merged.length} accepted ListenerSet${merged.length === 1 ? "" : "s"}` : undefined}>
+                    {(g.listeners ?? []).map(listenerText).join(", ") || "-"}{extra > 0 ? ` +${extra} from ListenerSets` : ""}</span>}
                 </div>
               );
             }} />
@@ -274,7 +305,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect · double-click opens topology · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== gateways.length ? `${visible.length} of ${gateways.length}${mark} · ` : ""}needs attention first{asOf}</span>}
-      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} stale={ev === "stale"} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} />
+      inspector={selected ? <GatewayInspector key={selKey} cluster={cluster} g={selected} sets={sets} stale={ev === "stale"} gone={gone} replaced={pin.gone === "replaced" ? pin.adopt : undefined} onOpen={() => openGateway(selected.namespace, selected.name)} onClose={close} />
         : selKey && pin.expected && pin.gone ? <PinnedGone cluster={cluster} kind="Gateway" namespace={selKey.split("/")[0]} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone} onAdopt={pin.next ? pin.adopt : undefined} onClose={close} />
         : undefined}
       inspectorLabel="Gateway details"
@@ -283,7 +314,7 @@ function GatewayList({ cluster, rows, toggle }: { cluster: string; rows: Gateway
   );
 }
 
-function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; stale: boolean; gone: "removed" | "unverified" | null; replaced?: () => void; onOpen: () => void; onClose: () => void }) {
+function GatewayInspector({ cluster, g, sets, stale, gone, replaced, onOpen, onClose }: { cluster: string; g: GatewayRefDTO; sets: ListenerSetRows; stale: boolean; gone: "removed" | "unverified" | null; replaced?: () => void; onOpen: () => void; onClose: () => void }) {
   const ai = useInspectorAI(g.uid ? { kind: "row" as const, task: "gateway", part: "gateways", uid: g.uid } : null, `Gateway/${g.namespace}/${g.name}`, !gone, cluster);
   // Describe (slice 14c): kubectl's report for this object, read-only; never
   // for a removed or unverified selection.
@@ -321,17 +352,9 @@ function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }
         ]), ...describe.menu, ...ai.menu]}>
         {ai.block}
         <InspectorBlock title="Listeners" count={listeners.length}>
-          {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : (
-            <div className="insp-kv">
-              {listeners.map((l, i) => (
-                <Fragment key={i}>
-                  <span>{l.name || "unnamed"}</span>
-                  <span>{l.protocol}{l.port > 0 ? `:${l.port}` : ""}{l.hostname ? ` · ${l.hostname}` : ""}{(l.certificateRefs?.length ?? 0) > 0 ? ` · ${l.certificateRefs!.length} TLS ref${l.certificateRefs!.length === 1 ? "" : "s"}` : ""}</span>
-                </Fragment>
-              ))}
-            </div>
-          )}
+          {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : <ListenerList listeners={listeners} testid="gateway-listeners" />}
         </InspectorBlock>
+        <GatewayListenerSets g={g} sets={sets} />
         <InspectorBlock title="Addresses" count={addresses.length}>
           {addresses.length === 0 ? <div className="t-secondary">None assigned{role.kind === "ok" ? "" : " - typical while the Gateway is not programmed"}.</div> : (
             <div className="insp-kv">
@@ -343,5 +366,47 @@ function GatewayInspector({ cluster, g, stale, gone, replaced, onOpen, onClose }
       {/* the sheet sits beside the layout, so it shows on the Manifest tab too */}
       {describe.sheet}
     </div>
+  );
+}
+
+// GatewayListenerSets - the ListenerSets naming this Gateway, in the parent's
+// merge order after its own listeners (coverage S7a §4, §9), each with its
+// controller's verdict and listeners, beside the Gateway's allowedListeners
+// and its own attachedListenerSets count. A difference is said, never
+// reconciled; a conflict is the controller's to decide.
+function GatewayListenerSets({ g, sets }: { g: GatewayRefDTO; sets: ListenerSetRows }) {
+  const served = sets.coverage.find((k) => k.kind === "ListenerSet")?.coverage;
+  if (served === "absent") return null;
+  const mine = setsOf(sets.sets, g);
+  const complete = !sets.loading && kindEvidence(true, sets.coverage, "ListenerSet", sets.watchError) === "complete";
+  const accepted = mine.filter(acceptedNow).length;
+  const reported = g.attachedListenerSets;
+  const count = sets.loading ? "reading ListenerSets" : `${mine.length}${complete ? "" : "+"} found naming this Gateway, ${accepted} accepted`;
+  const differs = reported != null && complete && reported !== accepted;
+  return (
+    <InspectorBlock title="ListenerSets" count={mine.length}>
+      <div data-testid="gateway-listenersets" style={{ display: "grid", gap: 8 }}>
+        <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>{allowedListenersText(g.allowedListeners)}</div>
+        <div className="t-secondary" data-testid="gateway-listenersets-count" style={{ color: differs ? "var(--color-text-warning)" : undefined }}>
+          {count}{reported != null ? ` · the controller reports ${reported} attached` : " · the controller reports no attached count"}{differs ? " - they differ" : ""}
+        </div>
+        {mine.map((s) => {
+          const role = { kind: s.rule.role as "fault" | "degraded" | "progressing" | "ok" | "unknown", label: s.rule.label };
+          return (
+            <div key={`${s.namespace}/${s.name}`} data-testid="gateway-listenerset" style={{ display: "grid", gap: 4, paddingTop: 6, borderTop: "1px solid var(--color-border-tertiary)" }}>
+              <div className="t-body" style={{ overflowWrap: "anywhere" }}>
+                <span style={{ color: "var(--color-text-tertiary)" }}>{ordinal(s.precedence)} · </span>
+                <span style={{ color: "var(--color-text-primary)", fontWeight: 500 }}>{s.namespace}/{s.name}</span>
+                <span style={{ color: ROLE_TEXT[role.kind] }}> {role.label}</span>
+              </div>
+              {s.allowance.disagrees && <div className="t-secondary" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{s.allowance.text}</div>}
+              {PARENT_TEXT[s.parentState] && <div className="t-secondary">{PARENT_TEXT[s.parentState]}</div>}
+              <ListenerList listeners={s.listeners} testid={`gateway-listenerset-${s.namespace}-${s.name}`} />
+            </div>
+          );
+        })}
+        {!complete && !sets.loading && <div className="t-secondary">The ListenerSets read is incomplete: one that ranks earlier may be missing.</div>}
+      </div>
+    </InspectorBlock>
   );
 }

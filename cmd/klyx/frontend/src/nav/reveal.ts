@@ -20,6 +20,7 @@ const OBJECT_KINDS: Record<string, string> = {
   schedules: "Schedule", backupstoragelocations: "BackupStorageLocation", backups: "Backup",
   validatingwebhookconfigurations: "ValidatingWebhookConfiguration", mutatingwebhookconfigurations: "MutatingWebhookConfiguration",
   validatingadmissionpolicies: "ValidatingAdmissionPolicy", mutatingadmissionpolicies: "MutatingAdmissionPolicy",
+  listenersets: "ListenerSet",
   services: "Service", ipaddresspools: "IPAddressPool", ciliumloadbalancerippools: "CiliumLoadBalancerIPPool", configurationstates: "ConfigurationState",
 };
 
@@ -31,7 +32,7 @@ export const kindOfRef = (ref: Pick<RevealRef, "gvr">) => OBJECT_KINDS[last(ref.
 const SELECTS = new Set([
   "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers",
   "argo/applications", "argo/applicationsets", "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores",
-  "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
+  "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
   "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb",
 ]);
 export const selectsOnReveal = (task: string, part: string) => SELECTS.has(`${task}/${part}`);

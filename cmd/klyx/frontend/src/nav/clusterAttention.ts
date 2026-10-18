@@ -31,7 +31,7 @@ export const TASKS: TaskMeta[] = [
   { task: "eso", label: "External secrets", groupId: "eso", destinationId: "eso", cap: "externalSecrets",
     parts: [{ part: "externalsecrets", label: "ExternalSecrets", destinationId: "eso" }, { part: "stores", label: "Stores" }] },
   { task: "gateway", label: "Gateways", groupId: "network", destinationId: "gateway", cap: "gatewayAPI",
-    parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "routes", label: "Routes" }] },
+    parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "listenersets", label: "ListenerSets" }, { part: "routes", label: "Routes" }] },
   { task: "lb", label: "Load balancers", groupId: "network", destinationId: "loadbalancers", cap: "loadBalancing",
     parts: [{ part: "services", label: "LoadBalancer Services", destinationId: "loadbalancers" }, { part: "pools", label: "Address pools" }, { part: "metallb", label: "MetalLB configuration" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
@@ -50,7 +50,7 @@ const MEMBERSHIP: Record<string, string[]> = { "gateway/routes": ["gateways"] };
 
 const KIND_LABELS: Record<string, string> = {
   pods: "Pods", deployments: "Deployments", statefulsets: "StatefulSets", daemonsets: "DaemonSets", replicasets: "ReplicaSets",
-  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes",
+  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes", listenersets: "ListenerSets", namespaces: "Namespaces",
   services: "Services", endpointslices: "EndpointSlices", kustomizations: "Kustomizations", helmreleases: "HelmReleases",
   gitrepositories: "GitRepositories", ocirepositories: "OCIRepositories", buckets: "Buckets", helmrepositories: "HelmRepositories",
   helmcharts: "HelmCharts", applications: "Applications", applicationsets: "ApplicationSets", certificates: "Certificates",

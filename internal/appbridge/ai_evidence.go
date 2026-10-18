@@ -33,6 +33,13 @@ var (
 	condAllow  = allow{"status": nil, "reason": nil, "message": nil, "observedGeneration": nil}
 	argoCond   = allow{"type": nil, "status": nil, "reason": nil, "message": nil}
 	attachment = allow{"parent": nil, "rule": allow{"included": nil, "role": nil, "label": nil}}
+	// coverage S7a: a listener with its status and allowedRoutes
+	routeKind     = allow{"group": nil, "kind": nil}
+	listenerAllow = allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil, "tlsMode": nil,
+		"allowedRoutes": allow{"namespaces": allow{"set": nil, "from": nil, "selector": nil}, "kinds": routeKind},
+		"status": allow{"attachedRoutes": nil, "supportedKinds": routeKind,
+			"conditions": allow{"type": nil, "status": nil, "reason": nil, "message": nil, "observedGeneration": nil, "stale": nil}}}
+	nsAllowance = allow{"set": nil, "from": nil, "selector": nil, "selectorInvalid": nil}
 )
 
 // aiEvidenceFields is the allowlist of lens row fields per part (the lens's
@@ -56,8 +63,14 @@ var aiEvidenceFields = map[string]allow{
 		"memUsed": nil, "nodes": nil},
 	healthsrc.TaskKarpenter + "/nodeclaims": {"pool": nil, "nodeName": nil, "ready": nil, "failingType": nil, "failingStatus": nil, "failingReason": nil,
 		"failingMessage": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil, "instanceType": nil, "ageSeconds": nil},
-	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil},
-		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow},
+	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": listenerAllow,
+		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow,
+		"allowedListeners": nsAllowance, "attachedListenerSets": nil},
+	// coverage S7a §4: the ListenerSet, its parent as established, Klyx's
+	// allowance reading (evidence) and its place in the parent's merge
+	healthsrc.TaskGateway + "/listenersets": {"parent": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil}, "parentState": nil,
+		"listeners": listenerAllow, "acceptedCond": condAllow, "programmedCond": condAllow, "stale": nil, "generation": nil, "observedGeneration": nil,
+		"allowance": allow{"from": nil, "allowed": nil, "text": nil, "disagrees": nil}, "precedence": nil, "siblings": nil, "precedenceComplete": nil},
 	healthsrc.TaskGateway + "/routes": {"parent": nil, "attachments": attachment, "generation": nil},
 	healthsrc.TaskNodes + "/nodes": {"roles": nil, "ready": nil, "unschedulable": nil, "problems": nil, "version": nil, "os": nil, "arch": nil,
 		"taintCount": nil, "cpuCapacity": nil, "cpuAllocatable": nil, "memCapacity": nil, "memAllocatable": nil, "podCapacity": nil,

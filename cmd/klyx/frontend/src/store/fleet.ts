@@ -800,7 +800,32 @@ export type GatewayAddressDTO = { type: string; value: string };
 // CondDTO: one status condition as observed. status "" = absent (no
 // controller wrote it) - distinct from "False" (rejected) and "Unknown".
 export type CondDTO = { status: string; reason: string; message: string; observedGeneration: number };
-export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
+export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO;
+  // coverage S7a §4: allowedListeners as written, and the controller's count
+  // of attached ListenerSets (null when unreported)
+  allowedListeners?: NamespaceAllowanceDTO; attachedListenerSets?: number | null };
+// Coverage S7a §3: a listener's status as its controller reported it. A
+// stale condition describes an older generation: shown, never judged.
+export type RouteKindDTO = { group: string; kind: string };
+export type ListenerConditionDTO = { type: string; status: string; reason: string; message: string; observedGeneration: number; lastTransitionTime?: string; stale: boolean };
+export type ListenerStatusDTO = { supportedKinds: RouteKindDTO[]; attachedRoutes: number; conditions: ListenerConditionDTO[] };
+// A namespaces allowance as written: set = the field was written; from "" =
+// unset (its default applies); selector in kubectl's form.
+export type NamespaceAllowanceDTO = { set: boolean; from: string; selector?: string; selectorInvalid?: boolean };
+export type AllowedRoutesDTO = { namespaces: NamespaceAllowanceDTO; kinds: RouteKindDTO[] };
+// One ListenerSet of the Gateways task's ListenerSets part (S7a §4), with its
+// captured verdict. parentState: "found" | "not found" (a complete read
+// proves it) | "not established" | "unsupported" (another kind). allowance is
+// Klyx's own reading of the parent's allowedListeners - evidence beside the
+// controller's verdict; allowed "yes" | "no" | "" (not established).
+export type ListenerParentDTO = { group: string; kind: string; namespace: string; name: string };
+export type AllowanceDTO = { from: string; allowed: string; text: string; disagrees: boolean };
+export type ListenerSetRowDTO = {
+  uid?: string; gvr?: string; generation?: number; namespace: string; name: string; created?: string;
+  parent: ListenerParentDTO; parentState: string; listeners: ListenerDTO[];
+  acceptedCond: CondDTO; programmedCond: CondDTO; stale: boolean; observedGeneration: number;
+  allowance: AllowanceDTO; precedence: number; siblings: number; precedenceComplete: boolean; rule: RuleDTO;
+};
 // One HTTPRoute of the Gateways task's routes part (1c slice 3 §4a): counted
 // once by UID with its worst attachment's captured role/label/parent, and
 // every attachment. The topology stays the route's data path.
@@ -809,7 +834,7 @@ export type GatewayRouteRowDTO = { uid?: string; gvr?: string; generation?: numb
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
-export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[] };
+export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[]; tlsMode?: string; allowedRoutes?: AllowedRoutesDTO; status?: ListenerStatusDTO };
 export type MatchDTO = { pathType: string; pathValue: string; method: string; rule?: number };
 // One spec.rules entry with its verdict and each backend's own (The Line
 // slice 8d): weight is the effective configured weight (1 when unset).

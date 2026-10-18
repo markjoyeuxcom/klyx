@@ -122,7 +122,7 @@ func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) Rou
 
 func toGatewayRefDTO(r gwapi.GatewayRef) GatewayRefDTO {
 	g := gatewayRefFields(r)
-	g.Rule = toRuleDTO(gwapi.GatewayRule(r.AcceptedCond, r.ProgrammedCond, r.Generation))
+	g.Rule = toRuleDTO(gwapi.GatewayVerdict(r.AcceptedCond, r.ProgrammedCond, r.Generation, r.Listeners))
 	return g
 }
 
@@ -130,12 +130,11 @@ func toGatewayRefDTO(r gwapi.GatewayRef) GatewayRefDTO {
 // copies the capture's evaluation, slice 3 §2a).
 func gatewayRefFields(r gwapi.GatewayRef) GatewayRefDTO {
 	g := GatewayRefDTO{Namespace: r.Namespace, Name: r.Name, ClassName: r.ClassName, Accepted: r.Accepted, Programmed: r.Programmed, Stale: r.Stale, Generation: r.Generation, ObservedGeneration: r.ObservedGeneration,
-		AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond)}
+		AcceptedCond: condDTO(r.AcceptedCond), ProgrammedCond: condDTO(r.ProgrammedCond),
+		AllowedListeners: allowanceDTO(r.AllowedListeners), AttachedListenerSets: r.AttachedListenerSets}
 	for _, a := range r.Addresses {
 		g.Addresses = append(g.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}
-	for _, l := range r.Listeners {
-		g.Listeners = append(g.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
-	}
+	g.Listeners = listenerDTOs(r.Listeners, r.Generation)
 	return g
 }

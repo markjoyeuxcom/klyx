@@ -42,6 +42,7 @@ const GROUPS: Record<string, string> = {
   Gateway: "gateway.networking.k8s.io",
   HTTPRoute: "gateway.networking.k8s.io",
   GRPCRoute: "gateway.networking.k8s.io",
+  ListenerSet: "gateway.networking.k8s.io", // coverage S7a
   // Velero (coverage S2a)
   Schedule: "velero.io",
   Backup: "velero.io",

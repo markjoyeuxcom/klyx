@@ -999,6 +999,7 @@ var chatParts = map[string][2]string{
 	"argoproj.io/applications":                   {healthsrc.TaskArgo, "applications"},
 	"argoproj.io/applicationsets":                {healthsrc.TaskArgo, "applicationsets"},
 	"gateway.networking.k8s.io/gateways":         {healthsrc.TaskGateway, "gateways"},
+	"gateway.networking.k8s.io/listenersets":     {healthsrc.TaskGateway, "listenersets"}, // coverage S7a
 	"cert-manager.io/certificates":               {healthsrc.TaskCerts, "certificates"},
 	"cert-manager.io/issuers":                    {healthsrc.TaskCerts, "issuers"},
 	"cert-manager.io/clusterissuers":             {healthsrc.TaskCerts, "issuers"},

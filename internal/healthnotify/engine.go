@@ -786,7 +786,7 @@ var kinds = map[string]string{
 	"ocirepositories": "OCIRepository", "buckets": "Bucket", "helmrepositories": "HelmRepository", "helmcharts": "HelmChart",
 	"applications": "Application", "applicationsets": "ApplicationSet", "certificates": "Certificate", "issuers": "Issuer",
 	"clusterissuers": "ClusterIssuer", "externalsecrets": "ExternalSecret", "secretstores": "SecretStore",
-	"clustersecretstores": "ClusterSecretStore", "gateways": "Gateway", "httproutes": "HTTPRoute",
+	"clustersecretstores": "ClusterSecretStore", "gateways": "Gateway", "httproutes": "HTTPRoute", "listenersets": "ListenerSet",
 	"nodeclaims": "NodeClaim", "nodepools": "NodePool",
 	"fluxinstances": "FluxInstance", "resourcesets": "ResourceSet", "resourcesetinputproviders": "ResourceSetInputProvider",
 	"imagerepositories": "ImageRepository", "imagepolicies": "ImagePolicy", "imageupdateautomations": "ImageUpdateAutomation",

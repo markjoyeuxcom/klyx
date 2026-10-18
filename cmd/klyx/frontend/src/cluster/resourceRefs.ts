@@ -25,6 +25,7 @@ export const WELL_KNOWN_RESOURCE_REFS: Record<string, ResourceRef> = {
   "gateway.networking.k8s.io/Gateway": { group: "gateway.networking.k8s.io", version: "v1", plural: "gateways", kind: "Gateway", scope: "Namespaced" },
   "gateway.networking.k8s.io/HTTPRoute": { group: "gateway.networking.k8s.io", version: "v1", plural: "httproutes", kind: "HTTPRoute", scope: "Namespaced" },
   "gateway.networking.k8s.io/GRPCRoute": { group: "gateway.networking.k8s.io", version: "v1", plural: "grpcroutes", kind: "GRPCRoute", scope: "Namespaced" },
+  "gateway.networking.k8s.io/ListenerSet": { group: "gateway.networking.k8s.io", version: "v1", plural: "listenersets", kind: "ListenerSet", scope: "Namespaced" },
   "cert-manager.io/Certificate": { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" },
   "cert-manager.io/CertificateRequest": { group: "cert-manager.io", version: "v1", plural: "certificaterequests", kind: "CertificateRequest", scope: "Namespaced" },
   "cert-manager.io/Issuer": { group: "cert-manager.io", version: "v1", plural: "issuers", kind: "Issuer", scope: "Namespaced" },

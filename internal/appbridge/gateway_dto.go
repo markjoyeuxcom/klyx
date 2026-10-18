@@ -8,6 +8,11 @@ type ListenerDTO struct {
 	Hostname        string              `json:"hostname"`
 	Port            int32               `json:"port"`
 	CertificateRefs []CertificateRefDTO `json:"certificateRefs"`
+	// S7a §3: the TLS mode and allowedRoutes as written, and the status its
+	// controller reported (absent when none was).
+	TLSMode       string             `json:"tlsMode,omitempty"`
+	AllowedRoutes *AllowedRoutesDTO  `json:"allowedRoutes,omitempty"`
+	Status        *ListenerStatusDTO `json:"status,omitempty"`
 }
 type CertificateRefDTO struct {
 	Group     string `json:"group"`
@@ -72,6 +77,10 @@ type GatewayNodeDTO struct {
 	AcceptedCond   CondDTO `json:"acceptedCond"`
 	ProgrammedCond CondDTO `json:"programmedCond"`
 	Generation     int64   `json:"generation"`
+	// S7a §4: allowedListeners as written, and the controller's count of
+	// attached ListenerSets (null when unreported).
+	AllowedListeners     NamespaceAllowanceDTO `json:"allowedListeners"`
+	AttachedListenerSets *int32                `json:"attachedListenerSets"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -188,6 +197,9 @@ type GatewayRefDTO struct {
 	AcceptedCond       CondDTO `json:"acceptedCond"`
 	ProgrammedCond     CondDTO `json:"programmedCond"`
 	ObservedGeneration int64   `json:"observedGeneration"`
+	// S7a §4, as GatewayNodeDTO's.
+	AllowedListeners     NamespaceAllowanceDTO `json:"allowedListeners"`
+	AttachedListenerSets *int32                `json:"attachedListenerSets"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -262,10 +274,9 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
 	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies),
 		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation,
-		Rule: toRuleDTO(gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation))}
-	for _, l := range g.Listeners {
-		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
-	}
+		AllowedListeners: allowanceDTO(g.AllowedListeners), AttachedListenerSets: g.AttachedListenerSets,
+		Rule: toRuleDTO(gwapi.GatewayVerdict(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Listeners))}
+	gd.Listeners = listenerDTOs(g.Listeners, g.Generation)
 	for _, a := range g.Addresses {
 		gd.Addresses = append(gd.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}

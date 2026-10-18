@@ -285,7 +285,7 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
     seed([...core(), task("flux", [absentPart("reconciliations", "kustomizations"), absentPart("sources", "gitrepositories"),
       absentPart("fluxinstance", "fluxinstances"), absentPart("resourcesets", "resourcesets"), absentPart("images", "imagerepositories"), absentPart("composition", "artifactgenerators"), absentPart("receivers", "receivers")]),
       task("argo", [absentPart("applications", "applications"), absentPart("applicationsets", "applicationsets")]),
-      task("gateway", [absentPart("gateways", "gateways"), absentPart("routes", "httproutes")])]);
+      task("gateway", [absentPart("gateways", "gateways"), absentPart("listenersets", "listenersets"), absentPart("routes", "httproutes")])]);
     render(<Overview c={c} />);
     for (const label of ["flux", "argo cd", "gateway"]) expect(fact(label)).toBe("not detected");
   });

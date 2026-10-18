@@ -184,6 +184,17 @@ var rowsConverters = map[string]rowsConverter{
 		}
 		return out, nil
 	},
+	healthsrc.TaskGateway + "/listenersets": func(rows any, _ time.Time) (any, error) {
+		set, err := rowSetOf[healthsrc.ListenerSetRow](rows)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ListenerSetRowDTO, 0, len(set.Rows))
+		for _, r := range set.Rows {
+			out = append(out, listenerSetRowDTO(r))
+		}
+		return out, nil
+	},
 	healthsrc.TaskGateway + "/routes": func(rows any, _ time.Time) (any, error) {
 		set, err := rowSetOf[observe.Attached](rows)
 		if err != nil {
