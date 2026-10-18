@@ -153,7 +153,7 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
   const gwFault = rows.partCounts ? rows.partCounts.fault : gateways.filter((g) => g.rule.included && gatewayRole(g).kind === "fault").length;
   const unverified = gateways.filter((g) => ["unknown", "progressing"].includes(gatewayRole(g).kind)).length;
   // "all programmed" is a claim about the present: a complete, current read
-  const allOk = gateways.length > 0 && ev === "complete" && !rows.rowsState.updating && !rowsRefreshing && gateways.every((g) => gatewayRole(g).kind === "ok");
+  const allOk = gateways.length > 0 && complete && !rows.rowsState.updating && !rowsRefreshing && gateways.every((g) => gatewayRole(g).kind === "ok");
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => ordered.filter((g) => {
     const role = gatewayRole(g);
@@ -367,7 +367,7 @@ function GatewayInspector({ cluster, g, sets, stale, gone, replaced, onOpen, onC
         <InspectorBlock title="Listeners" count={listeners.length}>
           {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : <ListenerList listeners={listeners} testid="gateway-listeners" />}
         </InspectorBlock>
-        <GatewayListenerSets g={g} sets={sets} gone={gone} />
+        <GatewayListenerSets g={g} sets={sets} gone={gone} gatewayStale={stale} />
         <InspectorBlock title="Addresses" count={addresses.length}>
           {addresses.length === 0 ? <div className="t-secondary">None assigned{role.kind === "ok" ? "" : " - typical while the Gateway is not programmed"}.</div> : (
             <div className="insp-kv">
@@ -387,7 +387,7 @@ function GatewayInspector({ cluster, g, sets, stale, gone, replaced, onOpen, onC
 // controller's verdict and listeners, beside the Gateway's allowedListeners
 // and its own attachedListenerSets count. A difference is said, never
 // reconciled; a conflict is the controller's to decide.
-function GatewayListenerSets({ g, sets, gone }: { g: GatewayRefDTO; sets: ListenerSetRows; gone: "removed" | "unverified" | null }) {
+function GatewayListenerSets({ g, sets, gone, gatewayStale }: { g: GatewayRefDTO; sets: ListenerSetRows; gone: "removed" | "unverified" | null; gatewayStale: boolean }) {
   const served = sets.coverage.find((k) => k.kind === "ListenerSet")?.coverage;
   if (served === "absent") return null;
   // the live join names a parent by namespace/name, not UID: a Gateway that
@@ -409,14 +409,19 @@ function GatewayListenerSets({ g, sets, gone }: { g: GatewayRefDTO; sets: Listen
   const lastGood = lastGoodAt(sets.coverage, ["ListenerSet"]);
   const asOfRead = ev === "stale" ? ` (the last good read${lastGood ? `, ${clock(lastGood)}` : ""})` : "";
   const count = sets.loading ? "reading ListenerSets" : `${mine.length}${complete ? "" : "+"} found naming this Gateway, ${accepted} accepted${asOfRead}`;
-  // a disagreement only between two current, complete readings
-  const differs = reported != null && complete && reported !== accepted;
+  // a disagreement only between two current readings: the ListenerSets read
+  // complete, and the Gateway's own count from a current read of it - a
+  // retained current Gateway's fields stand even if others were left out,
+  // but a stale one's count is historical (Codex's S7a re-review, finding 1)
+  const differs = reported != null && complete && !gatewayStale && reported !== accepted;
+  const reportedText = reported == null ? " · the controller reports no attached count"
+    : gatewayStale ? ` · the controller reported ${reported} attached when the Gateways were last read` : ` · the controller reports ${reported} attached`;
   return (
     <InspectorBlock title="ListenerSets" count={mine.length}>
       <div data-testid="gateway-listenersets" style={{ display: "grid", gap: 8 }}>
         <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>{allowedListenersText(g.allowedListeners)}</div>
         <div className="t-secondary" data-testid="gateway-listenersets-count" style={{ color: differs ? "var(--color-text-warning)" : undefined }}>
-          {count}{reported != null ? ` · the controller reports ${reported} attached` : " · the controller reports no attached count"}{differs ? " - they differ" : ""}
+          {count}{reportedText}{differs ? " - they differ" : ""}
         </div>
         {mine.map((s) => {
           const role = { kind: s.rule.role as "fault" | "degraded" | "progressing" | "ok" | "unknown", label: s.rule.label };

@@ -237,7 +237,10 @@ function listenerSetVerdictDetail(s: ListenerSetRowDTO): string {
   const lastObserved = (c: CondState, what: string) =>
     `${what} was False for generation ${c.observedGeneration}${why(c) ? ` - ${why(c)}` : ""}. The controller has not reported on generation ${s.generation}, so whether it is ${what.toLowerCase()} now is unverified.`;
   if (a.status === "False" && !a.stale) return `Its controller did not accept it${why(a) ? ` - ${why(a)}` : ""}. Its listeners are not merged into the parent.`;
-  if (a.status === "True" && !a.stale && p.status === "False" && !p.stale) return `Accepted, but not programmed${why(p) ? ` - ${why(p)}` : ""}.`;
+  // the deciding condition's own freshness decides (Codex's S7a re-review,
+  // finding 2): a current programming failure is current even when the
+  // acceptance it follows was last reported for an older generation
+  if (a.status === "True" && p.status === "False" && !p.stale) return `Accepted, but not programmed${why(p) ? ` - ${why(p)}` : ""}.${a.stale ? ` Its acceptance was last reported for generation ${a.observedGeneration}.` : ""}`;
   if (s.parentState === "not found") return "Its parent Gateway is absent from a complete, current read of the Gateways: its listeners join nothing.";
   if (a.status === "False") return lastObserved(a, "Accepted");
   if (a.status === "True" && p.status === "False") return lastObserved(p, "Programmed");

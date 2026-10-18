@@ -296,3 +296,36 @@ describe("a conflict written on several conditions is said once", () => {
     expect(issues.map((e) => e.textContent)).toEqual([`Accepted False, Conflicted True, Programmed False - HostnameConflict: ${msg}`]);
   });
 });
+
+// Codex's S7a re-review: the Gateway's own read guards its claims, and the
+// deciding condition's freshness decides the detail.
+describe("the Gateway's own read and the deciding condition (re-review)", () => {
+  it("a truncated Gateway read cannot certify all programmed", () => {
+    seed({ gateways: [gw("eg")] });
+    gwRows = { ...gwRows, coverage: [{ kind: "Gateway", served: true, synced: true, coverage: "live", truncated: true, notRetained: 1 }] };
+    render(<GatewayApiView cluster="x" />);
+    expect(screen.getByTestId("gateways-capped")).toBeTruthy();
+    expect(screen.queryByText("all programmed")).toBeNull();
+  });
+
+  it("a stale Gateway's count is historical and disagrees with nothing", () => {
+    seed({ gateways: [gw("eg", { attachedListenerSets: 0 })], sets: [first] });
+    gwRows = { ...gwRows, coverage: [{ kind: "Gateway", served: true, synced: true, coverage: "stale", lastGoodAt: "2026-10-18T09:00:00Z", error: "forbidden" }], watchError: "Gateway: forbidden" };
+    render(<GatewayApiView cluster="x" />);
+    fireEvent.click(screen.getByText("eg"));
+    const count = screen.getByTestId("gateway-listenersets-count").textContent ?? "";
+    expect(count).toContain("the controller reported 0 attached when the Gateways were last read");
+    expect(count).not.toContain("they differ");
+  });
+
+  it("a current programming failure beside an older acceptance is current", () => {
+    seed({ sets: [ls("infra", "mixed", 1, { generation: 2, observedGeneration: 2, acceptedCond: cond("True", "Accepted", 1), programmedCond: cond("False", "Invalid", 2),
+      rule: { included: true, role: "fault", label: "not programmed: Invalid" } })] });
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    const text = screen.getByTestId("listenerset-panel").textContent ?? "";
+    expect(text).toContain("Accepted, but not programmed - Invalid");
+    expect(text).toContain("Its acceptance was last reported for generation 1.");
+    expect(text).not.toContain("has not reported on generation 2");
+  });
+});
