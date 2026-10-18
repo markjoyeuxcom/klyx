@@ -8,6 +8,7 @@ import { LocationBar } from "../chrome/LocationBar";
 import { FleetView } from "../fleet/FleetView";
 import { FleetPromotion } from "../fleet/FleetPromotion";
 import { FleetExpiry } from "../fleet/FleetExpiry";
+import { FleetBackups } from "../fleet/FleetBackups";
 import { ForwardsView } from "../fleet/ForwardsView";
 import { ActivityView } from "../fleet/ActivityView";
 import { SettingsView } from "./SettingsView";
@@ -97,7 +98,7 @@ export function AppShell() {
         <div className="shell-main">
           <main className="shell-workspace" aria-label="Workspace">
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              {route.name === "fleet" ? (route.view === "promotion" ? <FleetPromotion /> : route.view === "expiry" ? <FleetExpiry /> : <FleetView />) : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
+              {route.name === "fleet" ? (route.view === "promotion" ? <FleetPromotion /> : route.view === "expiry" ? <FleetExpiry /> : route.view === "backups" ? <FleetBackups /> : <FleetView />) : route.name === "forwards" ? <ForwardsView /> : route.name === "activity" ? <ActivityView /> : route.name === "settings" ? <SettingsView /> : <ClusterDetail />}
             </div>
           </main>
         </div>

@@ -148,6 +148,7 @@ export function buildCommands(s: FleetStore): Command[] {
   cmds.push({ id: "fleet", group: "Application", title: "Fleet board", hint: "every cluster, attention first", run: () => s.openFleet() });
   cmds.push({ id: "fleet:promotion", group: "Application", title: "Promotion tracker", hint: "applied GitOps revisions per cluster", run: () => s.openFleet("promotion") });
   cmds.push({ id: "fleet:expiry", group: "Application", title: "Expiry horizon", hint: "certificates and CAs fleet-wide, soonest first", run: () => s.openFleet("expiry") });
+  cmds.push({ id: "fleet:backups", group: "Application", title: "Backups", hint: "Velero schedules fleet-wide, the longest without a retained success first", run: () => s.openFleet("backups") });
   cmds.push({ id: "forwards", group: "Application", title: "Port-forwards", hint: (s.forwards?.length ?? 0) > 0 ? `${s.forwards.length} active` : "none active", run: () => s.openForwards() });
   cmds.push({ id: "activity", group: "Application", title: "Activity log", hint: "recent action outcomes", run: () => s.openActivity() });
   cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "fleet config · kubeconfig contexts", run: () => s.openSettings() });

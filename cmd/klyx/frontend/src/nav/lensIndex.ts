@@ -167,4 +167,5 @@ export const FLEET_VIEWS: { label: string; view: FleetView | undefined; title: s
   { label: "Fleet board", view: undefined, title: "Every cluster, attention first" },
   { label: "Promotion tracker", view: "promotion", title: "Applied GitOps revisions per cluster - did a change land everywhere?" },
   { label: "Expiry horizon", view: "expiry", title: "Certificates, raw TLS secrets and webhook CAs fleet-wide, soonest first" },
+  { label: "Backups", view: "backups", title: "Every Velero schedule fleet-wide: its verdict and latest retained success, the longest without one first" },
 ];

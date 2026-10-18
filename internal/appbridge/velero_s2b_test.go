@@ -77,7 +77,7 @@ func backupsRows(cov observe.KindCoverage, names ...string) observe.Rows {
 		rs = append(rs, healthsrc.Row[healthsrc.VeleroBackupRow]{Ref: healthsrc.RowRef{UID: b.UID}, Data: healthsrc.VeleroBackupRow{Backup: b,
 			Attribution: velero.Attr{Schedule: "daily", How: "proven"}}})
 	}
-	cov.Kind = velero.KindBackup
+	cov.Kind = healthsrc.KindVeleroBackups
 	return observe.Rows{Task: healthsrc.TaskVelero, Part: observe.Part{ID: "backups", Kinds: []observe.KindCoverage{cov}},
 		Rows: healthsrc.RowSet[healthsrc.VeleroBackupRow]{Rows: rs}}
 }

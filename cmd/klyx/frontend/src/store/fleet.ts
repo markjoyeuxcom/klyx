@@ -712,7 +712,7 @@ export type InstanceDetailSlice = { cluster: string | null; resource: ResourceRe
 
 // Fleet-level views (redesign step 7d): the board, the promotion tracker and
 // the expiry horizon share the Fleet band.
-export type FleetView = "promotion" | "expiry";
+export type FleetView = "promotion" | "expiry" | "backups";
 export type Route =
   | { name: "fleet"; view?: FleetView }
   | { name: "forwards" }

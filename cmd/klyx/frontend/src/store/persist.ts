@@ -72,7 +72,7 @@ export function loadRoute(): PersistedRoute | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersistedRoute;
-    if (parsed.name === "fleet") return parsed.view === "promotion" || parsed.view === "expiry" ? { name: "fleet", view: parsed.view } : { name: "fleet" };
+    if (parsed.name === "fleet") return parsed.view === "promotion" || parsed.view === "expiry" || parsed.view === "backups" ? { name: "fleet", view: parsed.view } : { name: "fleet" };
     if (parsed.name === "forwards" || parsed.name === "settings" || parsed.name === "activity") return { name: parsed.name };
     if (parsed.name === "cluster" && typeof parsed.cluster === "string" && parsed.cluster !== "") {
       return {
@@ -114,7 +114,7 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
   const saved = loadRoute();
   if (!saved) return;
   if (saved.name === "fleet") {
-    if (saved.view === "promotion" || saved.view === "expiry") useFleet.setState({ route: { name: "fleet", view: saved.view } });
+    if (saved.view === "promotion" || saved.view === "expiry" || saved.view === "backups") useFleet.setState({ route: { name: "fleet", view: saved.view } });
     return;
   }
   if (saved.name === "forwards" || saved.name === "settings" || saved.name === "activity") {

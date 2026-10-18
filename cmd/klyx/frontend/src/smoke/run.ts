@@ -397,6 +397,52 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/the storage location is Unavailable/.test(panel.textContent ?? "")) throw new Error(`the validation class: ${panel.textContent}`);
     noVeleroNeedle("an unscheduled backup");
   });
+  // Coverage S2b (scratchpad lab-s2b): the horizon beside the verdict, every
+  // retained Backup as a fact, the Restores read, and the fleet view.
+  await step(steps, "Velero horizon", async () => {
+    await open("velero");
+    await closeDrawer();
+    const cell = await within(10_000, "the horizon cell", () => $<HTMLElement>("[data-testid='velero-success-partial-weekly']"));
+    if (!/ago/.test(cell.textContent ?? "") || !/partial/.test(cell.textContent ?? "")) throw new Error(`the horizon cell: ${cell.textContent}`);
+    const none = await within(4000, "the synced-only cell", () => $<HTMLElement>("[data-testid='velero-success-synced-only']"));
+    if (!/none/.test(none.textContent ?? "")) throw new Error(`a synced success counted: ${none.textContent}`);
+    (await within(4000, "the partial schedule", () => byText<HTMLElement>(".lens-row", /velero\/partial-weekly/))).click();
+    const hz = await within(8000, "the horizon block", () => $("[data-testid='velero-horizon']"));
+    if (!/latest proven retained success/.test(hz.textContent ?? "")) throw new Error(`the horizon: ${hz.textContent}`);
+    if (!/a newer run partially failed/.test($("[data-testid='velero-schedule-panel']")?.textContent ?? "")) throw new Error("the newer partial run is not said");
+    noVeleroNeedle("the horizon");
+  });
+  await step(steps, "Velero backups", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Backups tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Backups/))).click();
+    await within(8000, "the retained note", () => $("[data-testid='velero-retained-note']"));
+    const expired = await within(10_000, "the expired backup", () => byText<HTMLElement>(".lens-row", /velero\/manual-expired/));
+    if (!/expired, awaiting deletion/.test(expired.textContent ?? "")) throw new Error(`the expired backup: ${expired.textContent}`);
+    (await within(4000, "the synced backup", () => byText<HTMLElement>(".lens-row", /velero\/synced-only-2026/))).click();
+    const fact = await within(8000, "the fact inspector", () => $("[data-testid='velero-backup-fact']"));
+    if (!/looks synced from object storage/i.test(fact.textContent ?? "")) throw new Error(`the attribution: ${fact.textContent}`);
+    noVeleroNeedle("the Backups tab");
+  });
+  await step(steps, "Velero restores", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Restores tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Restores/))).click();
+    await within(10_000, "the restores read", () => $("[data-testid='velero-restores-note']"));
+    (await within(8000, "the completed restore", () => byText<HTMLElement>(".lens-row", /velero\/restore-ok/))).click();
+    const src = await within(8000, "the restore source", () => $("[data-testid='velero-restore-source']"));
+    if (!/regular-/.test(src.textContent ?? "") || !/proven run of regular|matched by name to regular/.test(src.textContent ?? "")) throw new Error(`the source join: ${src.textContent}`);
+    (await within(4000, "the failed restore", () => byText<HTMLElement>(".lens-row", /velero\/drill/))).click();
+    await within(8000, "its class", () => /the restore failed while running/.test($("[data-testid='velero-restore-panel']")?.textContent ?? ""));
+    noVeleroNeedle("the Restores tab");
+  });
+  await step(steps, "Fleet backups", async () => {
+    useFleet.getState().openFleet("backups");
+    const row = await within(15_000, "a fleet backups row", () => $<HTMLElement>("[data-testid^='fleet-backups-row-']"));
+    if (!/Missed|failed|Partially|Deferred|Not processed|Never/i.test(row.textContent ?? "")) throw new Error(`not broken-first: ${row.textContent}`);
+    await within(8000, "the partial schedule", () => $("[data-testid$='-partial-weekly']"));
+    noVeleroNeedle("the fleet Backups view");
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");

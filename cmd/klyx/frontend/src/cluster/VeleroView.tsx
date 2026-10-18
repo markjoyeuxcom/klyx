@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconDatabaseExport } from "@tabler/icons-react";
 import type { RuleDTO } from "../store/fleet";
-import type { VeleroBackupDTO, VeleroLocationDTO, VeleroRunDTO, VeleroScheduleDTO } from "../bridge/velero";
+import { getVeleroRestores, type VeleroBackupDTO, type VeleroHorizonDTO, type VeleroLocationDTO, type VeleroRestoreDTO, type VeleroRestoresDTO, type VeleroRunDTO, type VeleroScheduleDTO } from "../bridge/velero";
 import { useVeleroBackups, useVeleroLocations, useVeleroSchedules, type VeleroPartRows } from "../health/useVeleroRows";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
@@ -26,12 +26,13 @@ import { LensParts } from "../chrome/LensParts";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { expectPin } from "../nav/inspectorPin";
 
-// VeleroView - the Velero lens (coverage S2a §2): Schedules judged against
-// the run Velero owes, Storage locations, and the last day's unscheduled
-// backups, from the Observer's shared rows. Read-only. Velero's text never
-// crosses: every message is Klyx's fixed class.
+// VeleroView - the Velero lens (coverage S2a §2, S2b §2): Schedules judged
+// against the run Velero owes, with the latest retained success beside the
+// verdict; Storage locations; the last day's unscheduled backups; every
+// retained Backup and the Restores as listed facts. Read-only. Velero's text
+// never crosses: every message is Klyx's fixed class.
 
-type Tab = "schedules" | "locations" | "backups";
+type Tab = "schedules" | "locations" | "backups" | "all" | "restores";
 type RoleKind = "fault" | "degraded" | "progressing" | "ok" | "unknown" | "paused";
 const RANK: Record<string, number> = { fault: 0, degraded: 1, unknown: 2, progressing: 3, paused: 4, ok: 5 };
 const rankOf = (r: RuleDTO) => RANK[r.role] ?? RANK.unknown;
@@ -47,7 +48,8 @@ const keyOf = (kind: string, ns: string, name: string) => `${kind}/${ns}/${name}
 const unix = (iso?: string) => (iso ? Math.floor(Date.parse(iso) / 1000) : 0);
 // the reason without its leading label ("Missed: Velero created ...")
 const why = (reason: string | undefined, label: string) => (reason ? (reason.startsWith(label + ": ") ? reason.slice(label.length + 2) : reason) : "");
-const when = (iso?: string) => {
+// when is a time: the clock today, else the date and the clock.
+export const when = (iso?: string) => {
   if (!iso) return "-";
   const d = new Date(iso);
   const sameDay = d.toDateString() === new Date().toDateString();
@@ -71,7 +73,8 @@ const COLUMNS: Record<Tab, (ColumnDef & { label: string })[]> = {
     ROW_MARK,
     { id: "name", label: "Name", width: 200, priority: 0, flex: true },
     { id: "status", label: "Status", width: 220, priority: 0 },
-    { id: "cron", label: "Schedule", width: 170, priority: 1 },
+    { id: "cron", label: "Schedule", width: 170, priority: 2 },
+    { id: "success", label: "Last success", width: 130, priority: 1 },
     { id: "next", label: "Run due", width: 120, priority: 2 },
     { id: "location", label: "Location", width: 130, priority: 2 },
   ],
@@ -91,17 +94,76 @@ const COLUMNS: Record<Tab, (ColumnDef & { label: string })[]> = {
     { id: "errors", label: "Errors · warnings", width: 130, priority: 2 },
     { id: "location", label: "Location", width: 130, priority: 2 },
   ],
+  all: [
+    ROW_MARK,
+    { id: "name", label: "Name", width: 220, priority: 0, flex: true },
+    { id: "status", label: "Phase", width: 170, priority: 0 },
+    { id: "schedule", label: "Schedule", width: 170, priority: 1 },
+    { id: "started", label: "Started", width: 96, priority: 1 },
+    { id: "completed", label: "Completed", width: 96, priority: 2 },
+    { id: "expires", label: "Expires", width: 96, priority: 2 },
+    { id: "errors", label: "Errors · warnings", width: 130, priority: 3 },
+    { id: "location", label: "Location", width: 120, priority: 3 },
+  ],
+  restores: [
+    ROW_MARK,
+    { id: "name", label: "Name", width: 220, priority: 0, flex: true },
+    { id: "status", label: "Phase", width: 200, priority: 0 },
+    { id: "source", label: "Source", width: 220, priority: 1 },
+    { id: "started", label: "Started", width: 96, priority: 1 },
+    { id: "completed", label: "Completed", width: 96, priority: 2 },
+    { id: "errors", label: "Errors · warnings", width: 130, priority: 2 },
+  ],
 };
 
 const PARTS: Record<Tab, { kind: string; noun: [string, string]; lens: string }> = {
   schedules: { kind: "Schedule", noun: ["schedule", "schedules"], lens: "VeleroSchedules" },
   locations: { kind: "BackupStorageLocation", noun: ["storage location", "storage locations"], lens: "VeleroLocations" },
   backups: { kind: "Backup", noun: ["recent unscheduled backup", "recent unscheduled backups"], lens: "VeleroBackups" },
+  all: { kind: "Backup", noun: ["retained backup", "retained backups"], lens: "VeleroAllBackups" },
+  restores: { kind: "Restore", noun: ["restore", "restores"], lens: "VeleroRestores" },
 };
 const TAB_OF_PART: Record<string, Tab> = { schedules: "schedules", locations: "locations", backups: "backups" };
+// a row's key carries its tab: the two Backup lists are separate selections
+const KEY_KIND: Record<Tab, string> = { schedules: "Schedule", locations: "BackupStorageLocation", backups: "Backup", all: "RetainedBackup", restores: "Restore" };
+const TAB_OF_KEY: Record<string, Tab> = Object.fromEntries(Object.entries(KEY_KIND).map(([t, k]) => [k, t as Tab]));
 
-type Item = { key: string; uid: string; namespace: string; name: string; rule: RuleDTO };
-function sorted<T extends Item>(rows: T[]): T[] {
+// The Backups tab's phase groups (S2b §2).
+type PhaseGroup = "all" | "failed" | "partial" | "progress" | "completed";
+const groupOf = (phase: string): PhaseGroup =>
+  phase === "Completed" ? "completed" : phase === "PartiallyFailed" ? "partial" : phase === "Failed" || phase === "FailedValidation" ? "failed" : "progress";
+const GROUP_LABEL: Record<PhaseGroup, string> = { all: "All", failed: "Failed", partial: "Partially failed", progress: "In progress", completed: "Completed" };
+
+// How a listed Backup relates to the current schedules (S2b §2).
+export function attributionText(b: Pick<VeleroBackupDTO, "attribution" | "schedule" | "attributionDisputed">): string {
+  switch (b.attribution) {
+    case "proven": return `proven run of ${b.schedule}`;
+    case "named": return `matched by name to ${b.schedule}${b.attributionDisputed ? "; may have been synced from object storage" : ""}`;
+    case "synced": return `looks synced from object storage (carries ${b.schedule}'s name)`;
+    default: return "not a run of a current schedule";
+  }
+}
+
+// The Schedules column's cell for the horizon: an age that a newer, not
+// retained success could make younger reads "≤" (the full wording is the
+// title), and a name match says so (S2b §4).
+export function horizonCell(h: VeleroHorizonDTO, nowS: number): { text: string; title: string; partial: boolean } {
+  const title = h.partialText ? `${h.text} · ${h.partialText}` : h.text;
+  if (h.state === "unreadable") return { text: "runs unknown", title, partial: false };
+  if (!h.at || h.state !== "found") {
+    const none = !h.incomplete ? "none retained" : h.window && !h.tier0 ? `none since ${when(h.window)}` : "none held";
+    return { text: none, title, partial: !!h.partial };
+  }
+  const bound = h.incomplete || h.orderUnknown ? "≤ " : "";
+  const parts = [`${bound}${formatAge(Math.max(0, nowS - unix(h.at)))} ago`];
+  if (!h.proven) parts.push("by name");
+  if (h.untimed) parts.push("started");
+  return { text: parts.join(" · "), title, partial: !!h.partial };
+}
+
+type Item = { key: string; uid: string; namespace: string; name: string };
+type Ruled = Item & { rule: RuleDTO };
+function sorted<T extends Ruled>(rows: T[]): T[] {
   return [...rows].sort((a, b) => rankOf(a.rule) - rankOf(b.rule) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name));
 }
 
@@ -118,14 +180,29 @@ export function VeleroView({ cluster }: { cluster: string }) {
 
   const schedules = useMemo(() => sorted(sched.rows.map((s) => ({ ...s, key: keyOf("Schedule", s.namespace, s.name) }))), [sched.rows]);
   const locations = useMemo(() => sorted(locs.rows.map((l) => ({ ...l, key: keyOf("BackupStorageLocation", l.namespace, l.name) }))), [locs.rows]);
-  const backups = useMemo(() => sorted(bks.rows.map((b) => ({ ...b, key: keyOf("Backup", b.namespace, b.name) }))), [bks.rows]);
-  const part: Record<Tab, VeleroPartRows<unknown>> = { schedules: sched, locations: locs, backups: bks };
-  const items: Record<Tab, Item[]> = { schedules, locations, backups };
+  // the counted rows are the unscheduled part as S2a counts it; every row is
+  // a retained Backup (S2b §3)
+  const backups = useMemo(() => sorted(bks.rows.filter((b) => b.counted && b.rule).map((b) => ({ ...b, rule: b.rule!, key: keyOf("Backup", b.namespace, b.name) }))), [bks.rows]);
+  const [group, setGroup] = useState<PhaseGroup>("all");
+  const [schedFilter, setSchedFilter] = useState<string>("");
+  const retained = useMemo(() => bks.rows.map((b) => ({ ...b, key: keyOf("RetainedBackup", b.namespace, b.name) }))
+    .sort((a, b) => unix(b.started ?? b.created) - unix(a.started ?? a.created) || a.name.localeCompare(b.name)), [bks.rows]);
+  const allBackups = useMemo(() => retained.filter((b) => (group === "all" || groupOf(b.phase) === group)
+    && (schedFilter === "" || (schedFilter === "-" ? !b.attribution : b.schedule === schedFilter))), [retained, group, schedFilter]);
+  const scheduleNames = useMemo(() => [...new Set(retained.map((b) => b.schedule).filter((n): n is string => !!n))].sort(), [retained]);
+  const rst = useRestores(cluster, tab === "restores");
+  const restores = useMemo(() => (rst.data?.restores ?? []).map((r) => ({ ...r, key: keyOf("Restore", r.namespace, r.name) })), [rst.data]);
+  const restoresPart: VeleroPartRows<unknown> = useMemo(() => ({ rows: restores, coverage: [], watchError: rst.data?.state === "error" ? rst.data.error ?? "the read failed" : rst.data?.state === "forbidden" ? "Listing restores.velero.io is forbidden for this identity." : null,
+    loading: rst.loading && !rst.data, rowsState: bks.rowsState, counts: null, facts: null }), [restores, rst.data, rst.loading, bks.rowsState]);
+  const part: Record<Tab, VeleroPartRows<unknown>> = { schedules: sched, locations: locs, backups: bks, all: bks, restores: restoresPart };
+  const items: Record<Tab, Item[]> = { schedules, locations, backups, all: allBackups, restores };
   const cur = part[tab];
   const list = items[tab];
-  const ev = kindEvidence(!cur.loading, cur.coverage, PARTS[tab].kind, cur.watchError);
-  const absent = cur.coverage.find((k) => k.kind === PARTS[tab].kind)?.coverage === "absent";
-  const faults = (t: Tab) => (part[t].counts ? part[t].counts!.fault : items[t].filter((r) => r.rule.role === "fault").length);
+  const ev = tab === "restores" ? (rst.data?.state === "read" ? (rst.data.more ? "partial" : "complete") : rst.data ? "failed" : "pending")
+    : kindEvidence(!cur.loading, cur.coverage, PARTS[tab].kind, cur.watchError);
+  const absent = tab === "restores" ? rst.data?.state === "not-served" : cur.coverage.find((k) => k.kind === PARTS[tab].kind)?.coverage === "absent";
+  // only verdict tabs count faults: the Backups and Restores tabs list facts
+  const faults = (t: Tab) => (t === "all" || t === "restores" ? 0 : part[t].counts ? part[t].counts!.fault : (items[t] as Ruled[]).filter((r) => r.rule.role === "fault").length);
 
   const keys = list.map((r) => r.key);
   const cursorIdx = cursorKey === null ? -1 : keys.indexOf(cursorKey);
@@ -156,36 +233,54 @@ export function VeleroView({ cluster }: { cluster: string }) {
   const gridStyle = { gridTemplateColumns: fitted.template };
 
   const selKind = selKey?.split("/")[0] ?? "";
-  const selTab: Tab | null = selKind === "Schedule" ? "schedules" : selKind === "BackupStorageLocation" ? "locations" : selKind === "Backup" ? "backups" : null;
-  const live = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
-  const selEv = selTab ? kindEvidence(!part[selTab].loading, part[selTab].coverage, PARTS[selTab].kind, part[selTab].watchError) : "pending";
+  const selTab: Tab | null = TAB_OF_KEY[selKind] ?? null;
+  // a selection outlives a filter: it is looked up in the unfiltered rows
+  const selRows: Record<Tab, Item[]> = { ...items, all: retained };
+  const live = selTab ? selRows[selTab].find((r) => r.key === selKey) : undefined;
+  const selEv = selTab === "restores" ? ev : selTab ? kindEvidence(!part[selTab].loading, part[selTab].coverage, PARTS[selTab].kind, part[selTab].watchError) : "pending";
   // absence proves removal only from a complete, unfiltered read (Codex's
   // S2a implementation review, finding 4): a capped kind can leave an object
   // out, and the backups part is the last day's unscheduled ones, a set an
   // object leaves without being deleted
   const selCapped = selTab ? part[selTab].coverage.some((k) => k.kind === PARTS[selTab].kind && k.truncated) : false;
   const pin = usePinnedSubject(cluster, selTab ? selKey : null, live, selEv === "complete" && !selCapped && selTab !== "backups", selTab ? PARTS[selTab].lens : undefined);
+  // a filtered Backups view still lists every row it hides
+  const hidden = tab === "all" ? retained.length - allBackups.length : 0;
 
   let state: DatasetState = "ready";
   if (absent) state = "empty";
   else if (ev === "failed" && list.length === 0) state = "unreadable";
   else if (ev === "pending" && list.length === 0) state = "loading";
+  else if (list.length === 0 && hidden > 0) state = "no-match";
   else if (list.length === 0) state = "empty";
   const icon = <IconDatabaseExport size={28} stroke={1.2} />;
+  const clearFilters = () => { setGroup("all"); setSchedFilter(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={4} label={`reading ${PARTS[tab].noun[1]}`} />
     : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${PARTS[tab].noun[1]}.`} hint={cur.watchError ?? undefined} />
     : absent ? <EmptyState icon={icon} title="Velero is not installed on this cluster." hint={`Klyx observes no ${PARTS[tab].kind} API here.`} />
-    : <EmptyState icon={icon} title={tab === "backups" ? "No unscheduled backups in the last 24 hours." : `No ${PARTS[tab].noun[1]} on this cluster.`}
-      hint={tab === "backups" ? "Scheduled runs are judged on their schedule; S2b lists every backup." : undefined} />;
+    : state === "no-match" ? <EmptyState icon={icon} title="No retained backup matches these filters." hint={`${hidden} hidden by the filters.`} action={{ label: "Clear filters", onClick: clearFilters }} />
+    : <EmptyState icon={icon} title={tab === "backups" ? "No unscheduled backups in the last 24 hours." : tab === "restores" ? "No restores on this cluster." : `No ${PARTS[tab].noun[1]} on this cluster.`}
+      hint={tab === "backups" ? "Scheduled runs are judged on their schedule; every retained backup is in the Backups tab." : undefined} />;
 
   const notices: React.ReactNode[] = [];
   if (cur.watchError && list.length > 0) {
     const lg = lastGoodAt(cur.coverage, [PARTS[tab].kind]);
     notices.push(<WatchErrorBanner key="watch" tool="Velero" failure={`read failed - showing the last good state${lg ? ` from ${clock(lg)}` : ""}`} error={cur.watchError} />);
   }
-  const capped = cur.coverage.find((k) => k.kind === "Backup" && k.truncated);
+  const capped = tab !== "restores" ? cur.coverage.find((k) => k.kind === "Backup" && k.truncated) : undefined;
+  const win = typeof bks.facts?.veleroWindow === "string" ? bks.facts.veleroWindow : undefined;
+  const tier0 = bks.facts?.veleroTier0 === true;
+  if (tab === "all") notices.push(<div key="retained" className="t-secondary" data-testid="velero-retained-note">
+    What the cluster retains: each backup leaves when it expires (its TTL), or stays past it while Velero cannot delete it. Klyx judges scheduled runs on their schedule; these rows are facts, not verdicts.
+  </div>);
   if (capped) notices.push(<div key="cap" role="status" className="t-secondary" data-testid="velero-capped" style={{ color: "var(--color-text-warning)" }}>
-    Backups are capped{capped.notRetained ? ` (${capped.notRetained}+ left out)` : ""}: Klyx holds the newest runs and every run in progress, and says where a verdict needs one it does not hold.
+    Backups are capped{capped.notRetained ? ` (${capped.notRetained}+ left out)` : ""}: {tier0
+      ? "more runs are in progress than Klyx holds, so finished runs may be missing"
+      : `Klyx holds the runs that started since ${win ? when(win) : "its window"} and every run in progress`}, and says where a verdict needs one it does not hold.
+  </div>);
+  if (tab === "restores" && rst.data?.state === "read") notices.push(<div key="restores" className="t-secondary" data-testid="velero-restores-note">
+    Read {rst.data.readAt ? `at ${clock(rst.data.readAt)}` : "now"}{rst.data.more ? `, capped at ${rst.data.cap}: ${rst.data.remaining !== undefined ? `+${rst.data.remaining} more` : "more"} not shown` : ""}. Restores are facts: Klyx gives them no verdict and keeps nothing after this view closes.
+    {" "}<button className="l-btn" onClick={rst.reread} disabled={rst.loading}>{rst.loading ? "Reading…" : "Read again"}</button>
   </div>);
 
   const rowFor = (it: Item, cells: Record<string, React.ReactNode>) => (
@@ -203,10 +298,17 @@ export function VeleroView({ cluster }: { cluster: string }) {
     return <span style={{ ...cell, color: ROLE_TEXT[ro.kind] }}>{ro.label}{w ? ` · ${w}` : ""}</span>;
   };
   const muted = (s: React.ReactNode) => <span style={{ color: "var(--color-text-secondary)" }}>{s}</span>;
+  const phaseCell = (phase: string, extra?: string) => {
+    const k = phaseKind(phase);
+    return <span style={{ ...cell, color: ROLE_TEXT[k] }}>{phase || "New"}{extra ? <span style={{ color: "var(--color-text-warning)" }}> · {extra}</span> : null}</span>;
+  };
   const render = (it: Item) => {
     if (tab === "schedules") {
       const s = it as VeleroScheduleDTO & Item;
+      const hz = horizonCell(s.horizon, nowS);
       return rowFor(it, { mark: <VerdictMark health={role(s.rule)} />, name: name(s.namespace, s.name), status: status(s.rule, s.reason),
+        success: <span style={{ ...cell, color: s.horizon.state === "found" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={hz.title} data-testid={`velero-success-${s.name}`}>
+          {hz.text}{hz.partial ? <span style={{ color: "var(--color-text-warning)" }}> · partial</span> : null}</span>,
         cron: muted(s.cronTooLong ? "(too long)" : `${s.cron}${s.zone && s.zone !== "the cron's own zone" && s.zone !== "UTC" ? ` · ${s.zone}` : ""}`),
         next: muted(s.paused ? "paused" : s.dueZero ? "every check" : s.due ? when(s.due) : "-"),
         location: muted(s.location.name ?? (s.location.state === "server default" ? "server default" : "-")) });
@@ -218,7 +320,27 @@ export function VeleroView({ cluster }: { cluster: string }) {
         validated: muted(l.lastValidation ? formatAge(Math.max(0, nowS - unix(l.lastValidation))) : "never"),
         mode: muted(`${l.default ? "default · " : ""}${l.accessMode ?? "ReadWrite"}`) });
     }
-    const b = it as VeleroBackupDTO & Item;
+    if (tab === "all") {
+      const b = it as VeleroBackupDTO & Item;
+      const k = phaseKind(b.phase);
+      return rowFor(it, { mark: <VerdictMark health={{ kind: k, label: b.phase || "New" }} />, name: name(b.namespace, b.name),
+        status: phaseCell(b.phase, b.expired ? "expired, awaiting deletion" : undefined),
+        schedule: <span style={{ ...cell, color: b.attribution ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={attributionText(b)}>
+          {b.attribution ? `${b.schedule} · ${b.attribution === "proven" ? "proven" : b.attribution === "named" ? "by name" : "synced"}` : "none"}</span>,
+        started: muted(b.started ? formatAge(Math.max(0, nowS - unix(b.started))) : "-"), completed: muted(b.completed ? formatAge(Math.max(0, nowS - unix(b.completed))) : "-"),
+        expires: muted(b.expires ? when(b.expires) : "-"), errors: muted(`${b.errors} · ${b.warnings}`),
+        location: muted(b.storageLocation ?? (b.storageLocationInvalid ? "(invalid)" : "-")) });
+    }
+    if (tab === "restores") {
+      const r = it as VeleroRestoreDTO & Item;
+      const src = r.backupName ? r.backupName : r.scheduleName ? `schedule ${r.scheduleName}` : r.backupNameInvalid || r.scheduleNameInvalid ? "(invalid name)" : "-";
+      return rowFor(it, { mark: <VerdictMark health={{ kind: phaseKind(r.phase), label: r.phase || "New" }} />, name: name(r.namespace, r.name),
+        status: phaseCell(r.phase, r.failure ?? (r.validation[0] || undefined)),
+        source: <span style={{ ...cell, color: "var(--color-text-secondary)" }} title={r.source.text}>{src}{r.source.state !== "found" && r.backupName ? <span style={{ color: "var(--color-text-tertiary)" }}> · {r.source.state === "not-found" ? "not found" : r.source.state === "unreadable" ? "unread" : "unconfirmed"}</span> : null}</span>,
+        started: muted(r.started ? formatAge(Math.max(0, nowS - unix(r.started))) : "-"), completed: muted(r.completed ? formatAge(Math.max(0, nowS - unix(r.completed))) : "-"),
+        errors: muted(`${r.errors} · ${r.warnings}`) });
+    }
+    const b = it as VeleroBackupDTO & Ruled;
     return rowFor(it, { mark: <VerdictMark health={role(b.rule)} />, name: name(b.namespace, b.name), status: status(b.rule, b.reason),
       created: muted(b.created ? formatAge(Math.max(0, nowS - unix(b.created))) : "-"), errors: muted(`${b.errors} · ${b.warnings}`),
       location: muted(b.storageLocation ?? (b.storageLocationInvalid ? "(invalid)" : "-")) });
@@ -229,18 +351,21 @@ export function VeleroView({ cluster }: { cluster: string }) {
     return <button className="l-chip" aria-pressed={tab === t} onClick={() => { setTab(t); setSelKey(null); setCursorKey(null); }}>{label}{n ? <span style={{ color: "var(--color-text-danger)" }}> {n}</span> : null}</button>;
   };
 
-  const open = (k: string) => { const t: Tab = k.startsWith("Schedule/") ? "schedules" : "locations"; setTab(t); setCursorKey(k); setSelKey(k); };
-  const subject = pin.subject as (Item & (VeleroScheduleDTO | VeleroLocationDTO | VeleroBackupDTO)) | null;
+  const open = (k: string) => { const t: Tab = TAB_OF_KEY[k.split("/")[0]] ?? "locations"; setTab(t); setCursorKey(k); setSelKey(k); };
+  const subject = pin.subject as (Item & (VeleroScheduleDTO | VeleroLocationDTO | VeleroBackupDTO | VeleroRestoreDTO)) | null;
   const gone = pin.gone === "replaced" ? "removed" : pin.gone;
   const inspector = selTab && subject ? (
     selTab === "schedules" ? <ScheduleInspector cluster={cluster} s={subject as VeleroScheduleDTO} gone={gone} onOpen={open} onClose={() => setSelKey(null)} />
       : selTab === "locations" ? <LocationInspector cluster={cluster} l={subject as VeleroLocationDTO} gone={gone} onOpen={open} onClose={() => setSelKey(null)} />
-      : <BackupInspector cluster={cluster} b={subject as VeleroBackupDTO} gone={gone} onClose={() => setSelKey(null)} />
+      : selTab === "restores" ? <RestoreInspector cluster={cluster} r={subject as VeleroRestoreDTO} gone={gone} onOpen={open} onClose={() => setSelKey(null)} />
+      : <BackupInspector cluster={cluster} b={subject as VeleroBackupDTO} gone={gone} listed={selTab === "all"} onOpen={open} onClose={() => setSelKey(null)} />
   ) : selTab && selKey && pin.expected && pin.gone
     ? <PinnedGone cluster={cluster} kind={PARTS[selTab].kind} name={selKey.split("/").slice(1).join("/")} uid={pin.expected} gone={pin.gone} onAdopt={pin.next ? pin.adopt : undefined} onClose={() => setSelKey(null)} />
     : undefined;
 
-  const total = cur.counts ? cur.counts.total : list.length;
+  // the Backups tab counts the records it shows, never the unscheduled
+  // part's health total
+  const total = tab === "all" || tab === "restores" ? list.length : cur.counts ? cur.counts.total : list.length;
   return (
     <LensLayout
       label="Velero"
@@ -248,8 +373,9 @@ export function VeleroView({ cluster }: { cluster: string }) {
       part="velero"
       summary={absent ? null : (
         <>
-          <CountSentence total={total} marker={ev === "complete" ? "" : "+"} noun={PARTS[tab].noun} />
-          {faults(tab) > 0 ? <MarkedPhrase fault>{`${faults(tab)} ${tab === "schedules" ? "missed or failed" : tab === "locations" ? "unavailable" : "failed"}`}</MarkedPhrase> : <span className="t-secondary">none failing</span>}
+          <CountSentence total={total} marker={ev === "complete" && hidden === 0 ? "" : "+"} noun={PARTS[tab].noun} />
+          {tab === "all" || tab === "restores" ? <span className="t-secondary">{hidden > 0 ? `${hidden} hidden by filters · ` : ""}facts, no verdict</span>
+            : faults(tab) > 0 ? <MarkedPhrase fault>{`${faults(tab)} ${tab === "schedules" ? "missed or failed" : tab === "locations" ? "unavailable" : "failed"}`}</MarkedPhrase> : <span className="t-secondary">none failing</span>}
         </>
       )}
       controls={(
@@ -259,7 +385,19 @@ export function VeleroView({ cluster }: { cluster: string }) {
             {tabChip("schedules", "Schedules")}
             {tabChip("locations", "Storage locations")}
             {tabChip("backups", "Unscheduled backups")}
+            {tabChip("all", "Backups")}
+            {tabChip("restores", "Restores")}
           </div>
+          {tab === "all" && <>
+            <div role="group" aria-label="Phase" className="l-seg">
+              {(["all", "failed", "partial", "progress", "completed"] as PhaseGroup[]).map((g) => <button key={g} className="l-chip" aria-pressed={group === g} onClick={() => setGroup(g)}>{GROUP_LABEL[g]}</button>)}
+            </div>
+            <select className="l-input" aria-label="Schedule" value={schedFilter} onChange={(e) => setSchedFilter(e.target.value)}>
+              <option value="">every schedule</option>
+              {scheduleNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              <option value="-">no current schedule</option>
+            </select>
+          </>}
         </>
       )}
       notice={notices.length > 0 ? <div style={{ display: "grid", gap: 2 }}>{notices}</div> : undefined}
@@ -274,7 +412,7 @@ export function VeleroView({ cluster }: { cluster: string }) {
         </LensTable>
       }
       footer={<span className="t-legend">j k navigate · ↵ inspect</span>}
-      footerEnd={<span className="t-secondary">Broken first · read-only · Velero records no events for these objects</span>}
+      footerEnd={<span className="t-secondary">{tab === "all" || tab === "restores" ? "Newest first" : "Broken first"} · read-only · Velero records no events for these objects</span>}
       inspector={inspector}
       inspectorLabel="Velero object details"
       onCloseInspector={() => setSelKey(null)}
@@ -334,6 +472,8 @@ type Gone = "removed" | "unverified" | null;
 const linkStyle: React.CSSProperties = { display: "block", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)", overflowWrap: "anywhere" };
 
 function goneVerdict(kind: string, gone: Gone) {
+  if (kind === "RetainedBackup") kind = "Backup retained"; // the Backups tab: a read, not the 24-hour list
+  if (kind === "Backup retained") return <div role="status" className="t-body"><span className="t-status">{gone === "removed" ? "Backup removed." : "Not in the current Backup read."}</span> The details below are its last evidence.</div>;
   const word = gone === "removed" ? `${kind} removed.`
     : kind === "Backup" ? "No longer in this list." : `Not in the current ${kind} read.`;
   const why = kind === "Backup" && gone !== "removed" ? " It may have left the last day's unscheduled backups, or Klyx no longer holds it; that is not proof it was deleted." : "";
@@ -371,6 +511,7 @@ function ScheduleInspector({ cluster, s, gone, onOpen, onClose }: { cluster: str
         more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
+        <HorizonBlock s={s} onOpen={onOpen} />
         <InspectorBlock title="Recent runs">
           <VeleroRail s={s} />
           <div className="insp-kv" style={{ marginTop: 6 }}>
@@ -496,19 +637,35 @@ const MEMBERSHIP: Record<string, string> = {
   "proven, order unknown": "a proven run of its schedule whose order is unknown, counted until a later finished run supersedes it",
 };
 
-function BackupInspector({ cluster, b, gone, onClose }: { cluster: string; b: VeleroBackupDTO; gone: Gone; onClose: () => void }) {
-  const ro = role(b.rule);
+function BackupInspector({ cluster, b, gone, listed, onOpen, onClose }: { cluster: string; b: VeleroBackupDTO; gone: Gone; listed: boolean; onOpen: (key: string) => void; onClose: () => void }) {
   const describe = useDescribe(cluster, !gone ? { kind: "Backup", namespace: b.namespace, name: b.name, uid: b.uid } : null);
   const ai = useInspectorAI(b.uid ? { kind: "row" as const, task: "velero", part: "backups", uid: b.uid } : null, `Backup/${b.namespace}/${b.name}`, !gone, cluster);
+  // only a counted row carries Klyx's verdict; a listed one is a fact (S2b §3)
+  const verdict = b.counted && b.rule ? (() => {
+    const ro = role(b.rule);
+    return (
+      <div>
+        <InspectorStatus tone={toneOf(ro.kind)} kind={ro.kind} label={ro.label} reason={why(b.reason, ro.label) || undefined} />
+        <div className="t-secondary" style={{ marginTop: 4 }}>Counted {listed ? "in Unscheduled backups" : "here"} because it is {MEMBERSHIP[b.membership] ?? b.membership}{b.membershipSchedule ? ` (${b.membershipSchedule})` : ""}. It leaves that list 24 hours after it ran.</div>
+      </div>
+    );
+  })() : (
+    <div data-testid="velero-backup-fact">
+      <div className="t-body" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <VerdictMark health={{ kind: phaseKind(b.phase), label: b.phase || "New" }} />
+        <span style={{ color: ROLE_TEXT[phaseKind(b.phase)] }}>{b.phase || "New"}</span>
+        <span className="t-secondary">· Velero's phase</span>
+      </div>
+      <div className="t-secondary" style={{ marginTop: 4 }}>
+        {b.attribution === "proven" || b.attribution === "named" ? <>A {attributionText(b).startsWith("proven") ? "proven run" : "record matched by name"} of <button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("Schedule", b.namespace, b.schedule ?? ""))}>{b.schedule}</button>{b.attributionDisputed ? "; it may have been synced from object storage" : ""}: Klyx judges it on that schedule, never here.</>
+          : `${attributionText(b)[0].toUpperCase()}${attributionText(b).slice(1)}. Klyx lists it as a fact, with no verdict.`}
+      </div>
+    </div>
+  );
   return (
     <div data-testid="velero-backup-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout pin={{ cluster, uid: b.uid || undefined }} kind="Backup" name={b.name} meta={b.namespace} onClose={onClose}
-        verdict={gone ? goneVerdict("Backup", gone) : (
-          <div>
-            <InspectorStatus tone={toneOf(ro.kind)} kind={ro.kind} label={ro.label} reason={why(b.reason, ro.label) || undefined} />
-            <div className="t-secondary" style={{ marginTop: 4 }}>Counted here because it is {MEMBERSHIP[b.membership] ?? b.membership}{b.membershipSchedule ? ` (${b.membershipSchedule})` : ""}. It leaves this list 24 hours after it ran.</div>
-          </div>
-        )}
+        verdict={gone ? goneVerdict(listed ? "RetainedBackup" : "Backup", gone) : verdict}
         more={[...describe.menu, ...ai.menu]}
       >
         {ai.block}
@@ -520,7 +677,7 @@ function BackupInspector({ cluster, b, gone, onClose }: { cluster: string; b: Ve
             <span>created</span><span>{when(b.created)}</span>
             {b.started && <><span>started</span><span>{when(b.started)}</span></>}
             {b.completed && <><span>completed</span><span>{when(b.completed)}</span></>}
-            {b.expires && <><span>expires</span><span>{when(b.expires)}</span></>}
+            {b.expires && <><span>expires</span><span>{when(b.expires)}{b.expired ? <span style={{ color: "var(--color-text-warning)" }}> · expired, awaiting deletion{b.gcFailure ? ` (${b.gcFailure})` : ""}</span> : null}</span></>}
             <span>items</span><span>{b.itemsTotal ? `${b.itemsBackedUp ?? 0} of ${b.itemsTotal}` : "-"} · {b.errors} errors · {b.warnings} warnings</span>
             {b.hooksFailed ? <><span>hooks</span><span>{b.hooksFailed} of {b.hooksAttempted} failed</span></> : null}
             {b.operationsFailed ? <><span>operations</span><span>{b.operationsFailed} failed</span></> : null}
@@ -529,6 +686,114 @@ function BackupInspector({ cluster, b, gone, onClose }: { cluster: string; b: Ve
             {b.disputed && <><span>timing</span><span>it may have been synced from object storage (it started shortly before it existed here)</span></>}
           </div>
           <div className="t-secondary" style={{ marginTop: 4 }}>Error and warning texts are in the backup's log in object storage, which Klyx does not read.</div>
+        </InspectorBlock>
+      </InspectorLayout>
+      {describe.sheet}
+    </div>
+  );
+}
+
+// ---- S2b: the horizon block, the Restores read and inspector --------------
+
+// HorizonBlock is the schedule's latest retained success, beside the verdict
+// and never part of it (S2b §4).
+function HorizonBlock({ s, onOpen }: { s: VeleroScheduleDTO; onOpen: (key: string) => void }) {
+  const h = s.horizon;
+  const goTo = (r?: VeleroRunDTO) => r && <button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("RetainedBackup", s.namespace, r.name))}>{r.name}</button>;
+  return (
+    <InspectorBlock title="Latest retained success">
+      <div className="t-body" data-testid="velero-horizon" style={{ color: h.state === "found" ? undefined : "var(--color-text-secondary)" }}>{h.text}.</div>
+      <div className="insp-kv" style={{ marginTop: 4 }}>
+        {h.success && <><span>backup</span><span>{goTo(h.success)}{h.proven ? "" : " · matched by name"}</span></>}
+        {h.partial && <><span>partial</span><span style={{ color: "var(--color-text-warning)" }}>{h.partialText}: {goTo(h.partial)}{h.partial.errors ? ` · ${h.partial.errors} errors` : ""}</span></>}
+        {h.expired ? <><span>expired</span><span>{h.expired} Completed run{h.expired === 1 ? "" : "s"} past expiry, awaiting deletion: not counted</span></> : null}
+        {h.nextExpiry && <><span>changes</span><span>{when(h.nextExpiry)}, when a retained success expires</span></>}
+      </div>
+      <div className="t-secondary" style={{ marginTop: 4 }}>Completed is Velero's phase, not a restore test: Klyx never calls a backup restorable.</div>
+    </InspectorBlock>
+  );
+}
+
+// useRestores reads the Restores when the tab opens, and again on demand.
+// A reply lands only for this cluster and the newest read; nothing outlives
+// the view (S2b §3).
+function useRestores(cluster: string, open: boolean): { data: VeleroRestoresDTO | null; loading: boolean; reread: () => void } {
+  const [data, setData] = useState<VeleroRestoresDTO | null>(null);
+  const [loading, setLoading] = useState(false);
+  const seq = useRef(0);
+  const read = useCallback(() => {
+    const id = `${cluster}#${++seq.current}`;
+    setLoading(true);
+    void getVeleroRestores(cluster, id).then((r) => {
+      if (r.cluster !== cluster || r.readId !== `${cluster}#${seq.current}`) return; // another cluster's, or an older read's
+      setData(r);
+      setLoading(false);
+    });
+  }, [cluster]);
+  useEffect(() => { setData(null); setLoading(false); seq.current++; }, [cluster]);
+  useEffect(() => { if (open && !data && !loading) read(); }, [open, data, loading, read]);
+  return { data, loading, reread: read };
+}
+
+const SOURCE_TONE: Record<string, string> = { found: "var(--color-text-secondary)", "not-found": "var(--color-text-warning)" };
+
+function RestoreInspector({ cluster, r, gone, onOpen, onClose }: { cluster: string; r: VeleroRestoreDTO; gone: Gone; onOpen: (key: string) => void; onClose: () => void }) {
+  const describe = useDescribe(cluster, !gone ? { kind: "Restore", namespace: r.namespace, name: r.name, uid: r.uid } : null);
+  const k = phaseKind(r.phase);
+  const src = r.source;
+  const ns = (names: string[], count: number) => `${names.join(", ")}${count > names.length ? ` +${count - names.length}` : ""}`;
+  return (
+    <div data-testid="velero-restore-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <InspectorLayout pin={{ cluster, uid: r.uid || undefined }} kind="Restore" name={r.name} meta={r.namespace} onClose={onClose}
+        verdict={gone ? goneVerdict("Restore", gone) : (
+          <div>
+            <div className="t-body" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <VerdictMark health={{ kind: k, label: r.phase || "New" }} />
+              <span style={{ color: ROLE_TEXT[k] }}>{r.phase || "New"}</span>
+              <span className="t-secondary">· Velero's phase</span>
+            </div>
+            {(r.failure || r.validation.length > 0) && <div className="t-secondary" style={{ marginTop: 4 }}>{r.failure ?? r.validation.join("; ")}{r.validationCount > r.validation.length ? ` +${r.validationCount - r.validation.length}` : ""}</div>}
+            <div className="t-secondary" style={{ marginTop: 4 }}>A restore is a fact in Klyx: no verdict, no count, no notification.</div>
+          </div>
+        )}
+        more={[...describe.menu]}
+      >
+        <InspectorBlock title="Source">
+          <div className="insp-kv" data-testid="velero-restore-source">
+            {r.scheduleName && <><span>schedule</span><span>{r.scheduleName} (Velero picks its newest Completed backup by start)</span></>}
+            {(r.scheduleNameInvalid) && <><span>schedule</span><span>(invalid name)</span></>}
+            <span>backup</span><span>{src.state === "found" && src.backup
+              ? <><button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("RetainedBackup", r.namespace, src.backup!.name))}>{src.backup.name}</button> · {src.backup.phase}{src.attribution ? ` · ${src.attribution === "proven" ? `proven run of ${src.schedule}` : src.attribution === "named" ? `matched by name to ${src.schedule}` : src.attribution === "synced" ? "looks synced" : ""}` : ""}</>
+              : <span style={{ color: SOURCE_TONE[src.state] ?? "var(--color-text-tertiary)" }}>{r.backupName ? `${r.backupName}: ` : ""}{src.text}{src.class ? ` (${src.class})` : ""}</span>}</span>
+            {src.state === "found" && src.text !== "retained" && <><span>retained</span><span>{src.text}{src.asOf ? ` (${when(src.asOf)})` : ""}</span></>}
+            {src.state === "not-in-last-read" && src.asOf && <><span>as of</span><span>{when(src.asOf)}</span></>}
+          </div>
+        </InspectorBlock>
+        <InspectorBlock title="What it restores">
+          <div className="insp-kv">
+            <span>namespaces</span><span style={{ overflowWrap: "anywhere" }}>{r.includedCount ? ns(r.includedNamespaces, r.includedCount) : "all in the backup"}{r.excludedCount ? ` · excluding ${ns(r.excludedNamespaces, r.excludedCount)}` : ""}</span>
+            {r.mappingCount > 0 && <><span>mapping</span><span style={{ overflowWrap: "anywhere" }}>{r.mapping.map((m) => `${m.from} → ${m.to}`).join(", ")}{r.mappingCount > r.mapping.length ? ` +${r.mappingCount - r.mapping.length}` : ""}</span></>}
+            {(r.resourcesIncluded || r.resourcesExcluded) ? <><span>resources</span><span>{r.resourcesIncluded ? `${r.resourcesIncluded} included` : ""}{r.resourcesIncluded && r.resourcesExcluded ? " · " : ""}{r.resourcesExcluded ? `${r.resourcesExcluded} excluded` : ""}</span></> : null}
+            {(r.labelSelector || r.orLabelSelectors) ? <><span>selectors</span><span>{r.labelSelector ? "a label selector" : `${r.orLabelSelectors} or-selectors`} (values not shown)</span></> : null}
+            {r.restorePVs !== undefined && <><span>volumes</span><span>{r.restorePVs ? "restored" : "not restored"}</span></>}
+            {r.existingResourcePolicy && <><span>existing</span><span>{r.existingResourcePolicy}</span></>}
+            {r.itemOperationTimeout && <><span>timeout</span><span>{r.itemOperationTimeout}</span></>}
+            {r.resourceModifier && <><span>modifier</span><span>ConfigMap {r.resourceModifier} (named only, never read)</span></>}
+            {r.resourcePolicy && <><span>policy</span><span>ConfigMap {r.resourcePolicy} (named only, never read)</span></>}
+            {r.hooks > 0 && <><span>hooks</span><span>{r.hooks} hook{r.hooks === 1 ? "" : "s"} (commands withheld)</span></>}
+          </div>
+          {r.cut && <div className="t-secondary" style={{ marginTop: 4 }}>Long lists are cut to fit; their counts are whole.</div>}
+        </InspectorBlock>
+        <InspectorBlock title="Progress">
+          <div className="insp-kv">
+            <span>created</span><span>{when(r.created)}</span>
+            {r.started && <><span>started</span><span>{when(r.started)}</span></>}
+            {r.completed && <><span>completed</span><span>{when(r.completed)}</span></>}
+            <span>items</span><span>{r.itemsTotal ? `${r.itemsRestored ?? 0} of ${r.itemsTotal}` : "-"} · {r.errors} errors · {r.warnings} warnings</span>
+            {r.operationsAttempted ? <><span>operations</span><span>{r.operationsCompleted ?? 0} of {r.operationsAttempted} completed{r.operationsFailed ? ` · ${r.operationsFailed} failed` : ""}</span></> : null}
+            {r.hooksAttempted ? <><span>hooks</span><span>{r.hooksFailed ?? 0} of {r.hooksAttempted} failed</span></> : null}
+          </div>
+          <div className="t-secondary" style={{ marginTop: 4 }}>Error and warning texts are in the restore's log in object storage, which Klyx does not read.</div>
         </InspectorBlock>
       </InspectorLayout>
       {describe.sheet}

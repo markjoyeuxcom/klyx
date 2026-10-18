@@ -133,7 +133,7 @@ func readVeleroBackups(ctx context.Context, conn VeleroConn) veleroBackups {
 	}
 	out := veleroBackups{state: "unreadable", byName: map[string]healthsrc.VeleroBackupRow{}}
 	for _, k := range rows.Part.Kinds {
-		if k.Kind != velero.KindBackup {
+		if k.Kind != healthsrc.KindVeleroBackups { // the Observer names a kind by its resource
 			continue
 		}
 		switch {
