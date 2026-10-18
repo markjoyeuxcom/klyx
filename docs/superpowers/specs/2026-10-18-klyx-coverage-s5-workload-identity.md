@@ -395,3 +395,19 @@ Fixed in 1145032. Each finding has a regression, and every regression was mutati
 - **golangci-lint:** 0 issues.
 - **The frontend:** 2202 passed, tsc clean, eslint 0 errors.
 - **Parity:** not re-run. The fixes touch no Observer part.
+
+## 16. Implementation review 2: Codex's re-review of 1f5b395
+
+The raw-audience leak was confirmed fixed and the twelve earlier probes pass. Three P2s were fixed in c639b87, each with a mutation-checked regression; Codex's three new probes pass.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `splitDrive` turned relative paths absolute, introduced by the drive fix | A token file that is relative ("tokens/token") or drive-relative ("C:tokens\token") resolves against a working directory Klyx does not read. The chain is unresolved and nothing is compared. A relative mount path never matches. "/x", "\x" (the current drive, C: in a container), "C:\x" and "C:/x" are absolute. |
+| 2 | A confirmed-absent store kind discarded its live companion | `VisitKind` reports an absent kind with Coverage Absent and complete false, because it visits nothing. That is a complete, empty source (`readLive`, shared with `visitLive`). A live SecretStore read beside an absent ClusterSecretStore API is kept, and both absent is known empty. Stale, checking and unreadable stay incomplete. |
+| 3 | An oversized audience was hidden but still compared | Per §6, a value past MaxValue is never compared. An oversized token audience makes its chain unresolved. An oversized declared role, audience, client or tenant reads "Unresolved: the ServiceAccount's ... annotation is oversized; nothing is compared". `Value` records its oversize, unexported. |
+
+**The gates at c639b87:**
+- **The four-way native smoke:** 170/170 in all four modes, clean, with the labs re-applied within the hour.
+- **`go test -race ./...`:** ok.
+- **golangci-lint:** 0 issues.
+- **The frontend:** unchanged this round.
