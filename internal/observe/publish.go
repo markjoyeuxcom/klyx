@@ -345,6 +345,34 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				}
 			}
 		}
+		if ks := o.kinds[name]; ks != nil && len(ks.spec.Consumers) > 0 {
+			kc.Consumers = demandVector(ks.demand)
+			// the part's own consumer decides what of the shared kind is its
+			// evidence (C3): objects, completeness, coverage and the ledger's
+			// source identity alike
+			switch d, probed := ks.consumerView(p.spec.Consumer); {
+			case d == DemandYes:
+			case d == DemandNo:
+				delete(c.Objects, name)
+				delete(c.Windows, name)
+				c.Complete[name] = true
+				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Absent, Consumers: kc.Consumers}
+				if cp.truncated != nil {
+					delete(cp.truncated, name)
+				}
+			default:
+				delete(c.Objects, name)
+				delete(c.Windows, name)
+				c.Complete[name] = false
+				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Checking, Consumers: kc.Consumers}
+				if probed {
+					kc.Coverage, kc.Class, kc.Error = Unreadable, ClassDemand, "whether "+p.spec.Consumer+" needs this kind is not known: "+ks.probeErr
+				}
+				if cp.truncated != nil {
+					delete(cp.truncated, name)
+				}
+			}
+		}
 		kinds = append(kinds, kc)
 		if cp.ids != nil {
 			cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
@@ -361,6 +389,19 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 		absent = absent && k.Coverage == Absent
 	}
 	return c, kinds, absent, cp
+}
+
+// demandVector is a kind's demand, sorted by consumer.
+func demandVector(m map[string]Demand) []ConsumerDemand {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]ConsumerDemand, 0, len(m))
+	for n, d := range m {
+		out = append(out, ConsumerDemand{Name: n, Demand: d})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {

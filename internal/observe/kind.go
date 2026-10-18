@@ -2,9 +2,12 @@ package observe
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"math/rand"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +29,12 @@ type KindSpec struct {
 	// nil means always served (core kinds). Discovery is per kind: one
 	// domain can mix versions or miss an optional kind (spec §3.3).
 	Probe func(ctx context.Context) (Probe, error)
+	// Consumers, in place of Probe, gate a kind several readers share by
+	// each one's own demand (roadmap C3): served at Version when any
+	// consumer's demand is proven, absent only when every consumer proves
+	// none, and a discovery gap otherwise.
+	Consumers []Consumer
+	Version   string
 	// NewListWatch builds the source for one reflector instance at the
 	// version Probe chose ("" without a probe).
 	NewListWatch func(version string) cache.ListerWatcherWithContext
@@ -158,6 +167,9 @@ type kindState struct {
 	// watchers are WatchKind listeners; stateSeq is the kind's watermark.
 	watchers []*kindWatcher
 	stateSeq uint64
+	// demand is each consumer's last probed demand (C3); nil before a
+	// probe or without consumers.
+	demand map[string]Demand
 }
 
 type probeGen struct {
@@ -169,7 +181,7 @@ type probeGen struct {
 // activateKind starts discovery (or, without a probe, the generation) for a
 // kind gaining its first reader. Caller holds o.mu.
 func (o *Observer) activateKind(ks *kindState) {
-	if ks.spec.Probe == nil {
+	if ks.spec.Probe == nil && len(ks.spec.Consumers) == 0 {
 		ks.probed, ks.served = true, true
 		o.startKind(ks, "")
 		return
@@ -190,6 +202,7 @@ func (o *Observer) deactivateKind(ks *kindState) {
 	}
 	o.stopKind(ks)
 	ks.probed, ks.served, ks.version, ks.probeErr, ks.probedAt = false, false, "", "", time.Time{}
+	ks.demand = nil
 	o.markKindLocked(ks)
 }
 
@@ -200,12 +213,25 @@ func (o *Observer) deactivateKind(ks *kindState) {
 func (o *Observer) probeLoop(ks *kindState, pg *probeGen) {
 	backoff := o.cfg.BackoffMin
 	for {
-		res, err := ks.spec.Probe(pg.ctx)
+		var res Probe
+		var err error
+		var vector map[string]Demand
+		if len(ks.spec.Consumers) > 0 {
+			vector, res, err = consumersProbe(pg.ctx, ks.spec)
+		} else {
+			res, err = ks.spec.Probe(pg.ctx)
+		}
 		wait := o.cfg.ReprobeEvery
 		o.mu.Lock()
 		if ks.probe != pg || pg.ctx.Err() != nil {
 			o.mu.Unlock()
 			return
+		}
+		if vector != nil && !maps.Equal(vector, ks.demand) {
+			// a consumer's own demand changed: its parts re-read their view,
+			// even while the aggregate gate and the generation stand (C3)
+			ks.demand = vector
+			o.markKindLocked(ks)
 		}
 		if err != nil {
 			// A failed probe confirms nothing: the last known served state
@@ -252,6 +278,47 @@ func (o *Observer) applyProbeLocked(ks *kindState, res Probe) {
 		o.stopKind(ks) // a version change starts a new generation
 		o.startKind(ks, res.Version)
 	}
+}
+
+// consumersProbe asks every consumer for its demand (C3). The kind is
+// served when any is proven, absent only when every consumer proves none,
+// and otherwise a discovery gap: no consumer's yes, and one cannot tell.
+func consumersProbe(ctx context.Context, spec KindSpec) (map[string]Demand, Probe, error) {
+	vector := make(map[string]Demand, len(spec.Consumers))
+	var yes bool
+	var unknown []string
+	for _, c := range spec.Consumers {
+		ok, err := c.Demand(ctx)
+		switch {
+		case err != nil:
+			vector[c.Name] = DemandUnknown
+			unknown = append(unknown, c.Name+": "+err.Error())
+		case ok:
+			vector[c.Name], yes = DemandYes, true
+		default:
+			vector[c.Name] = DemandNo
+		}
+	}
+	switch {
+	case yes:
+		return vector, Probe{Served: true, Version: spec.Version}, nil
+	case len(unknown) > 0:
+		return vector, Probe{}, fmt.Errorf("demand unknown (%s)", strings.Join(unknown, "; "))
+	}
+	return vector, Probe{Served: false}, nil
+}
+
+// consumerView is a part's own view of a shared kind (C3): the coverage its
+// consumer's demand allows, and whether the kind's objects are its own.
+func (ks *kindState) consumerView(consumer string) (Demand, bool) {
+	if consumer == "" || len(ks.spec.Consumers) == 0 {
+		return DemandYes, false
+	}
+	d, ok := ks.demand[consumer]
+	if !ok {
+		return DemandUnknown, false // not yet probed: the kind reads checking
+	}
+	return d, true
 }
 
 // reprobeKindLocked asks a kind's discovery to run now (a NotFound list may

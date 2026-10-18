@@ -29,6 +29,34 @@ type Probe struct {
 	Version string
 }
 
+// Consumer is one reader's own demand for a shared kind (roadmap C3): the
+// kind is acquired when any consumer's demand is proven, and absent only
+// when every consumer proves it has none. Demand returns true for proven
+// demand, false for proven absence, and an error when it cannot tell.
+type Consumer struct {
+	Name   string
+	Demand func(ctx context.Context) (bool, error)
+}
+
+// Demand is one consumer's demand for a shared kind, as last probed.
+type Demand string
+
+const (
+	DemandYes     Demand = "yes"
+	DemandNo      Demand = "no"
+	DemandUnknown Demand = "unknown"
+)
+
+// ConsumerDemand is one consumer's demand, published on a kind's coverage.
+type ConsumerDemand struct {
+	Name   string `json:"name"`
+	Demand Demand `json:"demand"`
+}
+
+// ClassDemand: a part's own consumer cannot tell whether it needs the kind
+// (C3): the kind is unread for that part, whatever another consumer holds.
+const ClassDemand = "demand"
+
 // DomainSpec is one task: its parts and, through them, the kinds and
 // snapshots it reads. Discovery is per kind (KindSpec.Probe); a part is
 // absent when every counted source is absent, a task when every part is.
@@ -53,6 +81,12 @@ type PartSpec struct {
 	// the Observer keeps a role ledger and transition stream for the part
 	// (The Line slice 2b). Evidence-only parts leave it off.
 	Ledger bool
+	// Consumer names the part's own consumer of the shared kinds it reads
+	// (KindSpec.Consumers, C3). The part sees such a kind only through its
+	// consumer's demand: yes is the kind as it is, no reads absent, unknown
+	// reads unread - in its objects, completeness, coverage and ledger
+	// alike. "" reads the kind as it is.
+	Consumer string
 }
 
 // Capture is one part's atomic view: every listed source's objects (sorted
@@ -224,6 +258,9 @@ func New(cfg Config) *Observer {
 		if _, dup := o.kinds[k.Name]; dup {
 			panic("observe: duplicate kind " + k.Name)
 		}
+		if len(k.Consumers) > 0 && k.Probe != nil {
+			panic("observe: kind " + k.Name + " has both a Probe and Consumers")
+		}
 		o.kinds[k.Name] = &kindState{spec: k}
 	}
 	for _, s := range cfg.Snapshots {
@@ -250,6 +287,9 @@ func New(cfg Config) *Observer {
 				switch {
 				case o.kinds[name] != nil:
 					o.kinds[name].parts = append(o.kinds[name].parts, ps.key)
+					if p.Consumer != "" && len(o.kinds[name].spec.Consumers) > 0 && !hasConsumer(o.kinds[name].spec.Consumers, p.Consumer) {
+						panic(fmt.Sprintf("observe: part %s/%s names consumer %q, which kind %q does not have", d.ID, p.ID, p.Consumer, name))
+					}
 				case o.snaps[name] != nil:
 					o.snaps[name].parts = append(o.snaps[name].parts, ps.key)
 				default:
@@ -261,6 +301,15 @@ func New(cfg Config) *Observer {
 		o.byTask[d.ID] = ds
 	}
 	return o
+}
+
+func hasConsumer(cs []Consumer, name string) bool {
+	for _, c := range cs {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Incarnation identifies this Observer (spec §3.4).
