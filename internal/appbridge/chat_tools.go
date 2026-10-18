@@ -1018,6 +1018,14 @@ var chatParts = map[string][2]string{
 	"velero.io/schedules":              {healthsrc.TaskVelero, "schedules"},
 	"velero.io/backupstoragelocations": {healthsrc.TaskVelero, "locations"},
 	"velero.io/backups":                {healthsrc.TaskVelero, "backups"},
+	// coverage S3a: a binding's row in the policies part is a fact, never a
+	// verdict (the FactRow gate)
+	"admissionregistration.k8s.io/validatingwebhookconfigurations":   {healthsrc.TaskAdmission, "webhooks"},
+	"admissionregistration.k8s.io/mutatingwebhookconfigurations":     {healthsrc.TaskAdmission, "webhooks"},
+	"admissionregistration.k8s.io/validatingadmissionpolicies":       {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/mutatingadmissionpolicies":         {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/validatingadmissionpolicybindings": {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/mutatingadmissionpolicybindings":   {healthsrc.TaskAdmission, "policies"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer

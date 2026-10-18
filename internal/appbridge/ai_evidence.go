@@ -123,6 +123,23 @@ var aiEvidenceFields = map[string]allow{
 		"counted": nil, "schedule": nil, "attribution": nil, "attributionDisputed": nil, "attributionCoverage": nil, "expired": nil, "gcFailure": nil},
 }
 
+// Coverage S3a §8: names, kinds, roles, failure policies, backend states and
+// counts; never a URL, a rule list, an expression or a warning's text.
+var admissionBindingAllow = allow{"name": nil, "policyName": nil, "policyState": nil, "actions": nil,
+	"paramRef": allow{"name": nil, "namespace": nil, "selector": nil, "notFoundAction": nil}}
+
+func init() {
+	aiEvidenceFields[healthsrc.TaskAdmission+"/webhooks"] = allow{"kind": nil, "webhookCount": nil, "cut": nil, "unavailable": nil, "unverified": nil, "reason": nil,
+		"webhooks": allow{"name": nil, "failurePolicy": nil, "failClosed": nil, "sideEffects": nil, "timeoutSeconds": nil, "serviceNamespace": nil,
+			"serviceName": nil, "servicePort": nil, "url": nil, "caBundle": nil, "ruleCount": nil, "namespaceSelector": nil, "objectSelector": nil,
+			"matchConditions": nil, "role": nil, "reason": nil,
+			"backend": allow{"state": nil, "label": nil, "reason": nil, "endpointRouting": nil, "clusterRouting": nil, "terminating": nil, "selectorless": nil}}}
+	aiEvidenceFields[healthsrc.TaskAdmission+"/policies"] = allow{"entity": nil, "kind": nil, "failurePolicy": nil, "failClosed": nil,
+		"paramKind": allow{"apiVersion": nil, "kind": nil, "state": nil, "namespaced": nil}, "matchRuleCount": nil, "validations": nil, "mutations": nil,
+		"variables": nil, "matchConditions": nil, "auditAnnotations": nil, "behind": nil, "warningCount": nil, "warningFields": nil,
+		"bindings": admissionBindingAllow, "binding": admissionBindingAllow, "reason": nil}
+}
+
 var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,
 	"timing": nil, "errors": nil, "warnings": nil, "class": nil}
 

@@ -36,7 +36,7 @@ func svcHook(name, service string, fail bool) map[string]any {
 	}
 	return map[string]any{"name": name, "failurePolicy": fp, "sideEffects": "None", "admissionReviewVersions": []any{"v1"},
 		"clientConfig": map[string]any{"service": map[string]any{"namespace": "sys", "name": service, "port": int64(443)}},
-		"rules": []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{"lab.klyx.dev"}, "apiVersions": []any{"v1"}, "resources": []any{"widgets"}}}}
+		"rules":        []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{"lab.klyx.dev"}, "apiVersions": []any{"v1"}, "resources": []any{"widgets"}}}}
 }
 
 func hookSvc(name string) *corev1.Service {

@@ -137,6 +137,9 @@ func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural
 func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
 	return VeleroRestores{}, nil
 }
+func (f *fakeConn) CheckAdmissionParams(context.Context, string, string, schema.GroupVersionResource, bool) (AdmissionParams, error) {
+	return AdmissionParams{}, nil
+}
 
 func (f *fakeConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
 	return observe.Rows{}, false

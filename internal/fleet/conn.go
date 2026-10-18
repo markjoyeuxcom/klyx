@@ -58,6 +58,8 @@ type Conn interface {
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	// ListVeleroRestores reads the Restores on demand (coverage S2b §3).
 	ListVeleroRestores(ctx context.Context) (VeleroRestores, error)
+	// CheckAdmissionParams reads a policy's params on demand (coverage S3a §6).
+	CheckAdmissionParams(ctx context.Context, policyKind, policyName string, paramGVR schema.GroupVersionResource, namespaced bool) (AdmissionParams, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

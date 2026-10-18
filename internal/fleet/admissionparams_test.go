@@ -43,7 +43,7 @@ func TestResolveParamKinds(t *testing.T) {
 	at := time.Date(2026, 10, 18, 3, 0, 0, 0, time.UTC)
 	got := resolveParamKindsWith(context.Background(), refs, newCachedDiscovery(disc, clock.RealClock{}), func() time.Time { return at })
 	want := map[string]string{
-		admission.KeyOf("example.com", "v1beta1", "Limits"): admission.ParamServed,   // a non-preferred served version
+		admission.KeyOf("example.com", "v1beta1", "Limits"): admission.ParamServed,    // a non-preferred served version
 		admission.KeyOf("example.com", "v1", "Limits"):      admission.ParamNotServed, // the version is served, the kind is not
 		admission.KeyOf("metrics.k8s.io", "v1", "Usage"):    admission.ParamUnknown,   // an unavailable aggregated group
 		admission.KeyOf("gone.example.com", "v1", "X"):      admission.ParamNotServed, // NotFound

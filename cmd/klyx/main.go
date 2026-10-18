@@ -189,6 +189,14 @@ func main() {
 		return c, true
 	})
 
+	admissionSvc := appbridge.NewAdmissionService(func(name string) (appbridge.AdmissionConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	certManagerSvc := appbridge.NewCertManagerService(
 		func(name string) (appbridge.CertManagerConn, bool) {
 			c, ok := reg.Conn(name)
@@ -557,6 +565,7 @@ func main() {
 		application.NewService(gitopsSvc),
 		application.NewService(certManagerSvc),
 		application.NewService(veleroSvc),
+		application.NewService(admissionSvc),
 		application.NewService(crdSvc),
 		application.NewService(gatewaySvc),
 		application.NewService(meshSvc),

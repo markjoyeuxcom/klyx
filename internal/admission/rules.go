@@ -282,6 +282,7 @@ const (
 type ParamKindState struct {
 	State      string    `json:"state"`
 	Namespaced bool      `json:"namespaced,omitempty"`
+	Resource   string    `json:"resource,omitempty"` // its plural, when served
 	At         time.Time `json:"at"`
 	Error      string    `json:"error,omitempty"`
 }

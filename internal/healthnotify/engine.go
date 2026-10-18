@@ -792,4 +792,6 @@ var kinds = map[string]string{
 	"imagerepositories": "ImageRepository", "imagepolicies": "ImagePolicy", "imageupdateautomations": "ImageUpdateAutomation",
 	"artifactgenerators": "ArtifactGenerator", "externalartifacts": "ExternalArtifact", "receivers": "Receiver",
 	"schedules": "Schedule", "backupstoragelocations": "BackupStorageLocation", "backups": "Backup",
+	"validatingwebhookconfigurations": "ValidatingWebhookConfiguration", "mutatingwebhookconfigurations": "MutatingWebhookConfiguration",
+	"validatingadmissionpolicies": "ValidatingAdmissionPolicy", "mutatingadmissionpolicies": "MutatingAdmissionPolicy",
 }

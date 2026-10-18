@@ -115,7 +115,7 @@ func resolveParamKindsWith(ctx context.Context, refs map[string][3]string, disc 
 				st := admission.ParamKindState{State: admission.ParamNotServed, At: at}
 				for _, r := range rl.APIResources {
 					if r.Kind == kind && !containsSlash(r.Name) {
-						st = admission.ParamKindState{State: admission.ParamServed, Namespaced: r.Namespaced, At: at}
+						st = admission.ParamKindState{State: admission.ParamServed, Namespaced: r.Namespaced, Resource: r.Name, At: at}
 						break
 					}
 				}
