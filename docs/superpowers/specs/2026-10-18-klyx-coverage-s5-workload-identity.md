@@ -371,3 +371,27 @@ The lab-s5 captures found this on kind.
 
   None scrolls sideways, none has a page error, and no identity block shows the lab's needle. The first probe found the two fixes in b4d5c96.
 - **The load test:** not run. S5 adds no watch, no model and no evaluator, and its reads happen only when an inspector opens.
+
+## 15. Implementation review 1: Codex's review of 58da867
+
+Fixed in 1145032. Each finding has a regression, and every regression was mutation-checked. Codex's twelve probes pass; one probe call was adapted to `storesFor`'s new three-value signature.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 (P1) | A projected token's audience crossed the reply raw | `Mechanism.Audience` is a `Value`: its exact bytes compare, and only a token-shaped form serialises. The test covers complete, wrong-audience and oversized chains through the pod, ServiceAccount and handler reports. |
+| 2 | Only the ServiceAccount reply was bounded | The bound is measured over every final DTO with its counts. The Store reply drops handler pods from the end (`podsDropped`), keeping each group's ServiceAccount. The Pod reply drops container evidence and keeps the readings (`containersDropped`). A reply still over the bound says so in place of its report. |
+| 3 | A stale store became a current subject; the inverse join ignored unresolved handlers | A store read that is not live and complete yields no store, so `StoreIdentity` reads "unreadable". The ServiceAccount's stores read "unread", with why. When a no-auth store's handler is not resolved, the inverse join reads "partial" and names the store. |
+| 4 | gce:// proves Google Compute, not GKE | GKE now needs its node-pool label (`cloud.google.com/gke-nodepool`) or a gke-metadata-server pod on a gce:// node. Google Compute without either, or a node without a provider ID, is "not verified", with why. Not GKE needs every node to have a provider ID and none to be gce://. The metadata server's manager is the platform only on its pod (C2), and unknown otherwise. This corrects §13's deviation. |
+| 5 | `gcpServiceAccountEmail` applied only with `serviceAccountRef` | The email is the requested principal after every federation base, as ESO applies it; the unknown base stays said. |
+| 6 | Three chain readings overstated their evidence | A Windows path keeps its drive, and a path with no drive is on C:. A token entry past the bound in a partly read volume is unresolved; a volume that is not projected stays definite. Both AWS mechanisms are read by each one's own state: "configured" only when complete, and "neither complete" otherwise. |
+| 7 | The wrong controller could be named | The last `--controller-class` wins, and "--" ends the flags, as pflag parses them. Only a Running pod's process handles stores: a Succeeded or Failed pod names nothing. A Pending or Unknown pod is said as "not running yet" and never counted; with no running pod, the handler is unresolved. |
+| 8 | Unread or dropped data read as proven absence | A pod report says whether it was compared. An uncompared pod says so and shows its spec's mechanisms. Omission notices stand whatever the list's length, and "no pods run" needs a complete read with nothing dropped. The stores' unread and partial states are said. |
+| 9 (P3) | Declared settings were not shown | The STS regional endpoint, AWS token expiration and Azure expiration are shown with their validation, and "no identity annotations" counts them. |
+
+**The gates at 1145032:**
+- **The four-way native smoke:** 170/170 in all four modes, clean, with the labs re-applied within the hour.
+- **The live captures:** 60 shots (cap-s5r1), clean. On kind the GKE link now reads "does nothing here", and the irsa ServiceAccount names the one unjoined store (aws-other-class, whose class no running controller accepts).
+- **`go test -race ./...`:** ok.
+- **golangci-lint:** 0 issues.
+- **The frontend:** 2202 passed, tsc clean, eslint 0 errors.
+- **Parity:** not re-run. The fixes touch no Observer part.
