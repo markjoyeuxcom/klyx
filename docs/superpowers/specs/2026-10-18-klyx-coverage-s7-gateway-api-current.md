@@ -504,3 +504,14 @@ The same fixture was run on the code before S7a (b982518, where the ListenerSets
 | every kind live after the API recovered | 8.48s, 8.51s | 8.59s, 8.49s |
 
 S7a adds 0.2 MB of steady heap at this scale, and no change to full evaluation beyond the run-to-run spread. Full evaluation misses its 50 ms budget before and after alike: the open owner question, unchanged by S7a. The full-budget case is §15.4's.
+
+### 15.8 Gates
+
+At 60161d9, clean:
+- `go test -race ./...`: pass.
+- golangci-lint v2.14.0: 0 issues.
+- vitest: 2,222 passed. tsc: clean. eslint: 0 errors (3 earlier warnings, in `LogsPane`).
+- Parity: Go stage PASS, run 00e39b7890c5e18f with case 5d; frontend stage pass.
+- Native smoke: 176/176 in each of night and day at 1440 and 1024, the labs re-applied first.
+- Mutations: 12 caught of 12. They covered the exact namespace count, not-established read as not-found, older listener conditions judged, the order explaining a conflict, discovery's order in place of the candidates', Same allowing every namespace, labels from an incomplete read, a truncated index kind read live, newest-first precedence, a projection dropping listener status, a reveal overridden by auto-selection, and the listener column counting unaccepted ListenerSets.
+- Captures: 32 clean (§15.6).
