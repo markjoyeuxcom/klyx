@@ -93,7 +93,7 @@ func (s Snapshot) EndpointRevision(cluster, kind string) string {
 	}
 	spec, _ := json.Marshal(e.Spec)
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%o\x00", cluster, kind, spec, s.Mode)
+	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%o\x00", cluster, kind, spec, s.Mode) // a hash never fails to write
 	if kind == EndpointMetrics && cl.Metrics != nil && cl.Metrics.Token != "" {
 		t := sha256.Sum256([]byte(cl.Metrics.Token))
 		h.Write(t[:])
