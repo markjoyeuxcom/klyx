@@ -353,3 +353,21 @@ The lab-s5 captures found this on kind.
 - **Stores:** AWS jwt with `role` and `additionalRoles`, AWS without auth (the controller), another class, static keys, legacy Azure with and without a store tenant, and GCP workload identity. No ESO controller runs, so each store is given a Ready status, and the fixtures add nothing to Needs you.
 - **The needle** `S5LABneedle` sits in a non-identity env variable, in Pod Identity's URI user info, in Azure's authority-host query and in a static-key Secret.
 - **Not in the lab:** the lab's ESO CRDs are v1beta1 (controller-gen 0.16.5) without `useAzureSDK` or `gcpServiceAccountEmail`. The new Azure SDK and the GSA email override are covered by `internal/identity`'s tests only. So are Auto Mode, Fargate and GKE nodes, as §8 said.
+
+## 14. Gates
+
+- **The four-way native smoke:** 170/170 in night-1440, night-1024, day-1440 and day-1024. The run was at b4d5c96, dirty with exactly 530be96's changes (the steps and these notes), clean. The labs (lab-s1b, lab-s1c, lab-s2b, lab-s3a) were re-applied within the hour, and lab-s5 was in place. The first run missed one step in the two 1440 modes, in the smoke's own step: with the inspector split, a pod selected earlier still showed its Identity block until the select intent landed, and the step read that block. Each identity step now waits for its subject's own block (530be96).
+- **The parity gate:** passes, both stages, at 530be96 (run 1629e95381ce16bb; dirty only with this section, uncommitted while the gate ran). S5 adds no Observer part, so the gate is unchanged, as §8 said.
+- **`go test -race ./...`:** ok.
+- **golangci-lint v2.14.0:** 0 issues.
+- **The frontend:**
+  - the suite: 2197 passed;
+  - tsc: clean;
+  - eslint: 0 errors. The 3 warnings are pre-existing, in InstanceDetail and LogsPane.
+- **The live captures** (scratchpad cap-s5, server mode at 530be96): 15 shots in each of the four themes and widths, 60 in all:
+  - five ServiceAccounts (IRSA, Azure, Pod Identity, GKE, the stand-in controller's);
+  - three pods (the stale role, Pod Identity with its label, Azure);
+  - the seven stores.
+
+  None scrolls sideways, none has a page error, and no identity block shows the lab's needle. The first probe found the two fixes in b4d5c96.
+- **The load test:** not run. S5 adds no watch, no model and no evaluator, and its reads happen only when an inspector opens.
