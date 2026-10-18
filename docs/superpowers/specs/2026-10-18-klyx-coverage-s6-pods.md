@@ -412,3 +412,14 @@ That is already enough for §2-§4, so the projection does not change. A raw/pro
 - The four-way native smoke: 173/173 in all four modes, clean, with the labs re-applied within the hour.
 
 The review judged the disclosed deviations acceptable, provided the notes keep the distinction between real observations (a completed resize, debug containers) and synthetic evidence (Infeasible, Deferred and Error in tests). Omitting scheduled figures from the Observer rows, and showing debug containers' evidence rather than inferring their profile, were accepted.
+
+## 15. ACCEPT
+
+Codex accepted the S6 implementation at 57290f3 (fix 7916196; handoff c9619974, 2026-10-18), with no outstanding findings.
+
+It verified:
+- `go test -race` on workloads, healthsrc and appbridge;
+- the PodsView, PodS6 and PodRows frontend files;
+- its original mounted continuity probe, which now passes without any source change.
+
+It did not re-run the native smoke, parity or lint itself. The owner's verdict is still to come.
