@@ -91,7 +91,7 @@ func Core(d CoreDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 			}, func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
 				return typed.CoreV1().Nodes().Watch(ctx, o)
 			})},
-		metaKind(d.Meta, KindNamespaces, schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, "cluster-scoped", ProjectNameMeta),
+		namespacesKind(d.Meta),
 	}
 	domains := []observe.DomainSpec{
 		{ID: TaskWorkloads, Parts: []observe.PartSpec{{
@@ -123,6 +123,22 @@ func lw(client any, list func(context.Context, metav1.ListOptions) (runtime.Obje
 		return cache.ToListWatcherWithWatchListSemantics(
 			&cache.ListWatch{ListWithContextFunc: list, WatchFuncWithContext: watchFn}, client).(cache.ListerWatcherWithContext)
 	}
+}
+
+// The namespaces budget (coverage S7 §8): labels are kept for the Gateway
+// API's namespace selectors, within 256 KiB encoded per cluster, a namespace
+// at most 4 KiB. Past it the kind reads truncated and a selector over it is
+// not established; the Summary's namespace count stays exact (the Observer
+// counts what it left out).
+const (
+	budgetNamespaces    = 256 << 10
+	maxNamespaceProject = 4 << 10
+)
+
+func namespacesKind(m metadata.Interface) observe.KindSpec {
+	ks := metaKind(m, KindNamespaces, schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, "cluster-scoped", ProjectNamespaceMeta)
+	ks.Budget, ks.MaxObject, ks.Size = budgetNamespaces, maxNamespaceProject, namespaceSize
+	return ks
 }
 
 func metaKind(m metadata.Interface, name string, gvr schema.GroupVersionResource, scope string, project func(any) (any, error)) observe.KindSpec {

@@ -64,6 +64,7 @@ func gatewayListKinds() map[schema.GroupVersionResource]string {
 		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}: "GatewayClassList",
 		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}:       "GatewayList",
 		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}:     "HTTPRouteList",
+		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "listenersets"}:   "ListenerSetList",
 	}
 }
 
@@ -84,7 +85,7 @@ func startGatewayWith(t *testing.T, served, admission bool, dynObjs []runtime.Ob
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gatewayListKinds())
 	for _, o := range dynObjs {
 		u := o.(*unstructured.Unstructured)
-		res := map[string]string{"Gateway": "gateways", "HTTPRoute": "httproutes", "GatewayClass": "gatewayclasses"}[u.GetKind()]
+		res := map[string]string{"Gateway": "gateways", "HTTPRoute": "httproutes", "GatewayClass": "gatewayclasses", "ListenerSet": "listenersets"}[u.GetKind()]
 		gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: res}
 		if _, err := dyn.Resource(gvr).Namespace(u.GetNamespace()).Create(context.Background(), u, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
@@ -103,7 +104,8 @@ func startGatewayWith(t *testing.T, served, admission bool, dynObjs []runtime.Ob
 	}
 	nd := NativeDeps{Cluster: "c1", Dyn: dyn, Served: probe, Typed: typed, Meta: metafake.NewSimpleMetadataClient(scheme)}
 	kinds, domains := Gateway(nd)
-	kinds = append(SharedNetworkKinds(nd), kinds...)
+	// the namespaces kind is the core kinds' (the ListenerSets part reads it)
+	kinds = append(append(SharedNetworkKinds(nd), namespacesKind(nd.Meta)), kinds...)
 	s := &sink{}
 	o := observe.New(observe.Config{Cluster: "c1", Sink: s, Kinds: kinds, Domains: domains, Throttle: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +242,7 @@ func TestRouteReasonReachesTop(t *testing.T) {
 	bad := parents[1].(map[string]any)["conditions"].([]any)[0].(map[string]any)
 	bad["reason"], bad["message"] = "NotAllowedByListeners", "denied token=secret-value"
 	c := observe.Capture{Rows: true, Objects: map[string][]any{
-		KindHTTPRoutes: {r}, KindGateways: {gw("a", "True"), gw("b", "True")},
+		KindHTTPRoutes: {r}, KindGateways: {projected(t, KindGateways, gw("a", "True")), projected(t, KindGateways, gw("b", "True"))},
 		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
 	}}
 	res := evalRoutes("test")(c)
@@ -261,7 +263,7 @@ func TestRouteReasonReachesTop(t *testing.T) {
 func TestRouteRowsCarryRuleFingerprints(t *testing.T) {
 	r := httpRoute("web", []string{"a", "b"}, "web", nil)
 	c := observe.Capture{Rows: true, Objects: map[string][]any{
-		KindHTTPRoutes: {r}, KindGateways: {gw("a", "True"), gw("b", "True")},
+		KindHTTPRoutes: {r}, KindGateways: {projected(t, KindGateways, gw("a", "True")), projected(t, KindGateways, gw("b", "True"))},
 		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
 	}}
 	rows := evalRoutes("test")(c).Rows.(RowSet[observe.Attached]).Rows
@@ -269,4 +271,14 @@ func TestRouteRowsCarryRuleFingerprints(t *testing.T) {
 	if len(rows) != 1 || len(want) == 0 || !reflect.DeepEqual(rows[0].Data.Rules, want) {
 		t.Fatalf("rules %v, want %v", rows, want)
 	}
+}
+
+// projected is a Gateway API object as its kind's model holds it.
+func projected(t *testing.T, resource string, u *unstructured.Unstructured) any {
+	t.Helper()
+	p, err := gwapi.Project(resource)(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

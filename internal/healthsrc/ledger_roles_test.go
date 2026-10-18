@@ -126,7 +126,7 @@ func TestLedgerRoutesEmitOnlyAttachedRoutes(t *testing.T) {
 	orphan := httpRoute("orphan", []string{"gone"}, "web", nil)
 	orphan.SetUID("uid-orphan")
 	c := observe.Capture{Now: time.Now(), RoleCap: 10, Objects: map[string][]any{
-		KindHTTPRoutes: {attached, orphan}, KindGateways: {gw("a", "True")},
+		KindHTTPRoutes: {attached, orphan}, KindGateways: {projected(t, KindGateways, gw("a", "True"))},
 		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
 	}}
 	res := evalRoutes("c1")(c)

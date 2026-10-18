@@ -1,10 +1,12 @@
 package healthsrc
 
 import (
+	"context"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/observe"
@@ -15,26 +17,45 @@ import (
 // task. Service existence and EndpointSlices are the routes part's evidence:
 // the shared network kinds (shared.go, C3), read through the gateway
 // consumer, so they are this part's only where the Gateway API is served.
+//
+// Coverage S7a: every Gateway API kind is read at the first of its own
+// candidate versions that is served (gwapi.Versions), GatewayClasses,
+// Gateways and ListenerSets are typed projections within a budget, and
+// ListenerSets are their own part.
 const (
 	KindGatewayClasses   = "gatewayclasses"
 	KindGateways         = "gateways"
 	KindHTTPRoutes       = "httproutes"
+	KindListenerSets     = "listenersets"
 	TaskGateway          = "gateway"
-	gatewayGroup         = "gateway.networking.k8s.io"
+	gatewayGroup         = gwapi.Group
 	coreKindProbeVersion = "v1" // core kinds: a fixed generation identity
+)
+
+// The S7 budgets (§8), in JSON-encoded projection bytes. The design's
+// Gateway and ListenerSet figures assumed listeners without their status;
+// measured at about 1.15 KiB a listener (TestProjectionSizing), they hold
+// about 85 ten-listener Gateways and 200 two-listener ListenerSets.
+const (
+	budgetGatewayClasses = 64 << 10
+	budgetGateways       = 1 << 20
+	budgetListenerSets   = 512 << 10
 )
 
 // Gateway returns the Gateway API kinds and the Gateways task.
 func Gateway(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	kinds := []observe.KindSpec{
-		crdKind(d, KindGatewayClasses, gatewayGroup, "gatewayclasses", "v1", "cluster-scoped"),
-		crdKind(d, KindGateways, gatewayGroup, "gateways", "v1", "all namespaces"),
-		crdKind(d, KindHTTPRoutes, gatewayGroup, "httproutes", "v1", "all namespaces"),
+		gwKind(d, KindGatewayClasses, "cluster-scoped", budgetGatewayClasses),
+		gwKind(d, KindGateways, "all namespaces", budgetGateways),
+		gwKind(d, KindListenerSets, "all namespaces", budgetListenerSets),
+		gwKind(d, KindHTTPRoutes, "all namespaces", 0),
 	}
 	c := d.Cluster
 	domains := []observe.DomainSpec{{ID: TaskGateway, Parts: []observe.PartSpec{
 		{ID: "gateways", Entity: "Gateways", Scope: "all namespaces", Classifier: "native",
 			Counted: []string{KindGateways}, Deps: []string{KindGatewayClasses}, Evaluate: evalGateways(c), Ledger: true},
+		{ID: "listenersets", Entity: "ListenerSets", Scope: "all namespaces", Classifier: "native",
+			Counted: []string{KindListenerSets}, Deps: []string{KindGateways, KindGatewayClasses, KindNamespaces}, Evaluate: evalListenerSets(c), Ledger: true},
 		{ID: "routes", Entity: "HTTPRoutes with a failing attachment", Scope: "routes attached to a Gateway", Classifier: "native",
 			Counted: []string{KindHTTPRoutes}, Deps: []string{KindGateways, KindServices, KindEndpointSlices}, Evaluate: evalRoutes(c), Ledger: true,
 			Consumer: ConsumerGateway},
@@ -42,15 +63,114 @@ func Gateway(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 	return kinds, domains
 }
 
+// gwKind is one Gateway API kind: read at the first of its candidates that
+// discovery serves (S7 §2); with a budget, a typed projection measured
+// against it.
+func gwKind(d NativeDeps, resource, scope string, budget int) observe.KindSpec {
+	ks := crdKind(d, resource, gatewayGroup, resource, gwapi.Versions(resource)[0], scope)
+	ks.Probe = func(ctx context.Context) (observe.Probe, error) {
+		return d.servedAmong(ctx, gatewayGroup, resource, gwapi.Versions(resource))
+	}
+	if budget > 0 {
+		ks.Project, ks.Budget, ks.MaxObject, ks.Size = gwapi.Project(resource), budget, gwapi.MaxObject(resource), gwapi.SizeOf
+	}
+	return ks
+}
+
+// gwObjects are a kind's typed projections.
+func gwObjects(objs []any) []*gwapi.Object {
+	out := make([]*gwapi.Object, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, o.(*gwapi.Object))
+	}
+	return out
+}
+
+// gwRef is a typed projection's ref.
+func gwRef(o *gwapi.Object, resource string) refInput {
+	return refInput{gvr: o.APIVersion + "/" + resource, ns: o.Namespace, name: o.Name, uid: string(o.UID), generation: o.Generation, source: resource}
+}
+
 func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		var items []nativeItem
 		var rows []Row[gwapi.GatewayRef]
-		for _, u := range unstructuredOf(c.Objects[KindGateways]) {
-			g := gwapi.ParseGatewayRef(u)
-			it := nativeItem{gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation), refOf(u, KindGateways)}
+		for _, o := range gwObjects(c.Objects[KindGateways]) {
+			g := *o.Gateway
+			it := nativeItem{gwapi.GatewayVerdict(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Listeners), gwRef(o, KindGateways)}
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, g))
+		}
+		r := nativeResult(c.RoleCap, cluster, TaskGateway, "need attention", items)
+		if c.Rows {
+			r.Rows = rowSet(rows)
+		}
+		return r
+	}
+}
+
+// ListenerSetRow is one ListenerSet with what its inspector shows beside its
+// verdict (S7 §4): how its parent was established, Klyx's own reading of
+// the parent's allowedListeners, and its place in the parent's merge.
+type ListenerSetRow struct {
+	Set         gwapi.ListenerSet
+	ParentState gwapi.ParentState
+	Allowance   gwapi.Allowance
+	// Precedence is the set's place among the ListenerSets naming the same
+	// parent in this read (1 = first after the Gateway's own listeners),
+	// Siblings how many the read holds, and PrecedenceComplete whether the
+	// read holds every ListenerSet (a truncated read can miss one that
+	// ranks earlier).
+	Precedence, Siblings int
+	PrecedenceComplete   bool
+}
+
+// evalListenerSets judges each ListenerSet (S7 §4) against its parent in
+// the gateways model - absent proves "not found" only from a complete read -
+// and evaluates the parent's allowedListeners against the namespace's
+// labels, established only from a complete namespaces read.
+func evalListenerSets(cluster string) func(observe.Capture) observe.PartResult {
+	return func(c observe.Capture) observe.PartResult {
+		gws := gwObjects(c.Objects[KindGateways])
+		gateways := make([]gwapi.GatewayRef, len(gws))
+		for i, o := range gws {
+			gateways[i] = *o.Gateway
+		}
+		nsLabels := map[string]map[string]string{}
+		for _, o := range c.Objects[KindNamespaces] {
+			m := o.(*metav1.PartialObjectMetadata)
+			nsLabels[m.Name] = m.Labels
+		}
+		objs := gwObjects(c.Objects[KindListenerSets])
+		sets := make([]gwapi.ListenerSet, len(objs))
+		for i, o := range objs {
+			sets[i] = *o.ListenerSet
+		}
+		// each parent's ListenerSets in merge precedence
+		byParent := map[string][]gwapi.ListenerSet{}
+		for _, ls := range sets {
+			k := ls.Parent.Group + "/" + ls.Parent.Kind + "/" + ls.Parent.Key()
+			byParent[k] = append(byParent[k], ls)
+		}
+		place := map[string][2]int{} // UID -> precedence, siblings
+		for _, group := range byParent {
+			gwapi.SortByPrecedence(group)
+			for i, ls := range group {
+				place[ls.UID] = [2]int{i + 1, len(group)}
+			}
+		}
+		var items []nativeItem
+		var rows []Row[ListenerSetRow]
+		for i, o := range objs {
+			ls := sets[i]
+			lk := gwapi.LookupParent(ls, gateways, c.Complete[KindGateways])
+			labels, present := nsLabels[ls.Namespace]
+			ns := gwapi.NamespaceLabels{Known: present && c.Complete[KindNamespaces], Labels: labels}
+			it := nativeItem{gwapi.ListenerSetRule(ls, lk), gwRef(o, KindListenerSets)}
+			items = append(items, it)
+			pl := place[ls.UID]
+			rows = append(rows, nativeRow(it, ListenerSetRow{Set: ls, ParentState: lk.State, Allowance: gwapi.ListenerSetAllowance(ls, lk, ns),
+				Precedence: pl[0], Siblings: pl[1], PrecedenceComplete: c.Complete[KindListenerSets]}))
 		}
 		r := nativeResult(c.RoleCap, cluster, TaskGateway, "need attention", items)
 		if c.Rows {
@@ -66,10 +186,10 @@ func evalGateways(cluster string) func(observe.Capture) observe.PartResult {
 // once by UID with its worst attachment (observe.ReduceAttachments).
 func evalRoutes(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
-		gateways := unstructuredOf(c.Objects[KindGateways])
+		gateways := gwObjects(c.Objects[KindGateways])
 		parents := make([]gwapi.GatewayRef, len(gateways))
-		for i, u := range gateways {
-			parents[i] = gwapi.ParseGatewayRef(u)
+		for i, o := range gateways {
+			parents[i] = *o.Gateway
 		}
 		svcObjs, servicesRead := c.Objects[KindGatewayServices]
 		services := map[string]bool{}

@@ -251,3 +251,22 @@ func TestBudgetAdmitAllocatesByAdmitted(t *testing.T) {
 	}
 	runtime.KeepAlive(out)
 }
+
+// Coverage S7 §8: the namespaces kind keeps labels within a budget, and the
+// Summary's namespace count stays exact past it - the objects the budget
+// left out are counted.
+func TestNamespaceCountIsExactPastTheBudget(t *testing.T) {
+	src := newSource()
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		src.put(n, nil)
+	}
+	h := start(t, Config{Kinds: []KindSpec{budgetKind("cms", src, 300)}, NamespacesKind: "cms",
+		Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.eventually(func() bool {
+		s, ok := h.sink.last()
+		p, _ := h.sink.part("things", "cms")
+		return ok && s.Namespaces != nil && *s.Namespaces == 5 && kindOf(p).Truncated && kindOf(p).NotRetained == 2
+	}, "five namespaces counted with two left out")
+	src.remove("e")
+	h.eventually(func() bool { s, ok := h.sink.last(); return ok && s.Namespaces != nil && *s.Namespaces == 4 }, "a left-out namespace's deletion is counted")
+}

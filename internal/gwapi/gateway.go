@@ -3,7 +3,9 @@ package gwapi
 import (
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // condTrue reports whether status.conditions has an entry of the given type with
@@ -70,6 +72,7 @@ func ParseGateway(u *unstructured.Unstructured) GatewayNode {
 	g.Generation = u.GetGeneration()
 	g.Listeners = parseListeners(u.Object)
 	g.Addresses = parseAddresses(u.Object)
+	g.AllowedListeners, g.AttachedListenerSets = parseListenerAllowance(u.Object)
 	return g
 }
 
@@ -77,6 +80,7 @@ func parseListeners(obj map[string]interface{}) []Listener {
 	ls, _, _ := unstructured.NestedSlice(obj, "spec", "listeners")
 	out := make([]Listener, 0, len(ls))
 	gwNS, _, _ := unstructured.NestedString(obj, "metadata", "namespace")
+	status := parseListenerStatus(obj)
 	for _, l := range ls {
 		m, ok := l.(map[string]interface{})
 		if !ok {
@@ -90,9 +94,112 @@ func parseListeners(obj map[string]interface{}) []Listener {
 			lis.Port = int32(p)
 		}
 		lis.CertificateRefs = parseCertificateRefs(m, gwNS)
+		lis.TLSMode, _, _ = unstructured.NestedString(m, "tls", "mode")
+		if ar, ok := m["allowedRoutes"].(map[string]interface{}); ok {
+			lis.AllowedRoutes = &AllowedRoutes{Namespaces: parseAllowance(ar), Kinds: parseRouteKinds(ar["kinds"])}
+		}
+		lis.Status = status[lis.Name]
 		out = append(out, lis)
 	}
 	return out
+}
+
+// parseListenerStatus reads status.listeners by name (S7 §3). A name
+// reported twice keeps its first entry, as a list map keyed by name has one.
+func parseListenerStatus(obj map[string]interface{}) map[string]*ListenerStatus {
+	ls, _, _ := unstructured.NestedSlice(obj, "status", "listeners")
+	out := make(map[string]*ListenerStatus, len(ls))
+	for _, l := range ls {
+		m, ok := l.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if _, seen := out[name]; seen || name == "" {
+			continue
+		}
+		st := &ListenerStatus{SupportedKinds: parseRouteKinds(m["supportedKinds"])}
+		if n, ok, _ := unstructured.NestedNumberAsFloat64(m, "attachedRoutes"); ok {
+			st.AttachedRoutes = int32(n)
+		}
+		conds, _ := m["conditions"].([]interface{})
+		st.Conditions = typedConds(conds)
+		out[name] = st
+	}
+	return out
+}
+
+// typedConds reads every condition in the order reported.
+func typedConds(conds []interface{}) []TypedCond {
+	var out []TypedCond
+	for _, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t, _ := m["type"].(string)
+		if t == "" {
+			continue
+		}
+		out = append(out, TypedCond{Type: t, Cond: condOf(conds, t)})
+	}
+	return out
+}
+
+func parseRouteKinds(v interface{}) []RouteKind {
+	ks, _ := v.([]interface{})
+	var out []RouteKind
+	for _, k := range ks {
+		m, ok := k.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rk := RouteKind{}
+		rk.Group, _ = m["group"].(string)
+		rk.Kind, _ = m["kind"].(string)
+		if rk.Kind != "" {
+			out = append(out, rk)
+		}
+	}
+	return out
+}
+
+// parseAllowance reads a namespaces allowance from the map holding it (an
+// allowedRoutes or allowedListeners object).
+func parseAllowance(holder map[string]interface{}) NamespaceAllowance {
+	ns, ok := holder["namespaces"].(map[string]interface{})
+	if !ok {
+		return NamespaceAllowance{}
+	}
+	a := NamespaceAllowance{Set: true}
+	a.From, _ = ns["from"].(string)
+	if raw, ok := ns["selector"].(map[string]interface{}); ok {
+		var sel metav1.LabelSelector
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &sel); err != nil {
+			a.SelectorInvalid = true
+		} else {
+			a.Selector = &sel
+		}
+	}
+	return a
+}
+
+// parseListenerAllowance reads a Gateway's allowedListeners and its
+// attachedListenerSets count (S7 §4).
+func parseListenerAllowance(obj map[string]interface{}) (NamespaceAllowance, *int32) {
+	var a NamespaceAllowance
+	if al, ok, _ := unstructured.NestedMap(obj, "spec", "allowedListeners"); ok {
+		a = parseAllowance(al)
+		if !a.Set {
+			a.Set = true // allowedListeners written, its namespaces defaulted
+		}
+	}
+	var attached *int32
+	if n, ok, _ := unstructured.NestedNumberAsFloat64(obj, "status", "attachedListenerSets"); ok {
+		v := int32(n)
+		attached = &v
+	}
+	return a, attached
 }
 
 func parseCertificateRefs(listener map[string]interface{}, gwNS string) []CertificateRef {
@@ -144,6 +251,7 @@ func parseAddresses(obj map[string]interface{}) []GatewayAddress {
 func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 	cls, _, _ := unstructured.NestedString(u.Object, "spec", "gatewayClassName")
 	stale, gen, observed := gatewayStaleness(u)
+	allowed, attached := parseListenerAllowance(u.Object)
 	return GatewayRef{
 		Namespace: u.GetNamespace(), Name: u.GetName(), ClassName: cls,
 		Accepted: condTrue(u.Object, "Accepted"), Programmed: condTrue(u.Object, "Programmed"),
@@ -151,6 +259,7 @@ func ParseGatewayRef(u *unstructured.Unstructured) GatewayRef {
 		Listeners: parseListeners(u.Object),
 		Stale:     stale, Generation: gen, ObservedGeneration: observed,
 		AcceptedCond: condOf(statusConds(u.Object), "Accepted"), ProgrammedCond: condOf(statusConds(u.Object), "Programmed"),
+		AllowedListeners: allowed, AttachedListenerSets: attached,
 	}
 }
 

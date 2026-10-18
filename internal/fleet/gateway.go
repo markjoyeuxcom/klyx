@@ -150,21 +150,44 @@ func attachOneCiliumPolicy(u *unstructured.Unstructured, kind string, cluster bo
 	}
 }
 
-func (c *ClusterConn) gwGVR(resource string) schema.GroupVersionResource {
-	v := preferredVersion(c.discovery(), gwGroup, "v1")
-	return schema.GroupVersionResource{Group: gwGroup, Version: v, Resource: resource}
+// gwGVR resolves a Gateway API resource's version from its own candidates
+// (coverage S7 §2, gwapi.Versions), never the group's preferred version. An
+// error says the resource is not served, or is served only at a version
+// Klyx does not read: either way nothing is read.
+func (c *ClusterConn) gwGVR(resource string) (schema.GroupVersionResource, error) {
+	v, served, err := servedResourceAmong(c.discovery(), gwGroup, resource, gwapi.Versions(resource))
+	switch {
+	case err != nil:
+		return schema.GroupVersionResource{}, err
+	case !served:
+		return schema.GroupVersionResource{}, fmt.Errorf("%s/%s is not served", gwGroup, resource)
+	}
+	return schema.GroupVersionResource{Group: gwGroup, Version: v, Resource: resource}, nil
+}
+
+// listGW lists a Gateway API resource at its resolved version.
+func (c *ClusterConn) listGW(ctx context.Context, resource string) (*unstructured.UnstructuredList, error) {
+	gvr, err := c.gwGVR(resource)
+	if err != nil {
+		return nil, err
+	}
+	return c.dyn.Resource(gvr).List(ctx, metav1.ListOptions{})
 }
 
 // GetGatewayTopology builds the per-Gateway data path. A core failure (the Gateway
 // cannot be read) returns an error; soft issues accumulate in Topology.Warnings.
 func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
-	gwu, err := c.dyn.Resource(c.gwGVR("gateways")).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	gwGVR, err := c.gwGVR("gateways")
+	if err != nil {
+		return gwapi.Topology{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
+	}
+	gwu, err := c.dyn.Resource(gwGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return gwapi.Topology{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
 	}
 	topo := gwapi.Topology{Gateway: gwapi.ParseGateway(gwu)}
 
-	hrList, err := c.dyn.Resource(c.gwGVR("httproutes")).List(ctx, metav1.ListOptions{})
+	hrList, err := c.listGW(ctx, "httproutes")
 	if err != nil {
 		// Coverage, not a warning alone: with no route list nothing can be
 		// claimed about which routes attach (none, or one that left).

@@ -4,7 +4,11 @@
 // unstructured. Policy attachment is M5-b (the Policies fields stay empty here).
 package gwapi
 
-import "time"
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 // Topology is the per-Gateway data path.
 type Topology struct {
@@ -37,6 +41,10 @@ type GatewayNode struct {
 	Addresses                  []GatewayAddress
 	Accepted, Programmed       bool
 	Policies                   []PolicyRef // M5-b; empty in M5-a
+	// AllowedListeners is spec.allowedListeners.namespaces as written (S7
+	// §4); AttachedListenerSets the controller's count, nil when unreported.
+	AllowedListeners     NamespaceAllowance
+	AttachedListenerSets *int32
 
 	AcceptedCond, ProgrammedCond Cond
 	Generation                   int64
@@ -81,7 +89,69 @@ type Listener struct {
 	Name, Protocol, Hostname string
 	Port                     int32
 	CertificateRefs          []CertificateRef
+	// TLSMode is spec tls.mode as written: "" when unset (the API defaults
+	// it to Terminate).
+	TLSMode string
+	// AllowedRoutes is the listener's allowedRoutes as written (S7 §3):
+	// nil when unset, where the API's default is routes from the same
+	// namespace, of the protocol's kinds.
+	AllowedRoutes *AllowedRoutes
+	// Status is the controller's status.listeners entry of this name (S7
+	// §3): nil when none was reported.
+	Status *ListenerStatus
 }
+
+// AllowedRoutes is a listener's allowedRoutes: which namespaces and kinds
+// of routes may attach.
+type AllowedRoutes struct {
+	Namespaces NamespaceAllowance
+	Kinds      []RouteKind // as written: empty means the protocol's kinds
+}
+
+// NamespaceAllowance is a namespaces field as written - a listener's
+// allowedRoutes.namespaces or a Gateway's allowedListeners.namespaces.
+// Set: the field was written at all. From is as written ("" when unset);
+// the field's own default applies (Same for routes, None for ListenerSets).
+// SelectorInvalid: a selector was written that Klyx could not read.
+type NamespaceAllowance struct {
+	Set             bool
+	From            string
+	Selector        *metav1.LabelSelector
+	SelectorInvalid bool
+}
+
+// RouteKind is one route group and kind; Group as written ("" is the
+// Gateway API group by the API's default).
+type RouteKind struct{ Group, Kind string }
+
+// ListenerStatus is one listener's status as its controller reported it:
+// the route kinds it supports, how many routes attached, and every
+// condition in the order reported.
+type ListenerStatus struct {
+	SupportedKinds []RouteKind
+	AttachedRoutes int32
+	Conditions     []TypedCond
+}
+
+// TypedCond is one condition with its type.
+type TypedCond struct {
+	Type string
+	Cond
+}
+
+// Of returns the condition of a type ("" status when absent).
+func (s *ListenerStatus) Of(condType string) Cond {
+	if s == nil {
+		return Cond{}
+	}
+	for _, c := range s.Conditions {
+		if c.Type == condType {
+			return c.Cond
+		}
+	}
+	return Cond{}
+}
+
 type GatewayAddress struct{ Type, Value string }
 type CertificateRef struct {
 	Group, Kind, Namespace, Name string
@@ -174,6 +244,9 @@ type GatewayRef struct {
 	Accepted, Programmed       bool
 	Addresses                  []GatewayAddress
 	Listeners                  []Listener
+	// AllowedListeners and AttachedListenerSets as GatewayNode's (S7 §4).
+	AllowedListeners     NamespaceAllowance
+	AttachedListenerSets *int32
 	// Stale reports that the spec changed and the controller has not observed
 	// it yet (the Programmed condition's observedGeneration lags
 	// metadata.generation). While stale, Accepted/Programmed reflect the

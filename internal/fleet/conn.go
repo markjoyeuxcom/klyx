@@ -799,7 +799,7 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	}
 	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta})
 	if c.dyn != nil {
-		nd := healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed, Typed: c.typed, Meta: c.meta}
+		nd := healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed, ServedAmong: c.crdServedAmong, Typed: c.typed, Meta: c.meta}
 		gk, gd := healthsrc.GitOps(nd)
 		wk, wd := healthsrc.Gateway(nd)
 		nk, ndoms := healthsrc.Native(nd)

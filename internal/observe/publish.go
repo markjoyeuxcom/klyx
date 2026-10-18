@@ -418,8 +418,10 @@ func demandVector(m map[string]Demand) []ConsumerDemand {
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {
 	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: now, Connection: o.conn}
 	if ks := o.kinds[o.cfg.NamespacesKind]; ks != nil && ks.gen != nil && ks.gen.fresh.cov == Live {
-		n := len(ks.gen.model)
-		s.Namespaces = &n // unknown (nil) unless complete and current
+		// the count stays exact past a budget: the objects left out are
+		// counted (coverage S7 §8)
+		n := len(ks.gen.model) + ks.gen.notRetained
+		s.Namespaces = &n // unknown (nil) unless current
 	}
 	for _, d := range o.domains {
 		t := Task{ID: d.spec.ID}
