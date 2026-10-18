@@ -256,7 +256,8 @@ export function VeleroView({ cluster }: { cluster: string }) {
   const icon = <IconDatabaseExport size={28} stroke={1.2} />;
   const clearFilters = () => { setGroup("all"); setSchedFilter(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={4} label={`reading ${PARTS[tab].noun[1]}`} />
-    : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${PARTS[tab].noun[1]}.`} hint={cur.watchError ?? undefined} />
+    : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${PARTS[tab].noun[1]}.`} hint={cur.watchError ?? undefined}
+      action={tab === "restores" ? { label: "Read again", onClick: rst.reread } : undefined} />
     : absent ? <EmptyState icon={icon} title="Velero is not installed on this cluster." hint={`Klyx observes no ${PARTS[tab].kind} API here.`} />
     : state === "no-match" ? <EmptyState icon={icon} title="No retained backup matches these filters." hint={`${hidden} hidden by the filters.`} action={{ label: "Clear filters", onClick: clearFilters }} />
     : <EmptyState icon={icon} title={tab === "backups" ? "No unscheduled backups in the last 24 hours." : tab === "restores" ? "No restores on this cluster." : `No ${PARTS[tab].noun[1]} on this cluster.`}

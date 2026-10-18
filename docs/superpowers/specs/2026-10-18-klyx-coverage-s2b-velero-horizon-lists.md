@@ -266,3 +266,51 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
 | # | Finding | Where answered |
 |---|---|---|
 | 1 | A tier-0 window does not prove that no finished Backup is retained: the pending floor survives a delayed refill while a retained Backup finishes | §4: tier 0 certifies no terminal coverage; the selection is made from the retained candidates and qualified; "no finished runs are retained" only when the retained set holds none. S2a's code was already conservative (`covers` and `guardComplete` certify nothing in tier 0); only `Window`'s doc comment overclaimed, and is corrected. §6 |
+
+## 10. As built (2a76827, 1d3a485)
+
+**`internal/velero` (pure):**
+- **Restore classes** (`messages.go`): the seventeen `validationErrors` forms of `restore_controller.go` 307-435 (v1.18.4), anchored, nothing re-emitted. v1.17 wrote the hook and init-container errors bare, so they stay withheld whole; v1.17 has no resource-policy form.
+- **The Restore projection** (`restore.go`): the §3 caps (mapping 50, included and excluded namespaces 20 each, every string under the URL rule), then cut from the tails (mapping, then excluded, then included) until it measures within 4 KiB. Counts stay whole and `Cut` says a list was cut. The resource modifier and policy are named only when their kind is ConfigMap.
+- **The horizon** (`horizon.go`), carried in `ScheduleVerdict.Horizon`:
+  - `certainlyAfter` is §4's order rule, and `newest` picks by it;
+  - a PartiallyFailed run must also be unexpired to be the newer partial run;
+  - with no success, the newest partial run is the fact ("a run partially failed");
+  - `Incomplete` is `!covers(creation - 1m)`, so tier 0 and an unknown window certify nothing;
+  - `Horizon.Text` and `PartialText` are the wording every surface carries.
+- **The clock:** `ScheduleRule` wraps the S2a classifier (now `scheduleRule`), adds the horizon, and merges `NextExpiry` into `Eval.Next`: the Observer re-evaluates the part then, and the roles are the classifier's alone.
+- **List attributions** (`Attributions`): by `Attribute`'s precedence. "synced" is only an unowned Backup carrying a current schedule's name that looks synced, as S2a's rail counts them.
+
+**healthsrc and appbridge:**
+- **The backups part's rows** carry every retained Backup:
+  - a counted row is S2a's member, with its evaluation;
+  - a row not counted has a zero `Eval`, which never reaches a DTO;
+  - `healthsrc.FactRow` marks the row; the Backups window travels as row facts (`veleroWindow`, `veleroTier0`).
+- **The one gate** is `anchorVerdict`: a fact row returns `errFactRow`. AI Explain then explains the object with no verdict and a qualification, and the chat verdict map leaves it out. A zero `health.Kind` reads as fault, which is why the gate is central and the converter emits no rule for a fact row.
+- **`VeleroService`:**
+  - `GetVeleroRestores(cluster, readID)`: a cluster-wide list, limit 500. NotFound reads not served, Forbidden reads forbidden. `remaining` is set only from `remainingItemCount`.
+  - **The source join** reads the `backups` part's own coverage. Its states are found, not-found, not-retained, not-in-last-read, unreadable, none and invalid.
+  - `GetBackupHorizon(cluster)`: one capture of the schedules part, as of its evaluation.
+
+**Frontend:**
+- **The Velero lens:**
+  - Schedules gain "Last success" (`horizonCell`). An age a newer, not retained success could make younger reads "≤", and a name match says "by name". The cron column now drops first at narrow widths.
+  - The inspector's horizon block.
+  - A Backups tab (facts, phase-group and schedule filters, its own counts, the retained and window notices).
+  - A Restores tab (read on open, fenced by cluster and read id, Read again, the cap).
+  - The fact and Restore inspectors.
+- **The fleet Backups view** (`FleetBackups`, fleet route `backups`, lens index, palette), over `useFleetBatch`.
+
+**Found by the live captures and fixed in 1d3a485:**
+- **Kind names:** the source join and the fleet notes looked for the kinds by kind name, while the Observer names a kind by its resource (`backups`, `schedules`). Every source read "the Backups could not be read". The unit test had faked the wrong name.
+- **Smaller fixes:**
+  - the fleet "Run due" showed a bare clock for another day;
+  - the Restore inspector repeated "retained".
+
+**Lab:** `lab-s2b/apply.sh` (scratchpad), over lab-s2a on kind-klyx:
+- a schedule with a proven older success (an owner reference) and a newer PartiallyFailed N;
+- a schedule whose only success looks synced;
+- an expired success left by a GC-blocked location;
+- three Restores (completed and joined, failed with the needle, failed validation with the needle).
+
+**Gates:** filled in below as they complete.

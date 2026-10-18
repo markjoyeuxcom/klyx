@@ -218,20 +218,34 @@ describe("VeleroView (coverage S2a)", () => {
   });
 
   it("a Restores reply for an older read or another cluster is dropped", async () => {
+    // an older read's reply (another read id) never lands
     let release: (() => void) | null = null;
-    let calls = 0;
-    restoresReply = (c, id) => {
-      calls++;
-      if (calls === 1) return new Promise((res) => { release = () => res(restoresOf(c, id, { restores: [] })); });
-      return Promise.resolve(restoresOf(c, id));
-    };
-    render(<VeleroView cluster="c" />);
+    restoresReply = (c) => new Promise((res) => { release = () => res(restoresOf(c, "c#0")); });
+    const { unmount } = render(<VeleroView cluster="c" />);
     fireEvent.click(tab(/^Restores/));
-    await waitFor(() => expect(calls).toBe(1));
-    // a stale reply from another cluster never lands
-    restoresReply = async (_c, id) => restoresOf("other", id);
+    await waitFor(() => expect(release).not.toBeNull());
     await act(async () => { release?.(); });
     expect(rowTexts().length).toBe(0);
+    expect(screen.queryByTestId("velero-restores-note")).toBeNull();
+    unmount();
+    // nor does another cluster's
+    release = null;
+    restoresReply = (_c, id) => new Promise((res) => { release = () => res(restoresOf("other", id)); });
+    render(<VeleroView cluster="c" />);
+    fireEvent.click(tab(/^Restores/));
+    await waitFor(() => expect(release).not.toBeNull());
+    await act(async () => { release?.(); });
+    expect(rowTexts().length).toBe(0);
+  });
+
+  it("a failed Restores read offers Read again", async () => {
+    let calls = 0;
+    restoresReply = async (c, id) => (++calls === 1 ? { ...restoresOf(c, id), state: "error", error: "boom", restores: [] } : restoresOf(c, id));
+    render(<VeleroView cluster="c" />);
+    fireEvent.click(tab(/^Restores/));
+    await waitFor(() => expect(screen.getByText("Could not read the restores.")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Read again" }));
+    await waitFor(() => expect(rowTexts().length).toBe(1));
   });
 
   it("an absent or forbidden Restores API is said, never empty", async () => {
