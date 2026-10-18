@@ -400,11 +400,15 @@ func evalVeleroBackups(cluster string) func(observe.Capture) observe.PartResult 
 		members := velero.Unscheduled(hist.Backups, scheds, servers, c.Now)
 		var attrs map[*velero.Backup]velero.Attr
 		if c.Rows {
+			// Complete first: the Observer represents a confirmed-absent
+			// kind as complete with no objects (Codex's S2b implementation
+			// re-review, finding 2)
 			cov := velero.SchedulesComplete
-			if _, readable := c.Objects[KindVeleroSchedules]; !readable {
-				cov = velero.SchedulesUnreadable
-			} else if !c.Complete[KindVeleroSchedules] {
+			if !c.Complete[KindVeleroSchedules] {
 				cov = velero.SchedulesIncomplete
+				if _, readable := c.Objects[KindVeleroSchedules]; !readable {
+					cov = velero.SchedulesUnreadable
+				}
 			}
 			attrs = velero.Attributions(hist.Backups, scheds, servers, cov)
 		}

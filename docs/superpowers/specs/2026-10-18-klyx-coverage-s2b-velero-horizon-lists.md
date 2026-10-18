@@ -326,3 +326,12 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
 | 5 | The 4 KiB bound held only for the abbreviated projection, not the serialised DTO with its source join | `fitRestoreDTO` measures the final DTO and cuts from the mapping, the namespaces, the validation classes, then the joined backup's details; counts stay whole; a worst-case test serialises the bridge result |
 
 Codex's probes are kept as `review_s2b_r1_test.go` in velero, healthsrc and appbridge, and as the "review:" cases in `VeleroView.test.tsx` and `FleetBackups.test.tsx`.
+
+## 12. Implementation review 2: Codex's re-review of e22d8cc
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A cluster change fenced the pending Restores reply but left its loading on the old cluster, so a return to it never read again | The cluster change also ends that loading |
+| 2 | A confirmed-absent Schedule API (complete, with no objects) read as an unreadable Schedules read | Complete is checked first: only an incomplete read without objects is unreadable |
+
+Codex's probes are kept: `healthsrc/review_s2b_r2_test.go` and the "review r1:" case in `VeleroView.test.tsx`.

@@ -747,7 +747,10 @@ function useRestores(cluster: string, open: boolean): { data: VeleroRestoresDTO 
       setLoadingFor(null);
     });
   }, [cluster]);
-  useEffect(() => { seq.current++; }, [cluster]);
+  // a cluster change fences the pending reply and ends its loading, so a
+  // return to that cluster reads anew (Codex's S2b implementation
+  // re-review, finding 1)
+  useEffect(() => { seq.current++; setLoadingFor(null); }, [cluster]);
   useEffect(() => { if (open && !data && !loading) read(); }, [open, data, loading, read]);
   return { data, loading, reread: read };
 }

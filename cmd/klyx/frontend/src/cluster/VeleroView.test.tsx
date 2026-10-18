@@ -296,4 +296,23 @@ describe("VeleroView (coverage S2a)", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Schedule" }), { target: { value: "-" } });
     expect(rowTexts().length).toBe(0);
   });
+
+  it("review r1: a fenced pending read cannot keep loading across a cluster round trip", async () => {
+    const calls: string[] = [];
+    let release: (() => void) | undefined;
+    restoresReply = (c, id) => {
+      calls.push(c);
+      return new Promise((resolve) => { release = () => resolve(restoresOf(c, id)); });
+    };
+    const { rerender } = render(<VeleroView cluster="c" />);
+    fireEvent.click(tab(/^Restores/));
+    await waitFor(() => expect(calls).toEqual(["c"]));
+    const oldRelease = release;
+    fireEvent.click(tab(/^Schedules/));
+    rerender(<VeleroView cluster="other" />);
+    rerender(<VeleroView cluster="c" />);
+    await act(async () => { oldRelease?.(); });
+    fireEvent.click(tab(/^Restores/));
+    await waitFor(() => expect(calls).toEqual(["c", "c"]));
+  });
 });
