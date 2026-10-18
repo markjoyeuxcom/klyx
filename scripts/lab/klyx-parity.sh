@@ -72,6 +72,7 @@ crds=(
 	externalsecrets.external-secrets.io secretstores.external-secrets.io clustersecretstores.external-secrets.io
 	gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io
 	grpcroutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io listenersets.gateway.networking.k8s.io
+	tlsroutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io udproutes.gateway.networking.k8s.io
 	nodepools.karpenter.sh nodeclaims.karpenter.sh
 	fluxinstances.fluxcd.controlplane.io fluxreports.fluxcd.controlplane.io
 	resourcesets.fluxcd.controlplane.io resourcesetinputproviders.fluxcd.controlplane.io

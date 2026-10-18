@@ -19,10 +19,10 @@ func TestRouteNodeDTOCarriesTheAttachment(t *testing.T) {
 		Attachment: ref.Key(), AttachmentLabel: ref.Label(), ParentRef: ref, Verdict: &verdict,
 		Controller: "example.com/gw", OtherControllers: []gwapi.ParentStatus{{ControllerName: "retired.example/gw",
 			Accepted: gwapi.Cond{Status: "True"}, ResolvedRefs: gwapi.Cond{Status: "False"}}},
-		Evidence: &gwapi.AttachmentEvidence{Features: []string{"the class's controller does not declare support for GRPCRoute"}},
+		Evidence:  &gwapi.AttachmentEvidence{Features: []string{"the class's controller does not declare support for GRPCRoute"}},
 		RuleNames: []string{"", "named"}, HostnameCount: 20, Hostnames: []string{"a.example"},
-		Matches:  []gwapi.Match{{GRPCService: "pkg.Svc", GRPCMethod: "Get", Rule: 0}},
-		Backends: []gwapi.Backend{{Kind: "Service", Name: "api", Namespace: "apps", Port: 9000, Transport: "TCP", State: gwapi.BackendNotFound, Rule: 0}},
+		Matches:   []gwapi.Match{{GRPCService: "pkg.Svc", GRPCMethod: "Get", Rule: 0}},
+		Backends:  []gwapi.Backend{{Kind: "Service", Name: "api", Namespace: "apps", Port: 9000, Transport: "TCP", State: gwapi.BackendNotFound, Rule: 0}},
 		RuleCount: 2,
 	}
 	d := toRouteNodeDTO(rn, nil)

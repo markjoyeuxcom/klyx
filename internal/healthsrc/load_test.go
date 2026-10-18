@@ -718,11 +718,24 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 		loadListeners(u, 2)
 		create("gateway.networking.k8s.io", "v1", "listenersets", u)
 	}
+	// coverage S7b: four routes in ten are of the other kinds, one each; the
+	// UDPRoutes' backends publish TCP only (no-port), as a real mix would
+	others := []struct{ kind, resource string }{{"GRPCRoute", "grpcroutes"}, {"TLSRoute", "tlsroutes"}, {"TCPRoute", "tcproutes"}, {"UDPRoute", "udproutes"}}
 	for i := 0; i < sc.routes; i++ {
 		u := httpRoute(fmt.Sprintf("route-%04d", i), []string{fmt.Sprintf("gw-%02d", i%sc.gateways)}, fmt.Sprintf("svc-%04d", i%svcs), nil)
 		u.SetNamespace(ns(i))
 		u.SetUID(types.UID(fmt.Sprintf("route-%04d", i)))
-		create("gateway.networking.k8s.io", "v1", "httproutes", u)
+		resource := "httproutes"
+		if k := i % 10; k >= 6 {
+			u.SetKind(others[k-6].kind)
+			resource = others[k-6].resource
+		}
+		create("gateway.networking.k8s.io", "v1", resource, u)
+	}
+	for i := 0; i < sc.gateways; i++ {
+		create("gateway.networking.k8s.io", "v1", "referencegrants", cr("gateway.networking.k8s.io/v1", "ReferenceGrant", ns(i), fmt.Sprintf("grant-%02d", i), map[string]any{
+			"from": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "shop"}},
+			"to":   []any{map[string]any{"group": "", "kind": "Service"}}}, nil, nil))
 	}
 	create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{}, []any{cond("Ready", "True", "Ready")}, nil))
 	for i := 0; i < sc.claims; i++ {

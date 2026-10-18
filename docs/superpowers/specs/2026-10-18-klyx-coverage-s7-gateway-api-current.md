@@ -591,3 +591,128 @@ Codex's three new mounted probes pass unchanged and are adopted as tests. Three 
 - Native smoke: 176/176 in each of night and day at 1440 and 1024, the labs re-applied first.
 
 **Accepted at 2d86b13** (Codex, implementation revision 2, handoff db4f5e4f, 2026-10-18). This accepts S7a; S7b keeps its own review and gates.
+
+## 18. As built: S7b
+
+Built on `feat/coverage` in six stages: cbd2923 (the model), ee8e6d1 (the evidence), 5a421a0 (the projections), 00cfce3 (the Observer's routes part), 0259398 (the on-demand topology) and a1c4682 (the lens). The gates, lab, parity, smoke and captures follow.
+
+### 18.1 Routes, attachments and the controller (§5)
+
+- **One model for the five kinds.** `gwapi.Route` reads HTTPRoute, GRPCRoute, TLSRoute, TCPRoute and UDPRoute alike: every parentRef with its defaults, every rule as returned (TLSRoute's alpha shapes kept), matches by kind (HTTP path and method, gRPC service and method), backends, and `status.parents` with their `controllerName`.
+- **The attachment identity** is the normalised reference `group/kind/namespace/name#section:port`, with every field kept even when empty. The reduction's parent, the DTOs, pins and the topology's lane key all use it. The label is shorter: "infra/eg · https", "ListenerSet infra/extra · a:8443".
+- **The expected controller** is the parent Gateway's class's `controllerName` (a ListenerSet goes through its Gateway). Only that controller's entry is judged. Other controllers' entries are shown as "an entry from another controller (‹name›), not judged". A class that is unread, stale, truncated or missing, or one with no `controllerName`, leaves the attachment Unknown: "the controller judging this parent is not established", with the reason.
+- **Backends by port and transport.** A backend resolves through the one ServicePort whose number is the backendRef's and whose protocol (TCP when unset) is the route's transport: UDP for a UDPRoute, TCP for every other kind. Only the EndpointSlices carrying that port's name and protocol count. A Service without the port is the new `no-port` state, a Fault: "no UDP port 53", with "port 53 exists for TCP only" when another protocol has the number. The no-endpoints text names the port: "The backend Service has no endpoints for its UDP port 53."
+- **Membership.** A route counts when it has a Gateway or ListenerSet parent, even a missing one: a Fault on a complete, current read, Unknown otherwise. A route whose only parents are kinds Klyx does not read (mesh, GAMMA) is not counted.
+- **Fingerprints.** HTTPRoute's are unchanged, so measured traffic keeps joining. The other kinds hash their kind into each rule's fingerprint.
+
+### 18.2 The evidence (§6)
+
+Built as designed, evidence beside the verdict and never replacing it:
+- **allowedRoutes per target listener.** Namespaces are Same, All or Selector; a selector is judged only on a complete, current namespaces read. Kinds come from `supportedKinds`, then the declared kinds, then the protocol's convention, which is said as a convention.
+- **ReferenceGrants**, with non-inheritance (a Gateway's grant is not its ListenerSets'). A disagreement such as "no ReferenceGrant allows it" is said only on a complete, current, untruncated read.
+- **Declared features**, when the class lists any.
+
+On the lab, the evidence reads like this:
+- "listener web: routes from klyx-gateway-lab only (Same); this one is in klyx-gateway-other";
+- "Service klyx-gateway-other/other-db from HTTPRoute klyx-gateway-lab: no ReferenceGrant in klyx-gateway-other allows it";
+- "the class's controller does not declare support for UDPRoute".
+
+### 18.3 The experimental group (§7)
+
+Capability detection reads the resources of every served `gateway.networking.x-k8s.io` version and lists their kinds, deduplicated and sorted, with subresources left out. A version that cannot be read is a named gap, and the list may then be partial. The Gateways view says it in one neutral line: "Experimental Gateway API kinds served: XBackend, XBackendTrafficPolicy, XMesh; Klyx does not read them." An XListenerSet adds its promotion to ListenerSet. Nothing in the group is watched or judged.
+
+### 18.4 Projections, the budget and the heap (§8)
+
+- **Projections and limits.** A route keeps its parentRefs, backendRefs and `status.parents` whole. It caps hostnames at 16 and each rule's matches at 8 for display; the counts and fingerprints are taken over the whole object. Condition messages are made safe, then clipped at 512 bytes. The limits are as designed: 16 KiB for HTTP, gRPC and TLS routes, 8 KiB for TCP and UDP routes, 4 KiB for a ReferenceGrant. A 16-rule HTTPRoute with 4 backends and 8 matches a rule, and 4 parents, measures 15.4 KiB.
+- **The full-budget case** (`TestGatewayAPIObserverHeap`, extended) fills every budgeted kind past its budget: the S7a kinds and namespaces, plus 1,500 HTTPRoutes, 400 GRPCRoutes, 400 TLSRoutes, 300 TCPRoutes, 300 UDPRoutes (four rules of two backends each) and 800 ReferenceGrants. The route kinds retain 723, 203, 256, 132 and 132 routes, and 333 grants are kept. The running Observer holds:
+
+  | Heap held | Against | Heap bytes per budget byte |
+  |---|---|---|
+  | 8.11 MiB with the Routes view closed | 3.69 MiB of encoded budget | 2.20 |
+  | 11.31 MiB with the routes rows subscribed | the same | 3.07 |
+
+  S7a's kinds alone were 1.69. The typed route keeps its parsed rules and per-backend state, which cost more per encoded byte than a Gateway's listeners. The 3.2 MiB of route rows are held only while the Routes view is open. This is a worst case per cluster at every budget's limit.
+
+### 18.5 The on-demand topology (§9)
+
+- **One lane per attachment.** `GetGatewayTopology` reads all five served route kinds and draws one lane per attachment landing on the Gateway, directly or through one of its ListenerSets. Each lane carries:
+  - the attachment's verdict, the controllers and the evidence;
+  - the rule names;
+  - the version the route was read at, so "Open TLSRoute" opens the served version.
+- **Live backends.** Backends resolve live by port and transport, and a Service without the port is `no-port`.
+- **What the routes claim.** A failed route-kind list leaves the routes incomplete and names the kind. So do unreadable ListenerSets when a route attaches through one: whether it lands here is unknown, never silently short. A failed GatewayClass or ReferenceGrant read warns, and its lanes' controllers or grants are then not established.
+- **Policies.** A policy's route target matches only the lane of its own kind; Envoy Gateway's policies target every route kind.
+- **Two bridge fixes.** gRPC matches reach the rules' own match lists, and each backend keeps its transport in the DTO. Both had been set before the lists they belonged to were built; a new bridge test holds them.
+
+### 18.6 Views (§9)
+
+- **Routes view.**
+  - Identity is `kind/namespace/name`, so an HTTPRoute and a TLSRoute of one name are two rows.
+  - It has a Kind column and a kind filter. The worst parent shows by its label, with the identity in its tooltip.
+  - Each attachment shows the controller judging it (or why none is established), other controllers' entries and the evidence.
+  - A reveal names its kind by resource.
+  - Open topology goes to the Gateway the worst attachment lands on and selects that attachment's lane.
+- **Topology.**
+  - Lanes are keyed by route and attachment, and a kind filter appears when more than one kind is present.
+  - The header counts routes, and attachments when they differ ("2 routes · 3 attachments").
+  - A route identity from the Routes view or the palette resolves to that route's worst lane.
+  - Each lane says its kind, where it attaches and what it matches.
+  - Through a ListenerSet, the Gateway's listeners are not the section's evidence: no "listener missing", and Listener TLS points to the ListenerSet.
+- **Data path.** Each rule says what it matches in its kind's words:
+  - "every request" or method and path;
+  - "pkg.Catalog/Get" or "every call";
+  - "SNI shop.example" or "any SNI";
+  - "every connection on pg :5432".
+
+  L4 rules have no match step.
+- **Metrics.** HTTP request metrics are read and shown for HTTPRoute lanes only. Every other kind says "HTTP request metrics do not apply to ‹kind›" in the lane, the data path and the inspector, and the topology does not request the route-level read for it.
+- **Elsewhere.**
+  - The palette lists one command per lane.
+  - ⌘K's index and the console open GRPCRoutes, TLSRoutes, TCPRoutes, UDPRoutes and ListenerSets in the lens.
+  - Describe, the registry and resource refs know the L4 kinds.
+  - BackendTLSPolicy opens at v1: Gateway API 1.4 made it GA, and 1.6 serves nothing else.
+- **What is not done.** Registry entries still pin one version per kind. A cluster serving only an older version of a kind (say TLSRoute v1alpha2) reads it as not served in the generic browser. Resolving served versions there is a cross-cutting change, left out of S7b.
+
+### 18.7 The lab, parity, smoke and captures (§10)
+
+- **The kind lab** (`lab-s7/apply-s7b.sh`) uses the stand-in controller and selectorless Services with hand-written EndpointSlices. Its fixtures:
+  - one Gateway with HTTP, TLS passthrough, TCP and UDP listeners;
+  - an HTTPRoute and a TLSRoute named `shop`, and a GRPCRoute;
+  - two TCPRoutes, one to a port the Service lacks;
+  - a UDPRoute whose Service serves TCP/53 and UDP/53 with ready endpoints on TCP only, under a class that omits UDPRoute;
+  - cross-namespace backends with and without their grant;
+  - a route from a namespace the listener does not allow;
+  - a route with two parents.
+
+  Gateway API 1.6.3's experimental CRDs were already installed by S7a, including XMesh.
+- **Parity** copies the TLS, TCP and UDP route CRDs. parity-gw gains a TCP listener and a healthy TCPRoute. Case 5e adds a TCPRoute whose backend has no TCP port 6432, a counted fault. The oracle's routes part counts all five kinds. **The gate passes**: the Go stage in 143s, then the frontend stage's two tests.
+- **Native smoke** gains two steps: the Routes view's kind filter keeps the TCPRoutes, and a TCPRoute's topology lane draws a data path whose rule reads "every connection on pg :5432", with no match step and no HTTP metrics.
+- **Captures** (`pw/s7b.mjs`), night and day at 1440 and 1024, 13 each, every one with its expected text and no horizontal scroll. They cover:
+  - the experimental line;
+  - the Routes view and its TCP filter;
+  - the UDP, denied-grant, not-allowed and two-parent inspectors;
+  - lab-gw-l4's topology, with the pg-old, dns, TLS and gRPC inspectors and the kind filter.
+
+### 18.8 The load test (§8)
+
+`TestLoad`'s routes are now mixed: four in ten are gRPC, TLS, TCP or UDP routes, one kind each, and each cluster has ReferenceGrants. The same fixture was run on the S7a code (2d86b13) and on S7b, four times each, on an idle machine:
+
+| | before (S7a) | after (S7b) |
+|---|---|---|
+| first complete summary, large | 1.07-1.08s | 1.07s |
+| Observers' retained heap, steady | 59.9 MB | 59.5-59.6 MB |
+| recovery peak / steady | 1.37x, 1.56x, 1.25x, 1.40x | 1.61x, 1.34x, 1.42x, 1.21x |
+| full evaluation, large (max of 5) | 79.5-87.9 ms | 69.4-93.9 ms |
+| every kind live after the API recovered | 8.21-8.54s | 8.56-8.72s |
+
+- **No regression.** S7b changes neither the steady heap nor full evaluation beyond the run-to-run spread.
+- **Recovery peak.** Its 1.5x budget is missed once in four runs on both sides: GC pacing, not S7b.
+- **Full evaluation** misses 50 ms before and after alike; it remains the open owner question.
+
+### 18.9 On a real cluster: AKS with Envoy Gateway
+
+`lab-aks-s7/apply-s7b.sh` (authorised 2026-10-18, ClusterIP only, labelled `aks-s7` and in the lab namespaces, so `teardown.sh` removes it) puts the S7b kinds behind Envoy Gateway v1.9.2. Envoy Gateway's own statuses confirm the design:
+- **It selects ports by protocol too.** A UDPRoute to a TCP-only Service reads ResolvedRefs False PortNotFound "UDP Port 53 not found on Service klyx-gw-lab/dns-tcponly". A TCPRoute to a missing port reads "TCP Port 6432 not found".
+- **The denied cross-namespace backend** reads ResolvedRefs False RefNotPermitted.
+- **The route from another namespace** reads Accepted False NotAllowedByListeners.
+- **Listener kinds.** Each listener reports `supportedKinds` by protocol: HTTPRoute and GRPCRoute on HTTP, and one kind each on TLS, TCP and UDP.

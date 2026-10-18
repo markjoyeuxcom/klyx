@@ -300,7 +300,7 @@ metadata: {name: parity-gw, namespace: $ns, annotations: {klyx.dev/parity-role: 
 spec:
   gatewayClassName: parity-gc
   allowedListeners: {namespaces: {from: Same}}
-  listeners: [{name: http, port: 80, protocol: HTTP}]
+  listeners: [{name: http, port: 80, protocol: HTTP}, {name: tcp, port: 5432, protocol: TCP}]
 EOF
 	local g
 	g=$(gen gatewayclasses.gateway.networking.k8s.io - parity-gc)
@@ -310,6 +310,28 @@ EOF
 	backend parity-backend true
 	route parity-route parity-backend True ResolvedRefs ok false
 	listenerset parity-ls True Accepted ok false
+	tcproute parity-tcp 80 ok false
+}
+
+# tcproute <name> <backend port> <role> <included>: a TCPRoute on parity-gw's
+# tcp listener to parity-backend (coverage S7b), accepted with references
+# resolved; its backend resolves by port number and TCP
+tcproute() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks "$3" "$4")
+spec:
+  parentRefs: [{name: parity-gw, sectionName: tcp}]
+  rules: [{backendRefs: [{name: parity-backend, port: $2}]}]
+EOF
+	local g
+	g=$(gen tcproutes.gateway.networking.k8s.io "$ns" "$1")
+	status tcproutes.gateway.networking.k8s.io "$ns" "$1" "{\"parents\":[{\"parentRef\":{\"group\":\"gateway.networking.k8s.io\",\"kind\":\"Gateway\",\"name\":\"parity-gw\",\"namespace\":\"$ns\",\"sectionName\":\"tcp\"},\"controllerName\":\"example.dev/parity\",\"conditions\":[$(cond Accepted True Accepted "$g"),$(cond ResolvedRefs True ResolvedRefs "$g")]}]}"
 }
 
 # listenerset <name> <Accepted status> <reason> <role> <included>: a
@@ -902,6 +924,8 @@ EOF
 		route parity-route-empty parity-empty True ResolvedRefs fault true ;;
 	5d) # a ListenerSet its controller did not accept (coverage S7a)
 		listenerset parity-ls-notallowed False NotAllowed fault true ;;
+	5e) # a TCPRoute whose backend Service has no TCP port 6432 (coverage S7b)
+		tcproute parity-tcp-noport 6432 fault true ;;
 	6) # cert-manager down, no cert-manager object fault (core: its
 		# Deployment and the Pending pod are faults, declared)
 		stand_in cert-manager cert-manager fault ;;
@@ -924,6 +948,7 @@ revert_case() {
 	5c) k -n "$ns" delete httproutes.gateway.networking.k8s.io parity-route-empty --wait >/dev/null
 		k -n "$ns" delete service/parity-empty endpointslice/parity-empty-1 --wait >/dev/null ;;
 	5d) k -n "$ns" delete listenersets.gateway.networking.k8s.io parity-ls-notallowed --wait >/dev/null ;;
+	5e) k -n "$ns" delete tcproutes.gateway.networking.k8s.io parity-tcp-noport --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
 	6b) stand_in flux-system kustomize-controller "" ;;
 	*) die "unknown case '$1'" ;;

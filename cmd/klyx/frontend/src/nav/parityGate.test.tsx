@@ -69,7 +69,7 @@ const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reco
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "6", "6b", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };

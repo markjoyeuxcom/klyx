@@ -79,6 +79,10 @@ describe("the S7b model", () => {
     expect(backendIssue({ kind: "Service", name: "dns", namespace: "apps", port: 53, weight: 0, transport: "UDP", state: "no-port", error: "Service has no UDP port 53 (port 53 exists for TCP only)" }))
       .toEqual({ short: "no UDP port 53", text: "Backend Service apps/dns has no UDP port 53 - port 53 exists for TCP only.", severity: "fault" });
   });
+  it("no endpoints names the port whose slices were counted", () => {
+    expect(backendIssue({ kind: "Service", name: "dns", namespace: "apps", port: 53, weight: 0, transport: "UDP", state: "resolved", endpoints: { ready: 0, total: 0, nonPod: 0 } })?.text)
+      .toBe("The backend Service has no endpoints for its UDP port 53.");
+  });
   it("the attachment's verdict leads when it decided before the status (controller not established)", () => {
     const r = { ...lane("GRPCRoute", "api", "https", { controller: "", controllerWhy: "the GatewayClass eg does not exist", parentFound: false }), rule: { included: false, role: "unknown", label: "the controller judging this parent is not established" } } as RouteNodeDTO;
     const issues = laneIssues(r, []);

@@ -394,7 +394,7 @@ func (c *ClusterConn) resolveRouteBackends(ctx context.Context, r *gwapi.Route, 
 				if other != "" {
 					b.Error += " (" + other + ")"
 				}
-				topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s: %s %s/%s", routeID, b.Error, b.Namespace, b.Name))
+				topo.Warnings = append(topo.Warnings, fmt.Sprintf("route %s: backend Service %s/%s has no %s port %d", routeID, b.Namespace, b.Name, transport, b.Port))
 				continue
 			}
 			b.State = gwapi.BackendResolved

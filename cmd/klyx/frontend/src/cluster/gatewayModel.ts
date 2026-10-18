@@ -173,7 +173,9 @@ export function backendIssue(b: BackendDTO): RouteIssue | null {
   if (b.state === "resolved") {
     const ep = b.endpoints;
     if (!ep || ep.error) return { short: "endpoints unreadable", text: `The backend's EndpointSlices could not be read${ep?.error ? ` - ${ep.error}` : ""}.`, severity: "unknown" };
-    if (ep.total === 0) return { short: "no endpoints", text: "The backend Service has no endpoints.", severity: "fault" };
+    // only the slices carrying the selected port count (S7b §5): name it
+    const onPort = b.transport ? ` for its ${b.transport} port ${b.port}` : "";
+    if (ep.total === 0) return { short: "no endpoints", text: `The backend Service has no endpoints${onPort}.`, severity: "fault" };
     if (ep.ready === 0) return { short: "no ready endpoints", text: `${ep.total === 1 ? "The backend's only endpoint is not ready" : `None of the backend's ${ep.total} endpoints is ready`}.`, severity: "fault" };
     if (ep.ready < ep.total) return { short: `${ep.ready}/${ep.total} endpoints ready`, text: `${endpointsText(ep.ready, ep.total, ep.nonPod)} - reduced capacity.`, severity: "degraded" };
     return null;

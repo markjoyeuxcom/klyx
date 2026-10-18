@@ -44,7 +44,7 @@ const COLUMNS: (ColumnDef & { label: string })[] = [
   { id: "name", label: "Route", width: 240, priority: 0, flex: true },
   { id: "kind", label: "Kind", width: 96, priority: 1 },
   { id: "status", label: "Status", width: 190, priority: 0 },
-  { id: "parent", label: "Worst parent", width: 200, priority: 1 },
+  { id: "parent", label: "Worst parent", width: 280, priority: 1 },
   { id: "parents", label: "Parents", width: 64, priority: 2 },
 ];
 const ROUTE_KIND_SET: ReadonlySet<string> = new Set(ROUTE_KINDS);

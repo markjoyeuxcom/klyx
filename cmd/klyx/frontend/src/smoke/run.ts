@@ -164,6 +164,10 @@ function typeInto(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
+function chooseOption(select: HTMLSelectElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
 function byText<T extends HTMLElement = HTMLElement>(sel: string, text: RegExp): T | undefined {
   return [...document.querySelectorAll<T>(sel)].find((el) => text.test(el.textContent?.trim() ?? ""));
 }
@@ -653,6 +657,41 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
     (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
     sized(await within(10_000, "the data path", () => $("[data-testid='data-path']")), "the data path");
+  });
+  // Coverage S7b (scratchpad lab-s7b): the Routes view's kind filter keeps
+  // the TCPRoutes; a TCPRoute's topology lane draws a data path whose rule
+  // matches every connection - no match step - and reads no HTTP metrics.
+  await step(steps, "Routes: the kind filter shows a TCPRoute", async () => {
+    await open("gateway");
+    await closeDrawer();
+    (await within(4000, "the Routes switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="routes"]'))).click();
+    await within(8000, "the Routes view", () => gatewayView() === "routes" && !loading());
+    const filter = await within(8000, "the kind filter", () => $<HTMLSelectElement>("[data-testid='route-kind-filter']"));
+    if (![...filter.options].some((o) => o.value === "TCPRoute")) throw new Error(`no TCPRoute among the kinds: ${[...filter.options].map((o) => o.value).join(", ")}`);
+    chooseOption(filter, "TCPRoute");
+    const rows = await within(4000, "TCPRoute rows only", () => {
+      const r = [...document.querySelectorAll<HTMLElement>(".lens-row")];
+      return r.length > 0 && r.every((x) => x.querySelector("[data-col='kind']")?.textContent === "TCPRoute") ? r : null;
+    });
+    const names = rows.map((r) => r.querySelector(".lens-cell-name")?.getAttribute("title") ?? "");
+    if (!names.includes("TCPRoute klyx-gateway-lab/pg")) throw new Error(`the TCPRoutes read: ${names.join(", ")}`);
+    return { tcproutes: names };
+  });
+  await step(steps, "an L4 data path has no match step", async () => {
+    const row = await within(8000, "the pg TCPRoute", () => $<HTMLElement>('.lens-row .lens-cell-name[title="TCPRoute klyx-gateway-lab/pg"]'));
+    row.click();
+    const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
+    (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
+    const path = await within(10_000, "the TCPRoute's data path", () => {
+      const p = $("[data-testid='route-panel'] [data-testid='data-path']");
+      return p && /TCPRoute/.test(p.textContent ?? "") ? p : null;
+    });
+    sized(path, "the L4 data path");
+    const text = (path.textContent ?? "").replace(/\s+/g, " ");
+    if (!/every connection on pg :5432/.test(text)) throw new Error(`the rule reads: ${text.slice(0, 200)}`);
+    if (/every request|PathPrefix/.test(text)) throw new Error(`an L4 rule shows a match step: ${text.slice(0, 200)}`);
+    if (!/HTTP request metrics do not apply to TCPRoute/.test(text)) throw new Error("the L4 rule claims HTTP request metrics");
+    return { rule: text.match(/rule 1[^·]*/)?.[0]?.trim() };
   });
 
   // ---- Describe (slice 14) ----

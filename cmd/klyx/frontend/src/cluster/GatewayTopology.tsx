@@ -414,7 +414,7 @@ function PolicyList({ policies }: { policies: PolicyRefDTO[] }) {
 function RuleSummary({ route, metrics }: { route: RouteNodeDTO; metrics: RuleMetrics | null }) {
   const n = route.rules?.length ?? 0;
   const count = `${n} rule${n === 1 ? "" : "s"}`;
-  if (!httpMetricsApply(route)) return <span className="t-secondary gw-line">{count} · {noHttpMetricsText(route)}</span>;
+  if (!httpMetricsApply(route)) return <span className="t-secondary gw-line" title={noHttpMetricsText(route)}>{count} · {noHttpMetricsText(route)}</span>;
   if (!metrics) return <span className="t-secondary">{count} · reading…</span>;
   if (!metrics.status.available) return <span className="t-secondary">{count} · no route metrics</span>;
   let worst: { rule: number; v: number } | null = null;
@@ -445,9 +445,8 @@ function RouteLane({ route, role, ruleMetrics, selected, onSelect }: { route: Ro
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <VerdictMark health={role} size={8} />
           <span className="t-identifier gw-name"><span style={{ color: "var(--color-text-tertiary)" }}>{route.namespace}/</span>{route.name}</span>
-          <span className="t-legend" data-testid="lane-kind" style={{ marginLeft: "auto", flexShrink: 0 }}>{routeKindOf(route)}</span>
         </span>
-        <span className="t-secondary gw-line">{attachmentWhere(route)} · {laneMatchText(route)}</span>
+        <span className="t-secondary gw-line"><span data-testid="lane-kind">{routeKindOf(route)}</span> · {attachmentWhere(route)} · {laneMatchText(route)}</span>
         <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}</span>
         {route.policies.length > 0 && <PolicyList policies={route.policies} />}
       </button>
