@@ -1220,9 +1220,12 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.route.name !== "cluster") return {};
       // Preserve the current section if it is a resource-browsing section; otherwise default to "resources".
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
+      // Re-opening the list already shown keeps its read: the list loads when
+      // its cluster or GVR changes, so a reset here would never be refilled.
+      const shown = sameResource(s.route.resource, resource) && s.instances.cluster === s.route.cluster && sameResource(s.instances.ref, resource);
       return {
         route: { name: "cluster", cluster: s.route.cluster, section, resource },
-        instances: { cluster: s.route.cluster, ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false },
+        ...(shown ? {} : { instances: { cluster: s.route.cluster, ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false } }),
       };
     }),
   closeResource: () =>
