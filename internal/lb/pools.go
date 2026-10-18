@@ -141,8 +141,10 @@ func CiliumPoolRule(p *CiliumPool) health.NativeEval {
 type Instances struct {
 	Namespaces   map[string]bool
 	FromWorkload map[string]bool
-	// Known: the evidence was read (a ConfigurationState read or the
-	// capability's workload read). Without it no namespace is excluded.
+	// Known: there is positive evidence (a controller ConfigurationState,
+	// or the capability's complete workload read). An empty or absent
+	// ConfigurationState kind proves nothing - MetalLB before v0.15 writes
+	// none - so without either no namespace is excluded.
 	Known bool
 }
 
@@ -150,9 +152,11 @@ type Instances struct {
 func (in Instances) Has(ns string) bool { return in.Namespaces[ns] }
 
 // InstancesOf derives the instance namespaces from the ConfigurationStates
-// (with their read) and the detected controller workloads' namespaces
-// (with whether that list was read).
-func InstancesOf(states []*ConfigState, statesRead Read, workloads []string, workloadsRead bool) Instances {
+// and the detected controller workloads' namespaces (with whether that list
+// was read). The states' read is not consulted: a controller state from a
+// stale read still names MetalLB's namespace, and a complete read with
+// none proves nothing.
+func InstancesOf(states []*ConfigState, _ Read, workloads []string, workloadsRead bool) Instances {
 	in := Instances{Namespaces: map[string]bool{}, FromWorkload: map[string]bool{}}
 	for _, s := range states {
 		if s.Role() == "controller" {
@@ -164,7 +168,7 @@ func InstancesOf(states []*ConfigState, statesRead Read, workloads []string, wor
 			in.Namespaces[ns], in.FromWorkload[ns] = true, true
 		}
 	}
-	in.Known = statesRead == ReadComplete || workloadsRead
+	in.Known = workloadsRead || len(in.Namespaces) > 0
 	return in
 }
 

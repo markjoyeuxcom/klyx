@@ -412,6 +412,15 @@ func TestConfigState(t *testing.T) {
 	if !in.Has("lb") || !in.Has("metallb-system") || in.FromWorkload["lb"] || !in.FromWorkload["metallb-system"] {
 		t.Fatalf("instances: %+v", in)
 	}
+	// MetalLB before ConfigurationState, its controllers unreadable: nothing
+	// is known, so no pool reads "no instance here"
+	if in := InstancesOf(nil, ReadComplete, nil, false); in.Known {
+		t.Fatalf("an empty states read is no evidence: %+v", in)
+	}
+	p := mpool("gold", nil, PoolStatus{AvailableV4: i64(1), AssignedV4: i64(0)})
+	if e := MetalLBPoolRule(MetalLBPoolInput{Pool: p, Instances: InstancesOf(nil, ReadComplete, nil, false), Ads: []*Advertisement{ad("all", nil)}, AdsRead: ReadComplete}); e.Label == "No MetalLB instance here" {
+		t.Fatalf("unknown instances never exclude a pool: %+v", e)
+	}
 }
 
 func TestTracker(t *testing.T) {
