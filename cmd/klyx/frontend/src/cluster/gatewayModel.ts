@@ -35,7 +35,7 @@ export function condState(c: CondDTO | undefined, generation: number | undefined
 const because = (c: CondState) => [c.reason, c.message].filter(Boolean).join(": ");
 const observedFor = (c: CondState) => (c.observedGeneration > 0 ? `generation ${c.observedGeneration}` : "an unreported generation");
 
-type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation">;
+type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation"> & { rule?: RuleDTO };
 
 // Gateway roles: an explicit, current Accepted=False is the fault (nothing
 // through it is served by its controller). Absent status is unverified, a
@@ -63,6 +63,8 @@ export function gatewayVerdictDetail(g: GatewayLike): string {
     ? `Programmed was False for ${observedFor(p)}${because(p) ? ` - ${because(p)}` : ""}. The controller has not reported on generation ${g.generation}; whether the data plane is configured now is unverified.`
     : `Accepted, but Programmed is False${because(p) ? ` - ${because(p)}` : ""}. The data plane is not configured for it.`;
   if (a.stale || p.stale) return `Accepted and programmed as of ${observedFor(p.stale ? p : a)}; the controller has not reported on generation ${g.generation} yet.`;
+  // coverage S7a §3: the Go rule degrades a healthy Gateway by its listeners
+  if (g.rule?.role === "degraded" && g.rule.label.startsWith("listener ")) return "Accepted and programmed, but its controller reports a listener failing (below).";
   return "Accepted and programmed by its controller.";
 }
 

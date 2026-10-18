@@ -379,6 +379,8 @@ function GatewayListenerSets({ g, sets }: { g: GatewayRefDTO; sets: ListenerSetR
   if (served === "absent") return null;
   const mine = setsOf(sets.sets, g);
   const complete = !sets.loading && kindEvidence(true, sets.coverage, "ListenerSet", sets.watchError) === "complete";
+  // nothing to say for a Gateway that allows none, has none and reports none
+  if (!g.allowedListeners?.set && mine.length === 0 && g.attachedListenerSets == null && complete) return null;
   const accepted = mine.filter(acceptedNow).length;
   const reported = g.attachedListenerSets;
   const count = sets.loading ? "reading ListenerSets" : `${mine.length}${complete ? "" : "+"} found naming this Gateway, ${accepted} accepted`;

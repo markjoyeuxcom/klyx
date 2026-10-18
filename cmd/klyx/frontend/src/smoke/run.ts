@@ -148,10 +148,10 @@ export function partOf(): { shown: string | null; pressed: string | null } | nul
 // The identity column is chosen by its id - both tables lead with the row
 // mark's empty head (13b review 2). Null while they disagree or either is
 // missing.
-export function gatewayView(): "gateways" | "routes" | null {
+export function gatewayView(): "gateways" | "listenersets" | "routes" | null {
   const pressed = document.querySelector<HTMLElement>('[data-testid="gateway-views"] [aria-pressed="true"]')?.dataset.view;
   const head = document.querySelector('.lens-table-head > [data-col="name"]')?.textContent?.trim();
-  const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : null;
+  const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : head === "ListenerSet" ? "listenersets" : null;
   return shown !== null && pressed === shown ? shown : null;
 }
 
@@ -615,6 +615,32 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   await step(steps, "External Secrets chain", async () => {
     await open("eso");
     sized(await within(10_000, "the ExternalSecret chain", () => $("ol[data-rail][aria-label='Store, ExternalSecret and target Secret']")), "the ExternalSecret chain");
+  });
+  // Coverage S7a (scratchpad lab-s7: Gateway API 1.6 experimental CRDs, a
+  // stand-in controller's status): the ListenerSets view broken first, the
+  // NotAllowed one first; a Gateway's ListenerSets in its merge order.
+  await step(steps, "ListenerSets: the NotAllowed one first", async () => {
+    await open("gateway");
+    await closeDrawer();
+    (await within(4000, "the ListenerSets switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="listenersets"]'))).click();
+    await within(8000, "the ListenerSets view", () => gatewayView() === "listenersets" && !loading());
+    const first = await within(8000, "the first row", () => $<HTMLElement>("[data-testid='listenerset-row']"));
+    if (!/ls-other/.test(first.textContent ?? "") || !/not accepted: NotAllowed/.test(first.textContent ?? "")) throw new Error(`the first row reads: ${first.textContent}`);
+    return { first: first.textContent?.slice(0, 80) };
+  });
+  await step(steps, "a Gateway's ListenerSets in merge order", async () => {
+    (await within(4000, "the Gateways switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="gateways"]'))).click();
+    await within(8000, "the Gateways view", () => gatewayView() === "gateways" && !loading());
+    (await within(8000, "lab-gw", () => $<HTMLElement>('.lens-row .lens-cell-name[title="klyx-gateway-lab/lab-gw"]'))).click();
+    const block = await within(8000, "the ListenerSets block", () => {
+      const b = $("[data-testid='gateway-listenersets']");
+      return b && b.querySelectorAll("[data-testid='gateway-listenerset']").length === 3 ? b : null;
+    });
+    const order = [...block.querySelectorAll("[data-testid='gateway-listenerset']")].map((e) => (e.textContent ?? "").replace(/\s+/g, " ").slice(0, 40));
+    const want = [/^1st · klyx-gateway-lab\/ls-first/, /^2nd · klyx-gateway-other\/ls-other/, /^3rd · klyx-gateway-lab\/ls-conflict/];
+    if (!want.every((re, i) => re.test(order[i] ?? ""))) throw new Error(`the merge order reads: ${order.join(" | ")}`);
+    if (!/the controller reports 2 attached/.test($("[data-testid='gateway-listenersets-count']")?.textContent ?? "")) throw new Error("the controller's attached count is not beside the ListenerSets found");
+    return { order };
   });
   await step(steps, "Gateway data path", async () => {
     await open("gateway");

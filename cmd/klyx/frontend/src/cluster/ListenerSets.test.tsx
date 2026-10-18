@@ -158,6 +158,14 @@ describe("the Gateway inspector's listeners and ListenerSets (coverage S7a §3, 
     expect(within(block).getByTestId("gateway-listenersets-count").textContent).toBe("3 found naming this Gateway, 2 accepted · the controller reports 2 attached");
   });
 
+  it("a Gateway with no allowance, no ListenerSet and no count has no block; a failing listener is the detail", () => {
+    seed({ gateways: [gw("eg", { allowedListeners: { set: false, from: "" }, attachedListenerSets: null, rule: { included: true, role: "degraded", label: "listener https: InvalidCertificateRef" } })], sets: [] });
+    render(<GatewayApiView cluster="x" />);
+    const panel = screen.getByTestId("gateway-panel");
+    expect(within(panel).queryByTestId("gateway-listenersets")).toBeNull();
+    expect(within(panel).getByText("Accepted and programmed, but its controller reports a listener failing (below).")).toBeTruthy();
+  });
+
   it("a differing attached count is said, never reconciled", () => {
     seed({ gateways: [gw("eg", { attachedListenerSets: 5 })], sets: [first] });
     render(<GatewayApiView cluster="x" />);
