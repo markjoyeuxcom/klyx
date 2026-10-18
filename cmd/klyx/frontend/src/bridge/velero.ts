@@ -175,8 +175,11 @@ export type VeleroBackupDTO = {
   // verdict in rule; a row not counted is a listed fact, with no rule.
   counted: boolean;
   schedule?: string;
-  attribution?: "proven" | "named" | "synced" | "";
+  // unknown: no match in an incomplete or unreadable Schedules read, which
+  // proves nothing; a match from one is kept, and attributionCoverage says so
+  attribution?: "proven" | "named" | "synced" | "unknown" | "";
   attributionDisputed?: boolean;
+  attributionCoverage?: "incomplete" | "unreadable" | "";
   expired?: boolean;
   gcFailure?: string;
   reason?: string;
@@ -189,6 +192,7 @@ export type VeleroRestoreSourceDTO = {
   backup?: VeleroRunDTO;
   schedule?: string;
   attribution?: string;
+  attributionCoverage?: string;
   asOf?: string;
   class?: string;
 };

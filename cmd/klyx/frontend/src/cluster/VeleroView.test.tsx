@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useLayoutEffect } from "react";
 import { render, fireEvent, screen, within, waitFor, act } from "@testing-library/react";
 import type { VeleroPartRows } from "../health/useVeleroRows";
 import type { VeleroBackupDTO, VeleroLocationDTO, VeleroRestoresDTO, VeleroScheduleDTO } from "../bridge/velero";
 import { useFleet } from "../store/fleet";
-import { VeleroView, phaseKind, horizonCell } from "./VeleroView";
+import { VeleroView, phaseKind, horizonCell, attributionText } from "./VeleroView";
 
 let restoresReply: (cluster: string, readId: string) => Promise<VeleroRestoresDTO>;
 vi.mock("../bridge/velero", () => ({ getVeleroRestores: (c: string, id: string) => restoresReply(c, id) }));
@@ -258,5 +259,41 @@ describe("VeleroView (coverage S2a)", () => {
     render(<VeleroView cluster="c" />);
     fireEvent.click(tab(/^Restores/));
     await waitFor(() => expect(screen.getByText("Velero is not installed on this cluster.")).toBeTruthy());
+  });
+
+  // ---- Codex's S2b implementation review --------------------------------------
+
+  it("review: clears the previous cluster's Restores before committing the new identity", async () => {
+    restoresReply = async (c, id) => restoresOf(c, id);
+    const frames: string[] = [];
+    function Probe({ cluster }: { cluster: string }) {
+      useLayoutEffect(() => { frames.push(document.body.textContent ?? ""); });
+      return <VeleroView cluster={cluster} />;
+    }
+    const { rerender } = render(<Probe cluster="c" />);
+    fireEvent.click(tab(/^Restores/));
+    await waitFor(() => expect(screen.getByTestId("velero-row-drill")).toBeTruthy());
+    restoresReply = async () => new Promise(() => {}); // the next cluster's read stays pending
+    frames.length = 0;
+    rerender(<Probe cluster="other" />);
+    expect(frames.some((text) => text.includes("drill"))).toBe(false);
+  });
+
+  it("review: a retained success with no timestamps never reads none retained", () => {
+    const h = { state: "found" as const, proven: true, untimed: true, text: "latest proven retained success; its start and completion times are not recorded", success: run("untimed", "Completed", "") };
+    expect(horizonCell(h, Date.now() / 1000).text).toBe("retained, time not recorded");
+    expect(horizonCell({ ...h, proven: false, incomplete: true }, Date.now() / 1000).text).toBe("retained, time not recorded, maybe newer · by name");
+  });
+
+  it("review: no match in an incomplete schedules read is unknown, and a match from one says so", () => {
+    expect(attributionText({ attribution: "unknown", attributionCoverage: "incomplete" })).toBe("whether it is a run of a current schedule cannot be told: the schedules read is incomplete");
+    expect(attributionText({ attribution: "proven", schedule: "daily", attributionCoverage: "incomplete" })).toBe("proven run of daily (from an incomplete schedules read)");
+    expect(attributionText({ attribution: "" })).toBe("not a run of a current schedule");
+    backups = part([bk("daily-9", "Completed", { attribution: "unknown", attributionCoverage: "unreadable" })], ["Backup"]);
+    render(<VeleroView cluster="c" />);
+    fireEvent.click(tab(/^Backups/));
+    // "no current schedule" lists only what a complete read proves
+    fireEvent.change(screen.getByRole("combobox", { name: "Schedule" }), { target: { value: "-" } });
+    expect(rowTexts().length).toBe(0);
   });
 });

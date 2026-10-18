@@ -46,4 +46,20 @@ describe("FleetBackups (coverage S2b §2)", () => {
       .toBe("schedules as of the last good read · backups unreadable");
     expect(coverageNote({ cluster: "x", state: "read", kinds: [live("schedules"), live("backups")], schedules: [] })).toBe("");
   });
+
+  it("review: unreadable history is never counted as no retained success", async () => {
+    const s = sched("unread", "unknown");
+    s.horizon = { state: "unreadable", proven: false, text: "runs not readable" };
+    const capped = sched("capped", "ok");
+    capped.horizon = { state: "none", proven: false, incomplete: true, window: new Date().toISOString(), text: "no successful backup retained since …" };
+    replies.a = { cluster: "a", state: "read", kinds: [live("schedules"), live("backups", { coverage: "unreadable" })], schedules: [s, capped] };
+    for (const c of ["b", "c", "d"]) replies[c] = { cluster: c, state: "no-velero", kinds: [], schedules: [] };
+    render(<FleetBackups />);
+    await waitFor(() => expect(screen.getByTestId("fleet-backups-row-a-unread")).toBeTruthy());
+    expect(screen.getByTestId("fleet-backups-row-a-unread").textContent).toContain("runs unknown");
+    expect(screen.queryByText(/with no retained success/)).toBeNull();
+    expect(screen.getByText("1 with runs unknown")).toBeTruthy();
+    expect(screen.getByText("1 with none in the history Klyx holds")).toBeTruthy();
+    expect(screen.getByTestId("fleet-backups-row-a-capped").textContent).toMatch(/none since/);
+  });
 });

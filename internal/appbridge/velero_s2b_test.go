@@ -2,7 +2,9 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -178,5 +180,47 @@ func TestVeleroBackupHorizon(t *testing.T) {
 	out := svc.GetBackupHorizon("c1")
 	if out.State != "read" || out.AsOf == nil || !out.AsOf.Equal(at) || len(out.Schedules) != 1 || out.Schedules[0].Horizon.Text != "no successful backup retained" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+// The serialised Restore, source join included, stays within the bound at
+// the worst case the CRD allows; every count stays whole (Codex's S2b
+// implementation review, finding 5).
+func TestVeleroRestoreDTOWorstCase(t *testing.T) {
+	name := func(c string, i int) string { return fmt.Sprintf("%s%02d", strings.Repeat(c, 61), i) }
+	mapping := map[string]any{}
+	var inc, exc, ve []any
+	for i := 0; i < 100; i++ {
+		mapping[name("n", i)] = name("m", i)
+		inc, exc = append(inc, name("i", i)), append(exc, name("e", i))
+	}
+	for i := 0; i < 10; i++ {
+		ve = append(ve, "Validation error in resource modifiers provided in configmap velero/x: bad")
+	}
+	long := strings.Repeat("b", 253)
+	u := restoreU("r1", long, map[string]any{"scheduleName": strings.Repeat("s", 253), "includedNamespaces": inc, "excludedNamespaces": exc,
+		"namespaceMapping": mapping, "existingResourcePolicy": strings.Repeat("x", 300), "itemOperationTimeout": strings.Repeat("y", 300),
+		"resourceModifier": map[string]any{"kind": "ConfigMap", "name": strings.Repeat("m", 253)},
+		"resourcePolicy":   map[string]any{"kind": "ConfigMap", "name": strings.Repeat("p", 253)}})
+	u.Object["metadata"].(map[string]any)["name"] = strings.Repeat("r", 253)
+	u.Object["status"].(map[string]any)["validationErrors"] = ve
+	r := velero.ProjectRestore(&u)
+	now := time.Now()
+	b := &velero.Backup{Meta: velero.Meta{Namespace: "velero", Name: long, UID: "11111111-2222-3333-4444-555555555555", Created: now}, Phase: "Completed",
+		Start: now, Completion: now, Errors: 9, Warnings: 9}
+	bk := veleroBackups{state: "stale", asOf: &now, byName: map[string]healthsrc.VeleroBackupRow{"velero/" + long: {Backup: b, Expired: true,
+		Attribution: velero.Attr{Schedule: strings.Repeat("s", 253), How: "named", Coverage: velero.SchedulesIncomplete}}}}
+	d := veleroRestoreDTO(r, bk)
+	raw, _ := json.Marshal(d)
+	if len(raw) > velero.MaxObject {
+		t.Fatalf("final DTO %d > %d", len(raw), velero.MaxObject)
+	}
+	if !d.Cut || d.MappingCount != 100 || d.IncludedCount != 100 || d.ExcludedCount != 100 || d.ValidationCount != 10 || d.Source.State != "found" {
+		t.Fatalf("cut=%v counts %d %d %d %d source %s", d.Cut, d.MappingCount, d.IncludedCount, d.ExcludedCount, d.ValidationCount, d.Source.State)
+	}
+	// a small Restore is never cut
+	small := restoreU("r2", "daily-1", nil)
+	if s := veleroRestoreDTO(velero.ProjectRestore(&small), bk); s.Cut {
+		t.Fatal("cut a small restore")
 	}
 }

@@ -400,7 +400,13 @@ func evalVeleroBackups(cluster string) func(observe.Capture) observe.PartResult 
 		members := velero.Unscheduled(hist.Backups, scheds, servers, c.Now)
 		var attrs map[*velero.Backup]velero.Attr
 		if c.Rows {
-			attrs = velero.Attributions(hist.Backups, scheds, servers)
+			cov := velero.SchedulesComplete
+			if _, readable := c.Objects[KindVeleroSchedules]; !readable {
+				cov = velero.SchedulesUnreadable
+			} else if !c.Complete[KindVeleroSchedules] {
+				cov = velero.SchedulesIncomplete
+			}
+			attrs = velero.Attributions(hist.Backups, scheds, servers, cov)
 		}
 		var items []nativeItem
 		var rows []Row[VeleroBackupRow]

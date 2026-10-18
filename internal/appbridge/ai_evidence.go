@@ -120,7 +120,7 @@ var aiEvidenceFields = map[string]allow{
 		"storageLocation": nil, "errors": nil, "warnings": nil, "itemsTotal": nil, "itemsBackedUp": nil, "failure": nil, "validation": nil,
 		"validationCount": nil, "hooksFailed": nil, "operationsFailed": nil, "membership": nil, "disputed": nil, "reason": nil,
 		// S2b §5: whether the row is counted, and its attribution
-		"counted": nil, "schedule": nil, "attribution": nil, "attributionDisputed": nil, "expired": nil, "gcFailure": nil},
+		"counted": nil, "schedule": nil, "attribution": nil, "attributionDisputed": nil, "attributionCoverage": nil, "expired": nil, "gcFailure": nil},
 }
 
 var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,

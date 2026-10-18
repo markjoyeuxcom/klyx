@@ -205,9 +205,14 @@ func (h Horizon) Text() string {
 		s = "a Completed record matched by name (not proven to be this schedule's)"
 	}
 	if h.Success != nil {
-		if h.Untimed {
+		switch {
+		case h.Untimed && h.Success.Start.IsZero():
+			// a success with no time at all is still a success, never "none"
+			// (Codex's S2b implementation review, finding 3)
+			s += "; its start and completion times are not recorded"
+		case h.Untimed:
 			s += ", started " + stamp(h.Success.Start) + "; its completion time is not recorded"
-		} else {
+		default:
 			s += ", completed " + stamp(h.Success.Completion)
 		}
 		if h.OrderUnknown {

@@ -145,18 +145,34 @@ func BackupRule(b *Backup, m Membership, servers Servers, now time.Time) health.
 
 // Attr is how a listed Backup relates to the current schedules (S2b §2).
 // How is "proven", "named", "synced" (it carries a current schedule's name
-// and looks synced from object storage, unproven) or "" (not a run of a
-// current schedule). Attribute's precedence decides: a proof wins over the
-// looks-synced heuristic.
+// and looks synced from object storage, unproven), "" (not a run of a
+// current schedule: only from a complete Schedules read) or "unknown" (no
+// match in an incomplete or unreadable one, which proves nothing).
+// Attribute's precedence decides: a proof wins over the looks-synced
+// heuristic.
 type Attr struct {
 	Schedule string
 	How      string
 	// Disputed: named, with timing within plausible skew of a synced one.
 	Disputed bool
+	// Coverage is the Schedules read the attribution comes from: "" when
+	// complete, else SchedulesIncomplete or SchedulesUnreadable. A match
+	// from an incomplete read is kept, and says so (Codex's S2b
+	// implementation review, finding 2).
+	Coverage string
 }
 
-// Attributions relates every listed Backup to the current schedules.
-func Attributions(backups []*Backup, schedules []*Schedule, servers Servers) map[*Backup]Attr {
+// The Schedules read an attribution comes from.
+const (
+	SchedulesComplete   = ""
+	SchedulesIncomplete = "incomplete"
+	SchedulesUnreadable = "unreadable"
+)
+
+// Attributions relates every listed Backup to the current schedules, read
+// with coverage (SchedulesComplete, SchedulesIncomplete or
+// SchedulesUnreadable): only a complete read proves no schedule matches.
+func Attributions(backups []*Backup, schedules []*Schedule, servers Servers, coverage string) map[*Backup]Attr {
 	type view struct {
 		s     *Schedule
 		nName string
@@ -200,6 +216,10 @@ func Attributions(backups []*Backup, schedules []*Schedule, servers Servers) map
 		if a.How == "" && b.Timing() == TimingSynced && len(b.Owners) == 0 && len(cands) > 0 && cands[0].s.Name == b.ScheduleLabel {
 			a = Attr{Schedule: b.ScheduleLabel, How: "synced"}
 		}
+		if a.How == "" && coverage != SchedulesComplete {
+			a.How = "unknown"
+		}
+		a.Coverage = coverage
 		out[b] = a
 	}
 	return out

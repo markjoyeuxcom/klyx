@@ -210,9 +210,10 @@ type VeleroBackupDTO struct {
 	Disputed               bool       `json:"disputed,omitempty"`
 	Counted                bool       `json:"counted"`
 	Schedule               string     `json:"schedule,omitempty"`    // the current schedule it relates to
-	Attribution            string     `json:"attribution,omitempty"` // proven | named | synced | "" (none)
+	Attribution            string     `json:"attribution,omitempty"` // proven | named | synced | unknown | "" (none)
 	AttributionDisputed    bool       `json:"attributionDisputed,omitempty"`
-	Expired                bool       `json:"expired,omitempty"` // past its expiration, awaiting deletion
+	AttributionCoverage    string     `json:"attributionCoverage,omitempty"` // the Schedules read: "" complete | incomplete | unreadable
+	Expired                bool       `json:"expired,omitempty"`             // past its expiration, awaiting deletion
 	GCFailure              string     `json:"gcFailure,omitempty"`
 	Reason                 string     `json:"reason,omitempty"`
 	Rule                   *RuleDTO   `json:"rule,omitempty"`
@@ -274,7 +275,7 @@ func veleroScheduleDTO(r healthsrc.Row[healthsrc.VeleroScheduleRow]) VeleroSched
 		DueZero: v.Due.Zero, DueUnknown: v.Due.Unknown, Validation: classTexts(s.Validation), NName: v.NName, NState: v.NState,
 		PreviousNamed: v.PreviousNamed, Runs: []VeleroRunDTO{}, Newer: []VeleroRunDTO{}, Synced: v.Synced, Resumed: r.Data.Resumed,
 		Horizon: veleroHorizonDTO(v.Horizon),
-		Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval),
+		Reason:  r.Eval.Reason, Rule: toRuleDTO(r.Eval),
 		Template: VeleroTemplateDTO{StorageLocation: t.StorageLocation, StorageLocationInvalid: t.StorageLocationInvalid, TTL: t.TTL,
 			SnapshotVolumes: t.SnapshotVolumes, DefaultVolumesToFs: t.DefaultVolumesToFs, SnapshotMoveData: t.SnapshotMoveData,
 			VolumeSnapshotLocations: nonNil(t.VolumeSnapshotLocations), IncludedNamespaces: nonNil(t.Included), IncludedCount: t.IncludedCount,
@@ -333,7 +334,8 @@ func veleroBackupDTO(r healthsrc.Row[healthsrc.VeleroBackupRow]) VeleroBackupDTO
 		ValidationCount: b.ValidationCount, HooksAttempted: b.HooksAttempted, HooksFailed: b.HooksFailed, OperationsFailed: b.OperationsFailed,
 		Membership: m.Why, MembershipSchedule: m.Schedule, Disputed: m.Disputed, Counted: r.Data.Counted,
 		Schedule: r.Data.Attribution.Schedule, Attribution: r.Data.Attribution.How, AttributionDisputed: r.Data.Attribution.Disputed,
-		Expired: r.Data.Expired, GCFailure: b.GCFailure}
+		AttributionCoverage: r.Data.Attribution.Coverage,
+		Expired:             r.Data.Expired, GCFailure: b.GCFailure}
 	if r.Data.Counted { // only a counted row carries Klyx's verdict
 		rule := toRuleDTO(r.Eval)
 		d.Reason, d.Rule = r.Eval.Reason, &rule

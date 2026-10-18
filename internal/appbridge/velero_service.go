@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
@@ -50,8 +51,10 @@ type VeleroRestoreSourceDTO struct {
 	Backup      *VeleroRunDTO `json:"backup,omitempty"`
 	Schedule    string        `json:"schedule,omitempty"`
 	Attribution string        `json:"attribution,omitempty"`
-	AsOf        *time.Time    `json:"asOf,omitempty"`
-	Class       string        `json:"class,omitempty"`
+	// AttributionCoverage is the Schedules read the attribution comes from.
+	AttributionCoverage string     `json:"attributionCoverage,omitempty"`
+	AsOf                *time.Time `json:"asOf,omitempty"`
+	Class               string     `json:"class,omitempty"`
 }
 
 // VeleroRestoreDTO is one Restore: a fact, with no verdict (S2b §2).
@@ -171,7 +174,7 @@ func (bk veleroBackups) join(r *velero.Restore) VeleroRestoreSourceDTO {
 	if row, ok := bk.byName[r.Namespace+"/"+r.BackupName]; ok {
 		b := row.Backup
 		d := VeleroRestoreSourceDTO{State: "found", Text: "retained", Backup: veleroRunDTO(b, b.RunTime(), row.Attribution.How == "proven"),
-			Schedule: row.Attribution.Schedule, Attribution: row.Attribution.How}
+			Schedule: row.Attribution.Schedule, Attribution: row.Attribution.How, AttributionCoverage: row.Attribution.Coverage}
 		if bk.state == "stale" {
 			d.Text, d.AsOf = "retained as of the last good read", bk.asOf
 		}
@@ -206,7 +209,44 @@ func veleroRestoreDTO(r *velero.Restore, bk veleroBackups) VeleroRestoreDTO {
 	if r.Failure != nil {
 		d.Failure, d.FailureWithheld = velero.TextOf(*r.Failure), r.Failure.Withheld
 	}
+	fitRestoreDTO(&d)
 	return d
+}
+
+// fitRestoreDTO holds the serialised Restore, source join included, within
+// velero.MaxObject (S2b §3): the bridge spells out field names and Klyx's
+// class texts, so the projection's own fit is not enough (Codex's S2b
+// implementation review, finding 5). It cuts from the tails of the mapping,
+// then the excluded and included namespaces, then the validation classes,
+// then the joined backup's details; every count stays whole and Cut says
+// so.
+func fitRestoreDTO(d *VeleroRestoreDTO) {
+	for size := restoreDTOSize(d); size > velero.MaxObject; {
+		switch {
+		case len(d.Mapping) > 0:
+			d.Mapping = d.Mapping[:len(d.Mapping)-1]
+		case len(d.ExcludedNamespaces) > 0:
+			d.ExcludedNamespaces = d.ExcludedNamespaces[:len(d.ExcludedNamespaces)-1]
+		case len(d.IncludedNamespaces) > 0:
+			d.IncludedNamespaces = d.IncludedNamespaces[:len(d.IncludedNamespaces)-1]
+		case len(d.Validation) > 0:
+			d.Validation = d.Validation[:len(d.Validation)-1]
+		case d.Source.Backup != nil:
+			d.Source.Backup = nil
+		default:
+			return // nothing left to cut: every other field is bounded on its own
+		}
+		d.Cut = true
+		size = restoreDTOSize(d)
+	}
+}
+
+func restoreDTOSize(d *VeleroRestoreDTO) int {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return velero.MaxObject + 1
+	}
+	return len(b)
 }
 
 // GetVeleroRestores reads one cluster's Restores on demand, capped at

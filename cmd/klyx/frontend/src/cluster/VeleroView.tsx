@@ -135,11 +135,15 @@ const groupOf = (phase: string): PhaseGroup =>
 const GROUP_LABEL: Record<PhaseGroup, string> = { all: "All", failed: "Failed", partial: "Partially failed", progress: "In progress", completed: "Completed" };
 
 // How a listed Backup relates to the current schedules (S2b §2).
-export function attributionText(b: Pick<VeleroBackupDTO, "attribution" | "schedule" | "attributionDisputed">): string {
+export function attributionText(b: Pick<VeleroBackupDTO, "attribution" | "schedule" | "attributionDisputed" | "attributionCoverage">): string {
+  // a match from an incomplete Schedules read is kept and says so; no match
+  // in one proves nothing (Codex's S2b implementation review, finding 2)
+  const from = b.attributionCoverage ? ` (from ${b.attributionCoverage === "unreadable" ? "an unreadable" : "an incomplete"} schedules read)` : "";
   switch (b.attribution) {
-    case "proven": return `proven run of ${b.schedule}`;
-    case "named": return `matched by name to ${b.schedule}${b.attributionDisputed ? "; may have been synced from object storage" : ""}`;
-    case "synced": return `looks synced from object storage (carries ${b.schedule}'s name)`;
+    case "proven": return `proven run of ${b.schedule}${from}`;
+    case "named": return `matched by name to ${b.schedule}${b.attributionDisputed ? "; may have been synced from object storage" : ""}${from}`;
+    case "synced": return `looks synced from object storage (carries ${b.schedule}'s name)${from}`;
+    case "unknown": return `whether it is a run of a current schedule cannot be told: the schedules read is ${b.attributionCoverage === "unreadable" ? "unreadable" : "incomplete"}`;
     default: return "not a run of a current schedule";
   }
 }
@@ -150,9 +154,16 @@ export function attributionText(b: Pick<VeleroBackupDTO, "attribution" | "schedu
 export function horizonCell(h: VeleroHorizonDTO, nowS: number): { text: string; title: string; partial: boolean } {
   const title = h.partialText ? `${h.text} · ${h.partialText}` : h.text;
   if (h.state === "unreadable") return { text: "runs unknown", title, partial: false };
-  if (!h.at || h.state !== "found") {
+  if (h.state !== "found") {
     const none = !h.incomplete ? "none retained" : h.window && !h.tier0 ? `none since ${when(h.window)}` : "none held";
     return { text: none, title, partial: !!h.partial };
+  }
+  if (!h.at) {
+    // a success with no recorded time is still a success, never "none"
+    // (Codex's S2b implementation review, finding 3)
+    const parts = [h.incomplete || h.orderUnknown ? "retained, time not recorded, maybe newer" : "retained, time not recorded"];
+    if (!h.proven) parts.push("by name");
+    return { text: parts.join(" · "), title, partial: !!h.partial };
   }
   const bound = h.incomplete || h.orderUnknown ? "≤ " : "";
   const parts = [`${bound}${formatAge(Math.max(0, nowS - unix(h.at)))} ago`];
@@ -326,8 +337,8 @@ export function VeleroView({ cluster }: { cluster: string }) {
       const k = phaseKind(b.phase);
       return rowFor(it, { mark: <VerdictMark health={{ kind: k, label: b.phase || "New" }} />, name: name(b.namespace, b.name),
         status: phaseCell(b.phase, b.expired ? "expired, awaiting deletion" : undefined),
-        schedule: <span style={{ ...cell, color: b.attribution ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={attributionText(b)}>
-          {b.attribution ? `${b.schedule} · ${b.attribution === "proven" ? "proven" : b.attribution === "named" ? "by name" : "synced"}` : "none"}</span>,
+        schedule: <span style={{ ...cell, color: b.attribution && b.attribution !== "unknown" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={attributionText(b)}>
+          {b.attribution === "unknown" ? "unknown" : b.attribution ? `${b.schedule} · ${b.attribution === "proven" ? "proven" : b.attribution === "named" ? "by name" : "synced"}${b.attributionCoverage ? " ?" : ""}` : "none"}</span>,
         started: muted(b.started ? formatAge(Math.max(0, nowS - unix(b.started))) : "-"), completed: muted(b.completed ? formatAge(Math.max(0, nowS - unix(b.completed))) : "-"),
         expires: muted(b.expires ? when(b.expires) : "-"), errors: muted(`${b.errors} · ${b.warnings}`),
         location: muted(b.storageLocation ?? (b.storageLocationInvalid ? "(invalid)" : "-")) });
@@ -658,7 +669,7 @@ function BackupInspector({ cluster, b, gone, listed, onOpen, onClose }: { cluste
         <span className="t-secondary">· Velero's phase</span>
       </div>
       <div className="t-secondary" style={{ marginTop: 4 }}>
-        {b.attribution === "proven" || b.attribution === "named" ? <>A {attributionText(b).startsWith("proven") ? "proven run" : "record matched by name"} of <button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("Schedule", b.namespace, b.schedule ?? ""))}>{b.schedule}</button>{b.attributionDisputed ? "; it may have been synced from object storage" : ""}: Klyx judges it on that schedule, never here.</>
+        {b.attribution === "proven" || b.attribution === "named" ? <>A {b.attribution === "proven" ? "proven run" : "record matched by name"} of <button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("Schedule", b.namespace, b.schedule ?? ""))}>{b.schedule}</button>{b.attributionDisputed ? "; it may have been synced from object storage" : ""}: Klyx judges it on that schedule, never here.{b.attributionCoverage ? " The schedules read is incomplete, so the schedule may have changed since." : ""}</>
           : `${attributionText(b)[0].toUpperCase()}${attributionText(b).slice(1)}. Klyx lists it as a fact, with no verdict.`}
       </div>
     </div>
@@ -719,19 +730,24 @@ function HorizonBlock({ s, onOpen }: { s: VeleroScheduleDTO; onOpen: (key: strin
 // A reply lands only for this cluster and the newest read; nothing outlives
 // the view (S2b §3).
 function useRestores(cluster: string, open: boolean): { data: VeleroRestoresDTO | null; loading: boolean; reread: () => void } {
-  const [data, setData] = useState<VeleroRestoresDTO | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [held, setHeld] = useState<VeleroRestoresDTO | null>(null);
+  const [loadingFor, setLoadingFor] = useState<string | null>(null);
   const seq = useRef(0);
+  // a read belongs to the cluster it was made for: render shows it only
+  // under that cluster, so a switch never commits the last cluster's rows,
+  // not even for one frame (Codex's S2b implementation review, finding 1)
+  const data = held && held.cluster === cluster ? held : null;
+  const loading = loadingFor === cluster;
   const read = useCallback(() => {
     const id = `${cluster}#${++seq.current}`;
-    setLoading(true);
+    setLoadingFor(cluster);
     void getVeleroRestores(cluster, id).then((r) => {
       if (r.cluster !== cluster || r.readId !== `${cluster}#${seq.current}`) return; // another cluster's, or an older read's
-      setData(r);
-      setLoading(false);
+      setHeld(r);
+      setLoadingFor(null);
     });
   }, [cluster]);
-  useEffect(() => { setData(null); setLoading(false); seq.current++; }, [cluster]);
+  useEffect(() => { seq.current++; }, [cluster]);
   useEffect(() => { if (open && !data && !loading) read(); }, [open, data, loading, read]);
   return { data, loading, reread: read };
 }
@@ -764,7 +780,7 @@ function RestoreInspector({ cluster, r, gone, onOpen, onClose }: { cluster: stri
             {r.scheduleName && <><span>schedule</span><span>{r.scheduleName} (Velero picks its newest Completed backup by start)</span></>}
             {(r.scheduleNameInvalid) && <><span>schedule</span><span>(invalid name)</span></>}
             <span>backup</span><span>{src.state === "found" && src.backup
-              ? <><button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("RetainedBackup", r.namespace, src.backup!.name))}>{src.backup.name}</button> · {src.backup.phase}{src.attribution ? ` · ${src.attribution === "proven" ? `proven run of ${src.schedule}` : src.attribution === "named" ? `matched by name to ${src.schedule}` : src.attribution === "synced" ? "looks synced" : ""}` : ""}</>
+              ? <><button style={{ ...linkStyle, display: "inline" }} onClick={() => onOpen(keyOf("RetainedBackup", r.namespace, src.backup!.name))}>{src.backup.name}</button> · {src.backup.phase}{src.attribution ? ` · ${attributionText({ attribution: src.attribution as VeleroBackupDTO["attribution"], schedule: src.schedule, attributionCoverage: src.attributionCoverage as VeleroBackupDTO["attributionCoverage"] })}` : ""}</>
               : <span style={{ color: SOURCE_TONE[src.state] ?? "var(--color-text-tertiary)" }}>{r.backupName ? `${r.backupName}: ` : ""}{src.text}{src.class ? ` (${src.class})` : ""}</span>}</span>
             {src.state === "found" && src.text !== "retained" && <><span>retained</span><span>{src.text}{src.asOf ? ` (${when(src.asOf)})` : ""}</span></>}
             {src.state === "not-in-last-read" && src.asOf && <><span>as of</span><span>{when(src.asOf)}</span></>}

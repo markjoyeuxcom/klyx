@@ -314,3 +314,15 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
 - three Restores (completed and joined, failed with the needle, failed validation with the needle).
 
 **Gates:** filled in below as they complete.
+
+## 11. Implementation review 1: Codex's review of 5a2e811
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | Switching clusters committed the last cluster's Restores for a frame, until an effect cleared them | `useRestores` shows a read only under the cluster it was made for, decided in render; the reply fence stays |
+| 2 | A Backup with no match in an incomplete or unreadable Schedules read was "not a run of a current schedule" | `Attributions` takes the Schedules read's coverage: no match there is "unknown"; a match is kept with its coverage, said in the row, inspector, Restore join and AI fields; "no current schedule" filters only what a complete read proves |
+| 3 | A success with neither time read "none retained" and printed a zero date | `Horizon.Text` says both times are not recorded; `horizonCell` reads "retained, time not recorded" (qualified when incomplete) |
+| 4 | The fleet view counted unknown history as "no retained success" | Three counts: known none, none in the history Klyx holds (capped), runs unknown |
+| 5 | The 4 KiB bound held only for the abbreviated projection, not the serialised DTO with its source join | `fitRestoreDTO` measures the final DTO and cuts from the mapping, the namespaces, the validation classes, then the joined backup's details; counts stay whole; a worst-case test serialises the bridge result |
+
+Codex's probes are kept as `review_s2b_r1_test.go` in velero, healthsrc and appbridge, and as the "review:" cases in `VeleroView.test.tsx` and `FleetBackups.test.tsx`.

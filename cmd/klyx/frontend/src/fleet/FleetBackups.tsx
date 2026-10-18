@@ -65,7 +65,11 @@ export function FleetBackups() {
   const pending = clusters.filter((c) => !replies[c.name]).length;
   const noted = clusters.map((c) => ({ name: c.name, note: replies[c.name] ? coverageNote(replies[c.name]) : "" })).filter((c) => c.note);
   const withVelero = clusters.filter((c) => replies[c.name]?.state === "read").length;
-  const noSuccess = rows.filter((r) => r.horizon.state !== "found").length;
+  // known none, none in a capped history, and unknown history are three
+  // facts (Codex's S2b implementation review, finding 4)
+  const noSuccess = rows.filter((r) => r.horizon.state === "none" && !r.horizon.incomplete).length;
+  const noneHeld = rows.filter((r) => r.horizon.state === "none" && r.horizon.incomplete).length;
+  const unknownRuns = rows.filter((r) => r.horizon.state === "unreadable").length;
   const broken = rows.filter((r) => r.rule.role === "fault" || r.rule.role === "degraded").length;
   const grid = "24px minmax(150px, 1.2fr) minmax(110px, 0.6fr) minmax(150px, 1fr) minmax(130px, 0.8fr) 110px";
 
@@ -89,6 +93,8 @@ export function FleetBackups() {
           <span className="t-secondary">schedule{rows.length === 1 ? "" : "s"} · {scope}</span>
           {broken > 0 && <span className="t-status" style={{ color: "var(--color-text-danger)" }}>▲ {broken} missed, failed or not running</span>}
           {noSuccess > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }}>{noSuccess} with no retained success</span>}
+          {noneHeld > 0 && <span className="t-secondary">{noneHeld} with none in the history Klyx holds</span>}
+          {unknownRuns > 0 && <span className="t-secondary">{unknownRuns} with runs unknown</span>}
         </>
       )}
       headerEnd={
