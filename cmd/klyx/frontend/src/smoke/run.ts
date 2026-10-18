@@ -506,7 +506,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await open("loadbalancers");
     await closeDrawer();
     (await within(4000, "the Pools tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^Pools/))).click();
-    const first = await within(10_000, "pool rows", () => $<HTMLElement>(".lens-row"));
+    // the tab's rows replace the Services rows on the next render: wait for a pool's
+    const first = await within(10_000, "pool rows", () => { const r = $<HTMLElement>(".lens-row"); return r && !/lab-s4\//.test(r.textContent ?? "") ? r : null; });
     if (!/lab-s4-cilium-conflict/.test(first.textContent ?? "")) throw new Error(`not broken first: the first row is ${first.textContent}`);
     (await within(4000, "the unadvertised pool", () => byText<HTMLElement>(".lens-row", /lab-s4-silent/))).click();
     await within(8000, "no advertisement", () => /No advertisement/.test($("[data-testid='lb-pool-panel']")?.textContent ?? ""));
