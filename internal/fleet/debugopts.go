@@ -35,7 +35,7 @@ const (
 // DebugProfiles is every offered profile and what it adds to the debug
 // container (legacy is not offered: deprecated, removed in kubectl 1.39).
 var DebugProfiles = map[string]string{
-	"general":    "adds SYS_PTRACE, for inspecting the target's processes where the runtime supports --target",
+	"general":    "adds SYS_PTRACE, for inspecting the target container's processes where the runtime supports targeting it",
 	"baseline":   "no added privilege (clears the security context)",
 	"restricted": "non-root, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp; the image must run as non-root unless the pod sets runAsUser",
 	"netadmin":   "adds NET_ADMIN and NET_RAW",

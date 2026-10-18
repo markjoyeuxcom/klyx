@@ -568,6 +568,46 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     noIdentityNeedle("the stores");
     (await within(4000, "the ExternalSecrets view", () => byText<HTMLElement>("[aria-label='External Secrets view'] button", /^ExternalSecrets/))).click();
   });
+  // Coverage S6 (scratchpad lab-s6, a real kubelet): a completed in-place
+  // resize's desired, allocated and actual values and its acknowledged
+  // generation; a pod with a failed debug container that is still Running;
+  // the debug chooser naming sysadmin's privilege, cancelled.
+  const podBlock = async (name: string, sel: string, re: RegExp, what: string) => {
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: "klyx-resize-lab", name });
+    const end = Date.now() + 20_000;
+    for (;;) {
+      const t = $(sel)?.textContent ?? "";
+      if ($("#inspector-identity")?.textContent?.includes(name) && re.test(t)) return t;
+      if (Date.now() > end) throw new Error(`timed out waiting for ${what}; the block reads: ${(t || "none").slice(0, 200)}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  await step(steps, "Pods: a completed in-place resize", async () => {
+    await open("pods");
+    await closeDrawer();
+    await podBlock("resize-done", "[data-testid='pod-resources']", /desired 150m · allocated 150m · actual 150m[\s\S]*acknowledged generation 2/, "resize-done's Resources");
+    if (!/assuming kube-scheduler 1\.\d+/.test($("[data-testid='pod-sched']")?.textContent ?? "")) throw new Error("the scheduled estimate does not name its assumption");
+  });
+  await step(steps, "Pods: a failed debug container is evidence, not the app's failure", async () => {
+    await open("pods");
+    await closeDrawer();
+    await podBlock("debug-target", "[data-testid='pod-debug-containers']", /dbg-failed[\s\S]*exited 3/, "debug-target's debug containers");
+    const row = [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /debug-target/.test(r.textContent ?? ""));
+    if (row && !/Running/.test(row.textContent ?? "")) throw new Error(`the pod's verdict changed: ${row.textContent}`);
+  });
+  await step(steps, "Pods: the debug chooser names sysadmin's privilege", async () => {
+    const panel = await within(8000, "the pod inspector", () => $("[data-testid='lens-inspector']"));
+    (await within(4000, "More", () => [...panel.querySelectorAll<HTMLElement>("button[aria-haspopup='menu']")].find((b) => /^More/.test(b.textContent ?? "")))).click();
+    (await within(4000, "Debug shell", () => byText<HTMLElement>("[role='menuitem']", /Debug shell/))).click();
+    const target = await within(1500, "a container choice", () => byText<HTMLElement>("[role='menuitem']", /^app$/)).catch(() => null);
+    target?.click();
+    await within(10_000, "the kubectl gate", () => /kubectl v1\./.test($("[data-testid='debug-kubectl']")?.textContent ?? ""));
+    (await within(4000, "sysadmin", () => [...document.querySelectorAll<HTMLInputElement>("input[name='debug-profile']")].find((i) => i.value === "sysadmin"))).click();
+    (await within(4000, "Continue", () => $<HTMLButtonElement>("[data-testid='debug-continue']"))).click();
+    await within(4000, "the confirmation naming the privilege", () => /profile sysadmin: privileged/.test($("[data-testid='confirm-detail']")?.textContent ?? ""));
+    (await within(4000, "Cancel", () => [...document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((b) => b.textContent === "Cancel"))).click();
+    await within(2000, "the dialog closed", () => !$("[data-testid='confirm-detail']"));
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
