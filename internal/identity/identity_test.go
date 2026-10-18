@@ -72,37 +72,37 @@ func only(t *testing.T, rs []Reading, adapter string) Reading {
 }
 
 func TestIRSAComparison(t *testing.T) {
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), irsaPod(roleA), false), AdapterAWS); r.State != StateMatch || r.Compared != "role and audience" {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), irsaPod(roleA), PlatformOther), AdapterAWS); r.State != StateMatch || r.Compared != "role and audience" {
 		t.Fatalf("match: %+v", r)
 	}
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleB}), irsaPod(roleA), false), AdapterAWS); r.State != StateDiffers || !strings.Contains(r.Text, roleA) {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleB}), irsaPod(roleA), PlatformOther), AdapterAWS); r.State != StateDiffers || !strings.Contains(r.Text, roleA) {
 		t.Fatalf("a stale role: %+v", r)
 	}
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA, AnnAudience: "custom"}), irsaPod(roleA), false), AdapterAWS); r.State != StateDiffers || !strings.Contains(r.Text, "audience") {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA, AnnAudience: "custom"}), irsaPod(roleA), PlatformOther), AdapterAWS); r.State != StateDiffers || !strings.Contains(r.Text, "audience") {
 		t.Fatalf("an audience mismatch: %+v", r)
 	}
-	if r := only(t, Compare(sa(nil), irsaPod(roleA), false), AdapterAWS); r.State != StateUndeclared {
+	if r := only(t, Compare(sa(nil), irsaPod(roleA), PlatformOther), AdapterAWS); r.State != StateUndeclared {
 		t.Fatalf("undeclared: %+v", r)
 	}
 	none := pod(nil, nil, nil)
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), none, false), AdapterAWS); r.State != StateNotConfig || !strings.Contains(r.Text, "2026-10-18T09:00:00Z") {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), none, PlatformOther), AdapterAWS); r.State != StateNotConfig || !strings.Contains(r.Text, "2026-10-18T09:00:00Z") {
 		t.Fatalf("created before the annotation: %+v", r)
 	}
-	if rs := Compare(sa(nil), none, false); len(rs) != 0 {
+	if rs := Compare(sa(nil), none, PlatformOther); len(rs) != 0 {
 		t.Fatalf("nothing declared, nothing given: %+v", rs)
 	}
 	skipped := pod(nil, nil, nil, func(p *corev1.Pod) { p.Annotations = map[string]string{AnnAWSSkip: "sidecar, app"} })
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), skipped, false), AdapterAWS); r.State != StateExcluded {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), skipped, PlatformOther), AdapterAWS); r.State != StateExcluded {
 		t.Fatalf("skipped (comma): %+v", r)
 	}
 	optOut := pod(nil, nil, nil, func(p *corev1.Pod) { p.Labels = map[string]string{LabelAWSOptOut: ""} })
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), optOut, false), AdapterAWS); r.State != StateExcluded {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), optOut, PlatformOther), AdapterAWS); r.State != StateExcluded {
 		t.Fatalf("opt-out label: %+v", r)
 	}
 	withEnvFrom := pod(nil, nil, nil, func(p *corev1.Pod) {
 		p.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "x"}}}}
 	})
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), withEnvFrom, false), AdapterAWS); !strings.Contains(r.Text, "envFrom") {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), withEnvFrom, PlatformOther), AdapterAWS); !strings.Contains(r.Text, "envFrom") {
 		t.Fatalf("envFrom said: %+v", r)
 	}
 }
@@ -135,7 +135,7 @@ func TestChains(t *testing.T) {
 			[]corev1.VolumeMount{{Name: "aws-iam-token", MountPath: `C:\var\run\secrets\eks.amazonaws.com\serviceaccount`}}, []corev1.Volume{tokenVol("aws-iam-token", "token", AudienceSTS)}), StateMatch},
 	}
 	for _, c := range cases {
-		if r := only(t, Compare(declared, c.p, false), AdapterAWS); r.State != c.state {
+		if r := only(t, Compare(declared, c.p, PlatformOther), AdapterAWS); r.State != c.state {
 			t.Errorf("%s: %+v", c.name, r)
 		}
 	}
@@ -151,16 +151,16 @@ func TestPodIdentity(t *testing.T) {
 	mounts := []corev1.VolumeMount{{Name: "eks-pod-identity-token", MountPath: piDir}}
 	vols := []corev1.Volume{tokenVol("eks-pod-identity-token", "eks-pod-identity-token", AudiencePodIdentity)}
 	p := pod(piEnv(), mounts, vols)
-	r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), p, false), AdapterAWS)
+	r := only(t, Compare(sa(map[string]string{AnnRoleARN: roleA}), p, PlatformOther), AdapterAWS)
 	if r.State != StatePodIdentity || !strings.Contains(r.Text, "prefers Pod Identity") || !strings.Contains(r.Text, "not visible") {
 		t.Fatalf("pod identity: %+v", r)
 	}
 	wrongAud := pod(piEnv(), mounts, []corev1.Volume{tokenVol("eks-pod-identity-token", "eks-pod-identity-token", AudienceSTS)})
-	if r := only(t, Compare(sa(nil), wrongAud, false), AdapterAWS); r.State != StatePartial || !strings.Contains(r.Text, "audience") {
+	if r := only(t, Compare(sa(nil), wrongAud, PlatformOther), AdapterAWS); r.State != StatePartial || !strings.Contains(r.Text, "audience") {
 		t.Fatalf("another audience: %+v", r)
 	}
 	both := pod(append(piEnv(), env(EnvRoleARN, roleA, EnvWebTokenFile, irsaDir+"/token")...), mounts, vols)
-	if r := only(t, Compare(sa(nil), both, false), AdapterAWS); r.State != StateBothAWS || !strings.Contains(r.Text, "not inferred") {
+	if r := only(t, Compare(sa(nil), both, PlatformOther), AdapterAWS); r.State != StateBothAWS || !strings.Contains(r.Text, "not inferred") {
 		t.Fatalf("both mechanisms: %+v", r)
 	}
 	labelled := pod(piEnv(), mounts, vols, func(p *corev1.Pod) { p.Labels = map[string]string{LabelPodIdentity: "enabled"} })
@@ -180,30 +180,30 @@ func azurePod(client, ten string, opts ...podOpt) Pod {
 
 func TestAzure(t *testing.T) {
 	full := map[string]string{AnnAzureClient: guidA, AnnAzureTenant: tenant}
-	if r := only(t, Compare(sa(full), azurePod(guidA, tenant), false), AdapterAzure); r.State != StateMatch || r.Compared != "client ID and tenant" {
+	if r := only(t, Compare(sa(full), azurePod(guidA, tenant), PlatformOther), AdapterAzure); r.State != StateMatch || r.Compared != "client ID and tenant" {
 		t.Fatalf("match: %+v", r)
 	}
-	if r := only(t, Compare(sa(map[string]string{AnnAzureClient: guidA, AnnAzureTenant: guidB}), azurePod(guidA, tenant), false), AdapterAzure); r.State != StateDiffers || !strings.Contains(r.Text, "tenant") {
+	if r := only(t, Compare(sa(map[string]string{AnnAzureClient: guidA, AnnAzureTenant: guidB}), azurePod(guidA, tenant), PlatformOther), AdapterAzure); r.State != StateDiffers || !strings.Contains(r.Text, "tenant") {
 		t.Fatalf("a tenant mismatch: %+v", r)
 	}
-	if r := only(t, Compare(sa(map[string]string{AnnAzureClient: guidA}), azurePod(guidA, tenant), false), AdapterAzure); r.State != StateMatchClient || !strings.Contains(r.Text, "not visible") || strings.Contains(r.Text, "is the webhook's default") {
+	if r := only(t, Compare(sa(map[string]string{AnnAzureClient: guidA}), azurePod(guidA, tenant), PlatformOther), AdapterAzure); r.State != StateMatchClient || !strings.Contains(r.Text, "not visible") || strings.Contains(r.Text, "is the webhook's default") {
 		t.Fatalf("no tenant declared: the origin is not claimed: %+v", r)
 	}
 	notOpted := pod(nil, nil, nil, func(p *corev1.Pod) { p.Labels = map[string]string{LabelAzureUse: "True"} })
-	if r := only(t, Compare(sa(full), notOpted, false), AdapterAzure); r.State != StateNotOptedIn {
+	if r := only(t, Compare(sa(full), notOpted, PlatformOther), AdapterAzure); r.State != StateNotOptedIn {
 		t.Fatalf("the label must be exactly \"true\": %+v", r)
 	}
 	skipped := pod(nil, nil, nil, func(p *corev1.Pod) {
 		p.Labels = map[string]string{LabelAzureUse: "true"}
 		p.Annotations = map[string]string{AnnAzureSkip: "x; app"}
 	})
-	if r := only(t, Compare(sa(full), skipped, false), AdapterAzure); r.State != StateExcluded {
+	if r := only(t, Compare(sa(full), skipped, PlatformOther), AdapterAzure); r.State != StateExcluded {
 		t.Fatalf("skipped (semicolon): %+v", r)
 	}
 	old := pod(env(EnvAzureClient, guidA, EnvAzureTenant, tenant, EnvAzureToken, "/var/run/secrets/azure/tokens/azure-identity-token"),
 		[]corev1.VolumeMount{{Name: "azure-identity-token", MountPath: "/var/run/secrets/azure/tokens"}},
 		[]corev1.Volume{tokenVol("azure-identity-token", "azure-identity-token", AudienceAzure)}, func(p *corev1.Pod) { p.Labels = map[string]string{LabelAzureUse: "true"} })
-	if r := only(t, Compare(sa(full), old, false), AdapterAzure); r.State != StateMatch {
+	if r := only(t, Compare(sa(full), old, PlatformOther), AdapterAzure); r.State != StateMatch {
 		t.Fatalf("the pre-v1.6 volume: %+v", r)
 	}
 	if d := sa(map[string]string{AnnAzureClient: guidA, AnnAzureExpiry: "60"}); !d.AzureExpiryOutOfRange {
@@ -213,14 +213,25 @@ func TestAzure(t *testing.T) {
 
 func TestGKE(t *testing.T) {
 	g := "app@proj.iam.gserviceaccount.com"
-	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), true), AdapterGKE); r.State != StateLinked || !strings.Contains(r.Text, g) {
+	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformGKE), AdapterGKE); r.State != StateLinked || !strings.Contains(r.Text, g) {
 		t.Fatalf("linked: %+v", r)
 	}
-	if r := only(t, Compare(sa(nil), pod(nil, nil, nil), true), AdapterGKE); r.State != StateUnlinked {
+	if r := only(t, Compare(sa(nil), pod(nil, nil, nil), PlatformGKE), AdapterGKE); r.State != StateUnlinked {
 		t.Fatalf("direct federation: %+v", r)
 	}
 	host := pod(nil, nil, nil, func(p *corev1.Pod) { p.Spec.HostNetwork = true })
-	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), host, true), AdapterGKE); r.State != StateHostNetwork {
+	// only GKE's metadata server honours the link: on nodes read as not GKE
+	// it does nothing; with the nodes unread, GKE is not known either way
+	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformOther), AdapterGKE); r.State != StateNotGKE || !strings.Contains(r.Text, "does nothing here") {
+		t.Fatalf("a link off GKE: %+v", r)
+	}
+	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformUnread), AdapterGKE); r.State != StateLinked || !strings.Contains(r.Text, "whether this cluster is GKE is not known") {
+		t.Fatalf("a link with the nodes unread: %+v", r)
+	}
+	if rs := Compare(sa(nil), pod(nil, nil, nil), PlatformOther); len(rs) != 0 {
+		t.Fatalf("no link and not GKE: no GKE reading: %+v", rs)
+	}
+	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), host, PlatformGKE), AdapterGKE); r.State != StateHostNetwork {
 		t.Fatalf("hostNetwork: %+v", r)
 	}
 }
@@ -250,7 +261,7 @@ func TestValuePolicy(t *testing.T) {
 	}
 	// an unexpected value still compares by its exact bytes
 	odd := "not-an-arn"
-	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: odd}), irsaPod(odd), false), AdapterAWS); r.State != StateMatch || strings.Contains(r.Text, odd) {
+	if r := only(t, Compare(sa(map[string]string{AnnRoleARN: odd}), irsaPod(odd), PlatformOther), AdapterAWS); r.State != StateMatch || strings.Contains(r.Text, odd) {
 		t.Fatalf("exact comparison, never shown: %+v", r)
 	}
 }

@@ -33,7 +33,7 @@ const ADAPTER: Record<string, string> = { aws: "AWS", azure: "Azure", gke: "GKE"
 // mark), never a fault: identity is on demand and raises nothing (S5 §5).
 // A reading Klyx could not settle is said in secondary text.
 export const LOOK_AT = new Set(["differs", "not-configured", "not-opted-in", "partial", "both-aws"]);
-const QUIET = new Set(["unresolved", "excluded", "configured-undeclared", "unlinked", "host-network", "match-client"]);
+const QUIET = new Set(["unresolved", "excluded", "configured-undeclared", "unlinked", "host-network", "match-client", "not-gke"]);
 
 export const NOT_READ: Record<string, string> = {
   replaced: "This object was replaced since it was opened: its identity is not shown for the new one.",
@@ -68,17 +68,21 @@ function ReadingLine({ r }: { r: IdReading }) {
   );
 }
 
+// The C2 side: its reading, then the evidence behind it (the manager and
+// the observation each say why), never the verdict twice.
 function SideLine({ s }: { s: IdSide }) {
   const m = s.management;
+  const why = [
+    m.managerEvidence ? `manager ${m.manager}: ${m.managerEvidence}` : "",
+    m.observedEvidence ? `${m.observed === "observed" ? "observed" : "not observed"}: ${m.observedEvidence}` : "",
+    s.note ?? "",
+  ].filter(Boolean);
   return (
     <div className="t-body" data-testid="identity-side" style={{ overflowWrap: "anywhere" }}>
       {s.fault && <span style={{ marginRight: 6 }}><Aspect kind="fault" label="fault" /></span>}
       <span className="t-legend" style={{ marginRight: 6 }}>{s.component}</span>
       <span>{s.health}</span>
-      <div className="t-secondary">
-        manager: {m.manager}{m.managerEvidence ? ` (${m.managerEvidence})` : ""} · health {m.observed === "observed" ? "observed" : "not directly observed"}{m.observedEvidence ? ` (${m.observedEvidence})` : ""}
-        {s.note ? ` · ${s.note}` : ""}
-      </div>
+      {why.length > 0 && <div className="t-secondary">{why.join(" · ")}</div>}
     </div>
   );
 }

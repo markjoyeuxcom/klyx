@@ -49,10 +49,21 @@ func (e Env) gke() bool {
 	return false
 }
 
+// platform says what the nodes read show of the cluster.
+func (e Env) platform() Platform {
+	switch {
+	case !e.NodesRead:
+		return PlatformUnread
+	case e.gke():
+		return PlatformGKE
+	}
+	return PlatformOther
+}
+
 // PodReportOf compares one pod with its ServiceAccount's declarations and
 // reads its node's side.
 func PodReportOf(d Declared, p Pod, e Env) PodReport {
-	r := PodReport{Pod: p, Readings: Compare(d, p, e.gke())}
+	r := PodReport{Pod: p, Readings: Compare(d, p, e.platform())}
 	var node *NodeInfo
 	if e.NodesRead {
 		node = e.Nodes[p.Node]

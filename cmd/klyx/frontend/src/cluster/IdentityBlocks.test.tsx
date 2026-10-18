@@ -15,7 +15,8 @@ const { ServiceAccountIdentity, PodIdentity, StoreAuthenticatesAs } = await impo
 
 const pod = (name: string, over: Partial<IdPod> = {}): IdPod => ({ namespace: "app", name, uid: `u-${name}`, serviceAccount: "web", node: "n1", created: "2026-10-18T08:00:00Z",
   azureOptIn: false, containers: [{ name: "app" }], ...over });
-const side = (over: Partial<IdSide> = {}): IdSide => ({ component: "eks-pod-identity-agent", health: "running on n1", management: { manager: "unknown", observed: "observed", observedEvidence: "its pod on this node" }, ...over });
+const side = (over: Partial<IdSide> = {}): IdSide => ({ component: "eks-pod-identity-agent", health: "running on n1",
+  management: { manager: "unknown", managerEvidence: "the add-on's labels are not verified", observed: "observed", observedEvidence: "its pod on this node" }, ...over });
 const report = (p: IdPod, readings: IdPodReport["readings"], nodes?: IdSide[]): IdPodReport => ({ pod: p, readings, nodes });
 const LIMIT = "cloud trust, associations and permissions are not visible";
 const saDTO = (uid: string, over: Partial<SAIdentityDTO["report"]> = {}, dto: Partial<SAIdentityDTO> = {}): SAIdentityDTO => ({ cluster: "c", namespace: "app", name: "web", uid,
@@ -49,8 +50,9 @@ describe("identity blocks (coverage S5 §5)", () => {
     expect(within(screen.getByTestId("identity-reading-pod-identity")).queryByRole("img")).toBeNull();
     const s = screen.getByTestId("identity-side");
     expect(within(s).getByRole("img", { name: "fault" })).toBeTruthy();
-    expect(s.textContent).toContain("manager: unknown");
-    expect(s.textContent).toContain("health observed (its pod on this node)");
+    expect(s.textContent).toContain("manager unknown: the add-on's labels are not verified");
+    expect(s.textContent).toContain("observed: its pod on this node");
+    expect(s.textContent?.match(/no agent pod on n1/g)?.length).toBe(1);
     expect(screen.getByTestId("identity-store").textContent).toContain("serviceAccountRef");
     expect(screen.getByTestId("identity-limits").textContent).toContain(LIMIT);
   });

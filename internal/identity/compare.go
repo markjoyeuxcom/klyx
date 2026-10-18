@@ -27,6 +27,7 @@ const (
 	StateLinked      = "linked"
 	StateUnlinked    = "unlinked"
 	StateHostNetwork = "host-network"
+	StateNotGKE      = "not-gke" // a GKE link on a cluster whose nodes are not GKE
 )
 
 // Reading is one comparison, current against current, naming what it
@@ -76,9 +77,19 @@ func chainReading(adapter, container string, m *Mechanism) Reading {
 	return Reading{Adapter: adapter, Container: container, State: StatePartial, Text: "Partial: " + m.Missing + "; nothing is compared."}
 }
 
+// Platform is what the nodes say of the cluster, for the GKE reading: only
+// the GKE metadata server honours a linked Google service account.
+type Platform string
+
+const (
+	PlatformGKE    Platform = "gke"    // a node with a gce:// provider ID
+	PlatformOther  Platform = "other"  // the nodes were read and none is GKE
+	PlatformUnread Platform = "unread" // the nodes were not read
+)
+
 // Compare reads every container of a pod against the ServiceAccount's
-// current declarations. gke says the pod's cluster is GKE (a gce:// node).
-func Compare(d Declared, p Pod, gke bool) []Reading {
+// current declarations, on a cluster of the given platform.
+func Compare(d Declared, p Pod, pl Platform) []Reading {
 	var out []Reading
 	for _, c := range p.Containers {
 		if r, ok := compareAWS(d, p, c); ok {
@@ -88,8 +99,8 @@ func Compare(d Declared, p Pod, gke bool) []Reading {
 			out = append(out, r)
 		}
 	}
-	if d.GKEServiceAccount != nil || gke {
-		out = append(out, compareGKE(d, p))
+	if d.GKEServiceAccount != nil || pl == PlatformGKE {
+		out = append(out, compareGKE(d, p, pl))
 	}
 	return out
 }
@@ -185,13 +196,18 @@ func compareAzure(d Declared, p Pod, c Container) (Reading, bool) {
 	return r, true
 }
 
-func compareGKE(d Declared, p Pod) Reading {
+func compareGKE(d Declared, p Pod, pl Platform) Reading {
 	r := Reading{Adapter: AdapterGKE}
 	switch {
+	case d.GKEServiceAccount != nil && pl == PlatformOther:
+		r.State, r.Text = StateNotGKE, "Declares "+d.GKEServiceAccount.Shown+", which only GKE's metadata server honours; no node of this cluster is a GKE node (gce://), so the annotation does nothing here."
 	case p.HostNetwork:
 		r.State, r.Text = StateHostNetwork, "This pod runs on the host network, so it does not use Workload Identity Federation for GKE."
 	case d.GKEServiceAccount != nil:
 		r.State, r.Text = StateLinked, "Linked to "+d.GKEServiceAccount.Shown+" for impersonation; the IAM binding is not visible."
+		if pl == PlatformUnread {
+			r.Text += " The nodes were not read, so whether this cluster is GKE is not known."
+		}
 	default:
 		r.State, r.Text = StateUnlinked, "No link declared; direct principal access may still be granted in IAM, which Klyx cannot see."
 	}
