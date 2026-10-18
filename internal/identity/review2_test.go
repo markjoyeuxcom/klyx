@@ -21,10 +21,38 @@ func TestReview2RelativePathsAreUnresolved(t *testing.T) {
 			t.Errorf("%q: %+v / %+v", file, m, r)
 		}
 	}
+	onOS := func(os corev1.OSName) func(*corev1.Pod) {
+		return func(p *corev1.Pod) { p.Spec.OS = &corev1.PodOS{Name: os} }
+	}
+	state := func(file string, opts ...podOpt) Mechanism {
+		return pod(env(EnvRoleARN, roleA, EnvWebTokenFile, file), []corev1.VolumeMount{{Name: "aws", MountPath: "/tokens"}}, []corev1.Volume{tokenVol("aws", "token", AudienceSTS)}, opts...).Containers[0].Mechanisms[0]
+	}
+	// Windows: drives and backslashes apply
 	for _, file := range []string{"/tokens/token", `C:\tokens\token`, `C:/tokens/token`, `\tokens\token`} {
-		p := pod(env(EnvRoleARN, roleA, EnvWebTokenFile, file), []corev1.VolumeMount{{Name: "aws", MountPath: "/tokens"}}, []corev1.Volume{tokenVol("aws", "token", AudienceSTS)})
-		if m := p.Containers[0].Mechanisms[0]; m.State != ChainComplete {
-			t.Errorf("%q is absolute: %+v", file, m)
+		if m := state(file, onOS(corev1.Windows)); m.State != ChainComplete {
+			t.Errorf("Windows: %q is absolute: %+v", file, m)
+		}
+	}
+	// Linux (said by spec.os or the node selector): a backslash is an
+	// ordinary character and only "/" roots a path
+	linuxSelector := func(p *corev1.Pod) { p.Spec.NodeSelector = map[string]string{corev1.LabelOSStable: "linux"} }
+	for _, opt := range []podOpt{onOS(corev1.Linux), linuxSelector} {
+		if m := state("/tokens/token", opt); m.State != ChainComplete {
+			t.Errorf("Linux: /tokens/token: %+v", m)
+		}
+		for file, why := range map[string]string{`C:\tokens\token`: "relative", `\tokens\token`: "relative", `/tokens\token`: "no mount in this container"} {
+			if m := state(file, opt); m.State == ChainComplete || !strings.Contains(m.Missing, why) {
+				t.Errorf("Linux: %q never names /tokens/token (%s): %+v", file, why, m)
+			}
+		}
+	}
+	// no OS said: only what both OSes read alike stands
+	if m := state("/tokens/token"); m.State != ChainComplete {
+		t.Errorf("a plain slash path reads alike on both: %+v", m)
+	}
+	for _, file := range []string{`C:\tokens\token`, `\tokens\token`, `/tokens\token`} {
+		if m := state(file); m.State != ChainUnresolved || !strings.Contains(m.Missing, "does not say its OS") {
+			t.Errorf("no OS: %q depends on the OS: %+v", file, m)
 		}
 	}
 	rel := pod(env(EnvRoleARN, roleA, EnvWebTokenFile, "/tokens/token"), []corev1.VolumeMount{{Name: "aws", MountPath: "tokens"}}, []corev1.Volume{tokenVol("aws", "token", AudienceSTS)})

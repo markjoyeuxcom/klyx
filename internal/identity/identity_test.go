@@ -132,7 +132,10 @@ func TestChains(t *testing.T) {
 			[]corev1.Volume{tokenVol("aws-iam-token", "token", AudienceSTS)}), StateUnresolved},
 		{"half a pair", pod(env(EnvRoleARN, roleA), nil, nil), StatePartial},
 		{"windows path", pod(env(EnvRoleARN, roleA, EnvWebTokenFile, `C:\var\run\secrets\eks.amazonaws.com\serviceaccount\token`),
-			[]corev1.VolumeMount{{Name: "aws-iam-token", MountPath: `C:\var\run\secrets\eks.amazonaws.com\serviceaccount`}}, []corev1.Volume{tokenVol("aws-iam-token", "token", AudienceSTS)}), StateMatch},
+			[]corev1.VolumeMount{{Name: "aws-iam-token", MountPath: `C:\var\run\secrets\eks.amazonaws.com\serviceaccount`}}, []corev1.Volume{tokenVol("aws-iam-token", "token", AudienceSTS)},
+			func(p *corev1.Pod) { p.Spec.OS = &corev1.PodOS{Name: corev1.Windows} }), StateMatch},
+		{"windows path, no OS said", pod(env(EnvRoleARN, roleA, EnvWebTokenFile, `C:\var\run\secrets\eks.amazonaws.com\serviceaccount\token`),
+			[]corev1.VolumeMount{{Name: "aws-iam-token", MountPath: `C:\var\run\secrets\eks.amazonaws.com\serviceaccount`}}, []corev1.Volume{tokenVol("aws-iam-token", "token", AudienceSTS)}), StateUnresolved},
 	}
 	for _, c := range cases {
 		if r := only(t, Compare(declared, c.p, PlatformOther), AdapterAWS); r.State != c.state {

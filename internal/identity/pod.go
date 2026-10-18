@@ -176,12 +176,21 @@ func PodOf(p *corev1.Pod) Pod {
 			out.ContainersCut = len(all) - MaxContainers
 			break
 		}
-		out.Containers = append(out.Containers, containerOf(e.c, e.init, vols, awsSkip, azSkip))
+		out.Containers = append(out.Containers, containerOf(e.c, e.init, vols, podOS(p), awsSkip, azSkip))
 	}
 	return out
 }
 
-func containerOf(c corev1.Container, init bool, vols volumes, awsSkip, azSkip map[string]bool) Container {
+// podOS is the workload's declared OS (spec.os, else its kubernetes.io/os
+// node selector), or "" when it says none.
+func podOS(p *corev1.Pod) string {
+	if p.Spec.OS != nil {
+		return string(p.Spec.OS.Name)
+	}
+	return p.Spec.NodeSelector[corev1.LabelOSStable]
+}
+
+func containerOf(c corev1.Container, init bool, vols volumes, os string, awsSkip, azSkip map[string]bool) Container {
 	out := Container{Name: c.Name, Init: init, EnvFrom: len(c.EnvFrom) > 0, SkippedAWS: awsSkip[c.Name], SkippedAzure: azSkip[c.Name]}
 	for _, e := range c.Env {
 		if !identityEnv[e.Name] {
@@ -206,7 +215,7 @@ func containerOf(c corev1.Container, init bool, vols volumes, awsSkip, azSkip ma
 		}
 		out.Env[e.Name] = ev
 	}
-	ch := chainer{mounts: c.VolumeMounts, vols: vols}
+	ch := chainer{mounts: c.VolumeMounts, vols: vols, os: os}
 	if m, ok := mechanismOf(MechIRSA, out.Env, []string{EnvRoleARN, EnvWebTokenFile}, EnvWebTokenFile, "", ch); ok {
 		m.Role = valPtr(out.Env, EnvRoleARN)
 		out.Mechanisms = append(out.Mechanisms, m)
@@ -261,7 +270,7 @@ func mechanismOf(kind string, env map[string]EnvValue, vars []string, fileVar, w
 	}
 	aud, gap := ch.resolve(env[fileVar].Value.raw)
 	switch {
-	case gap == errUnresolvedMount || gap == errVolumesCut || gap == errRelativePath || gap == errOversizedAudience:
+	case gap == errUnresolvedMount || gap == errVolumesCut || gap == errRelativePath || gap == errOversizedAudience || gap == errOSUnknown:
 		m.State, m.Missing = ChainUnresolved, gap
 	case gap != "":
 		m.State, m.Missing = ChainPartial, gap
@@ -290,6 +299,7 @@ const (
 	errVolumesCut        = "the pod's projected volumes were cut at the bound, so the token was not read"
 	errRelativePath      = "the token file's path is relative, resolved against the process's working directory, which Klyx does not read"
 	errOversizedAudience = "the token's audience is oversized, so nothing is compared"
+	errOSUnknown         = "the pod does not say its OS, and the token file's path reads differently on Linux and Windows"
 )
 
 // volumes is what a pod's projected volumes hold, as far as they were read.
@@ -300,10 +310,30 @@ type volumes struct {
 }
 
 // chainer resolves a token file through a container's mounts to a
-// projected serviceAccountToken entry (S5 §3.2).
+// projected serviceAccountToken entry (S5 §3.2), by the pod's OS path
+// rules: on Linux a backslash is an ordinary character and only "/" roots
+// a path; on Windows drives and backslashes apply.
 type chainer struct {
 	mounts []corev1.VolumeMount
 	vols   volumes
+	os     string // "linux", "windows", or "" when the pod says none
+}
+
+// absoluteOn: a path from the root by the OS's rules.
+func absoluteOn(p string, windows bool) bool {
+	if windows {
+		return absolutePath(p)
+	}
+	return strings.HasPrefix(p, "/")
+}
+
+// splitOn splits a path into its drive (Windows only) and its clean
+// slash form; on Linux the path is kept as written, backslashes literal.
+func splitOn(p string, windows bool) (string, string) {
+	if windows {
+		return splitDrive(p)
+	}
+	return "", path.Clean(p)
 }
 
 // absolutePath: a path from the root ("/x", "\\x", on Windows the
@@ -340,18 +370,34 @@ func sameDrive(a, b string) bool {
 
 // resolve returns the token's audience, or the missing link.
 func (c chainer) resolve(file string) (string, string) {
-	if !absolutePath(file) {
+	switch c.os {
+	case "linux":
+		return c.resolveOn(file, false)
+	case "windows":
+		return c.resolveOn(file, true)
+	}
+	// the pod says no OS: only a reading both OSes agree on stands
+	la, lg := c.resolveOn(file, false)
+	wa, wg := c.resolveOn(file, true)
+	if la == wa && lg == wg {
+		return la, lg
+	}
+	return "", errOSUnknown
+}
+
+func (c chainer) resolveOn(file string, windows bool) (string, string) {
+	if !absoluteOn(file, windows) {
 		return "", errRelativePath
 	}
-	fd, f := splitDrive(file)
+	fd, f := splitOn(file, windows)
 	var best *corev1.VolumeMount
 	bestPath := ""
 	for i := range c.mounts {
-		if !absolutePath(c.mounts[i].MountPath) {
+		if !absoluteOn(c.mounts[i].MountPath, windows) {
 			continue // never a match: where it lands is not known
 		}
-		md, mp := splitDrive(c.mounts[i].MountPath)
-		if !sameDrive(fd, md) {
+		md, mp := splitOn(c.mounts[i].MountPath, windows)
+		if windows && !sameDrive(fd, md) {
 			continue
 		}
 		if f == mp || strings.HasPrefix(f, strings.TrimSuffix(mp, "/")+"/") {
