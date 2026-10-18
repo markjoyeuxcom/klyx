@@ -181,23 +181,38 @@ func TestPolicyRows(t *testing.T) {
 		why   string
 	}{
 		{"bindings unread", PolicyInput{P: pol()}, health.Unknown, "Bindings unverified", ""},
-		{"unbound", PolicyInput{P: pol(), BindingsRead: true}, health.Paused, "Not bound", "no effect"},
-		{"param kind unknown", PolicyInput{P: pol(param), Bindings: []*Binding{bnd("Deny")}, BindingsRead: true}, health.Unknown, "paramKind unverified", ""},
-		{"param kind not served, fail-closed", PolicyInput{P: pol(param), Bindings: []*Binding{bnd("Warn")}, BindingsRead: true, ParamKinds: gone}, health.Fault, "paramKind not served", "matching requests are denied"},
-		{"param kind not served, ignore", PolicyInput{P: pol(param, ignore), Bindings: []*Binding{bnd("Deny")}, BindingsRead: true, ParamKinds: gone}, health.Degraded, "paramKind not served", "skipped"},
-		{"namespace for a cluster-scoped kind", PolicyInput{P: pol(param), Bindings: []*Binding{ns}, BindingsRead: true, ParamKinds: cluster}, health.Fault, "Binding misconfigured", "denied"},
-		{"namespaced kind, namespace fine", PolicyInput{P: pol(param), Bindings: []*Binding{ns}, BindingsRead: true, ParamKinds: served}, health.OK, "Bound", ""},
-		{"status behind, historical warnings", PolicyInput{P: pol(func(p *Policy) { p.Generation, p.WarningCount = 3, 2 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: true}, health.Progressing, "Type checking pending", ""},
-		{"warnings under Deny", PolicyInput{P: pol(func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: true}, health.Degraded, "Type-checking warnings", "denies requests matched by Deny bindings"},
-		{"warnings under Warn and Audit", PolicyInput{P: pol(func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Warn", "Audit")}, BindingsRead: true}, health.Degraded, "Type-checking warnings", "warned or audited, not denied"},
-		{"warnings under Ignore", PolicyInput{P: pol(ignore, func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: true}, health.Degraded, "Type-checking warnings", "ignored"},
-		{"mutating, no status", PolicyInput{P: &Policy{Kind: Mutating}, Bindings: []*Binding{bnd()}, BindingsRead: true}, health.OK, "Bound", ""},
-		{"bound", PolicyInput{P: pol(), Bindings: []*Binding{bnd("Deny"), bnd("Audit")}, BindingsRead: true}, health.OK, "Bound", "bound by 2"},
+		{"unbound", PolicyInput{P: pol(), BindingsRead: ReadComplete}, health.Paused, "Not bound", "no effect"},
+		{"param kind unknown", PolicyInput{P: pol(param), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadComplete}, health.Unknown, "paramKind unverified", ""},
+		{"param kind not served, fail-closed", PolicyInput{P: pol(param), Bindings: []*Binding{bnd("Warn")}, BindingsRead: ReadComplete, ParamKinds: gone}, health.Fault, "paramKind not served", "matching requests are denied"},
+		{"param kind not served, ignore", PolicyInput{P: pol(param, ignore), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadComplete, ParamKinds: gone}, health.Degraded, "paramKind not served", "skipped"},
+		{"namespace for a cluster-scoped kind", PolicyInput{P: pol(param), Bindings: []*Binding{ns}, BindingsRead: ReadComplete, ParamKinds: cluster}, health.Fault, "Binding misconfigured", "denied"},
+		{"namespaced kind, namespace fine", PolicyInput{P: pol(param), Bindings: []*Binding{ns}, BindingsRead: ReadComplete, ParamKinds: served}, health.OK, "Bound", ""},
+		{"status behind, historical warnings", PolicyInput{P: pol(func(p *Policy) { p.Generation, p.WarningCount = 3, 2 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadComplete}, health.Progressing, "Type checking pending", ""},
+		{"warnings under Deny", PolicyInput{P: pol(func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadComplete}, health.Degraded, "Type-checking warnings", "denies requests matched by Deny bindings"},
+		{"warnings under Warn and Audit", PolicyInput{P: pol(func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Warn", "Audit")}, BindingsRead: ReadComplete}, health.Degraded, "Type-checking warnings", "warned or audited, not denied"},
+		{"warnings under Ignore", PolicyInput{P: pol(ignore, func(p *Policy) { p.WarningCount = 1 }), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadComplete}, health.Degraded, "Type-checking warnings", "ignored"},
+		{"mutating, no status", PolicyInput{P: &Policy{Kind: Mutating}, Bindings: []*Binding{bnd()}, BindingsRead: ReadComplete}, health.OK, "Bound", ""},
+		{"bound", PolicyInput{P: pol(), Bindings: []*Binding{bnd("Deny"), bnd("Audit")}, BindingsRead: ReadComplete}, health.OK, "Bound", "bound by 2"},
 	}
 	for _, c := range cases {
 		ev := PolicyVerdict(c.in)
 		if ev.Role != c.role || ev.Label != c.label || !strings.Contains(ev.Reason, c.why) || ev.Included != c.role.Attention() {
 			t.Errorf("%s: %+v", c.name, ev)
 		}
+	}
+}
+
+// Only a complete bindings read proves a policy unbound (Codex's S3a
+// implementation review, finding 3); a binding found in a stale read
+// still names it.
+func TestPolicyBindingsReadStates(t *testing.T) {
+	if ev := PolicyVerdict(PolicyInput{P: pol(), BindingsRead: ReadStale}); ev.Role != health.Unknown || ev.Label != "Bindings unverified" {
+		t.Fatalf("stale empty: %+v", ev)
+	}
+	if ev := PolicyVerdict(PolicyInput{P: pol(), Bindings: []*Binding{bnd("Deny")}, BindingsRead: ReadStale}); ev.Role != health.OK {
+		t.Fatalf("stale with a binding: %+v", ev)
+	}
+	if ev := PolicyVerdict(PolicyInput{P: pol(), BindingsRead: ReadComplete}); ev.Role != health.Paused {
+		t.Fatalf("complete empty: %+v", ev)
 	}
 }

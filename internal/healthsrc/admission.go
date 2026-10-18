@@ -131,6 +131,9 @@ type AdmissionPolicyRow struct {
 	Binding     *admission.Binding
 	PolicyState string
 	ParamKind   *admission.ParamKindState
+	// BindingsRead is how the policy's bindings kind was read: the
+	// inspector says "no effect" only from a complete read.
+	BindingsRead admission.Read
 }
 
 // FactOnly: a binding's row is a fact, never a verdict (S2b's FactRow).
@@ -151,7 +154,7 @@ func evalAdmissionPolicies(cluster string) func(observe.Capture) observe.PartRes
 					bindings = append(bindings, bd)
 				}
 			}
-			bindingsRead := readOf(c, kinds.bindings) != admission.ReadNone
+			bindingsRead := readOf(c, kinds.bindings)
 			policies := map[string]bool{}
 			for _, o := range c.Objects[kinds.policies] {
 				p, ok := o.(*admission.Policy)
@@ -165,7 +168,7 @@ func evalAdmissionPolicies(cluster string) func(observe.Capture) observe.PartRes
 					admissionRef(p.Meta, kinds.policies)}
 				items = append(items, it)
 				if c.Rows {
-					row := AdmissionPolicyRow{Policy: p, Bindings: bs}
+					row := AdmissionPolicyRow{Policy: p, Bindings: bs, BindingsRead: bindingsRead}
 					if p.ParamKind != nil && pk != nil {
 						if g, v, k, ok := p.ParamKind.GVK(); ok {
 							if st, found := pk[admission.KeyOf(g, v, k)]; found {

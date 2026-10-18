@@ -39,13 +39,16 @@ type AdmissionParamCheckDTO struct {
 // AdmissionParamsDTO is one check for a policy. Cluster and PolicyUID fence
 // it: the inspector drops a reply for another cluster or policy.
 type AdmissionParamsDTO struct {
-	Cluster   string                   `json:"cluster"`
-	PolicyUID string                   `json:"policyUid"`
-	State     string                   `json:"state"` // read | not-applicable | error
-	Text      string                   `json:"text,omitempty"`
-	Checks    []AdmissionParamCheckDTO `json:"checks"`
-	More      int                      `json:"more,omitempty"`
-	ReadAt    *time.Time               `json:"readAt,omitempty"`
+	Cluster   string `json:"cluster"`
+	PolicyUID string `json:"policyUid"`
+	// Revision is the policy reading the check was made for (the rows'
+	// paramRevision): the inspector shows it only under that revision.
+	Revision string                   `json:"revision,omitempty"`
+	State    string                   `json:"state"` // read | not-applicable | error
+	Text     string                   `json:"text,omitempty"`
+	Checks   []AdmissionParamCheckDTO `json:"checks"`
+	More     int                      `json:"more,omitempty"`
+	ReadAt   *time.Time               `json:"readAt,omitempty"`
 }
 
 // paramText words one check (S3a §6): a missing param under Deny is a
@@ -95,6 +98,7 @@ func (s *AdmissionService) CheckParams(cluster, policyUID string) AdmissionParam
 		return out
 	}
 	p := data.Policy
+	out.Revision = paramRevision(data)
 	switch {
 	case p.ParamKind == nil:
 		out.State, out.Text = "not-applicable", "no paramKind: there are no params to check"

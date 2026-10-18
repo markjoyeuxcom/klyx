@@ -92,3 +92,16 @@ func TestConfigCut(t *testing.T) {
 		t.Fatal("a small configuration is never cut")
 	}
 }
+
+// An oversized paramKind is not kept and classifies unknown, never as a
+// truncated name (Codex's S3a implementation review, finding 4).
+func TestParamKindOversizedIsUnknown(t *testing.T) {
+	p := ProjectPolicy(obj("ValidatingAdmissionPolicy", map[string]any{"spec": map[string]any{"paramKind": map[string]any{"apiVersion": strings.Repeat("g", 500) + "/v1", "kind": "K"}}}, nil), Validating)
+	if _, _, _, ok := p.ParamKind.GVK(); ok || !p.ParamKind.Oversized {
+		t.Fatalf("%+v", p.ParamKind)
+	}
+	ev := PolicyVerdict(PolicyInput{P: p, Bindings: []*Binding{{PolicyName: "x"}}, BindingsRead: ReadComplete, ParamKinds: ParamKinds{}})
+	if ev.Label != "paramKind unverified" {
+		t.Fatalf("%+v", ev)
+	}
+}

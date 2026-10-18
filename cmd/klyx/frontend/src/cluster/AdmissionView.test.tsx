@@ -93,4 +93,43 @@ describe("AdmissionView (coverage S3a)", () => {
     expect(paramRefText({ uid: "", name: "b", policyName: "p", actions: [], paramRef: { namespace: "team", selector: true, notFoundAction: "Deny" } })).toBe("team/a selector · Deny if missing");
     expect(paramRefText({ uid: "", name: "b", policyName: "p", actions: [] })).toBe("none");
   });
+
+  // ---- Codex's S3a implementation review ------------------------------------
+
+  it("review: a same-UID generation change re-reads the params, and the old reply never shows", async () => {
+    let calls = 0;
+    paramsReply = async (c, u) => { calls++; return { cluster: c, policyUid: u, state: "read", checks: [{ binding: "b", state: "not-found", text: "OLD-DENIAL" }] }; };
+    const p = policy("p", "ok", "Bound", { generation: 1, paramKind: { apiVersion: "example.com/v1", kind: "Limits", state: "served" } });
+    policies = part([p], ["ValidatingAdmissionPolicy"]);
+    const v = render(<AdmissionView cluster="c" />);
+    fireEvent.click(tab(/^Policies/));
+    fireEvent.click(screen.getByText("p"));
+    await waitFor(() => expect(screen.getByTestId("admission-params").textContent).toContain("OLD-DENIAL"));
+    paramsReply = async (c, u) => { calls++; return { cluster: c, policyUid: u, state: "read", checks: [{ binding: "b", state: "found", text: "NEW-RESULT" }] }; };
+    policies = part([{ ...p, generation: 2, failClosed: false, paramKind: { apiVersion: "example.com/v1", kind: "Other", state: "served" } }], ["ValidatingAdmissionPolicy"]);
+    v.rerender(<AdmissionView cluster="c" />);
+    await waitFor(() => expect(calls).toBe(2));
+    await waitFor(() => expect(screen.getByTestId("admission-params").textContent).toContain("NEW-RESULT"));
+    expect(screen.getByTestId("admission-params").textContent).not.toContain("OLD-DENIAL");
+  });
+
+  it("review: a reply read for another revision is dropped", async () => {
+    paramsReply = async (c, u) => ({ cluster: c, policyUid: u, revision: "1|served/true/limits", state: "read", checks: [{ binding: "b", state: "found", text: "STALE" }] });
+    policies = part([policy("p", "ok", "Bound", { generation: 2, paramRevision: "2|served/true/limits", paramKind: { apiVersion: "example.com/v1", kind: "Limits", state: "served" } })], ["ValidatingAdmissionPolicy"]);
+    render(<AdmissionView cluster="c" />);
+    fireEvent.click(tab(/^Policies/));
+    fireEvent.click(screen.getByText("p"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("admission-params").textContent).not.toContain("STALE");
+  });
+
+  it("review: unread binding history never says no effect", () => {
+    policies = part([policy("p", "unknown", "Bindings unverified", { bindings: [], bindingsRead: "unread" })], ["ValidatingAdmissionPolicy"]);
+    render(<AdmissionView cluster="c" />);
+    fireEvent.click(tab(/^Policies/));
+    fireEvent.click(screen.getByText("p"));
+    const panel = screen.getByTestId("admission-policy-panel");
+    expect(panel.textContent).not.toContain("No binding names it: it has no effect");
+    expect(within(panel).getByTestId("admission-no-bindings").textContent).toContain("is not known");
+  });
 });

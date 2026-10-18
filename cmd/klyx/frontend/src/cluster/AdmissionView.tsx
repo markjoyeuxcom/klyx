@@ -354,17 +354,26 @@ function ConfigInspector({ cluster, c, gone, onClose }: { cluster: string; c: Ad
   );
 }
 
-// useParamCheck reads a policy's params when its inspector opens; a reply
-// lands only for this cluster and this policy (S3a §6).
-function useParamCheck(cluster: string, uid: string, active: boolean): AdmissionParamsDTO | null {
+// useParamCheck reads a policy's params when its inspector opens, and again
+// whenever the policy's reading changes (its generation, its paramKind's
+// discovered state): a reply lands only for this cluster, this policy and
+// this revision (S3a §6; Codex's S3a implementation review, finding 2).
+function useParamCheck(cluster: string, p: AdmissionPolicyDTO, active: boolean): AdmissionParamsDTO | null {
   const [res, setRes] = useState<AdmissionParamsDTO | null>(null);
+  const uid = p.uid;
+  const revision = p.paramRevision;
+  const key = `${p.generation}|${revision ?? ""}|${p.paramKind?.state ?? ""}|${p.paramKind?.apiVersion ?? ""}/${p.paramKind?.kind ?? ""}|${p.failClosed}`;
   useEffect(() => {
     setRes(null);
     if (!active || !uid) return;
     let live = true;
-    void checkAdmissionParams(cluster, uid).then((r) => { if (live && r.cluster === cluster && r.policyUid === uid) setRes(r); });
+    void checkAdmissionParams(cluster, uid).then((r) => {
+      if (!live || r.cluster !== cluster || r.policyUid !== uid) return;
+      if (r.revision && revision && r.revision !== revision) return; // read for another revision
+      setRes(r);
+    });
     return () => { live = false; };
-  }, [cluster, uid, active]);
+  }, [cluster, uid, active, key, revision]);
   return res;
 }
 
@@ -374,7 +383,7 @@ function PolicyInspector({ cluster, p, gone, onOpen, onClose }: { cluster: strin
   const ro = roleKind(rule.role);
   const describe = useDescribe(cluster, !gone ? { kind, namespace: "", name: p.name, uid: p.uid } : null);
   const ai = useInspectorAI(p.uid ? { kind: "row" as const, task: "admission", part: "policies", uid: p.uid } : null, `${kind}/${p.name}`, !gone, cluster);
-  const params = useParamCheck(cluster, p.uid, !gone && !!p.paramKind);
+  const params = useParamCheck(cluster, p, !gone && !!p.paramKind);
   const counts = [p.validations ? `${p.validations} validations` : "", p.mutations ? `${p.mutations} mutations` : "", p.variables ? `${p.variables} variables` : "",
     p.matchConditions ? `${p.matchConditions} match conditions` : "", p.auditAnnotations ? `${p.auditAnnotations} audit annotations` : ""].filter(Boolean);
   return (
@@ -399,7 +408,9 @@ function PolicyInspector({ cluster, p, gone, onOpen, onClose }: { cluster: strin
           </div>
         </InspectorBlock>}
         <InspectorBlock title={`Bindings · ${p.bindings.length}`}>
-          {p.bindings.length === 0 ? <div className="t-secondary">No binding names it: it has no effect.</div>
+          {p.bindings.length === 0 ? <div className="t-secondary" data-testid="admission-no-bindings">{p.bindingsRead === "complete"
+            ? "No binding names it: it has no effect."
+            : "The bindings read is incomplete: whether a binding names it is not known."}</div>
             : p.bindings.map((b) => <button key={b.name} className="t-body" onClick={() => onOpen(keyOf("bindings", p.kind, b.name))}
               style={{ display: "block", background: "none", border: 0, padding: "2px 0", cursor: "pointer", textAlign: "left", color: "var(--color-text-info)" }}>
               {b.name} <span className="t-secondary">· {b.actions.join(", ") || "no actions"} · paramRef {paramRefText(b)}</span>

@@ -299,9 +299,12 @@ func KeyOf(group, version, kind string) string { return group + "/" + version + 
 
 // PolicyInput is everything one policy's verdict reads.
 type PolicyInput struct {
-	P            *Policy
-	Bindings     []*Binding // the bindings that name it
-	BindingsRead bool       // the bindings kind was read for this part
+	P        *Policy
+	Bindings []*Binding // the bindings that name it
+	// BindingsRead is how the bindings kind was read: only a complete read
+	// proves that no binding names it (Codex's S3a implementation review,
+	// finding 3).
+	BindingsRead Read
 	ParamKinds   ParamKinds // nil: the fact is not known
 }
 
@@ -315,11 +318,14 @@ func PolicyVerdict(in PolicyInput) health.NativeEval {
 		}
 	}
 	p := in.P
-	if !in.BindingsRead {
+	switch {
+	case in.BindingsRead == ReadNone:
 		set(health.Unknown, "Bindings unverified", "the bindings could not be read")
 		return ev
-	}
-	if len(in.Bindings) == 0 {
+	case len(in.Bindings) == 0 && in.BindingsRead == ReadStale:
+		set(health.Unknown, "Bindings unverified", "no binding named it in the last good read, which proves nothing now")
+		return ev
+	case len(in.Bindings) == 0:
 		set(health.Paused, "Not bound", "no binding names it: it has no effect")
 		return ev
 	}

@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -133,9 +134,16 @@ type AdmissionPolicyDTO struct {
 	WarningCount       int                    `json:"warningCount,omitempty"`
 	WarningFields      []string               `json:"warningFields"`
 	Bindings           []AdmissionBindingDTO  `json:"bindings"`
-	Binding            *AdmissionBindingDTO   `json:"binding,omitempty"`
-	Reason             string                 `json:"reason,omitempty"`
-	Rule               *RuleDTO               `json:"rule,omitempty"`
+	// BindingsRead is how the bindings were read: complete | stale | unread.
+	// Only complete proves that no binding names the policy.
+	BindingsRead string `json:"bindingsRead,omitempty"`
+	// ParamRevision is what a param check's reading depends on; a check
+	// whose reply carries another one is stale (Codex's S3a implementation
+	// review, finding 2).
+	ParamRevision string               `json:"paramRevision,omitempty"`
+	Binding       *AdmissionBindingDTO `json:"binding,omitempty"`
+	Reason        string               `json:"reason,omitempty"`
+	Rule          *RuleDTO             `json:"rule,omitempty"`
 }
 
 func admissionRules(rs []admission.Rule) []AdmissionRuleDTO {
@@ -210,7 +218,33 @@ func admissionPolicyDTO(r healthsrc.Row[healthsrc.AdmissionPolicyRow]) Admission
 	for _, b := range r.Data.Bindings {
 		d.Bindings = append(d.Bindings, admissionBindingDTO(b.UID, b, "found"))
 	}
+	d.BindingsRead = readWord(r.Data.BindingsRead)
+	d.ParamRevision = paramRevision(r.Data)
 	return d
+}
+
+func readWord(r admission.Read) string {
+	switch r {
+	case admission.ReadComplete:
+		return "complete"
+	case admission.ReadStale:
+		return "stale"
+	}
+	return "unread"
+}
+
+// paramRevision is what a param check depends on: the policy's
+// generation (its paramKind and failure policy) and the paramKind's
+// discovered state, scope and resource.
+func paramRevision(r healthsrc.AdmissionPolicyRow) string {
+	if r.Policy == nil {
+		return ""
+	}
+	st := "unknown/false/"
+	if pk := r.ParamKind; pk != nil {
+		st = fmt.Sprintf("%s/%v/%s", pk.State, pk.Namespaced, pk.Resource)
+	}
+	return fmt.Sprintf("%d|%s", r.Policy.Generation, st)
 }
 
 func init() {

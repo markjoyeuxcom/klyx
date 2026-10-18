@@ -115,15 +115,26 @@ type Config struct {
 	Size int  `json:"-"`
 }
 
-// ParamKind is a policy's paramKind.
+// ParamKind is a policy's paramKind, kept whole: it classifies by exact
+// discovery, so it is never clipped for display (Codex's S3a
+// implementation review, finding 4). A value past maxParamKind is not
+// kept and reads unknown.
 type ParamKind struct {
 	APIVersion string `json:"av"`
 	Kind       string `json:"k"`
+	Oversized  bool   `json:"over,omitempty"`
 }
 
+// maxParamKind bounds a paramKind's apiVersion and kind: a group (253) and
+// a version (63) with their slash, and a kind, fit with room.
+const maxParamKind = 400
+
 // GVK is the exact group, version and kind a ParamKind names; ok is false
-// when its apiVersion does not parse.
+// when its apiVersion does not parse or it was not kept.
 func (p ParamKind) GVK() (group, version, kind string, ok bool) {
+	if p.Oversized {
+		return "", "", "", false
+	}
 	g, v, found := cutLast(p.APIVersion)
 	if !found {
 		g, v = "", p.APIVersion
@@ -369,7 +380,12 @@ func ProjectPolicy(u *unstructured.Unstructured, kind string) *Policy {
 		}
 	}
 	if pk, ok, _ := unstructured.NestedMap(u.Object, "spec", "paramKind"); ok {
-		p.ParamKind = &ParamKind{APIVersion: clip(str(pk, "apiVersion"), maxName), Kind: clip(str(pk, "kind"), maxName)}
+		av, kind := str(pk, "apiVersion"), str(pk, "kind")
+		if len(av) > maxParamKind || len(kind) > maxParamKind {
+			p.ParamKind = &ParamKind{Oversized: true}
+		} else {
+			p.ParamKind = &ParamKind{APIVersion: av, Kind: kind}
+		}
 	}
 	p.MatchRules, p.MatchRuleCount = rulesOf(slice(u.Object, "spec", "matchConstraints", "resourceRules"))
 	p.Size = size(p)

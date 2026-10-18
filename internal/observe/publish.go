@@ -345,6 +345,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				}
 			}
 		}
+		viewed := false // the part's consumer view replaced the kind (C3)
 		if ks := o.kinds[name]; ks != nil && len(ks.spec.Consumers) > 0 {
 			kc.Consumers = demandVector(ks.demand)
 			// the part's own consumer decides what of the shared kind is its
@@ -353,6 +354,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			switch d, probed := ks.consumerView(p.spec.Consumer); {
 			case d == DemandYes:
 			case d == DemandNo:
+				viewed = true
 				delete(c.Objects, name)
 				delete(c.Windows, name)
 				c.Complete[name] = true
@@ -361,6 +363,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 					delete(cp.truncated, name)
 				}
 			default:
+				viewed = true
 				delete(c.Objects, name)
 				delete(c.Windows, name)
 				c.Complete[name] = false
@@ -375,7 +378,15 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 		}
 		kinds = append(kinds, kc)
 		if cp.ids != nil {
-			cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
+			if viewed {
+				// the part's own absence or gap: a stable identity that
+				// borrows nothing of the other consumers' generation, so
+				// their relists are never this part's loss (Codex's S3a
+				// implementation review, finding 1)
+				cp.ids[name] = SourceIdentity{Source: name, Coverage: kc.Coverage}
+			} else {
+				cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
+			}
 		}
 	}
 	for _, n := range p.spec.Counted {

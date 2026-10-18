@@ -100,6 +100,10 @@ export type AdmissionPolicyDTO = {
   warningCount?: number;
   warningFields: string[];
   bindings: AdmissionBindingDTO[];
+  // only "complete" proves that no binding names the policy
+  bindingsRead?: "complete" | "stale" | "unread";
+  // what a param check's reading depends on; a reply for another is stale
+  paramRevision?: string;
   binding?: AdmissionBindingDTO;
   reason?: string;
   rule?: RuleDTO;
@@ -110,6 +114,7 @@ export type AdmissionParamCheckDTO = { binding: string; state: string; text: str
 export type AdmissionParamsDTO = {
   cluster: string;
   policyUid: string;
+  revision?: string;
   state: "read" | "not-applicable" | "error";
   text?: string;
   checks: AdmissionParamCheckDTO[];

@@ -112,7 +112,7 @@ func TestAdmissionParamCheck(t *testing.T) {
 	conn := &fakeAdmissionConn{rows: row(pol, served), params: fleet.AdmissionParams{Checks: checks, ReadAt: time.Now()}}
 	svc := NewAdmissionService(func(string) (AdmissionConn, bool) { return conn, true })
 	out := svc.CheckParams("c1", "pu")
-	if out.State != "read" || out.Cluster != "c1" || out.PolicyUID != "pu" || conn.got != (schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "limits"}) {
+	if out.State != "read" || out.Cluster != "c1" || out.PolicyUID != "pu" || out.Revision != "0|served/true/limits" || conn.got != (schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "limits"}) {
 		t.Fatalf("%+v %v", out, conn.got)
 	}
 	by := map[string]string{}

@@ -447,3 +447,14 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
   - **full evaluation:** 66.1 and 72.1 ms before (5be4ec7, the known 50 ms miss) against 72.9 and 78.4 ms after, about +6 ms (9%);
   - **steady retained heap:** +0.5 MB on the large cluster, +1.1 MB across six;
   - **recovery-storm peak:** 64.0 and 86.3 MB before, 79.1 and 80.7 MB after; noise, no regression.
+
+## 14. Implementation review 1: Codex's review of 4bc5a26
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A consumer's absent view borrowed the physical generation's epoch and relisting, so another consumer's relist emitted a spurious loss | `captureLocked` gives a viewed kind (no or unknown) a stable `SourceIdentity` of its source and coverage only; a flip of the part's own demand still changes it |
+| 2 | Param results were fenced by cluster and UID only, so a generation-1 denial outlived the policy's change | The rows carry `paramRevision` (generation and the paramKind's discovered state, scope and resource) and the reply its `revision`. The inspector re-reads when the reading changes and drops a reply for another revision, in flight or completed |
+| 3 | A stale or unread empty bindings read was presented as "Not bound: no effect" | The bindings read is three-state through the rule (stale with none naming it reads unknown), the rows (`bindingsRead`) and the inspector, which says "no effect" only after a complete read |
+| 4 | `paramKind.apiVersion` was clipped before exact discovery | The paramKind is kept whole; past 400 characters it is not kept and reads unknown, never a truncated name |
+
+Codex's probes are kept: `observe/review_s3a_test.go`, `healthsrc/review_s3a_test.go`, `admission/review_s3a_test.go`, and the "review:" cases in `AdmissionView.test.tsx`.
