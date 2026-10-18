@@ -407,3 +407,100 @@ Five of revision 1's answers were accepted, with one residual P2 and one P3:
 | (P3) | Budget units and heap wording | §8: sizes are JSON-encoded projection lengths; the totals are encoded admission totals, not heap; the load test's full-budget case records the actual retained heap, which the as-built notes report. |
 
 **Accepted at e51e03c** (Codex, design revision 2, handoff 0b0adb79, 2026-10-18). This accepts the design only; S7a and S7b keep their separate implementation reviews and gates.
+
+## 15. As built: S7a
+
+Built on `feat/coverage` from b982518, commits d13e11e to 98b805e. S7b (§5, §6, §7, the route kinds and grants) is not built.
+
+### 15.1 Versions (§2)
+
+- **The candidates** live in `gwapi.Versions` and are the table in §2.
+- **The Observer probe** is `crdServedAmong` (`internal/fleet/crdprobe.go`). It reads the first candidate whose resource list names the resource. A candidate discovery cannot read is uncertainty: when no readable candidate serves the resource, the first unreadable candidate is tried, as `crdServed` does. Absence needs a complete answer. A resource served only at a version outside the candidates is a named gap ("served at v2; Klyx reads v1 or v1beta1"), never a list read at a version Klyx does not parse; so is an unreadable non-candidate when no candidate serves.
+- **The on-demand reads** (`gwGVR` for the topology, the rule metrics and the GatewayClass read) use `servedResourceAmong` over the same core. They return an error naming why nothing was read. Discovery that cannot answer at all still tries the first candidate, as `servedVersion` does.
+- **The healthsrc kinds** take the probe through `NativeDeps.ServedAmong`. Without it (older test harnesses), `Served`'s answer is checked against the candidates.
+
+### 15.2 Listener status (§3)
+
+- **Parsing:** a listener carries its TLS mode, its `allowedRoutes` as written (namespaces with the selector read through the API's own `LabelSelector`, an unreadable selector flagged, and the kinds), and its `status.listeners` entry by name (supported kinds, attached routes, every condition in the order reported). A name reported twice keeps its first entry.
+- **The rule** is `gwapi.GatewayVerdict`: `GatewayRule` unchanged, then, with the Gateway itself OK, `ListenerIssues`. Each listener's first failing current condition, in the order that explains it best: Accepted False, Conflicted True, ResolvedRefs False, Programmed False. A condition observed for an older generation is shown, never judged (`condState`'s staleness). The verdict is Degraded, labelled "listener ‹name›: ‹reason›" with "(+N more)", the reason and message in `Reason`, the condition as `Cond`, and no `Since` (it is the worst of several listeners).
+- **Every surface uses it:** the Observer's gateways part, the on-demand Gateway list DTO and the topology's Gateway node.
+
+### 15.3 ListenerSets (§4)
+
+- **The part** `gateway/listenersets` counts ListenerSet UIDs; its dependencies are gateways, gatewayclasses and namespaces (§8's table; the namespaces kind is the core kinds'). Its ledger is on.
+- **The verdict** (`gwapi.ListenerSetRule`): the set's own conditions first. Accepted False is a Fault named with its reason ("not accepted: NotAllowed"); Programmed False is a Fault; pending, absent and stale read as `GatewayRule` reads them. A controller-reported Fault is judged whatever the parent's read. Then the parent:
+  - absent from a Live, complete, untruncated gateways read (`Capture.Complete`): Fault "parent Gateway not found";
+  - absent from any other read: Unknown "parent Gateway not established", unless the set's own conditions already read Degraded;
+  - a reference to another kind: Unknown "parent is a ‹Kind›, not a Gateway".
+
+  With the set healthy and its parent found, its listeners' conditions apply as a Gateway's do (Degraded).
+- **The allowance** (`gwapi.ListenerSetAllowance`) is evidence on the row, never the verdict: None (the default, and when `allowedListeners` is unset), Same, All, or Selector against the namespace's labels. The labels are known only when the namespace is in a complete namespaces read. A value Klyx does not read, or an unreadable selector, is said and not established. It is compared with the controller's current Accepted condition: accepted while Klyx reads "no", or NotAllowed while Klyx reads "yes", is a disagreement the text says, prefixed with the controller's side.
+- **Precedence** (`gwapi.SortByPrecedence`): creation time, then namespace/name, among the ListenerSets naming the same parent (group, kind, namespace and name). The row carries its place, the count, and whether the ListenerSets read was complete (a truncated read can miss one that ranks earlier).
+
+### 15.4 Projections and the budget (§8): two measured changes
+
+1. **MaxObject for a Gateway and a ListenerSet is 64 KiB, not 16 KiB.** The design's figures assumed a listener without its status. Measured (`TestProjectionSizing`), a listener with a controller's status (four conditions, two supported kinds, a certificate, an allowedRoutes) is about 1.15 KiB encoded: a ten-listener Gateway is 12.0 KiB, and 16 KiB would have refused anything past about 13 listeners. The API allows 64. A 64-listener object is 73.4 KiB whole and 59.6 KiB once tight. The tight rebuild clips the object's own condition messages to 256 bytes and drops its listeners' messages (what the rules read is kept).
+2. **The projection is typed.** `gwapi.Project` builds the API-shaped projection (the kept fields in the API's own encoding, credential shapes scrubbed from messages before the 1 KiB clip), measures its JSON-encoded length as `Size` (the budget's measure, as the design states), then keeps a typed, parsed `gwapi.Object`: identity in an `ObjectMeta` (name, namespace, UID, generation, creation time, resource version, labels: what the refs and the fleet index read), plus the `GatewayRef`, `ListenerSet` or `GatewayClass` the rules read. Evaluators no longer parse unstructured maps on every evaluation.
+
+**The budgets**, in encoded bytes, are revised with the measured sizes:
+
+| Kind | Budget | MaxObject | Measured to hold |
+|---|---|---|---|
+| gatewayclasses | 64 KiB | 4 KiB | 172 classes |
+| gateways | 1 MiB | 64 KiB | 99 ten-listener Gateways |
+| listenersets | 512 KiB | 64 KiB | 210 two-listener ListenerSets |
+| namespaces (labels added) | 256 KiB | 4 KiB | 1,583 namespaces with five labels |
+| httproutes | unbudgeted until S7b | | |
+
+**The full-budget case** (`TestGatewayAPIObserverHeap`): every S7a kind filled past its budget (200 classes, 200 ten-listener Gateways, 600 two-listener ListenerSets, 3,000 namespaces), read through the real kinds, parts and rows with the gateways and listenersets rows subscribed. The running Observer holds **3.06 MiB of heap for 1.81 MiB of encoded budget: 1.69 heap bytes per budget byte**. S1a measured 5.55 for its unstructured projections, which is why the typed projection was chosen.
+
+**The namespace count stays exact past the budget.** `Summary.Namespaces` counts the retained namespaces plus the ones the budget left out (the Observer's exact `notRetained`). The full-budget case reads 3,000 with 1,417 left out.
+
+**The fleet index reads a truncated kind as partial** (`fleetindex.StatePartial`). Budgeting namespaces and Gateways, two default index kinds, exposed that `VisitKind` finishes over a truncated model and the index read only its coverage, so ⌘K would have shown a subset as the whole kind. The same gap existed since S1a for any budgeted kind configured in `index.kinds`. A live kind the Observer truncated now reads "partly indexed (N kept within Klyx's budget; more exist)". Its entries stay searchable. Namespaces now keep their labels for the index too.
+
+### 15.5 Views (§9)
+
+- **The Gateway lens** offers a third view, ListenerSets, beside Gateways and Routes. It is shown unless the ListenerSet kind is confirmed absent. It lists broken first, with columns for status, parent (and its state when not found), the allowance (a disagreement in amber) and listeners.
+- **Its inspector** shows:
+  - the verdict, with a detail from the evidence;
+  - the parent block (its kind, its state, and its place in the merge: "2nd of 3 ListenerSets naming this parent, after the Gateway's own listeners", qualified when the read is incomplete);
+  - the allowance, said to be Klyx's own reading and not the verdict;
+  - the listeners with their status;
+  - "read as listenersets.v1" in the identity line.
+- **The Gateway inspector's Listeners block** shows each listener's endpoint, TLS mode, allowedRoutes (with its default named) and status. Failing conditions are named in amber with the controller's reason and message; current healthy ones are listed compactly; conditions from an older generation are shown as "observed at generation N, shown, not judged".
+- **A ListenerSets block** lists the sets naming the Gateway in merge order, each with its verdict and listeners, beside the Gateway's `allowedListeners` and "N found naming this Gateway, M accepted · the controller reports K attached". A difference is said ("they differ"), never reconciled. The block is omitted for a Gateway that allows none, has none and reports none.
+- **The Gateways list's listener column** adds "+N from ListenerSets" for the listeners of currently accepted sets.
+- **ListenerSets reach** reveal (Top links select them), Explain (an allowlist for the part, and listener status for Gateways), chat, health notifications, Describe and the generic browser.
+- **A reveal race, fixed:** a view mounting with a pending reveal let the first-broken auto-selection override it in the same commit. The ListenerSets view and the Gateways list (when revealed from another view) now count a consumed reveal as their one-shot selection.
+
+### 15.6 The lab, parity, smoke and captures (§10)
+
+- **The lab** (`scratchpad/lab-s7`):
+  - `crds.sh` applies Gateway API v1.6.3's experimental-channel CRDs from the module cache to kind-klyx, server-side. They were inspected first: CRDs only, no conversion webhooks, and every stored version (`referencegrants` v1beta1 among them) still served. The bundle's `safe-upgrades` ValidatingAdmissionPolicy is not applied: it refuses experimental CRDs over the lab's standard ones.
+  - `apply.sh` writes the S7a fixtures in `klyx-gateway-lab` and `klyx-gateway-other`, with status through the status subresource under the stand-in controller `lab.klyx.dev/gateway-controller`:
+    - `lab-gw` allows Same and its controller reports 2 attached;
+    - ListenerSets created a second apart: `ls-first` (healthy), `ls-other` (another namespace, NotAllowed) and `ls-conflict` (Conflicted HostnameConflict);
+    - `lab-gw-cert` has a listener with ResolvedRefs False InvalidCertificateRef.
+- **Parity:**
+  - `klyx-parity.sh` copies `listenersets` and now applies every copied CRD server-side: the 1.6 HTTPRoute CRD is 635 KB, over client-side apply's 256 KiB annotation.
+  - `fixture.sh` adds an accepted ListenerSet under `parity-gw` (now `allowedListeners: Same`) and case 5d, a NotAllowed ListenerSet.
+  - The Go oracle and the frontend stage read the new part.
+- **Captures:** `scratchpad/cap-s7a`, night and day at 1440 and 1024: the Gateways view, `lab-gw-cert`, `lab-gw`'s listeners and ListenerSets, the ListenerSets view and each set's inspector. No sideways scroll, and every expected text present.
+- **Not in S7a** (S7b, as staged): route kinds and attachments, ReferenceGrants, supported features, the experimental group, and the routes budget.
+- **Noted for S7b:** v1.6.3 serves BackendTLSPolicy at v1 only, while the frontend's `POLICY_REFS` and the generic browser's registry still name v1alpha3.
+
+### 15.7 The load test (§8)
+
+`TestLoad`'s large cluster now carries 500 routes and 50 ListenerSets. Its Gateways and ListenerSets have listener status, and its namespaces have labels; each small cluster has 50 routes and 5 ListenerSets.
+
+The same fixture was run on the code before S7a (b982518, where the ListenerSets sit unwatched in the fake API) and after, twice each, on an idle machine:
+
+| | before | after |
+|---|---|---|
+| first complete summary, large | 1.075s | 1.073s |
+| Observers' retained heap, steady | 60.8 MB, 60.8 MB | 61.0 MB, 61.0 MB |
+| Observers' retained heap, peak in the recovery storm | 84.9 MB, 74.2 MB | 76.9 MB, 73.4 MB |
+| full evaluation, large (max of 5) | 70.7 ms, 96.2 ms | 79.5 ms, 63.0 ms |
+| every kind live after the API recovered | 8.48s, 8.51s | 8.59s, 8.49s |
+
+S7a adds 0.2 MB of steady heap at this scale, and no change to full evaluation beyond the run-to-run spread. Full evaluation misses its 50 ms budget before and after alike: the open owner question, unchanged by S7a. The full-budget case is §15.4's.
