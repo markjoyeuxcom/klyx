@@ -402,6 +402,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   await step(steps, "Velero horizon", async () => {
     await open("velero");
     await closeDrawer();
+    // the lens keeps its tab across visits: the previous step left another
+    (await within(4000, "the Schedules tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Schedules/))).click();
     const cell = await within(10_000, "the horizon cell", () => $<HTMLElement>("[data-testid='velero-success-partial-weekly']"));
     if (!/ago/.test(cell.textContent ?? "") || !/partial/.test(cell.textContent ?? "")) throw new Error(`the horizon cell: ${cell.textContent}`);
     const none = await within(4000, "the synced-only cell", () => $<HTMLElement>("[data-testid='velero-success-synced-only']"));
