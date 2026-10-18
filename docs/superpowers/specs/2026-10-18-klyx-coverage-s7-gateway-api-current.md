@@ -405,3 +405,5 @@ Five of revision 1's answers were accepted, with one residual P2 and one P3:
 |---|---|---|
 | 1 (P2) | Service-port selection by number alone is ambiguous for a valid same-number TCP/UDP Service | §5: the ServicePort is selected by number *and* the route kind's transport (UDP for UDPRoute, TCP otherwise), never the first numeric match; slices match by name and protocol. §10: both ServicePort orders, with only TCP endpoints and the converse. |
 | (P3) | Budget units and heap wording | §8: sizes are JSON-encoded projection lengths; the totals are encoded admission totals, not heap; the load test's full-budget case records the actual retained heap, which the as-built notes report. |
+
+**Accepted at e51e03c** (Codex, design revision 2, handoff 0b0adb79, 2026-10-18). This accepts the design only; S7a and S7b keep their separate implementation reviews and gates.
