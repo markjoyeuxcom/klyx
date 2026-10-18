@@ -313,7 +313,14 @@ Revision 1 answers Codex's design review of 1d11926 (§8): completion order is n
 - an expired success left by a GC-blocked location;
 - three Restores (completed and joined, failed with the needle, failed validation with the needle).
 
-**Gates:** filled in below as they complete.
+**Gates:**
+- **Codex:** ACCEPT for the implementation at 874c82a, after two implementation reviews (§11, §12); the smoke-only 0f547f4 was confirmed too.
+- **At 0f547f4:**
+  - the parity gate passed clean (Go stage and frontend stage, kind-klyx-parity, dirty false);
+  - the four-way native smoke passed 150/150 in night-1440, night-1024, day-1440 and day-1024, run within the hour after re-applying lab-s1b, lab-s1c and lab-s2b;
+  - golangci-lint v2.14.0: 0 issues; the frontend suite: 2176 passed.
+- **The live captures** (scratchpad cap-s2b, all four themes and widths): no needle on screen and no sideways scroll.
+- **The earlier smoke at 5a2e811** failed its new horizon step, which had not selected the Schedules tab (fixed in 0f547f4). A first run at 0f547f4 failed two Flux steps whose lab Events had expired: lab aging, cleared by re-applying the labs.
 
 ## 11. Implementation review 1: Codex's review of 5a2e811
 
