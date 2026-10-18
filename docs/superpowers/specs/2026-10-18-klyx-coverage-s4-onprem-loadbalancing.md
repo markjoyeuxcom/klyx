@@ -125,9 +125,7 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
 
 **Pending episodes** (revision 1; the parent's carry-over: object creation is not the start of the current episode). A tracker in `healthsrc`, keyed by UID, records each Service's last observed state (allocated, pending, or not a LoadBalancer) and the start of its current pending episode:
 - **Observed start:** a transition this Observer saw into pending (from allocated, or from another type) starts the episode at that evaluation's time.
-- **A Service first seen pending:**
-  - **created after the Observer's kind went live:** this Observer saw it from its creation, so the creation is the start;
-  - **otherwise** the start was not observed. The episode's start is a lower bound, the first observation: "pending at least <duration> (its start was not observed)". The grace runs from that bound, so a fault is never claimed from a creation time.
+- **A Service first seen pending** (revision 2): its start was not observed, whenever it was created. Evaluations are throttled snapshots, so a Service created while the kind is live can still have become a LoadBalancer, been allocated and lost its address before the tracker first saw it; its creation time records none of that. The episode's start is a lower bound, the first observation: "pending at least <duration> (its start was not observed)". The grace runs from that bound, so a fault is never claimed from a creation time.
 - **A watch gap:** the Services kind leaving Live, or a relist. Pending before and after the gap cannot prove the Service stayed pending: it may have been allocated and lost meanwhile. So after a gap the episode restarts as a lower bound from the first observation after it.
 - **Restart:** a new Observer starts with an empty tracker. Every pending Service is then first seen, with a lower-bound start.
 - **Absence and replacement:** a Service gone from a complete read drops its entry. A new UID under the same name is a new Service.
@@ -166,7 +164,7 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
 - **Cilium:** the Service's `cilium.io/IPAMRequestSatisfied` condition, reason as fixed wording. Its observedGeneration must equal the Service's generation, else it is shown as historical and never as current evidence.
 - **The address request:** the allowlisted annotations, or `spec.loadBalancerIP` (deprecated).
 - **Pools:**
-  - **a pool the Service names** (`metallb.io/address-pool`) is the requested pool, joined by name, with its availability. Missing from a complete read reads "the requested pool does not exist";
+  - **a pool the Service names** (`metallb.io/address-pool`) is the requested pool, joined by name inside MetalLB's instance namespace (§5), with its availability. Missing from a complete read of that namespace reads "the requested pool does not exist"; with no instance namespace known, or several, the join is qualified, never guessed;
   - **every other pool is cluster context, never a cause.** Cilium's `serviceSelector` and MetalLB's `serviceAllocation` can exclude the Service, and Klyx does not evaluate them (they need Service and namespace labels the shared projection does not keep). The inspector says "pools in the cluster", not "the pool that should serve it".
 - **Silence named:** a pending Service with none of this says which silent case fits:
   - no pools;
@@ -186,20 +184,29 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
 - **Cilium's counts** are in the messages of `IPsTotal`, `IPsAvailable` and `IPsUsed`, conditions whose status is always Unknown by design. Each message is parsed as an exact non-negative integer (`math/big`, since IPv6 counts exceed int64); anything else is "malformed".
 - **MetalLB's** `assignedIPv4`, `availableIPv4`, `assignedIPv6` and `availableIPv6` are optional: absent is "not reported", never zero.
 
-**Cilium `CiliumLoadBalancerIPPool`:**
+**Cilium `CiliumLoadBalancerIPPool`** (revision 2: each condition is judged on its own freshness, and the conflict before the counts). Cilium writes `PoolConflict` when it marks the pool (`markPoolConflicting`) and the counts afterwards (`satisfyAndUpdateCounts`), so a current conflict with no counts, or with counts from an earlier generation, is an ordinary state. A condition is current when its observedGeneration equals the pool's generation.
 1. `spec.disabled`: paused, "Disabled".
-2. **The conditions describe an earlier generation**, or a count condition is missing or malformed: **unknown**, "Counts not reported yet" (or "for an earlier change").
-3. `PoolConflict` True: **fault**, "Conflicts with another pool: disabled by Cilium" (its message, clipped).
+2. **A current `PoolConflict` True:** **fault**, "Conflicts with another pool: disabled by Cilium" (its message, clipped), whatever the counts say. A conflict from an earlier generation is not current evidence: it is shown as historical and the rule goes on.
+3. **A count condition missing, malformed or from an earlier generation:** **unknown**, "Counts not reported yet" (or "for an earlier change").
 4. Available is 0 and total above 0: **degraded**, "Exhausted".
 5. Otherwise ok, "N of M available".
 
+**MetalLB's instance namespace** (revision 2). MetalLB reads its pools, advertisements and ConfigurationStates only in its own namespace (`client.InNamespace(r.Namespace)`). That namespace defaults to the pod's own and can be moved by `--namespace` or `METALLB_NAMESPACE`. Klyx's evidence for it, in order:
+- the namespace holding a `controller` ConfigurationState, which MetalLB itself writes there;
+- otherwise the detected controller workload's namespace, with the limit that the flag can move it.
+
+Every MetalLB join (an advertisement to a pool, a Service's requested pool, a ConfigurationState to its pools) stays inside one namespace. A pool outside every known instance namespace reads **unknown**, "No MetalLB instance found in its namespace: MetalLB reads pools only in its own". Same-named pools in two namespaces are never confused.
+
 **MetalLB `IPAddressPool`:**
 1. **No count reported:** unknown, "Counts not reported".
-2. **Not advertised:** no `L2Advertisement` or `BGPAdvertisement` selects it. **Degraded**, "Not advertised: its addresses are allocated but never announced".
-   - **Selection:** an advertisement with neither `ipAddressPools` nor `ipAddressPoolSelectors` selects every pool; otherwise by name, or by the pool's labels (kept for this).
-   - **When it is said:** only from complete advertisement reads, else unknown.
-3. **Assigned and none available** in every family it reports: **degraded**, "Exhausted".
-4. Otherwise ok, "N available". `autoAssign` false is said, never a fault.
+2. **The configuration is not the active one:** when the namespace's `controller` or any `speaker-<node>` ConfigurationState is Invalid, MetalLB keeps running its last valid configuration (`toConfig` fails and the reconciler returns without applying), so the objects Klyx reads may not be what the speakers announce. The advertisement verdict is withheld: **unknown**, "MetalLB's configuration is invalid: it may still run an earlier valid one". The Invalid ConfigurationState is the fault (below).
+3. **No advertisement selects it:** no `L2Advertisement` or `BGPAdvertisement` in its namespace selects it. **Degraded**, "No advertisement selects it". This is configuration evidence, worded as such: it says what the cluster's objects configure, not what the speakers announce, and it holds whether or not any address is assigned yet.
+   - **Selection, MetalLB's own:** an advertisement with neither `ipAddressPools` nor `ipAddressPoolSelectors` selects every pool in its namespace. Otherwise it selects a pool named in `ipAddressPools`, or one whose labels match any of its `ipAddressPoolSelectors`. Each selector is kept whole (`matchLabels` and `matchExpressions`) and evaluated with `metav1.LabelSelectorAsSelector`, the function MetalLB uses, against the pool's labels.
+   - **Unresolved:** a selector that does not convert, or one past the projection's cap (§7), is unresolved. If no other advertisement selects the pool and any advertisement in its namespace is unresolved, the verdict is **unknown**, "An advertisement's selector could not be evaluated", never degraded.
+   - **When it is said:** only from complete advertisement and pool reads; else unknown.
+   - **The limit, always said:** "From the cluster's configuration objects, not the speakers' announcement state." When ConfigurationState is absent (MetalLB before the kind), unread or reports no result, it adds: "MetalLB's configuration result is not reported; an invalid configuration would leave the speakers on an earlier one."
+4. **Assigned and none available** in every family it reports: **degraded**, "Exhausted".
+5. Otherwise ok, "N available". `autoAssign` false is said, never a fault.
 
 **MetalLB `ConfigurationState`** (`lb/metallb`):
 - `result` Invalid: **fault**, "Configuration invalid", with its error summary clipped under the URL rule.
@@ -231,8 +238,8 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
 - **Services:** §2's additions, unbudgeted as today. The ingress, port and condition lists are capped at 8 for display, after classification over the whole input.
 - **Pools:**
   - **Cilium:** name, generation, `disabled`, the block count and first 8 blocks, `serviceSelector` presence, and the conditions with their observedGeneration and exact counts;
-  - **MetalLB:** name, labels (for advertisement selectors), the address count and first 8 addresses, `autoAssign`, `serviceAllocation` presence, and status counts with presence kept.
-- **Advertisements:** name, kind, the pool names and whether pool selectors are set (with their match labels, to evaluate them against pool labels), node selector presence, and BGP peers' count.
+  - **MetalLB:** namespace, name, labels (for advertisement selectors, capped at 32 with the cut said; a pool whose labels are cut makes selection by labels unresolved), the address count and first 8 addresses, `autoAssign`, `serviceAllocation` presence, and status counts with presence kept.
+- **Advertisements** (revision 2): namespace, name, kind, the pool names (capped at 32), and the pool selectors kept whole, `matchLabels` and `matchExpressions`, up to 8 selectors of 16 requirements each, past which the advertisement is unresolved (§5); node selector presence, and BGP peers' count.
 - **ConfigurationState:** name, result, error summary (clipped), and conditions.
 - **Budget:**
   - **new watches:** up to five MetalLB and Cilium kinds, where served;
@@ -255,8 +262,10 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
   - each evidence join: an event without a UID, an svclb pod owned by another DaemonSet, a stale Cilium condition, a named pool missing;
   - each silent case;
   - every pool row, including absent and partial status, an old observedGeneration, a malformed count, a large IPv6 count, and advertisement selection;
+  - revision 2, Cilium: a current conflict with absent counts and with counts from an earlier generation (both fault), and a conflict from an earlier generation (historical, never fault);
+  - revision 2, MetalLB: an expression-only selector (`tier In [gold]` never selects a bronze pool), a mixed `matchLabels` and `matchExpressions` selector, a selector that does not convert and one past the cap (unresolved), a same-named pool and advertisement in another namespace (never joined), a pool outside every instance namespace, and an Invalid ConfigurationState with an unselected pool (withheld, never degraded);
   - the ConfigurationState rows.
-- **The episode tracker:** an observed start, a first-seen lower bound, a gap restarting it, a restart, absence, replacement, and clearing.
+- **The episode tracker:** an observed start, a first-seen lower bound, a gap restarting it, a restart, absence, replacement, and clearing. Revision 2: a Service created after the kind went live whose first capture already shows it pending after coalesced intervening states (ClusterIP, then allocated, then lost) gets the first-seen lower bound, never its creation time.
 - **observe and healthsrc:**
   - the third consumer;
   - the Service part with every dependency present and absent;
@@ -268,8 +277,9 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
     - a Service gets an address from MetalLB itself;
     - a one-address pool is exhausted by a second Service, whose `AllocationFailed` event MetalLB writes;
     - deleting the first Service releases its address, which MetalLB's status counts show;
-    - a pool with no advertisement allocates without announcing;
-    - MetalLB's own ConfigurationState.
+    - a pool no advertisement selects reads "No advertisement selects it";
+    - MetalLB's own ConfigurationState, Valid;
+    - revision 2: a second pool whose range overlaps the first makes MetalLB's configuration Invalid (its own validation refuses overlapping CIDRs), which its ConfigurationState reports and which withholds the advertisement verdict; removing the pool restores Valid.
   - **Fixtures for what the lab cannot produce:**
     - a Cilium pool in conflict and an exhausted one (Cilium is not the lab's CNI);
     - a Service with Cilium's unsatisfied condition;
@@ -298,3 +308,11 @@ Notes: Prax reference 91b51923 ("On-prem LoadBalancer controller facts for S4"),
 | 5 | ConfigurationState, controller health and advertisements had no acquisition contract | §2: the `lb/metallb` part; the controller task's workload readiness; advertisements watched as pool evidence (§5's "not advertised") |
 | 6 | The lab needed a real controller (C6) | §8: a real MetalLB with allocation, exhaustion, release and no-advertisement scenarios; fixtures only for what the lab cannot produce; the pending fixture re-applied per smoke mode |
 | 7 (P3) | `io.cilium/node`; exact GKE classes; custom classes unproven | §4 |
+
+## 11. Revision 2: Codex's re-review of revision 1
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Creation after the kind went live does not prove the first observed episode began at creation: evaluations are throttled snapshots | §3: every Service first seen pending gets the first-seen lower bound; the creation time is never a start. §8: a first capture after coalesced states |
+| 2 | Missing or stale counts came before a current `PoolConflict` and suppressed a proven fault | §5: each condition judged on its own freshness; a current conflict is a fault whatever the counts; a stale conflict is historical; the counts gate only exhaustion and capacity. §8: the three cases |
+| 3 | Advertisement matching lost `matchExpressions`, crossed namespaces, and over-claimed announcement | §5: MetalLB's instance namespace bounds every join; selectors kept whole and evaluated with `LabelSelectorAsSelector`, unresolved past the cap; "No advertisement selects it" as configuration evidence with its limit; withheld while a ConfigurationState is Invalid (the last valid configuration). §7: the projection. §8: the cases |
