@@ -411,3 +411,16 @@ The raw-audience leak was confirmed fixed and the twelve earlier probes pass. Th
 - **`go test -race ./...`:** ok.
 - **golangci-lint:** 0 issues.
 - **The frontend:** unchanged this round.
+
+## 17. Implementation review 3: Codex's re-review of aaa52d1
+
+The three previous findings are resolved, and all fifteen earlier probes pass. One P2 was fixed in afc3ff7.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | Path reading ignored the workload's OS. On a Linux pod, "C:\tokens\token", "\tokens\token" and "/tokens\token" resolved to the mounted /tokens/token. | The chain takes the pod's declared OS: `spec.os`, else its `kubernetes.io/os` node selector. On Linux only "/" roots a path and a backslash is an ordinary character. On Windows, drives and backslashes apply. When the pod says no OS, a path stands only if Linux and Windows read it alike; otherwise the chain is unresolved ("the pod does not say its OS ..."). The Windows positives now name their OS, and a Windows path with no OS said is unresolved. Codex's probe passes, and the regressions check each Linux reason, which caught all four mutations. |
+
+**The gates at afc3ff7:**
+- **The four-way native smoke:** 170/170 in all four modes. The tree was dirty only with this section; the labs were re-applied within the hour.
+- **`go test -race ./...`:** ok.
+- **golangci-lint:** 0 issues.
