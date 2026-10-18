@@ -18,6 +18,7 @@ const (
 	metallbNotReady  = "MetalLB controller %s/%s is not ready"
 	metallbNoCtl     = "MetalLB CRDs installed but no MetalLB controller found (no Deployment labelled app=metallb,component=controller or app.kubernetes.io/name=metallb,app.kubernetes.io/component=controller)"
 	metallbCtlUnread = "MetalLB CRDs installed but its controller could not be read"
+	metallbCtlCut    = "the MetalLB controller list was cut short (a continued list): the rest was not read"
 )
 
 // metallbSelectors are the native manifest's and the Helm chart's labels.
@@ -59,7 +60,10 @@ func (c LoadBalancingCapability) Present(ciliumPresent bool) bool {
 
 // detectLoadBalancing classifies MetalLB like the other controllers: not
 // ready for a found controller not ready; unknown when the list is
-// unreadable, or no controller is found while the CRDs are served.
+// unreadable, or no controller is found while the CRDs are served. Both
+// selectors' reads accumulate (Codex's S4 implementation review, finding
+// 4): a gap in one never discards what the other proved, and only complete
+// reads of both certify health, absence, or ControllersRead.
 func (d *Detector) detectLoadBalancing(ctx context.Context, served map[string]bool) LoadBalancingCapability {
 	out := LoadBalancingCapability{MetalLB: served[metallbGroup], AWSLBC: served[awsLBCGroup]}
 	if !out.MetalLB {
@@ -67,12 +71,15 @@ func (d *Detector) detectLoadBalancing(ctx context.Context, served map[string]bo
 		return out
 	}
 	seen := map[string]bool{}
+	var gaps []string
 	for _, sel := range metallbSelectors {
 		deps, err := d.cs.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: sel})
 		if err != nil {
-			out.Base = Base{Tier: Classify(true, false), Reason: metallbCtlUnread + ": " + err.Error()}
-			out.Controllers = nil
-			return out
+			gaps = append(gaps, metallbCtlUnread+": "+err.Error())
+			continue
+		}
+		if deps.Continue != "" || (deps.RemainingItemCount != nil && *deps.RemainingItemCount > 0) {
+			gaps = append(gaps, metallbCtlCut)
 		}
 		for i := range deps.Items {
 			dp := &deps.Items[i]
@@ -82,7 +89,7 @@ func (d *Detector) detectLoadBalancing(ctx context.Context, served map[string]bo
 			}
 		}
 	}
-	out.ControllersRead = true
+	out.ControllersRead = len(gaps) == 0
 	sort.Slice(out.Controllers, func(i, j int) bool {
 		if out.Controllers[i].Namespace != out.Controllers[j].Namespace {
 			return out.Controllers[i].Namespace < out.Controllers[j].Namespace
@@ -96,11 +103,14 @@ func (d *Detector) detectLoadBalancing(ctx context.Context, served map[string]bo
 		}
 	}
 	switch {
+	case len(notReady) > 0:
+		// a proven failure stands beside any gap
+		out.Verified = true
+		out.Base.Reason = strings.Join(append(notReady, gaps...), "; ")
+	case len(gaps) > 0:
+		out.Base.Reason = strings.Join(gaps, "; ") // unknown: what was not read may not be ready
 	case len(out.Controllers) == 0:
 		out.Base.Reason = metallbNoCtl
-	case len(notReady) > 0:
-		out.Verified = true
-		out.Base.Reason = strings.Join(notReady, "; ")
 	default:
 		out.Verified, out.Healthy = true, true
 	}

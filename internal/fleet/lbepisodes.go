@@ -28,14 +28,16 @@ type lbObserver interface {
 func startLBEpisodes(ctx context.Context, h lbObserver, now func() time.Time, seen func(bool)) {
 	var mu sync.Mutex
 	var tr lb.Tracker
+	var lastSeq uint64
+	visited := false
 	h.WatchKind(healthsrc.KindServices, func(observe.KindState) {
 		if ctx.Err() != nil {
 			return
 		}
-		states := map[string]lb.SvcState{}
+		states := map[string]lb.Obs{}
 		st, complete, ok := h.VisitKind(healthsrc.KindServices, func(obj any) bool {
 			if s, ok := obj.(*corev1.Service); ok {
-				states[string(s.UID)] = lb.StateOf(s)
+				states[string(s.UID)] = lb.Obs{State: lb.StateOf(s), RV: s.ResourceVersion}
 			}
 			return true
 		})
@@ -43,12 +45,17 @@ func startLBEpisodes(ctx context.Context, h lbObserver, now func() time.Time, se
 		defer mu.Unlock()
 		if !ok || !complete || st.Coverage != observe.Live || st.Truncated {
 			tr.Break()
+			visited = false
 			return
 		}
-		h.SetFact(healthsrc.FactLBEpisodes, tr.Observe(lb.Continuity{Generation: st.Generation, Epoch: st.Epoch}, now(), states))
+		// deliveries are newest-wins: contiguous only when the kind changed
+		// once at most since the last visit (Codex's S4 review, finding 2)
+		contiguous := visited && st.Seq <= lastSeq+1
+		lastSeq, visited = st.Seq, true
+		h.SetFact(healthsrc.FactLBEpisodes, tr.Observe(lb.Continuity{Generation: st.Generation, Epoch: st.Epoch}, now(), states, contiguous))
 		lbSeen := false
 		for _, s := range states {
-			lbSeen = lbSeen || s != lb.StateOther
+			lbSeen = lbSeen || s.State != lb.StateOther
 		}
 		if seen != nil {
 			seen(lbSeen)

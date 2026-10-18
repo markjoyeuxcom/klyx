@@ -140,24 +140,27 @@ func init() {
 		"bindings": admissionBindingAllow, "binding": admissionBindingAllow, "reason": nil}
 }
 
-// Coverage S4 §7: classes, states, counts, reasons and the expected
+// Coverage S4 §7: classes, states, counts, reason tokens and the expected
 // controller; never an address, a hostname, an address block, an
-// annotation's value, a requested pool's name or an event's message.
+// annotation's value, a requested pool's name or a controller's message -
+// so never the rule's free-text reason, which quotes them (Codex's S4
+// review finding 1). lbEvidence applies the same policy to the rest of the
+// document.
 func init() {
 	cond := allow{"type": nil, "status": nil, "reason": nil, "current": nil}
 	aiEvidenceFields[healthsrc.TaskLB+"/services"] = allow{"class": nil, "externalTrafficPolicy": nil, "ipFamilies": nil, "ipFamilyPolicy": nil,
 		"allocated": nil, "addressCount": nil, "entries": nil, "families": nil, "portError": nil, "portsErrorCond": nil, "missingFamily": nil,
-		"oneFamilyPreferred": nil, "pendingSince": nil, "pendingObserved": nil, "cilium": cond, "conditionCount": nil, "limits": nil, "reason": nil,
+		"oneFamilyPreferred": nil, "pendingSince": nil, "pendingObserved": nil, "cilium": cond, "conditionCount": nil, "limits": nil, "cause": nil,
 		"expected": allow{"class": nil, "known": nil, "note": nil, "candidates": allow{"controller": nil, "detected": nil, "limit": nil}},
-		"diagnosis": allow{"eventCount": nil, "eventsRead": nil, "events": allow{"reason": nil, "count": nil}, "svclbRead": nil, "cilium": cond,
+		"diagnosis": allow{"eventCount": nil, "eventsRead": nil, "svclbRead": nil, "cilium": cond,
 			"svclb": allow{"pods": nil, "ready": nil, "pending": nil, "hostPortConflict": nil, "pendingReason": nil, "candidates": nil},
 			"pool":  allow{"state": nil}, "silent": nil}}
 	aiEvidenceFields[healthsrc.TaskLB+"/pools"] = allow{"kind": nil, "blockCount": nil, "disabled": nil, "serviceSelector": nil,
 		"counts": allow{"total": nil, "totalState": nil, "available": nil, "availableState": nil, "used": nil, "usedState": nil}, "conflict": cond,
 		"labelsCut": nil, "autoAssign": nil, "serviceAllocation": nil,
 		"status":     allow{"assignedIPv4": nil, "availableIPv4": nil, "assignedIPv6": nil, "availableIPv6": nil},
-		"selectedBy": nil, "unresolved": nil, "adsRead": nil, "statesRead": nil, "instance": nil, "invalid": nil, "limits": nil, "reason": nil}
-	aiEvidenceFields[healthsrc.TaskLB+"/metallb"] = allow{"role": nil, "node": nil, "result": nil, "conditionCount": nil, "reason": nil}
+		"selectedBy": nil, "unresolved": nil, "adsRead": nil, "statesRead": nil, "instance": nil, "invalid": nil, "limits": nil}
+	aiEvidenceFields[healthsrc.TaskLB+"/metallb"] = allow{"role": nil, "node": nil, "result": nil, "conditionCount": nil}
 }
 
 var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,

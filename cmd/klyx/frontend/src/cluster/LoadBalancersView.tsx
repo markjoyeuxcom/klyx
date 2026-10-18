@@ -7,7 +7,7 @@ import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
-import { clock, kindEvidence, lastGoodAt } from "../layout/coverage";
+import { clock, combineEvidence, kindEvidence, lastGoodAt } from "../layout/coverage";
 import { useListKeys } from "../chrome/useListKeys";
 import { ROW_MARK, VerdictMark } from "../health/VerdictView";
 import { Aspect } from "../chrome/primitives/Aspect";
@@ -74,10 +74,12 @@ const COLUMNS: Record<Tab, (ColumnDef & { label: string })[]> = {
   ],
 };
 
-const PARTS: Record<Tab, { noun: [string, string]; lens: string; kind: string }> = {
-  services: { noun: ["LoadBalancer Service", "LoadBalancer Services"], lens: "LBServices", kind: "Service" },
-  pools: { noun: ["address pool", "address pools"], lens: "LBPools", kind: "IPAddressPool" },
-  config: { noun: ["configuration state", "configuration states"], lens: "LBStates", kind: "ConfigurationState" },
+// kinds: every kind a tab's dataset spans - Pools is only as complete as
+// both pool kinds (Codex's S4 implementation review, finding 3).
+const PARTS: Record<Tab, { noun: [string, string]; lens: string; kind: string; kinds: string[] }> = {
+  services: { noun: ["LoadBalancer Service", "LoadBalancer Services"], lens: "LBServices", kind: "Service", kinds: ["Service"] },
+  pools: { noun: ["address pool", "address pools"], lens: "LBPools", kind: "IPAddressPool", kinds: ["IPAddressPool", "CiliumLoadBalancerIPPool"] },
+  config: { noun: ["configuration state", "configuration states"], lens: "LBStates", kind: "ConfigurationState", kinds: ["ConfigurationState"] },
 };
 const KEY_KIND: Record<Tab, string> = { services: "Service", pools: "Pool", config: "State" };
 const TAB_OF_KEY: Record<string, Tab> = { Service: "services", Pool: "pools", State: "config" };
@@ -125,7 +127,8 @@ export function LoadBalancersView({ cluster }: { cluster: string }) {
   const items: Record<Tab, Item[]> = { services, pools: poolItems, config: stateItems };
   const cur = part[tab];
   const list = items[tab];
-  const ev = kindEvidence(!cur.loading, cur.coverage, PARTS[tab].kind, cur.watchError);
+  const evOf = (t: Tab, kinds = PARTS[t].kinds) => combineEvidence(kinds.map((k) => kindEvidence(!part[t].loading, part[t].coverage, k, part[t].watchError)));
+  const ev = evOf(tab);
   const attention = (t: Tab) => (part[t].counts ? part[t].counts!.included : 0); // the rule's inclusion: faults and degraded
   const faults = (t: Tab) => (part[t].counts ? part[t].counts!.fault : 0);
 
@@ -144,7 +147,7 @@ export function LoadBalancersView({ cluster }: { cluster: string }) {
     const key = t === "pools" ? poolKey({ kind: intent.ref.gvr.startsWith("cilium.io") ? "cilium" : "metallb", namespace: intent.ref.namespace, name: intent.ref.name })
       : keyOf(t, intent.ref.namespace ?? "", intent.ref.name);
     const found = items[t].some((r) => r.key === key);
-    const tev = kindEvidence(!part[t].loading, part[t].coverage, PARTS[t].kind, part[t].watchError);
+    const tev = evOf(t, t === "pools" ? [intent.ref.gvr.startsWith("cilium.io") ? "CiliumLoadBalancerIPPool" : "IPAddressPool"] : PARTS[t].kinds);
     if (intent.ref.uid) expectPin(cluster, PARTS[t].lens, key, intent.ref.uid);
     else if (!found) return tev === "complete" ? "missing" : "wait";
     setTab(t);
@@ -159,7 +162,9 @@ export function LoadBalancersView({ cluster }: { cluster: string }) {
 
   const selTab: Tab | null = TAB_OF_KEY[selKey?.split("/")[0] ?? ""] ?? null;
   const live = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
-  const selEv = selTab ? kindEvidence(!part[selTab].loading, part[selTab].coverage, PARTS[selTab].kind, part[selTab].watchError) : "pending";
+  // a pinned pool is proven gone only by its own kind's read
+  const selKinds = selTab === "pools" ? [selKey?.split("/")[1] === "cilium" ? "CiliumLoadBalancerIPPool" : "IPAddressPool"] : selTab ? PARTS[selTab].kinds : [];
+  const selEv = selTab ? evOf(selTab, selKinds) : "pending";
   const pin = usePinnedSubject(cluster, selTab ? selKey : null, live, selEv === "complete", selTab ? PARTS[selTab].lens : undefined);
 
   let state: DatasetState = "ready";
@@ -178,7 +183,7 @@ export function LoadBalancersView({ cluster }: { cluster: string }) {
 
   const notices: React.ReactNode[] = [];
   if (cur.watchError && list.length > 0) {
-    const lg = lastGoodAt(cur.coverage, [PARTS[tab].kind]);
+    const lg = lastGoodAt(cur.coverage, PARTS[tab].kinds);
     notices.push(<WatchErrorBanner key="watch" tool="Load balancers" failure={`read failed - showing the last good state${lg ? ` from ${clock(lg)}` : ""}`} error={cur.watchError} />);
   }
 

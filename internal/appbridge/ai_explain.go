@@ -168,6 +168,9 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 			}
 		}
 	}
+	if t.Task == healthsrc.TaskLB {
+		ev = lbEvidence(ev) // S4 §7: no controller message anywhere in the document
+	}
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
 	if fact {
 		grounded = fmt.Sprintf("No Klyx verdict (a listed fact) as of %s · %s/%s", verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))

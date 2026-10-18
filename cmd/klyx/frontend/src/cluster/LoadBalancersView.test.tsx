@@ -108,4 +108,16 @@ describe("LoadBalancersView (coverage S4)", () => {
     fireEvent.click(screen.getAllByText("controller")[0]);
     expect(screen.getByTestId("lb-state-panel").textContent).toContain("last valid one");
   });
+
+  it("review: the Pools dataset stays pending until Cilium is read (Codex's S4 review, finding 3)", () => {
+    pools = { ...part([], ["IPAddressPool", "CiliumLoadBalancerIPPool"]),
+      coverage: [
+        { kind: "IPAddressPool", served: false, synced: false, coverage: "absent" },
+        { kind: "CiliumLoadBalancerIPPool", served: true, synced: false, coverage: "checking" },
+      ] };
+    render(<LoadBalancersView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    expect(screen.queryByText("No address pools on this cluster.")).toBeNull();
+    expect(screen.getByRole("status", { name: /reading address pools/i })).toBeTruthy();
+  });
 });

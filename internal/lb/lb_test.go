@@ -426,44 +426,72 @@ func TestConfigState(t *testing.T) {
 func TestTracker(t *testing.T) {
 	var tr Tracker
 	c1 := Continuity{Generation: 1, Epoch: 1}
+	o := func(st SvcState, rv string) Obs { return Obs{State: st, RV: rv} }
 	// a Service created after the kind went live whose first capture already
 	// shows it pending (ClusterIP, allocated and lost coalesced before it)
 	// gets the first-seen lower bound, never its creation time (revision 2)
-	eps := tr.Observe(c1, t0, map[string]SvcState{"a": StatePending, "b": StateAllocated, "c": StateOther})
+	eps := tr.Observe(c1, t0, map[string]Obs{"a": o(StatePending, "1"), "b": o(StateAllocated, "1"), "c": o(StateOther, "1")}, false)
 	if eps["a"].Start != t0 || eps["a"].Observed || len(eps) != 1 {
 		t.Fatalf("first seen: %+v", eps)
 	}
-	// continuity: pending stays, allocated loses its address (observed)
-	eps = tr.Observe(c1, t0.Add(time.Minute), map[string]SvcState{"a": StatePending, "b": StatePending, "c": StatePending})
+	// continuity: a unwritten stays; b loses its address and c becomes a
+	// LoadBalancer (observed)
+	eps = tr.Observe(c1, t0.Add(time.Minute), map[string]Obs{"a": o(StatePending, "1"), "b": o(StatePending, "2"), "c": o(StatePending, "2")}, false)
 	if eps["a"].Start != t0 || !eps["b"].Observed || eps["b"].Start != t0.Add(time.Minute) || !eps["c"].Observed {
 		t.Fatalf("observed starts: %+v", eps)
 	}
 	// clearing: an allocation ends the episode; pending again is a new one
-	tr.Observe(c1, t0.Add(2*time.Minute), map[string]SvcState{"a": StateAllocated, "b": StatePending, "c": StatePending})
-	eps = tr.Observe(c1, t0.Add(3*time.Minute), map[string]SvcState{"a": StatePending, "b": StatePending, "c": StatePending})
+	tr.Observe(c1, t0.Add(2*time.Minute), map[string]Obs{"a": o(StateAllocated, "2"), "b": o(StatePending, "2"), "c": o(StatePending, "2")}, false)
+	eps = tr.Observe(c1, t0.Add(3*time.Minute), map[string]Obs{"a": o(StatePending, "3"), "b": o(StatePending, "2"), "c": o(StatePending, "2")}, false)
 	if eps["a"].Start != t0.Add(3*time.Minute) || !eps["a"].Observed {
 		t.Fatalf("cleared then pending: %+v", eps)
 	}
+	// Codex's S4 review, finding 2: written between two snapshots that
+	// skipped changes, a pending Service may have held an address meanwhile:
+	// a lower bound. One contiguous write (pending to pending) carries on.
+	eps = tr.Observe(c1, t0.Add(4*time.Minute), map[string]Obs{"a": o(StatePending, "3"), "b": o(StatePending, "5"), "c": o(StatePending, "2")}, false)
+	if eps["b"].Start != t0.Add(4*time.Minute) || eps["b"].Observed || eps["c"].Start != t0.Add(time.Minute) {
+		t.Fatalf("a coalesced write restarts only that Service: %+v", eps)
+	}
+	eps = tr.Observe(c1, t0.Add(5*time.Minute), map[string]Obs{"a": o(StatePending, "3"), "b": o(StatePending, "6"), "c": o(StatePending, "2")}, true)
+	if eps["b"].Start != t0.Add(4*time.Minute) {
+		t.Fatalf("a contiguous pending-to-pending write carries on: %+v", eps)
+	}
 	// a relist (epoch) restarts every episode as a lower bound
 	c2 := Continuity{Generation: 1, Epoch: 2}
-	eps = tr.Observe(c2, t0.Add(4*time.Minute), map[string]SvcState{"a": StatePending, "b": StatePending})
-	if eps["a"].Observed || eps["a"].Start != t0.Add(4*time.Minute) || eps["b"].Start != t0.Add(4*time.Minute) {
+	eps = tr.Observe(c2, t0.Add(6*time.Minute), map[string]Obs{"a": o(StatePending, "3"), "b": o(StatePending, "6")}, false)
+	if eps["a"].Observed || eps["a"].Start != t0.Add(6*time.Minute) || eps["b"].Start != t0.Add(6*time.Minute) {
 		t.Fatalf("a gap restarts: %+v", eps)
 	}
 	// absence: c is gone from a complete read; a new UID under its name is new
-	eps = tr.Observe(c2, t0.Add(5*time.Minute), map[string]SvcState{"a": StatePending, "c2": StatePending})
-	if eps["c2"].Observed || eps["c2"].Start != t0.Add(5*time.Minute) {
+	eps = tr.Observe(c2, t0.Add(7*time.Minute), map[string]Obs{"a": o(StatePending, "3"), "c2": o(StatePending, "1")}, false)
+	if eps["c2"].Observed || eps["c2"].Start != t0.Add(7*time.Minute) {
 		t.Fatalf("replacement: %+v", eps)
 	}
 	// a break (the kind left live) restarts on the next observation
 	tr.Break()
-	eps = tr.Observe(c2, t0.Add(6*time.Minute), map[string]SvcState{"a": StatePending})
-	if eps["a"].Start != t0.Add(6*time.Minute) || eps["a"].Observed {
+	eps = tr.Observe(c2, t0.Add(8*time.Minute), map[string]Obs{"a": o(StatePending, "3")}, false)
+	if eps["a"].Start != t0.Add(8*time.Minute) || eps["a"].Observed {
 		t.Fatalf("after a break: %+v", eps)
 	}
 	// restart: a new tracker sees every pending Service first
 	var fresh Tracker
-	if eps = fresh.Observe(c2, t0.Add(7*time.Minute), map[string]SvcState{"a": StatePending}); eps["a"].Start != t0.Add(7*time.Minute) {
+	if eps = fresh.Observe(c2, t0.Add(9*time.Minute), map[string]Obs{"a": o(StatePending, "3")}, true); eps["a"].Start != t0.Add(9*time.Minute) {
 		t.Fatalf("restart: %+v", eps)
+	}
+}
+
+// Codex's S4 implementation review, finding 5: IPv6 reported with its
+// available count missing proves nothing about its capacity.
+func TestS4ReviewIncompleteFamilyCannotProveExhaustion(t *testing.T) {
+	inst := Instances{Namespaces: map[string]bool{"metallb-system": true}, Known: true}
+	run := func(st PoolStatus) health.NativeEval {
+		return MetalLBPoolRule(MetalLBPoolInput{Pool: mpool("p", nil, st), Instances: inst, Ads: []*Advertisement{ad("all", nil)}, AdsRead: ReadComplete})
+	}
+	if e := run(PoolStatus{AssignedV4: i64(1), AvailableV4: i64(0), AssignedV6: i64(1)}); e.Role != health.Unknown || e.Label != "Counts incomplete" {
+		t.Fatalf("a missing count is not zero: %+v", e)
+	}
+	if e := run(PoolStatus{AssignedV4: i64(1), AvailableV4: i64(3), AssignedV6: i64(1)}); e.Role != health.OK {
+		t.Fatalf("free capacity in a complete family settles it: %+v", e)
 	}
 }

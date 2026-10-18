@@ -99,6 +99,9 @@ func ProjectService(obj any) (any, error) {
 	out := &corev1.Service{ObjectMeta: projectMeta(s.ObjectMeta, false), Spec: corev1.ServiceSpec{Type: s.Spec.Type,
 		ExternalName: s.Spec.ExternalName, PublishNotReadyAddresses: s.Spec.PublishNotReadyAddresses}}
 	if s.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		// its resourceVersion tells the episode tracker whether it was
+		// written between two snapshots (S4 §3, Codex's review finding 2)
+		out.ResourceVersion = s.ResourceVersion
 		projectLoadBalancer(s, out)
 	}
 	if s.Spec.ClusterIP == corev1.ClusterIPNone {

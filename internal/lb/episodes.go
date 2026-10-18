@@ -32,12 +32,27 @@ func StateOf(s *corev1.Service) SvcState {
 // before and after cannot prove the Service stayed pending (S4 §3).
 type Continuity struct{ Generation, Epoch uint64 }
 
+// Obs is one Service as a snapshot shows it: its state and its
+// resourceVersion, which changes on every write.
+type Obs struct {
+	State SvcState
+	RV    string
+}
+
 // Tracker records each Service's last observed state and its current
 // pending episode, keyed by UID (S4 §3, revisions 1 and 2). It is fed
 // level-triggered snapshots: transitions between two snapshots are not
 // seen, so only a pending state following a recorded non-pending one has
 // an observed start; every Service first seen pending, whenever it was
 // created, gets a lower bound from its first observation.
+//
+// Snapshots are newest-wins (observe.WatchKind), so two pending snapshots
+// of one Service need not be one pending stretch: it may have been given an
+// address and lost it between them (Codex's S4 implementation review,
+// finding 2). Its episode carries on only when the snapshot proves it
+// stayed pending: its resourceVersion unchanged (it was not written), or
+// the snapshots contiguous (one write at most in the whole kind, which took
+// it from pending to pending). Otherwise it restarts as a lower bound.
 type Tracker struct {
 	cont  Continuity
 	began bool
@@ -46,20 +61,23 @@ type Tracker struct {
 
 type tracked struct {
 	state SvcState
+	rv    string
 	ep    *Episode
 }
 
-// Observe applies one complete, live snapshot (UID to state) taken at now
-// under continuity c, and returns every pending Service's episode. A
-// snapshot that is not live and complete must not be passed: the caller
-// calls Break instead, and the next Observe restarts every episode.
-func (t *Tracker) Observe(c Continuity, now time.Time, states map[string]SvcState) map[string]Episode {
+// Observe applies one complete, live snapshot (UID to its state) taken at
+// now under continuity c, and returns every pending Service's episode.
+// contiguous says no change of the kind was skipped since the previous
+// snapshot (its sequence advanced by one at most). A snapshot that is not
+// live and complete must not be passed: the caller calls Break instead,
+// and the next Observe restarts every episode.
+func (t *Tracker) Observe(c Continuity, now time.Time, obs map[string]Obs, contiguous bool) map[string]Episode {
 	gap := !t.began || c != t.cont
-	next := make(map[string]tracked, len(states))
+	next := make(map[string]tracked, len(obs))
 	out := map[string]Episode{}
-	for uid, st := range states {
-		if st != StatePending {
-			next[uid] = tracked{state: st}
+	for uid, o := range obs {
+		if o.State != StatePending {
+			next[uid] = tracked{state: o.State, rv: o.RV}
 			continue
 		}
 		prev, had := t.last[uid]
@@ -67,13 +85,15 @@ func (t *Tracker) Observe(c Continuity, now time.Time, states map[string]SvcStat
 		switch {
 		case gap || !had:
 			ep = Episode{Start: now} // a lower bound: the start was not observed
-		case prev.state == StatePending && prev.ep != nil:
-			ep = *prev.ep
+		case prev.state == StatePending && prev.ep != nil && (prev.rv == o.RV || contiguous):
+			ep = *prev.ep // provably still the same stretch
+		case prev.state == StatePending:
+			ep = Episode{Start: now} // written between snapshots: it may have held an address meanwhile
 		default:
 			ep = Episode{Start: now, Observed: true} // seen leaving allocated or another type
 		}
 		e := ep
-		next[uid] = tracked{state: st, ep: &e}
+		next[uid] = tracked{state: o.State, rv: o.RV, ep: &e}
 		out[uid] = ep
 	}
 	t.cont, t.began, t.last = c, true, next // absent UIDs drop: a new UID is a new Service

@@ -120,7 +120,10 @@ type LBServiceDTO struct {
 	ConditionCount        int             `json:"conditionCount"`
 	Limits                []string        `json:"limits"`
 	Reason                string          `json:"reason,omitempty"`
-	Rule                  RuleDTO         `json:"rule"`
+	// Cause is the reason as structure (the AI's, Codex's S4 review finding
+	// 1): the speaking source and its reason token, or the silent case.
+	Cause string  `json:"cause,omitempty"`
+	Rule  RuleDTO `json:"rule"`
 }
 
 func capStrings(xs []string) []string {
@@ -143,7 +146,8 @@ func lbServiceDTO(r healthsrc.Row[healthsrc.LBServiceRow]) LBServiceDTO {
 		Class: lb.Class(s), ExternalTrafficPolicy: string(s.Spec.ExternalTrafficPolicy), IPFamilies: []string{}, Allocated: a.Allocated,
 		IPs: capStrings(a.IPs), Hostnames: capStrings(a.Hostnames), AddressCount: len(a.IPs) + len(a.Hostnames), Entries: a.Entries, Families: []string{},
 		PortError: a.PortError, PortsErrorCond: a.PortsErrorCond, MissingFamily: r.Data.MissingFamily, Cilium: lbServiceCond(r.Data.Cilium),
-		Conditions: []LBCondDTO{}, ConditionCount: len(s.Status.Conditions), Limits: []string{LBLimitAllocation}, Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
+		Conditions: []LBCondDTO{}, ConditionCount: len(s.Status.Conditions), Limits: []string{LBLimitAllocation}, Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval),
+		Cause: lbCause(lbServiceInput{diag: r.Data.Diagnosis, alloc: a, missingFamily: r.Data.MissingFamily})}
 	for _, f := range s.Spec.IPFamilies {
 		d.IPFamilies = append(d.IPFamilies, string(f))
 	}

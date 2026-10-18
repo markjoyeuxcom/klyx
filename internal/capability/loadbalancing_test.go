@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -47,5 +48,34 @@ func TestS4DetectLoadBalancing(t *testing.T) {
 	}
 	if got := (&Detector{cs: fake.NewSimpleClientset()}).detectLoadBalancing(context.Background(), map[string]bool{}); got.MetalLB || got.Tier != Absent {
 		t.Fatalf("absent: %+v", got)
+	}
+}
+
+// Codex's S4 implementation review, finding 4: a proven not-ready
+// controller survives a failed second read; a continued (cut) list never
+// certifies health or a complete read.
+func TestS4ReviewDetectionAccumulates(t *testing.T) {
+	served := map[string]bool{metallbGroup: true}
+	cs := fake.NewSimpleClientset()
+	calls := 0
+	cs.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, &appsv1.DeploymentList{Items: []appsv1.Deployment{*metallbDep("lb", "down", map[string]string{"app": "metallb", "component": "controller"}, false)}}, nil
+		}
+		return true, nil, errors.New("second selector forbidden")
+	})
+	got := (&Detector{cs: cs}).detectLoadBalancing(context.Background(), served)
+	if !got.Verified || got.Healthy || got.ControllersRead || !strings.Contains(got.Reason, "down") || !strings.Contains(got.Reason, "forbidden") {
+		t.Fatalf("the proven failure and the gap, together: %+v", got)
+	}
+	cs = fake.NewSimpleClientset()
+	cs.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &appsv1.DeploymentList{ListMeta: metav1.ListMeta{Continue: "unread-tail"},
+			Items: []appsv1.Deployment{*metallbDep("lb", "ready", map[string]string{"app": "metallb", "component": "controller"}, true)}}, nil
+	})
+	got = (&Detector{cs: cs}).detectLoadBalancing(context.Background(), served)
+	if got.ControllersRead || got.Healthy || got.Verified || len(got.Controllers) != 1 {
+		t.Fatalf("a cut list certifies nothing, and keeps what it read: %+v", got)
 	}
 }

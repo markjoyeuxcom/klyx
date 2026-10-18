@@ -307,7 +307,12 @@ func MetalLBPoolRule(in MetalLBPoolInput) health.NativeEval {
 	if !p.Status.Reported() {
 		return health.NativeEval{Role: health.Unknown, Label: "Counts not reported"}
 	}
-	if exhausted(p.Status) {
+	full, known := exhausted(p.Status)
+	if !known {
+		return health.NativeEval{Role: health.Unknown, Label: "Counts incomplete",
+			Reason: health.CapReason("Counts incomplete", "a family reports one of its counts but not the other")}
+	}
+	if full {
 		return health.NativeEval{Included: true, Role: health.Degraded, Label: "Exhausted",
 			Reason: health.CapReason("Exhausted", "assigned and none available in every family it reports")}
 	}
@@ -315,26 +320,31 @@ func MetalLBPoolRule(in MetalLBPoolInput) health.NativeEval {
 }
 
 // exhausted: in every family the pool reports addresses for (assigned or
-// available above zero), none is available, and some are assigned.
-func exhausted(s PoolStatus) bool {
+// available above zero), none is available, and some are assigned. known
+// is false when a family reports one count but not the other and no family
+// proves free capacity: a missing count is never zero (Codex's S4
+// implementation review, finding 5).
+func exhausted(s PoolStatus) (full, known bool) {
 	type fam struct{ a, v *int64 }
-	assigned := false
+	assigned, incomplete := false, false
 	for _, f := range []fam{{s.AssignedV4, s.AvailableV4}, {s.AssignedV6, s.AvailableV6}} {
-		if f.a == nil || f.v == nil {
-			if f.v != nil && *f.v > 0 {
-				return false
-			}
+		switch {
+		case f.a == nil && f.v == nil:
+			continue // the family is not reported
+		case f.v != nil && *f.v > 0:
+			return false, true // free capacity, whatever the rest says
+		case f.a == nil || f.v == nil:
+			incomplete = true
 			continue
-		}
-		if *f.a+*f.v == 0 {
+		case *f.a+*f.v == 0:
 			continue // the pool has no addresses of this family
-		}
-		if *f.v > 0 {
-			return false
 		}
 		assigned = assigned || *f.a > 0
 	}
-	return assigned
+	if incomplete {
+		return false, false
+	}
+	return assigned, true
 }
 
 func availableLabel(s PoolStatus) string {

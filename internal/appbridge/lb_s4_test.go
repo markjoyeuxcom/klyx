@@ -10,9 +10,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/lb"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 const s4Needle = "S4LABneedle"
@@ -72,6 +74,53 @@ func TestLBNeedleNeverCrosses(t *testing.T) {
 			if strings.Contains(s, bad) {
 				t.Errorf("AI evidence carries %q: %s", bad, s)
 			}
+		}
+	}
+}
+
+// Codex's S4 implementation review, finding 1: the S4 policy holds for the
+// whole Explain document - the rule's derived reason, the target's facts and
+// condition messages, related objects and Warning events - through the
+// serialized prompt, for a Service and for a pool.
+func TestS4ReviewExplainDocumentExclusions(t *testing.T) {
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app", UID: "u", Generation: 1}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer}}
+	ep := lb.Episode{Start: evalAt.Add(-time.Hour)}
+	msg := "EVENT-EGRESS-MARKER cannot allocate 10.77.66.55 from pool PRIVATE-POOL"
+	d := lb.Diagnose(lb.DiagnosisInput{Svc: svc, Events: []lb.Event{{Reason: "AllocationFailed", Message: msg}}})
+	row := healthsrc.Row[healthsrc.LBServiceRow]{Ref: healthsrc.RowRef{UID: "u", GVR: "v1/services", Namespace: "app", Name: "web", Generation: 1},
+		Eval: lb.ServiceRule(svc, lb.AllocationOf(svc), ep, evalAt, d.Summary), Data: healthsrc.LBServiceRow{Service: svc, Allocation: lb.AllocationOf(svc), Episode: &ep, Diagnosis: &d}}
+	rows := observe.Rows{Task: "lb", Cluster: "c", EvaluatedAt: evalAt, Part: observe.Part{ID: "services", Classifier: "native"},
+		Rows: healthsrc.RowSet[healthsrc.LBServiceRow]{Rows: []healthsrc.Row[healthsrc.LBServiceRow]{row}}}
+	detail := crd.InstanceDetail{Kind: "Service", Namespace: "app", Name: "web", UID: "u", Generation: 1,
+		Events:     []crd.Event{{Type: "Warning", Reason: "AllocationFailed", Message: msg}, {Type: "Warning", Reason: "free text PRIVATE-POOL", Message: "x"}},
+		Facts:      []crd.Fact{{Label: "LB address", Value: "10.77.66.55"}, {Label: "type", Value: "LoadBalancer"}},
+		Conditions: []crd.Condition{{Type: "x/Cond", Status: "False", Reason: "NotReady", Message: msg}}}
+	cp := &lb.CiliumPool{Meta: lb.Meta{APIVersion: "cilium.io/v2", Name: "p", UID: "pu", Generation: 1},
+		Conds: []lb.Cond{{Type: lb.CondPoolConflict, Status: "True", Reason: "cidr_overlap", Message: "range '10.77.66.0/24' overlaps PRIVATE-POOL", ObservedGeneration: 1}}}
+	n := lb.CountsOf(cp)
+	cf, cur := cp.Conflict()
+	prow := healthsrc.Row[healthsrc.LBPoolRow]{Ref: healthsrc.RowRef{UID: "pu", GVR: "cilium.io/v2/ciliumloadbalancerippools", Name: "p", Generation: 1},
+		Eval: lb.CiliumPoolRule(cp), Data: healthsrc.LBPoolRow{Cilium: cp, Counts: &n, Conflict: cf, ConflictCurrent: cur}}
+	prows := observe.Rows{Task: "lb", Cluster: "c", EvaluatedAt: evalAt, Part: observe.Part{ID: "pools", Classifier: "native"},
+		Rows: healthsrc.RowSet[healthsrc.LBPoolRow]{Rows: []healthsrc.Row[healthsrc.LBPoolRow]{prow}}}
+	pdetail := crd.InstanceDetail{Kind: "CiliumLoadBalancerIPPool", Name: "p", UID: "pu", Generation: 1,
+		Conditions: []crd.Condition{{Type: lb.CondPoolConflict, Status: "True", Reason: "cidr_overlap", Message: "range '10.77.66.0/24' overlaps PRIVATE-POOL"}}}
+	conn := &fakeExplainConn{rows: map[string]observe.Rows{"lb/services": rows, "lb/pools": prows},
+		details: map[string]crd.InstanceDetail{"/services/app/web": detail, "cilium.io/ciliumloadbalancerippools//p": pdetail}}
+	for _, target := range []ExplainTargetDTO{{Kind: "row", Task: "lb", Part: "services", UID: "u"}, {Kind: "row", Task: "lb", Part: "pools", UID: "pu"}} {
+		cl := &fakeCompleter{reply: "x"}
+		res := explainSvc(cl, conn).Explain("c", target)
+		if !res.OK {
+			t.Fatalf("%s: Explain failed: %+v", target.Part, res)
+		}
+		raw, _ := json.Marshal(evidenceOf(t, cl.gotUser))
+		for _, needle := range []string{"EVENT-EGRESS-MARKER", "10.77.66", "PRIVATE-POOL"} {
+			if strings.Contains(string(raw), needle) {
+				t.Errorf("%s: %q reached the evidence: %s", target.Part, needle, raw)
+			}
+		}
+		if target.Part == "services" && (!strings.Contains(string(raw), `"cause":"event AllocationFailed"`) || !strings.Contains(string(raw), `"LoadBalancer"`)) {
+			t.Errorf("the structural cause and the safe facts stay: %s", raw)
 		}
 	}
 }
