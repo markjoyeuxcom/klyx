@@ -515,7 +515,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     (await within(4000, "the IPv6 pool", () => byText<HTMLElement>(".lens-row", /lab-s4-cilium-v6/))).click();
     await within(8000, "exact counts", () => /18446744073709551614 of 18446744073709551616/.test($("[data-testid='lb-counts']")?.textContent ?? ""));
     (await within(4000, "the configuration tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^MetalLB configuration/))).click();
-    await within(8000, "MetalLB's states", () => [...document.querySelectorAll(".lens-row")].some((r) => /speaker on/.test(r.textContent ?? "")));
+    // the name column always shows; the writer column can be hidden at 1024
+    await within(8000, "MetalLB's states", () => [...document.querySelectorAll(".lens-row")].some((r) => /speaker-/.test(r.textContent ?? "")));
   });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
