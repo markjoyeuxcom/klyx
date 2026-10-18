@@ -51,8 +51,10 @@ type Mechanism struct {
 	Missing string `json:"missing,omitempty"`
 	// Audience of the resolved token entry, when the chain reached one.
 	Audience string `json:"audience,omitempty"`
-	// The identifiers compared (exact values kept unexported in Value).
-	Role, Client, Tenant *Value `json:"-"`
+	// The identifiers compared; a Value serialises only what may be shown.
+	Role   *Value `json:"role,omitempty"`
+	Client *Value `json:"client,omitempty"`
+	Tenant *Value `json:"tenant,omitempty"`
 	// URI is Pod Identity's credentials URI, as shown.
 	URI *Value `json:"uri,omitempty"`
 }
@@ -73,11 +75,13 @@ type Container struct {
 
 // Pod is one pod's identity evidence.
 type Pod struct {
-	Namespace, Name, UID string
-	ServiceAccount       string    `json:"serviceAccount"`
-	Node                 string    `json:"node,omitempty"`
-	Created              time.Time `json:"created"`
-	HostNetwork          bool      `json:"hostNetwork,omitempty"`
+	Namespace      string    `json:"namespace"`
+	Name           string    `json:"name"`
+	UID            string    `json:"uid"`
+	ServiceAccount string    `json:"serviceAccount"`
+	Node           string    `json:"node,omitempty"`
+	Created        time.Time `json:"created"`
+	HostNetwork    bool      `json:"hostNetwork,omitempty"`
 	// AWSOptOut: the self-hosted webhook's opt-out label.
 	AWSOptOut bool `json:"awsOptOut,omitempty"`
 	// PodIdentityLabel: the v0.6.15+ webhook's result label.
@@ -86,9 +90,9 @@ type Pod struct {
 	AzureOptIn bool        `json:"azureOptIn"`
 	Containers []Container `json:"containers"`
 	// ContainersCut and VolumesCut: past the bounds, said.
-	ContainersCut int  `json:"containersCut,omitempty"`
-	VolumesCut    bool `json:"volumesCut,omitempty"`
-	OwnerUID      string
+	ContainersCut int    `json:"containersCut,omitempty"`
+	VolumesCut    bool   `json:"volumesCut,omitempty"`
+	OwnerUID      string `json:"-"`
 }
 
 // tokenEntry is one projected serviceAccountToken source.

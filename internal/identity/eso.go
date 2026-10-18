@@ -331,7 +331,7 @@ type Group struct {
 	Namespace      string `json:"namespace"`
 	ServiceAccount string `json:"serviceAccount"`
 	Candidate      string `json:"candidate"`
-	Pods           []Pod  `json:"-"`
+	Pods           []Pod  `json:"pods"`
 }
 
 // Handlers is who handles a store (S5 §4.2): the applicable running pods

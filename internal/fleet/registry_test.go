@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/gitops/notify"
+	"github.com/moomora/klyx/internal/identity"
 	"github.com/moomora/klyx/internal/observe"
 	"io"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -133,6 +134,15 @@ func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural str
 }
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil
+}
+func (f *fakeConn) ServiceAccountIdentity(context.Context, string, string, string) (identity.SAReport, error) {
+	return identity.SAReport{}, nil
+}
+func (f *fakeConn) PodIdentity(context.Context, string, string, string) (identity.PodInspectorReport, error) {
+	return identity.PodInspectorReport{}, nil
+}
+func (f *fakeConn) StoreIdentity(context.Context, string, string, string, string) (identity.StoreReport, error) {
+	return identity.StoreReport{}, nil
 }
 func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
 	return VeleroRestores{}, nil

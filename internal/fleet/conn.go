@@ -42,6 +42,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
+	"github.com/moomora/klyx/internal/identity"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/rbac"
@@ -60,6 +61,10 @@ type Conn interface {
 	ListVeleroRestores(ctx context.Context) (VeleroRestores, error)
 	// CheckAdmissionParams reads a policy's params on demand (coverage S3a §6).
 	CheckAdmissionParams(ctx context.Context, policyKind, policyName string, paramGVR schema.GroupVersionResource, namespaced bool) (AdmissionParams, error)
+	// Workload identity, read on demand (coverage S5 §6).
+	ServiceAccountIdentity(ctx context.Context, ns, name, uid string) (identity.SAReport, error)
+	PodIdentity(ctx context.Context, ns, name, uid string) (identity.PodInspectorReport, error)
+	StoreIdentity(ctx context.Context, kind, ns, name, uid string) (identity.StoreReport, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

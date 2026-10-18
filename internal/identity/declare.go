@@ -8,7 +8,9 @@ import (
 
 // Declared is what a ServiceAccount declares now, per adapter (S5 §3.1).
 type Declared struct {
-	Namespace, Name, UID string
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
 	// AWS IRSA.
 	RoleARN     *Value `json:"roleArn,omitempty"`
 	Audience    *Value `json:"audience,omitempty"` // nil: the default, sts.amazonaws.com
