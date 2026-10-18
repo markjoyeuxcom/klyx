@@ -22,7 +22,7 @@ const (
 
 // Backends is what the webhook rule reads of the shared network kinds.
 type Backends struct {
-	Services  map[string]*corev1.Service                // namespace/name
+	Services  map[string]*corev1.Service              // namespace/name
 	Slices    map[string][]*discoveryv1.EndpointSlice // namespace/service name
 	SvcRead   Read
 	SliceRead Read

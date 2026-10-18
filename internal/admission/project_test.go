@@ -45,7 +45,7 @@ func TestProjectionsWithholdNeedles(t *testing.T) {
 			map[string]any{"fieldRef": "spec." + needle, "warning": needle}}}}})
 	p := ProjectPolicy(pol, Validating)
 	b := ProjectBinding(obj("ValidatingAdmissionPolicyBinding", map[string]any{"spec": map[string]any{"policyName": "x",
-		"paramRef": map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"k": needle}}, "parameterNotFoundAction": "Deny"},
+		"paramRef":          map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"k": needle}}, "parameterNotFoundAction": "Deny"},
 		"validationActions": []any{"Deny"}}}, nil), Validating)
 	for name, v := range map[string]any{"config": c, "policy": p, "binding": b} {
 		raw, _ := json.Marshal(v)

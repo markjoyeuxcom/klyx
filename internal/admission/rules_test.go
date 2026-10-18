@@ -161,7 +161,9 @@ func pol(mut ...func(*Policy)) *Policy {
 	return p
 }
 
-func bnd(actions ...string) *Binding { return &Binding{Meta: Meta{Name: "b"}, PolicyName: "p", Actions: actions} }
+func bnd(actions ...string) *Binding {
+	return &Binding{Meta: Meta{Name: "b"}, PolicyName: "p", Actions: actions}
+}
 
 // Every row of S3a §6.
 func TestPolicyRows(t *testing.T) {
