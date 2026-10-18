@@ -108,3 +108,27 @@ func TestAttachPoliciesPlacesByTarget(t *testing.T) {
 	}
 	// The non-matching SecurityPolicy is dropped silently (belongs elsewhere).
 }
+
+// S7b: a route target names the lane of its own kind; an HTTPRoute and a
+// TCPRoute of one name are two routes.
+func TestAttachPoliciesMatchesTheRouteKind(t *testing.T) {
+	topo := &Topology{Routes: []RouteNode{
+		{Kind: KindHTTPRoute, Namespace: "apps", Name: "db"},
+		{Kind: KindTCPRoute, Namespace: "apps", Name: "db"},
+		{Namespace: "apps", Name: "legacy"}, // a lane from before S7b is an HTTPRoute
+	}}
+	AttachPolicies(topo, []PolicyRef{
+		{Kind: "BackendTrafficPolicy", Name: "tcp-btp", TargetKind: KindTCPRoute, TargetNamespace: "apps", TargetName: "db"},
+		{Kind: "SecurityPolicy", Name: "http-sp", TargetKind: KindHTTPRoute, TargetNamespace: "apps", TargetName: "db"},
+		{Kind: "SecurityPolicy", Name: "legacy-sp", TargetKind: KindHTTPRoute, TargetNamespace: "apps", TargetName: "legacy"},
+	})
+	if p := topo.Routes[0].Policies; len(p) != 1 || p[0].Name != "http-sp" {
+		t.Fatalf("HTTPRoute lane: %+v", p)
+	}
+	if p := topo.Routes[1].Policies; len(p) != 1 || p[0].Name != "tcp-btp" {
+		t.Fatalf("TCPRoute lane: %+v", p)
+	}
+	if p := topo.Routes[2].Policies; len(p) != 1 || p[0].Name != "legacy-sp" {
+		t.Fatalf("a kindless lane reads as HTTPRoute: %+v", p)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/moomora/klyx/internal/health"
 )
 
 // Topology is the per-Gateway data path.
@@ -73,6 +75,21 @@ type RouteNode struct {
 	ParentFound                    bool
 	AcceptedCond, ResolvedRefsCond Cond
 	Generation                     int64
+
+	// Coverage S7b §5: the route's kind; the attachment this lane draws (its
+	// identity, its label and the reference); the verdict the attachment
+	// rule gave (nil: judge with RouteRule); its evidence; the controller
+	// expected to judge it (or why it is not established) and the other
+	// controllers' entries; the rules' names by index; the hostname count.
+	Kind                        string
+	Attachment, AttachmentLabel string
+	ParentRef                   RouteParentRef
+	Verdict                     *health.NativeEval
+	Evidence                    *AttachmentEvidence
+	Controller, ControllerWhy   string
+	OtherControllers            []ParentStatus
+	RuleNames                   []string
+	HostnameCount               int
 }
 
 type ServiceNode struct {

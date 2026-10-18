@@ -91,6 +91,9 @@ type MatchDTO struct {
 	PathValue string `json:"pathValue"`
 	Method    string `json:"method"`
 	Rule      int    `json:"rule"` // the spec.rules index it belongs to
+	// GRPCRoute's method match (S7b §5)
+	GRPCService string `json:"grpcService,omitempty"`
+	GRPCMethod  string `json:"grpcMethod,omitempty"`
 }
 
 // RouteRuleDTO is one spec.rules entry with its verdict and each backend's
@@ -121,8 +124,9 @@ type BackendDTO struct {
 	Namespace string `json:"namespace"`
 	Port      int32  `json:"port"`
 	Weight    int32  `json:"weight"`
-	WeightSet bool   `json:"weightSet"` // false: unset, the Gateway API default of 1
-	Rule      int    `json:"rule"`      // the spec.rules index listing it; weights split within one rule
+	WeightSet bool   `json:"weightSet"`           // false: unset, the Gateway API default of 1
+	Rule      int    `json:"rule"`                // the spec.rules index listing it; weights split within one rule
+	Transport string `json:"transport,omitempty"` // TCP, or UDP for a UDPRoute (S7b §5)
 
 	// state: resolved | not-found | unreadable | unsupported
 	State     string            `json:"state"`
@@ -165,8 +169,23 @@ type RouteNodeDTO struct {
 	AcceptedCond     CondDTO `json:"acceptedCond"`
 	ResolvedRefsCond CondDTO `json:"resolvedRefsCond"`
 	Generation       int64   `json:"generation"`
-	// Rule is the relocated lens rule (1c addendum §2).
+	// Rule is the relocated lens rule (1c addendum §2); for a lane the
+	// topology read evaluated, the attachment rule's verdict (S7b §5).
 	Rule RuleDTO `json:"rule"`
+	// Coverage S7b: the route's kind; the attachment the lane draws (its
+	// identity, its label, the reference); the controller expected to judge
+	// it (or why not established) and other controllers' entries; the
+	// evidence; rule names by index; the hostname count.
+	Kind            string           `json:"kind"`
+	Attachment      string           `json:"attachment"`
+	AttachmentLabel string           `json:"attachmentLabel"`
+	ParentRef       *ParentRefDTO    `json:"parentRef,omitempty"`
+	Controller      string           `json:"controller,omitempty"`
+	ControllerWhy   string           `json:"controllerWhy,omitempty"`
+	Others          []OtherStatusDTO `json:"others,omitempty"`
+	Evidence        *AttachmentEvDTO `json:"evidence,omitempty"`
+	RuleNames       []string         `json:"ruleNames"`
+	HostnameCount   int              `json:"hostnameCount"`
 }
 type TopologyDTO struct {
 	Gateway         GatewayNodeDTO `json:"gateway"`
@@ -346,6 +365,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd := RouteNodeDTO{UID: r.UID, Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
 		ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation,
 		Rule: toRuleDTO(gwapi.RouteRule(r, listeners))}
+	routeNodeS7b(&rd, r)
 	// Slices always serialize as arrays: a route with no backendRefs (a
 	// redirect-only HTTPRoute) used to reach the lens as backends: null, and
 	// the lane code reads backends[0] (found by the 1c golden gate).

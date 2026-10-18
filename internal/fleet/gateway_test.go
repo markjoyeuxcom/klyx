@@ -24,6 +24,25 @@ func hrGVR() schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 }
 
+// gwListKinds registers every Gateway API resource the topology reads, at
+// its first candidate version, plus extra: a fake dynamic client panics on
+// a list it was not told about.
+func gwListKinds(extra map[schema.GroupVersionResource]string) map[schema.GroupVersionResource]string {
+	kinds := map[string]string{
+		"gateways": "GatewayList", "httproutes": "HTTPRouteList", "gatewayclasses": "GatewayClassList",
+		"listenersets": "ListenerSetList", "referencegrants": "ReferenceGrantList", "grpcroutes": "GRPCRouteList",
+		"tlsroutes": "TLSRouteList", "tcproutes": "TCPRouteList", "udproutes": "UDPRouteList",
+	}
+	out := map[schema.GroupVersionResource]string{}
+	for res, list := range kinds {
+		out[schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: res}] = list
+	}
+	for gvr, list := range extra {
+		out[gvr] = list
+	}
+	return out
+}
+
 // seedGW builds a fake dynamic client and seeds the given objects under their
 // exact GVRs via Create. The default fake plural-guesser maps "Gateway" to
 // "gatewaies", so constructor-varargs seeding would key the object under the
@@ -31,8 +50,13 @@ func hrGVR() schema.GroupVersionResource {
 func seedGW(t *testing.T, objs map[schema.GroupVersionResource][]*unstructured.Unstructured) dynamic.Interface {
 	t.Helper()
 	scheme := dynScheme()
-	listKinds := map[schema.GroupVersionResource]string{gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList"}
+	listKinds := gwListKinds(nil)
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	if _, ok := objs[gcGVR()]; !ok {
+		// Every fixture Gateway names envoy-gateway; its class must exist for a
+		// route to be judged by a controller at all.
+		objs[gcGVR()] = []*unstructured.Unstructured{egClass()}
+	}
 	for gvr, items := range objs {
 		for _, o := range items {
 			ns, _, _ := unstructured.NestedString(o.Object, "metadata", "namespace")
@@ -42,6 +66,25 @@ func seedGW(t *testing.T, objs map[schema.GroupVersionResource][]*unstructured.U
 		}
 	}
 	return dyn
+}
+
+// egController is the controller the fixtures' GatewayClass names and their
+// route statuses report: S7b judges a route by its parent's controller.
+const egController = "gateway.envoyproxy.io/gatewayclass-controller"
+
+func egClass() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+		"metadata": map[string]interface{}{"name": "envoy-gateway"},
+		"spec":     map[string]interface{}{"controllerName": egController},
+	}}
+}
+
+// tcp80 is the port a Service on port 80 publishes in its EndpointSlices:
+// S7b counts only the slices that carry the selected Service port.
+func tcp80() []discoveryv1.EndpointPort {
+	name, proto, port := "", corev1.ProtocolTCP, int32(80)
+	return []discoveryv1.EndpointPort{{Name: &name, Protocol: &proto, Port: &port}}
 }
 
 func gw(name, ns string) *unstructured.Unstructured {
@@ -64,7 +107,7 @@ func hr(name, ns, gwName, gwNS, backend string) *unstructured.Unstructured {
 			"parentRefs": []interface{}{map[string]interface{}{"name": gwName, "namespace": gwNS}},
 			"rules":      []interface{}{map[string]interface{}{"backendRefs": []interface{}{map[string]interface{}{"name": backend, "port": int64(80), "weight": int64(100)}}}},
 		},
-		"status": map[string]interface{}{"parents": []interface{}{map[string]interface{}{"parentRef": map[string]interface{}{"name": gwName, "namespace": gwNS}, "conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "ResolvedRefs", "status": "True"}}}}},
+		"status": map[string]interface{}{"parents": []interface{}{map[string]interface{}{"parentRef": map[string]interface{}{"name": gwName, "namespace": gwNS}, "controllerName": egController, "conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "ResolvedRefs", "status": "True"}}}}},
 	}}
 }
 
@@ -81,6 +124,7 @@ func TestGetGatewayTopology(t *testing.T) {
 	ready := true
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: "share-api-abc", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "share-api"}},
+		Ports:      tcp80(),
 		Endpoints:  []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}}, {Conditions: discoveryv1.EndpointConditions{Ready: &ready}}},
 	}
 	typed := typedfake.NewSimpleClientset(svc, eps)
@@ -144,7 +188,7 @@ func hrBackends(name, ns, gwName, gwNS string, backends []map[string]interface{}
 			"parentRefs": []interface{}{map[string]interface{}{"name": gwName, "namespace": gwNS}},
 			"rules":      []interface{}{map[string]interface{}{"backendRefs": refs}},
 		},
-		"status": map[string]interface{}{"parents": []interface{}{map[string]interface{}{"parentRef": map[string]interface{}{"name": gwName, "namespace": gwNS}, "conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "ResolvedRefs", "status": "True"}}}}},
+		"status": map[string]interface{}{"parents": []interface{}{map[string]interface{}{"parentRef": map[string]interface{}{"name": gwName, "namespace": gwNS}, "controllerName": egController, "conditions": []interface{}{map[string]interface{}{"type": "Accepted", "status": "True"}, map[string]interface{}{"type": "ResolvedRefs", "status": "True"}}}}},
 	}}
 }
 
@@ -167,6 +211,7 @@ func TestGetGatewayTopologyNonServiceFirstBackendCounts(t *testing.T) {
 	pod := &corev1.ObjectReference{Kind: "Pod", Namespace: "apps", Name: "api-1", UID: "uid-api-1"}
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: "api-abc", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "api"}},
+		Ports:      tcp80(),
 		Endpoints:  []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
 	}
 	typed := typedfake.NewSimpleClientset(svc, eps)
@@ -198,11 +243,13 @@ func TestGetGatewayTopologyDualStackCountsPodsOnce(t *testing.T) {
 	v4 := &discoveryv1.EndpointSlice{
 		ObjectMeta:  metav1.ObjectMeta{Name: "share-api-v4", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "share-api"}},
 		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       tcp80(),
 		Endpoints:   []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
 	}
 	v6 := &discoveryv1.EndpointSlice{
 		ObjectMeta:  metav1.ObjectMeta{Name: "share-api-v6", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "share-api"}},
 		AddressType: discoveryv1.AddressTypeIPv6,
+		Ports:       tcp80(),
 		Endpoints:   []discoveryv1.Endpoint{{Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: pod}},
 	}
 	typed := typedfake.NewSimpleClientset(svc, v4, v6)

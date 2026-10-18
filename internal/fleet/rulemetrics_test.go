@@ -100,8 +100,8 @@ type ruleEnv struct {
 
 func (e ruleEnv) conn(t *testing.T) *ClusterConn {
 	t.Helper()
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{
-		gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList", gcGVR(): "GatewayClassList", epGVR(): "EnvoyProxyList"})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), gwListKinds(map[schema.GroupVersionResource]string{
+		gcGVR(): "GatewayClassList", epGVR(): "EnvoyProxyList"}))
 	create := func(gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
 		if _, err := dyn.Resource(gvr).Namespace(o.GetNamespace()).Create(context.Background(), o, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("seed %s: %v", gvr, err)

@@ -190,3 +190,48 @@ func routeRowDTO(r healthsrc.Row[healthsrc.RouteRow]) GatewayRouteRowDTO {
 	}
 	return dto
 }
+
+// routeNodeS7b fills a topology lane's S7b fields (§5, §9): its kind and
+// attachment, the attachment rule's verdict when the read evaluated it,
+// the controllers, the evidence, rule names and GRPC matches.
+func routeNodeS7b(rd *RouteNodeDTO, r gwapi.RouteNode) {
+	rd.Kind = r.Kind
+	if rd.Kind == "" {
+		rd.Kind = gwapi.KindHTTPRoute
+	}
+	rd.Attachment, rd.AttachmentLabel = r.Attachment, r.AttachmentLabel
+	if r.Attachment != "" {
+		p := r.ParentRef
+		rd.ParentRef = &ParentRefDTO{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name, SectionName: p.SectionName, Port: p.Port}
+	}
+	if r.Verdict != nil {
+		rd.Rule = toRuleDTO(*r.Verdict)
+	}
+	rd.Controller, rd.ControllerWhy = r.Controller, r.ControllerWhy
+	for _, o := range r.OtherControllers {
+		rd.Others = append(rd.Others, OtherStatusDTO{Controller: o.ControllerName, Accepted: o.Accepted.Status, ResolvedRefs: o.ResolvedRefs.Status})
+	}
+	if ev := r.Evidence; ev != nil {
+		ed := &AttachmentEvDTO{Controller: r.Controller, ControllerWhy: r.ControllerWhy, Others: rd.Others, Features: ev.Features, Disagreements: ev.Disagreements,
+			Allowance: AllowanceDTO{Allowed: ev.Allowance.Allowed, Text: ev.Allowance.Text}}
+		for _, g := range ev.Grants {
+			ed.Grants = append(ed.Grants, GrantDTO{Rule: g.Rule, Backend: g.Backend, Allowed: g.Allowed, By: g.By, Text: g.Text})
+		}
+		rd.Evidence = ed
+	}
+	rd.RuleNames = sliceOrEmpty(r.RuleNames)
+	rd.HostnameCount = r.HostnameCount
+	if rd.HostnameCount == 0 {
+		rd.HostnameCount = len(r.Hostnames)
+	}
+	for i := range rd.Matches {
+		if i < len(r.Matches) {
+			rd.Matches[i].GRPCService, rd.Matches[i].GRPCMethod = r.Matches[i].GRPCService, r.Matches[i].GRPCMethod
+		}
+	}
+	for i := range rd.Backends {
+		if i < len(r.Backends) {
+			rd.Backends[i].Transport = r.Backends[i].Transport
+		}
+	}
+}
