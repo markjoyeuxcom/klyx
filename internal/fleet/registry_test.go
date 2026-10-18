@@ -211,9 +211,10 @@ func (f *fakeConn) DescribeArgv(kindArg, namespace, name string, _ bool) ([]stri
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil
 }
 func (f *fakeConn) CheckPodArmed(context.Context, string, string, string) error { return nil }
-func (f *fakeConn) DebugCommand(namespace, pod, container string) ([]string, error) {
+func (f *fakeConn) DebugCommand(namespace, pod, container string, _ DebugOptions) ([]string, error) {
 	return nil, nil
 }
+func (f *fakeConn) DebugKubectlCheck(context.Context) DebugKubectl { return DebugKubectl{} }
 func (f *fakeConn) ExecCommand(namespace, pod, container string) ([]string, error) {
 	return []string{"kubectl", "exec", pod}, nil
 }

@@ -130,7 +130,8 @@ type Conn interface {
 	// FluxNotifications reads Providers and Alerts on demand (S1c §3).
 	FluxNotifications(ctx context.Context) notify.Read
 	ExecCommand(namespace, pod, container string) ([]string, error)
-	DebugCommand(namespace, pod, container string) ([]string, error)
+	DebugCommand(namespace, pod, container string, o DebugOptions) ([]string, error)
+	DebugKubectlCheck(ctx context.Context) DebugKubectl
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	PortForward(ctx context.Context, namespace, pod string, localPort, targetPort int) (stop func(), actualLocal int, done <-chan error, err error)
 	ResolveServicePod(ctx context.Context, namespace, service string, port int) (pod string, targetPort int, err error)
