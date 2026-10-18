@@ -20,6 +20,11 @@ var lbFactLabels = map[string]bool{"type": true, "traffic policy": true, "sessio
 
 // lbEvidence applies the policy to an assembled evidence document.
 func lbEvidence(ev explainEvidence) explainEvidence {
+	// a condition's reason in the lens fields (a Service's Cilium condition,
+	// a pool's conflict) is an identifier or nothing: metav1.Condition
+	// admits colons, so an IPv6 address can pass for a reason (Codex's S4
+	// re-review)
+	tokenReasons(ev.LensFields)
 	ev.Target = lbObject(ev.Target)
 	for i := range ev.Related {
 		ev.Related[i] = lbObject(ev.Related[i])
@@ -90,4 +95,23 @@ type lbServiceInput struct {
 	diag          *lb.Diagnosis
 	alloc         lb.Allocation
 	missingFamily string
+}
+
+// tokenReasons replaces every "reason" string in the lens fields, at any
+// depth, by its identifier token.
+func tokenReasons(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if s, ok := e.(string); ok && k == "reason" {
+				x[k] = token(s, notIdentifier)
+				continue
+			}
+			tokenReasons(e)
+		}
+	case []any:
+		for _, e := range x {
+			tokenReasons(e)
+		}
+	}
 }

@@ -124,3 +124,50 @@ func TestS4ReviewExplainDocumentExclusions(t *testing.T) {
 		}
 	}
 }
+
+// Codex's S4 re-review: a condition's reason inside the lens fields (a
+// Service's Cilium condition, a pool's conflict) holds to the token policy
+// too - metav1.Condition admits colons, so an IPv6 address passes for one.
+func TestS4ReviewR1LensConditionReasons(t *testing.T) {
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app", UID: "u", Generation: 1}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer}}
+	svc.Status.Conditions = []metav1.Condition{{Type: lb.CondRequestSatisfied, Status: "False", Reason: "fd00::1234", ObservedGeneration: 1}}
+	ep := lb.Episode{Start: evalAt.Add(-time.Hour)}
+	msg := "EVENT-EGRESS-MARKER cannot allocate 10.77.66.55 from pool PRIVATE-POOL"
+	d := lb.Diagnose(lb.DiagnosisInput{Svc: svc, Events: []lb.Event{{Reason: "AllocationFailed", Message: msg}}})
+	row := healthsrc.Row[healthsrc.LBServiceRow]{Ref: healthsrc.RowRef{UID: "u", GVR: "v1/services", Namespace: "app", Name: "web", Generation: 1},
+		Eval: lb.ServiceRule(svc, lb.AllocationOf(svc), ep, evalAt, d.Summary), Data: healthsrc.LBServiceRow{Service: svc, Allocation: lb.AllocationOf(svc), Episode: &ep, Diagnosis: &d, Cilium: lb.CiliumSatisfied(svc)}}
+	rows := observe.Rows{Task: "lb", Cluster: "c", EvaluatedAt: evalAt, Part: observe.Part{ID: "services", Classifier: "native"},
+		Rows: healthsrc.RowSet[healthsrc.LBServiceRow]{Rows: []healthsrc.Row[healthsrc.LBServiceRow]{row}}}
+	detail := crd.InstanceDetail{Kind: "Service", Namespace: "app", Name: "web", UID: "u", Generation: 1,
+		Events:     []crd.Event{{Type: "Warning", Reason: "AllocationFailed", Message: msg}, {Type: "Warning", Reason: "free text PRIVATE-POOL", Message: "x"}},
+		Facts:      []crd.Fact{{Label: "LB address", Value: "10.77.66.55"}, {Label: "type", Value: "LoadBalancer"}},
+		Conditions: []crd.Condition{{Type: "x/Cond", Status: "False", Reason: "NotReady", Message: msg}}}
+	cp := &lb.CiliumPool{Meta: lb.Meta{APIVersion: "cilium.io/v2", Name: "p", UID: "pu", Generation: 1},
+		Conds: []lb.Cond{{Type: lb.CondPoolConflict, Status: "True", Reason: "fd00::1234", Message: "range '10.77.66.0/24' overlaps PRIVATE-POOL", ObservedGeneration: 1}}}
+	n := lb.CountsOf(cp)
+	cf, cur := cp.Conflict()
+	prow := healthsrc.Row[healthsrc.LBPoolRow]{Ref: healthsrc.RowRef{UID: "pu", GVR: "cilium.io/v2/ciliumloadbalancerippools", Name: "p", Generation: 1},
+		Eval: lb.CiliumPoolRule(cp), Data: healthsrc.LBPoolRow{Cilium: cp, Counts: &n, Conflict: cf, ConflictCurrent: cur}}
+	prows := observe.Rows{Task: "lb", Cluster: "c", EvaluatedAt: evalAt, Part: observe.Part{ID: "pools", Classifier: "native"},
+		Rows: healthsrc.RowSet[healthsrc.LBPoolRow]{Rows: []healthsrc.Row[healthsrc.LBPoolRow]{prow}}}
+	pdetail := crd.InstanceDetail{Kind: "CiliumLoadBalancerIPPool", Name: "p", UID: "pu", Generation: 1,
+		Conditions: []crd.Condition{{Type: lb.CondPoolConflict, Status: "True", Reason: "fd00::1234", Message: "range '10.77.66.0/24' overlaps PRIVATE-POOL"}}}
+	conn := &fakeExplainConn{rows: map[string]observe.Rows{"lb/services": rows, "lb/pools": prows},
+		details: map[string]crd.InstanceDetail{"/services/app/web": detail, "cilium.io/ciliumloadbalancerippools//p": pdetail}}
+	for _, target := range []ExplainTargetDTO{{Kind: "row", Task: "lb", Part: "services", UID: "u"}, {Kind: "row", Task: "lb", Part: "pools", UID: "pu"}} {
+		cl := &fakeCompleter{reply: "x"}
+		res := explainSvc(cl, conn).Explain("c", target)
+		if !res.OK {
+			t.Fatalf("%s: Explain failed: %+v", target.Part, res)
+		}
+		raw, _ := json.Marshal(evidenceOf(t, cl.gotUser))
+		for _, needle := range []string{"EVENT-EGRESS-MARKER", "10.77.66", "PRIVATE-POOL", "fd00::1234"} {
+			if strings.Contains(string(raw), needle) {
+				t.Errorf("%s: %q reached the evidence: %s", target.Part, needle, raw)
+			}
+		}
+		if target.Part == "services" && (!strings.Contains(string(raw), `"cause":"event AllocationFailed"`) || !strings.Contains(string(raw), `"LoadBalancer"`)) {
+			t.Errorf("the structural cause and the safe facts stay: %s", raw)
+		}
+	}
+}
