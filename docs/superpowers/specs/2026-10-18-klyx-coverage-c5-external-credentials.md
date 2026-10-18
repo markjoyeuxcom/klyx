@@ -54,22 +54,30 @@ clusters:
 
 **Resolution** for each endpoint, in order: the direct `endpoint`, then `serviceRef` through the apiserver proxy, then discovery. Discovery covers metrics as today. For Alertmanager and Loki it is a named-candidate list in S8; C5 defines no candidates.
 
+**Alertmanager and Loki in C5.** Their blocks are parsed, validated and shown with their credential state in C5, so a credential can be set before S8 reads them. C5 does not read them.
+
 **Validation:**
 - **An `endpoint` with userinfo** (`https://user:pass@host`) is refused for use, not for loading. The endpoint reads unavailable: "the endpoint URL carries credentials; set them in Settings > Endpoints". The userinfo is never sent and never shown: the source is displayed through `urlscrub`.
 - **Auth on a proxied endpoint.** `auth` together with a `serviceRef` (or discovery) is a configuration warning: external credentials never ride the kube-apiserver's authentication, so they are not sent on that path (§4).
-- **The legacy `metrics.token`** is still read (§5).
+- **The legacy `metrics.token`** is still read (§6).
 
 ## 3. Credentials: endpoint-scoped, in the keychain
 
 **One keychain item per endpoint.**
 - **Account:** `endpoint/<cluster>/<metrics|alertmanager|loki>`, beside the AI keys' `ai/<provider>`, under the same service `io.moomora.klyx`.
-- **Value:** a small JSON document `{origin, type, secret}`.
-  - `origin` is the scheme, host and port of the endpoint it was stored for.
-  - `secret` is the bearer token, or the basic password (the username stays in the configuration).
+- **Value:** a small, versioned JSON document `{v: 1, origin, type, secret}`.
+  - `origin` is the canonical origin of the endpoint it was stored for.
+  - `type` is `bearer` or `basic`.
+  - `secret` is the bearer token, or the basic password; the username stays in the configuration.
 
-**Endpoint-scoped.** A credential is sent only to the origin it was stored for.
+  A record that does not parse, has another version, or whose `type` differs from the configured `auth.type` is refused: "the stored credential cannot be used (‹why›) - set it again". It is never guessed at.
+
+**Canonical origin.** An origin is the scheme in lower case, the host lower-cased and IDNA-normalised (Unicode to its ASCII form, IPv6 in brackets), and the effective port (443 for https and 80 for http when none is written). Two origins match only when all three are equal. A URL that cannot be parsed has no origin, and nothing is sent to it.
+
+**Endpoint-scoped.** A stored credential is sent only to the origin it was stored for.
 - **When the configured endpoint's origin changes,** the credential is withheld and the endpoint says so: "the stored credential is for https://old.example; the endpoint is now https://new.example - set it again".
-- **A config edit therefore never silently sends a token to a new host.**
+- **A config edit therefore never sends a stored token to a new host.**
+- **The legacy plaintext `metrics.token` is the one exception** (§6): it is whatever fleet.yaml says, for whatever origin fleet.yaml names, as today, until it is moved.
 
 **The store's states**, kept distinct as the AI keys keep them, and shown per endpoint:
 
@@ -79,100 +87,209 @@ clusters:
 | stored | in the keychain, for this endpoint's origin |
 | missing | `auth` configured, nothing stored |
 | for another origin | stored, but for a different origin |
+| unusable record | stored, but not a record Klyx can use (above) |
 | keychain unavailable | locked, denied, or no store |
-| legacy | a plaintext `metrics.token` in the file (§5) |
+| legacy | a plaintext `metrics.token` in the file (§6); with "and stored in the keychain" when both exist |
 
-An endpoint whose credential is missing, for another origin, or unavailable reads **unavailable** with that reason. It never reads "no metrics", and it is never attempted without the credential.
+An endpoint whose credential is missing, for another origin, unusable or unavailable reads **unavailable** with that reason. It never reads "no metrics", and it is never attempted without the credential.
 
-**The store interface** moves from `internal/ai` to a shared package (`internal/secretstore`): `Get`, `Set` and `Delete` by account, with `ErrNoKey` and `KeychainError`. AI keeps its accounts and behaviour; C5 adds the endpoint accounts. Tests use an in-memory store with injectable failures, as `memKeys` does today.
+**The store interface** moves from `internal/ai` to a shared package, `internal/secretstore`: `Get`, `Set` and `Delete` by account, with `ErrNoKey` and `KeychainError`. AI keeps its accounts and behaviour; C5 adds the endpoint accounts. Tests use an in-memory store with injectable failures, as `memKeys` does today.
 
-## 4. The transport: bounded, and credentials never redirected
+## 4. The transport: bounded, and no credential ever redirected
 
-One client builder, `internal/safehttp`, serves every external endpoint. It is `ai.Harden`'s policy, generalised and shared, and AI moves onto it.
+One client builder, `internal/safehttp`, serves every external endpoint. It is `ai.Harden`'s policy generalised: same-origin redirects only and an erroring cap. Each user states its own environment-proxy policy explicitly:
+- **AI keeps `ProxyFromEnvironment`**, its behaviour today (`ai/transport.go:35` clones `http.DefaultTransport`).
+- **Metrics, Alertmanager and Loki keep `Proxy = nil`,** metrics' behaviour today.
+
+Nothing about AI's egress changes.
 
 **Direct endpoints:**
-- **Redirects** are followed only to the same origin (scheme, host and port), never from HTTPS to HTTP, and at most 5 hops. Any other redirect is an error ("redirected to another origin; Klyx does not follow it"), whether or not the request carries a credential.
-- **Credentials** go only as the request's `Authorization` header, set by the client for the stored origin. They are never in the URL, and never re-sent by redirect handling.
-- **The tenant header** is set on every request to the endpoint, including a followed same-origin redirect.
+- **Redirects** are followed only to the same canonical origin, never from HTTPS to HTTP, and at most 5 hops. Any other redirect is refused before a request is made to its target: "redirected to another origin; Klyx does not follow it". This holds whether or not the request carries a credential.
+- **Authorization** is set by the client on every request to the stored origin, the first and every allowed same-origin hop alike. It is never put in a URL. A refused redirect sends nothing, so no credential reaches another origin or a downgraded connection.
+- **The tenant header** is set on every request to the endpoint, and on every allowed hop.
 - **Responses** are capped per endpoint: 4 MiB for metrics as today, and S8 sets Alertmanager's and Loki's. Past the cap the read is an error (`ErrResponseTooLarge`), never a truncated body read as whole.
 - **Timeouts** are per endpoint: 3s for metrics as today. The caller's context cancels.
-- **No environment proxy**, as today: the transport's `Proxy` stays nil.
 
-**Proxied endpoints** (`serviceRef`, discovery):
-- They use the kubeconfig credentials only. `Authorization` from `auth` is never added: the apiserver would consume or reject it, and the kube credentials must never leave for an external origin.
-- `tenant` is sent as a header on the proxied request. Verified on `kind-klyx` (v1.37, 2026-10-18) with an agnhost `netexec` Service behind `/api/v1/namespaces/<ns>/services/http:echo:80/proxy`:
+**Proxied endpoints** (`serviceRef`, discovery) go through the apiserver's service proxy with the kubeconfig credentials, and only those.
+- **The `auth` credential is never added.** The apiserver would consume or reject it, and the kube credentials must never be mixed with an external origin's.
+- **A dedicated client fences the apiserver origin** (Codex's design review, finding 1):
+  - The service-proxy path no longer uses the clientset's shared REST client, whose `http.Client` follows redirects. client-go's auth round-tripper re-adds `Authorization` (and the TLS transport presents its client certificate) on every redirected request, so a backend's `302` to another origin through the proxy would carry the user's kube credential there. A local probe with today's code shows it.
+  - C5 builds a separate client from the same `rest.Config` (`rest.HTTPClientFor`, then `rest.RESTClientForConfigAndClient`). Its `CheckRedirect` allows only the apiserver's own canonical origin, refuses any downgrade and any other origin, and allows at most 5 hops.
+  - `CheckRedirect` runs before the redirected request is handed to the transport stack, so a refused redirect never reaches the bearer, basic, client-certificate or exec-plugin layers: **the other origin receives no request at all**.
+  - The response cap and the caller's timeout apply here too.
+- **What the Service does with a request is a separate hop,** behind the apiserver. Klyx's guard is the client-side one.
+- **The tenant header** is sent on the proxied request. Verified on `kind-klyx` (v1.37, 2026-10-18) with an agnhost `netexec` Service behind `/api/v1/namespaces/<ns>/services/http:echo:80/proxy`:
   - `X-Scope-OrgID: tenant-a` arrives at the Service as sent.
   - An `Authorization` header from the client does not arrive.
 
-  An external credential on this path would therefore never reach the Service either, which is one more reason not to send it.
-- The apiserver proxy's own redirect handling is the apiserver's. Klyx adds the same response cap and the caller's timeout.
+## 5. A credential-safe diagnostic boundary
 
-**Isolation, stated as tests (§7):**
-- an external credential is never sent through the apiserver proxy;
-- kube credentials are never sent to an external origin;
-- no credential follows a redirect to another origin or a downgrade.
+Klyx's endpoint diagnostics must never carry a credential back out (Codex's design review, finding 3). Today they can:
+- the Prometheus parser copies a response's `error` field into its error (`internal/metrics/parse.go:79`);
+- `Probe` copies that into the capability's `Reason` (`capability.go:14`);
+- `MetricsService` returns it to the page.
 
-## 5. Migrating the plaintext metrics token
+An endpoint that echoes the `Authorization` header into a JSON error therefore puts the token on screen. A local probe shows it.
 
-The legacy `metrics.token` keeps working until it is moved, so nothing breaks on upgrade.
+**The boundary.** Every string that leaves the endpoint client for anything Klyx shows, returns or logs is redacted first. That covers:
+- an error;
+- a capability reason;
+- a Test result;
+- a "Read notes" line;
+- an Activity entry.
 
-**Settings > Endpoints** shows it as "legacy: stored in plain text in fleet.yaml", with **Move to keychain**. The move follows `MoveKeyToKeychain`'s order:
-1. **Write the keychain item** for the endpoint's origin. On failure nothing changes, and the store's error is shown.
-2. **Edit fleet.yaml:** replace that cluster's `token:` line with `auth: {type: bearer}`.
-   - This is a new per-cluster textual edit in `internal/config`, under the shared `fleetWriteMu`. It writes a temporary file, re-runs `Load` on it, and checks through the decoded diff that only that cluster's `metrics.token` and `metrics.auth` changed. It then renames over the original, and refuses with `ErrFleetChangedOnDisk` if the file changed meanwhile.
-   - The file's mode is kept. Today's writers leave fleet.yaml at 0600 after any edit; this edit preserves whatever mode it had.
-3. **If step 2 fails**, the keychain holds the token and the file still holds it in plain text. The state reads "stored in the keychain, and still in plain text in fleet.yaml", and **Move to keychain** stays offered: both steps are idempotent, so it retries.
+This is `safehttp`'s `Redactor`, built per request from the credential actually in use, and applied before any clipping:
+- **The exact secrets** go: the bearer token; the basic password; the base64 `username:password`, with and without `Basic `; `Bearer ‹token›`.
+- **Then `scrub.Credentials`** removes credential shapes generally, which covers a legacy token and a header echoed in an unexpected form.
+
+**Where it sits.** Endpoint errors leave the endpoint packages (`internal/metrics` today, the S8 readers next) only through it. The DTO converters keep their own field allowlists. A test feeds every reader an endpoint that echoes the request's credentials in each place a message can come from:
+- a JSON error body, for both instant and range queries;
+- a plain-text body;
+- a transport error;
+- a keychain error;
+- a parse failure quoting the body.
+
+The test asserts that no form of the secret reaches a public DTO, a log line or the Test result.
+
+**The operator's own log view** (the logs pane, and Loki's in S8) stays unscrubbed and honest. The boundary covers Klyx's auth diagnostics, not the application logs the operator asked to read.
+
+## 6. Changes reviewed, fenced and serialised
+
+Settings acts on what the person reviewed, never on whatever fleet.yaml says by the time the handler runs (Codex's design review, finding 2).
+
+**A revision per endpoint.** The Settings state carries, for each endpoint, an opaque revision: a hash of the cluster's endpoint entry as read (origin, `auth`, username, tenant, and for a legacy entry a hash of the token), plus the file's mode. Every action (Set, Remove, Move to keychain, Test) sends back the revision the person saw.
+
+**One action at a time.** Endpoint actions are serialised by one lock, held for the whole action, keychain calls included. The lock is taken before the file writer's `fleetWriteMu`, in one order only.
+
+**Each action re-reads the file under the lock and refuses on drift.** If the endpoint's revision differs from the one sent, nothing is written: "this endpoint changed in fleet.yaml since you looked; review it and try again". So:
+- **Set** binds the entered secret to the origin the person saw, or to nothing.
+- **Remove** removes the credential of the endpoint the person saw.
+- **Test** tests that endpoint.
+
+**Move to keychain** is a transaction against one snapshot:
+1. **Snapshot.** Under the lock, read fleet.yaml once: its bytes, mode and modification time. Check the action's revision against it, and take the token from that snapshot.
+2. **Keychain.** Write the keychain item for the snapshot's origin. On failure nothing changes, and the store's error is shown, redacted (§5).
+3. **The file edit, against the original snapshot.** Prepare the edit (that cluster's `token:` line becomes `auth: {type: bearer}`) from the snapshot's bytes:
+   - in a private temporary file, mode 0600, beside fleet.yaml;
+   - re-run `Load` on it, and check through the decoded diff that only that cluster's `metrics.token` and `metrics.auth` changed;
+   - give it the snapshot's mode;
+   - just before the rename, compare fleet.yaml's current bytes and mode with the snapshot. If anything changed since step 1 (another editor, another Klyx action), the newer file is left untouched and the temporary file removed: "the token is stored in the keychain for ‹origin›; fleet.yaml changed meanwhile and still holds a token - review it and move again".
+4. **If step 3 fails** for any reason, the keychain holds the token and the file still holds it in plain text. The state reads "legacy, and stored in the keychain", and Move stays offered: every step is idempotent, so it retries.
 
 Klyx never writes a token into fleet.yaml, and never deletes the plaintext before the keychain write has succeeded.
 
-**Which token wins.** While both exist, the file's token is used: it is what the user last wrote. Once the file no longer holds it, the keychain's is used.
+**Which token wins.** While both exist, the file's token is used: it is what the person last wrote, and the move is not finished. Once the file no longer holds it, the keychain's is used.
 
-## 6. What the operator sees
+## 7. Credentials at run time: revision and revocation
 
-**Settings > Endpoints (new).** Per cluster, one row per configured endpoint:
+A stored credential reaches requests only through the endpoint's current credential revision (Codex's design review, finding 4).
+
+**What is cached today.** A metrics resolution and its token-bearing transport are cached for the connection's lifetime (`fleet/metrics.go:42-46, 101-122`). A keychain change that only updated storage would leave the old client sending the old token.
+
+**The revision.** Each endpoint has an in-memory credential revision that moves on:
+- Set, Remove and a successful Move;
+- a fleet.yaml reload that changes the endpoint;
+- the first read after start.
+
+**Invalidation.** Every cached resolution, transport and availability records the revision it was built under. A read finds a different revision, discards them, and rebuilds. This covers every path: instant, range, liveness, workload, node, route and rule metrics, and S8's readers.
+
+**Fencing in-flight reads.** A read started under an older revision may finish after the change. Its result and its availability are dropped, never cached or shown: the cache write is a compare-and-set on the revision.
+
+**Remove stops authentication first.** For an active keychain credential:
+1. The endpoint is marked revoked in memory, with a tombstone that no client may load past.
+2. The revision moves and the cached clients are dropped.
+3. Only then is the keychain item deleted.
+
+New authenticated requests therefore stop at step 1, even when the keychain delete fails. The failure is then shown ("removed from use; the keychain still holds it - ‹error›"), and Remove stays offered. A restart re-reads the keychain, so the tombstone is in-memory by design, and the state says so until the delete succeeds.
+
+**Remove while a legacy token wins** is labelled for what it does: "Remove the keychain copy - fleet.yaml still holds a token, and that is what Klyx sends". It never promises that authentication stopped.
+
+## 8. What the operator sees
+
+**Settings > Endpoints (new).** Per cluster, one row per configured endpoint (metrics, Alertmanager, Loki):
 - **The endpoint:** the source as configured (URL through `urlscrub`, or `serviceRef`), and its tenant.
 - **The credential's state** (§3).
-- **Actions:** Set (a password field; bearer token, or basic password with the configured username), Remove, Move to keychain (legacy only), and Test. Test reads the endpoint once and reports available, unavailable, or the reason.
+- **Actions** (§6, each carrying its revision):
+  - **Set:** a password field. The bearer token, or the basic password with the configured username.
+  - **Remove,** labelled as §7 says when a legacy token wins.
+  - **Move to keychain:** legacy only.
+  - **Test,** metrics only in C5. Test reads the endpoint once and reports available, unavailable, or the redacted reason. For Alertmanager and Loki, Test reads "not implemented until S8": a successful `GET /` is not a reader's availability, and S8 defines their API, cap and liveness.
 
-Endpoints themselves are still edited in fleet.yaml, as metrics are today. Settings writes credentials, and only the `token` to `auth` edit in §5.
+Endpoints themselves are still edited in fleet.yaml, as metrics are today. Settings writes credentials, and only the `token` to `auth` edit in §6.
 
 **Elsewhere:**
 - **The Overview's metrics source** is shown through `urlscrub`.
 - **"Unavailable" reasons** carry the credential state ("credential missing", "keychain unavailable", "stored for another origin").
 
-## 7. Tests
+## 9. Tests
 
-- **Config:** parsing and validation of the three blocks, `auth` and `tenant`; userinfo refused for use; `auth` with `serviceRef` warned; legacy `token` still read.
-- **Store:** every state in §3 with the in-memory store, including locked and unavailable; values round-trip; the origin check.
-- **Transport** (an `httptest` server pair):
-  - same-origin redirects followed, cross-origin and downgrade refused, at most 5 hops;
-  - `Authorization` present on the first request only for the stored origin, and never on a refused redirect;
-  - the tenant header on every request;
+- **Config:**
+  - parsing and validation of the three blocks, `auth` and `tenant`;
+  - userinfo refused for use;
+  - `auth` with `serviceRef` warned;
+  - the legacy `token` still read.
+- **Store:**
+  - every state in §3 with the in-memory store, including locked, unavailable and unusable records (unparseable, another version, type mismatch);
+  - canonical origin matching: case, IDNA, default ports, IPv6.
+- **Direct transport** (an `httptest` server pair):
+  - same-origin redirects followed, cross-origin and downgrade refused before any request reaches the target, at most 5 hops;
+  - `Authorization` on every request to the stored origin, and nothing at all at a refused target;
+  - the tenant header on every allowed request;
   - the cap returns an error at the limit plus one byte, never a short body.
-- **Proxy:** a proxied request carries the tenant header and no `Authorization` from `auth`. An external credential is never added on this path, whatever the configuration.
-- **Migration:**
-  - keychain failure, then nothing changed;
-  - file failure after the keychain write, then both and retryable;
-  - a concurrent edit gives `ErrFleetChangedOnDisk`;
-  - the file mode is kept;
-  - the decoded diff limits the change to that cluster's `metrics` keys.
-- **UI:** Settings > Endpoints states and actions, with no secret ever read back into the page (`TestAISettings_StateCarriesNoKey`'s pattern). The scrubbed source.
+- **Proxy client** (a fake apiserver that redirects to a second origin):
+  - with bearer and with basic kube credentials, the second origin receives no request at all;
+  - mTLS and exec-plugin configurations are covered by the same assertion, because the redirected request is never handed to the transport;
+  - the tenant header passes, and no `auth` credential is added;
+  - Codex's characterisation probe is adopted.
+- **Diagnostics** (§5): every reader, every message source, every encoding of the secret, through every public boundary; Codex's echo probe is adopted.
+- **Fencing** (§6):
+  - an edit to fleet.yaml before Set, between Set's read and its keychain write, and after it;
+  - the same for Move, between its keychain write and its file edit: the newer file untouched, the staged item reported, the retry working;
+  - stale-UI Set, Remove and Test refused;
+  - a mode change alone counts as drift;
+  - competing actions serialised;
+  - the temporary file private.
+- **Run time** (§7), each on an endpoint that is already available and cached:
+  - Set, Remove and Move change what the next request sends;
+  - an in-flight read under the old revision neither caches nor shows;
+  - Remove stops authenticated requests even when the keychain delete fails;
+  - the legacy-wins label.
+- **UI:** Settings > Endpoints states and actions with no secret ever read back into the page (`TestAISettings_StateCarriesNoKey`'s pattern); the scrubbed source; Test disabled for Alertmanager and Loki.
 - **The metrics path end to end** with a keychain token: the same readings as with the legacy token.
 
-## 8. Staging
+## 10. Staging
 
-One change:
-1. `internal/secretstore` and `internal/safehttp` (AI moved onto both, unchanged in behaviour).
-2. The config blocks and validation.
-3. Metrics resolved through them, with the legacy token still read.
-4. The migration edit.
-5. Settings > Endpoints.
+One change, in order:
+1. `internal/secretstore` and `internal/safehttp`, with AI moved onto both, its behaviour unchanged (environment proxy included).
+2. The proxy client's apiserver-origin redirect guard. This also fixes today's metrics path.
+3. The diagnostic boundary on today's metrics reads.
+4. The config blocks for metrics, Alertmanager and Loki, with validation and the canonical origin.
+5. Metrics resolved through them, with the credential revision, the cache invalidation and the legacy token still read.
+6. The fenced actions and the migration edit.
+7. Settings > Endpoints.
 
 S8 then adds the Alertmanager and Loki readers on this base.
 
-## 9. Not in C5
+## 11. Not in C5
 
-- Readers for Alertmanager and Loki (S8a, S8b), and their discovery candidates.
+- Readers for Alertmanager and Loki (S8a, S8b), their discovery candidates, and their Test.
 - Client certificates and custom CA bundles: a later request, not a C5 need.
 - Writing endpoints from Settings: the file stays the place they are authored.
 - Scrubbing the operator's own views: log text bound for AI goes through `internal/scrub` (the chat logs tool already does); the operator's log view stays unscrubbed and honest.
+
+## 12. Revision 1: Codex's design review of dbd7da0
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 (P1) | A service-proxy redirect would carry the kube credential to another origin (client-go re-adds auth on redirected requests); "the apiserver's own handling" does not establish isolation | §4: a dedicated client for the proxy path, with an apiserver-origin `CheckRedirect` that refuses before the redirected request reaches the auth/TLS stack; bearer, basic, mTLS and exec covered; this also fixes today's metrics path (§10 step 2) |
+| 2 (P1) | The keychain-first migration and Set could act on a fleet.yaml that changed after the person reviewed it | §6: an opaque per-endpoint revision carried by every action; one serialising lock; refusal on drift; Move as a transaction against one snapshot, the file compared with that snapshot (bytes and mode) before the rename, the newer file left untouched |
+| 3 (P1) | Endpoint errors can carry a credential back out (a JSON error echoing the header reaches the capability reason) | §5: a per-request redactor of the exact secrets in every encoding, then `scrub.Credentials`, before clipping, at the endpoint packages' boundary; tested for every reader and message source |
+| 4 (P2) | Cached clients keep sending a changed or removed credential | §7: a per-endpoint credential revision; every cached resolution, transport and availability invalidated by it; in-flight completions fenced by compare-and-set; Remove revokes in memory before deleting from the keychain; the legacy-wins Remove label |
+
+Codex's answers, adopted:
+- origin binding, with canonical comparison and refused malformed or mismatched records, and the legacy token stated as the exception (§3);
+- every cross-origin redirect refused (§4);
+- the file's token wins while both exist (§6);
+- the authored mode kept, with private temporary files (§6);
+- Alertmanager and Loki blocks parsed, validated and shown in C5, their Test "not implemented until S8" (§2, §8);
+- AI's environment proxy kept, and auth on allowed same-origin hops stated (§4).
