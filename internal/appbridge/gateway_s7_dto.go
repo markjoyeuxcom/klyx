@@ -193,9 +193,9 @@ func routeRowDTO(r healthsrc.Row[healthsrc.RouteRow]) GatewayRouteRowDTO {
 
 // routeNodeS7b fills a topology lane's S7b fields (§5, §9): its kind and
 // attachment, the attachment rule's verdict when the read evaluated it,
-// the controllers, the evidence, rule names and GRPC matches.
+// the controllers, the evidence and rule names.
 func routeNodeS7b(rd *RouteNodeDTO, r gwapi.RouteNode) {
-	rd.Kind = r.Kind
+	rd.Kind, rd.APIVersion = r.Kind, r.APIVersion
 	if rd.Kind == "" {
 		rd.Kind = gwapi.KindHTTPRoute
 	}
@@ -223,15 +223,5 @@ func routeNodeS7b(rd *RouteNodeDTO, r gwapi.RouteNode) {
 	rd.HostnameCount = r.HostnameCount
 	if rd.HostnameCount == 0 {
 		rd.HostnameCount = len(r.Hostnames)
-	}
-	for i := range rd.Matches {
-		if i < len(r.Matches) {
-			rd.Matches[i].GRPCService, rd.Matches[i].GRPCMethod = r.Matches[i].GRPCService, r.Matches[i].GRPCMethod
-		}
-	}
-	for i := range rd.Backends {
-		if i < len(r.Backends) {
-			rd.Backends[i].Transport = r.Backends[i].Transport
-		}
 	}
 }

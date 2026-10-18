@@ -39,31 +39,35 @@ type ClusterDTO struct {
 	NetworkTier              string `json:"networkTier"`
 	NetworkReason            string `json:"networkReason"`
 	GatewayAPIVersion        string `json:"gatewayAPIVersion"`
-	CiliumPresent            bool   `json:"ciliumPresent"`
-	ClusterMesh              bool   `json:"clusterMesh"`
-	HasHubble                bool   `json:"hasHubble"`
-	KarpenterPresent         bool   `json:"karpenterPresent"`
-	VeleroPresent            bool   `json:"veleroPresent"`
-	AdmissionPresent         bool   `json:"admissionPresent"`
-	LoadBalancingPresent     bool   `json:"loadBalancingPresent"`
-	MetalLBPresent           bool   `json:"metallbPresent"`
-	KarpenterHealthy         bool   `json:"karpenterHealthy"`
-	CertManagerTier          string `json:"certManagerTier"`
-	CertManagerReason        string `json:"certManagerReason"`
-	CertManagerPresent       bool   `json:"certManagerPresent"`
-	CertManagerHealthy       bool   `json:"certManagerHealthy"`
-	ExternalSecretsTier      string `json:"externalSecretsTier"`
-	ExternalSecretsReason    string `json:"externalSecretsReason"`
-	ExternalSecretsPresent   bool   `json:"externalSecretsPresent"`
-	ExternalSecretsHealthy   bool   `json:"externalSecretsHealthy"`
-	ReloaderTier             string `json:"reloaderTier"`
-	ReloaderReason           string `json:"reloaderReason"`
-	ReloaderPresent          bool   `json:"reloaderPresent"`
-	ReloaderHealthy          bool   `json:"reloaderHealthy"`
-	Env                      string `json:"env"`
-	Region                   string `json:"region"`
-	Provider                 string `json:"provider"`
-	Group                    string `json:"group"`
+	// GatewayExperimentalKinds / GatewayExperimentalGap: the experimental
+	// channel's own group, recognised and never read (coverage S7b §7).
+	GatewayExperimentalKinds []string `json:"gatewayExperimentalKinds"`
+	GatewayExperimentalGap   string   `json:"gatewayExperimentalGap"`
+	CiliumPresent            bool     `json:"ciliumPresent"`
+	ClusterMesh              bool     `json:"clusterMesh"`
+	HasHubble                bool     `json:"hasHubble"`
+	KarpenterPresent         bool     `json:"karpenterPresent"`
+	VeleroPresent            bool     `json:"veleroPresent"`
+	AdmissionPresent         bool     `json:"admissionPresent"`
+	LoadBalancingPresent     bool     `json:"loadBalancingPresent"`
+	MetalLBPresent           bool     `json:"metallbPresent"`
+	KarpenterHealthy         bool     `json:"karpenterHealthy"`
+	CertManagerTier          string   `json:"certManagerTier"`
+	CertManagerReason        string   `json:"certManagerReason"`
+	CertManagerPresent       bool     `json:"certManagerPresent"`
+	CertManagerHealthy       bool     `json:"certManagerHealthy"`
+	ExternalSecretsTier      string   `json:"externalSecretsTier"`
+	ExternalSecretsReason    string   `json:"externalSecretsReason"`
+	ExternalSecretsPresent   bool     `json:"externalSecretsPresent"`
+	ExternalSecretsHealthy   bool     `json:"externalSecretsHealthy"`
+	ReloaderTier             string   `json:"reloaderTier"`
+	ReloaderReason           string   `json:"reloaderReason"`
+	ReloaderPresent          bool     `json:"reloaderPresent"`
+	ReloaderHealthy          bool     `json:"reloaderHealthy"`
+	Env                      string   `json:"env"`
+	Region                   string   `json:"region"`
+	Provider                 string   `json:"provider"`
+	Group                    string   `json:"group"`
 	// Protected is the EFFECTIVE protection - exactly what the backend
 	// ProtectGuard enforces (explicit flag OR a prd/prod/production token in
 	// env/name/context). The UI decides on typed arming from this field; the
@@ -108,6 +112,8 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		NetworkTier:              s.Capabilities.Network.Tier.String(),
 		NetworkReason:            s.Capabilities.Network.Reason,
 		GatewayAPIVersion:        s.Capabilities.Network.GatewayAPIVersion,
+		GatewayExperimentalKinds: append([]string{}, s.Capabilities.Network.GatewayExperimentalKinds...),
+		GatewayExperimentalGap:   s.Capabilities.Network.GatewayExperimentalGap,
 		CiliumPresent:            s.Capabilities.Network.CiliumPresent,
 		ClusterMesh:              s.Capabilities.Network.ClusterMesh,
 		HasHubble:                s.Capabilities.Network.HasHubble,

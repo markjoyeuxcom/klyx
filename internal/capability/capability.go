@@ -95,6 +95,12 @@ type NetworkCapability struct {
 	HasHubble          bool
 	ClusterMesh        bool
 	IngressControllers []string
+	// GatewayExperimentalKinds are the kinds the experimental channel's own
+	// group (gateway.networking.x-k8s.io) serves, sorted: recognised, never
+	// read or judged (coverage S7b §7). GatewayExperimentalGap names a
+	// version whose resources could not be read; the list is then partial.
+	GatewayExperimentalKinds []string
+	GatewayExperimentalGap   string
 	// GatewayUnverified marks a Degraded tier that proves nothing: the
 	// GatewayClasses could not be read, or none is Accepted yet without all
 	// being rejected (acceptance pending or unreported). Data-plane health

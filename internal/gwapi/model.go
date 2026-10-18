@@ -82,6 +82,7 @@ type RouteNode struct {
 	// expected to judge it (or why it is not established) and the other
 	// controllers' entries; the rules' names by index; the hostname count.
 	Kind                        string
+	APIVersion                  string // the version the route was read at (S7b)
 	Attachment, AttachmentLabel string
 	ParentRef                   RouteParentRef
 	Verdict                     *health.NativeEval

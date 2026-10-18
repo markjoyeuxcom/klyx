@@ -19,19 +19,20 @@ import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/Inspec
 import { coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from "../layout/coverage";
 import {
   POLICY_ABBREV, POLICY_REFS, RANK, REFS, ROLE_TEXT, addressText, certBySecret, certStatus, errColor, fmtErr, fmtMs, fmtRps,
-  gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeIssues, routeRole, routeKey, sortWarnings,
+  gatewayRole, listenerText, policyKey, primaryBackendText, roleTone, routeHasGlobal, routeHasPolicies, routeRole, routeKey, sortWarnings,
   type CertLookup, type Role,
-  carriesTraffic,
+  attachmentWhere, carriesTraffic, httpMetricsApply, isL4, laneIssues, laneKey, laneMatchText, noHttpMetricsText, resolveLane, routeId, routeKindOf, routeRef,
 } from "./gatewayModel";
 
 // GatewayTopology - one Gateway's data path on the canvas-detail template
-// (spec §6 step 6). The canvas draws each HTTPRoute as a lane: route ->
-// primary backend -> observed traffic; broken lanes first. The selected
+// (spec §6 step 6). The canvas draws each attachment of a route of any kind
+// (coverage S7b §9) as a lane, keyed by the route and its whole parentRef:
+// route -> primary backend -> rules; broken lanes first. The selected
 // route's diagnosis lives in the inspector. The topology is a read with
 // Refresh (route numbers poll every 20s). Evidence rules (Codex review):
 // conditions keep their native status (absent / Unknown / False / last
 // observed); a failed read never replaces the last good one; route absence
-// is claimed only from a complete HTTPRoute list; nothing here asserts an
+// is claimed only from complete lists of every served route kind; nothing here asserts an
 // end-to-end path works - Klyx reads status and endpoints, it does not probe.
 
 type Mode = "all" | "issues" | "global" | "policies";
@@ -49,6 +50,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const nowS = Math.floor(useNow() / 1000);
   const [mode, setMode] = useState<Mode>("all");
   const [nsFilter, setNsFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState("");
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -107,8 +109,16 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     : net.routeMetricsStale ? { state: "stale", message: rmStatus.message, at: net.routeMetricsAt ?? null }
     : { state: "unavailable", message: rmStatus.message, at: null };
 
-  const healthOf = useMemo(() => new Map(routes.map((r) => [routeKey(r), routeRole(r)])), [routes]);
-  const kindOf = (r: RouteNodeDTO) => healthOf.get(routeKey(r))!.kind;
+  const healthOf = useMemo(() => new Map(routes.map((r) => [laneKey(r), routeRole(r)])), [routes]);
+  const kindOf = (r: RouteNodeDTO) => healthOf.get(laneKey(r))!.kind;
+  // lanes are attachments; a route with two parentRefs here draws two
+  const routeCount = useMemo(() => new Set(routes.map(routeId)).size, [routes]);
+  const kindCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of routes) m.set(routeKindOf(r), (m.get(routeKindOf(r)) ?? 0) + 1);
+    return m;
+  }, [routes]);
+  const routeKinds = [...kindCounts.keys()].sort();
   const nsCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of routes) m.set(r.namespace, (m.get(r.namespace) ?? 0) + 1);
@@ -126,27 +136,32 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   const visible = useMemo(() => routes
     .filter((r) => {
       if (nsFilter && r.namespace !== nsFilter) return false;
-      if (mode === "issues" && RANK[healthOf.get(routeKey(r))!.kind] > RANK.degraded) return false;
+      if (kindFilter && routeKindOf(r) !== kindFilter) return false;
+      if (mode === "issues" && RANK[healthOf.get(laneKey(r))!.kind] > RANK.degraded) return false;
       if (mode === "global" && !routeHasGlobal(r)) return false;
       if (mode === "policies" && !routeHasPolicies(r)) return false;
       if (!q) return true;
-      return [r.name, r.namespace, ...r.hostnames, ...r.backends.map((b) => b.name)].some((v) => v.toLowerCase().includes(q));
+      return [r.name, r.namespace, routeKindOf(r), r.attachmentLabel ?? "", ...r.hostnames, ...r.backends.map((b) => b.name)].some((v) => v.toLowerCase().includes(q));
     })
     // broken lanes first; the API order holds within a tier (stable sort)
-    .sort((a, b) => RANK[healthOf.get(routeKey(a))!.kind] - RANK[healthOf.get(routeKey(b))!.kind]),
-  [routes, nsFilter, mode, q, healthOf]);
+    .sort((a, b) => RANK[healthOf.get(laneKey(a))!.kind] - RANK[healthOf.get(laneKey(b))!.kind]),
+  [routes, nsFilter, kindFilter, mode, q, healthOf]);
 
+  // A selection is a lane key; a route's identity (from the Routes view or
+  // the palette) names its worst lane here and is narrowed to it below.
   const selKey = current ? net.selectedRoute : null;
-  const selected = selKey ? routes.find((r) => routeKey(r) === selKey) : undefined;
+  const selected = resolveLane(selKey, routes);
 
   // The route-level numbers (rate, p50/p99, 5xx) are read once for the
   // selected route, for its inspector: the per-rule read replaced the
-  // lanes' poll (slice 8d).
+  // lanes' poll (slice 8d). They are HTTP request metrics: an HTTPRoute's
+  // only (S7b §9), joined by its namespace/name.
+  const metricsKey = selected && httpMetricsApply(selected) ? routeKey(selected) : null;
   useEffect(() => {
-    if (!selKey) return;
-    void getRouteMetrics(cluster, gateway.namespace, gateway.name, [selKey]);
+    if (!metricsKey) return;
+    void getRouteMetrics(cluster, gateway.namespace, gateway.name, [metricsKey]);
     return () => abandonRouteMetrics();
-  }, [cluster, gateway.namespace, gateway.name, selKey]);
+  }, [cluster, gateway.namespace, gateway.name, metricsKey]);
 
   // Selections this view made itself; any other key arrived by navigation
   // (the palette) and must be revealed - clear filters once, after the
@@ -156,7 +171,13 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   useEffect(() => {
     if (!selKey || selKey === ownSelect.current || !selected) return;
     ownSelect.current = selKey;
-    setMode("all"); setNsFilter(""); setQuery("");
+    setMode("all"); setNsFilter(""); setKindFilter(""); setQuery("");
+  }, [selKey, selected]);
+  // a route identity becomes the lane it resolved to, so the selection
+  // stays on that attachment
+  useEffect(() => {
+    if (selKey && selected && laneKey(selected) !== selKey) pick(laneKey(selected));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selKey, selected]);
 
   // First fresh, COMPLETE read: select the first broken lane once (no focus
@@ -167,7 +188,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     autoDone.current = true;
     if (selKey) return;
     const first = visible[0];
-    if (first && kindOf(first) === "fault") pick(routeKey(first));
+    if (first && kindOf(first) === "fault") pick(laneKey(first));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, loading, routesNow]);
 
@@ -177,13 +198,13 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     if (filterEdits.current++ === 0) return;
     if (selected && !visible.includes(selected)) pick(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, nsFilter, q]);
+  }, [mode, nsFilter, kindFilter, q]);
 
   // A route absent from a complete current read is named as no longer
   // attached; absent from anything less proves nothing.
   const lastRoute = useRef<RouteNodeDTO | null>(null);
   if (selected) lastRoute.current = selected;
-  if (lastRoute.current && routeKey(lastRoute.current) !== selKey) lastRoute.current = null;
+  if (lastRoute.current && laneKey(lastRoute.current) !== selKey) lastRoute.current = null;
   const missing = !!selKey && !selected && !!t && !loading;
   const inspected = selected ?? (missing ? lastRoute.current : null);
 
@@ -191,8 +212,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   useListKeys({
     count: visible.length,
     selected: selIdx,
-    onSelect: (i) => { const r = visible[i]; if (r) pick(routeKey(r)); },
-    onActivate: (i) => { const r = visible[i]; if (r) pick(routeKey(r)); },
+    onSelect: (i) => { const r = visible[i]; if (r) pick(laneKey(r)); },
+    onActivate: (i) => { const r = visible[i]; if (r) pick(laneKey(r)); },
     onEscape: () => pick(null),
     searchRef,
   });
@@ -210,7 +231,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
   else if (visible.length === 0) state = "no-match";
 
   const icon = <IconRoute size={28} stroke={1.2} />;
-  const clearFilters = () => { setMode("all"); setNsFilter(""); setQuery(""); };
+  const clearFilters = () => { setMode("all"); setNsFilter(""); setKindFilter(""); setQuery(""); };
   const gwRole = t ? gatewayRole(t.gateway) : null;
   const stateView = state === "loading" ? <SkeletonRows rows={5} label="reading the Gateway topology" />
     : state === "unreadable" ? <EmptyState icon={icon} title="Could not read this Gateway's topology." hint={readError ?? undefined} action={{ label: "Retry", onClick: refresh }} />
@@ -218,8 +239,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       <div style={{ width: "100%", maxWidth: 720, alignSelf: "stretch" }}>
         {t && <GatewayStrip g={t.gateway} clusterPolicies={t.clusterPolicies ?? []} absentKinds={warnings.absentKinds} />}
         {routesNow
-          ? <EmptyState icon={icon} title="No HTTPRoutes are attached to this Gateway." hint="Routes attach through spec.parentRefs; none references this Gateway." />
-          : <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Could not list HTTPRoutes." hint={`${t?.routesError ?? "The route list was not read"} - which routes attach is unknown.`} action={{ label: "Retry", onClick: refresh }} />}
+          ? <EmptyState icon={icon} title="No routes are attached to this Gateway." hint="Routes of every served kind attach through spec.parentRefs, directly or through one of its ListenerSets; none references this Gateway." />
+          : <EmptyState icon={<IconAlertTriangle size={28} stroke={1.2} />} title="Could not list every route kind." hint={`${t?.routesError ?? "The route lists were not read"} - which routes attach is unknown.`} action={{ label: "Retry", onClick: refresh }} />}
       </div>
     )
     : <EmptyState icon={icon} title="No routes match the current filters." hint={`${routes.length} routes on this Gateway.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
@@ -232,7 +253,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     ) : null,
     routesCarried ? (
       <div key="routes" role="status" className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
-        <span className="t-status">HTTPRoute list failed - the lanes are from the complete read at {absoluteTime(net.routesAt!)}.</span> {t?.routesError}
+        <span className="t-status">A route list failed - the lanes are from the complete read at {absoluteTime(net.routesAt!)}.</span> {t?.routesError}
       </div>
     ) : null,
     gwRole && RANK[gwRole.kind] <= RANK.degraded ? (
@@ -266,8 +287,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       }
       summary={!t || (!routesNow && !routesCarried) ? null : (
         <>
-          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{routes.length}</span>
-          <span className="t-secondary">HTTPRoute{routes.length === 1 ? "" : "s"}{coverage}</span>
+          <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{routeCount}</span>
+          <span className="t-secondary">route{routeCount === 1 ? "" : "s"}{routes.length > routeCount ? ` · ${routes.length} attachments` : ""}{coverage}</span>
           {issueCount > 0 && <span className="t-status" style={{ color: broken > 0 ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{[broken ? `▲ ${broken} broken` : "", degraded ? `${degraded} degraded` : ""].filter(Boolean).join(" · ")}</span>}
           {unverified > 0 && <span className="t-secondary">{unverified} unverified</span>}
         </>
@@ -287,6 +308,15 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
             {globalCount > 0 && <button className="l-chip" aria-pressed={mode === "global"} onClick={() => setMode("global")}>Global {globalCount}</button>}
             {policyCount > 0 && <button className="l-chip" aria-pressed={mode === "policies"} onClick={() => setMode("policies")}>With policies {policyCount}</button>}
           </div>
+          {routeKinds.length > 1 && (
+            <label style={{ display: "flex" }}>
+              <span className="sr-only">Route kind</span>
+              <select className="l-input" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
+                <option value="">All kinds</option>
+                {routeKinds.map((k) => <option key={k} value={k}>{k} ({kindCounts.get(k)})</option>)}
+              </select>
+            </label>
+          )}
           {namespaces.length > 1 && (
             <label style={{ display: "flex" }}>
               <span className="sr-only">Route namespace</span>
@@ -309,10 +339,10 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       body={t ? (
         <div className="lens-canvas" data-testid="gateway-canvas">
           <GatewayStrip g={t.gateway} clusterPolicies={t.clusterPolicies ?? []} absentKinds={warnings.absentKinds} />
-          <div role="list" aria-label="HTTPRoute lanes" style={{ display: "grid", gap: 8 }}>
+          <div role="list" aria-label="Route lanes" style={{ display: "grid", gap: 8 }}>
             {visible.map((r) => (
-              <RouteLane key={routeKey(r)} route={r} role={healthOf.get(routeKey(r))!} ruleMetrics={ruleM}
-                selected={routeKey(r) === selKey} onSelect={() => pick(routeKey(r) === selKey ? null : routeKey(r))} />
+              <RouteLane key={laneKey(r)} route={r} role={healthOf.get(laneKey(r))!} ruleMetrics={ruleM}
+                selected={laneKey(r) === selKey} onSelect={() => pick(laneKey(r) === selKey ? null : laneKey(r))} />
             ))}
           </div>
         </div>
@@ -320,8 +350,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
       footer={<span className="t-legend">j k select · esc close · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
       inspector={selKey && inspected && t ? (
-        <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(selKey) ?? []} ruleMetrics={ruleM}
-          metric={metrics[selKey]} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
+        <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(routeId(inspected)) ?? []} ruleMetrics={ruleM}
+          metric={metricsKey ? metrics[metricsKey] : undefined} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />
       ) : undefined}
       inspectorLabel="Route details"
       onCloseInspector={() => pick(null)}
@@ -384,6 +414,7 @@ function PolicyList({ policies }: { policies: PolicyRefDTO[] }) {
 function RuleSummary({ route, metrics }: { route: RouteNodeDTO; metrics: RuleMetrics | null }) {
   const n = route.rules?.length ?? 0;
   const count = `${n} rule${n === 1 ? "" : "s"}`;
+  if (!httpMetricsApply(route)) return <span className="t-secondary gw-line">{count} · {noHttpMetricsText(route)}</span>;
   if (!metrics) return <span className="t-secondary">{count} · reading…</span>;
   if (!metrics.status.available) return <span className="t-secondary">{count} · no route metrics</span>;
   let worst: { rule: number; v: number } | null = null;
@@ -410,12 +441,13 @@ function RouteLane({ route, role, ruleMetrics, selected, onSelect }: { route: Ro
   return (
     <div role="listitem" className="gw-lane" data-role={role.kind}>
       <button ref={ref} className="gw-node gw-route" aria-pressed={selected} data-selected={selected ? "true" : undefined} onClick={onSelect}
-        aria-label={`HTTPRoute ${route.namespace}/${route.name}: ${role.label}`}>
+        aria-label={`${routeKindOf(route)} ${route.namespace}/${route.name}${route.attachmentLabel ? ` via ${route.attachmentLabel}` : ""}: ${role.label}`}>
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <VerdictMark health={role} size={8} />
           <span className="t-identifier gw-name"><span style={{ color: "var(--color-text-tertiary)" }}>{route.namespace}/</span>{route.name}</span>
+          <span className="t-legend" data-testid="lane-kind" style={{ marginLeft: "auto", flexShrink: 0 }}>{routeKindOf(route)}</span>
         </span>
-        <span className="t-secondary gw-line">{route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"} · {route.hostnames[0] ?? "any host"}{route.hostnames.length > 1 ? ` +${route.hostnames.length - 1}` : ""} · {route.matches[0]?.pathValue ?? "/"}{route.matches.length > 1 ? ` +${route.matches.length - 1}` : ""}</span>
+        <span className="t-secondary gw-line">{attachmentWhere(route)} · {laneMatchText(route)}</span>
         <span className="gw-line" style={{ color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}</span>
         {route.policies.length > 0 && <PolicyList policies={route.policies} />}
       </button>
@@ -459,12 +491,17 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
   onOpenObject: OpenObject;
   onClose: () => void;
 }) {
+  const kind = routeKindOf(route);
   const role = routeRole(route);
-  const issues = routeIssues(route, listeners);
+  // through a ListenerSet, the section names the ListenerSet's listener, not
+  // one of the Gateway's: the Gateway's listeners are not the evidence
+  const viaSet = route.parentRef?.kind === "ListenerSet";
+  const laneListeners = viaSet ? [] : listeners;
+  const issues = laneIssues(route, laneListeners);
   const gwRole = gatewayRole(gateway);
   const primary = route.backends[0];
   const carrying = route.backends.filter(carriesTraffic);
-  const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
+  const scoped = route.parentSectionName ? laneListeners.filter((l) => l.name === route.parentSectionName) : laneListeners;
   const policies = [...route.policies, ...route.services.flatMap((s) => s.policies)];
   const cnps = route.services.flatMap((s) => s.cnps);
   const services = route.backends.filter((b) => b.kind === "Service" && b.state !== "not-found");
@@ -476,18 +513,18 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
   more.push({ label: "Copy route name", onSelect: () => void navigator.clipboard?.writeText(`${route.namespace}/${route.name}`) });
   // Describe (slice 14c, review 1): kubectl's report for this route, by its
   // UID; never for a route the latest read no longer holds, or cannot prove.
-  const describe = useDescribe(cluster, !gone && !unproven ? { kind: "HTTPRoute", namespace: route.namespace, name: route.name, uid: route.uid } : null);
+  const describe = useDescribe(cluster, !gone && !unproven ? { kind, namespace: route.namespace, name: route.name, uid: route.uid } : null);
   more.push(...describe.menu);
 
   return (
     <div data-testid="route-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <InspectorLayout pin={{ cluster: cluster }} kind="HTTPRoute" namespace={route.namespace} name={route.name}
-        meta={`${route.parentSectionName ? `listener ${route.parentSectionName}` : "all listeners"}${route.hostnames.length > 0 ? ` · ${route.hostnames.join(", ")}` : ""}`}
+      <InspectorLayout pin={{ cluster: cluster }} kind={kind} namespace={route.namespace} name={route.name}
+        meta={`${attachmentWhere(route)}${route.hostnames.length > 0 ? ` · ${route.hostnames.join(", ")}` : ""}`}
         onClose={onClose}
         verdict={
           <div>
-            {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The latest complete HTTPRoute list did not include it; this is its last evidence.</div>}
-            {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current read.</span> The HTTPRoute list was incomplete, so its absence proves nothing; this is its last evidence.</div>}
+            {gone && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">No longer attached.</span> The latest complete route lists did not include this attachment; this is its last evidence.</div>}
+            {unproven && <div role="status" className="t-body" style={{ marginBottom: 8 }}><span className="t-status">Not in the current read.</span> A route list was incomplete, so its absence proves nothing; this is its last evidence.</div>}
             <InspectorStatus tone={roleTone(role.kind)} kind={role.kind} label={role.label} />
             <div className="verdict-evidence" style={{ display: "grid", gap: 4 }}>
               {issues.length > 0
@@ -495,7 +532,7 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
                 ? issues.map((i) => <div key={i.short} className="t-body" data-severity={i.severity} style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{i.text}</div>)
                 : (
                   <div className="t-body" style={{ color: "var(--color-text-secondary)" }}>
-                    Accepted by this Gateway with references resolved; {carrying.length > 1 ? "every backend that carries traffic has ready endpoints" : <>the backend {carrying[0]?.name} has {carrying[0]?.endpoints ? `${carrying[0].endpoints.ready}/${carrying[0].endpoints.total} endpoints ready` : "endpoints"}</>}. Klyx reads status and endpoints - it does not test the path end to end.
+                    Accepted {viaSet ? `through ${route.attachmentLabel || "its ListenerSet"}` : "by this Gateway"} with references resolved; {carrying.length > 1 ? "every backend that carries traffic has ready endpoints" : <>the backend {carrying[0]?.name} has {carrying[0]?.endpoints ? `${carrying[0].endpoints.ready}/${carrying[0].endpoints.total} endpoints ready` : "endpoints"}</>}. Klyx reads status and endpoints - it does not test the path end to end.
                   </div>
                 )}
               {RANK[gwRole.kind] <= RANK.degraded && <div className="t-body" data-severity={gwRole.kind} style={{ color: "var(--color-text-secondary)" }}>The Gateway itself is {gwRole.label}.</div>}
@@ -507,7 +544,7 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             <DataPath gateway={gateway} route={route} listeners={listeners} metrics={ruleM} />
           </InspectorBlock>
         )}
-        primary={gone ? undefined : { label: "Open HTTPRoute", onSelect: () => onOpenObject(REFS.httpRoute, route.namespace, route.name) }}
+        primary={gone ? undefined : { label: `Open ${kind}`, onSelect: () => onOpenObject(routeRef(kind, route.apiVersion), route.namespace, route.name) }}
         secondary={!gone && primary?.state === "resolved" ? { label: "Open Service", onSelect: () => onOpenObject(REFS.service, primary.namespace, primary.name) } : undefined}
         more={gone ? undefined : more}>
         {notes.length > 0 && (
@@ -515,12 +552,8 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             {notes.map((n, i) => <div key={i} className="t-body" style={{ color: "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{n.charAt(0).toUpperCase() + n.slice(1)}.</div>)}
           </InspectorBlock>
         )}
-        <InspectorBlock title="Matches" count={route.matches.length}>
-          <div className="insp-kv">
-            {route.matches.map((m, i) => <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>)}
-            <span>hostnames</span><span>{route.hostnames.length > 0 ? route.hostnames.join(", ") : "any (from the listener)"}</span>
-          </div>
-        </InspectorBlock>
+        <AttachmentBlock route={route} />
+        <MatchesBlock route={route} kind={kind} />
         <InspectorBlock title="Backends" count={route.backends.length}>
           <div className="insp-kv">
             {route.backends.map((b, i) => (
@@ -534,7 +567,11 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
             ))}
           </div>
         </InspectorBlock>
-        <InspectorBlock title="Listener TLS">
+        {isL4(kind) ? null : viaSet ? (
+          <InspectorBlock title="Listener TLS">
+            <div className="t-secondary">Attached through {route.attachmentLabel || "a ListenerSet"}: its listeners, and their certificates, are the ListenerSet's - see the ListenerSets view.</div>
+          </InspectorBlock>
+        ) : <InspectorBlock title="Listener TLS">
           {certGap && <div className="t-secondary" data-testid="cert-discovery-gap" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>cert-manager discovery re-check failing - {certGap}. A capability gap only - the Certificate read below keeps its own state.</div>}
           {scoped.length === 0 ? (
             <div className="t-body" style={{ color: "var(--color-text-warning)" }}>No listener on this Gateway matches the route's section.</div>
@@ -558,9 +595,10 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
               </div>
             );
           })}
-        </InspectorBlock>
+        </InspectorBlock>}
         <InspectorBlock title="Observed traffic">
-          {metricsObs.state === "unavailable" ? <div className="t-secondary">Unavailable{metricsObs.message ? ` - ${metricsObs.message}` : ""}.</div>
+          {!httpMetricsApply(route) ? <div className="t-secondary" data-testid="no-http-metrics">{noHttpMetricsText(route)}.</div>
+            : metricsObs.state === "unavailable" ? <div className="t-secondary">Unavailable{metricsObs.message ? ` - ${metricsObs.message}` : ""}.</div>
             : !metric ? <div className="t-secondary">{metricsObs.state === "reading" ? "Reading…" : "No traffic series for this route in the window."}</div>
             : (
               <>
@@ -592,8 +630,62 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
   );
 }
 
+// AttachmentBlock is the lane's attachment (S7b §5, §6): the reference, the
+// controller judging it, other controllers' entries (shown, never judged),
+// and Klyx's own evidence - which explains the status and never replaces it.
+function AttachmentBlock({ route }: { route: RouteNodeDTO }) {
+  const p = route.parentRef;
+  const ev = route.evidence;
+  if (!p && !ev) return null;
+  const others = route.others ?? ev?.others ?? [];
+  return (
+    <InspectorBlock title="Attachment">
+      <div className="insp-kv" data-testid="route-attachment-evidence">
+        {p && <><span>parent</span><span className="t-identifier">{p.kind} {p.namespace}/{p.name}{p.sectionName ? ` · ${p.sectionName}` : ""}{p.port ? ` :${p.port}` : ""}</span></>}
+        <span>controller</span><span>{route.controller ? <span className="t-identifier">{route.controller}</span> : <span style={{ color: "var(--color-text-warning)" }}>not established{route.controllerWhy ? ` - ${route.controllerWhy}` : ""}</span>}</span>
+        {others.map((o, i) => <Fragment key={i}><span>{i === 0 ? "other entries" : ""}</span><span className="t-secondary">an entry from another controller ({o.controller || "unnamed"}), not judged: Accepted {o.accepted || "absent"}, ResolvedRefs {o.resolvedRefs || "absent"}</span></Fragment>)}
+        {ev?.allowance.text && <><span>allowedRoutes</span><span className="t-secondary" style={{ color: ev.allowance.disagrees ? "var(--color-text-warning)" : undefined }}>{ev.allowance.text}</span></>}
+        {(ev?.grants ?? []).map((g, i) => <Fragment key={`g${i}`}><span>{i === 0 ? "grants" : ""}</span><span className="t-secondary">rule {g.rule + 1} {g.backend}: {g.text}</span></Fragment>)}
+        {(ev?.features ?? []).map((f, i) => <Fragment key={`f${i}`}><span>{i === 0 ? "features" : ""}</span><span className="t-secondary">{f}</span></Fragment>)}
+        {(ev?.disagreements ?? []).map((d, i) => <Fragment key={`d${i}`}><span>{i === 0 ? "disagrees" : ""}</span><span style={{ color: "var(--color-text-warning)" }}>{d}</span></Fragment>)}
+      </div>
+    </InspectorBlock>
+  );
+}
+
+// MatchesBlock says what the route matches in its kind's words (S7b §5).
+function MatchesBlock({ route, kind }: { route: RouteNodeDTO; kind: string }) {
+  if (isL4(kind)) {
+    return (
+      <InspectorBlock title="Matches">
+        <div className="t-secondary">Every connection on the listener: a {kind} matches no fields.</div>
+      </InspectorBlock>
+    );
+  }
+  const hosts = route.hostnames.length > 0 ? route.hostnames.join(", ") : kind === "TLSRoute" ? "any SNI (from the listener)" : "any (from the listener)";
+  const more = (route.hostnameCount ?? 0) > route.hostnames.length ? ` +${(route.hostnameCount ?? 0) - route.hostnames.length} more` : "";
+  if (kind === "TLSRoute") {
+    return (
+      <InspectorBlock title="Matches">
+        <div className="insp-kv"><span>SNI</span><span>{hosts}{more}</span></div>
+      </InspectorBlock>
+    );
+  }
+  return (
+    <InspectorBlock title="Matches" count={route.matches.length}>
+      <div className="insp-kv">
+        {kind === "GRPCRoute"
+          ? route.matches.map((m, i) => <Fragment key={i}><span>call</span><span>{m.grpcService || "any service"}/{m.grpcMethod || "any method"}</span></Fragment>)
+          : route.matches.map((m, i) => <Fragment key={i}><span>{m.method || "any"}</span><span>{m.pathType} {m.pathValue}</span></Fragment>)}
+        <span>hostnames</span><span>{hosts}{more}</span>
+      </div>
+    </InspectorBlock>
+  );
+}
+
 function backendEvidence(b: RouteNodeDTO["backends"][number]): string {
   if (b.state === "not-found") return "Service not found";
+  if (b.state === "no-port") return b.error || `no ${b.transport || "TCP"} port ${b.port}`;
   if (b.state === "unreadable") return `could not be read${b.error ? ` - ${b.error}` : ""}`;
   if (b.state === "unsupported" || b.kind !== "Service") return "not evaluated (Klyx reads Service backends only)";
   const ep = b.endpoints;

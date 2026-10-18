@@ -177,6 +177,7 @@ type RouteNodeDTO struct {
 	// it (or why not established) and other controllers' entries; the
 	// evidence; rule names by index; the hostname count.
 	Kind            string           `json:"kind"`
+	APIVersion      string           `json:"apiVersion,omitempty"` // the version read: opening the route uses it
 	Attachment      string           `json:"attachment"`
 	AttachmentLabel string           `json:"attachmentLabel"`
 	ParentRef       *ParentRefDTO    `json:"parentRef,omitempty"`
@@ -374,7 +375,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd.Backends = make([]BackendDTO, 0, len(r.Backends))
 	rd.Services = make([]ServiceNodeDTO, 0, len(r.Services))
 	for _, m := range r.Matches {
-		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method, Rule: m.Rule})
+		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method, Rule: m.Rule, GRPCService: m.GRPCService, GRPCMethod: m.GRPCMethod})
 	}
 	rd.Rules = make([]RouteRuleDTO, 0, r.RuleCount)
 	for _, rv := range gwapi.RuleVerdicts(r) {
@@ -397,7 +398,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 		rd.Rules = append(rd.Rules, rr)
 	}
 	for _, b := range r.Backends {
-		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, State: string(b.State), Error: b.Error}
+		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, Transport: b.Transport, State: string(b.State), Error: b.Error}
 		if b.Endpoints != nil {
 			bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
 		}

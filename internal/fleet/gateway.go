@@ -318,7 +318,7 @@ func (c *ClusterConn) readRoutes(ctx context.Context, gwu *unstructured.Unstruct
 			for _, ref := range landing {
 				ae := gwapi.EvaluateAttachment(r, ref, ix)
 				rn := r.NodeFor(ae)
-				rn.Kind, rn.Attachment, rn.AttachmentLabel, rn.ParentRef = kind, ref.Key(), ref.Label(), ref
+				rn.Kind, rn.APIVersion, rn.Attachment, rn.AttachmentLabel, rn.ParentRef = kind, r.APIVersion, ref.Key(), ref.Label(), ref
 				eval := ae.Eval
 				rn.Verdict = &eval
 				ev := gwapi.Evidence(r, ae, ix, grants, labelsOf(r.Namespace))

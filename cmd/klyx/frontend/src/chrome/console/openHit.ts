@@ -32,6 +32,12 @@ const LENSES: Record<string, Lens> = {
   "external-secrets.io/clustersecretstores": { task: "eso", part: "stores", label: "External Secrets" },
   "gateway.networking.k8s.io/gateways": { task: "gateway", part: "gateways", label: "Gateway API" },
   "gateway.networking.k8s.io/httproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  // coverage S7: every route kind and the ListenerSets have the lens's views
+  "gateway.networking.k8s.io/grpcroutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/tlsroutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/tcproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/udproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/listenersets": { task: "gateway", part: "listenersets", label: "Gateway API" },
   "karpenter.sh/nodeclaims": { task: "karpenter", part: "nodeclaims", label: "Karpenter" },
   "karpenter.sh/nodepools": { task: "karpenter", part: "nodepools", label: "Karpenter" },
   "velero.io/schedules": { task: "velero", part: "schedules", label: "Velero" },

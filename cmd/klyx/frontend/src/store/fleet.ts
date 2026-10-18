@@ -26,6 +26,9 @@ export type ClusterDTO = {
   networkTier: string;
   networkReason: string;
   gatewayAPIVersion?: string;
+  // The experimental channel's own group: recognised, never read (S7b §7).
+  gatewayExperimentalKinds?: string[] | null;
+  gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
   hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean;
@@ -826,16 +829,32 @@ export type ListenerSetRowDTO = {
   acceptedCond: CondDTO; programmedCond: CondDTO; stale: boolean; observedGeneration: number;
   allowance: AllowanceDTO; precedence: number; siblings: number; precedenceComplete: boolean; rule: RuleDTO;
 };
-// One HTTPRoute of the Gateways task's routes part (1c slice 3 §4a): counted
-// once by UID with its worst attachment's captured role/label/parent, and
-// every attachment. The topology stays the route's data path.
-export type GatewayRouteAttachmentDTO = { parent: string; rule: RuleDTO };
-export type GatewayRouteRowDTO = { uid?: string; gvr?: string; generation?: number; namespace: string; name: string; parent: string; rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[] };
+// One route of the Gateways task's routes part (1c slice 3 §4a; coverage
+// S7b §5): any of the five kinds, counted once by UID with its worst
+// attachment's captured role/label/parent, and every attachment. parent is
+// an attachment's identity (the whole normalised parentRef), parentLabel
+// its name, gateway the "namespace/name" of the Gateway it lands on ("" when
+// not established). The topology stays the route's data path.
+export type ParentRefDTO = { group: string; kind: string; namespace: string; name: string; sectionName?: string; port?: number };
+// Another controller's entry for the same reference: shown, never judged.
+export type OtherStatusDTO = { controller: string; accepted: string; resolvedRefs: string };
+// A cross-namespace backend's ReferenceGrant evidence; allowed "yes" | "no" | "" (not established).
+export type GrantDTO = { rule: number; backend: string; allowed: string; by?: string; text: string };
+// An attachment's evidence (S7b §5, §6): the expected controller or why it
+// is not established, other controllers' entries, and Klyx's own readings
+// beside the controller's status, never replacing it.
+export type AttachmentEvDTO = { controller?: string; controllerWhy?: string; others?: OtherStatusDTO[]; allowance: AllowanceDTO; grants?: GrantDTO[]; features?: string[]; disagreements?: string[] };
+export type GatewayRouteAttachmentDTO = { parent: string; parentLabel?: string; parentRef?: ParentRefDTO; gateway?: string; rule: RuleDTO; evidence?: AttachmentEvDTO };
+export type GatewayRouteRowDTO = {
+  uid?: string; gvr?: string; generation?: number; kind?: string; namespace: string; name: string;
+  parent: string; parentLabel?: string; gateway?: string; hostnames?: string[]; hostnameCount?: number;
+  rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[];
+};
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
 export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[]; tlsMode?: string; allowedRoutes?: AllowedRoutesDTO; status?: ListenerStatusDTO };
-export type MatchDTO = { pathType: string; pathValue: string; method: string; rule?: number };
+export type MatchDTO = { pathType: string; pathValue: string; method: string; rule?: number; grpcService?: string; grpcMethod?: string };
 // One spec.rules entry with its verdict and each backend's own (The Line
 // slice 8d): weight is the effective configured weight (1 when unset).
 export type RouteRuleBackendDTO = { kind: string; namespace: string; name: string; port: number; weight: number; weightSet: boolean; rule: RuleDTO };
@@ -845,13 +864,26 @@ export type EndpointCountDTO = { ready: number; total: number; nonPod: number; e
 // weightSet false: the backendRef wrote no weight (the Gateway API default
 // of 1); an explicit weight 0 sends the backend no traffic. rule is the
 // spec.rules index listing it - weights split traffic within one rule.
-export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; rule?: number; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
+// transport is TCP, or UDP for a UDPRoute: the Service port is selected by
+// number and transport, and only the slices carrying it count (S7b §5);
+// "no-port" is a Service without that port.
+export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; rule?: number; transport?: string; state?: "resolved" | "not-found" | "no-port" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { rule: RuleDTO; namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };
-export type RouteNodeDTO = { uid?: string; rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number };
+// A topology lane (coverage S7b §9): one attachment of a route of any kind.
+// attachment is its identity (the whole normalised parentRef), rule the
+// attachment's verdict; controller is the parent's class's, controllerWhy
+// why it is not established; others are other controllers' entries.
+export type RouteNodeDTO = {
+  uid?: string; rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string;
+  accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO;
+  policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number;
+  kind?: string; apiVersion?: string; attachment?: string; attachmentLabel?: string; parentRef?: ParentRefDTO;
+  controller?: string; controllerWhy?: string; others?: OtherStatusDTO[]; evidence?: AttachmentEvDTO; ruleNames?: string[]; hostnameCount?: number;
+};
 // error = the topology could not be read at all (never a snapshot);
-// routesComplete = the HTTPRoute list succeeded (absence is then proof).
+// routesComplete = every served route kind's list succeeded (absence is then proof).
 export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string; routesComplete?: boolean; routesError?: string };
 export type GatewayRef = { namespace: string; name: string };
 

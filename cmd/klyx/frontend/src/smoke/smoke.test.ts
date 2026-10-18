@@ -161,11 +161,11 @@ describe("a destination's page", () => {
       document.body.innerHTML = `<div class="lens-header"><h1>Gateways and routes</h1></div><div data-testid="gateway-views"><button data-view="gateways" aria-pressed="${pressed === "gateways"}"></button><button data-view="routes" aria-pressed="${pressed === "routes"}"></button></div><div class="lens-table-head"><span data-col="mark"></span><span data-col="name">${head}</span><span data-col="status">Status</span></div>`;
       return gatewayView();
     };
-    expect(at("routes", "HTTPRoute")).toBe("routes");
+    expect(at("routes", "Route")).toBe("routes");
     expect(at("gateways", "Gateway")).toBe("gateways");
     // the switch says Routes over the Gateways table, and the reverse
     expect(at("routes", "Gateway")).toBeNull();
-    expect(at("gateways", "HTTPRoute")).toBeNull();
+    expect(at("gateways", "Route")).toBeNull();
     document.body.innerHTML = '<div class="lens-header"><h1>Gateways and routes</h1></div>';
     expect(gatewayView()).toBeNull();
   });

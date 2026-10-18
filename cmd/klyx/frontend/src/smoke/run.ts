@@ -151,7 +151,8 @@ export function partOf(): { shown: string | null; pressed: string | null } | nul
 export function gatewayView(): "gateways" | "listenersets" | "routes" | null {
   const pressed = document.querySelector<HTMLElement>('[data-testid="gateway-views"] [aria-pressed="true"]')?.dataset.view;
   const head = document.querySelector('.lens-table-head > [data-col="name"]')?.textContent?.trim();
-  const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : head === "ListenerSet" ? "listenersets" : null;
+  // coverage S7b: the Routes table's identity column is "Route" (every kind)
+  const shown = head === "Route" ? "routes" : head === "Gateway" ? "gateways" : head === "ListenerSet" ? "listenersets" : null;
   return shown !== null && pressed === shown ? shown : null;
 }
 

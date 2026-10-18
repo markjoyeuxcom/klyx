@@ -50,7 +50,8 @@ const MEMBERSHIP: Record<string, string[]> = { "gateway/routes": ["gateways"] };
 
 const KIND_LABELS: Record<string, string> = {
   pods: "Pods", deployments: "Deployments", statefulsets: "StatefulSets", daemonsets: "DaemonSets", replicasets: "ReplicaSets",
-  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes", listenersets: "ListenerSets", namespaces: "Namespaces",
+  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes", listenersets: "ListenerSets",
+  grpcroutes: "GRPCRoutes", tlsroutes: "TLSRoutes", tcproutes: "TCPRoutes", udproutes: "UDPRoutes", referencegrants: "ReferenceGrants", namespaces: "Namespaces",
   services: "Services", endpointslices: "EndpointSlices", kustomizations: "Kustomizations", helmreleases: "HelmReleases",
   gitrepositories: "GitRepositories", ocirepositories: "OCIRepositories", buckets: "Buckets", helmrepositories: "HelmRepositories",
   helmcharts: "HelmCharts", applications: "Applications", applicationsets: "ApplicationSets", certificates: "Certificates",

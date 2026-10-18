@@ -23,7 +23,7 @@ import { GatewayTopology } from "./GatewayTopology";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { RANK, REFS, ROLE_TEXT, addressText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone } from "./gatewayModel";
+import { RANK, REFS, ROLE_TEXT, addressText, experimentalText, gatewayRole, gatewayVerdictDetail, listenerText, roleTone } from "./gatewayModel";
 import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
@@ -114,6 +114,10 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
   // The Gateways are the Observer's shared rows (1c slice 3 §5.6) - live, not
   // a snapshot; the topology stays a fetch.
   const openGateway = useFleet((s) => s.openGateway);
+  const experimental = useFleet((s) => {
+    const c = s.clusters.find((x) => x.name === cluster);
+    return experimentalText(c?.gatewayExperimentalKinds, c?.gatewayExperimentalGap);
+  });
   const [mode, setMode] = useState<Mode>("all");
   const [query, setQuery] = useState("");
   const [cursorKey, setCursorKey] = useState<string | null>(null);
@@ -246,6 +250,8 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
   if (capped) notices.push(<div key="capped" role="status" data-testid="gateways-capped" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)" }}>
     Capped: {capped.notRetained ?? "some"} Gateway{capped.notRetained === 1 ? "" : "s"} not retained - Klyx keeps a bounded amount per cluster, so counts are lower bounds and a Gateway left out is unverified, never removed.</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
+  // a capability fact, not a fault: neutral, one line (S7b §7)
+  if (experimental) notices.push(<div key="x" role="note" data-testid="gateway-experimental" className="t-secondary" style={{ padding: "4px 0", overflowWrap: "anywhere" }}>{experimental}</div>);
 
   return (
     <LensLayout

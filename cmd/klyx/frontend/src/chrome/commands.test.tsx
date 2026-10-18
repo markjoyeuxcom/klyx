@@ -334,11 +334,11 @@ describe("buildCommands", () => {
         },
       } as never,
     });
-    const cmd = buildCommands(s).find((c) => c.id === "gateway-route:apps/api")!;
+    const cmd = buildCommands(s).find((c) => c.id === "gateway-route:HTTPRoute/apps/api")!;
     expect(cmd.title).toBe("HTTPRoute apps/api");
     cmd.run();
     expect(openGateway).toHaveBeenCalledWith("gateway-system", "shared");
-    expect(selectRoute).toHaveBeenCalledWith("apps/api");
+    expect(selectRoute).toHaveBeenCalledWith("HTTPRoute/apps/api");
   });
 
   it("offers theme commands for night and day, and no retired palette", () => {

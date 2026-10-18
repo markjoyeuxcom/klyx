@@ -5495,6 +5495,360 @@
       }
     },
     {
+      "case": "backend has no TCP port",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "uid": "",
+          "namespace": "shop",
+          "name": "backend has no TCP port",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "db",
+              "namespace": "",
+              "port": 5432,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 0,
+              "transport": "TCP",
+              "state": "no-port",
+              "error": "Service has no TCP port 5432"
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "fingerprint": "",
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no TCP port 5432"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "db",
+                  "port": 5432,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no TCP port 5432"
+                  }
+                }
+              ]
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "no TCP port 5432"
+          },
+          "kind": "HTTPRoute",
+          "attachment": "",
+          "attachmentLabel": "",
+          "ruleNames": [],
+          "hostnameCount": 0
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "no TCP port 5432"
+      }
+    },
+    {
+      "case": "backend has no UDP port, TCP only",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "uid": "",
+          "namespace": "shop",
+          "name": "backend has no UDP port, TCP only",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "dns",
+              "namespace": "",
+              "port": 53,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 0,
+              "transport": "UDP",
+              "state": "no-port",
+              "error": "Service has no UDP port 53 (port 53 exists for TCP only)"
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "fingerprint": "",
+              "rule": {
+                "included": true,
+                "role": "fault",
+                "label": "no UDP port 53"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "dns",
+                  "port": 53,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no UDP port 53"
+                  }
+                }
+              ]
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "fault",
+            "label": "no UDP port 53"
+          },
+          "kind": "HTTPRoute",
+          "attachment": "",
+          "attachmentLabel": "",
+          "ruleNames": [],
+          "hostnameCount": 0
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "fault",
+        "label": "no UDP port 53"
+      }
+    },
+    {
+      "case": "no-port primary of several",
+      "nowUnix": 1791720000,
+      "dto": {
+        "route": {
+          "uid": "",
+          "namespace": "shop",
+          "name": "no-port primary of several",
+          "hostnames": [],
+          "matches": [],
+          "parentSectionName": "",
+          "accepted": false,
+          "resolvedRefs": false,
+          "backends": [
+            {
+              "kind": "Service",
+              "name": "db",
+              "namespace": "",
+              "port": 5432,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 0,
+              "transport": "TCP",
+              "state": "no-port"
+            },
+            {
+              "kind": "Service",
+              "name": "web-0",
+              "namespace": "shop",
+              "port": 80,
+              "weight": 0,
+              "weightSet": false,
+              "rule": 0,
+              "state": "resolved",
+              "endpoints": {
+                "ready": 3,
+                "total": 3,
+                "nonPod": 0
+              }
+            }
+          ],
+          "rules": [
+            {
+              "index": 0,
+              "fingerprint": "",
+              "rule": {
+                "included": true,
+                "role": "degraded",
+                "label": "db: no TCP port 5432"
+              },
+              "matches": [],
+              "backends": [
+                {
+                  "kind": "Service",
+                  "namespace": "",
+                  "name": "db",
+                  "port": 5432,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": true,
+                    "role": "fault",
+                    "label": "no TCP port 5432"
+                  }
+                },
+                {
+                  "kind": "Service",
+                  "namespace": "shop",
+                  "name": "web-0",
+                  "port": 80,
+                  "weight": 1,
+                  "weightSet": false,
+                  "rule": {
+                    "included": false,
+                    "role": "ok",
+                    "label": "resolved"
+                  }
+                }
+              ]
+            }
+          ],
+          "services": [],
+          "pods": {
+            "ready": 0,
+            "total": 0,
+            "unknown": false
+          },
+          "policies": [],
+          "parentFound": true,
+          "acceptedCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "resolvedRefsCond": {
+            "status": "True",
+            "reason": "R",
+            "message": "m",
+            "observedGeneration": 3
+          },
+          "generation": 3,
+          "rule": {
+            "included": true,
+            "role": "degraded",
+            "label": "db: no TCP port 5432"
+          },
+          "kind": "HTTPRoute",
+          "attachment": "",
+          "attachmentLabel": "",
+          "ruleNames": [],
+          "hostnameCount": 0
+        },
+        "listeners": [
+          {
+            "name": "https",
+            "protocol": "HTTPS",
+            "hostname": "",
+            "port": 443,
+            "certificateRefs": null
+          },
+          {
+            "name": "http",
+            "protocol": "HTTP",
+            "hostname": "",
+            "port": 80,
+            "certificateRefs": null
+          }
+        ]
+      },
+      "want": {
+        "included": true,
+        "role": "degraded",
+        "label": "db: no TCP port 5432"
+      }
+    },
+    {
       "case": "endpoints not read",
       "nowUnix": 1791720000,
       "dto": {

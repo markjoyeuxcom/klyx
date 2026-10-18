@@ -67,10 +67,11 @@ func TestToDTOProjectsCapabilityDetails(t *testing.T) {
 				Flux: capability.FluxInfo{Present: true, Healthy: true},
 			},
 			Network: capability.NetworkCapability{
-				Base:              capability.Base{Tier: capability.Healthy},
-				GatewayAPIVersion: "v1",
-				CiliumPresent:     true,
-				ClusterMesh:       true,
+				Base:                     capability.Base{Tier: capability.Healthy},
+				GatewayAPIVersion:        "v1",
+				CiliumPresent:            true,
+				ClusterMesh:              true,
+				GatewayExperimentalKinds: []string{"XMesh"},
 			},
 		},
 	}, config.ClusterConfig{}, now)
@@ -80,6 +81,9 @@ func TestToDTOProjectsCapabilityDetails(t *testing.T) {
 	}
 	if dto.GatewayAPIVersion != "v1" || !dto.CiliumPresent || !dto.ClusterMesh {
 		t.Fatalf("want network capability details projected, got %+v", dto)
+	}
+	if len(dto.GatewayExperimentalKinds) != 1 || dto.GatewayExperimentalKinds[0] != "XMesh" {
+		t.Fatalf("want the experimental kinds projected, got %v", dto.GatewayExperimentalKinds)
 	}
 }
 
