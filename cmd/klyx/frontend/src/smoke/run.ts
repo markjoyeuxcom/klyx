@@ -518,6 +518,56 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     // the name column always shows; the writer column can be hidden at 1024
     await within(8000, "MetalLB's states", () => [...document.querySelectorAll(".lens-row")].some((r) => /speaker-/.test(r.textContent ?? "")));
   });
+  // Coverage S5 (scratchpad lab-s5): a ServiceAccount's Identity block (a
+  // stale-role pod read as Differs, the limits), that pod's own block in the
+  // Pods lens, and an ESO store's subject and handling controller; the lab's
+  // needle (a non-identity env value, URL user info and query, static keys)
+  // never reaches an identity block.
+  const noIdentityNeedle = (where: string) => {
+    const text = [...document.querySelectorAll("[data-testid^='identity-']")].map((e) => e.textContent ?? "").join("\n");
+    if (text.includes("S5LABneedle")) throw new Error(`a protected value is in an identity block: ${where}`);
+  };
+  // a block read for its subject: a split inspector can still show the
+  // previous selection's block until the new selection lands
+  const identityShows = async (sel: string, subject: RegExp, what: string) => {
+    const end = Date.now() + 20_000;
+    for (;;) {
+      const b = $<HTMLElement>(sel);
+      const t = b?.textContent ?? "";
+      if (b && /Read at/.test(t) && subject.test(t)) return b;
+      if (Date.now() > end) throw new Error(`timed out after 20000ms waiting for ${what}; the block reads: ${(t || "none").slice(0, 200)}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  await step(steps, "Identity: a ServiceAccount", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "", version: "v1", plural: "serviceaccounts", kind: "ServiceAccount", scope: "Namespaced" });
+    useFleet.getState().openInstance("klyx-identity-lab", "irsa");
+    sized(await identityShows("[data-testid='identity-sa']", /role\/lab-current/, "the Identity block"), "the Identity block");
+    const stale = $("[data-testid='identity-reading-differs']")?.textContent ?? "";
+    if (!/role\/lab-old/.test(stale)) throw new Error(`the stale-role pod is not read as Differs: ${stale.slice(0, 200)}`);
+    if (!/Cloud trust/.test($("[data-testid='identity-limits']")?.textContent ?? "")) throw new Error("the limits are not said");
+    noIdentityNeedle("the ServiceAccount");
+    useFleet.getState().closeResource();
+  });
+  await step(steps, "Identity: a pod", async () => {
+    await open("pods");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: "klyx-identity-lab", name: "irsa-stale" });
+    await identityShows("[data-testid='identity-pod']", /irsa-stale[\s\S]*Differs: the pod carries arn:aws:iam::111122223333:role\/lab-old/, "irsa-stale's Differs reading");
+    noIdentityNeedle("the pod");
+  });
+  await step(steps, "Identity: an ESO store's subject", async () => {
+    await open("eso");
+    await closeDrawer();
+    (await within(4000, "the Stores view", () => byText<HTMLElement>("[aria-label='External Secrets view'] button", /^Stores/))).click();
+    (await within(8000, "the jwt store", () => byText<HTMLElement>(".lens-row", /aws-jwt/))).click();
+    await identityShows("[data-testid='identity-store-auth']", /role\/lab-current → arn:aws:iam::111122223333:role\/lab-hop → arn:aws:iam::111122223333:role\/lab-target/, "the jwt store's principal chain");
+    (await within(4000, "the controller store", () => byText<HTMLElement>(".lens-row", /aws-controller/))).click();
+    await identityShows("[data-testid='identity-store-auth']", /eso-standin as klyx-identity-lab\/eso-controller/, "the handling controller");
+    noIdentityNeedle("the stores");
+    (await within(4000, "the ExternalSecrets view", () => byText<HTMLElement>("[aria-label='External Secrets view'] button", /^ExternalSecrets/))).click();
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");

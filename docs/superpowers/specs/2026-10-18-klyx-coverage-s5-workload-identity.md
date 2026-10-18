@@ -298,3 +298,58 @@ The comparison uses exact retained values; display clipping comes after.
 | # | Finding | Where answered |
 |---|---|---|
 | 1 | The legacy Azure guards did not match ESO's branch: an `authSecretRef` without `clientId` is refused before the annotation; an empty store `tenantId` is no duplicate | §4.1: "The legacy Azure guards", in ESO's order, deterministic refusals apart from value-dependent ones; the new SDK's empty store tenant said; §8 the three regressions |
+
+## 13. As built (22acb85 to b4d5c96)
+
+**C2, `capability.Management`** (22acb85): `Manager` (self-hosted, platform, unknown) and `Observability` (observed, not observed), each with its evidence. `Unobserved()` and `HealthReading()` give §2's wording. Management is positive evidence only, and nothing reads it to suppress a fault.
+
+**`internal/identity`** (22acb85), pure:
+- **Values** (`values.go`): the named variable set is the only env kept. Each value is shape-checked (ARN, GUID, domain, region, token path); a URL-valued variable goes through `urlscrub`, so a documented URL is shown and anything else shows its origin with "(custom path, not shown)" or "(user info removed)". A value that fails its shape reads "unexpected value (not shown)" but still compares by its exact bytes, which never serialise.
+- **Declarations** (`declare.go`): the IRSA, Azure and GKE annotations, automount, and Azure's expiration range.
+- **Pods** (`pod.go`): each container's mechanisms through env, then mount (the longest mountPath, `subPath`; `subPathExpr` unresolved), then the projected token entry and its audience. Windows paths are normalised. The bounds of §6 apply, each with its cut said.
+- **The comparison** (`compare.go`): §3.3's rows per adapter, each naming what it compared.
+- **The node and webhook side** (`node.go`): §3.4 through C2.
+- **ESO** (`eso.go`): §4.1's decision table per provider and mode, in ESO's order. `ClassOf` reads each running pod's own `--controller-class`; `HandlersOf` applies ESO's ShouldProcessStore per pod before grouping by ServiceAccount.
+- **The reports** (`report.go`): one per inspector block, with the limits.
+
+**The reads** (30aaa60, `fleet/identity.go`) are as §6, and the budget holds:
+- the ServiceAccount and the pod are UID-fenced GETs;
+- the pods LIST uses the field selector with `limit=50`, and a continuation is "more, count unknown";
+- nodes, the agent's and the metadata server's pods, the webhook configurations, the ESO stores and the ReplicaSets come from the Observer's models, and only a live, complete model counts as read;
+- the agent DaemonSet is a GET, only when an AWS mechanism is in play;
+- ESO candidates are a label LIST (limit 3) plus a GET of the conventional Deployment, then each candidate's pods (limit 10). A pod counts toward its candidate only through its ReplicaSet owner's UID, and an unread ReplicaSets model fences nothing, so it names no handler.
+
+**appbridge** (30aaa60): `IdentityService` with `ServiceAccount`, `Pod` and `Store`. The reply's 256 KB bound drops pods from the end and says how many. A literal-needle test covers the boundary: no non-identity env value, no Secret value, and no credential planted in an allowed variable's URL user info or query crosses.
+
+**The frontend** (0db4d9a): the three blocks of §5:
+- the ServiceAccount's "Identity" in the generic inspector;
+- the pod's "Identity" in the Pods lens;
+- the store's "Authenticates as" in the External Secrets lens.
+
+Each block reads when its inspector opens, and "Read again" re-reads it in every state. A reply is held with the request it answers (cluster, object and UID, and the read number) and shown only under it. A reading that disagrees with its declaration carries the hollow look-at mark, and a broken node component the fault mark; nothing reaches Needs you. A pod opens UID-pinned in the Pods lens; a ServiceAccount opens in the generic inspector.
+
+**A deviation from §3.3: the GKE row on a cluster that is not GKE** (b4d5c96). The table said "Linked to G for impersonation" whenever the annotation is set. Only GKE's metadata server honours the link, so `Compare` now takes the platform the nodes show:
+- nodes read, none GKE (`gce://`): "Declares G, which only GKE's metadata server honours; no node of this cluster is a GKE node, so the annotation does nothing here", in secondary text;
+- nodes unread: the linked reading adds that whether this cluster is GKE is not known;
+- GKE: as §3.3.
+
+The lab-s5 captures found this on kind.
+
+**Found during the build:**
+- **The C2 side said its verdict twice** (b4d5c96). The evidence line now carries only the manager's and the observation's evidence.
+- **Re-opening the resource list already shown left it empty** (d143b09, pre-existing, in the store). Choosing the open list again reset its rows, but the list loads only when its cluster or GVR changes, so it stayed on skeleton rows. The shown list's read is now kept.
+
+**The lab** (scratchpad `lab-s5`, kind-klyx, fixtures per C6; every pod runs pause):
+- **ServiceAccounts:** IRSA, Azure (client and tenant), GKE, one with no annotations for Pod Identity, and the stand-in controller's (IRSA).
+- **Pods** in each webhook's documented shape:
+  - IRSA current, a stale role, created without the env, a skipped container, partial, and both AWS mechanisms in one container;
+  - Pod Identity with and without the pod label;
+  - Azure current, and Azure without the use label;
+  - a GKE-linked pod.
+- **The stand-ins:**
+  - an `eks-pod-identity-agent` DaemonSet in kube-system;
+  - a `pod-identity-webhook` configuration, URL-served, fail-open, whose object selector matches nothing;
+  - an ESO controller (`eso-standin`, `--controller-class=lab`) in the lab's namespace with only the chart's label. The ESO capability, keyed on external-secrets/external-secrets, therefore reads as before.
+- **Stores:** AWS jwt with `role` and `additionalRoles`, AWS without auth (the controller), another class, static keys, legacy Azure with and without a store tenant, and GCP workload identity. No ESO controller runs, so each store is given a Ready status, and the fixtures add nothing to Needs you.
+- **The needle** `S5LABneedle` sits in a non-identity env variable, in Pod Identity's URI user info, in Azure's authority-host query and in a static-key Secret.
+- **Not in the lab:** the lab's ESO CRDs are v1beta1 (controller-gen 0.16.5) without `useAzureSDK` or `gcpServiceAccountEmail`. The new Azure SDK and the GSA email override are covered by `internal/identity`'s tests only. So are Auto Mode, Fargate and GKE nodes, as §8 said.
