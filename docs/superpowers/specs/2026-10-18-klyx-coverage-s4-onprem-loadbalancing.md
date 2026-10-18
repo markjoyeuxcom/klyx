@@ -323,3 +323,101 @@ Every MetalLB join (an advertisement to a pool, a Service's requested pool, a Co
 |---|---|---|
 | 1 | The named-pool list was capped at 32 with no cut flag, so a pool named only at entry 33 could read "No advertisement selects it" | §5: a cut `ipAddressPools` list leaves the advertisement unresolved for every pool its retained names do not match; a retained exact name still proves selection. §7: the names-cut flag. §8: the 33rd-name regression and a name within the first 32 |
 | (own) | The lab's overlapping pool would be refused by MetalLB's webhook | §8: an input the webhook admits but the reconciler refuses (a BGPPeer password Secret of the wrong type), proven at build, else a fixture; §5 notes the webhook's namespace refusal |
+
+## 13. As built (42b321d to ef187bd)
+
+**`internal/lb`** (42b321d): the projections and the rules as §3 to §5.
+- **The projections:**
+  - MetalLB pools keep their labels sorted and capped, with the cut flagged.
+  - Advertisements keep their selectors whole, flagging a cut name list or selector.
+  - ConfigurationStates keep their result, error summary and conditions, scrubbed.
+  - Cilium pools keep the four conditions the rule reads, whole.
+- **Counts:** `Count` holds an exact `big.Int` or a state (missing, malformed or stale), and `CountsOf` fences each count by its own observedGeneration.
+- **Selection:** `Selects` uses `metav1.LabelSelectorAsSelector` and refuses another namespace. A selector that matches on retained labels proves selection only when no requirement could be falsified by a cut label (`NotIn`, `DoesNotExist`).
+- **The episode tracker:** `Tracker` keys episodes by UID and restarts every one on any change of `Continuity{Generation, Epoch}`.
+
+**A deviation from §3: where the tracker runs.** §3 put it "in `healthsrc`". An evaluator must stay pure, so the state lives elsewhere:
+- **`fleet/lbepisodes.go`** follows the Services kind with `WatchKind`, reads it with `VisitKind`, and feeds a live, complete snapshot to the pure tracker. Anything else (not live, not complete, or truncated) is a `Break`.
+- **The output** is published as `FactLBEpisodes`.
+- **`observe.KindState` gains `Epoch`** (58effc8): the continuity epoch that the ledger already kept. It advances on every recorded error and every complete list, so a relist or a gap restarts each episode as a lower bound.
+- **No episode yet:** a pending Service the tracker has not recorded reads a lower bound from the evaluation's own time.
+
+**A deviation from §5: the MetalLB rule's order.** §5 put "no count reported" first. As built, the order is:
+1. the instance namespace;
+2. Invalid configuration (withheld);
+3. the advertisements read;
+4. selection;
+5. counts;
+6. exhaustion.
+
+A missing count therefore never hides the configuration evidence. This is revision 2's Cilium ordering (a proven finding before an unrelated missing count) applied here too.
+
+**`healthsrc`** (58effc8, 24a2cc4):
+- **The Services projection:** a LoadBalancer Service keeps its class, families and policy, traffic policy, loadBalancerIP, the allowlisted address annotations, and its whole ingress and condition lists. A port error becomes `(set)`; a condition message is scrubbed. The lists are kept whole, and the rule classifies over all of them. Only the DTO caps them at 8 for display, so classification before the display cap holds by construction.
+- **The consumer:** the `loadbalancing` consumer is always yes, and only on Services (EndpointSlices keep their two consumers).
+- **The `lb` task:** the parts are `services`, `pools` and `metallb` (§2).
+- **The services part's dependencies:**
+  - DaemonSets, pods and nodes;
+  - the Warning-events snapshot;
+  - both pool kinds and ConfigurationStates;
+  - the facts `FactLBEpisodes` and `FactLB`.
+
+  The events read is "partial" when the 500-event snapshot is capped or stale: an absent event then proves nothing.
+- **Detection beyond §4's list:**
+  - kube-vip by pods running its image;
+  - the AWS Load Balancer Controller by its `elbv2.k8s.aws` CRDs;
+  - a cloud by a node's providerID scheme from a fixed list (`kind://` and `k3s://` are not clouds).
+- **The MetalLB controller task** (`capability.LoadBalancing`): Deployments by the native labels and the chart's, deduplicated. The controller issue follows the Velero pattern, and `FactLB` carries the controllers' namespaces (the instance namespace's fallback evidence).
+
+**The lens gate.** `LoadBalancingCapability.Present` is true when any of these holds:
+- MetalLB is detected;
+- the AWS Load Balancer Controller is detected;
+- Cilium is served (its LB IPAM pools come with it);
+- a LoadBalancer Service is seen. The tracker reports this from each complete live read, and the snapshot merges it.
+
+ServiceLB acts only on LoadBalancer Services, so they cover §6's "or ServiceLB is detected".
+
+**appbridge and the frontend** (a023184, 5468935):
+- **The DTOs:**
+  - Cilium counts travel as exact decimal strings;
+  - MetalLB counts keep their presence;
+  - the limits are said on every row.
+- **The AI allowlists** carry classes, states, counts, reasons and candidates. They never carry an address, hostname, address block, annotation value, requested pool name or event message, and a literal-needle test checks this at the serialised boundary.
+- **Chat** reads the `lb` verdicts for Services, pools and states.
+- **The lens** is the Load balancers lens in the Network group:
+  - **Services:** pending first, oldest first, with "≥" marking a lower-bound start;
+  - **Pools;**
+  - **MetalLB configuration:** shown with MetalLB's objects;
+  - **the drawing:** the class to controller to pool to address chain;
+  - **the inspectors:** each piece of evidence with its source, and the limits block.
+- **Describe:** a Service has no Describe item, because the describe table names no core kinds and never guesses a group.
+
+**Needs you.** §6 names three faults: a Service past the grace, a conflicting pool, an Invalid configuration. As every other lens does, the rule's degraded rows are Included too, so they reach Needs you as look-at entries, never as faults:
+- an exhausted pool;
+- an unadvertised MetalLB pool;
+- a port error;
+- a missing required family.
+
+**MetalLB's instance namespaces** (91622da) are known only from positive evidence: a controller ConfigurationState, or a complete controller read. An absent ConfigurationState kind (MetalLB before v0.15) proves nothing, so it never makes a pool read "no instance here".
+
+**Found during the build:**
+- **The re-probe never refreshed Velero's capability** (S2a): a server that went not ready after connect was never seen. `applyReprobe` now copies it (24a2cc4).
+- **From the live captures** (ef187bd):
+  - the expected-controller column now outranks the class;
+  - a pending Service's families read "requested", not "- · policy";
+  - the ServiceLB block shows only with svclb evidence or a detected ServiceLB;
+  - the no-advertisement reason no longer repeats the limit.
+
+**The lab** (scratchpad `lab-s4`, kind-klyx; the manifest's sha256 is checked before apply):
+- **A real MetalLB v0.16.1** on the kind network (192.168.97.0/24):
+  - `web` is allocated from `lab-s4-main`;
+  - `one-a` holds the one address of `lab-s4-one`, and MetalLB itself refuses `one-b` with `AllocationFailed ... no available IPs in pool lab-s4-one`;
+  - `silent` is allocated from `lab-s4-silent`, which no advertisement selects;
+  - the pool counts and both ConfigurationStates (controller, speaker) are written by MetalLB.
+- **Release** (`release.sh`): deleting the holder freed the address, and MetalLB gave it at once to a Service waiting on the same pool (its `IPAllocated` event). The counts stayed one assigned, because the address never sat free. A released address goes to whichever Service waits, so the script rebuilds the order from scratch.
+- **Invalid** (`invalid.sh on`): MetalLB's webhook admitted the BGPPeer whose password Secret is Opaque. The speaker's ConfigurationState then read `Invalid` ("secret type mismatch ... kubernetes.io/basic-auth is expected") while the controller's stayed `Valid`: separate writers, as §5 says. `off` restores Valid.
+- **Fixtures:**
+  - the Cilium pool CRD (from Cilium v1.20.3) with status-written pools: ok, conflict, full, and an IPv6 /64 with exact counts;
+  - Cilium's unsatisfied condition on a classed Service (MetalLB ignores another class);
+  - a stand-in svclb DaemonSet under the Service's generated name, whose pod a port-holder pod leaves Pending ("didn't have free ports").
+- **Not in the lab:** a k3s node version. The kubelet rewrites nodeInfo, so it is covered by `internal/lb`'s tests only. The Cilium CRD also makes `cilium.io` served on kind-klyx, so Cilium LB IPAM is listed as a candidate there; that is the detection rule, as §4 says.
