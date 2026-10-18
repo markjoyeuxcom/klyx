@@ -41,6 +41,11 @@ const LENSES: Record<string, Lens> = {
   "admissionregistration.k8s.io/mutatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
   "admissionregistration.k8s.io/validatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
   "admissionregistration.k8s.io/mutatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  // coverage S4: a Service opens in Resources (only a LoadBalancer has a
+  // verdict, and a hit does not carry the type)
+  "metallb.io/ipaddresspools": { task: "lb", part: "pools", label: "Load balancers" },
+  "cilium.io/ciliumloadbalancerippools": { task: "lb", part: "pools", label: "Load balancers" },
+  "metallb.io/configurationstates": { task: "lb", part: "metallb", label: "Load balancers" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;

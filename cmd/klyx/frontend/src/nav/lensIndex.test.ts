@@ -24,9 +24,9 @@ beforeEach(() => resetHealthStore());
 describe("lens index entries (§4.1)", () => {
   it("core tasks are lenses of their own; tool groups are one lens each; the browsers are two; index labels apply", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
-    const m = model(cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true }));
+    const m = model(cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, loadBalancingPresent: true }));
     expect(m.needsYou).toEqual([]);
-    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Upgrade check", "Workloads", "Pods", "Admission", "Karpenter", "Connectivity check", "Gateways and routes", "Hubble flows",
+    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Upgrade check", "Workloads", "Pods", "Admission", "Karpenter", "Connectivity check", "Gateways and routes", "Load balancers", "Hubble flows",
       "Access check", "Flux CD", "Argo CD", "cert-manager", "External Secrets", "Velero", "Helm", "API browser", "Resources"]);
     expect(m.absent).toEqual([]);
   });
@@ -54,8 +54,8 @@ describe("lens index entries (§4.1)", () => {
     expect(failed.absent).toEqual([]);
     const m = model(cl({ argoPresent: false }));
     expect(m.rest.some((e) => e.key === "lens:argo")).toBe(false);
-    expect(m.absent).toEqual(["Admission", "Karpenter", "Gateways and routes", "Hubble flows", "Argo CD", "cert-manager", "External Secrets", "Velero"]);
-    expect(absentLine(m.absent)).toBe("Admission, Karpenter, Gateways and routes, Hubble flows, Argo CD, cert-manager, External Secrets and Velero are not installed here, so they are not listed.");
+    expect(m.absent).toEqual(["Admission", "Karpenter", "Gateways and routes", "Load balancers", "Hubble flows", "Argo CD", "cert-manager", "External Secrets", "Velero"]);
+    expect(absentLine(m.absent)).toBe("Admission, Karpenter, Gateways and routes, Load balancers, Hubble flows, Argo CD, cert-manager, External Secrets and Velero are not installed here, so they are not listed.");
     expect(absentLine(["Argo CD"])).toBe("Argo CD is not installed here, so it is not listed.");
     expect(absentLine(["Argo CD", "Karpenter"])).toBe("Argo CD and Karpenter are not installed here, so they are not listed.");
     expect(absentLine([])).toBeNull();
@@ -126,7 +126,7 @@ describe("the current entry (§4.3)", () => {
 
   it("every registry task destination is reachable from an index entry or its lens", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
-    const c = cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true });
+    const c = cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, loadBalancingPresent: true });
     const reach = new Set<string>();
     for (const g of NAV_GROUPS) {
       for (const d of g.destinations.filter((x) => x.type === "task")) {

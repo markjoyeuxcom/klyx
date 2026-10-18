@@ -32,6 +32,8 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "externalsecrets", label: "ExternalSecrets", destinationId: "eso" }, { part: "stores", label: "Stores" }] },
   { task: "gateway", label: "Gateways", groupId: "network", destinationId: "gateway", cap: "gatewayAPI",
     parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "routes", label: "Routes" }] },
+  { task: "lb", label: "Load balancers", groupId: "network", destinationId: "loadbalancers", cap: "loadBalancing",
+    parts: [{ part: "services", label: "LoadBalancer Services", destinationId: "loadbalancers" }, { part: "pools", label: "Address pools" }, { part: "metallb", label: "MetalLB configuration" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
   { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
@@ -55,6 +57,8 @@ const KIND_LABELS: Record<string, string> = {
   issuers: "Issuers", clusterissuers: "ClusterIssuers", externalsecrets: "ExternalSecrets", secretstores: "SecretStores",
   clustersecretstores: "ClusterSecretStores", nodepools: "NodePools", nodeclaims: "NodeClaims",
   schedules: "Schedules", backupstoragelocations: "BackupStorageLocations", backups: "Backups",
+  ipaddresspools: "IPAddressPools", l2advertisements: "L2Advertisements", bgpadvertisements: "BGPAdvertisements",
+  configurationstates: "ConfigurationStates", ciliumloadbalancerippools: "CiliumLoadBalancerIPPools",
 };
 const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 

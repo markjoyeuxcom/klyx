@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -105,11 +105,20 @@ export const NAV_GROUPS: NavGroup[] = [
       // The list of Gateways and their routes; "Gateway topology" is the graph
       // a Gateway opens (UI review 2026-10-13).
       task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "envoy", "topology"] }),
+      // coverage S4: LoadBalancer Services and the on-prem controllers that
+      // serve them; read-only
+      task("loadbalancers", "Load balancers", section("loadbalancers"), { cap: "loadBalancing",
+        keywords: ["load balancer", "loadbalancer", "pending service", "external ip", "metallb", "cilium lb ipam", "ip pool", "servicelb", "kube-vip"] }),
       task("flows", "Hubble flows", section("flows"), { cap: "hubble", keywords: ["cilium", "drops"] }),
       res("Services", r("", "v1", "services", "Service", "Namespaced")),
       res("Ingresses", r("networking.k8s.io", "v1", "ingresses", "Ingress", "Namespaced")),
       res("NetworkPolicies", r("networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy", "Namespaced")),
       res("EndpointSlices", r("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", "Namespaced")),
+      res("IPAddressPools", r("metallb.io", "v1beta1", "ipaddresspools", "IPAddressPool", "Namespaced"), { cap: "metallb" }),
+      res("L2Advertisements", r("metallb.io", "v1beta1", "l2advertisements", "L2Advertisement", "Namespaced"), { cap: "metallb" }),
+      res("BGPAdvertisements", r("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisement", "Namespaced"), { cap: "metallb" }),
+      res("ConfigurationStates", r("metallb.io", "v1beta1", "configurationstates", "ConfigurationState", "Namespaced"), { cap: "metallb" }),
+      res("CiliumLoadBalancerIPPools", r("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPool", "Cluster"), { cap: "cilium" }),
       res("IngressClasses", r("networking.k8s.io", "v1", "ingressclasses", "IngressClass", "Cluster")),
       res("Gateways", r("gateway.networking.k8s.io", "v1", "gateways", "Gateway", "Namespaced"), { cap: "gatewayAPI" }),
       res("HTTPRoutes", r("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRoute", "Namespaced"), { cap: "gatewayAPI" }),
@@ -254,6 +263,8 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     karpenter: c.karpenterPresent ?? false,
     velero: c.veleroPresent ?? false,
     admission: c.admissionPresent ?? false,
+    loadBalancing: c.loadBalancingPresent ?? false,
+    metallb: c.metallbPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

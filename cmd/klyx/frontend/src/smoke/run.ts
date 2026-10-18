@@ -127,7 +127,7 @@ export const TITLES: Record<string, string | ((cluster: string) => string)> = {
   overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
   karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
   flux: "Flux CD", "flux-sources": "Flux CD", "flux-operator": "Flux CD", "flux-images": "Flux CD", "flux-composition": "Flux CD", "flux-notifications": "Flux CD", argo: "Argo CD", "argo-projects": "Argo CD",
-  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", helm: "Helm",
+  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", loadbalancers: "Load balancers", helm: "Helm",
   crds: "API browser", builtins: "Resources",
 };
 

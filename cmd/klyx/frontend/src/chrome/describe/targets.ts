@@ -47,6 +47,12 @@ const GROUPS: Record<string, string> = {
   Backup: "velero.io",
   Restore: "velero.io",
   BackupStorageLocation: "velero.io",
+  // load balancing (coverage S4)
+  IPAddressPool: "metallb.io",
+  L2Advertisement: "metallb.io",
+  BGPAdvertisement: "metallb.io",
+  ConfigurationState: "metallb.io",
+  CiliumLoadBalancerIPPool: "cilium.io",
   // admission (coverage S3a)
   ValidatingWebhookConfiguration: "admissionregistration.k8s.io",
   MutatingWebhookConfiguration: "admissionregistration.k8s.io",

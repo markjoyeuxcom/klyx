@@ -20,6 +20,7 @@ const OBJECT_KINDS: Record<string, string> = {
   schedules: "Schedule", backupstoragelocations: "BackupStorageLocation", backups: "Backup",
   validatingwebhookconfigurations: "ValidatingWebhookConfiguration", mutatingwebhookconfigurations: "MutatingWebhookConfiguration",
   validatingadmissionpolicies: "ValidatingAdmissionPolicy", mutatingadmissionpolicies: "MutatingAdmissionPolicy",
+  services: "Service", ipaddresspools: "IPAddressPool", ciliumloadbalancerippools: "CiliumLoadBalancerIPPool", configurationstates: "ConfigurationState",
 };
 
 /** kindOfRef: the object's kind from its GVR's resource, or "". */
@@ -31,13 +32,13 @@ const SELECTS = new Set([
   "workloads/workloads", "pods/pods", "nodes/nodes", "helm/releases", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers",
   "argo/applications", "argo/applicationsets", "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores",
   "gateway/gateways", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
-  "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies",
+  "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb",
 ]);
 export const selectsOnReveal = (task: string, part: string) => SELECTS.has(`${task}/${part}`);
 
 // The lens section (and route view) of each task.
-const SECTIONS: Record<string, "certs" | "externalsecrets" | "gatewayApi" | "karpenter" | "velero" | "admission"> = {
-  certs: "certs", eso: "externalsecrets", gateway: "gatewayApi", karpenter: "karpenter", velero: "velero", admission: "admission",
+const SECTIONS: Record<string, "certs" | "externalsecrets" | "gatewayApi" | "karpenter" | "velero" | "admission" | "loadbalancers"> = {
+  certs: "certs", eso: "externalsecrets", gateway: "gatewayApi", karpenter: "karpenter", velero: "velero", admission: "admission", lb: "loadbalancers",
 };
 
 export function reveal(cluster: string, task: string, part: string, ref: RevealRef): void {
