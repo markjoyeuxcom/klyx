@@ -49,8 +49,9 @@ type Mechanism struct {
 	// Missing names the absent link for a partial chain, or the unresolved
 	// value.
 	Missing string `json:"missing,omitempty"`
-	// Audience of the resolved token entry, when the chain reached one.
-	Audience string `json:"audience,omitempty"`
+	// Audience of the resolved token entry, when the chain reached one: its
+	// exact bytes compare, and only a policy-checked form is shown.
+	Audience *Value `json:"audience,omitempty"`
 	// The identifiers compared; a Value serialises only what may be shown.
 	Role   *Value `json:"role,omitempty"`
 	Client *Value `json:"client,omitempty"`
@@ -127,22 +128,25 @@ func PodOf(p *corev1.Pod) Pod {
 			out.OwnerUID = string(o.UID)
 		}
 	}
-	tokens := map[string][]tokenEntry{} // projected volume name -> token entries
+	vols := volumes{tokens: map[string][]tokenEntry{}, projected: map[string]bool{}, cut: map[string]bool{}}
 	sources := 0
 	for _, v := range p.Spec.Volumes {
 		if v.Projected == nil {
 			continue
 		}
+		vols.projected[v.Name] = true
 		for _, src := range v.Projected.Sources {
 			if src.ServiceAccountToken == nil {
 				continue
 			}
 			if sources == MaxVolumeSources {
-				out.VolumesCut = true
+				// this volume's later entries, and every later volume's,
+				// are not read: a token path in them is unresolved
+				out.VolumesCut, vols.cut[v.Name] = true, true
 				break
 			}
 			sources++
-			tokens[v.Name] = append(tokens[v.Name], tokenEntry{path: src.ServiceAccountToken.Path, audience: src.ServiceAccountToken.Audience})
+			vols.tokens[v.Name] = append(vols.tokens[v.Name], tokenEntry{path: src.ServiceAccountToken.Path, audience: src.ServiceAccountToken.Audience})
 		}
 	}
 	awsSkip := skipSet(p.Annotations[AnnAWSSkip], ",")
@@ -168,12 +172,12 @@ func PodOf(p *corev1.Pod) Pod {
 			out.ContainersCut = len(all) - MaxContainers
 			break
 		}
-		out.Containers = append(out.Containers, containerOf(e.c, e.init, tokens, awsSkip, azSkip, out.VolumesCut))
+		out.Containers = append(out.Containers, containerOf(e.c, e.init, vols, awsSkip, azSkip))
 	}
 	return out
 }
 
-func containerOf(c corev1.Container, init bool, tokens map[string][]tokenEntry, awsSkip, azSkip map[string]bool, volumesCut bool) Container {
+func containerOf(c corev1.Container, init bool, vols volumes, awsSkip, azSkip map[string]bool) Container {
 	out := Container{Name: c.Name, Init: init, EnvFrom: len(c.EnvFrom) > 0, SkippedAWS: awsSkip[c.Name], SkippedAzure: azSkip[c.Name]}
 	for _, e := range c.Env {
 		if !identityEnv[e.Name] {
@@ -198,7 +202,7 @@ func containerOf(c corev1.Container, init bool, tokens map[string][]tokenEntry, 
 		}
 		out.Env[e.Name] = ev
 	}
-	ch := chainer{mounts: c.VolumeMounts, tokens: tokens, volumesCut: volumesCut}
+	ch := chainer{mounts: c.VolumeMounts, vols: vols}
 	if m, ok := mechanismOf(MechIRSA, out.Env, []string{EnvRoleARN, EnvWebTokenFile}, EnvWebTokenFile, "", ch); ok {
 		m.Role = valPtr(out.Env, EnvRoleARN)
 		out.Mechanisms = append(out.Mechanisms, m)
@@ -258,52 +262,79 @@ func mechanismOf(kind string, env map[string]EnvValue, vars []string, fileVar, w
 	case gap != "":
 		m.State, m.Missing = ChainPartial, gap
 	case want != "" && aud != want:
-		m.State, m.Missing, m.Audience = ChainPartial, "the token's audience is "+audienceShown(aud)+", not "+want, aud
+		m.State, m.Missing, m.Audience = ChainPartial, "the token's audience is "+audienceShown(aud)+", not "+want, audienceValue(aud)
 	default:
-		m.State, m.Audience = ChainComplete, aud
+		m.State, m.Audience = ChainComplete, audienceValue(aud)
 	}
 	return m, true
 }
 
-func audienceShown(a string) string {
+// audienceValue is a token entry's audience: compared by its exact bytes,
+// shown only in a token's shape (S5 §7); empty is the API server's own.
+func audienceValue(a string) *Value {
 	if a == "" {
-		return "the API server's own"
+		return &Value{Shown: "the API server's own"}
 	}
 	v := valueOf(a, shapeToken)
-	return v.Shown
+	return &v
 }
+
+func audienceShown(a string) string { return audienceValue(a).Shown }
 
 const (
 	errUnresolvedMount = "a mount uses subPathExpr, resolved only at runtime"
 	errVolumesCut      = "the pod's projected volumes were cut at the bound, so the token was not read"
 )
 
+// volumes is what a pod's projected volumes hold, as far as they were read.
+type volumes struct {
+	tokens    map[string][]tokenEntry // volume name -> retained token entries
+	projected map[string]bool         // every projected volume, read or not
+	cut       map[string]bool         // a volume whose entries the bound cut
+}
+
 // chainer resolves a token file through a container's mounts to a
 // projected serviceAccountToken entry (S5 §3.2).
 type chainer struct {
-	mounts     []corev1.VolumeMount
-	tokens     map[string][]tokenEntry
-	volumesCut bool
+	mounts []corev1.VolumeMount
+	vols   volumes
 }
 
-// normalise turns a Windows path (C:\var\run\...) into the slash form the
-// mounts use, for matching.
-func normalise(p string) string {
-	if len(p) > 2 && p[1] == ':' {
-		p = p[2:]
+// splitDrive turns a Windows path (D:\var\run\...) into its lower-case
+// drive and the slash form the mounts use; a path without a drive has "".
+func splitDrive(p string) (string, string) {
+	drive := ""
+	if len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) {
+		drive, p = strings.ToLower(p[:1]), p[2:]
 	}
-	return strings.ReplaceAll(p, "\\", "/")
+	return drive, path.Clean("/" + strings.ReplaceAll(p, "\\", "/"))
+}
+
+// sameDrive: a path without a drive is on C:, Windows' default; two drives
+// must be the same drive.
+func sameDrive(a, b string) bool {
+	if a == "" {
+		a = "c"
+	}
+	if b == "" {
+		b = "c"
+	}
+	return a == b
 }
 
 // resolve returns the token's audience, or the missing link.
 func (c chainer) resolve(file string) (string, string) {
-	f := path.Clean(normalise(file))
+	fd, f := splitDrive(file)
 	var best *corev1.VolumeMount
+	bestPath := ""
 	for i := range c.mounts {
-		mp := path.Clean(normalise(c.mounts[i].MountPath))
+		md, mp := splitDrive(c.mounts[i].MountPath)
+		if !sameDrive(fd, md) {
+			continue
+		}
 		if f == mp || strings.HasPrefix(f, strings.TrimSuffix(mp, "/")+"/") {
-			if best == nil || len(mp) > len(path.Clean(normalise(best.MountPath))) {
-				best = &c.mounts[i]
+			if best == nil || len(mp) > len(bestPath) {
+				best, bestPath = &c.mounts[i], mp
 			}
 		}
 	}
@@ -313,21 +344,21 @@ func (c chainer) resolve(file string) (string, string) {
 	if best.SubPathExpr != "" {
 		return "", errUnresolvedMount
 	}
-	rel := strings.TrimPrefix(strings.TrimPrefix(f, path.Clean(normalise(best.MountPath))), "/")
+	rel := strings.TrimPrefix(strings.TrimPrefix(f, bestPath), "/")
 	if best.SubPath != "" {
 		rel = path.Join(best.SubPath, rel)
 	}
-	entries, ok := c.tokens[best.Name]
-	if !ok {
-		if c.volumesCut {
-			return "", errVolumesCut
-		}
-		return "", "the mounted volume " + best.Name + " is not a projected token volume"
-	}
-	for _, e := range entries {
+	for _, e := range c.vols.tokens[best.Name] {
 		if path.Clean(e.path) == path.Clean(rel) {
 			return e.audience, ""
 		}
+	}
+	switch {
+	case !c.vols.projected[best.Name]:
+		return "", "the mounted volume " + best.Name + " is not a projected token volume"
+	case c.vols.cut[best.Name]:
+		// its entries past the bound were not read: absence proves nothing
+		return "", errVolumesCut
 	}
 	return "", "the volume " + best.Name + " has no token at that path"
 }

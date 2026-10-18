@@ -83,7 +83,10 @@ func PodIdentityNode(n *NodeInfo, agentPods []ComponentPod, agentRead bool) Side
 	return s
 }
 
-// GKENode is the node side of a pod on GKE (S5 §3.4, C2's table).
+// GKENode is the node side of a pod on GKE (S5 §3.4, C2's table). The
+// manager is the platform only on C2's evidence: a gke-metadata-server pod
+// on this gce:// node. Without that pod, who runs the metadata server is
+// unknown.
 func GKENode(n *NodeInfo, mdPods []ComponentPod, read bool) Side {
 	s := Side{Component: componentMetadata}
 	if n == nil {
@@ -92,23 +95,20 @@ func GKENode(n *NodeInfo, mdPods []ComponentPod, read bool) Side {
 		return s
 	}
 	gce := strings.HasPrefix(n.ProviderID, "gce://")
-	mgr, mev := capability.ManagerUnknown, "the node is not a gce:// node"
-	if gce {
-		mgr, mev = capability.ManagerPlatform, "a gke-metadata-server pod in kube-system, on a gce:// node"
-	}
 	if n.Labels[LabelGKEMetadata] == "true" {
 		s.Note = "the node carries " + LabelGKEMetadata + `: "true"`
 	} else {
 		s.Note = "the node does not carry " + LabelGKEMetadata + `: "true"`
 	}
 	if n.OS == "windows" {
-		s.Management = capability.Management{Manager: mgr, ManagerEvidence: mev, Observed: capability.NotObserved,
-			ObservedEvidence: "on Windows nodes the metadata server is a native Windows service, so no pod is expected"}
+		s.Management = capability.Management{Manager: capability.ManagerUnknown, ManagerEvidence: "on Windows nodes the metadata server is a native Windows service, so no pod shows who runs it",
+			Observed: capability.NotObserved, ObservedEvidence: "on Windows nodes the metadata server is a native Windows service, so no pod is expected"}
 		s.Health = "runs as a Windows service; not directly observed"
 		return s
 	}
-	s.Management = capability.Management{Manager: mgr, ManagerEvidence: mev, Observed: capability.Observed, ObservedEvidence: "its pod on this node"}
 	if !read {
+		s.Management = capability.Management{Manager: capability.ManagerUnknown, ManagerEvidence: "the metadata server's pods were not read",
+			Observed: capability.NotObserved, ObservedEvidence: "the metadata server's pods were not read"}
 		s.Health = "the metadata server's pods were not read"
 		return s
 	}
@@ -116,6 +116,11 @@ func GKENode(n *NodeInfo, mdPods []ComponentPod, read bool) Side {
 		if p.Node != n.Name {
 			continue
 		}
+		mgr, mev := capability.ManagerUnknown, "a gke-metadata-server pod on a node that is not gce://"
+		if gce {
+			mgr, mev = capability.ManagerPlatform, "a gke-metadata-server pod in kube-system on this gce:// node"
+		}
+		s.Management = capability.Management{Manager: mgr, ManagerEvidence: mev, Observed: capability.Observed, ObservedEvidence: "its pod on this node"}
 		if p.Ready {
 			s.Health = "metadata server pod " + p.Name + " is ready on this node"
 		} else {
@@ -123,6 +128,8 @@ func GKENode(n *NodeInfo, mdPods []ComponentPod, read bool) Side {
 		}
 		return s
 	}
+	s.Management = capability.Management{Manager: capability.ManagerUnknown, ManagerEvidence: "no gke-metadata-server pod on this node",
+		Observed: capability.Observed, ObservedEvidence: "the metadata server's pods were read"}
 	s.Health = "no metadata server pod on this node"
 	return s
 }

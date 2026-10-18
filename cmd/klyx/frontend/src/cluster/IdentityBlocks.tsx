@@ -45,7 +45,12 @@ function Declarations({ d }: { d: IdDeclared }) {
   const rows: [string, string][] = [];
   if (d.roleArn) rows.push(["AWS role (IRSA)", d.roleArn.shown + (d.audience ? ` · audience ${d.audience.shown}` : "")]);
   if (d.azureClient) rows.push(["Azure client ID", d.azureClient.shown + (d.azureTenant ? ` · tenant ${d.azureTenant.shown}` : "")]);
-  if (d.azureExpiryOutOfRange) rows.push(["Azure token expiration", "outside 3600-86400: the webhook rejects such pods"]);
+  if (d.stsRegional) rows.push(["AWS STS regional endpoints", d.stsRegional.shown]);
+  if (d.tokenExpiry) rows.push(["AWS token expiration", d.tokenExpiry.unexpected ? d.tokenExpiry.shown : `${d.tokenExpiry.shown}s`]);
+  if (d.azureExpiry || d.azureExpiryOutOfRange) {
+    const v = d.azureExpiry ? (d.azureExpiry.unexpected ? d.azureExpiry.shown : `${d.azureExpiry.shown}s`) : "";
+    rows.push(["Azure token expiration", d.azureExpiryOutOfRange ? `${v ? `${v}: ` : ""}outside 3600-86400: the webhook rejects such pods` : v]);
+  }
   if (d.gkeServiceAccount) rows.push(["GKE linked account", d.gkeServiceAccount.shown]);
   return (
     <div className="insp-kv" data-testid="identity-declared">
@@ -95,7 +100,9 @@ function PodEvidence({ r, open }: { r: IdPodReport; open?: (p: IdPod) => void })
         {open ? <button onClick={() => open(p)} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", font: "inherit" }}>{p.name}</button> : p.name}
         <span className="t-secondary"> · created {clock(p.created)}{p.node ? ` · on ${p.node}` : ""}{p.containersCut ? ` · ${p.containersCut} containers not read` : ""}{p.volumesCut ? " · volumes cut at the bound" : ""}</span>
       </div>
-      {(r.readings ?? []).length === 0 ? <div className="t-secondary">No identity configured, and none declared.</div> : (r.readings ?? []).map((x, i) => <ReadingLine key={i} r={x} />)}
+      {!r.compared ? <div className="t-secondary" data-testid="identity-uncompared">Not compared: its ServiceAccount was not read. In its spec: {mechText(p)}.</div>
+        : (r.readings ?? []).length === 0 ? <div className="t-secondary">No identity configured, and none declared.</div>
+        : (r.readings ?? []).map((x, i) => <ReadingLine key={i} r={x} />)}
       {(r.nodes ?? []).map((s, i) => <SideLine key={i} s={s} />)}
     </div>
   );
@@ -144,20 +151,21 @@ export function ServiceAccountIdentity({ cluster, namespace, name, uid, active }
           : r && <>
             {r.declared && <Declarations d={r.declared} />}
             <div className="t-legend" style={{ marginTop: 6 }}>Pods using it</div>
-            {r.podsRead === "unreadable" ? <div className="t-secondary">Its pods could not be read: none can be said to exist or not.</div>
-              : r.pods.length === 0 ? <div className="t-secondary">No pods run as this ServiceAccount.</div>
-              : <>
-                {r.podsRead === "more" && <div className="t-secondary">More pods than the {r.pods.length + (dto.podsDropped ?? 0)} read; the count is unknown. The page is the first by name, newest first within it.</div>}
-                {(dto.podsDropped ?? 0) > 0 && <div className="t-secondary">{dto.podsDropped} pods not shown (the reply's bound).</div>}
-                {r.pods.map((p) => <PodEvidence key={p.pod.uid} r={p} open={openPod(cluster)} />)}
-              </>}
+            {/* the omission notices stand on their own: a list emptied by the
+                reply's bound is never "no pods" */}
+            {r.podsRead === "unreadable" && <div className="t-secondary">Its pods could not be read: none can be said to exist or not.</div>}
+            {r.podsRead === "more" && <div className="t-secondary" data-testid="identity-pods-more">More pods than the {r.pods.length + (dto.podsDropped ?? 0)} read; the count is unknown. The page is the first by name, newest first within it.</div>}
+            {(dto.podsDropped ?? 0) > 0 && <div className="t-secondary" data-testid="identity-pods-dropped">{dto.podsDropped} pods not shown: read, but past the reply's bound.</div>}
+            {r.podsRead === "complete" && r.pods.length === 0 && !(dto.podsDropped ?? 0) && <div className="t-secondary">No pods run as this ServiceAccount.</div>}
+            {r.pods.map((p) => <PodEvidence key={p.pod.uid} r={p} open={openPod(cluster)} />)}
             {(r.webhooks ?? []).length > 0 && <><div className="t-legend" style={{ marginTop: 6 }}>Webhooks</div>{r.webhooks!.map((s, i) => <SideLine key={i} s={s} />)}</>}
-            {(r.stores.length > 0 || r.storesRead === "more") && <div className="t-legend" style={{ marginTop: 6 }}>External Secrets stores using it</div>}
+            {(r.stores.length > 0 || r.storesRead === "unread" || r.storesRead === "partial") && <div className="t-legend" style={{ marginTop: 6 }}>External Secrets stores using it</div>}
+            {r.storesRead === "unread" && <div className="t-secondary" data-testid="identity-stores-unread">{r.storesGap ?? "The stores were not read"}: any that use this ServiceAccount are not known.</div>}
+            {r.storesRead === "partial" && <div className="t-secondary" data-testid="identity-stores-partial">{r.storesGap}.</div>}
             {r.stores.map((s) => (
               <div key={s.uid} className="t-body" data-testid="identity-store">{s.kind} {s.namespace ? `${s.namespace}/` : ""}{s.name}
                 <span className="t-secondary"> · {s.provider} {s.mode} · {s.via === "controller" ? "no auth: the controller runs as this ServiceAccount" : s.referent ? "for ExternalSecrets in this namespace" : "serviceAccountRef"}</span></div>
             ))}
-            {r.storesRead === "more" && <div className="t-secondary">The stores were not read completely.</div>}
             {r.storesRead === "cut" && <div className="t-secondary">More stores than shown.</div>}
             <Limits limits={r.limits} />
           </>}
@@ -180,6 +188,7 @@ export function PodIdentity({ cluster, namespace, name, uid, active }: { cluster
           : r && <>
             {r.declared ? <div className="t-body">ServiceAccount <button onClick={() => openServiceAccount(r.declared!.namespace, r.declared!.name)} style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", font: "inherit" }}>{r.declared.name}</button></div>
               : <div className="t-secondary">Its ServiceAccount could not be read ({r.saState}): nothing is compared.</div>}
+            {(dto.containersDropped ?? 0) > 0 && <div className="t-secondary" data-testid="identity-containers-dropped">{dto.containersDropped} containers' evidence not shown (the reply's bound); their readings are.</div>}
             {r.report && <PodEvidence r={r.report} />}
             {(r.webhooks ?? []).map((s, i) => <SideLine key={i} s={s} />)}
             <Limits limits={r.limits} />
@@ -233,6 +242,8 @@ export function StoreAuthenticatesAs({ cluster, kind, namespace, name, uid, acti
                   </div>
                 ))}
               {(r.handlers.groups ?? []).length > 1 && <div className="t-secondary">Several controllers handle this store; each authenticates as its own identity.</div>}
+              {(r.handlers.notRunning ?? []).length > 0 && <div className="t-secondary" data-testid="identity-handler-not-running">Not counted, not running yet: {r.handlers.notRunning!.join(", ")}.</div>}
+              {(dto.podsDropped ?? 0) > 0 && <div className="t-secondary" data-testid="identity-handler-dropped">{dto.podsDropped} controller pods not shown: read, but past the reply's bound.</div>}
             </>}
             {(r.envGaps ?? []).map((x) => <div key={x} className="t-secondary">{x}</div>)}
             <Limits limits={r.limits} />

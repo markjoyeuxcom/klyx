@@ -70,6 +70,28 @@ func mechOf(c Container, kind string) *Mechanism {
 	return nil
 }
 
+// bothAWS reads a container with both AWS mechanisms by each one's own
+// state: "configured" only for a complete chain.
+func bothAWS(r Reading, irsa, pi *Mechanism) Reading {
+	const sdk = " Which credential the SDK uses is not inferred."
+	irsaOK, piOK := irsa.State == ChainComplete, pi.State == ChainComplete
+	switch {
+	case irsaOK && piOK:
+		r.State, r.Text = StateBothAWS, "Both IRSA and EKS Pod Identity are configured in this container."+sdk
+	case irsaOK:
+		r.State, r.Text = StateBothAWS, "IRSA is configured; EKS Pod Identity is also present but "+pi.State+": "+pi.Missing+"."+sdk
+	case piOK:
+		r.State, r.Text = StateBothAWS, "EKS Pod Identity is configured; IRSA is also present but "+irsa.State+": "+irsa.Missing+"."+sdk
+	default:
+		r.State = StatePartial
+		if irsa.State == ChainUnresolved || pi.State == ChainUnresolved {
+			r.State = StateUnresolved
+		}
+		r.Text = "Neither AWS mechanism is complete: IRSA " + irsa.State + " (" + irsa.Missing + "); EKS Pod Identity " + pi.State + " (" + pi.Missing + "); nothing is compared."
+	}
+	return r
+}
+
 func chainReading(adapter, container string, m *Mechanism) Reading {
 	if m.State == ChainUnresolved {
 		return Reading{Adapter: adapter, Container: container, State: StateUnresolved, Text: "Unresolved: " + m.Missing + "; nothing is compared."}
@@ -77,20 +99,35 @@ func chainReading(adapter, container string, m *Mechanism) Reading {
 	return Reading{Adapter: adapter, Container: container, State: StatePartial, Text: "Partial: " + m.Missing + "; nothing is compared."}
 }
 
-// Platform is what the nodes say of the cluster, for the GKE reading: only
-// the GKE metadata server honours a linked Google service account.
-type Platform string
+// Platform is what the nodes show of the cluster, for the GKE reading:
+// only GKE's metadata server honours a linked Google service account.
+type Platform struct {
+	Kind string // gke, other or unverified
+	Why  string // for unverified: why GKE is neither proven nor ruled out
+}
 
 const (
-	PlatformGKE    Platform = "gke"    // a node with a gce:// provider ID
-	PlatformOther  Platform = "other"  // the nodes were read and none is GKE
-	PlatformUnread Platform = "unread" // the nodes were not read
+	platformGKE        = "gke"
+	platformOther      = "other"
+	platformUnverified = "unverified"
 )
+
+var (
+	// PlatformGKE: a gce:// node with GKE's own evidence (its node-pool
+	// label, or a gke-metadata-server pod on it).
+	PlatformGKE = Platform{Kind: platformGKE}
+	// PlatformOther: every node read has a provider ID and none is a Google
+	// Compute (gce://) node, which every GKE node is.
+	PlatformOther = Platform{Kind: platformOther}
+)
+
+// PlatformUnverified: the nodes do not settle it, and why.
+func PlatformUnverified(why string) Platform { return Platform{Kind: platformUnverified, Why: why} }
 
 // Compare reads every container of a pod against the ServiceAccount's
 // current declarations, on a cluster of the given platform.
 func Compare(d Declared, p Pod, pl Platform) []Reading {
-	var out []Reading
+	out := []Reading{} // compared: empty is "nothing configured", never unread
 	for _, c := range p.Containers {
 		if r, ok := compareAWS(d, p, c); ok {
 			out = append(out, r)
@@ -99,7 +136,7 @@ func Compare(d Declared, p Pod, pl Platform) []Reading {
 			out = append(out, r)
 		}
 	}
-	if d.GKEServiceAccount != nil || pl == PlatformGKE {
+	if d.GKEServiceAccount != nil || pl.Kind == platformGKE {
 		out = append(out, compareGKE(d, p, pl))
 	}
 	return out
@@ -110,8 +147,7 @@ func compareAWS(d Declared, p Pod, c Container) (Reading, bool) {
 	r := Reading{Adapter: AdapterAWS, Container: c.Name}
 	switch {
 	case irsa != nil && pi != nil:
-		r.State, r.Text = StateBothAWS, "Both IRSA and EKS Pod Identity are configured in this container; which credential the SDK uses is not inferred."
-		return r, true
+		return bothAWS(r, irsa, pi), true
 	case pi != nil:
 		if pi.State != ChainComplete {
 			return chainReading(AdapterAWS, c.Name, pi), true
@@ -130,7 +166,7 @@ func compareAWS(d Declared, p Pod, c Container) (Reading, bool) {
 			r.State, r.Text = StateUndeclared, "Configured with "+irsa.Role.Shown+"; the ServiceAccount declares no role now (removed later, set in the template, or a self-hosted webhook's ConfigMap)."
 			return r, true
 		}
-		roleOK, audOK := irsa.Role.Equal(*d.RoleARN), irsa.Audience == d.DeclaredAudience()
+		roleOK, audOK := irsa.Role.Equal(*d.RoleARN), irsa.Audience != nil && irsa.Audience.raw == d.DeclaredAudience()
 		switch {
 		case roleOK && audOK:
 			r.State, r.Text = StateMatch, "Role and audience match the ServiceAccount."
@@ -138,7 +174,7 @@ func compareAWS(d Declared, p Pod, c Container) (Reading, bool) {
 			r.State, r.Text = StateDiffers, "Differs: the pod carries "+irsa.Role.Shown+"; the ServiceAccount now declares "+d.RoleARN.Shown+
 				". Pods take identity when created; one created before the change keeps the old role. A value set in the pod template also wins over the webhook."
 		default:
-			r.State, r.Text = StateDiffers, "Differs: the token's audience is "+audienceShown(irsa.Audience)+"; the ServiceAccount now asks for "+audienceShown(d.DeclaredAudience())+"."
+			r.State, r.Text = StateDiffers, "Differs: the token's audience is "+irsa.Audience.Shown+"; the ServiceAccount now asks for "+audienceShown(d.DeclaredAudience())+"."
 		}
 		return r, true
 	}
@@ -199,14 +235,14 @@ func compareAzure(d Declared, p Pod, c Container) (Reading, bool) {
 func compareGKE(d Declared, p Pod, pl Platform) Reading {
 	r := Reading{Adapter: AdapterGKE}
 	switch {
-	case d.GKEServiceAccount != nil && pl == PlatformOther:
-		r.State, r.Text = StateNotGKE, "Declares "+d.GKEServiceAccount.Shown+", which only GKE's metadata server honours; no node of this cluster is a GKE node (gce://), so the annotation does nothing here."
+	case d.GKEServiceAccount != nil && pl.Kind == platformOther:
+		r.State, r.Text = StateNotGKE, "Declares "+d.GKEServiceAccount.Shown+", which only GKE's metadata server honours. Every node read has a provider ID and none is a Google Compute (gce://) node, as every GKE node is, so the annotation does nothing here."
 	case p.HostNetwork:
 		r.State, r.Text = StateHostNetwork, "This pod runs on the host network, so it does not use Workload Identity Federation for GKE."
 	case d.GKEServiceAccount != nil:
 		r.State, r.Text = StateLinked, "Linked to "+d.GKEServiceAccount.Shown+" for impersonation; the IAM binding is not visible."
-		if pl == PlatformUnread {
-			r.Text += " The nodes were not read, so whether this cluster is GKE is not known."
+		if pl.Kind == platformUnverified {
+			r.Text += " Whether this cluster is GKE is not verified: " + pl.Why + "."
 		}
 	default:
 		r.State, r.Text = StateUnlinked, "No link declared; direct principal access may still be granted in IAM, which Klyx cannot see."

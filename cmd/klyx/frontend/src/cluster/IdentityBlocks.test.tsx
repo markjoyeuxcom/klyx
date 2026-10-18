@@ -17,7 +17,7 @@ const pod = (name: string, over: Partial<IdPod> = {}): IdPod => ({ namespace: "a
   azureOptIn: false, containers: [{ name: "app" }], ...over });
 const side = (over: Partial<IdSide> = {}): IdSide => ({ component: "eks-pod-identity-agent", health: "running on n1",
   management: { manager: "unknown", managerEvidence: "the add-on's labels are not verified", observed: "observed", observedEvidence: "its pod on this node" }, ...over });
-const report = (p: IdPod, readings: IdPodReport["readings"], nodes?: IdSide[]): IdPodReport => ({ pod: p, readings, nodes });
+const report = (p: IdPod, readings: IdPodReport["readings"], nodes?: IdSide[]): IdPodReport => ({ pod: p, compared: readings !== null, readings, nodes });
 const LIMIT = "cloud trust, associations and permissions are not visible";
 const saDTO = (uid: string, over: Partial<SAIdentityDTO["report"]> = {}, dto: Partial<SAIdentityDTO> = {}): SAIdentityDTO => ({ cluster: "c", namespace: "app", name: "web", uid,
   report: { readAt: "2026-10-18T09:00:00Z", state: "read", declared: { namespace: "app", name: "web", uid, roleArn: { shown: "arn:aws:iam::123456789012:role/web" } },
@@ -95,7 +95,8 @@ describe("identity blocks (coverage S5 §5)", () => {
       report: { readAt: "2026-10-18T09:00:00Z", state: "read", saState: "not-found", report: report(pod("a"), null), limits: [LIMIT] } });
     render(<PodIdentity cluster="c" namespace="app" name="a" uid="u-a" active />);
     await waitFor(() => expect(screen.getByTestId("identity-pod").textContent).toContain("nothing is compared"));
-    expect(screen.getByTestId("identity-pod").textContent).toContain("No identity configured");
+    expect(screen.getByTestId("identity-uncompared").textContent).toContain("its ServiceAccount was not read");
+    expect(screen.getByTestId("identity-pod").textContent).not.toContain("No identity configured");
 
     saReply = async (_c, _ns, _n, u) => saDTO(u, { pods: [report(pod("a"), [])] });
     render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
@@ -136,5 +137,55 @@ describe("identity blocks (coverage S5 §5)", () => {
     render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
     await waitFor(() => expect(screen.getByTestId("identity-sa").textContent).toContain("replaced since it was opened"));
     expect(screen.queryByTestId("identity-declared")).toBeNull();
+  });
+
+  // review 1 (#8, #9): unread or uncompared is never "none"; omissions are
+  // said whatever the list's length; every retained declaration is shown
+  it("an uncompared pod says so and shows what its spec carries, never 'no identity configured'", async () => {
+    const irsa = pod("a", { containers: [{ name: "app", mechanisms: [{ kind: "irsa", state: "complete", role: { shown: "arn:aws:iam::123456789012:role/web" } }] }] });
+    podReply = async (c, ns, n, u) => ({ cluster: c, namespace: ns, name: n, uid: u,
+      report: { readAt: "2026-10-18T09:00:00Z", state: "read", saState: "unreadable", report: report(irsa, null), limits: [] } });
+    render(<PodIdentity cluster="c" namespace="app" name="a" uid="u-a" active />);
+    const u = await screen.findByTestId("identity-uncompared");
+    expect(u.textContent).toContain("irsa arn:aws:iam::123456789012:role/web");
+    expect(screen.getByTestId("identity-pod").textContent).not.toContain("No identity configured");
+  });
+
+  it("pods all dropped by the reply's bound, or a continued page, never read as 'no pods'", async () => {
+    saReply = async (_c, _ns, _n, u) => saDTO(u, { pods: [], podsRead: "more" }, { podsDropped: 3 });
+    render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
+    await screen.findByTestId("identity-pods-dropped");
+    expect(screen.getByTestId("identity-pods-more")).toBeTruthy();
+    expect(screen.getByTestId("identity-sa").textContent).not.toContain("No pods run");
+  });
+
+  it("the stores' read state is said: unread and a partial controller join", async () => {
+    saReply = async (_c, _ns, _n, u) => saDTO(u, { storesRead: "unread", storesGap: "the External Secrets stores are not read live and completely" });
+    const { unmount } = render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
+    expect((await screen.findByTestId("identity-stores-unread")).textContent).toContain("are not known");
+    unmount();
+    saReply = async (_c, _ns, _n, u) => saDTO(u, { storesRead: "partial", storesGap: "Not known for 1 store(s) without auth, whose handling controller is not resolved: SecretStore app/x (no running controller pod)" });
+    render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
+    expect((await screen.findByTestId("identity-stores-partial")).textContent).toContain("SecretStore app/x");
+  });
+
+  it("every retained declaration is shown, with its validation", async () => {
+    saReply = async (_c, _ns, _n, u) => saDTO(u, { declared: { namespace: "app", name: "web", uid: u, stsRegional: { shown: "true" }, tokenExpiry: { shown: "86400" },
+      azureExpiry: { shown: "90000" }, azureExpiryOutOfRange: true } });
+    render(<ServiceAccountIdentity cluster="c" namespace="app" name="web" uid="sa-1" active />);
+    const d = await screen.findByTestId("identity-declared");
+    expect(d.textContent).toContain("AWS STS regional endpointstrue");
+    expect(d.textContent).toContain("AWS token expiration86400s");
+    expect(d.textContent).toContain("90000s: outside 3600-86400");
+    expect(d.textContent).not.toContain("no identity annotations");
+  });
+
+  it("a store says the controller pods not yet running and those dropped by the bound", async () => {
+    storeReply = async (c, k, ns, n, u) => ({ cluster: c, kind: k, namespace: ns, name: n, uid: u, podsDropped: 4, report: { readAt: "2026-10-18T09:00:00Z", state: "read",
+      subject: { provider: "aws", mode: "default", base: "the handling controller's credential chain", controller: true },
+      handlers: { groups: [{ namespace: "eso", serviceAccount: "sa", candidate: "eso/eso", pods: [] }], notRunning: ["eso-new (Pending)"] }, limits: [] } });
+    render(<StoreAuthenticatesAs cluster="c" kind="SecretStore" namespace="app" name="s" uid="s1" active />);
+    expect((await screen.findByTestId("identity-handler-not-running")).textContent).toContain("eso-new (Pending)");
+    expect(screen.getByTestId("identity-handler-dropped").textContent).toContain("4 controller pods");
   });
 });

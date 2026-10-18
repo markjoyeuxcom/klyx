@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,19 +246,20 @@ func (c *ClusterConn) ServiceAccountIdentity(ctx context.Context, ns, name, uid 
 		out.Pods = append(out.Pods, identity.PodReportOf(d, p, e))
 	}
 	out.Webhooks = webhookSides(e, webhookRelevance(aws, usesAzure(d, pods)))
-	out.Stores, out.StoresRead = c.storesFor(ctx, obs, ns, name)
+	out.Stores, out.StoresRead, out.StoresGap = c.storesFor(ctx, obs, ns, name)
 	return out, nil
 }
 
 // storesFor lists the stores that authenticate through a ServiceAccount:
 // by serviceAccountRef, and (no auth) through the controller whose pods run
 // as it (S5 §4.3).
-func (c *ClusterConn) storesFor(ctx context.Context, h identityObserver, ns, name string) ([]identity.StoreLink, string) {
+func (c *ClusterConn) storesFor(ctx context.Context, h identityObserver, ns, name string) ([]identity.StoreLink, string, string) {
 	stores, read := esoStores(h)
-	if stores == nil && !read {
-		return []identity.StoreLink{}, identity.ReadNone
+	if !read {
+		return []identity.StoreLink{}, identity.ReadNone, "the External Secrets stores are not read live and completely"
 	}
 	out := []identity.StoreLink{}
+	var unjoined []string // stores without auth whose handler is not resolved
 	var cands []identity.Candidate
 	candsComplete, candsRead := false, false
 	for _, st := range stores {
@@ -274,6 +276,9 @@ func (c *ClusterConn) storesFor(ctx context.Context, h identityObserver, ns, nam
 			candsRead = true
 		}
 		hs := identity.HandlersOf(identity.StoreClass(st), cands, candsComplete)
+		if hs.Unresolved != "" {
+			unjoined = append(unjoined, storeName(st)+" ("+hs.Unresolved+")")
+		}
 		for _, g := range hs.Groups {
 			if g.Namespace == ns && g.ServiceAccount == name {
 				out = append(out, identity.StoreLink{Kind: st.GetKind(), Namespace: st.GetNamespace(), Name: st.GetName(), UID: string(st.GetUID()),
@@ -282,17 +287,31 @@ func (c *ClusterConn) storesFor(ctx context.Context, h identityObserver, ns, nam
 			}
 		}
 	}
-	state := identity.ReadComplete
-	if !read {
-		state = identity.ReadMore
+	state, gap := identity.ReadComplete, ""
+	if len(unjoined) > 0 {
+		// a store whose handler is not resolved may run as this ServiceAccount
+		state = identity.ReadPartial
+		gap = "Not known for " + strconv.Itoa(len(unjoined)) + " store(s) without auth, whose handling controller is not resolved: " + unjoined[0]
+		if len(unjoined) > 1 {
+			gap += ", and " + strconv.Itoa(len(unjoined)-1) + " more"
+		}
 	}
 	if len(out) > identity.MaxStores {
 		out, state = out[:identity.MaxStores], "cut"
 	}
-	return out, state
+	return out, state, gap
 }
 
-// esoStores reads both store kinds from the Observer's ESO models.
+func storeName(st *unstructured.Unstructured) string {
+	if st.GetNamespace() == "" {
+		return st.GetKind() + " " + st.GetName()
+	}
+	return st.GetKind() + " " + st.GetNamespace() + "/" + st.GetName()
+}
+
+// esoStores reads both store kinds from the Observer's ESO models. Only a
+// live, complete read yields stores: a stale or partial one yields none
+// and false, so no old auth configuration becomes a current subject.
 func esoStores(h identityObserver) ([]*unstructured.Unstructured, bool) {
 	var out []*unstructured.Unstructured
 	complete := true
@@ -314,10 +333,13 @@ func esoStores(h identityObserver) ([]*unstructured.Unstructured, bool) {
 		served = served || st.Coverage != observe.Absent
 		complete = complete && all && (st.Coverage == observe.Live || st.Coverage == observe.Absent)
 	}
-	if !served {
-		return nil, complete
+	if !complete {
+		return nil, false
 	}
-	return out, complete
+	if !served {
+		return nil, true
+	}
+	return out, true
 }
 
 // esoCandidates reads the candidate controllers and their running pods
@@ -372,7 +394,7 @@ func (c *ClusterConn) esoCandidates(ctx context.Context, h identityObserver) ([]
 		if err == nil {
 			for i := range pods.Items {
 				p := &pods.Items[i]
-				cp := identity.ControllerPod{Pod: identity.PodOf(p)}
+				cp := identity.ControllerPod{Pod: identity.PodOf(p), Phase: string(p.Status.Phase)}
 				for _, r := range p.OwnerReferences {
 					if r.Controller != nil && *r.Controller && rsOwner[string(r.UID)] == string(d.UID) {
 						cp.Owned = true
@@ -443,7 +465,7 @@ func (c *ClusterConn) PodIdentity(ctx context.Context, ns, name, uid string) (id
 	e := c.identityEnv(ctx, obs, aws)
 	r := identity.PodReportOf(d, pod, e)
 	if out.Declared == nil {
-		r.Readings = nil // no comparison without the ServiceAccount
+		r.Readings, r.Compared = nil, false // no comparison without the ServiceAccount
 	}
 	out.Report = &r
 	out.Webhooks = webhookSides(e, webhookRelevance(aws, usesAzure(d, pods)))
@@ -476,8 +498,9 @@ func (c *ClusterConn) StoreIdentity(ctx context.Context, kind, ns, name, uid str
 		out.State = identity.StateNotFound
 		return out, nil
 	case st == nil:
+		// a store from a stale or partial read is never a current subject
 		out.State = identity.StateUnreadable
-		out.Error = "the stores were not read completely"
+		out.Error = "the stores are not read live and completely"
 		return out, nil
 	case uid != "" && string(st.GetUID()) != uid:
 		out.State = identity.StateReplaced

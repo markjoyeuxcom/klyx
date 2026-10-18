@@ -225,7 +225,7 @@ func TestGKE(t *testing.T) {
 	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformOther), AdapterGKE); r.State != StateNotGKE || !strings.Contains(r.Text, "does nothing here") {
 		t.Fatalf("a link off GKE: %+v", r)
 	}
-	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformUnread), AdapterGKE); r.State != StateLinked || !strings.Contains(r.Text, "whether this cluster is GKE is not known") {
+	if r := only(t, Compare(sa(map[string]string{AnnGKEServiceAcct: g}), pod(nil, nil, nil), PlatformUnverified("the nodes were not read")), AdapterGKE); r.State != StateLinked || !strings.Contains(r.Text, "Whether this cluster is GKE is not verified: the nodes were not read") {
 		t.Fatalf("a link with the nodes unread: %+v", r)
 	}
 	if rs := Compare(sa(nil), pod(nil, nil, nil), PlatformOther); len(rs) != 0 {
@@ -448,7 +448,7 @@ func TestESOGCP(t *testing.T) {
 }
 
 func ctlPod(name, saName, class string, unresolved bool) ControllerPod {
-	return ControllerPod{Pod: Pod{Namespace: "eso", Name: name, ServiceAccount: saName}, Class: class, ClassUnresolved: unresolved, Owned: true}
+	return ControllerPod{Pod: Pod{Namespace: "eso", Name: name, ServiceAccount: saName}, Class: class, ClassUnresolved: unresolved, Owned: true, Phase: "Running"}
 }
 
 func TestHandlers(t *testing.T) {

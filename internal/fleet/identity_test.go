@@ -107,7 +107,8 @@ func TestS5ESOCandidates(t *testing.T) {
 		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "external-secrets", Name: name, UID: "u-" + metav1Type(name),
 			Labels:          map[string]string{"app.kubernetes.io/name": "external-secrets"},
 			OwnerReferences: []metav1.OwnerReference{{UID: "rs-" + typesUID(rs), Controller: &ctl}}},
-			Spec: corev1.PodSpec{ServiceAccountName: sa, Containers: []corev1.Container{{Name: "external-secrets", Args: []string{"--controller-class=" + class}}}}}
+			Spec:   corev1.PodSpec{ServiceAccountName: sa, Containers: []corev1.Container{{Name: "external-secrets", Args: []string{"--controller-class=" + class}}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 	}
 	cs := fake.NewSimpleClientset(dep, pod("old", "a", "sa-a", "a"), pod("new", "b", "sa-b", "b"), pod("stray", "x", "sa-x", "b"))
 	rs := func(uid, owner string) *metav1.PartialObjectMetadata {

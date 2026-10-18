@@ -14,8 +14,9 @@ const (
 	StateNotFound   = "not-found"
 	StateUnreadable = "unreadable"
 	ReadComplete    = "complete"
-	ReadMore        = "more"   // a continued list: more not read, count unknown
-	ReadNone        = "unread" // not read
+	ReadMore        = "more"    // a continued list: more not read, count unknown
+	ReadPartial     = "partial" // read, but a join behind it is not resolved
+	ReadNone        = "unread"  // not read
 )
 
 // MaxStores bounds the stores listed per ServiceAccount (S5 §6).
@@ -23,7 +24,11 @@ const MaxStores = 20
 
 // PodReport is one pod's evidence, readings and node side.
 type PodReport struct {
-	Pod      Pod       `json:"pod"`
+	Pod Pod `json:"pod"`
+	// Compared: the pod was read against its ServiceAccount. Without it the
+	// readings are absent, never "nothing configured" (the ServiceAccount
+	// was not read).
+	Compared bool      `json:"compared"`
 	Readings []Reading `json:"readings"`
 	Nodes    []Side    `json:"nodes,omitempty"`
 }
@@ -39,31 +44,54 @@ type Env struct {
 	Webhooks     []Webhook
 }
 
-// gke reports a GKE cluster: a node with a gce:// providerID.
-func (e Env) gke() bool {
+// platform says what the nodes read show of the cluster. A gce:// provider
+// ID proves Google Compute, not GKE: GKE needs its own evidence (C2).
+func (e Env) platform() Platform {
+	if !e.NodesRead {
+		return PlatformUnverified("the nodes were not read")
+	}
+	gce, noID := false, false
 	for _, n := range e.Nodes {
-		if strings.HasPrefix(n.ProviderID, "gce://") {
-			return true
+		switch {
+		case n.ProviderID == "":
+			noID = true
+		case strings.HasPrefix(n.ProviderID, "gce://"):
+			gce = true
+			if e.gkeNode(n) {
+				return PlatformGKE
+			}
+		}
+	}
+	switch {
+	case gce:
+		return PlatformUnverified("its Google Compute (gce://) nodes carry no " + LabelGKENodePool + " label and run no gke-metadata-server pod")
+	case noID:
+		return PlatformUnverified("a node has no provider ID")
+	}
+	return PlatformOther
+}
+
+// gkeNode: a gce:// node with GKE's own evidence: its node-pool label, or a
+// gke-metadata-server pod on it.
+func (e Env) gkeNode(n *NodeInfo) bool {
+	if _, ok := n.Labels[LabelGKENodePool]; ok {
+		return true
+	}
+	if e.MetadataRead {
+		for _, p := range e.MetadataPods {
+			if p.Node == n.Name {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// platform says what the nodes read show of the cluster.
-func (e Env) platform() Platform {
-	switch {
-	case !e.NodesRead:
-		return PlatformUnread
-	case e.gke():
-		return PlatformGKE
-	}
-	return PlatformOther
-}
-
 // PodReportOf compares one pod with its ServiceAccount's declarations and
 // reads its node's side.
 func PodReportOf(d Declared, p Pod, e Env) PodReport {
-	r := PodReport{Pod: p, Readings: Compare(d, p, e.platform())}
+	pl := e.platform()
+	r := PodReport{Pod: p, Readings: Compare(d, p, pl), Compared: true}
 	var node *NodeInfo
 	if e.NodesRead {
 		node = e.Nodes[p.Node]
@@ -74,7 +102,7 @@ func PodReportOf(d Declared, p Pod, e Env) PodReport {
 			break
 		}
 	}
-	if e.gke() && !p.HostNetwork {
+	if pl.Kind == platformGKE && !p.HostNetwork {
 		r.Nodes = append(r.Nodes, GKENode(node, e.MetadataPods, e.MetadataRead))
 	}
 	return r
@@ -125,8 +153,10 @@ type SAReport struct {
 	PodsRead string      `json:"podsRead"`
 	Webhooks []Side      `json:"webhooks,omitempty"`
 	Stores   []StoreLink `json:"stores"`
-	// StoresRead: complete, unread, or "cut" past MaxStores.
+	// StoresRead: complete, unread, partial (a controller join is not
+	// resolved; StoresGap says which), or "cut" past MaxStores.
 	StoresRead string   `json:"storesRead"`
+	StoresGap  string   `json:"storesGap,omitempty"`
 	Limits     []string `json:"limits"`
 }
 

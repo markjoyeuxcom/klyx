@@ -29,9 +29,20 @@ func NewIdentityService(lookup func(string) (IdentityConn, bool)) *IdentityServi
 	return &IdentityService{lookup: lookup}
 }
 
-// maxIdentityDTO bounds a reply (S5 §6); past it pods drop from the end,
-// counted.
+// maxIdentityDTO bounds every reply (S5 §6), measured over the final
+// serialised DTO with its omission counts: past it pods (or a pod's
+// containers) drop from the end, counted; a reply that still does not fit
+// says so in place of its report.
 const maxIdentityDTO = 256 << 10
+
+// overBound is the error a reply carries when even its trimmed report
+// does not fit.
+const overBound = "the identity reply exceeds its 256 KB bound even trimmed; its report is not shown"
+
+func fits(v any) bool {
+	raw, err := json.Marshal(v)
+	return err == nil && len(raw) <= maxIdentityDTO
+}
 
 const identityCallTimeout = 25 * time.Second
 
@@ -56,6 +67,9 @@ type PodIdentityDTO struct {
 	UID       string                 `json:"uid"`
 	Error     string                 `json:"error,omitempty"`
 	Report    wid.PodInspectorReport `json:"report"`
+	// ContainersDropped counts the containers whose evidence was dropped
+	// to fit the reply bound (their readings stay).
+	ContainersDropped int `json:"containersDropped,omitempty"`
 }
 
 // StoreIdentityDTO is the ESO store inspector's "Authenticates as" block.
@@ -67,6 +81,8 @@ type StoreIdentityDTO struct {
 	UID       string          `json:"uid"`
 	Error     string          `json:"error,omitempty"`
 	Report    wid.StoreReport `json:"report"`
+	// PodsDropped counts the handler pods dropped to fit the reply bound.
+	PodsDropped int `json:"podsDropped,omitempty"`
 }
 
 func (s *IdentityService) conn(cluster string) (IdentityConn, string) {
@@ -93,20 +109,51 @@ func (s *IdentityService) ServiceAccount(cluster, namespace, name, uid string) S
 		return out
 	}
 	out.Report = r
-	out.PodsDropped = fitSAReport(&out)
+	fitSAReport(&out)
 	return out
 }
 
 // fitSAReport drops pods from the end until the reply fits its bound.
-func fitSAReport(d *SAIdentityDTO) int {
-	dropped := 0
-	for {
-		raw, err := json.Marshal(d)
-		if err != nil || len(raw) <= maxIdentityDTO || len(d.Report.Pods) == 0 {
-			return dropped
-		}
+func fitSAReport(d *SAIdentityDTO) {
+	for !fits(d) && len(d.Report.Pods) > 0 {
 		d.Report.Pods = d.Report.Pods[:len(d.Report.Pods)-1]
-		dropped++
+		d.PodsDropped++
+	}
+	if !fits(d) {
+		d.Report, d.Error = wid.SAReport{State: wid.StateUnreadable, Pods: []wid.PodReport{}, Stores: []wid.StoreLink{}}, overBound
+	}
+}
+
+// fitPodReport drops the pod's container evidence from the end (its
+// readings stay) until the reply fits its bound.
+func fitPodReport(d *PodIdentityDTO) {
+	for !fits(d) && d.Report.Report != nil && len(d.Report.Report.Pod.Containers) > 0 {
+		cs := d.Report.Report.Pod.Containers
+		d.Report.Report.Pod.Containers = cs[:len(cs)-1]
+		d.ContainersDropped++
+	}
+	if !fits(d) {
+		d.Report, d.Error = wid.PodInspectorReport{State: wid.StateUnreadable}, overBound
+	}
+}
+
+// fitStoreReport drops handler pods from the end of the last group that
+// still has any; a group whose pods all dropped keeps its ServiceAccount.
+func fitStoreReport(d *StoreIdentityDTO) {
+	for !fits(d) && d.Report.Handlers != nil {
+		gs := d.Report.Handlers.Groups
+		i := len(gs) - 1
+		for i >= 0 && len(gs[i].Pods) == 0 {
+			i--
+		}
+		if i < 0 {
+			break
+		}
+		gs[i].Pods = gs[i].Pods[:len(gs[i].Pods)-1]
+		d.PodsDropped++
+	}
+	if !fits(d) {
+		d.Report, d.Error = wid.StoreReport{State: wid.StateUnreadable}, overBound
 	}
 }
 
@@ -126,6 +173,7 @@ func (s *IdentityService) Pod(cluster, namespace, name, uid string) PodIdentityD
 		return out
 	}
 	out.Report = r
+	fitPodReport(&out)
 	return out
 }
 
@@ -145,5 +193,6 @@ func (s *IdentityService) Store(cluster, kind, namespace, name, uid string) Stor
 		return out
 	}
 	out.Report = r
+	fitStoreReport(&out)
 	return out
 }

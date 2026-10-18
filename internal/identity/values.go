@@ -51,6 +51,7 @@ const (
 	AnnGKEServiceAcct = "iam.gke.io/gcp-service-account"
 	LabelComputeType  = "eks.amazonaws.com/compute-type"
 	LabelGKEMetadata  = "iam.gke.io/gke-metadata-server-enabled"
+	LabelGKENodePool  = "cloud.google.com/gke-nodepool"
 )
 
 // Audiences.

@@ -288,7 +288,6 @@ func gcpSubject(p map[string]any, kind, ns string, get SALookup) Subject {
 			sa, ok := lookupSA(sub.SA, get, &sub)
 			switch {
 			case hasEmail && email != "":
-				sub.Requested = append(sub.Requested, valueOf(email, shapeEmail).Shown)
 				sub.Notes = append(sub.Notes, "gcpServiceAccountEmail overrides the ServiceAccount's linked account")
 			case ok && gsaOf(sa) != "":
 				sub.Requested = append(sub.Requested, gsaOf(sa))
@@ -299,6 +298,11 @@ func gcpSubject(p map[string]any, kind, ns string, get SALookup) Subject {
 		default:
 			sub.Base = "AWS security credentials (not read)"
 			sub.Unresolved = append(sub.Unresolved, "the AWS credentials are not read")
+		}
+		// ESO applies the override after merging every base: a configured
+		// impersonation target is known without reading the base's source
+		if hasEmail && email != "" {
+			sub.Requested = append(sub.Requested, valueOf(email, shapeEmail).Shown)
 		}
 	default:
 		sub.Mode, sub.Base, sub.Controller = "default", "the handling controller's application default credentials", true
@@ -315,6 +319,10 @@ type ControllerPod struct {
 	ClassUnresolved bool
 	// Owned: its ReplicaSet owner belongs to the candidate (by UID).
 	Owned bool
+	// Phase: the pod's phase. Only a Running pod's process handles stores;
+	// a Succeeded or Failed pod has departed, and a Pending or Unknown one
+	// proves nothing yet.
+	Phase string
 }
 
 // Candidate is one candidate controller Deployment and its running pods.
@@ -339,27 +347,33 @@ type Group struct {
 type Handlers struct {
 	Groups     []Group `json:"groups,omitempty"`
 	Unresolved string  `json:"unresolved,omitempty"`
+	// NotRunning names applicable owned pods that are not running yet
+	// (Pending or Unknown): not counted as handlers, never as absent.
+	NotRunning []string `json:"notRunning,omitempty"`
 }
 
-// ClassOf reads a controller container's --controller-class argument.
+// ClassOf reads a controller container's --controller-class argument as
+// ESO's flag parsing does: the last assignment wins, and parsing stops at
+// "--".
 func ClassOf(c corev1.Container) (string, bool) {
 	args := append(append([]string(nil), c.Command...), c.Args...)
-	for i, a := range args {
-		v, has := "", false
+	class, set := "default", false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
+		case a == "--":
+			i = len(args)
 		case strings.HasPrefix(a, "--controller-class="):
-			v, has = strings.TrimPrefix(a, "--controller-class="), true
+			class, set = strings.TrimPrefix(a, "--controller-class="), true
 		case a == "--controller-class" && i+1 < len(args):
-			v, has = args[i+1], true
-		}
-		if has {
-			if strings.Contains(v, "$(") {
-				return "", false
-			}
-			return v, true
+			class, set = args[i+1], true
+			i++
 		}
 	}
-	return "default", true
+	if set && strings.Contains(class, "$(") {
+		return "", false
+	}
+	return class, true
 }
 
 // HandlersOf applies ESO's ShouldProcessStore per running pod: an empty
@@ -371,6 +385,7 @@ func HandlersOf(storeClass string, cands []Candidate, candidatesComplete bool) H
 		return Handlers{Unresolved: "the candidate controllers were not read completely"}
 	}
 	groups := map[string]*Group{}
+	var notRunning []string
 	for _, c := range cands {
 		if !c.PodsComplete {
 			return Handlers{Unresolved: "the pods of " + c.Namespace + "/" + c.Name + " were not read completely"}
@@ -379,6 +394,9 @@ func HandlersOf(storeClass string, cands []Candidate, candidatesComplete bool) H
 			if !p.Owned {
 				continue // not proven to be this candidate's
 			}
+			if p.Phase == string(corev1.PodSucceeded) || p.Phase == string(corev1.PodFailed) {
+				continue // departed: its process handles nothing
+			}
 			if storeClass != "" {
 				if p.ClassUnresolved {
 					return Handlers{Unresolved: "pod " + p.Pod.Name + "'s controller class is resolved only at runtime"}
@@ -386,6 +404,10 @@ func HandlersOf(storeClass string, cands []Candidate, candidatesComplete bool) H
 				if p.Class != storeClass {
 					continue
 				}
+			}
+			if p.Phase != string(corev1.PodRunning) {
+				notRunning = append(notRunning, p.Pod.Name+" ("+phaseOr(p.Phase)+")")
+				continue
 			}
 			key := p.Pod.Namespace + "/" + p.Pod.ServiceAccount + "/" + c.Namespace + "/" + c.Name
 			g := groups[key]
@@ -396,10 +418,14 @@ func HandlersOf(storeClass string, cands []Candidate, candidatesComplete bool) H
 			g.Pods = append(g.Pods, p.Pod)
 		}
 	}
+	sort.Strings(notRunning)
 	if len(groups) == 0 {
+		if len(notRunning) > 0 {
+			return Handlers{Unresolved: "the controller pods that accept this store are not running yet", NotRunning: notRunning}
+		}
 		return Handlers{Unresolved: "no running controller pod Klyx found accepts this store"}
 	}
-	out := Handlers{}
+	out := Handlers{NotRunning: notRunning}
 	for _, g := range groups {
 		out.Groups = append(out.Groups, *g)
 	}
@@ -408,6 +434,13 @@ func HandlersOf(storeClass string, cands []Candidate, candidatesComplete bool) H
 		return a.Candidate+a.Namespace+a.ServiceAccount < b.Candidate+b.Namespace+b.ServiceAccount
 	})
 	return out
+}
+
+func phaseOr(p string) string {
+	if p == "" {
+		return "phase unknown"
+	}
+	return p
 }
 
 // ControllerEnvGaps names, for Azure's controller-env branch, the variables
