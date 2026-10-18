@@ -17,8 +17,8 @@ import { InspectorStatus } from "./ResourceInspector";
 import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../layout/LensLayout";
 import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
-import { RANK, REFS, ROLE_TEXT, condState, listenerText, roleTone, type Role } from "./gatewayModel";
-import { ListenerList, PARENT_TEXT, ordinal, parentKey } from "./gatewayListeners";
+import { RANK, REFS, ROLE_TEXT, condState, listenerText, roleTone, type CondState, type Role } from "./gatewayModel";
+import { ListenerList, ordinal, parentKey, parentText } from "./gatewayListeners";
 import { useInspectorAI } from "../ai/AIExplain";
 import { staleProps } from "./staleness";
 import { useClusterKey } from "./useClusterKey";
@@ -65,7 +65,12 @@ export function ListenerSetList({ cluster, rows, toggle, onOpenGateway }: { clus
   const rowsAsOf = rows.rowsState.evaluatedAt ? clock(rows.rowsState.evaluatedAt) : "the last read";
   const asOf = refreshing ? ` (as of ${rowsAsOf})` : "";
   const lastGood = lastGoodAt(rows.coverage, ["ListenerSet"]);
-  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
+  // a budget-truncated read is current but not complete (Codex's S7a
+  // implementation review, finding 2): counts are lower bounds, an object
+  // left out is unverified, never removed, and nothing is proven absent
+  const capped = rows.coverage.find((k) => k.kind === "ListenerSet" && k.truncated);
+  const complete = ev === "complete" && !capped;
+  const mark = complete ? "" : ev === "stale" ? "*" : "+";
 
   const ordered = useMemo(() => [...sets].sort((a, b) =>
     RANK[roleOf(a).kind] - RANK[roleOf(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [sets]);
@@ -87,16 +92,16 @@ export function ListenerSetList({ cluster, rows, toggle, onOpenGateway }: { clus
     const key = `${intent.ref.namespace ?? ""}/${intent.ref.name}`;
     const row = sets.find((s) => keyOf(s) === key);
     if (intent.ref.uid) expectPin(cluster, "ListenerSet", key, intent.ref.uid);
-    else if (!row) return ev === "complete" ? "missing" : "wait";
+    else if (!row) return complete ? "missing" : "wait";
     setMode("all"); setQuery("");
     setCursorKey(key);
     setSelKey(key);
     autoDone.current = true;
     return "consumed";
-  }, [sets, ev]);
+  }, [sets, complete]);
 
   const found = selKey ? sets.find((s) => keyOf(s) === selKey) : undefined;
-  const pin = usePinnedSubject(cluster, selKey, found, ev === "complete", "ListenerSet");
+  const pin = usePinnedSubject(cluster, selKey, found, complete, "ListenerSet");
   const selected = pin.subject ?? undefined;
   const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
   const close = () => setSelKey(null);
@@ -140,12 +145,15 @@ export function ListenerSetList({ cluster, rows, toggle, onOpenGateway }: { clus
     : state === "unreadable" ? <EmptyState icon={icon} title="Could not list ListenerSets." hint={error ?? undefined} />
     : state === "empty" && absent ? <EmptyState icon={icon} title="ListenerSets are not served on this cluster." hint="Gateway API 1.5 and later serve gateway.networking.k8s.io/v1 ListenerSets; this cluster does not." />
     : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title="No ListenerSets in the last good read." hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${error ?? "unverified"}.`} />
+    : state === "empty" && capped ? <EmptyState icon={icon} title="No ListenerSets kept within Klyx's budget." hint={`${capped.notRetained ?? "Some"} ListenerSet${capped.notRetained === 1 ? "" : "s"} left out by the budget: they exist, but Klyx keeps none of them.`} />
     : state === "empty" ? <EmptyState icon={icon} title="No ListenerSets on this cluster." hint="ListenerSets are served, but none exist: every listener is a Gateway's own." />
     : <EmptyState icon={icon} title="No ListenerSets match the current filters." hint={`${sets.length} ListenerSets on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
   const notices: React.ReactNode[] = [];
   if (error && sets.length > 0) notices.push(<WatchErrorBanner key="read" tool="ListenerSets" failure={`read failed - showing the last good list${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={error} />);
   if (refreshing) notices.push(<div key="r" role="status" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.</div>);
+  if (capped) notices.push(<div key="capped" role="status" data-testid="listenersets-capped" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)" }}>
+    Capped: {capped.notRetained ?? "some"} ListenerSet{capped.notRetained === 1 ? "" : "s"} not retained - Klyx keeps a bounded amount per cluster, so counts are lower bounds and merge orders may miss a ListenerSet that ranks earlier.</div>);
 
   return (
     <LensLayout
@@ -185,7 +193,7 @@ export function ListenerSetList({ cluster, rows, toggle, onOpenGateway }: { clus
             render={(s) => {
               const k = keyOf(s);
               const role = roleOf(s);
-              const parentNote = PARENT_TEXT[s.parentState] ? ` · ${s.parentState}` : "";
+              const parentNote = s.parentState !== "found" ? ` · ${s.parentState}` : s.parentCurrent === false ? " · last good read" : "";
               return (
                 <div key={k} role="button" tabIndex={0} className="lens-row" data-testid="listenerset-row" {...staleProps(s.stale)} style={gridStyle}
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
@@ -216,17 +224,29 @@ export function ListenerSetList({ cluster, rows, toggle, onOpenGateway }: { clus
 }
 
 // listenerSetVerdictDetail explains the verdict from the evidence it was read from.
+// listenerSetVerdictDetail explains the verdict from the evidence it was
+// read from, in the rule's order (gwapi.ListenerSetRule): the controller's
+// current failures, a parent proven missing, a last-observed negative, a
+// parent not established, then acceptance and programming in each of their
+// states. "Accepted and programmed" is said only when both conditions say so
+// for this generation (Codex's S7a implementation review, finding 5).
 function listenerSetVerdictDetail(s: ListenerSetRowDTO): string {
   const a = condState(s.acceptedCond, s.generation);
   const p = condState(s.programmedCond, s.generation);
   const why = (c: { reason: string; message: string }) => [c.reason, c.message].filter(Boolean).join(": ");
+  const lastObserved = (c: CondState, what: string) =>
+    `${what} was False for generation ${c.observedGeneration}${why(c) ? ` - ${why(c)}` : ""}. The controller has not reported on generation ${s.generation}, so whether it is ${what.toLowerCase()} now is unverified.`;
   if (a.status === "False" && !a.stale) return `Its controller did not accept it${why(a) ? ` - ${why(a)}` : ""}. Its listeners are not merged into the parent.`;
-  if (a.status === "True" && p.status === "False" && !p.stale) return `Accepted, but not programmed${why(p) ? ` - ${why(p)}` : ""}.`;
-  if (s.parentState === "not found") return "Its parent Gateway is absent from a complete read of the Gateways: its listeners join nothing.";
-  if (s.parentState === "not established") return "Its parent Gateway is not in the Gateways read, and that read is incomplete - whether it exists is unverified.";
+  if (a.status === "True" && !a.stale && p.status === "False" && !p.stale) return `Accepted, but not programmed${why(p) ? ` - ${why(p)}` : ""}.`;
+  if (s.parentState === "not found") return "Its parent Gateway is absent from a complete, current read of the Gateways: its listeners join nothing.";
+  if (a.status === "False") return lastObserved(a, "Accepted");
+  if (a.status === "True" && p.status === "False") return lastObserved(p, "Programmed");
+  if (s.parentState === "not established") return "Its parent Gateway is not in the Gateways read, and that read cannot prove it absent (incomplete, not current, or Gateways not served) - whether it exists is unverified.";
   if (s.parentState === "unsupported") return `Its parent is a ${s.parent.kind}; Klyx reads Gateway parents only.`;
   if (a.status === "absent") return "No controller has written an Accepted condition - check that the parent Gateway's class has a controller that supports ListenerSets.";
   if (a.status === "Unknown") return `The controller has not decided yet${why(a) ? ` (${why(a)})` : ""}.`;
+  if (p.status === "absent") return "Accepted, but no Programmed condition has been written - whether its listeners are configured is unverified.";
+  if (p.status === "Unknown") return `Accepted; programming is in progress${why(p) ? ` (${why(p)})` : ""}.`;
   if (a.stale || p.stale) return `Accepted and programmed as of generation ${Math.min(a.observedGeneration, p.observedGeneration)}; the controller has not reported on generation ${s.generation} yet.`;
   if (s.rule.role === "degraded") return "Accepted and programmed, but its controller reports a listener failing (below).";
   return "Accepted and programmed by its controller; its listeners are merged into the parent Gateway.";
@@ -275,7 +295,7 @@ function ListenerSetInspector({ cluster, s, stale, gone, replaced, onOpenGateway
         <InspectorBlock title="Parent">
           <div className="insp-kv" data-testid="listenerset-parent">
             <span>{s.parent.kind}</span>
-            <span>{parentKey(s)}{PARENT_TEXT[s.parentState] ? ` - ${PARENT_TEXT[s.parentState]}` : ""}</span>
+            <span>{parentKey(s)}{parentText(s) ? ` - ${parentText(s)}` : ""}</span>
             <span>Merge order</span>
             <span data-testid="listenerset-precedence">
               {s.precedence > 0 ? `${ordinal(s.precedence)} of ${s.siblings} ListenerSet${s.siblings === 1 ? "" : "s"} naming this parent, after the Gateway's own listeners` : "-"}

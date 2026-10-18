@@ -9,7 +9,7 @@ import { useGatewayRouteRows } from "../health/useGatewayRouteRows";
 import { useListenerSetRows, type ListenerSetRows } from "../health/useListenerSetRows";
 import { RouteList } from "./GatewayRoutesView";
 import { ListenerSetList } from "./ListenerSetsView";
-import { ListenerList, PARENT_TEXT, allowedListenersText, ordinal } from "./gatewayListeners";
+import { ListenerList, allowedListenersText, ordinal, parentText } from "./gatewayListeners";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { WatchErrorBanner } from "../chrome/WatchErrorBanner";
@@ -133,7 +133,15 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
   const asOf = rowsRefreshing ? ` (as of ${rowsAsOf})` : "";
   const lastGood = lastGoodAt(rows.coverage, ["Gateway"]);
   const discoveryGap = coverageGaps(rows.coverage);
-  const mark = ev === "complete" ? "" : ev === "stale" ? "*" : "+";
+  // Gateways are budgeted (coverage S7a): a truncated read is current but not
+  // complete - counts are lower bounds and a Gateway left out is unverified
+  const capped = rows.coverage.find((k) => k.kind === "Gateway" && k.truncated);
+  const complete = ev === "complete" && !capped;
+  const mark = complete ? "" : ev === "stale" ? "*" : "+";
+  // the ListenerSets read the joins come from: a current read is needed for
+  // any merged count, and a truncated one gives a lower bound
+  const lsEv = kindEvidence(!sets.loading, sets.coverage, "ListenerSet", sets.watchError);
+  const lsCapped = sets.coverage.some((k) => k.kind === "ListenerSet" && k.truncated);
 
   const ordered = useMemo(() => [...gateways].sort((a, b) =>
     RANK[gatewayRole(a).kind] - RANK[gatewayRole(b).kind] || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name)), [gateways]);
@@ -166,20 +174,20 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
     // An opening by UID (slice 9 note §4.2): pinned to that UID at once; a
     // different or missing row is said, never substituted.
     if (intent.ref.uid) expectPin(cluster, "Gateway", key, intent.ref.uid);
-    else if (!row) return ev === "complete" ? "missing" : "wait";
+    else if (!row) return complete ? "missing" : "wait";
     setMode("all"); setQuery("");
     setCursorKey(key);
     setSelKey(key);
     autoDone.current = true;
     return "consumed";
-  }, [gateways, ev]);
+  }, [gateways, complete]);
 
   // A selection keeps its last row - removed only on a complete read,
   // otherwise unverified (slice 3 §5a) - and is pinned to its Gateway's UID:
   // a same-name Gateway with a new UID on a complete read is "replaced"
   // (The Line slice 4 §6.3), never silently followed.
   const found = selKey ? gateways.find((g) => keyOf(g) === selKey) : undefined;
-  const pin = usePinnedSubject(cluster, selKey, found, ev === "complete", "Gateway");
+  const pin = usePinnedSubject(cluster, selKey, found, complete, "Gateway");
   const selected = pin.subject ?? undefined;
   const gone: "removed" | "unverified" | null = pin.gone === "replaced" ? "removed" : pin.gone;
   const close = () => setSelKey(null);
@@ -227,6 +235,7 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
     : state === "empty" && absent ? <EmptyState icon={icon} title="Gateway API is not installed on this cluster." hint="Klyx observes no gateway.networking.k8s.io Gateways API here." />
     : state === "empty" && rowsRefreshing && total > 0 ? <EmptyState icon={icon} title={`No Gateways as of ${rowsAsOf}.`} hint={`Refreshing - the cluster summary now counts ${total}.`} />
     : state === "empty" && ev === "stale" ? <EmptyState icon={icon} title="No Gateways in the last good read." hint={`The read is failing now${lastGood ? ` - last good ${clock(lastGood)}` : ""}: ${error ?? "unverified"}.`} />
+    : state === "empty" && capped ? <EmptyState icon={icon} title="No Gateways kept within Klyx's budget." hint={`${capped.notRetained ?? "Some"} Gateway${capped.notRetained === 1 ? "" : "s"} left out by the budget: they exist, but Klyx keeps none of them.`} />
     : state === "empty" ? <EmptyState icon={icon} title="No Gateways on this cluster." hint="Gateway API is served, but no Gateway objects exist." />
     : <EmptyState icon={icon} title="No Gateways match the current filters." hint={`${gateways.length} Gateways on this cluster${asOf}.`} action={{ label: "Clear filters", onClick: clearFilters }} />;
 
@@ -234,6 +243,8 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
   const notices: React.ReactNode[] = [];
   if (error && gateways.length > 0) notices.push(<WatchErrorBanner key="read" tool="Gateways" failure={`read failed - showing the last good list${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={error} />);
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
+  if (capped) notices.push(<div key="capped" role="status" data-testid="gateways-capped" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)" }}>
+    Capped: {capped.notRetained ?? "some"} Gateway{capped.notRetained === 1 ? "" : "s"} not retained - Klyx keeps a bounded amount per cluster, so counts are lower bounds and a Gateway left out is unverified, never removed.</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   return (
@@ -281,7 +292,9 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
               const k = keyOf(g);
               const role = gatewayRole(g);
               const address = addressText(g.addresses);
-              const merged = setsOf(sets.sets, g).filter(acceptedNow);
+              // merged listeners from a current ListenerSets read only; a
+              // truncated read is a lower bound (Codex's S7a review, finding 2)
+              const merged = lsEv === "complete" ? setsOf(sets.sets, g).filter(acceptedNow) : [];
               const extra = merged.reduce((n, s) => n + s.listeners.length, 0);
               return (
                 <div key={k} role="button" tabIndex={0} className="lens-row" {...staleProps(g.stale)} style={gridStyle}
@@ -297,7 +310,7 @@ function GatewayList({ cluster, rows, sets, toggle }: { cluster: string; rows: G
                   {show("class") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}>{g.className || "-"}</span>}
                   {show("listeners") && <span style={{ ...cellStyle, color: "var(--color-text-secondary)" }}
                     title={extra > 0 ? `${extra} more from ${merged.length} accepted ListenerSet${merged.length === 1 ? "" : "s"}` : undefined}>
-                    {(g.listeners ?? []).map(listenerText).join(", ") || "-"}{extra > 0 ? ` +${extra} from ListenerSets` : ""}</span>}
+                    {(g.listeners ?? []).map(listenerText).join(", ") || "-"}{extra > 0 ? ` +${extra}${lsCapped ? " or more" : ""} from ListenerSets` : ""}</span>}
                 </div>
               );
             }} />
@@ -354,7 +367,7 @@ function GatewayInspector({ cluster, g, sets, stale, gone, replaced, onOpen, onC
         <InspectorBlock title="Listeners" count={listeners.length}>
           {listeners.length === 0 ? <div className="t-secondary">No listeners reported.</div> : <ListenerList listeners={listeners} testid="gateway-listeners" />}
         </InspectorBlock>
-        <GatewayListenerSets g={g} sets={sets} />
+        <GatewayListenerSets g={g} sets={sets} gone={gone} />
         <InspectorBlock title="Addresses" count={addresses.length}>
           {addresses.length === 0 ? <div className="t-secondary">None assigned{role.kind === "ok" ? "" : " - typical while the Gateway is not programmed"}.</div> : (
             <div className="insp-kv">
@@ -374,16 +387,29 @@ function GatewayInspector({ cluster, g, sets, stale, gone, replaced, onOpen, onC
 // controller's verdict and listeners, beside the Gateway's allowedListeners
 // and its own attachedListenerSets count. A difference is said, never
 // reconciled; a conflict is the controller's to decide.
-function GatewayListenerSets({ g, sets }: { g: GatewayRefDTO; sets: ListenerSetRows }) {
+function GatewayListenerSets({ g, sets, gone }: { g: GatewayRefDTO; sets: ListenerSetRows; gone: "removed" | "unverified" | null }) {
   const served = sets.coverage.find((k) => k.kind === "ListenerSet")?.coverage;
   if (served === "absent") return null;
+  // the live join names a parent by namespace/name, not UID: a Gateway that
+  // is no longer the current object of its name takes none of it (Codex's
+  // S7a implementation review, finding 4)
+  if (gone) return (
+    <InspectorBlock title="ListenerSets">
+      <div className="t-secondary" data-testid="gateway-listenersets-withheld">Not joined: this Gateway is not the current one of its name, so the ListenerSets naming {g.namespace}/{g.name} now are not its evidence.</div>
+    </InspectorBlock>
+  );
   const mine = setsOf(sets.sets, g);
-  const complete = !sets.loading && kindEvidence(true, sets.coverage, "ListenerSet", sets.watchError) === "complete";
+  const ev = sets.loading ? "pending" : kindEvidence(true, sets.coverage, "ListenerSet", sets.watchError);
+  const capped = sets.coverage.some((k) => k.kind === "ListenerSet" && k.truncated);
+  const complete = ev === "complete" && !capped;
   // nothing to say for a Gateway that allows none, has none and reports none
   if (!g.allowedListeners?.set && mine.length === 0 && g.attachedListenerSets == null && complete) return null;
   const accepted = mine.filter(acceptedNow).length;
   const reported = g.attachedListenerSets;
-  const count = sets.loading ? "reading ListenerSets" : `${mine.length}${complete ? "" : "+"} found naming this Gateway, ${accepted} accepted`;
+  const lastGood = lastGoodAt(sets.coverage, ["ListenerSet"]);
+  const asOfRead = ev === "stale" ? ` (the last good read${lastGood ? `, ${clock(lastGood)}` : ""})` : "";
+  const count = sets.loading ? "reading ListenerSets" : `${mine.length}${complete ? "" : "+"} found naming this Gateway, ${accepted} accepted${asOfRead}`;
+  // a disagreement only between two current, complete readings
   const differs = reported != null && complete && reported !== accepted;
   return (
     <InspectorBlock title="ListenerSets" count={mine.length}>
@@ -402,12 +428,12 @@ function GatewayListenerSets({ g, sets }: { g: GatewayRefDTO; sets: ListenerSetR
                 <span style={{ color: ROLE_TEXT[role.kind] }}> {role.label}</span>
               </div>
               {s.allowance.disagrees && <div className="t-secondary" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>{s.allowance.text}</div>}
-              {PARENT_TEXT[s.parentState] && <div className="t-secondary">{PARENT_TEXT[s.parentState]}</div>}
+              {parentText(s) && <div className="t-secondary">{parentText(s)}</div>}
               <ListenerList listeners={s.listeners} testid={`gateway-listenerset-${s.namespace}-${s.name}`} />
             </div>
           );
         })}
-        {!complete && !sets.loading && <div className="t-secondary">The ListenerSets read is incomplete: one that ranks earlier may be missing.</div>}
+        {!complete && !sets.loading && <div className="t-secondary">{capped ? "Klyx's budget left ListenerSets out" : ev === "stale" ? "The ListenerSets read is failing" : "The ListenerSets read is incomplete"}: one that ranks earlier may be missing, and no difference from the controller's count is claimed.</div>}
       </div>
     </InspectorBlock>
   );

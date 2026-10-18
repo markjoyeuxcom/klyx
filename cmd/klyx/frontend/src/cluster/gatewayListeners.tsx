@@ -17,8 +17,21 @@ export function listenerIssues(l: ListenerDTO): ListenerConditionDTO[] {
   return (l.status?.conditions ?? []).filter(failing).sort((a, b) => ORDER.indexOf(a.type) - ORDER.indexOf(b.type));
 }
 
+// issueGroups joins failing conditions that carry the same reason and
+// message: Envoy Gateway writes one conflict's message on Accepted,
+// Conflicted and Programmed alike, and it is said once.
+export function issueGroups(issues: ListenerConditionDTO[]): { heads: string; why: string }[] {
+  const out: { heads: string[]; why: string }[] = [];
+  for (const c of issues) {
+    const why = [c.reason, c.message].filter(Boolean).join(": ");
+    const g = out.find((x) => x.why === why);
+    if (g) g.heads.push(`${c.type} ${c.status}`);
+    else out.push({ heads: [`${c.type} ${c.status}`], why });
+  }
+  return out.map((g) => ({ heads: g.heads.join(", "), why: g.why }));
+}
+
 const kindText = (k: RouteKindDTO) => k.kind;
-const because = (c: ListenerConditionDTO) => [c.reason, c.message].filter(Boolean).join(": ");
 
 export function endpointText(l: ListenerDTO): string {
   const tls = l.tlsMode ? ` · TLS ${l.tlsMode}` : (l.certificateRefs?.length ?? 0) > 0 ? " · TLS" : "";
@@ -61,9 +74,9 @@ function ListenerItem({ l }: { l: ListenerDTO }) {
           <div className="t-secondary">
             {st.attachedRoutes} route{st.attachedRoutes === 1 ? "" : "s"} attached{st.supportedKinds.length > 0 ? ` · supports ${st.supportedKinds.map(kindText).join(", ")}` : ""}
           </div>
-          {bad.map((c) => (
-            <div key={c.type} data-testid="listener-issue" className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
-              {c.type} {c.status}{because(c) ? ` - ${because(c)}` : ""}
+          {issueGroups(bad).map((g) => (
+            <div key={g.heads} data-testid="listener-issue" className="t-body" style={{ color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
+              {g.heads}{g.why ? ` - ${g.why}` : ""}
             </div>
           ))}
           {current.length > 0 && <div className="t-secondary" style={{ overflowWrap: "anywhere" }}>{current.map((c) => `${c.type} ${c.status}${c.status === "Unknown" && c.reason ? ` (${c.reason})` : ""}`).join(" · ")}</div>}
@@ -82,10 +95,15 @@ function ListenerItem({ l }: { l: ListenerDTO }) {
 
 export const PARENT_TEXT: Record<string, string> = {
   found: "",
-  "not found": "not found - absent from a complete read of the Gateways",
-  "not established": "not established - the Gateways read is incomplete",
+  "not found": "not found - absent from a complete, current read of the Gateways",
+  "not established": "not established - the Gateways read is incomplete, not current or not served",
   unsupported: "not a Gateway - Klyx reads Gateway parents only",
 };
+
+/** parentText: the parent as established; one found only in a stale read
+ * is said to be last read, never current. */
+export const parentText = (s: Pick<ListenerSetRowDTO, "parentState" | "parentCurrent">) =>
+  s.parentState === "found" && s.parentCurrent === false ? "found in the last good read of the Gateways - not a current read" : PARENT_TEXT[s.parentState] ?? s.parentState;
 
 export const parentKey = (s: Pick<ListenerSetRowDTO, "parent">) => `${s.parent.namespace}/${s.parent.name}`;
 

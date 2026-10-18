@@ -173,3 +173,126 @@ describe("the Gateway inspector's listeners and ListenerSets (coverage S7a §3, 
     expect(screen.getByTestId("gateway-listenersets-count").textContent).toBe("1 found naming this Gateway, 1 accepted · the controller reports 5 attached - they differ");
   });
 });
+
+// Codex's S7a implementation review: findings 2, 4 and 5, mounted.
+const openListenerSets = () => fireEvent.click(within(screen.getByTestId("gateway-views")).getByRole("button", { name: /^ListenerSets/ }));
+const truncatedLS = (notRetained = 1) => [{ kind: "ListenerSet", served: true, synced: true, coverage: "live" as const, truncated: true, notRetained }];
+
+describe("the ListenerSet detail says programmed only when it is (finding 5)", () => {
+  it.each([["Unknown", "progressing", /programming is in progress/], ["", "unknown", /no Programmed condition has been written/]])("programming %s", (status, role, want) => {
+    seed({ sets: [ls("infra", "pending", 1, { programmedCond: cond(status, status ? "Pending" : ""), rule: { included: false, role, label: "programming" } })] });
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    fireEvent.click(screen.getByTestId("listenerset-row"));
+    const text = screen.getByTestId("listenerset-panel").textContent ?? "";
+    expect(text).toMatch(want);
+    expect(text).not.toContain("Accepted and programmed");
+  });
+
+  it("a historical rejection is said as last observed, never as programmed", () => {
+    seed({ sets: [ls("infra", "historical", 1, { generation: 2, stale: true, acceptedCond: cond("False", "NotAllowed", 1), programmedCond: cond("False", "Invalid", 1),
+      rule: { included: true, role: "degraded", label: "not accepted (last observed): NotAllowed" } })] });
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    const text = screen.getByTestId("listenerset-panel").textContent ?? "";
+    expect(text).toContain("Accepted was False for generation 1 - NotAllowed");
+    expect(text).toContain("whether it is accepted now is unverified");
+    expect(text).not.toContain("Accepted and programmed");
+  });
+});
+
+describe("a truncated or stale read is never complete (finding 2)", () => {
+  it("a wholly omitted ListenerSet kind is not proven empty", () => {
+    seed({ sets: [] });
+    lsRows = { ...lsRows, coverage: truncatedLS(3) };
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    expect(screen.queryByText("No ListenerSets on this cluster.")).toBeNull();
+    expect(screen.getByText("No ListenerSets kept within Klyx's budget.")).toBeTruthy();
+  });
+
+  it("a budget eviction is unverified, never a removal", () => {
+    seed({ sets: [ls("infra", "keep", 1, { rule: { included: true, role: "fault", label: "not accepted" } })] });
+    const v = render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    expect(screen.getByTestId("listenerset-panel")).toBeTruthy();
+    lsRows = { ...lsRows, sets: [], coverage: truncatedLS(1) };
+    v.rerender(<GatewayApiView cluster="x" />);
+    expect(screen.queryByText("ListenerSet removed.")).toBeNull();
+    expect(screen.getByTestId("selection-unverified")).toBeTruthy();
+    expect(screen.getByTestId("listenersets-capped").textContent).toContain("1 ListenerSet not retained");
+  });
+
+  it("a truncated ListenerSet read gives a lower bound and claims no difference", () => {
+    seed({ sets: [first] });
+    lsRows = { ...lsRows, coverage: truncatedLS(1) };
+    render(<GatewayApiView cluster="x" />);
+    const row = screen.getByText("eg").closest(".lens-row") as HTMLElement;
+    expect(row.textContent).toContain("+1 or more from ListenerSets");
+    fireEvent.click(row);
+    const count = screen.getByTestId("gateway-listenersets-count").textContent ?? "";
+    expect(count).toContain("1+ found");
+    expect(count).not.toContain("they differ");
+  });
+
+  it("a stale ListenerSet read supplies no merged count, and its block is dated", () => {
+    seed({ sets: [first] });
+    lsRows = { ...lsRows, coverage: [{ kind: "ListenerSet", served: true, synced: true, coverage: "stale", lastGoodAt: "2026-10-18T09:00:00Z", error: "forbidden" }], watchError: "ListenerSet: forbidden" };
+    render(<GatewayApiView cluster="x" />);
+    const row = screen.getByText("eg").closest(".lens-row") as HTMLElement;
+    expect(row.textContent).not.toContain("from ListenerSets");
+    fireEvent.click(row);
+    const count = screen.getByTestId("gateway-listenersets-count").textContent ?? "";
+    expect(count).toContain("(the last good read");
+    expect(count).not.toContain("they differ");
+  });
+
+  it("a truncated Gateway read keeps an evicted selection unverified", () => {
+    seed({ gateways: [gw("eg", { uid: "gw-1", rule: { included: true, role: "fault", label: "not accepted" } })] });
+    const v = render(<GatewayApiView cluster="x" />);
+    expect(screen.getByTestId("gateway-panel")).toBeTruthy();
+    gwRows = { ...gwRows, gateways: [], coverage: [{ kind: "Gateway", served: true, synced: true, coverage: "live", truncated: true, notRetained: 1 }] };
+    v.rerender(<GatewayApiView cluster="x" />);
+    expect(screen.queryByText(/Gateway removed/)).toBeNull();
+    expect(screen.getByTestId("gateways-capped")).toBeTruthy();
+  });
+
+  it("a parent found only in a stale read is said to be the last good read", () => {
+    seed({ sets: [ls("infra", "old-parent", 1, { parentCurrent: false, allowance: { from: "Same", allowed: "", text: "the Gateways read is not current: the parent's allowedListeners (Same when last read) is not established", disagrees: false } })] });
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    const row = screen.getByTestId("listenerset-row");
+    expect(row.textContent).toContain("infra/eg · last good read");
+    fireEvent.click(row);
+    expect(screen.getByTestId("listenerset-parent").textContent).toContain("found in the last good read of the Gateways - not a current read");
+  });
+});
+
+describe("a replaced Gateway takes none of its successor's ListenerSets (finding 4)", () => {
+  it("the pinned old Gateway shows no live join", () => {
+    seed({ gateways: [gw("eg", { uid: "old-gw", rule: { included: true, role: "fault", label: "not accepted" } })], sets: [] });
+    const v = render(<GatewayApiView cluster="x" />);
+    expect(screen.getByTestId("gateway-panel").querySelector("#inspector-identity")?.getAttribute("data-pin-uid")).toBe("old-gw");
+    gwRows = { ...gwRows, gateways: [gw("eg", { uid: "new-gw" })] };
+    lsRows = { ...lsRows, sets: [ls("infra", "REPLACEMENT_ONLY", 1)] };
+    v.rerender(<GatewayApiView cluster="x" />);
+    const panel = screen.getByTestId("gateway-panel");
+    expect(panel.querySelector("#inspector-identity")?.getAttribute("data-pin-uid")).toBe("old-gw");
+    expect(panel.textContent).not.toContain("REPLACEMENT_ONLY");
+    expect(within(panel).getByTestId("gateway-listenersets-withheld")).toBeTruthy();
+  });
+});
+
+describe("a conflict written on several conditions is said once", () => {
+  it("Envoy Gateway's shared message is grouped", () => {
+    const msg = "All listeners for a given port must use a unique hostname";
+    const c = (type: string, status: string) => ({ type, status, reason: "HostnameConflict", message: msg, observedGeneration: 1, stale: false });
+    seed({ sets: [ls("infra", "dup", 1, { rule: { included: true, role: "fault", label: "not accepted: ListenersNotValid" }, acceptedCond: cond("False", "ListenersNotValid"),
+      listeners: [listener("extra", { status: { attachedRoutes: 0, supportedKinds: [], conditions: [c("Accepted", "False"), c("Conflicted", "True"), c("Programmed", "False"),
+        { type: "ResolvedRefs", status: "True", reason: "ResolvedRefs", message: "", observedGeneration: 1, stale: false }] } })] })] });
+    render(<GatewayApiView cluster="x" />);
+    openListenerSets();
+    const issues = within(screen.getByTestId("listenerset-panel")).getAllByTestId("listener-issue");
+    expect(issues.map((e) => e.textContent)).toEqual([`Accepted False, Conflicted True, Programmed False - HostnameConflict: ${msg}`]);
+  });
+});

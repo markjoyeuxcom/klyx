@@ -822,7 +822,7 @@ export type ListenerParentDTO = { group: string; kind: string; namespace: string
 export type AllowanceDTO = { from: string; allowed: string; text: string; disagrees: boolean };
 export type ListenerSetRowDTO = {
   uid?: string; gvr?: string; generation?: number; namespace: string; name: string; created?: string;
-  parent: ListenerParentDTO; parentState: string; listeners: ListenerDTO[];
+  parent: ListenerParentDTO; parentState: string; parentCurrent?: boolean; listeners: ListenerDTO[];
   acceptedCond: CondDTO; programmedCond: CondDTO; stale: boolean; observedGeneration: number;
   allowance: AllowanceDTO; precedence: number; siblings: number; precedenceComplete: boolean; rule: RuleDTO;
 };
