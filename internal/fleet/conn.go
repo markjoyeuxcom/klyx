@@ -170,11 +170,15 @@ type ClusterConn struct {
 	// outside the factory (tests), which then inherit the environment.
 	kubeconfigPaths []string
 	restConfig      *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
-	typed           kubernetes.Interface
-	meta            metadata.Interface
-	dyn             dynamic.Interface
-	detector        *capability.Detector
-	clk             clock.Clock
+	// guardedREST is the metrics service-proxy client built from restConfig
+	// (C5 §4), once, under metricsMu.
+	guardedREST    rest.Interface
+	guardedRESTErr error
+	typed          kubernetes.Interface
+	meta           metadata.Interface
+	dyn            dynamic.Interface
+	detector       *capability.Detector
+	clk            clock.Clock
 
 	mu             sync.RWMutex
 	state          ConnState

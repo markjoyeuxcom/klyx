@@ -2,13 +2,12 @@ package fleet
 
 import (
 	"context"
-	"crypto/tls"
-	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/safehttp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
@@ -49,19 +48,47 @@ type metricsCache struct {
 	samplesExp time.Time
 }
 
-// transportFactory builds real transports from the cluster REST client.
-type transportFactory struct{ rest rest.Interface }
+// transportFactory builds real transports: a direct endpoint through the
+// safe HTTP policy, a Service through the guarded proxy client (C5 §4).
+type transportFactory struct {
+	rest    rest.Interface
+	restErr error // the guarded proxy client could not be built
+}
 
 func (f transportFactory) Direct(base, token string, skip bool) metrics.Querier {
-	tr := &http.Transport{}
-	if skip {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in
-	}
-	return metrics.NewDirectTransport(base, token, &http.Client{Transport: tr, Timeout: metricsHTTPTimeout})
+	return metrics.NewDirectTransport(base, token, safehttp.NewClient(metrics.DirectPolicy(metricsHTTPTimeout, skip)))
 }
 
 func (f transportFactory) Proxy(c metrics.ServiceCandidate) metrics.Querier {
+	if f.restErr != nil {
+		return failedQuerier{err: f.restErr}
+	}
 	return metrics.NewProxyTransport(f.rest, c)
+}
+
+// failedQuerier reads as unavailable with the reason, never through an
+// unguarded client.
+type failedQuerier struct{ err error }
+
+func (q failedQuerier) InstantQuery(context.Context, string) (int, []byte, error) {
+	return 0, nil, q.err
+}
+func (q failedQuerier) RangeQuery(context.Context, string, time.Time, time.Time, time.Duration) (int, []byte, error) {
+	return 0, nil, q.err
+}
+
+// proxyREST is the REST client the service-proxy path uses: the guarded one
+// built from the cluster's rest.Config, which refuses redirects off the API
+// server's origin (C5 §4). A connection without a rest.Config (fake clients
+// in tests) uses its clientset's. Caller MUST hold c.metricsMu.
+func (c *ClusterConn) proxyREST() (rest.Interface, error) {
+	if c.restConfig == nil {
+		return c.typed.CoreV1().RESTClient(), nil
+	}
+	if c.guardedREST == nil && c.guardedRESTErr == nil {
+		c.guardedREST, c.guardedRESTErr = metrics.NewGuardedProxyREST(c.restConfig)
+	}
+	return c.guardedREST, c.guardedRESTErr
 }
 
 // discover reduces in-cluster Services to a single DiscoveryResult: first
@@ -104,7 +131,8 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	if capValid {
 		return
 	}
-	var tf metrics.TransportFactory = transportFactory{rest: c.typed.CoreV1().RESTClient()}
+	pr, prErr := c.proxyREST()
+	var tf metrics.TransportFactory = transportFactory{rest: pr, restErr: prErr}
 	if c.metricsTF != nil {
 		tf = c.metricsTF
 	}

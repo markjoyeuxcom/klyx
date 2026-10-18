@@ -1,6 +1,10 @@
 package metrics
 
-import "context"
+import (
+	"context"
+
+	"github.com/moomora/klyx/internal/safehttp"
+)
 
 // Probe resolves a candidate then liveness-checks it. Available is true only
 // after a passing vector(1). A resolved-but-unreachable backend reports
@@ -11,7 +15,9 @@ func Probe(ctx context.Context, res Resolution) MetricsCapability {
 		return out // Available stays false; Reason already set for unavailable
 	}
 	if err := NewClient(res.Transport).Liveness(ctx); err != nil {
-		out.Reason = err.Error()
+		// the transport already redacted its own credential; the general
+		// credential shapes go too before the reason reaches the page (C5 §5)
+		out.Reason = safehttp.NewRedactor().Text(err.Error())
 		return out
 	}
 	out.Available = true
