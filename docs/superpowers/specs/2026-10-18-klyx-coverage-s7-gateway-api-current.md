@@ -756,3 +756,7 @@ Codex verified the five findings resolved, and confirmed with a new probe that a
 | 2 | An explicit `group: ""` (the core group) collapsed into the omitted default (the Gateway API's) | `parseRouteKinds` applies the default only when the key is absent, so presence is kept at parsing; `containsKind` compares the group as parsed. The explanation says `core/HTTPRoute`, and the Gateway inspector's listener kinds name a foreign or core group the same way. |
 
 Mutations: the combined gate, no ListenerSet currentness, the empty group defaulted and the frontend kind text are all caught.
+
+## 21. Revision 3: Codex's re-review of e29383a
+
+Codex verified both residuals resolved. One more P2: `ListenerSetCurrent` was set only when the ListenerSet's own parent reference named a Gateway, so a current ListenerSet whose parent names another kind or group lost its own fresh refusal. It is now set whenever the ListenerSet is found, from the ListenerSets read alone. The stale-read reason follows it, and the chain's `Current`, controller and allowance gates are unchanged. Codex's probe is adopted (`routes_current_r2_test.go`), and the mutation that ties the flag to the parent's kind is caught. Go only: race and lint are clean. The smoke is not re-run, since the lab has no such ListenerSet and the frontend is unchanged.

@@ -408,15 +408,19 @@ func (ix RouteIndex) Resolve(ref RouteParentRef) AttachmentParent {
 				p.State = ParentNotFound
 			}
 		}
+		// the ListenerSet's own read decides its own evidence, whatever its
+		// parent's kind (Codex's S7b re-review 2)
+		if p.ListenerSet != nil {
+			p.ListenerSetCurrent = ix.ListenerSetsRead.Current
+			if !p.ListenerSetCurrent {
+				stale = "the ListenerSets read is not current: ListenerSet " + ref.Namespace + "/" + ref.Name + " is last observed"
+			}
+		}
 		if p.ListenerSet != nil && p.ListenerSet.Parent.IsGateway() {
 			var gwCurrent bool
 			p.Gateway, _, gwCurrent = ix.gateway(p.ListenerSet.Parent.Namespace, p.ListenerSet.Parent.Name)
-			p.ListenerSetCurrent = ix.ListenerSetsRead.Current
-			p.Current = ix.ListenerSetsRead.Current && gwCurrent
-			switch {
-			case !ix.ListenerSetsRead.Current:
-				stale = "the ListenerSets read is not current: ListenerSet " + ref.Namespace + "/" + ref.Name + " is last observed"
-			case p.Gateway != nil && !gwCurrent:
+			p.Current = p.ListenerSetCurrent && gwCurrent
+			if stale == "" && p.Gateway != nil && !gwCurrent {
 				stale = "the Gateways read is not current: Gateway " + p.Gateway.Namespace + "/" + p.Gateway.Name + " is last observed"
 			}
 		}
