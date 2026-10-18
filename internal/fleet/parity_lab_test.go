@@ -385,6 +385,10 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 				Health   *struct{ Kind int }
 				Role     string
 				Included bool
+				// a listed fact's markers (coverage S2b, S3a): an uncounted
+				// Backup, a binding
+				Counted *bool
+				Binding json.RawMessage
 			}
 		}
 	}
@@ -393,6 +397,12 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 	}
 	out := make(map[string]parityMember, len(env.Rows))
 	for _, x := range env.Rows {
+		// a listed fact, by its part's own marker: no evaluation, and no member
+		// of the counted set (FluxInstance rows carry an unrelated Binding)
+		if (key == "velero/backups" && x.Data.Counted != nil && !*x.Data.Counted) ||
+			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") {
+			continue
+		}
 		var m parityMember
 		switch {
 		case key == "workloads/workloads" || key == "pods/pods" || key == "nodes/nodes":

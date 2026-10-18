@@ -480,6 +480,11 @@ func init() {
 	add("velero.io", "v1", "schedules", "ScheduleList")
 	add("velero.io", "v1", "backupstoragelocations", "BackupStorageLocationList")
 	add("velero.io", "v1", "backups", "BackupList")
+	for _, r := range [][2]string{{"validatingwebhookconfigurations", "ValidatingWebhookConfigurationList"}, {"mutatingwebhookconfigurations", "MutatingWebhookConfigurationList"},
+		{"validatingadmissionpolicies", "ValidatingAdmissionPolicyList"}, {"mutatingadmissionpolicies", "MutatingAdmissionPolicyList"},
+		{"validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBindingList"}, {"mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBindingList"}} {
+		add("admissionregistration.k8s.io", "v1", r[0], r[1])
+	}
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -564,8 +569,9 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	}
 	svcs := sc.routes
 	for i := 0; i < svcs; i++ {
-		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))}})
+		// the shared Services kind is a typed watch (C3)
+		typedObjs = append(typedObjs, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "https", Port: 443, Protocol: corev1.ProtocolTCP}}}})
 	}
 	for i := 0; i < sc.slices; i++ {
 		svc := fmt.Sprintf("svc-%04d", i%svcs)
@@ -591,6 +597,24 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 		if _, err := dyn.Resource(gvr).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// coverage S3a: webhook configurations (two webhooks each, on the
+	// shared Services) and bound policies, scaled with the gateways
+	for i := 0; i < 2*sc.gateways; i++ {
+		hook := func(n int) map[string]any {
+			return map[string]any{"name": fmt.Sprintf("h%d.load.klyx.dev", n), "failurePolicy": "Fail", "sideEffects": "None", "admissionReviewVersions": []any{"v1"},
+				"clientConfig": map[string]any{"service": map[string]any{"namespace": ns(i), "name": fmt.Sprintf("svc-%04d", i%svcs), "port": int64(443)}},
+				"rules":        []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{"lab.klyx.dev"}, "apiVersions": []any{"v1"}, "resources": []any{"widgets"}}}}
+		}
+		create("admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d", i), "uid": fmt.Sprintf("vwc-%03d", i)}, "webhooks": []any{hook(0), hook(1)}}})
+		create("admissionregistration.k8s.io", "v1", "validatingadmissionpolicies", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d", i), "uid": fmt.Sprintf("vap-%03d", i)}, "spec": map[string]any{"validations": []any{map[string]any{"expression": "true"}}}}})
+		create("admissionregistration.k8s.io", "v1", "validatingadmissionpolicybindings", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicyBinding",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d-b", i), "uid": fmt.Sprintf("vapb-%03d", i)}, "spec": map[string]any{"policyName": fmt.Sprintf("load-%03d", i), "validationActions": []any{"Deny"}}}})
 	}
 	readyIf := func(i int) string {
 		if i%25 == 0 {
@@ -663,7 +687,8 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	}
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero} {
+	kinds = append(kinds, SharedNetworkKinds(nd)...)
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}
