@@ -51,10 +51,10 @@ const COLUMNS: Record<Tab, (ColumnDef & { label: string })[]> = {
   services: [
     ROW_MARK,
     { id: "name", label: "Name", width: 240, priority: 0, flex: true },
-    { id: "status", label: "Status", width: 260, priority: 0 },
+    { id: "status", label: "Status", width: 220, priority: 0 },
     { id: "class", label: "Class", width: 150, priority: 2 },
     { id: "address", label: "Address", width: 150, priority: 1 },
-    { id: "controller", label: "Expected controller", width: 190, priority: 2 },
+    { id: "controller", label: "Expected controller", width: 180, priority: 1 },
     { id: "pending", label: "Pending", width: 90, priority: 1 },
   ],
   pools: [
@@ -352,7 +352,8 @@ function ServiceInspector({ cluster, s, now, gone, pools, onOpen, onClose }: {
           <div className="insp-kv">
             <span>assigned</span><span style={{ overflowWrap: "anywhere" }}>{s.allocated ? [...s.ips, ...s.hostnames].join(", ") + (s.addressCount > s.ips.length + s.hostnames.length ? ` +${s.addressCount - s.ips.length - s.hostnames.length}` : "") : "none"}</span>
             {s.entries > s.addressCount && <><span>empty entries</span><span>{s.entries - s.addressCount} ingress entries carry neither an IP nor a hostname</span></>}
-            <span>families</span><span>{s.families.join(", ") || (s.allocated ? "unknown (a hostname)" : "-")}{s.ipFamilyPolicy ? ` · policy ${s.ipFamilyPolicy}` : ""}</span>
+            {s.allocated && <><span>families</span><span>{s.families.join(", ") || "unknown (a hostname)"}</span></>}
+            {(s.ipFamilies.length > 0 || s.ipFamilyPolicy) && <><span>requested</span><span>{[s.ipFamilies.join(", "), s.ipFamilyPolicy].filter(Boolean).join(" · ")}</span></>}
             {s.missingFamily && <><span>missing</span><span style={{ color: "var(--color-text-warning)" }}>{s.missingFamily} is not assigned, and the Service requires both</span></>}
             {s.oneFamilyPreferred && <><span>one family</span><span>PreferDualStack with one family assigned: allowed, said only</span></>}
             {s.externalTrafficPolicy && <><span>traffic policy</span><span>{s.externalTrafficPolicy}</span></>}
@@ -383,7 +384,7 @@ function ServiceInspector({ cluster, s, now, gone, pools, onOpen, onClose }: {
                 <div className="t-legend">Cilium LB IPAM condition</div>
                 <div className="t-body" style={{ color: d.cilium.current ? undefined : "var(--color-text-tertiary)" }}>{condText(d.cilium)}{d.cilium.current ? "" : " · historical: for an earlier generation"}</div>
               </div>}
-              {(d.svclb || d.svclbRead) && <div>
+              {(d.svclb || s.expected.candidates.some((c) => c.controller === "k3s ServiceLB")) && <div>
                 <div className="t-legend">k3s ServiceLB</div>
                 {d.svclb?.daemonSet
                   ? <div className="t-body">{d.svclb.daemonSet}: {d.svclb.ready} of {d.svclb.pods} pods ready{d.svclb.pending ? `, ${d.svclb.pending} pending${d.svclb.pendingReason ? ` (${d.svclb.pendingReason})` : ""}` : ""}

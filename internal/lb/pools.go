@@ -298,7 +298,7 @@ func MetalLBPoolRule(in MetalLBPoolInput) health.NativeEval {
 				Reason: health.CapReason("An advertisement's selection could not be evaluated", strings.Join(sel.Unresolved, ", "))}
 		}
 		return health.NativeEval{Included: true, Role: health.Degraded, Label: "No advertisement",
-			Reason: health.CapReason("No advertisement selects it", LimitAdvertisement)}
+			Reason: health.CapReason("No advertisement selects it", "no L2Advertisement or BGPAdvertisement in its namespace names or selects it")}
 	}
 	if !p.Status.Reported() {
 		return health.NativeEval{Role: health.Unknown, Label: "Counts not reported"}
