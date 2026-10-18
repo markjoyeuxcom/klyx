@@ -359,6 +359,17 @@ func main() {
 		return c, true
 	})
 
+	// Settings > Endpoints (coverage C5): credentials for the external
+	// endpoints, fenced against the fleet.yaml the person reviewed.
+	endpointsSvc := appbridge.NewEndpointsService(configPath(), endpointCreds.Store, endpointCreds.Revisions, func(name string) (appbridge.EndpointConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		ec, ok := c.(appbridge.EndpointConn)
+		return ec, ok
+	})
+
 	workloadsSvc := appbridge.NewWorkloadsService(func(name string) (appbridge.WorkloadsConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -589,6 +600,7 @@ func main() {
 		application.NewService(gitSvc),
 		application.NewService(writesSvc),
 		application.NewService(metricsSvc),
+		application.NewService(endpointsSvc),
 		application.NewService(workloadsSvc),
 		application.NewService(podsSvc),
 		application.NewService(logsSvc),
