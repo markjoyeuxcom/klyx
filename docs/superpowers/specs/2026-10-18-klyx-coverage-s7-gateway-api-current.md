@@ -589,3 +589,5 @@ Codex's three new mounted probes pass unchanged and are adopted as tests. Three 
 **Gates at c833250** (frontend-only), clean:
 - vitest: 2,236 passed. tsc: clean. eslint: 0 errors.
 - Native smoke: 176/176 in each of night and day at 1440 and 1024, the labs re-applied first.
+
+**Accepted at 2d86b13** (Codex, implementation revision 2, handoff db4f5e4f, 2026-10-18). This accepts S7a; S7b keeps its own review and gates.
