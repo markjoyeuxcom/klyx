@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/safehttp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,6 +41,9 @@ var labelSelectors = []string{
 }
 
 type metricsCache struct {
+	// credRev is the endpoint credential's revision the cache was built
+	// under (C5 §7): a different one discards it.
+	credRev   uint64
 	capSet    bool
 	cap       metrics.MetricsCapability
 	capExpiry time.Time // zero = cached for lifetime (available)
@@ -55,15 +60,15 @@ type transportFactory struct {
 	restErr error // the guarded proxy client could not be built
 }
 
-func (f transportFactory) Direct(base, token string, skip bool) metrics.Querier {
-	return metrics.NewDirectTransport(base, token, safehttp.NewClient(metrics.DirectPolicy(metricsHTTPTimeout, skip)))
+func (f transportFactory) Direct(base string, auth metrics.Auth, skip bool) metrics.Querier {
+	return metrics.NewDirectTransportAuth(base, auth, safehttp.NewClient(metrics.DirectPolicy(metricsHTTPTimeout, skip)))
 }
 
-func (f transportFactory) Proxy(c metrics.ServiceCandidate) metrics.Querier {
+func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metrics.Querier {
 	if f.restErr != nil {
 		return failedQuerier{err: f.restErr}
 	}
-	return metrics.NewProxyTransport(f.rest, c)
+	return metrics.NewProxyTransportTenant(f.rest, c, tenant)
 }
 
 // failedQuerier reads as unavailable with the reason, never through an
@@ -126,7 +131,9 @@ func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
 // lifetime, unavailable is short-TTL re-probed, forceReprobe bypasses the cache.
 // Caller MUST hold c.metricsMu.
 func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
-	capValid := c.metricsState.capSet && !forceReprobe &&
+	revs := c.creds.Revisions
+	rev := revs.Revision(c.name, config.EndpointMetrics)
+	capValid := c.metricsState.capSet && !forceReprobe && c.metricsState.credRev == rev &&
 		(c.metricsState.cap.Available || now.Before(c.metricsState.capExpiry))
 	if capValid {
 		return
@@ -140,9 +147,17 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil {
 		disco = c.discover(ctx)
 	}
-	res := metrics.Resolve(c.metricsCfg, disco, tf)
+	res := metrics.Resolve(c.metricsCfg, c.metricsAuth(rev), disco, tf)
 	cap := metrics.Probe(ctx, res)
 
+	// a read started under an older credential revision is neither cached
+	// nor shown as the endpoint's availability (C5 §7)
+	if revs.Revision(c.name, config.EndpointMetrics) != rev {
+		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: res.Mode, Source: res.Source,
+			Reason: "the endpoint's credential changed during the read; it is read again next time"}}
+		return
+	}
+	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
 	c.metricsState.cap = cap
 	c.metricsState.transport = res.Transport
@@ -195,4 +210,23 @@ func querySamples(ctx context.Context, q metrics.Querier) metrics.ClusterMetrics
 		out.MemFraction = &v
 	}
 	return out
+}
+
+// metricsAuth is the metrics endpoint's credential and tenant as resolved
+// now, gated on revision rev (C5 §3, §7).
+func (c *ClusterConn) metricsAuth(rev uint64) metrics.Auth {
+	revs := c.creds.Revisions
+	cred := endpointcred.Resolve(c.creds.Store, endpointcred.Input{Cluster: c.name, Kind: config.EndpointMetrics,
+		Spec: c.metricsCfg.Spec(), LegacyToken: c.metricsCfg.Token, Revoked: revs.Revoked(c.name, config.EndpointMetrics)})
+	auth := metrics.Auth{Tenant: c.metricsCfg.Tenant}
+	if !cred.Usable() {
+		auth.Unusable = cred.Why
+		if auth.Unusable == "" {
+			auth.Unusable = "the credential is " + string(cred.State)
+		}
+		return auth
+	}
+	auth.Header, auth.Redactor = cred.Header(), cred.Redactor()
+	auth.Live = revs.Live(c.name, config.EndpointMetrics, rev)
+	return auth
 }

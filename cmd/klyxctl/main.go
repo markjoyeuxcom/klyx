@@ -12,7 +12,9 @@ import (
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/secretstore"
 )
 
 func main() {
@@ -33,7 +35,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
+	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}, fleet.Credentials{Store: secretstore.OS{}, Revisions: endpointcred.NewRegistry()}))
 	reg.Start(ctx)
 
 	time.Sleep(*wait) // give informers time to sync for this one-shot tool

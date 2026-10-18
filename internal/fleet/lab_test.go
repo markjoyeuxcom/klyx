@@ -65,7 +65,7 @@ func TestLab(t *testing.T) {
 	cpu0 := cpuTime()
 
 	// The production connection, with its health Observer.
-	conn, err := DefaultConnFactory(clock.Real{})(cc)
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(cc)
 	if err != nil {
 		t.Fatal(err)
 	}

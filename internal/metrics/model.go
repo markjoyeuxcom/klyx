@@ -3,7 +3,11 @@
 // probe-confirmed capability. Pure of client-go except the proxy transport.
 package metrics
 
-import "context"
+import (
+	"context"
+
+	"github.com/moomora/klyx/internal/safehttp"
+)
 
 // Sample is one scalar value from an instant query. Absent reports "no data".
 type Sample struct {
@@ -67,6 +71,28 @@ type ClusterMetrics struct {
 // TransportFactory builds transports. The fleet layer supplies the real one
 // (it owns the cluster REST client); tests supply a fake.
 type TransportFactory interface {
-	Direct(base, token string, tlsSkipVerify bool) Querier
-	Proxy(c ServiceCandidate) Querier
+	Direct(base string, auth Auth, tlsSkipVerify bool) Querier
+	Proxy(c ServiceCandidate, tenant string) Querier
+}
+
+// Auth is what a direct request to an endpoint carries (coverage C5 §3-§7):
+// the Authorization header ("" for none), the tenant (X-Scope-OrgID), the
+// redactor for the credential, and a gate that refuses to send once the
+// credential's revision has moved. Unusable says why the credential cannot
+// be used: the endpoint then reads unavailable and nothing is sent.
+type Auth struct {
+	Header   string
+	Tenant   string
+	Redactor safehttp.Redactor
+	Live     func() bool
+	Unusable string
+}
+
+// BearerAuth is a plain bearer token, redacted (tests, and the legacy path).
+func BearerAuth(token string) Auth {
+	a := Auth{Redactor: safehttp.NewRedactor(safehttp.Bearer(token))}
+	if token != "" {
+		a.Header = "Bearer " + token
+	}
+	return a
 }

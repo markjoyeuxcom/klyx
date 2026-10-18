@@ -19,8 +19,9 @@ func sourceStr(c ServiceCandidate) string {
 }
 
 // Resolve applies the 4-tier priority: endpoint -> serviceRef -> discovery ->
-// unavailable. disco is the single reduced discovery outcome.
-func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactory) Resolution {
+// unavailable. disco is the single reduced discovery outcome; auth is the
+// direct endpoint's credential as resolved now (coverage C5 §3).
+func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf TransportFactory) Resolution {
 	if cfg.Endpoint != "" {
 		// an endpoint URL carrying credentials is refused for use, and
 		// never shown with them (coverage C5 §2)
@@ -32,12 +33,16 @@ func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactor
 		if cfg.ServiceRef != nil {
 			warn = "serviceRef ignored because endpoint is set"
 		}
-		return Resolution{Mode: ModeExplicitEndpoint, Source: base, Transport: tf.Direct(base, cfg.Token, cfg.TLSSkipVerify), Warning: warn}
+		if auth.Unusable != "" {
+			// nothing is sent without the credential the endpoint needs
+			return Resolution{Mode: ModeUnavailable, Source: base, Reason: auth.Unusable, Warning: warn}
+		}
+		return Resolution{Mode: ModeExplicitEndpoint, Source: base, Transport: tf.Direct(base, auth, cfg.TLSSkipVerify), Warning: warn}
 	}
 	if sr := cfg.ServiceRef; sr != nil {
 		c := ServiceCandidate{Namespace: sr.Namespace, Name: sr.Name, Port: sr.Port}
 		c.Scheme = schemeOr(sr.Scheme)
-		return Resolution{Mode: ModeExplicitService, Source: sourceStr(c), Transport: tf.Proxy(c)}
+		return Resolution{Mode: ModeExplicitService, Source: sourceStr(c), Transport: tf.Proxy(c, cfg.Tenant)}
 	}
 	if disco.MultiMatch {
 		return Resolution{Mode: ModeUnavailable, Reason: "multiple candidate Services found, set metrics.serviceRef"}
@@ -45,7 +50,7 @@ func Resolve(cfg config.MetricsConfig, disco DiscoveryResult, tf TransportFactor
 	if disco.Chosen != nil {
 		c := *disco.Chosen
 		c.Scheme = schemeOr(c.Scheme)
-		return Resolution{Mode: ModeDiscovered, Source: sourceStr(c), Transport: tf.Proxy(c)}
+		return Resolution{Mode: ModeDiscovered, Source: sourceStr(c), Transport: tf.Proxy(c, cfg.Tenant)}
 	}
 	return Resolution{Mode: ModeUnavailable, Reason: ReasonNoService}
 }

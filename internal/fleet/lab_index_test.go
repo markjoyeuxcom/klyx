@@ -30,7 +30,7 @@ func TestLabIndex(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: ctxName, Context: ctxName})
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: ctxName, Context: ctxName})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,11 +174,13 @@ type ClusterConn struct {
 	// (C5 §4), once, under metricsMu.
 	guardedREST    rest.Interface
 	guardedRESTErr error
-	typed          kubernetes.Interface
-	meta           metadata.Interface
-	dyn            dynamic.Interface
-	detector       *capability.Detector
-	clk            clock.Clock
+	// creds resolves external endpoints' credentials (C5 §3, §7).
+	creds    Credentials
+	typed    kubernetes.Interface
+	meta     metadata.Interface
+	dyn      dynamic.Interface
+	detector *capability.Detector
+	clk      clock.Clock
 
 	mu             sync.RWMutex
 	state          ConnState
@@ -267,6 +269,30 @@ func (c *ClusterConn) WithKubeconfig(configured string) *ClusterConn {
 // with no recorded selection.
 func (c *ClusterConn) cliEnv() []string {
 	return execenv.KubeconfigEnv(strings.Join(c.kubeconfigPaths, string(os.PathListSeparator)))
+}
+
+// WithCredentials sets where external endpoints' credentials come from.
+func (c *ClusterConn) WithCredentials(cr Credentials) *ClusterConn {
+	c.creds = cr
+	return c
+}
+
+// SetMetricsConfig replaces the metrics endpoint's configuration (a Move to
+// the keychain rewrote it, C5 §6) and drops every cached client built from
+// the old one.
+func (c *ClusterConn) SetMetricsConfig(mc config.MetricsConfig) {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	c.metricsCfg = mc
+	c.metricsState = metricsCache{}
+}
+
+// MetricsConfig is the metrics endpoint's configuration as this connection
+// uses it.
+func (c *ClusterConn) MetricsConfig() config.MetricsConfig {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	return c.metricsCfg
 }
 
 // WithRESTConfig sets the *rest.Config used to build SPDY transports for

@@ -18,11 +18,13 @@ import (
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/secretstore"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/dock"
@@ -86,7 +88,10 @@ func main() {
 	// handle is installed atomically once it exists (events before that are
 	// dropped; HealthService.Summaries bootstraps the retained summaries).
 	em := &appbridge.LateEmitter{}
-	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
+	// External endpoints' credentials (coverage C5): the OS keychain, and
+	// the in-memory revisions Settings > Endpoints moves.
+	endpointCreds := fleet.Credentials{Store: secretstore.OS{}, Revisions: endpointcred.NewRegistry()}
+	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}, endpointCreds))
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer

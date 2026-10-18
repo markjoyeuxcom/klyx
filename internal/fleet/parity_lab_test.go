@@ -670,7 +670,7 @@ type parityConn struct {
 func (l *parityLab) connect(kubeconfig string) *parityConn {
 	l.t.Helper()
 	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig}
-	conn, err := fleet.DefaultConnFactory(clock.Real{})(cc)
+	conn, err := fleet.DefaultConnFactory(clock.Real{}, fleet.Credentials{})(cc)
 	if err != nil {
 		l.t.Fatal(err)
 	}

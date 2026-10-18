@@ -161,3 +161,25 @@ func TestProxyReadPastTheCapIsAnError(t *testing.T) {
 		t.Fatalf("past the cap: %v", err)
 	}
 }
+
+// Coverage C5 §4: a proxied request carries the tenant header to the API
+// server, and only the kube credential - never an endpoint credential.
+func TestProxyCarriesTenantAndOnlyKubeAuth(t *testing.T) {
+	var gotTenant, gotAuth string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTenant, gotAuth = r.Header.Get("X-Scope-OrgID"), r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"scalar","result":[0,"1"]}}`)
+	}))
+	defer api.Close()
+	rc, err := NewGuardedProxyREST(&rest.Config{Host: api.URL, BearerToken: "kube-tok", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := NewProxyTransportTenant(rc, ServiceCandidate{Namespace: "monitoring", Name: "mimir", Port: "8080", Scheme: "http"}, "platform")
+	if err := NewClient(q).Liveness(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotTenant != "platform" || gotAuth != "Bearer kube-tok" {
+		t.Fatalf("tenant %q, auth %q", gotTenant, gotAuth)
+	}
+}

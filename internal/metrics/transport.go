@@ -32,20 +32,30 @@ func DirectPolicy(timeout time.Duration, tlsSkipVerify bool) safehttp.Policy {
 	return safehttp.Policy{Timeout: timeout, MaxBytes: maxResponseBytes, TooLarge: ErrResponseTooLarge, TLSSkipVerify: tlsSkipVerify}
 }
 
+// ErrCredentialChanged: the endpoint's credential changed or was removed
+// after this client was built; it sends nothing more (C5 §7).
+var ErrCredentialChanged = errors.New("the endpoint's credential changed; read it again")
+
 // directTransport queries an external Prometheus/Mimir base URL over HTTP(S).
 // It holds the credential, so it redacts it from everything it returns - the
-// body before any parse quotes it, and every error (C5 §5).
+// body before any parse quotes it, and every error (C5 §5) - and it sends
+// nothing once the credential's revision has moved (§7).
 type directTransport struct {
 	base   string // Prometheus base URL, no trailing /api/v1
-	token  string
+	auth   Auth
 	client *http.Client
-	red    safehttp.Redactor
 }
 
-// NewDirectTransport builds a direct HTTP transport. The caller supplies the
-// *http.Client (DirectPolicy's, with any TLS settings already applied).
+// NewDirectTransport builds a direct HTTP transport with a bearer token.
+// The caller supplies the *http.Client (DirectPolicy's).
 func NewDirectTransport(base, token string, client *http.Client) Querier {
-	return &directTransport{base: base, token: token, client: client, red: safehttp.NewRedactor(safehttp.Bearer(token))}
+	return NewDirectTransportAuth(base, BearerAuth(token), client)
+}
+
+// NewDirectTransportAuth builds a direct HTTP transport with an endpoint's
+// resolved credential and tenant.
+func NewDirectTransportAuth(base string, auth Auth, client *http.Client) Querier {
+	return &directTransport{base: base, auth: auth, client: client}
 }
 
 func (t *directTransport) InstantQuery(ctx context.Context, promql string) (int, []byte, error) {
@@ -53,9 +63,6 @@ func (t *directTransport) InstantQuery(ctx context.Context, promql string) (int,
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, nil, err
-	}
-	if t.token != "" {
-		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	return t.do(req)
 }
@@ -69,21 +76,30 @@ func (t *directTransport) RangeQuery(ctx context.Context, promql string, start, 
 	if err != nil {
 		return 0, nil, err
 	}
-	if t.token != "" {
-		req.Header.Set("Authorization", "Bearer "+t.token)
-	}
 	return t.do(req)
 }
 
-// do sends one request and reads its capped body, redacted.
+// do sends one request and reads its capped body, redacted. The credential
+// and the tenant are set here, for the endpoint's origin; the redirect
+// policy keeps them on that origin.
 func (t *directTransport) do(req *http.Request) (int, []byte, error) {
+	if t.auth.Live != nil && !t.auth.Live() {
+		return 0, nil, ErrCredentialChanged
+	}
+	if t.auth.Header != "" {
+		req.Header.Set("Authorization", t.auth.Header)
+	}
+	if t.auth.Tenant != "" {
+		req.Header.Set("X-Scope-OrgID", t.auth.Tenant)
+	}
+	red := t.auth.Redactor
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return 0, nil, t.red.Err(err)
+		return 0, nil, red.Err(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := readCapped(resp.Body)
-	return resp.StatusCode, t.red.ExactBytes(body), t.red.Err(err)
+	return resp.StatusCode, red.ExactBytes(body), red.Err(err)
 }
 
 // readCapped reads at most maxResponseBytes; one byte more is
@@ -124,14 +140,21 @@ func NewGuardedProxyREST(cfg *rest.Config) (rest.Interface, error) {
 
 // proxyTransport queries through the kube API-server service proxy using the
 // cluster's existing REST credentials, through NewGuardedProxyREST's client.
+// No endpoint credential is ever added here; the tenant header is (C5 §4).
 type proxyTransport struct {
-	rest rest.Interface
-	c    ServiceCandidate
+	rest   rest.Interface
+	c      ServiceCandidate
+	tenant string
 }
 
 // NewProxyTransport builds a proxy transport over a cluster REST client.
 func NewProxyTransport(r rest.Interface, c ServiceCandidate) Querier {
 	return &proxyTransport{rest: r, c: c}
+}
+
+// NewProxyTransportTenant is NewProxyTransport with a tenant header.
+func NewProxyTransportTenant(r rest.Interface, c ServiceCandidate, tenant string) Querier {
+	return &proxyTransport{rest: r, c: c, tenant: tenant}
 }
 
 func (t *proxyTransport) InstantQuery(ctx context.Context, promql string) (int, []byte, error) {
@@ -160,6 +183,9 @@ func (t *proxyTransport) get(ctx context.Context, suffix string, params [][2]str
 		Suffix(suffix)
 	for _, p := range params {
 		req = req.Param(p[0], p[1])
+	}
+	if t.tenant != "" {
+		req = req.SetHeader("X-Scope-OrgID", t.tenant)
 	}
 	rc, err := req.Stream(ctx)
 	if err != nil {
