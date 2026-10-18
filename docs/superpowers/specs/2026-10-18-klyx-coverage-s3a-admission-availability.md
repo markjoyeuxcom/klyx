@@ -1,6 +1,6 @@
 # Coverage S3a: admission backend availability and policy inventory, with C3
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S3a, and its shared contract C3, which lands first. S3b (proven attribution of a write error) is a separate note. Revision 1 answers Codex's design review of a74bd2d (§11).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S3a, and its shared contract C3, which lands first. S3b (proven attribution of a write error) is a separate note. Revision 1 answers Codex's design review of a74bd2d (§11), revision 2 its re-review of 2827d4b (§12).
 
 The roadmap's S3a:
 - **The inventory:** Validating and Mutating webhook configurations, ValidatingAdmissionPolicy and MutatingAdmissionPolicy, with their bindings.
@@ -157,14 +157,17 @@ Read from `k8s.io/apiserver` and `k8s.io/kube-aggregator` v0.37.1 and `k8s.io/ap
 7. **No Service port with the webhook's port number:** unavailable, "no Service port <p>" (both modes).
 8. **The Service port's protocol is not TCP:** unknown, "the Service port is <protocol>; a webhook is called over TCP".
 9. **EndpointSlices unread or checking:** unknown, "endpoints unverified". Unread is never empty.
-10. **Usable endpoints.** An endpoint is usable when all of these hold:
-    - **its slice belongs to the Service:** it is labelled with the Service's name;
-    - **its slice carries the port:** a port whose name is present and equals the Service port's name ("" for an unnamed port), whose number is present, and whose protocol equals the Service port's;
-    - **the endpoint itself:** it is ready (nil is ready) and has an address.
+10. **Usable endpoints**, judged per routing mode (revision 2: the two modes check different things):
+    - **Endpoint routing** (`RandomEndpoint`, `proxy.go` 117-144) can use an endpoint when:
+      - its slice is labelled with the Service's name;
+      - its slice carries a port whose name is present and equals the Service port's name ("" for an unnamed port), and whose number is present. **The slice port's protocol is not checked;**
+      - the endpoint is ready (nil is ready) and has an address.
+    - **ClusterIP routing** (the proxy) can use an endpoint when it meets the same conditions and the slice port's protocol also equals the Service port's. When no endpoint is ready, it also falls back to serving-terminating ones.
 
-    This is what endpoint routing requires (`RandomEndpoint`, `proxy.go` 99-150), and what ClusterIP routing's proxy programs.
-    - **Some usable:** ok, "Backend ready (N endpoints)", with the limits said in the inspector.
-    - **None usable, but serving-terminating ones carry the port:** degraded, "only terminating endpoints". ClusterIP routing may fall back to them; endpoint routing does not.
+    **The outcome:**
+    - **Usable in both modes:** ok, "Backend ready (N endpoints)", with the limits said in the inspector.
+    - **Usable in one mode only:** unknown, "usable under <mode> routing only; the routing mode is not observable". This covers a protocol mismatch that only ClusterIP routing rejects.
+    - **None usable in either mode, but serving-terminating ones carry the port:** degraded, "only terminating endpoints". ClusterIP routing may fall back to them; endpoint routing does not.
     - **Otherwise:** unavailable, "no usable endpoints", with the reason: no slices, no slice carries the port by name, the port has no number, or no ready endpoint.
     - **A selectorless Service** is counted the same way from its own slices; the inspector says that something other than the Service controller manages them.
 
@@ -218,7 +221,11 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
   - **no `paramRef`:** the binding evaluates with no params, and nothing is checked;
   - **a namespaced `paramKind` with no `paramRef.namespace`:** "depends on the request's namespace: not checked". The API server looks in the admitted request's namespace (`policy_dispatcher.go` 299-317);
   - **an explicit namespace, or a cluster-scoped kind:** a name is got, a selector listed (limit 1). Each reads found, not found, or not readable (forbidden or an error, which is never "not found");
-  - **not found:** with `parameterNotFoundAction: Deny`, "a request this binding matches is denied (no params found)"; with Allow, "this binding is skipped".
+  - **not found** (a missing name, or a selector that matches nothing): with `parameterNotFoundAction: Allow`, "this binding is skipped". With `Deny`, it is a configuration error, so the policy's failure policy decides (`types.go` 591-596, `policy_dispatcher.go` 173-185 and 212-229):
+    - fail-closed: "a request this binding matches is denied (no params found)";
+    - Ignore: "this binding is skipped (no params found; the policy ignores configuration errors)".
+
+    This holds whatever a validating binding's actions: configuration errors take their own path (revision 2).
 - **Why not in the verdict:** params can be any kind, and watching every param kind is outside this slice's budget. The inspector says the verdict does not check params.
 
 ## 7. Projections and budget
@@ -280,6 +287,7 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
 - **Unit (`internal/admission`, pure):**
   - **every webhook state, at both failure policies,** including:
     - headless, ExternalName and non-TCP as unknown;
+    - a manually managed slice whose port matches by name and number but not protocol, which reads unknown (endpoint routing would use it; ClusterIP routing would not);
     - a slice port with the right name and no number;
     - a selectorless Service's slices;
     - only terminating endpoints;
@@ -299,6 +307,7 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
   - cold discovery, which reads unknown;
   - not served.
 - **The param check:**
+  - a missing named param and an empty selector result, each under Deny with Fail, Deny with Ignore, and Allow;
   - no `paramRef`;
   - cluster-scoped;
   - request-namespace dependent;
@@ -371,3 +380,10 @@ Mutating policies have no status, so rows 4 and 5 do not apply.
 | 7 | A per-webhook row had no identity through rows, Explain and the ledger | §3, §4: the counted entity is the configuration (one UID); webhooks are its parts; truncation reads unknown, never ok, and never departs a member |
 | 8 (P3) | A URL with user info cannot be created | §9: user info in synthetic tests; the lab's needle is in the URL path |
 | - | C3 guidance | §2: the demand vector dirties its parts; the per-consumer view applies to Objects, Complete, coverage and ledger; the yes-to-unknown or no test with the generation unchanged |
+
+## 12. Revision 2: Codex's re-review of 2827d4b
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Endpoint routing does not check the slice port's protocol, so a protocol-only mismatch is routing-dependent | §5 row 10: eligibility per mode; usable in one mode only reads unknown; a test beside the non-TCP Service port |
+| 2 | Deny on a missing param denies only under Fail; Ignore skips | §6: the not-found wording by failure policy, for a name and a selector, independent of validation actions; tests for each |
