@@ -870,9 +870,14 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		vk, vd := healthsrc.Velero(nd)
 		ak, ad := healthsrc.Admission(nd)
 		lk, ld := healthsrc.LoadBalancing(nd)
+		kk, kd := healthsrc.KEDA(nd) // S9
 		// the shared network kinds (C3), once, gated by their consumers
 		kinds = append(append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...), lk...)
 		domains = append(append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...), ld...)
+		// S9: the shared HPA kind (C3: the standalone part and KEDA), KEDA's
+		// kinds, and their tasks
+		kinds = append(append(kinds, healthsrc.SharedHPAKind(nd)), kk...)
+		domains = append(append(domains, healthsrc.Autoscaling(nd)...), kd...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
@@ -889,6 +894,7 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	if c.dyn != nil {
 		c.startParamKinds(ctx, o)                               // S3a: FactParamKinds
 		startLBEpisodes(ctx, o, c.clk.Now, c.setLBServicesSeen) // S4: FactLBEpisodes
+		startKEDAEpisodes(ctx, o, c.clk.Now, c.kedaVersion)     // S9: FactKEDAEpisodes
 	}
 	c.attachIndex()
 	c.syncHealth()
@@ -926,6 +932,7 @@ func (c *ClusterConn) syncHealth() {
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
 	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
 	h.SetFact(healthsrc.FactLB, healthsrc.LoadBalancingFact(caps.LoadBalancing))
+	h.SetFact(healthsrc.FactKEDA, healthsrc.KEDAFactsOf(caps.KEDA))
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])

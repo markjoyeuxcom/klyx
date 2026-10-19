@@ -105,6 +105,9 @@ type Capture struct {
 	// source both complete and current proves an object of a served kind
 	// absent.
 	Current map[string]bool
+	// AsOf holds, for a stale source, when it was last live: its retained
+	// objects are dated evidence (coverage S9 §3), never current.
+	AsOf map[string]time.Time
 	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
 	// rank of its first left-out object: every object that ranks before it
 	// is here, so a question confined to those has a complete answer

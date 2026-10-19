@@ -15,7 +15,7 @@ const (
 // ControllerTasks are the tasks whose controller health the capability
 // detector reports. Each always has an entry in ControllerIssues, so a
 // recovery clears a previous issue.
-var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway, TaskVelero, TaskLB}
+var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway, TaskVelero, TaskLB, TaskKEDA}
 
 // ControllerIssues maps the capability tiers onto per-task controller
 // issues (nil when healthy or not installed), in the detector's own words.
@@ -73,6 +73,13 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	// is unknown. Its ConfigurationStates are their own part, never this.
 	if lbc := caps.LoadBalancing; lbc.MetalLB && !lbc.Healthy {
 		out[TaskLB] = issue(stateOf(lbc.Verified), lbc.Reason)
+	}
+	// KEDA (S9 §2): the operators, the external metrics APIService and the
+	// webhooks; not ready only on a proven failure (an operator read not
+	// ready, the APIService absent, unavailable or proven foreign), unknown
+	// otherwise
+	if caps.KEDA.Present && !caps.KEDA.Healthy {
+		out[TaskKEDA] = issue(stateOf(caps.KEDA.Verified), caps.KEDA.Reason)
 	}
 	return out
 }

@@ -60,6 +60,7 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	// never refreshed them, so a server going not ready after connect was
 	// never seen)
 	c.caps.Velero = set.Velero
+	c.caps.KEDA = set.KEDA // coverage S9: the operators, their versions, the APIService
 	switch {
 	case set.Network.Tier == capability.Degraded:
 		if next, ok := Transition(c.state, EvCapUnhealthy); ok {

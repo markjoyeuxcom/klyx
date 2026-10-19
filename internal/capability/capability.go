@@ -172,6 +172,7 @@ type Set struct {
 	Velero          VeleroCapability
 	Admission       AdmissionCapability
 	LoadBalancing   LoadBalancingCapability
+	KEDA            KEDACapability       // coverage S9
 	Alerting        AlertingCapability   // coverage S8a: evidence, not a probe
 	LogHistory      LogHistoryCapability // coverage S8b: the configuration
 }

@@ -271,7 +271,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	// evaluate at it, and its batches and rows are stamped with it - never an
 	// earlier cycle time, which a slow evaluation before it would make stale.
 	at := o.clk.Now()
-	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}, Current: map[string]bool{}}
+	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}, Current: map[string]bool{}, AsOf: map[string]time.Time{}}
 	cp := captured{at: at, connEpoch: o.connEpoch, connUsable: o.connUsable}
 	if p.ledger != nil {
 		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
@@ -378,6 +378,9 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 			}
 		}
 		c.Current[name] = kc.Coverage == Live
+		if kc.Coverage == Stale && kc.LastGoodAt != nil {
+			c.AsOf[name] = *kc.LastGoodAt
+		}
 		kinds = append(kinds, kc)
 		if cp.ids != nil {
 			if viewed {

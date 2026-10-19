@@ -128,6 +128,9 @@ type Detector struct {
 	// Gateway API version and how many a controller has Accepted. nil selects
 	// the default (a read through the discovery REST client); tests inject it.
 	gatewayClasses func(ctx context.Context, version string) (gatewayClassCounts, error)
+	// rawGet reads one API path (coverage S9: the external metrics
+	// APIService). nil selects the discovery REST client; tests inject it.
+	rawGet func(ctx context.Context, path string) ([]byte, error)
 }
 
 func NewDetector(cs kubernetes.Interface) *Detector { return &Detector{cs: cs} }
@@ -175,6 +178,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 			Velero:          VeleroCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Admission:       AdmissionCapability{Base: Base{Tier: Absent, Reason: msg}},
 			LoadBalancing:   LoadBalancingCapability{Base: Base{Tier: Absent, Reason: msg}},
+			KEDA:            KEDACapability{Base: Base{Tier: Absent, Reason: msg}},
 		}, err
 	}
 	return Set{
@@ -187,6 +191,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 		Velero:          d.detectVelero(ctx, served),
 		Admission:       AdmissionCapability{Present: served["admissionregistration.k8s.io/v1"]},
 		LoadBalancing:   d.detectLoadBalancing(ctx, served),
+		KEDA:            d.detectKEDA(ctx, served),
 	}, nil
 }
 
