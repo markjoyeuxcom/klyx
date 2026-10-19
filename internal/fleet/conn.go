@@ -225,6 +225,9 @@ type ClusterConn struct {
 	metricsMu    sync.Mutex
 	metricsState metricsCache
 	metricsTF    metrics.TransportFactory // nil in production; tests inject a fake
+
+	// am is the Alertmanager endpoint (coverage S8a).
+	am alertmanagerState
 }
 
 func NewClusterConn(name string, typed kubernetes.Interface, meta metadata.Interface,

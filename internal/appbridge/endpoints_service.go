@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
@@ -31,6 +32,24 @@ type EndpointConn interface {
 	SetMetricsConfig(config.MetricsConfig)
 	MetricsConfig() config.MetricsConfig
 	ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error
+	// Alertmanager (coverage S8a): the same guarantees for its endpoint.
+	AlertmanagerConfig() *config.EndpointConfig
+	SetAlertmanagerConfig(*config.EndpointConfig)
+	ChangeAlertmanagerCredential(cfg *config.EndpointConfig, install func() error) error
+	AlertmanagerStatus(ctx context.Context) (alertmanager.Status, string, error)
+}
+
+// syncAlertmanager is syncMetrics for the Alertmanager endpoint (S8a §4).
+// Caller holds s.mu.
+func (s *EndpointsService) syncAlertmanager(cluster string, cl *config.ClusterConfig) {
+	if cl == nil || cl.Alertmanager == nil {
+		return
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok || reflect.DeepEqual(conn.AlertmanagerConfig(), cl.Alertmanager) {
+		return
+	}
+	conn.SetAlertmanagerConfig(cl.Alertmanager)
 }
 
 // syncMetrics makes the live connection read the metrics endpoint the
@@ -143,7 +162,7 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	if r.CanRemove && legacy != "" {
 		r.RemoveLabel = removeLegacyLabel
 	}
-	if ne.Kind == config.EndpointMetrics {
+	if ne.Kind == config.EndpointMetrics || ne.Kind == config.EndpointAlertmanager {
 		r.CanTest = true
 	} else {
 		r.TestNote = "not implemented until S8: a successful GET of / is not a reader's availability"
@@ -228,6 +247,12 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 	// with the configuration it replaces (Codex's revision 1 review)
 	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointMetrics && cl.Metrics != nil {
 		if err := conn.ChangeMetricsCredential(*cl.Metrics, install); err != nil {
+			return fail(red, err)
+		}
+		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
+	}
+	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointAlertmanager && cl.Alertmanager != nil {
+		if err := conn.ChangeAlertmanagerCredential(cl.Alertmanager, install); err != nil {
 			return fail(red, err)
 		}
 		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
@@ -319,7 +344,7 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 // TestEndpoint reads the endpoint the person reviewed once. Metrics only:
 // Alertmanager and Loki have no reader until S8.
 func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) EndpointActionDTO {
-	if kind != config.EndpointMetrics {
+	if kind != config.EndpointMetrics && kind != config.EndpointAlertmanager {
 		return EndpointActionDTO{Message: "Test is not implemented until S8."}
 	}
 	s.mu.Lock()
@@ -327,7 +352,11 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 	if err == nil {
 		// the test reads the endpoint as reviewed, never the connection's
 		// older configuration
-		s.syncMetrics(cluster, cl)
+		if kind == config.EndpointMetrics {
+			s.syncMetrics(cluster, cl)
+		} else {
+			s.syncAlertmanager(cluster, cl)
+		}
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -339,9 +368,31 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
 	defer cancel()
+	if kind == config.EndpointAlertmanager {
+		// a status read, separate from the alerts snapshot: it never moves
+		// the snapshot's freshness or result (S8a §4)
+		st, src, err := conn.AlertmanagerStatus(ctx)
+		if err != nil {
+			return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
+		}
+		return EndpointActionDTO{OK: true, Message: "Available: " + amStatusText(st) + " at " + src + ", answered."}
+	}
 	_, capb := conn.ClusterMetrics(ctx, true)
 	if !capb.Available {
 		return EndpointActionDTO{Message: "Unavailable: " + capb.Reason}
 	}
 	return EndpointActionDTO{OK: true, Message: "Available: " + capb.Source + " answered."}
+}
+
+// amStatusText is an Alertmanager status as Settings' Test reports it.
+func amStatusText(st alertmanager.Status) string {
+	cluster := "cluster status not reported"
+	switch st.ClusterStatus {
+	case "disabled":
+		cluster = "clustering disabled"
+	case "":
+	default:
+		cluster = fmt.Sprintf("cluster %s with %d peers", st.ClusterStatus, st.Peers)
+	}
+	return "Alertmanager " + st.Version + ", " + cluster
 }

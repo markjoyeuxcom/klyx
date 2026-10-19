@@ -54,6 +54,7 @@ func DefaultConnFactory(clk clock.Clock, creds Credentials) ConnFactory {
 		conn.WithKubeconfig(cc.Kubeconfig)
 		conn.WithRESTConfig(rc)
 		conn.WithCredentials(creds)
+		conn.WithAlertmanager(cc.Alertmanager)
 		return conn, nil
 	}
 }

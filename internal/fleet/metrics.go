@@ -7,7 +7,6 @@ import (
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
-	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/safehttp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -252,18 +251,5 @@ func querySamples(ctx context.Context, q metrics.Querier) metrics.ClusterMetrics
 // metricsAuth is the metrics endpoint's credential and tenant as resolved
 // now, gated on revision rev (C5 §3, §7).
 func (c *ClusterConn) metricsAuth(rev uint64) metrics.Auth {
-	revs := c.creds.Revisions
-	cred := endpointcred.Resolve(c.creds.Store, endpointcred.Input{Cluster: c.name, Kind: config.EndpointMetrics,
-		Spec: c.metricsCfg.Spec(), LegacyToken: c.metricsCfg.Token, Revoked: revs.Revoked(c.name, config.EndpointMetrics)})
-	auth := metrics.Auth{Tenant: c.metricsCfg.Tenant}
-	if !cred.Usable() {
-		auth.Unusable = cred.Why
-		if auth.Unusable == "" {
-			auth.Unusable = "the credential is " + string(cred.State)
-		}
-		return auth
-	}
-	auth.Header, auth.Redactor = cred.Header(), cred.Redactor()
-	auth.Live = revs.Live(c.name, config.EndpointMetrics, rev)
-	return auth
+	return c.endpointAuth(config.EndpointMetrics, c.metricsCfg.Spec(), c.metricsCfg.Token, rev)
 }

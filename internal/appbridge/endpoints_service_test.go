@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
@@ -39,6 +40,39 @@ type endpointConnFake struct {
 	set  []config.MetricsConfig
 	cfg  config.MetricsConfig
 	capb metrics.MetricsCapability
+	// Alertmanager
+	amCfg    *config.EndpointConfig
+	amSet    []*config.EndpointConfig
+	amStatus alertmanager.Status
+	amSrc    string
+	amErr    error
+}
+
+func (f *endpointConnFake) AlertmanagerConfig() *config.EndpointConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.amCfg
+}
+func (f *endpointConnFake) SetAlertmanagerConfig(c *config.EndpointConfig) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.amSet = append(f.amSet, c)
+	f.amCfg = c
+}
+func (f *endpointConnFake) ChangeAlertmanagerCredential(c *config.EndpointConfig, install func() error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	f.amSet = append(f.amSet, c)
+	f.amCfg = c
+	return nil
+}
+func (f *endpointConnFake) AlertmanagerStatus(context.Context) (alertmanager.Status, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.amStatus, f.amSrc, f.amErr
 }
 
 func (f *endpointConnFake) ClusterMetrics(context.Context, bool) (metrics.ClusterMetrics, metrics.MetricsCapability) {
@@ -113,6 +147,19 @@ type boundConnFake struct {
 func (b boundConnFake) SetMetricsConfig(mc config.MetricsConfig) {
 	b.endpointConnFake.SetMetricsConfig(mc)
 	b.revs.Bump(b.cluster, config.EndpointMetrics, false)
+}
+
+func (b boundConnFake) SetAlertmanagerConfig(c *config.EndpointConfig) {
+	b.endpointConnFake.SetAlertmanagerConfig(c)
+	b.revs.Bump(b.cluster, config.EndpointAlertmanager, false)
+}
+
+func (b boundConnFake) ChangeAlertmanagerCredential(c *config.EndpointConfig, install func() error) error {
+	if err := b.endpointConnFake.ChangeAlertmanagerCredential(c, install); err != nil {
+		return err
+	}
+	b.revs.Bump(b.cluster, config.EndpointAlertmanager, true)
+	return nil
 }
 
 func (b boundConnFake) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
