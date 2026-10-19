@@ -32,7 +32,7 @@ type fakeBranch []Entry // newest first
 func page(ps *PageSet, fs []fakeBranch) []Kept {
 	kept, _, err := ReadPage(context.Background(), func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
 		return fs[i].read(i, start, end, limit).Entries, nil
-	}, ps)
+	}, ps, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -211,7 +211,7 @@ func TestReadPageRefusalsAndFailures(t *testing.T) {
 		}
 		return f.read(i, start, end, limit).Entries, nil
 	}
-	kept, markers, err := ReadPage(context.Background(), refuse, ps)
+	kept, markers, err := ReadPage(context.Background(), refuse, ps, nil)
 	if err != nil || len(kept) != 0 || len(markers) != 1 || markers[0].Count != 1000 || markers[0].TS != 5000 ||
 		markers[0].Refused != "max entries limit per query exceeded (5000 > 2000)" || !ps.Branches[0].Stopped {
 		t.Fatalf("refused: %v %+v %v", kept, markers, err)
@@ -225,7 +225,7 @@ func TestReadPageRefusalsAndFailures(t *testing.T) {
 		}
 		return f.read(i, start, end, limit).Entries, nil
 	}
-	if _, _, err := ReadPage(context.Background(), fail, ps); !errors.Is(err, boom) || fmt.Sprintf("%+v", ps.Branches) != before {
+	if _, _, err := ReadPage(context.Background(), fail, ps, nil); !errors.Is(err, boom) || fmt.Sprintf("%+v", ps.Branches) != before {
 		t.Fatalf("a failed read moved the page set: %v %+v", err, ps.Branches)
 	}
 }
@@ -270,7 +270,7 @@ func TestMarkersPersistUntilSkipped(t *testing.T) {
 	for i := 0; i < 8 && ps.Branches[0].Active(); i++ {
 		_, markers, _ = ReadPage(context.Background(), func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
 			return fakeBranch(g).read(i, start, end, limit).Entries, nil
-		}, ps)
+		}, ps, nil)
 	}
 	if len(markers) != 1 || ps.More() || ps.Done() {
 		t.Fatalf("stopped: markers %v, more %v, done %v", markers, ps.More(), ps.Done())
@@ -279,12 +279,71 @@ func TestMarkersPersistUntilSkipped(t *testing.T) {
 	_, again, _ := ReadPage(context.Background(), func(context.Context, int, int64, int64, int) ([]Entry, error) {
 		t.Fatal("a stopped branch was read")
 		return nil, nil
-	}, ps)
+	}, ps, nil)
 	if len(again) != 1 || again[0].Count != markers[0].Count {
 		t.Fatalf("the marker went: %v", again)
 	}
 	ps.Skip(0)
 	if len(ps.Markers()) != 0 || !ps.More() {
 		t.Fatalf("after skip: %v %v", ps.Markers(), ps.More())
+	}
+}
+
+// Codex's review of f4cce2f: a page read on a Clone leaves the page set it
+// came from where it was; keeping the clone moves the cursor.
+func TestCloneStagesAPage(t *testing.T) {
+	g := fakeBranch(older(5000, 1500, "x"))
+	ps := NewPageSet(1, 10_000, 1)
+	page(ps, []fakeBranch{g})
+	before := fmt.Sprintf("%+v", ps.Branches)
+	staged := ps.Clone()
+	kept := page(staged, []fakeBranch{g})
+	if fmt.Sprintf("%+v", ps.Branches) != before || len(kept) != 500 || !staged.Done() {
+		t.Fatalf("the clone moved the original: %s -> %+v (%d kept)", before, ps.Branches, len(kept))
+	}
+	again := page(ps, []fakeBranch{g})
+	if len(again) != 500 || again[0].Line != kept[0].Line {
+		t.Fatalf("the original, read again, does not give the same page: %d", len(again))
+	}
+	// a page whose oldest entry is at the held boundary adds to the keys
+	// delivered there: the clone's, never the original's
+	a, b := ent(4000, "a", nil), ent(4000, "b", nil)
+	held := NewPageSet(1, 10_000, 1)
+	held.Apply([]Read{{Branch: 0, Limit: 1, Entries: []Entry{a, b}}}, 1)
+	c := held.Clone()
+	if kept := c.Apply([]Read{{Branch: 0, Limit: 1000, Entries: []Entry{a, b}}}, 1000); len(kept) != 1 || kept[0].Line != "b" {
+		t.Fatalf("the clone's page: %+v", kept)
+	}
+	if len(held.Branches[0].Delivered) != 1 || len(c.Branches[0].Delivered) != 2 {
+		t.Fatalf("delivered keys: original %d, clone %d", len(held.Branches[0].Delivered), len(c.Branches[0].Delivered))
+	}
+}
+
+// The budget counts each entry by the size the caller gives: what the page
+// carries, not the raw line (Codex's review of f4cce2f). An entry left out
+// is read on the next page.
+func TestSizeFuncBoundsThePage(t *testing.T) {
+	g := fakeBranch(older(5000, 100, "y"))
+	ps := NewPageSet(1, 10_000, 1)
+	seen := map[string]bool{}
+	for pages := 0; !ps.Done(); pages++ {
+		if pages > 30 {
+			t.Fatal("the page set never ended")
+		}
+		kept, _, err := ReadPage(context.Background(), func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
+			return g.read(i, start, end, limit).Entries, nil
+		}, ps, func(Entry) int { return PageBytes / 4 })
+		if err != nil || len(kept) > 4 {
+			t.Fatalf("page %d: %d kept, %v", pages, len(kept), err)
+		}
+		for _, k := range kept {
+			if seen[k.Line] {
+				t.Fatalf("delivered twice: %s", k.Line)
+			}
+			seen[k.Line] = true
+		}
+	}
+	if len(seen) != 100 {
+		t.Fatalf("delivered %d of 100", len(seen))
 	}
 }

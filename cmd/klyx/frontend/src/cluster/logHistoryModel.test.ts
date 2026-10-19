@@ -41,4 +41,3 @@ describe("what a History view holds (coverage S8b §5)", () => {
     expect(h.newerDropped).toBeGreaterThan(0);
   });
 });
-

@@ -39,9 +39,11 @@ type Marker struct {
 // whose re-read the server refused with a 4xx) stopped with its marker. A
 // read failing otherwise fails the page whole: nothing is applied, and the
 // page set is where it was. The page keeps at most PageLimit entries and
-// PageBytes of them; the markers are every stopped branch's, not only this
-// page's.
-func ReadPage(ctx context.Context, read QueryFunc, ps *PageSet) ([]Kept, []Marker, error) {
+// PageBytes of them, each entry's share by size (nil: Raw); the markers are
+// every stopped branch's, not only this page's. A page applied is the
+// cursor moved: a caller that may not deliver the page reads it on a Clone
+// and keeps the clone only when it does.
+func ReadPage(ctx context.Context, read QueryFunc, ps *PageSet, size SizeFunc) ([]Kept, []Marker, error) {
 	var reads []Read
 	var stops []Read
 	refused := map[int]string{}
@@ -77,6 +79,6 @@ func ReadPage(ctx context.Context, read QueryFunc, ps *PageSet) ([]Kept, []Marke
 		ps.Stop(r)
 		ps.Branches[r.Branch].Refused = refused[r.Branch]
 	}
-	kept := ps.ApplyBounded(reads, PageLimit, PageBytes)
+	kept := ps.ApplyBounded(reads, PageLimit, PageBytes, size)
 	return kept, ps.Markers(), nil
 }

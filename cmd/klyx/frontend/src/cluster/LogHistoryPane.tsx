@@ -39,9 +39,11 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
   const [showSelectors, setShowSelectors] = useState(false);
   const listRef = useRef<VirtualListHandle>(null);
   const gen = useRef(0);
-  // what the held lines are of: a failed Refresh of the same target keeps
-  // them (not refreshed); a different target never shows them
+  // what the held lines are of: a failed read of the same target keeps them
+  // (not refreshed); a different target never shows them
   const heldKey = useRef("");
+  // the last page the view took: a next page continues after it
+  const cursor = useRef<{ set: number; page: number } | null>(null);
 
   useEffect(() => () => closeHistoryView(view), [view]);
 
@@ -51,17 +53,33 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
     const req: PodHistoryRequest = {
       cluster, view, restart, namespace: target.namespace, pod: target.name, uid: target.uid, container: container || undefined,
       createdUnix: target.createdUnix, gone: target.gone, rangeSeconds: range || undefined, mode, skip,
+      ...(restart || !cursor.current ? {} : { set: cursor.current.set, after: cursor.current.page }),
     };
     const key = `${cluster}|${target.uid}|${container}|${range}|${mode}`;
-    try {
-      const p = await readPodHistory(req);
-      if (g !== gen.current) return; // a newer request owns the view
-      if (restart && p.error && !p.reset && key === heldKey.current) {
-        // a failed Refresh keeps the last good lines and what they were read
-        // by, marked not refreshed (§7)
+    // a failed read - an answer with an error, or a call that threw - is
+    // said by one rule: the lines held of this target stay, with what they
+    // were read by and their cursor, marked not refreshed (§7); of another
+    // target, or after the source ended the page set, nothing held is shown
+    const failed = (p: HistoryPage) => {
+      if (!p.reset && key === heldKey.current) {
         setPage((old) => (old ? { ...old, error: p.error } : p));
         return;
       }
+      heldKey.current = key;
+      cursor.current = null;
+      setHeld(emptyHeld());
+      setOpen(null);
+      setNotice(null);
+      setPage(p);
+    };
+    try {
+      const p = await readPodHistory(req);
+      if (g !== gen.current) return; // a newer request owns the view
+      if (p.error) {
+        failed(p);
+        return;
+      }
+      cursor.current = p.set && p.page ? { set: p.set, page: p.page } : null;
       setPage(p);
       if (p.reset) setNotice("The Loki source changed; reading the newest again.");
       else if (restart) setNotice(null);
@@ -70,7 +88,7 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
         setHeld(withOlder(emptyHeld(), p.lines));
         setOpen(null);
         requestAnimationFrame(() => listRef.current?.scrollToIndex(Math.max(0, p.lines.length - 1)));
-      } else if (!p.error) {
+      } else {
         setHeld((h) => withOlder(h, p.lines));
         setOpen(null);
         // the older page goes before what was held: the anchor, the first line
@@ -78,7 +96,7 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
         requestAnimationFrame(() => listRef.current?.scrollToIndex(Math.min(p.lines.length, HISTORY_LINES_MAX - 1)));
       }
     } catch (e) {
-      if (g === gen.current) setPage((p) => ({ ...(p ?? emptyPage(view)), error: e instanceof Error ? e.message : String(e) }));
+      if (g === gen.current) failed({ ...emptyPage(view), error: e instanceof Error ? e.message : String(e) });
     } finally {
       if (g === gen.current) setBusy(false);
     }
@@ -130,7 +148,7 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
           Newer lines dropped ({held.lines.length.toLocaleString()} held); Refresh returns to the newest.
         </div>
       )}
-      {(page?.markers ?? []).map((m) => <MarkerLine key={`${m.branch}-${m.ts}`} m={m} onSkip={() => void request(false, [m.branch])} />)}
+      {(page?.markers ?? []).map((m) => <MarkerLine key={`${m.branch}-${m.ts}`} m={m} busy={busy} onSkip={() => void request(false, [m.branch])} />)}
       <div style={{ flexShrink: 0, display: "flex", gap: 8, alignItems: "center" }}>
         {page && !page.error && !page.noStreams && (page.done
           ? <span className="t-secondary" data-testid="history-start">Start of the range reached ({clock(page.start)}).</span>
@@ -160,12 +178,12 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
   );
 }
 
-function MarkerLine({ m, onSkip }: { m: HistoryMarker; onSkip: () => void }) {
+function MarkerLine({ m, busy, onSkip }: { m: HistoryMarker; busy: boolean; onSkip: () => void }) {
   return (
     <div role="status" data-testid="history-marker" className="t-secondary" style={{ color: "var(--color-text-warning)", flexShrink: 0 }}>
       At least {m.count.toLocaleString()} lines share the timestamp {clock(m.ts)} on selector {m.branch + 1}; Klyx cannot establish whether more remain.
       {m.refused ? ` Loki refused a larger read: ${m.refused}.` : ""}
-      <button className="l-btn" style={{ marginLeft: 8 }} onClick={onSkip}>Skip past {clock(m.ts)}</button>
+      <button className="l-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={onSkip}>Skip past {clock(m.ts)}</button>
       <span> (the lines at that time not shown are left out)</span>
     </div>
   );

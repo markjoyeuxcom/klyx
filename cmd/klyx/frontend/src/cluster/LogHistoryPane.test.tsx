@@ -97,6 +97,51 @@ describe("LogHistoryPane (coverage S8b §7)", () => {
     await waitFor(() => expect(screen.queryAllByTestId("history-line").length).toBe(0));
   });
 
+  it("a call that throws follows the same rule: another target shows nothing held, a same-target Refresh keeps it (Codex's review of f4cce2f)", async () => {
+    answer = () => page();
+    const multi = { ...target, containers: [{ name: "web" }, { name: "db" }] };
+    render(<LogHistoryPane cluster="c" target={multi} />);
+    await waitFor(() => expect(shown().length).toBe(3));
+    answer = () => { throw new Error("binding read failed"); };
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+    expect(shown().length).toBe(3);
+    expect(screen.getByTestId("history-error").textContent).toContain("binding read failed - the lines below are the last read");
+    await act(async () => { fireEvent.change(screen.getByLabelText("container"), { target: { value: "db" } }); });
+    await waitFor(() => expect(screen.getByTestId("history-error").textContent).toContain("binding read failed"));
+    expect(screen.queryAllByTestId("history-line").length).toBe(0);
+    expect(screen.queryByTestId("history-selector")).toBeNull();
+  });
+
+  it("a next page names the page the view took; a restart names none; a failed page keeps the cursor", async () => {
+    const marker = { branch: 1, ts: "2026-10-19T11:50:00Z", count: 5000 };
+    answer = (req) => (req.restart ? page({ set: 7, page: 1, markers: [marker] })
+      : req.skip ? page({ set: 7, page: 2, lines: lines(Date.parse("2026-10-19T11:00:00Z"), 1, "older") })
+        : page({ lines: [], error: "Loki answered HTTP 502" }));
+    render(<LogHistoryPane cluster="c" target={target} />);
+    await waitFor(() => expect(shown().length).toBe(3));
+    expect(calls[0].set).toBeUndefined();
+    await act(async () => { fireEvent.click(screen.getByTestId("history-older")); });
+    expect(calls[1]).toMatchObject({ restart: false, set: 7, after: 1 });
+    expect(shown().length).toBe(3); // the failed page added nothing and dropped nothing
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Skip past/ })); });
+    expect(calls[2]).toMatchObject({ restart: false, skip: [1], set: 7, after: 1 }); // the cursor the failure kept
+    expect(shown().map((t) => t.replace(/^.*Z /, ""))).toEqual(["older 1", "l 1", "l 2", "l 3"]);
+    await act(async () => { fireEvent.click(screen.getByTestId("history-older")); });
+    expect(calls[3]).toMatchObject({ restart: false, set: 7, after: 2 }); // the page the view took last
+  });
+
+  it("Skip past waits while a page is read", async () => {
+    let release: () => void = () => {};
+    answer = () => page({ more: false, markers: [{ branch: 0, ts: "2026-10-19T11:50:00Z", count: 5000 }] });
+    render(<LogHistoryPane cluster="c" target={target} />);
+    const skip = await screen.findByRole("button", { name: /^Skip past/ });
+    const slow = new Promise<HistoryPage>((r) => { release = () => r(page()); });
+    answer = () => slow as unknown as HistoryPage;
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+    expect((skip as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { release(); await slow; });
+  });
+
   it("a view stopped at markers offers Skip past, not an endless Load older", async () => {
     answer = () => page({ more: false, markers: [{ branch: 0, ts: "2026-10-19T11:50:00Z", count: 5000 }] });
     render(<LogHistoryPane cluster="c" target={target} />);
@@ -105,4 +150,3 @@ describe("LogHistoryPane (coverage S8b §7)", () => {
     expect(screen.queryByTestId("history-start")).toBeNull();
   });
 });
-

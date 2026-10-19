@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -62,6 +63,12 @@ type PodHistoryRequestDTO struct {
 	RangeSeconds int64  `json:"rangeSeconds,omitempty"` // 0: since created (clipped to 7 days), else 24 hours
 	Mode         string `json:"mode,omitempty"`         // auto | name | uid
 	Skip         []int  `json:"skip,omitempty"`         // stopped branches to move past (explicit)
+	// Set and After name the page a next page continues from: the page set
+	// and the last of its pages the view took (Codex's review of f4cce2f).
+	// The view's cursor moves only with what the view took, so a reply it
+	// discarded is read again, never skipped.
+	Set   uint64 `json:"set,omitempty"`
+	After int    `json:"after,omitempty"`
 }
 
 // LogHistoryLineDTO is one line, a display value.
@@ -100,6 +107,10 @@ type LogHistoryPageDTO struct {
 	NoStreams string                `json:"noStreams,omitempty"`
 	Reset     bool                  `json:"reset,omitempty"` // the page set ended: the source changed or expired
 	Error     string                `json:"error,omitempty"`
+	// Set and Page name this page (0: none - nothing to continue); a next
+	// page sends them back as Set and After.
+	Set  uint64 `json:"set,omitempty"`
+	Page int    `json:"page,omitempty"`
 }
 
 // historySlot is a view's place in the service. It outlives the view's page
@@ -116,8 +127,12 @@ type historySlot struct {
 }
 
 // historyView is one page set: what was locked when it started (§4) and
-// where its branches are.
+// where its branches are - after its last page (ps), and before it (prev),
+// so a page whose reply the view discarded is read again.
 type historyView struct {
+	set      uint64
+	seq      int // the pages delivered
+	prev     *loki.PageSet
 	cluster  string
 	lineage  string
 	rev      uint64
@@ -140,6 +155,7 @@ type LogHistoryService struct {
 	now      func() time.Time
 	mu       sync.Mutex
 	views    map[string]*historySlot
+	sets     atomic.Uint64
 }
 
 // errHistoryViewsFull: every view the service holds is reading; a new one
@@ -221,22 +237,46 @@ func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryP
 	v := slot.state
 	moved := v != nil && (v.cluster != req.Cluster || v.lineage != r.LineageKey() || v.rev != r.Revision() ||
 		v.target.UID != req.UID || v.target.Namespace != req.Namespace || v.target.Pod != req.Pod || v.target.Container != req.Container)
-	fresh := req.Restart || v == nil || moved
-	if fresh {
-		// a next page with no page set to continue (expired, evicted, failed,
-		// or its source moved) starts from the newest, said as Reset, so the
-		// view replaces what it holds instead of appending the newest again
-		v = &historyView{cluster: req.Cluster, lineage: r.LineageKey(), rev: r.Revision()}
-		slot.state = v
-		out = s.firstPage(ctx, r, v, req, out)
+	// the page a next page continues: the view's last, or the one before it
+	// when the view never took the last (its reply was discarded)
+	var from *loki.PageSet
+	if !req.Restart && v != nil && !moved && req.Set == v.set {
+		switch {
+		case req.After == v.seq:
+			from = v.ps
+		case req.After == v.seq-1 && v.prev != nil:
+			from = v.prev
+		}
+	}
+	var next *historyView // staged: kept only when its page is delivered
+	if from == nil {
+		// a new page set: Restart, or a next page with nothing to continue
+		// (expired, evicted, its source moved, or a cursor the view does not
+		// hold) starts from the newest, said as Reset, so the view replaces
+		// what it holds instead of appending the newest again
+		next = &historyView{set: s.sets.Add(1), cluster: req.Cluster, lineage: r.LineageKey(), rev: r.Revision()}
+		out = s.firstPage(ctx, r, next, req, out)
 		out.Reset = out.Reset || !req.Restart
 	} else {
+		staged := *v
+		next = &staged
+		next.ps = from.Clone()
 		for _, b := range req.Skip {
-			if b >= 0 && b < len(v.ps.Branches) && v.ps.Branches[b].Stopped {
-				v.ps.Skip(b)
+			if b >= 0 && b < len(next.ps.Branches) && next.ps.Branches[b].Stopped {
+				next.ps.Skip(b)
 			}
 		}
-		out = s.page(ctx, r, v, out)
+		out = s.page(ctx, r, next, out)
+	}
+	// the owner fence (Codex's review of f4cce2f): a request a newer one
+	// replaced, or out of time, delivers nothing and keeps nothing - its page
+	// set is where the view left it
+	if err := ctx.Err(); err != nil {
+		e := "a newer request for this view replaced this one"
+		if errors.Is(err, context.DeadlineExceeded) {
+			e = fmt.Sprintf("the page took longer than %s; nothing was kept", historyPageLimit)
+		}
+		return LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}, Error: e}
 	}
 	// the completion fence: a source that moved during the page (its
 	// configuration or credential) ends the page set, and the page read
@@ -245,8 +285,20 @@ func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryP
 		slot.state = nil
 		return LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}, Reset: true, Error: fleet.ErrLokiSourceChanged.Error()}
 	}
-	if fresh && (out.Error != "" || v.ps == nil) {
-		slot.state = nil // a failed first page leaves no page set
+	switch {
+	case out.Error != "":
+		// a failed page keeps nothing: the view's page set is where it was,
+		// so the cursor the view holds still continues it
+	case next.ps == nil:
+		slot.state = nil // nothing selectable: no page set
+	default:
+		if from != nil {
+			next.prev, next.seq = from, req.After+1
+		} else {
+			next.prev, next.seq = nil, 1
+		}
+		slot.state = next
+		out.Set, out.Page = next.set, next.seq
 	}
 	return out
 }
@@ -399,7 +451,7 @@ func (s *LogHistoryService) start(ctx context.Context, r HistoryReader, v *histo
 		}
 	}
 	v.ps = loki.NewPageSet(v.start.UnixNano(), v.end.UnixNano()+1, len(branches))
-	return loki.ReadPage(ctx, s.reader(r, v), v.ps)
+	return loki.ReadPage(ctx, s.reader(r, v), v.ps, shownBytes(red))
 }
 
 func (s *LogHistoryService) reader(r HistoryReader, v *historyView) loki.QueryFunc {
@@ -415,7 +467,7 @@ func (s *LogHistoryService) page(ctx context.Context, r HistoryReader, v *histor
 		out.Reset, out.Error = true, fleet.ErrLokiSourceChanged.Error()
 		return out
 	}
-	kept, markers, err := loki.ReadPage(ctx, s.reader(r, v), v.ps)
+	kept, markers, err := loki.ReadPage(ctx, s.reader(r, v), v.ps, shownBytes(r.Redactor()))
 	if err != nil {
 		out.Error = r.Redactor().Text(err.Error())
 		return out
@@ -467,31 +519,88 @@ func (s *LogHistoryService) fill(r HistoryReader, v *historyView, kept []loki.Ke
 	out.Done = v.ps.Done()
 	out.More = v.ps.More()
 	for _, k := range kept {
-		line := red.Exact(k.Line) // log content: the endpoint's own credential only (§5)
-		clipped := false
-		if len(line) > historyLineMax {
-			line, clipped = clipUTF8(line, historyLineMax), true
-		}
-		c := k.Stream[loki.LabelContainer]
-		if c == "" {
-			c = k.Stream[loki.LabelK8sContainer]
-		}
-		if c == "" {
-			c = k.Meta[loki.LabelContainer]
-		}
-		if c == "" {
-			c = k.Meta[loki.LabelK8sContainer]
-		}
-		// a label repeats on every line of its stream: bounded like a label
-		// value, so one large label cannot multiply into the reply
+		line, clipped := shownLine(red, k.Entry)
 		out.Lines = append(out.Lines, LogHistoryLineDTO{TS: time.Unix(0, k.TS).UTC().Format(time.RFC3339Nano), Line: line,
-			Container: alertmanager.Clip(red.Exact(c), alertmanager.MaxLabelValue), Branch: k.Branch, Clipped: clipped})
+			Container: shownContainer(red, k.Entry), Branch: k.Branch, Clipped: clipped})
 	}
 	for _, m := range markers {
 		out.Markers = append(out.Markers, LogHistoryMarkerDTO{Branch: m.Branch, TS: time.Unix(0, m.TS).UTC().Format(time.RFC3339Nano), Count: m.Count,
 			Refused: m.Refused})
 	}
 	return out
+}
+
+// shownLine is a line as the page shows it: log content through the
+// endpoint's own credential only (§5), then clipped on a rune boundary.
+func shownLine(red safehttp.Redactor, e loki.Entry) (string, bool) {
+	line := red.Exact(e.Line)
+	if len(line) > historyLineMax {
+		return clipUTF8(line, historyLineMax), true
+	}
+	return line, false
+}
+
+// shownContainer is the container a line is shown with. A label repeats on
+// every line of its stream: bounded like a label value, so one large label
+// cannot multiply into the reply.
+func shownContainer(red safehttp.Redactor, e loki.Entry) string {
+	c := e.Stream[loki.LabelContainer]
+	if c == "" {
+		c = e.Stream[loki.LabelK8sContainer]
+	}
+	if c == "" {
+		c = e.Meta[loki.LabelContainer]
+	}
+	if c == "" {
+		c = e.Meta[loki.LabelK8sContainer]
+	}
+	return alertmanager.Clip(red.Exact(c), alertmanager.MaxLabelValue)
+}
+
+// lineFieldBytes bounds a serialized line's fields besides its line and
+// container: {"ts":"<30>","line":,"container":,"branch":<n>,"clipped":true},
+const lineFieldBytes = 128
+
+// shownBytes is an entry's share of a page's budget as the bridge carries it
+// (Codex's review of f4cce2f): the line and container as shown - a
+// redaction can lengthen them - and JSON-escaped, as the bridge serializes
+// them, plus the line's other fields.
+func shownBytes(red safehttp.Redactor) loki.SizeFunc {
+	return func(e loki.Entry) int {
+		line, _ := shownLine(red, e)
+		return jsonStringLen(line) + jsonStringLen(shownContainer(red, e)) + lineFieldBytes
+	}
+}
+
+// jsonStringLen is the length of s as encoding/json writes it (HTML-safe,
+// as the bridge's json.Marshal does): quoted, a control character, <, >
+// and & as \u00XX, U+2028 and U+2029 escaped; an invalid byte at most six
+// (\ufffd escaped, or the replacement rune, by the encoder's version).
+func jsonStringLen(s string) int {
+	n := 2
+	for i := 0; i < len(s); {
+		if b := s[i]; b < utf8.RuneSelf {
+			switch {
+			case b == '"' || b == '\\' || b == '\b' || b == '\f' || b == '\n' || b == '\r' || b == '\t':
+				n += 2
+			case b < 0x20 || b == '<' || b == '>' || b == '&':
+				n += 6
+			default:
+				n++
+			}
+			i++
+			continue
+		}
+		c, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case c == utf8.RuneError && size == 1, c == '\u2028', c == '\u2029':
+			n += 6
+		default:
+			n += size
+		}
+		i += size
+	}
+	return n
 }
 
 // strength is the §4 sentence for a page set.

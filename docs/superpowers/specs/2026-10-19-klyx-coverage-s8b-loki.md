@@ -517,3 +517,43 @@ Codex requested changes with one P1, seven P2s and one P3. Each has a repository
 9. **[P3] An empty labels list skipped the fallback.** An empty list is nothing selectable, in the reader and in the service, and the second, unscoped labels read says why.
 
 **Mutations:** 14 caught for this revision. One, keeping a failed first page's state, first survived and got its test; that test also shows a "no streams" first page cannot be paged.
+
+## 18. Implementation revision 2: Codex's re-review of f4cce2f
+
+Codex's probes for revision 1 all passed. Codex requested changes with three residual P2s; each has a repository test beside Codex's probe.
+
+1. **[P2] A cancelled owner still committed its page.**
+   - **Staged reads.** A page is now read on a staged copy of the page set (`PageSet.Clone`). The copy is kept only when the page is delivered: after the page is filled, under the view's mutex, the request's context must still be live and the source current.
+   - **The owner fence.** A request that a newer one replaced returns "a newer request for this view replaced this one", with no lines, and keeps nothing. A request out of time says so and keeps nothing.
+   - **The window the fence leaves.** An owner can keep its page an instant before the newer request cancels it, and the pane discards that reply anyway. So a next page now names the page it continues: the page set and the last of its pages the view took (`set`, `after`). Each reply carries its `set` and `page`.
+   - **The service holds two positions:** the page set after its last page, and before it.
+     - `after` equal to the last page continues.
+     - `after` one page earlier reads the last page again (the view discarded its reply).
+     - Anything else starts from the newest, marked Reset.
+
+     The cursor moves only with what the view took.
+   - **Failed pages.** A failed page, first or next, now keeps nothing: the view's page set is where it was, so its cursor still continues it. This replaces §17.4's "failed" case: a failed Refresh now keeps both the held lines and their cursor. Nothing selectable still leaves no page set.
+   - Skip past now waits while a page is read, like Load older.
+2. **[P2] A thrown read kept another target's lines.**
+   - One rule in the pane now covers every failed read, whether an answer with an error or a call that threw.
+   - Lines held of this target stay, with what they were read by and their cursor, marked "not refreshed".
+   - For another target, or after the source ended the page set, nothing held is shown and the cursor is cleared.
+3. **[P2] The page budget counted raw lines.**
+   - **What the budget counts now** is what the bridge carries for each entry:
+     - its line and container as shown: exact redaction (which can lengthen them), then the 64 KiB line clip and the 256-byte label clip;
+     - JSON-escaped as the bridge's `json.Marshal` writes them (a control character, `<`, `>` and `&` take six bytes each);
+     - plus 128 bytes for the line's other fields.
+   - `loki.ReadPage` takes the size function. The cursor still moves only past what is kept.
+   - **Measured** (`TestHistoryBudgetShown`), every line once and in order:
+     - A 4-byte credential shown as `[redacted]`: 1,000 lines read as 7 MB and shown as 17.5 MB arrive in pages of 475, 475 and 50 lines, each reply at most 7.96 MiB.
+     - Lines of `\x00<` (each byte escaped to six): pages of 22 lines, 7.74 MiB each.
+     - Codex's probes measure 8.35 MB (475 lines) and 8.11 MB (22 lines), both under `PageBytes`.
+   - `jsonStringLen` matches `json.Marshal` exactly on valid UTF-8 and is an upper bound for an invalid byte. Go 1.27's encoder writes the replacement rune (3 bytes); the count assumes `\ufffd` escaped (6).
+4. The blank lines at the end of the two test files are gone.
+
+**Probes.** Codex's two cancellation probes sent a next page without a cursor, so under this revision they start again (Reset). Adapted to send the cursor of the page they took, both pass, with the other probes, unchanged.
+
+**Mutations:** 22 caught for this revision (16 Go, 6 frontend). Three first survived and got their tests:
+- a cursor naming another page set was continued when its page number matched;
+- the pane's cursor stuck at page 1;
+- a clone sharing its delivered keys only shows when a staged page ends at the held boundary.

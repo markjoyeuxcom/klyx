@@ -3,6 +3,7 @@ package loki
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"maps"
 	"sort"
 )
 
@@ -17,11 +18,15 @@ const (
 	PageBytes = 8 << 20
 )
 
-// entryBytes is an entry's share of a page's budget: what a page carries
-// for it - its line, and a bounded allowance for its timestamp and the label
-// shown beside it (clipped by the reader), never the stream's labels, which
+// SizeFunc is an entry's share of a page's byte budget: what the page
+// carries for it. The reader that shows the page knows that (the line as
+// displayed and serialized - Codex's review of f4cce2f); Raw is the default.
+type SizeFunc func(Entry) int
+
+// Raw is an entry's raw share: its line, and a bounded allowance for its
+// timestamp and the label shown beside it, never the stream's labels, which
 // its entries share.
-func entryBytes(e Entry) int { return len(e.Line) + 320 }
+func Raw(e Entry) int { return len(e.Line) + 320 }
 
 // BranchState is one branch's place in a page set.
 type BranchState struct {
@@ -48,6 +53,18 @@ func (b BranchState) Active() bool { return !b.Exhausted && !b.Stopped }
 type PageSet struct {
 	Start    int64
 	Branches []BranchState
+}
+
+// Clone is a deep copy. A page read on the copy changes nothing the caller
+// holds until it keeps the copy - when the page is delivered (Codex's review
+// of f4cce2f: a reply nobody takes must not move the cursor).
+func (ps *PageSet) Clone() *PageSet {
+	c := &PageSet{Start: ps.Start, Branches: make([]BranchState, len(ps.Branches))}
+	for i, b := range ps.Branches {
+		b.Delivered = maps.Clone(b.Delivered)
+		c.Branches[i] = b
+	}
+	return c
 }
 
 // NewPageSet starts n branches at end (exclusive).
@@ -153,12 +170,17 @@ type Kept struct {
 // entries was cut - exhaustion is read from the raw response, never from
 // what remained after the dedupe.
 func (ps *PageSet) Apply(reads []Read, limit int) []Kept {
-	return ps.ApplyBounded(reads, limit, 0)
+	return ps.ApplyBounded(reads, limit, 0, nil)
 }
 
-// ApplyBounded is Apply with a byte budget for the page's entries (0: none):
-// the newest entries are kept while they fit, at least one.
-func (ps *PageSet) ApplyBounded(reads []Read, limit, maxBytes int) []Kept {
+// ApplyBounded is Apply with a byte budget for the page's entries (0: none),
+// each entry's share by size (nil: Raw): the newest entries are kept while
+// they fit, at least one. An entry the budget leaves out is not delivered:
+// its branch's End stays above it, so the next page reads it.
+func (ps *PageSet) ApplyBounded(reads []Read, limit, maxBytes int, size SizeFunc) []Kept {
+	if size == nil {
+		size = Raw
+	}
 	type cand struct {
 		Kept
 		k [32]byte
@@ -193,7 +215,7 @@ func (ps *PageSet) ApplyBounded(reads []Read, limit, maxBytes int) []Kept {
 	if maxBytes > 0 {
 		n := 0
 		for i, c := range all {
-			if n += entryBytes(c.Entry); n > maxBytes && i > 0 {
+			if n += size(c.Entry); n > maxBytes && i > 0 {
 				all = all[:i]
 				break
 			}
