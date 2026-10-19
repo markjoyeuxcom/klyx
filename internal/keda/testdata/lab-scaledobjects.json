@@ -1,0 +1,1277 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "active-web"
+    },
+    "name": "active-web",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451541",
+    "uid": "269fbe77-b85a-4a30-9ccd-10aa0bf4e81a"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "active-web"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "keda-hpa-active-web",
+    "lastActiveTime": "2026-10-19T20:41:59Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "annotations": {
+     "scaledobject.keda.sh/transfer-hpa-ownership": "true"
+    },
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 2,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "adopted"
+    },
+    "name": "adopted",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451535",
+    "uid": "344dcc0e-aabb-43af-9229-c5f03ec496f3"
+   },
+   "spec": {
+    "advanced": {
+     "horizontalPodAutoscalerConfig": {
+      "name": "adopted-hpa"
+     },
+     "scalingModifiers": {}
+    },
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "adopted"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "adopted-hpa",
+    "lastActiveTime": "2026-10-19T20:41:59Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "bad-auth"
+    },
+    "name": "bad-auth",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447390",
+    "uid": "a934e91b-c0c2-4ebb-a1db-51ad951f0354"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "pollingInterval": 10,
+    "scaleTargetRef": {
+     "name": "bad-auth"
+    },
+    "triggers": [
+     {
+      "authenticationRef": {
+       "name": "missing-secret"
+      },
+      "metadata": {
+       "authModes": "bearer",
+       "query": "vector(1)",
+       "serverAddress": "http://nothing-answers.klyx-s9-lab.svc:9090",
+       "threshold": "1"
+      },
+      "type": "prometheus"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "missing-secret",
+    "conditions": [
+     {
+      "message": "failed to ensure HPA is correctly created for ScaledObject: error parsing prometheus metadata: error parsing prometheus metadata: bearer token=<empty> is required when bearer auth is enabled",
+      "reason": "ScaledObjectCheckFailed",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "message": "ScaledObject check failed",
+      "reason": "UnknownState",
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     }
+    ],
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersTypes": "prometheus"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "cluster-auth"
+    },
+    "name": "cluster-auth",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447603",
+    "uid": "41146d6c-2540-4472-a1db-3186e5e1d100"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "pollingInterval": 30,
+    "scaleTargetRef": {
+     "name": "cluster-auth"
+    },
+    "triggers": [
+     {
+      "authenticationRef": {
+       "kind": "ClusterTriggerAuthentication",
+       "name": "klyx-s9-lab"
+      },
+      "metadata": {
+       "authModes": "bearer",
+       "query": "vector(1)",
+       "serverAddress": "http://nothing-answers.klyx-s9-lab.svc:9090",
+       "threshold": "1"
+      },
+      "type": "prometheus"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "klyx-s9-lab",
+    "conditions": [
+     {
+      "message": "Triggers defined in ScaledObject are not working correctly",
+      "reason": "TriggerError",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is not performed because triggers are not active",
+      "reason": "ScalerNotActive",
+      "status": "False",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is not actively scaling: the HPA was unable to compute the replica count: unable to get external metric klyx-s9-lab/s0-prometheus/&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: cluster-auth,},MatchExpressions:[]LabelSelectorRequirement{},}: unable to fetch metrics from external metrics API: rpc error: code = Unknown desc = error when getting metric values metric:s0-prometheus encountered error",
+      "reason": "FailedGetExternalMetric",
+      "status": "False",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-prometheus"
+    ],
+    "hpaName": "keda-hpa-cluster-auth",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-prometheus": {
+      "isActive": false
+     }
+    },
+    "triggersTypes": "prometheus"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 2,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "custom-name"
+    },
+    "name": "custom-name",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451522",
+    "uid": "67ff598a-5c77-4d91-bc3b-35f3750ebd17"
+   },
+   "spec": {
+    "advanced": {
+     "horizontalPodAutoscalerConfig": {
+      "name": "web-autoscaler"
+     },
+     "scalingModifiers": {}
+    },
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "custom-name"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "web-autoscaler",
+    "lastActiveTime": "2026-10-19T20:41:59Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "failing"
+    },
+    "name": "failing",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451592",
+    "uid": "795bc8f8-cb21-47eb-9e7d-fac65c93c77c"
+   },
+   "spec": {
+    "fallback": {
+     "behavior": "static",
+     "failureThreshold": 2,
+     "replicas": 2
+    },
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "pollingInterval": 10,
+    "scaleTargetRef": {
+     "name": "failing"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "query": "vector(1)",
+       "serverAddress": "http://nothing-answers.klyx-s9-lab.svc:9090",
+       "threshold": "1"
+      },
+      "type": "prometheus"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "At least one trigger is falling back on this scaled object",
+      "reason": "FallbackExists",
+      "status": "True",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-prometheus"
+    ],
+    "health": {
+     "s0-prometheus": {
+      "numberOfFailures": 80,
+      "status": "Failing"
+     }
+    },
+    "hpaName": "keda-hpa-failing",
+    "lastActiveTime": "2026-10-19T20:42:11Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-prometheus": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "prometheus"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:38:05Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "ghost-auth"
+    },
+    "name": "ghost-auth",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1450593",
+    "uid": "7a8cdbba-aea5-40ec-b6f2-5904d21af995"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "pollingInterval": 30,
+    "scaleTargetRef": {
+     "name": "ghost-auth"
+    },
+    "triggers": [
+     {
+      "authenticationRef": {
+       "name": "no-such-auth"
+      },
+      "metadata": {
+       "authModes": "bearer",
+       "query": "vector(1)",
+       "serverAddress": "http://nothing-answers.klyx-s9-lab.svc:9090",
+       "threshold": "1"
+      },
+      "type": "prometheus"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "no-such-auth",
+    "conditions": [
+     {
+      "message": "failed to ensure HPA is correctly created for ScaledObject: error parsing prometheus metadata: error parsing prometheus metadata: bearer token=<empty> is required when bearer auth is enabled",
+      "reason": "ScaledObjectCheckFailed",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "message": "ScaledObject check failed",
+      "reason": "UnknownState",
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     }
+    ],
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersTypes": "prometheus"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "idle-api"
+    },
+    "name": "idle-api",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447569",
+    "uid": "48676173-1f9a-435e-8d2b-0cb0988bb6b1"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "idle-api"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "1 3 * * *",
+       "start": "0 3 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is not performed because triggers are not active",
+      "reason": "ScalerNotActive",
+      "status": "False",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-03xxx-13xxx"
+    ],
+    "hpaName": "keda-hpa-idle-api",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-03xxx-13xxx": {
+      "isActive": false
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "no-target"
+    },
+    "name": "no-target",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447389",
+    "uid": "41abf630-3ffb-4c26-b96d-4e4a3fd6ebc9"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "no-such-deployment"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "conditions": [
+     {
+      "message": "ScaledObject doesn't have correct scaleTargetRef specification: deployments.apps \"no-such-deployment\" not found",
+      "reason": "ScaledObjectCheckFailed",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "message": "ScaledObject check failed",
+      "reason": "UnknownState",
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "annotations": {
+     "autoscaling.keda.sh/paused-scale-in": "true"
+    },
+    "creationTimestamp": "2026-10-19T20:38:05Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "one-way"
+    },
+    "name": "one-way",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451562",
+    "uid": "96c49c57-2dcb-4e17-92e0-42a5773029a9"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "one-way"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "message": "ScaledObject is paused",
+      "reason": "ScaledObjectPaused",
+      "status": "True",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "keda-hpa-one-way",
+    "lastActiveTime": "2026-10-19T20:42:05Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "annotations": {
+     "autoscaling.keda.sh/paused": "true"
+    },
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "paused",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447105",
+    "uid": "6b4b3650-fb44-4d08-811f-5cddf1d1b91d"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "paused"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "conditions": [
+     {
+      "message": "ScaledObject is paused",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "message": "ScaledObject is paused",
+      "reason": "ScaledObjectPaused",
+      "status": "True",
+      "type": "Paused"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "annotations": {
+     "autoscaling.keda.sh/paused-replicas": "1"
+    },
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "paused-at-one",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447280",
+    "uid": "d53246f1-0e4f-4566-a8a0-a097346c00b8"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "paused-at-one"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "conditions": [
+     {
+      "message": "ScaledObject is paused",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "message": "ScaledObject is paused",
+      "reason": "ScaledObjectPaused",
+      "status": "True",
+      "type": "Paused"
+     }
+    ],
+    "pausedReplicaCount": 1
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:47Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "shared"
+    },
+    "name": "shared",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451478",
+    "uid": "3e1fed2c-083d-4a97-83b3-f88fc200687b"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "name": "shared"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "Unknown",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "keda-hpa-shared",
+    "lastActiveTime": "2026-10-19T20:41:47Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "sts"
+    },
+    "name": "sts",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451551",
+    "uid": "74658c33-8d6b-4859-94eb-6a8c0a4577c0"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "StatefulSet",
+     "name": "sts"
+    },
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledObject is defined correctly and is ready for scaling",
+      "reason": "ScaledObjectReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is actively scaling",
+      "reason": "HPAActive",
+      "status": "True",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-cron-UTC-00xxx-5923xxx"
+    ],
+    "hpaName": "keda-hpa-sts",
+    "lastActiveTime": "2026-10-19T20:42:02Z",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "StatefulSet",
+     "resource": "statefulsets",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.StatefulSet",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledObject",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "wl-identity"
+    },
+    "name": "wl-identity",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451107",
+    "uid": "2b0b6fd3-7153-41fc-a16b-e4e55fc195f0"
+   },
+   "spec": {
+    "maxReplicaCount": 3,
+    "minReplicaCount": 1,
+    "pollingInterval": 30,
+    "scaleTargetRef": {
+     "name": "wl-identity"
+    },
+    "triggers": [
+     {
+      "authenticationRef": {
+       "name": "aws-workload"
+      },
+      "metadata": {
+       "awsRegion": "eu-west-1",
+       "queueLength": "5",
+       "queueURL": "https://sqs.eu-west-1.amazonaws.com/111122223333/klyx-lab"
+      },
+      "type": "aws-sqs-queue"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "aws-workload",
+    "conditions": [
+     {
+      "message": "Triggers defined in ScaledObject are not working correctly",
+      "reason": "TriggerError",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is not performed because triggers are not active",
+      "reason": "ScalerNotActive",
+      "status": "False",
+      "type": "Active"
+     },
+     {
+      "message": "No fallbacks are active on this scaled object",
+      "reason": "NoFallbackFound",
+      "status": "False",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     },
+     {
+      "message": "HPA is not actively scaling: the HPA was unable to compute the replica count: unable to get external metric klyx-s9-lab/s0-aws-sqs-klyx-lab/&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: wl-identity,},MatchExpressions:[]LabelSelectorRequirement{},}: unable to fetch metrics from external metrics API: rpc error: code = Unknown desc = error when getting metric values metric:s0-aws-sqs-klyx-lab encountered error",
+      "reason": "FailedGetExternalMetric",
+      "status": "False",
+      "type": "HPAActive"
+     }
+    ],
+    "externalMetricNames": [
+     "s0-aws-sqs-klyx-lab"
+    ],
+    "hpaName": "keda-hpa-wl-identity",
+    "originalReplicaCount": 1,
+    "scaleTargetGVKR": {
+     "group": "apps",
+     "kind": "Deployment",
+     "resource": "deployments",
+     "version": "v1"
+    },
+    "scaleTargetKind": "apps/v1.Deployment",
+    "triggersActivity": {
+     "s0-aws-sqs-klyx-lab": {
+      "isActive": false
+     }
+    },
+    "triggersTypes": "aws-sqs-queue"
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

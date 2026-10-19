@@ -1,0 +1,38 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ClusterTriggerAuthentication",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "klyx-s9-lab",
+    "resourceVersion": "1447464",
+    "uid": "b4da3245-f771-4ecc-bc53-5bc6a8abcd1e"
+   },
+   "spec": {
+    "secretTargetRef": [
+     {
+      "key": "token",
+      "name": "klyx-s9-lab-token",
+      "parameter": "bearerToken"
+     }
+    ]
+   },
+   "status": {
+    "scaledobjects": "cluster-auth"
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}
