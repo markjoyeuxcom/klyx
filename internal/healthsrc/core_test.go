@@ -47,7 +47,15 @@ func (s *sink) part(task string) (observe.Part, bool) {
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+	waitForWithin(t, 10*time.Second, what, cond)
+}
+
+// waitForWithin is waitFor with its own deadline: the heap calibrations fill
+// every kind past its budget, which under -race on a shared CI runner takes
+// longer than the fixtures' ten seconds.
+func waitForWithin(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
 		if cond() {
 			return
 		}

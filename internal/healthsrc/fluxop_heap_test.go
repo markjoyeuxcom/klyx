@@ -133,7 +133,7 @@ func TestFluxOperatorObserverHeap(t *testing.T) {
 		o.SubscribeRows(TaskFlux, "resourcesets", observe.Owner{Kind: "lens", ID: "t"})
 		o.SubscribeRows(TaskFlux, "fluxinstance", observe.Owner{Kind: "lens", ID: "t"})
 		var kept, left int
-		waitFor(t, "the first complete list, capped", func() bool {
+		waitForWithin(t, time.Minute, "the first complete list, capped", func() bool {
 			p, ok := nativePart(s, TaskFlux, "resourcesets")
 			if !ok || p.Coverage != observe.Live {
 				return false

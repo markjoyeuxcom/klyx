@@ -147,7 +147,7 @@ func TestGatewayAPIObserverHeap(t *testing.T) {
 	budgeted := []string{KindGatewayClasses, KindGateways, KindListenerSets, KindNamespaces,
 		KindHTTPRoutes, KindGRPCRoutes, KindTLSRoutes, KindTCPRoutes, KindUDPRoutes, KindReferenceGrants}
 	held := map[string][2]int{}
-	waitFor(t, "every budgeted kind's first complete list, truncated", func() bool {
+	waitForWithin(t, time.Minute, "every budgeted kind's first complete list, truncated", func() bool {
 		var parts []observe.Part
 		for _, id := range []string{"gateways", "listenersets", "routes"} {
 			p, ok := nativePart(s, TaskGateway, id)
