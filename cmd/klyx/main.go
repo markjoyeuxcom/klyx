@@ -394,6 +394,16 @@ func main() {
 		return c, true
 	}, em)
 
+	// coverage S8b: pod log history from the cluster's Loki
+	logHistorySvc := appbridge.NewLogHistoryService(appbridge.ReaderOf(func(name string) (appbridge.LokiConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		lc, ok := c.(appbridge.LokiConn)
+		return lc, ok
+	}))
+
 	eventsSvc := appbridge.NewEventsService(func(name string) (appbridge.EventsConn, bool) {
 		c, ok := reg.Conn(name)
 		if !ok {
@@ -604,6 +614,7 @@ func main() {
 		application.NewService(workloadsSvc),
 		application.NewService(podsSvc),
 		application.NewService(logsSvc),
+		application.NewService(logHistorySvc),
 		application.NewService(eventsSvc),
 		application.NewService(nodesSvc),
 		application.NewService(nodeOpsSvc),

@@ -3,6 +3,7 @@ package appbridge
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -58,6 +59,30 @@ func (s *WindowsService) OpenLogsWindow(cluster, namespace, pod, container strin
 	title := fmt.Sprintf("logs · %s/%s", namespace, pod)
 
 	s.opener.OpenWindow(title, target, logsWindowWidth, logsWindowHeight)
+	return ActionResultDTO{OK: true}
+}
+
+// OpenLogHistoryWindow opens a native window on a pod's log history from the
+// cluster's Loki (coverage S8b §7), pinned to the pod's UID as the dock's
+// History is: mode=history with the UID, created time and whether it is gone.
+func (s *WindowsService) OpenLogHistoryWindow(cluster, namespace, pod, uid string, createdUnix int64, gone bool) ActionResultDTO {
+	if cluster == "" || namespace == "" || pod == "" || uid == "" {
+		return ActionResultDTO{Error: "cluster, namespace, pod and uid are required"}
+	}
+	q := url.Values{}
+	q.Set("logswin", "1")
+	q.Set("mode", "history")
+	q.Set("cluster", cluster)
+	q.Set("ns", namespace)
+	q.Set("pod", pod)
+	q.Set("uid", uid)
+	if createdUnix > 0 {
+		q.Set("created", strconv.FormatInt(createdUnix, 10))
+	}
+	if gone {
+		q.Set("gone", "1")
+	}
+	s.opener.OpenWindow(fmt.Sprintf("log history · %s/%s", namespace, pod), "/?"+q.Encode(), logsWindowWidth, logsWindowHeight)
 	return ActionResultDTO{OK: true}
 }
 
