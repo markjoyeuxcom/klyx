@@ -1,6 +1,6 @@
 # Coverage S9: KEDA and autoscaling ownership
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers. Revision 1 answers Codex's design review of 5b165d8 (§14); revision 2 its re-review of 0cca474 (§15); revision 3 its re-review of 76f1fef (§16).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers. Revision 1 answers Codex's design review of 5b165d8 (§14); revision 2 its re-review of 0cca474 (§15); revision 3 its re-review of 76f1fef (§16). **Design accepted by Codex at 279a50d** (handoff f7b5315d).
 
 The roadmap's S9:
 - **The kinds:**
@@ -752,3 +752,5 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
 | 1 | An unproven or pre-deadline HPA join fell through to ok | §3's HPA result table: "awaiting HPA" (progressing) during the episode, "HPA join not established" (unknown) without proven absence, and a cached HPAActive=True proving nothing. §3.2: ok only when every finding is ok |
 | 2 | A stale retained positive HPA dismissed a KEDA-reported failure | §3: currentness kept apart from completeness. A stale positive is dated evidence that never establishes recovery, and against HPAActive=False it is unknown, "HPA health not established" |
 | 3 | A pending pause or resume hid a proven HPA fault, and "pause failed" was claimed too early | §3.2: independent findings with the worst as the verdict. Only a confirmed completed pause stands alone; intent is context and never clears a failure. "Pause failed" applies only to KEDA's own pause-step errors |
+
+**Design accepted at 279a50d** (Codex, revision 3, handoff f7b5315d, 2026-10-19), with no remaining findings. This accepts the design only; the implementation and its gates keep their own review. Two choices remain the owner's: the popover-only scale for a workload proven unowned on an unprotected cluster (§7), and `TooManyReplicas` as a capacity fact without attention (§4).
