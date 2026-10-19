@@ -154,4 +154,10 @@ func TestProject(t *testing.T) {
 	if _, ok := project(t, raw("plain")).KEDAOwner(); ok {
 		t.Fatal("a plain HPA read as KEDA's")
 	}
+	// a ScaledObject kind in another group is not KEDA's
+	other := raw("other")
+	other.OwnerReferences = []metav1.OwnerReference{{APIVersion: "autoscaling.example.com/v1", Kind: "ScaledObject", Name: "web", UID: "x-1", Controller: ptr(true)}}
+	if _, ok := project(t, other).KEDAOwner(); ok {
+		t.Fatal("another group's ScaledObject read as KEDA's")
+	}
 }

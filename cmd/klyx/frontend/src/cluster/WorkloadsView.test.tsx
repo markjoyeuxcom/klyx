@@ -277,6 +277,20 @@ describe("WorkloadsView", () => {
     expect(screen.getByText(/Kustomization flux-system\/apps sets it back/)).toBeTruthy();
   });
 
+  it("no autoscaler but Git owning the count still takes the confirmation", async () => {
+    vi.mocked(scaleWorkload).mockClear();
+    owner.value = { autoscaler: "unowned", gitops: "owned", owners: [], gitopsOwner: "Kustomization flux-system/apps" };
+    seed([broken]);
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
+    await act(async () => {});
+    expect(getByRole("button", { name: "apply scale" }).textContent).toBe("scale anyway");
+    fireEvent.click(getByRole("button", { name: "apply scale" }));
+    expect(scaleWorkload).not.toHaveBeenCalled();
+    expect(screen.getByText(/Kustomization flux-system\/apps sets it back/)).toBeTruthy();
+  });
+
   it("an unverified owner never takes the popover-only path", async () => {
     vi.mocked(scaleWorkload).mockClear();
     owner.value = { autoscaler: "unverified", autoscalerWhy: "the HPA or ScaledObject read is incomplete", gitops: "unowned", owners: [] };

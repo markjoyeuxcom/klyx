@@ -500,28 +500,37 @@ type ReplicaOwnership struct {
 // ReplicaOwner joins the HPA and ScaledObject models, as of their last
 // update, and the authoritative GitOps check.
 func (c *ClusterConn) ReplicaOwner(ctx context.Context, kind, ns, name string) ReplicaOwnership {
-	var hs []*hpa.HPA
-	var sos []*keda.ScaledObject
-	hpaProven, soProven := false, false
-	if h := c.Health(); h != nil {
-		hst, hComplete, hOK := h.VisitKind(healthsrc.KindHPAs, func(obj any) bool {
-			if x, ok := obj.(*hpa.HPA); ok {
-				hs = append(hs, x)
-			}
-			return true
-		})
-		sst, sComplete, sOK := h.VisitKind(healthsrc.KindScaledObjects, func(obj any) bool {
-			if so, ok := obj.(*keda.ScaledObject); ok {
-				sos = append(sos, so)
-			}
-			return true
-		})
-		hpaProven = hOK && hComplete && hst.Coverage == observe.Live && !hst.Truncated
-		// KEDA's API not served: no ScaledObject can exist
-		soProven = !c.kedaServed() || (sOK && sComplete && sst.Coverage == observe.Live && !sst.Truncated)
+	var h identityObserver
+	if o := c.Health(); o != nil {
+		h = o
 	}
+	hs, sos, hpaProven, soProven := autoscalersOf(h, c.kedaServed())
 	owners := replicaOwners(kind, ns, name, hs, sos, c.kedaVersion())
 	return classifyOwnership(owners, hpaProven, soProven, c.GitOpsOwnership(ctx, "apps", kind, ns, name))
+}
+
+// autoscalersOf reads the HPA and ScaledObject models, and whether each read
+// proves an absence: live, complete and uncut. KEDA's API not served proves
+// no ScaledObject exists. Without an Observer nothing is proven.
+func autoscalersOf(h identityObserver, kedaServed bool) (hs []*hpa.HPA, sos []*keda.ScaledObject, hpaProven, soProven bool) {
+	if h == nil {
+		return nil, nil, false, false
+	}
+	hst, hComplete, hOK := h.VisitKind(healthsrc.KindHPAs, func(obj any) bool {
+		if x, ok := obj.(*hpa.HPA); ok {
+			hs = append(hs, x)
+		}
+		return true
+	})
+	sst, sComplete, sOK := h.VisitKind(healthsrc.KindScaledObjects, func(obj any) bool {
+		if so, ok := obj.(*keda.ScaledObject); ok {
+			sos = append(sos, so)
+		}
+		return true
+	})
+	hpaProven = hOK && hComplete && hst.Coverage == observe.Live && !hst.Truncated
+	soProven = !kedaServed || (sOK && sComplete && sst.Coverage == observe.Live && !sst.Truncated)
+	return hs, sos, hpaProven, soProven
 }
 
 // replicaOwners names every autoscaler of one workload: an HPA scaling it

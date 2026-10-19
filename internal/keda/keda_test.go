@@ -475,6 +475,25 @@ func TestScaledObjectFindings(t *testing.T) {
 
 func ptr32(n int32) *int32 { return &n }
 
+// §4 rule 5's capacity fact in KEDA's label: only TooManyReplicas reads
+// "wants more than maxReplicaCount"; another limit says nothing of it.
+func TestScaledObjectCapacityFact(t *testing.T) {
+	for _, tc := range []struct {
+		limit string
+		want  bool
+	}{
+		{"ScalingLimited=True:TooManyReplicas:the desired replica count is more than the maximum replica count", true},
+		{"ScalingLimited=True:TooFewReplicas:the desired replica count is less than the minimum replica count", false},
+		{"ScalingLimited=False:DesiredWithinRange:within range", false},
+	} {
+		h := hpaOf("keda-hpa-web", "AbleToScale=True:ReadyForNewScale", "ScalingActive=True:ValidMetricFound", tc.limit)
+		v := rule(so(nil, ready, active, noFb, notPause), SOInputs{HPA: current(h)})
+		if v.Eval.Role != health.OK || strings.Contains(v.Eval.Label, "wants more than maxReplicaCount") != tc.want {
+			t.Fatalf("%s: %v %q", tc.limit, v.Eval.Role, v.Eval.Label)
+		}
+	}
+}
+
 // A pending deadline is Next: a clock-only crossing is re-evaluated.
 func TestNextAndBoundary(t *testing.T) {
 	v := rule(so(map[string]string{AnnPaused: "true"}, ready, active, noFb, notPause), SOInputs{HPA: current(hpaOf("h", hpaOK...)), Episodes: eps(EpPausing, 30*time.Second, true)})
@@ -571,6 +590,8 @@ func TestScaledJobRule(t *testing.T) {
 		{"pausing", job(map[string]string{AnnPaused: "true"}, "Ready=True:ScaledJobReady:ok", notPause), JobInputs{Episodes: eps(EpPausing, 20*time.Second, true)}, health.Progressing, "Pause requested"},
 		{"pausing past the episode", job(map[string]string{AnnPaused: "true"}, "Ready=True:ScaledJobReady:ok", notPause), JobInputs{Episodes: eps(EpPausing, 3*time.Minute, true)}, health.Unknown, "pause requested; completion not established ("},
 		{"a job create failure", job(nil, "Ready=False:KEDAJobCreateFailed:quota exceeded", notPause), JobInputs{}, health.Fault, "quota exceeded"},
+		// Paused=True beside Ready=False is no completed pause: the failure stands
+		{"paused while Ready=False", job(map[string]string{AnnPaused: "true"}, "Ready=False:KEDAJobCreateFailed:quota exceeded", "Paused=True:ScaledJobPaused:ScaledJob is paused"), JobInputs{}, health.Fault, "quota exceeded (while a pause is requested)"},
 		{"partial", job(nil, "Ready=Unknown:PartialTriggerError:some", notPause), JobInputs{}, health.Degraded, "Some triggers failing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -616,4 +637,55 @@ func TestLabJoinsAndVerdicts(t *testing.T) {
 	expect(t, "no-target", verdict("no-target", ""), health.Fault, "no-such-deployment")
 	expect(t, "wl-identity", verdict("wl-identity", "keda-hpa-wl-identity"), health.Fault, "")
 	expect(t, "one-way", verdict("one-way", "keda-hpa-one-way"), health.OK, "scale-in paused")
+}
+
+// capProduct is a ScaledObject (or ScaledJob) with every retained field at
+// its cap: the largest projection §10's caps allow.
+func capProduct(kind string) *unstructured.Unstructured {
+	labels := map[string]any{}
+	for i := 0; i < 20; i++ {
+		labels[fmt.Sprintf("%02d%s", i, strings.Repeat("k", 251))] = strings.Repeat("v", 63)
+	}
+	ann := map[string]any{AnnPaused: strings.Repeat("p", 200), AnnPausedReplicas: strings.Repeat("r", 200), AnnPausedScaleIn: strings.Repeat("i", 200),
+		AnnPausedScaleOut: strings.Repeat("o", 200), AnnTransfer: "true", AnnForceActivate: "true",
+		"argocd.argoproj.io/tracking-id": strings.Repeat("a", 600) + ":apps/Deployment:" + strings.Repeat("n", 300) + "/web"}
+	var trig, conds []any
+	for i := 0; i < 20; i++ {
+		trig = append(trig, map[string]any{"type": strings.Repeat("t", 200), "name": strings.Repeat("n", 200), "metricType": strings.Repeat("m", 200),
+			"useCachedMetrics": true, "authenticationRef": map[string]any{"name": strings.Repeat("a", 300), "kind": KindClusterTriggerAuth}})
+	}
+	for i := 0; i < 10; i++ {
+		conds = append(conds, map[string]any{"type": fmt.Sprintf("%02d%s", i, strings.Repeat("t", 200)), "status": strings.Repeat("s", 40),
+			"reason": strings.Repeat("r", 200), "message": strings.Repeat("m", 4000)})
+	}
+	health, activity := map[string]any{}, map[string]any{}
+	for i := 0; i < 20; i++ {
+		k := fmt.Sprintf("%02d%s", i, strings.Repeat("k", 200))
+		health[k] = map[string]any{"numberOfFailures": int64(i), "status": strings.Repeat("s", 200)}
+		activity[k] = map[string]any{"isActive": true}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": kind,
+		"metadata": map[string]any{"namespace": strings.Repeat("s", 63), "name": strings.Repeat("n", 253), "uid": strings.Repeat("u", 80),
+			"resourceVersion": strings.Repeat("9", 200), "labels": labels, "annotations": ann},
+		"spec": map[string]any{"scaleTargetRef": map[string]any{"apiVersion": strings.Repeat("g", 300) + "/v1", "kind": strings.Repeat("K", 100), "name": strings.Repeat("t", 300)},
+			"advanced":        map[string]any{"horizontalPodAutoscalerConfig": map[string]any{"name": strings.Repeat("h", 300)}, "scalingModifiers": map[string]any{"formula": "x"}},
+			"minReplicaCount": int64(1), "maxReplicaCount": int64(5), "idleReplicaCount": int64(0), "successfulJobsHistoryLimit": int64(5), "failedJobsHistoryLimit": int64(5),
+			"fallback": map[string]any{"failureThreshold": int64(3), "replicas": int64(2), "behavior": strings.Repeat("b", 200)}, "triggers": trig},
+		"status": map[string]any{"conditions": conds, "hpaName": strings.Repeat("h", 300), "pausedReplicaCount": int64(1), "health": health, "triggersActivity": activity,
+			"scaleTargetGVKR": map[string]any{"group": strings.Repeat("g", 300), "version": strings.Repeat("v", 200), "kind": strings.Repeat("K", 100), "resource": strings.Repeat("r", 300)}},
+	}}
+}
+
+// §10's MaxObject bounds the product of every cap: no scaler is ever left
+// out of the model for its shape, only for the budget.
+func TestMaxObjectBoundsTheCapProduct(t *testing.T) {
+	so := ProjectScaledObject(capProduct(KindScaledObject))
+	job := ProjectScaledJob(capProduct(KindScaledJob))
+	if !so.TriggersCut || !so.CondsCut || !so.HealthCut || !so.ActivityCut || !so.LabelsCut || len(so.Labels) != maxLabels || so.Owner == nil {
+		t.Fatalf("the fixture does not reach every cap: %+v", so)
+	}
+	t.Logf("the cap product: ScaledObject %d bytes, ScaledJob %d bytes; MaxObject %d", so.Size, job.Size, MaxObject)
+	if so.Size > MaxObject || job.Size > MaxObject {
+		t.Fatalf("the cap product (%d, %d) exceeds MaxObject %d", so.Size, job.Size, MaxObject)
+	}
 }

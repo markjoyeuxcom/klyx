@@ -23,6 +23,7 @@ import (
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/hpa"
 	"github.com/moomora/klyx/internal/keda"
 )
@@ -181,8 +182,11 @@ func TestKEDASetPaused(t *testing.T) {
 	if err := c.KEDASetPaused(ctx, "scaledobjects", "team", "web", "so-1", false); err == nil || !strings.Contains(err.Error(), "paused-replicas") {
 		t.Fatalf("resume with paused-replicas: %v", err)
 	}
-	// 2.11 does not apply paused on a ScaledObject; a custom image's version is unknown
-	for image, want := range map[string]string{"ghcr.io/kedacore/keda:2.11.2": "does not apply", "registry.example/keda:2.21.0": "unverified"} {
+	// 2.11 does not apply paused on a ScaledObject; a custom image's handler
+	// is unresolved; KEDA's own image on a tag that is no version resolves the
+	// handler but not its version
+	for image, want := range map[string]string{"ghcr.io/kedacore/keda:2.11.2": "does not apply", "registry.example/keda:2.21.0": "unverified",
+		"ghcr.io/kedacore/keda:main": "the handling KEDA operator or its version is unverified"} {
 		c = kedaFixture(t, image, nil, []runtime.Object{newSO(nil)})
 		if err := c.KEDASetPaused(ctx, "scaledobjects", "team", "web", "so-1", true); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", image, err)
@@ -190,6 +194,16 @@ func TestKEDASetPaused(t *testing.T) {
 		if _, ok := annOf(c)[keda.AnnPaused]; ok {
 			t.Fatalf("%s: a refused pause wrote", image)
 		}
+	}
+	// a ScaledJob's paused applies from 2.11
+	job := kedaObj("ScaledJob", "team", "batch", "sj-1", map[string]any{"jobTargetRef": map[string]any{}}, nil)
+	c = kedaFixture(t, "ghcr.io/kedacore/keda:2.11.2", nil, []runtime.Object{job})
+	if err := c.KEDASetPaused(ctx, "scaledjobs", "team", "batch", "sj-1", true); err != nil {
+		t.Fatalf("a 2.11 ScaledJob: %v", err)
+	}
+	c = kedaFixture(t, "ghcr.io/kedacore/keda:2.10.1", nil, []runtime.Object{job})
+	if err := c.KEDASetPaused(ctx, "scaledjobs", "team", "batch", "sj-1", true); err == nil || !strings.Contains(err.Error(), "does not apply") {
+		t.Fatalf("a 2.10 ScaledJob: %v", err)
 	}
 	c = kedaFixture(t, "ghcr.io/kedacore/keda:2.21.0", nil, []runtime.Object{newSO(nil)})
 	if err := c.KEDASetPaused(ctx, "scaledobjects", "team", "web", "replaced", true); !errors.Is(err, ErrReplaced) {
@@ -246,6 +260,25 @@ func TestReplicaOwnership(t *testing.T) {
 	}
 	if r := classifyOwnership(nil, false, true, GitOpsOwnership{}); r.Autoscaler != "unverified" || r.GitOps != "unowned" {
 		t.Fatalf("a capped HPA read: %+v", r)
+	}
+	if r := classifyOwnership(nil, true, false, GitOpsOwnership{}); r.Autoscaler != "unverified" {
+		t.Fatalf("an unproven ScaledObject read: %+v", r)
+	}
+	// the reads that prove: live and complete; KEDA's API not served proves
+	// no ScaledObject; no Observer proves nothing
+	live := fakeIdentityObserver{models: map[string][]any{healthsrc.KindHPAs: {plain}}, live: map[string]bool{healthsrc.KindHPAs: true, healthsrc.KindScaledObjects: true}}
+	if hs, _, hp, sp := autoscalersOf(live, true); len(hs) != 1 || !hp || !sp {
+		t.Fatalf("live reads: %d %v %v", len(hs), hp, sp)
+	}
+	checking := fakeIdentityObserver{live: map[string]bool{healthsrc.KindHPAs: true}}
+	if _, _, hp, sp := autoscalersOf(checking, true); !hp || sp {
+		t.Fatalf("a ScaledObject read still checking: %v %v", hp, sp)
+	}
+	if _, _, _, sp := autoscalersOf(checking, false); !sp {
+		t.Fatal("KEDA not served proves no ScaledObject")
+	}
+	if _, _, hp, sp := autoscalersOf(nil, false); hp || sp {
+		t.Fatal("no Observer proved a read")
 	}
 	if r := classifyOwnership(nil, true, true, GitOpsOwnership{Warnings: []string{"kustomizations could not be listed"}}); r.GitOps != "unverified" {
 		t.Fatalf("a failing GitOps check: %+v", r)

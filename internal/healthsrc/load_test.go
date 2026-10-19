@@ -15,6 +15,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,13 +41,16 @@ import (
 
 type loadScale struct {
 	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims, listenersets int
+	// coverage S9: ScaledObjects (each with its HPA), half as many plain
+	// HPAs, a tenth as many ScaledJobs, a quarter as many authentications
+	scalers int
 }
 
 // Coverage S7 §8: the large cluster carries about 500 routes and 50
 // ListenerSets, its Gateways and ListenerSets with listener status.
 var (
-	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50}
-	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5}
+	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50, scalers: 200}
+	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5, scalers: 20}
 )
 
 // chaos is an API outage switch for one cluster's list/watch: while down,
@@ -498,6 +502,11 @@ func init() {
 	add("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisementList")
 	add("metallb.io", "v1beta1", "configurationstates", "ConfigurationStateList")
 	add("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPoolList")
+	// coverage S9
+	add("keda.sh", "v1alpha1", "scaledobjects", "ScaledObjectList")
+	add("keda.sh", "v1alpha1", "scaledjobs", "ScaledJobList")
+	add("keda.sh", "v1alpha1", "triggerauthentications", "TriggerAuthenticationList")
+	add("keda.sh", "v1alpha1", "clustertriggerauthentications", "ClusterTriggerAuthenticationList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -606,6 +615,30 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 				TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: ns(i % svcs), Name: fmt.Sprintf("p-%05d-%d", i, e), UID: types.UID(fmt.Sprintf("p-%05d-%d", i, e))}})
 		}
 		typedObjs = append(typedObjs, es)
+	}
+	// coverage S9: each ScaledObject's HPA (controlled by it) and the plain
+	// HPAs, healthy, as kind's HPA controller writes them
+	hpaConds := []autoscalingv2.HorizontalPodAutoscalerCondition{
+		{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale", Message: "recommended size matches current size", LastTransitionTime: created},
+		{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionTrue, Reason: "ValidMetricFound", Message: "the HPA was able to successfully calculate a replica count from external metric s0-prometheus", LastTransitionTime: created},
+		{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionFalse, Reason: "DesiredWithinRange", Message: "the desired count is within the acceptable range", LastTransitionTime: created}}
+	og, min := int64(1), int32(1)
+	hpaOf := func(name, namespace, target string, owner *metav1.OwnerReference) *autoscalingv2.HorizontalPodAutoscaler {
+		h := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name), Generation: 1, CreationTimestamp: created},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: target},
+				MinReplicas: &min, MaxReplicas: 10, Metrics: []autoscalingv2.MetricSpec{{Type: autoscalingv2.ExternalMetricSourceType}}},
+			Status: autoscalingv2.HorizontalPodAutoscalerStatus{ObservedGeneration: &og, CurrentReplicas: 2, DesiredReplicas: 2, Conditions: hpaConds}}
+		if owner != nil {
+			h.OwnerReferences = []metav1.OwnerReference{*owner}
+		}
+		return h
+	}
+	for i := 0; i < sc.scalers; i++ {
+		so := fmt.Sprintf("so-%04d", i)
+		typedObjs = append(typedObjs, hpaOf("keda-hpa-"+so, ns(i), so, &metav1.OwnerReference{APIVersion: "keda.sh/v1alpha1", Kind: "ScaledObject", Name: so, UID: types.UID(so), Controller: ptr(true)}))
+	}
+	for i := 0; i < sc.scalers/2; i++ {
+		typedObjs = append(typedObjs, hpaOf(fmt.Sprintf("hpa-%04d", i), ns(i), fmt.Sprintf("plain-%04d", i), nil))
 	}
 	typed := fake.NewClientset(typedObjs...)
 	scheme := krt.NewScheme()
@@ -737,6 +770,35 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			"from": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "shop"}},
 			"to":   []any{map[string]any{"group": "", "kind": "Service"}}}, nil, nil))
 	}
+	// coverage S9: ScaledObjects, ScaledJobs and authentications, as KEDA
+	// 2.21 writes their status (no condition times)
+	kc := func(t, status, reason, msg string) map[string]any {
+		return map[string]any{"type": t, "status": status, "reason": reason, "message": msg}
+	}
+	soConds := []any{kc("Ready", "True", "ScaledObjectReady", "ScaledObject is defined correctly and is ready for scaling"),
+		kc("Active", "True", "ScalerActive", "Scaling is performed because triggers are active"),
+		kc("Fallback", "False", "NoFallbackFound", "No fallbacks are active on this scaled object"), kc("Paused", "False", "", ""), kc("HPAActive", "True", "HPAActive", "HPA is actively scaling")}
+	trigger := []any{map[string]any{"type": "prometheus", "metadata": map[string]any{"serverAddress": "http://prometheus.monitoring.svc:9090", "query": "sum(rate(http_requests_total[1m]))", "threshold": "10"},
+		"authenticationRef": map[string]any{"name": "auth-0000"}}}
+	for i := 0; i < sc.scalers; i++ {
+		name := fmt.Sprintf("so-%04d", i)
+		u := cr("keda.sh/v1alpha1", "ScaledObject", ns(i), name, map[string]any{"scaleTargetRef": map[string]any{"name": name}, "minReplicaCount": int64(1), "maxReplicaCount": int64(10), "triggers": trigger},
+			soConds, map[string]any{"hpaName": "keda-hpa-" + name, "externalMetricNames": []any{"s0-prometheus"}, "triggersActivity": map[string]any{"s0-prometheus": map[string]any{"isActive": true}},
+				"scaleTargetGVKR": map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "resource": "deployments"}, "scaleTargetKind": "apps/v1.Deployment"})
+		u.SetUID(types.UID(name))
+		u.SetCreationTimestamp(created)
+		create("keda.sh", "v1alpha1", "scaledobjects", u)
+	}
+	for i := 0; i < sc.scalers/10; i++ {
+		u := cr("keda.sh/v1alpha1", "ScaledJob", ns(i), fmt.Sprintf("sj-%04d", i), map[string]any{"jobTargetRef": map[string]any{"template": map[string]any{}}, "triggers": trigger},
+			[]any{kc("Ready", "True", "ScaledJobReady", "ScaledJob is defined correctly and is ready for scaling"), kc("Active", "False", "ScalerNotActive", "Scaling is not performed because triggers are not active")}, nil)
+		u.SetCreationTimestamp(created)
+		create("keda.sh", "v1alpha1", "scaledjobs", u)
+	}
+	for i := 0; i < sc.scalers/4; i++ {
+		create("keda.sh", "v1alpha1", "triggerauthentications", cr("keda.sh/v1alpha1", "TriggerAuthentication", ns(i), fmt.Sprintf("auth-%04d", i),
+			map[string]any{"secretTargetRef": []any{map[string]any{"parameter": "bearerToken", "name": "prom-token", "key": "token"}}}, nil, nil))
+	}
 	create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{}, []any{cond("Ready", "True", "Ready")}, nil))
 	for i := 0; i < sc.claims; i++ {
 		u := cr("karpenter.sh/v1", "NodeClaim", "", fmt.Sprintf("claim-%03d", i), map[string]any{}, []any{cond("Ready", "True", "Ready"), cond("Launched", "True", "Launched")},
@@ -754,10 +816,12 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
 	kinds = append(kinds, SharedNetworkKinds(nd)...)
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing} {
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing, KEDA} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}
+	// coverage S9: the shared HPA kind and the standalone HPA part
+	kinds, domains = append(kinds, SharedHPAKind(nd)), append(domains, Autoscaling(nd)...)
 	snaps, ed := Events(EventsDeps{Cluster: name, Typed: typed})
 	domains = append(domains, ed...)
 	ch := &chaos{}

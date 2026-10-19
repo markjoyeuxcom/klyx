@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/hpa"
@@ -83,5 +85,55 @@ func TestS9FactRowsCarryNoVerdict(t *testing.T) {
 	plain := hpaRowDTO(healthsrc.Row[healthsrc.HPARow]{Eval: health.NativeEval{Role: health.OK, Label: "2 replicas"}, Data: healthsrc.HPARow{HPA: &hpa.HPA{Name: "plain"}}})
 	if plain.Rule == nil || plain.Rule.Role != "ok" {
 		t.Fatalf("a counted row lost its verdict: %+v", plain.Rule)
+	}
+}
+
+// fakeKEDAConn records the verbs that reach the connection.
+type fakeKEDAConn struct{ paused []string }
+
+func (f *fakeKEDAConn) KEDAInspect(context.Context, string, string, string, string) (fleet.KEDAInspection, error) {
+	return fleet.KEDAInspection{}, nil
+}
+func (f *fakeKEDAConn) KEDAJobsOf(context.Context, string, string, string) (fleet.KEDAJobs, error) {
+	return fleet.KEDAJobs{}, nil
+}
+func (f *fakeKEDAConn) ReplicaOwner(context.Context, string, string, string) fleet.ReplicaOwnership {
+	return fleet.ReplicaOwnership{}
+}
+func (f *fakeKEDAConn) KEDASetPaused(_ context.Context, resource, ns, name, _ string, pause bool) error {
+	f.paused = append(f.paused, resource+" "+ns+"/"+name+" "+map[bool]string{true: "pause", false: "resume"}[pause])
+	return nil
+}
+
+// S9 §8: Pause and Resume consume the typed-confirmation grant on a
+// protected cluster - refused unarmed, one-shot when armed - and an
+// unprotected cluster is not gated.
+func TestKEDASetPaused_ProtectedGrant(t *testing.T) {
+	now := time.Now()
+	g := newTestGuard("prd-cluster", &now)
+	SetProtectGuard(g)
+	t.Cleanup(func() { SetProtectGuard(nil) })
+	conn := &fakeKEDAConn{}
+	s := NewKEDAService(func(string) (KEDAConn, bool) { return conn, true })
+	if r := s.SetPaused("prd-cluster", "scaledobjects", "team", "web", "so-1", true); r.OK || r.Error == "" {
+		t.Fatalf("an unarmed pause on a protected cluster must refuse, got %+v", r)
+	}
+	if len(conn.paused) != 0 {
+		t.Fatalf("a refused pause reached the conn: %v", conn.paused)
+	}
+	if err := g.Arm("prd-cluster", "prd-cluster"); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.SetPaused("prd-cluster", "scaledobjects", "team", "web", "so-1", true); !r.OK {
+		t.Fatalf("an armed pause must pass, got %+v", r)
+	}
+	if r := s.SetPaused("prd-cluster", "scaledobjects", "team", "web", "so-1", false); r.OK {
+		t.Fatal("the grant is one-shot")
+	}
+	if r := s.SetPaused("dev-cluster", "scaledjobs", "team", "batch", "sj-1", false); !r.OK {
+		t.Fatalf("an unprotected resume needs no grant, got %+v", r)
+	}
+	if strings.Join(conn.paused, "; ") != "scaledobjects team/web pause; scaledjobs team/batch resume" {
+		t.Fatalf("the verbs that reached the conn: %v", conn.paused)
 	}
 }

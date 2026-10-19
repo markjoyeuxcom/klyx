@@ -51,18 +51,23 @@ const (
 )
 
 // Bounds (S9 §10). Size is the retained bytes - string lengths and a fixed
-// allowance per field - so the caps below bound every projection. MaxObject
-// is sized so a failing object with every condition message at its cap is
-// always retained (the design's 4 KiB and 2 KiB could drop exactly the
-// faulty ones); a pathological object past it is counted, not retained,
-// and the kind reads truncated (S1a §3), never silently healthy.
+// allowance per field - so the caps below bound every projection. A
+// scaler's MaxObject bounds the product of every cap (about 34 KiB,
+// TestMaxObjectBoundsTheCapProduct): no ScaledObject or ScaledJob is left
+// out for its shape, only for the budget (the design's 4 KiB could drop
+// exactly the faulty ones). An authentication's product (16 references per
+// source at full length, over 64 KiB) cannot be bounded within its kinds'
+// budgets: MaxAuthObject keeps a large realistic one (16 references in each
+// in-cluster source, Vault and a pod identity: about 8.5 KiB), and one past
+// it is counted, not retained, so its kinds read truncated (S1a §3) and a
+// missing authentication stays unverified, never claimed.
 const (
 	BudgetScaledObjects = 512 << 10
 	BudgetScaledJobs    = 128 << 10
 	BudgetTriggerAuths  = 128 << 10
 	BudgetClusterAuths  = 64 << 10
-	MaxObject           = 16 << 10
-	MaxAuthObject       = 8 << 10
+	MaxObject           = 40 << 10
+	MaxAuthObject       = 16 << 10
 	maxConds            = 8
 	maxTriggers         = 16
 	maxHealth           = 16

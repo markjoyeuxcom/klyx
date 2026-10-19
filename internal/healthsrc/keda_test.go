@@ -1,6 +1,7 @@
 package healthsrc
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestEvalHPAs(t *testing.T) {
 				t.Fatal("a KEDA-owned row counted")
 			}
 		case "plain":
-			if r.Eval.Role != health.Fault || r.Data.Others[0] != "team/keda-hpa-web (KEDA ScaledObject web)" {
+			if r.Eval.Role != health.Fault || len(r.Data.Others) != 1 || r.Data.Others[0] != "team/keda-hpa-web (KEDA ScaledObject web)" {
 				t.Fatalf("plain: %v %v", r.Eval.Role, r.Data.Others)
 			}
 		}
@@ -100,8 +101,24 @@ func TestEvalScaledObjects(t *testing.T) {
 	if r := rows["web"]; r.Eval.Role != health.Fault || r.Data.HPA == nil || r.Data.HPA.Name != "keda-hpa-web" {
 		t.Fatalf("web: %v %+v", r.Eval.Role, r.Data.HPA)
 	}
+	// AmbiguousSelector names the other autoscaler on the target
+	objs[KindHPAs] = append(objs[KindHPAs], kHPA("plain", "", hpaAmbig...))
+	for _, r := range evalScaledObjects("x")(kCapture(objs, complete)).Rows.(RowSet[ScaledObjectRow]).Rows {
+		if r.Data.ScaledObject.Name == "web" && (!strings.Contains(r.Eval.Reason, "also scaling this target: team/plain (plain HPA)") || len(r.Data.Others) != 1) {
+			t.Fatalf("web's AmbiguousSelector: %q, others %v", r.Eval.Reason, r.Data.Others)
+		}
+	}
+	objs[KindHPAs] = objs[KindHPAs][:1]
 	if r := rows["ghost"]; r.Eval.Label != "TriggerAuthentication no-such-auth does not exist" {
 		t.Fatalf("ghost: %q", r.Eval.Label)
+	}
+	// a complete but not current authentication read proves nothing missing
+	c := kCapture(objs, complete)
+	c.Current[KindTriggerAuths] = false
+	for _, r := range evalScaledObjects("x")(c).Rows.(RowSet[ScaledObjectRow]).Rows {
+		if r.Data.ScaledObject.Name == "ghost" && r.Eval.Label != "ScaledObjectCheckFailed" {
+			t.Fatalf("a stale read proved an absence: %q", r.Eval.Label)
+		}
 	}
 	// an incomplete authentication read proves nothing missing
 	complete[KindTriggerAuths] = false
@@ -114,11 +131,39 @@ func TestEvalScaledObjects(t *testing.T) {
 	// a stale HPA: dated, never current
 	healthy := map[string][]any{KindScaledObjects: {kSO("web", "so-1", "", ready, keda.Cond{Type: "HPAActive", Status: "False", Reason: "FailedGetExternalMetric"})},
 		KindHPAs: {kHPA("keda-hpa-web", "so-1", hpaHealthy...)}}
-	c := kCapture(healthy, map[string]bool{KindScaledObjects: true})
+	c = kCapture(healthy, map[string]bool{KindScaledObjects: true})
 	c.AsOf[KindHPAs] = kNow.Add(-5 * time.Minute)
 	r := evalScaledObjects("x")(c).Rows.(RowSet[ScaledObjectRow]).Rows[0]
 	if r.Eval.Role != health.Unknown || r.Eval.Label != "HPA health not established" {
 		t.Fatalf("stale positive against KEDA's False: %v %q (%s)", r.Eval.Role, r.Eval.Label, r.Eval.Reason)
+	}
+}
+
+// S9 §3: absence needs a complete AND current HPA read - a complete read
+// gone stale proves nothing, so a Ready ScaledObject without an HPA is "not
+// established", never awaiting or missing it; and the paused target's
+// replicas are read in the ScaledObject's own namespace only.
+func TestEvalScaledObjectsProofs(t *testing.T) {
+	objs := map[string][]any{KindScaledObjects: {kSO("web", "so-1", "", ready)}, KindHPAs: {}}
+	c := kCapture(objs, map[string]bool{KindScaledObjects: true, KindHPAs: true})
+	if r := evalScaledObjects("x")(c).Rows.(RowSet[ScaledObjectRow]).Rows[0]; r.Eval.Label != "Awaiting HPA" {
+		t.Fatalf("a current, complete empty read: %q", r.Eval.Label)
+	}
+	c.Current[KindHPAs] = false
+	if r := evalScaledObjects("x")(c).Rows.(RowSet[ScaledObjectRow]).Rows[0]; r.Eval.Role != health.Unknown || r.Eval.Label != "HPA join not established" {
+		t.Fatalf("a complete read gone stale: %v %q", r.Eval.Role, r.Eval.Label)
+	}
+
+	one := "1"
+	held := kSO("web", "so-1", "", ready, keda.Cond{Type: "Paused", Status: "True", Reason: "ScaledObjectPaused"})
+	held.Pause.PausedReplicas = &one
+	n := int32(1)
+	held.PausedCount = &n
+	elsewhere := &ProjectedDeployment{Deployment: appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "web"}, Status: appsv1.DeploymentStatus{Replicas: 1}}}
+	objs = map[string][]any{KindScaledObjects: {held}, KindHPAs: {}, KindDeployments: {elsewhere}}
+	c = kCapture(objs, map[string]bool{KindScaledObjects: true, KindHPAs: true, KindDeployments: true})
+	if r := evalScaledObjects("x")(c).Rows.(RowSet[ScaledObjectRow]).Rows[0]; r.Eval.Label != "Paused at 1 (the target's replicas were not read)" {
+		t.Fatalf("another namespace's Deployment read as the target: %q", r.Eval.Label)
 	}
 }
 

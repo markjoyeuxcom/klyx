@@ -144,6 +144,16 @@ describe("AutoscalingView (coverage S9)", () => {
     expect(jobs).toContain("not part of the verdict");
   });
 
+  it("a ScaledJob's pause applies from KEDA 2.11, a ScaledObject's from 2.12", async () => {
+    sjs = part([{ uid: "sj-1", gvr: "keda.sh/v1alpha1/scaledjobs", namespace: "team", name: "batch", triggers: [{ type: "cron" }], triggerCount: 1,
+      conditions: [{ type: "Ready", status: "True" }], pause: noPause, version: "2.11.2", findings: [{ role: "ok", label: "Active" }], rule: rule("ok", "Active") }], ["ScaledJob"]);
+    render(<AutoscalingView cluster="c" />);
+    fireEvent.click(tab(/^ScaledJobs/));
+    await act(async () => { fireEvent.click(screen.getByText("team/batch")); });
+    expect((screen.getByTestId("keda-pause") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("keda-verb-limit")).toBeNull();
+  });
+
   it("an authentication is a fact; an incomplete users read is never unused", async () => {
     auths = part([{ uid: "ta-1", gvr: "keda.sh/v1alpha1/triggerauthentications", namespace: "team", name: "ta", cluster: false,
       sources: [{ kind: "secretTargetRef", refs: [{ kind: "Secret", name: "tok", key: "token" }], refCount: 1 }], users: [], usersComplete: false }], ["TriggerAuthentication", "ClusterTriggerAuthentication"]);

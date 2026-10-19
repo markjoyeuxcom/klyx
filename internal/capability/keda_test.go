@@ -118,3 +118,35 @@ func TestDetectKEDA(t *testing.T) {
 		t.Fatalf("not ready: %+v", k)
 	}
 }
+
+// S9 §2: ownership needs every ready backing pod to be KEDA's and every
+// endpoint to name a pod; a not-ready webhook Deployment is a problem.
+func TestDetectKEDAProofs(t *testing.T) {
+	op := kedaOperator("keda", true, "ghcr.io/kedacore/keda:2.21.0")
+	slice := func(eps ...discoveryv1.Endpoint) *discoveryv1.EndpointSlice {
+		return &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Namespace: "keda", Name: "s", Labels: map[string]string{"kubernetes.io/service-name": "keda-metrics-apiserver"}}, Endpoints: eps}
+	}
+	ep := func(kind, name, uid string) discoveryv1.Endpoint {
+		return discoveryv1.Endpoint{Conditions: discoveryv1.EndpointConditions{Ready: yes()}, TargetRef: &corev1.ObjectReference{Kind: kind, Name: name, UID: types.UID(uid)}}
+	}
+	// mixed backing pods: unverified, never KEDA's
+	mixed := append(append([]runtime.Object{}, op...), slice(ep("Pod", "m-a", "a"), ep("Pod", "m-b", "b")),
+		runningPod("keda", "m-a", "a", "x", "ghcr.io/kedacore/keda-metrics-apiserver:2.21.0"), runningPod("keda", "m-b", "b", "x", "registry.example/prometheus-adapter:0.12"))
+	if k := detectK(serve(apiSvc), mixed...); k.APIService.Owner != "unverified" {
+		t.Fatalf("mixed: %+v", k.APIService)
+	}
+	// an endpoint naming something other than a pod - even one whose name
+	// and UID a KEDA pod shares: unverified
+	node := append(append([]runtime.Object{}, op...), slice(ep("Pod", "m-a", "a"), ep("Node", "m-b", "b")),
+		runningPod("keda", "m-a", "a", "x", "ghcr.io/kedacore/keda-metrics-apiserver:2.21.0"), runningPod("keda", "m-b", "b", "x", "ghcr.io/kedacore/keda-metrics-apiserver:2.21.0"))
+	if k := detectK(serve(apiSvc), node...); k.APIService.Owner != "unverified" {
+		t.Fatalf("a non-pod endpoint: %+v", k.APIService)
+	}
+	// a not-ready admission webhook Deployment: verified, not healthy
+	hook := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "keda", Name: "keda-admission", UID: "hook", Labels: map[string]string{"app": "keda-admission-webhooks"}},
+		Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(1)}}
+	objs := append(append(append([]runtime.Object{}, op...), backing("ghcr.io/kedacore/keda-metrics-apiserver:2.21.0")...), hook)
+	if k := detectK(serve(apiSvc), objs...); k.Healthy || !k.Verified || len(k.Webhooks) != 1 {
+		t.Fatalf("a not-ready webhook: %+v", k)
+	}
+}
