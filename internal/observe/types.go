@@ -121,6 +121,22 @@ type Ref struct {
 	Since     *time.Time `json:"since,omitempty"`
 	Condition *Condition `json:"condition,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
+	// Fingerprint is an alert ref's identity within its source (coverage
+	// S8a §4): an alert has no UID, and its subject is a correlation.
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// AlertCounts are an alerts part's counts (coverage S8a §6), kept apart
+// from every object count: they never add to faults, the lamp or the spine.
+type AlertCounts struct {
+	Counted     int  `json:"counted"` // active, critical or warning: Needs you's third count
+	Critical    int  `json:"critical"`
+	Warning     int  `json:"warning"`
+	Uncounted   int  `json:"uncounted"` // active, with another severity or none
+	Suppressed  int  `json:"suppressed"`
+	Unprocessed int  `json:"unprocessed"`
+	Unknown     int  `json:"unknown"`   // a state Klyx does not know, kept as written
+	Truncated   bool `json:"truncated"` // the read was capped: every count is a lower bound
 }
 
 // Condition is one condition's own transition: it has had Status since
@@ -136,12 +152,13 @@ type Part struct {
 	ID         string         `json:"id"`
 	Entity     string         `json:"entity"`
 	Scope      string         `json:"scope"`
-	Classifier string         `json:"classifier"` // verdict | native | evidence
+	Classifier string         `json:"classifier"` // verdict | native | evidence | alerts
 	Coverage   Coverage       `json:"coverage"`
 	Kinds      []KindCoverage `json:"kinds"`
 	Counts     *Counts        `json:"counts,omitempty"`
 	Native     *NativeCounts  `json:"native,omitempty"`
 	Evidence   *int           `json:"evidence,omitempty"`
+	Alerts     *AlertCounts   `json:"alerts,omitempty"`
 	Top        []Ref          `json:"top,omitempty"`
 	Obs        uint64         `json:"obs"` // data watermark (informational)
 	Ver        uint64         `json:"ver"` // part version: orders counts and rows

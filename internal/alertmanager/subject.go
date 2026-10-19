@@ -1,5 +1,7 @@
 package alertmanager
 
+import "time"
+
 // Subject is the Kubernetes object an alert's labels name (S8a §5): a
 // correlation by label, never a join by UID.
 type Subject struct {
@@ -66,4 +68,24 @@ func SubjectOf(labels map[string]string) Subject {
 		return Subject{Kind: "Namespace", Resource: "namespaces", Name: ns, Basis: []string{"namespace"}}
 	}
 	return Subject{}
+}
+
+// Read is one alerts snapshot read's envelope (S8a §4): the source identity
+// it was read under, so even an empty read names its source, with the
+// source line and every alert's raw subject (for joins) and display values.
+type Read struct {
+	Identity  string
+	Source    string // the source line, a display value
+	Note      string // a display value, e.g. discovery could not be re-read
+	Match     map[string]string
+	Alerts    []Item
+	Truncated bool
+	ReadAt    time.Time
+}
+
+// Item is one alert of a read.
+type Item struct {
+	Subject Subject // raw: for the joins only
+	Counted bool
+	Display DisplayAlert
 }

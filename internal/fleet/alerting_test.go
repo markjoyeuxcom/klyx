@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
@@ -137,7 +138,7 @@ func newAMEnv(t *testing.T, cfg *config.EndpointConfig, typed *typedfake.Clients
 }
 
 // read resolves the source (the first read re-keys) and reads it.
-func (e *amEnv) read(t *testing.T) AlertsRead {
+func (e *amEnv) read(t *testing.T) alertmanager.Read {
 	t.Helper()
 	key := e.c.AlertsIdentity()
 	r, err := e.c.ReadAlerts(context.Background(), key)
@@ -618,5 +619,61 @@ func TestAlertmanagerDiscoveryErrorIsNotNone(t *testing.T) {
 	e.c.disc = timingOutDiscovery{}
 	if d := e.c.discoverAlertmanager(context.Background()); d.err == nil || d.none {
 		t.Fatalf("discovery error: %+v", d)
+	}
+}
+
+// An Observer restarted with the empty key re-keys to the identity the
+// connection already holds - a read never stays refused because the
+// identity itself did not change.
+func TestAReadKeyedOtherwiseAlwaysRekeys(t *testing.T) {
+	cfg := &config.EndpointConfig{Endpoint: "https://am.example"}
+	e := newAMEnv(t, cfg, nil, nil)
+	e.c.SetAlertmanagerConfig(cfg)
+	id := e.c.AlertsIdentity()
+	before := len(e.rekeys())
+	if _, err := e.c.ReadAlerts(context.Background(), ""); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("read: %v", err)
+	}
+	if got := e.rekeys(); len(got) != before+1 || got[len(got)-1] != id {
+		t.Fatalf("re-keys %q, want %q appended", got, id)
+	}
+}
+
+// S8a §4: the Alerting capability is the snapshot's own evidence - present
+// when configured, or after a keyed read resolved an Alertmanager; absent
+// after a read that completed discovery and found none.
+func TestAlertingCapabilityIsTheReadsEvidence(t *testing.T) {
+	cfg := &config.EndpointConfig{Endpoint: "https://am.example"}
+	if e := newAMEnv(t, cfg, nil, nil); !e.c.alertsPresent() {
+		t.Fatal("configured is present")
+	}
+	e := newAMEnv(t, nil, typedfake.NewSimpleClientset(), amDyn())
+	if e.c.alertsPresent() {
+		t.Fatal("unread and unconfigured is not present")
+	}
+	r, err := e.c.ReadAlerts(context.Background(), e.c.AlertsIdentity())
+	if errors.Is(err, ErrSourceChanged) {
+		_, err = e.c.ReadAlerts(context.Background(), r.Identity)
+	}
+	if !errors.Is(err, ErrNoAlertmanager) || e.c.alertsPresent() {
+		t.Fatalf("none found: %v present=%v", err, e.c.alertsPresent())
+	}
+	typed := typedfake.NewSimpleClientset(governed("alertmanager-main-0")...)
+	servedAM(typed)
+	e2 := newAMEnv(t, nil, typed, amDyn(amResource("monitoring", "main", amUID, nil)))
+	r, err = e2.c.ReadAlerts(context.Background(), e2.c.AlertsIdentity())
+	if errors.Is(err, ErrSourceChanged) {
+		_, _ = e2.c.ReadAlerts(context.Background(), r.Identity)
+	}
+	if !e2.c.alertsPresent() {
+		t.Fatal("a discovered Alertmanager is present")
+	}
+}
+
+// The connection's snapshot carries the capability the cluster DTO reads.
+func TestSnapshotCarriesTheAlertingCapability(t *testing.T) {
+	e := newAMEnv(t, &config.EndpointConfig{Endpoint: "https://am.example"}, nil, nil)
+	if !e.c.Snapshot().Capabilities.Alerting.Present {
+		t.Fatal("the snapshot dropped the Alerting capability")
 	}
 }

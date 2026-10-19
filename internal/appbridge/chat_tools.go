@@ -651,24 +651,25 @@ func chatKinds(ks []observe.KindCoverage, n *int) []chatKindCov {
 // native part's inclusion count and wording kept apart from its roles, or
 // an evidence count, plus its version and kinds.
 type chatPart struct {
-	Area          string          `json:"area,omitempty"`
-	ID            string          `json:"id"`
-	Entity        string          `json:"entity"`
-	Classifier    string          `json:"classifier"`
-	Coverage      string          `json:"coverage"`
-	Ver           uint64          `json:"ver"`
-	AsOf          string          `json:"asOf,omitempty"`
-	Counts        *observe.Counts `json:"counts,omitempty"`
-	NativeRoles   *observe.Counts `json:"nativeRoles,omitempty"`
-	NeedAttention *int            `json:"needAttention,omitempty"`
-	Word          string          `json:"word,omitempty"`
-	Evidence      *int            `json:"evidence,omitempty"`
-	Kinds         []chatKindCov   `json:"kinds"`
+	Area          string               `json:"area,omitempty"`
+	ID            string               `json:"id"`
+	Entity        string               `json:"entity"`
+	Classifier    string               `json:"classifier"`
+	Coverage      string               `json:"coverage"`
+	Ver           uint64               `json:"ver"`
+	AsOf          string               `json:"asOf,omitempty"`
+	Counts        *observe.Counts      `json:"counts,omitempty"`
+	NativeRoles   *observe.Counts      `json:"nativeRoles,omitempty"`
+	NeedAttention *int                 `json:"needAttention,omitempty"`
+	Word          string               `json:"word,omitempty"`
+	Evidence      *int                 `json:"evidence,omitempty"`
+	Alerts        *observe.AlertCounts `json:"alerts,omitempty"` // coverage S8a: never added to object counts
+	Kinds         []chatKindCov        `json:"kinds"`
 }
 
 func toChatPart(area string, part observe.Part, n *int) chatPart {
 	cp := chatPart{Area: area, ID: part.ID, Entity: part.Entity, Classifier: part.Classifier, Coverage: string(part.Coverage),
-		Ver: part.Ver, AsOf: rfc(part.AsOf), Counts: part.Counts, Evidence: part.Evidence, Kinds: chatKinds(part.Kinds, n)}
+		Ver: part.Ver, AsOf: rfc(part.AsOf), Counts: part.Counts, Evidence: part.Evidence, Alerts: part.Alerts, Kinds: chatKinds(part.Kinds, n)}
 	if part.Native != nil {
 		inc := part.Native.Included
 		roles := part.Native.Roles
@@ -735,8 +736,9 @@ func (t *chatTools) overview() ChatToolResult {
 }
 
 type chatAttentionData struct {
-	Parts []chatPart      `json:"parts"`
-	Rows  []chatAttention `json:"rows"`
+	Parts  []chatPart      `json:"parts"`
+	Rows   []chatAttention `json:"rows"`
+	Alerts *int            `json:"alerts,omitempty"` // active critical and warning alerts, apart from the objects (S8a §6)
 }
 
 type chatAttention struct {
@@ -760,6 +762,7 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	var problems []string
 	var parts []chatPart
 	total, found := 0, area == ""
+	var alerts *int
 	for _, task := range sum.Tasks {
 		if area != "" && task.ID != area {
 			continue
@@ -770,6 +773,15 @@ func (t *chatTools) attention(area string) ChatToolResult {
 			// absence (Codex reviews of aea77e7 and 4456049).
 			problems = append(problems, partProblems(task.ID, part)...)
 			parts = append(parts, toChatPart(task.ID, part, &p.redacted))
+			if part.Alerts != nil {
+				// alerts are counted apart: never objects, never in the total
+				n := part.Alerts.Counted
+				if alerts != nil {
+					n += *alerts
+				}
+				alerts = &n
+				continue
+			}
 			switch {
 			case part.Native != nil:
 				total += part.Native.Included
@@ -790,8 +802,8 @@ func (t *chatTools) attention(area string) ChatToolResult {
 	}
 	exact := len(problems) == 0
 	env := chatEnvelope{Tool: toolAttention, Source: "observer", ReadAt: sum.EvaluatedAt.UTC().Format(time.RFC3339), Complete: exact && len(rows) >= total,
-		Total: &chatTotal{Count: total, Exact: exact}, Errors: problems, Data: chatAttentionData{Parts: parts, Rows: rows},
-		Note: "total counts every object needing attention; the listed objects are the worst few per area"}
+		Total: &chatTotal{Count: total, Exact: exact}, Errors: problems, Data: chatAttentionData{Parts: parts, Rows: rows, Alerts: alerts},
+		Note: "total counts every object needing attention; the listed objects are the worst few per area; alerts are Alertmanager's active critical and warning alerts, counted apart from the objects"}
 	return t.finish(env, ChatRead{Tool: toolAttention, Target: area, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
 }
 

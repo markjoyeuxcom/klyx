@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +24,8 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/endpointhttp"
+	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -45,8 +49,9 @@ var errAMTooLarge = fmt.Errorf("the Alertmanager response exceeded %d MiB; Klyx 
 var amLimits = endpointhttp.Limits{MaxBytes: amMaxBytes, TooLarge: errAMTooLarge}
 
 // ErrNoAlertmanager: no Alertmanager is configured, and discovery completed
-// and found none. Only this reads as "not installed" (S8a §4).
-var ErrNoAlertmanager = errors.New("no Alertmanager configured or found")
+// and found none. Only this reads as "not installed" (S8a §4): it is the
+// Observer's ErrSourceAbsent.
+var ErrNoAlertmanager = fmt.Errorf("%w: no Alertmanager configured or found", observe.ErrSourceAbsent)
 
 // ErrSourceChanged: the read's generation was keyed to another source; the
 // re-key that follows discards it (S8a §4).
@@ -70,6 +75,11 @@ type alertmanagerState struct {
 	identity string
 	rekey    func(key string) // re-keys the alerts snapshot (set with the health Observer)
 	client   func(policy safehttp.Policy) *http.Client
+	// configured and resolved make the Alerting capability (S8a §4):
+	// atomics, so the capability set reads them under c.mu without am.mu
+	// (a read holds am.mu while discovery takes c.mu).
+	configured atomic.Bool
+	resolved   atomic.Bool // the last keyed read resolved an Alertmanager
 }
 
 // amDiscovery is one discovery outcome.
@@ -83,31 +93,18 @@ type amDiscovery struct {
 	via       string // how the Service was chosen
 }
 
-// AlertsRead is one snapshot read's envelope (S8a §4): the identity it was
-// read under, so even an empty read names its source.
-type AlertsRead struct {
-	Identity  string
-	Source    string // the source line, a display value
-	Match     map[string]string
-	Note      string // e.g. discovery could not be re-read
-	Alerts    []AlertItem
-	Truncated bool
-	ReadAt    time.Time
-}
-
-// AlertItem is one alert of a read: the raw subject for the joins, and the
-// display values for everything shown.
-type AlertItem struct {
-	Subject alertmanager.Subject
-	Counted bool
-	Display alertmanager.DisplayAlert
-}
-
 // WithAlertmanager sets the configured Alertmanager (nil: none, so
 // discovery). Call it in the factory, before Start.
 func (c *ClusterConn) WithAlertmanager(cfg *config.EndpointConfig) *ClusterConn {
 	c.am.cfg = cloneEndpoint(cfg)
+	c.am.configured.Store(cfg != nil)
 	return c
+}
+
+// alertsPresent is the Alerting capability: an Alertmanager configured, or
+// the last keyed read resolved one.
+func (c *ClusterConn) alertsPresent() bool {
+	return c.am.configured.Load() || c.am.resolved.Load()
 }
 
 // AlertmanagerConfig is the configured Alertmanager as this connection
@@ -126,6 +123,7 @@ func (c *ClusterConn) SetAlertmanagerConfig(cfg *config.EndpointConfig) {
 	c.am.mu.Lock()
 	defer c.am.mu.Unlock()
 	c.am.cfg = cloneEndpoint(cfg)
+	c.am.configured.Store(cfg != nil)
 	c.am.disc, c.am.found = nil, nil
 	if c.creds.Revisions != nil {
 		c.creds.Revisions.Bump(c.name, config.EndpointAlertmanager, false)
@@ -143,6 +141,7 @@ func (c *ClusterConn) ChangeAlertmanagerCredential(cfg *config.EndpointConfig, i
 	}
 	if !sameEndpoint(c.am.cfg, cfg) {
 		c.am.cfg = cloneEndpoint(cfg)
+		c.am.configured.Store(cfg != nil)
 		c.am.disc, c.am.found = nil, nil
 	}
 	if c.creds.Revisions != nil {
@@ -246,11 +245,15 @@ type amSource struct {
 	rev      uint64
 }
 
-// resolveAlertmanager resolves the source a read uses now. Caller holds
-// am.readMu; this takes am.mu.
+// resolveAlertmanager resolves the source a read uses now, under am.mu.
 func (c *ClusterConn) resolveAlertmanager(ctx context.Context) (amSource, error) {
 	c.am.mu.Lock()
 	defer c.am.mu.Unlock()
+	return c.resolveAlertmanagerLocked(ctx)
+}
+
+// resolveAlertmanagerLocked is resolveAlertmanager; caller holds am.mu.
+func (c *ClusterConn) resolveAlertmanagerLocked(ctx context.Context) (amSource, error) {
 	cfg := c.am.cfg
 	var tenant string
 	var match map[string]string
@@ -306,7 +309,13 @@ func (c *ClusterConn) proxySourceLocked(svc endpointhttp.Service, identity, disp
 // limits (C5 §4, S8a §8); fake-client connections use their clientset's.
 func (c *ClusterConn) amRESTLocked() (rest.Interface, error) {
 	if c.restConfig == nil {
-		return c.typed.CoreV1().RESTClient(), nil
+		// a fake clientset's client is a typed nil: a failed read, never a
+		// panic in the snapshot's read
+		rc := c.typed.CoreV1().RESTClient()
+		if rc == nil || reflect.ValueOf(rc).IsNil() {
+			return nil, errors.New("this connection has no service-proxy client")
+		}
+		return rc, nil
 	}
 	if c.am.rest == nil && c.am.restErr == nil {
 		c.am.rest, c.am.restErr = endpointhttp.NewGuardedProxyREST(c.restConfig, amLimits)
@@ -506,45 +515,55 @@ func (c *ClusterConn) proveGoverning(ctx context.Context, ns string, amUID types
 // that follows discards this generation); /alerts then /alerts/groups with
 // match as filter; the credential fence; Reduce, the match re-check, the
 // entry cap and the display values.
-func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (AlertsRead, error) {
+func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.Read, error) {
 	c.am.readMu.Lock()
 	defer c.am.readMu.Unlock()
-	src, err := c.resolveAlertmanager(ctx)
+	// the resolution, the identity it gives and any re-key are one step
+	// against configuration changes, which take the same lock
 	c.am.mu.Lock()
-	c.setIdentityLocked(src.identity)
-	c.am.mu.Unlock()
+	src, err := c.resolveAlertmanagerLocked(ctx)
+	c.am.identity = src.identity
 	if src.identity != key {
-		return AlertsRead{Identity: src.identity}, ErrSourceChanged
+		// whether or not the identity changed: a generation keyed otherwise
+		// (an Observer restarted with the empty key) re-keys to it
+		if c.am.rekey != nil {
+			c.am.rekey(src.identity)
+		}
+		c.am.mu.Unlock()
+		return alertmanager.Read{Identity: src.identity}, ErrSourceChanged
 	}
+	// the read's own outcome for its key is the capability's evidence
+	c.am.resolved.Store(!errors.Is(err, ErrNoAlertmanager))
+	c.am.mu.Unlock()
 	if err != nil {
-		return AlertsRead{Identity: src.identity}, err
+		return alertmanager.Read{Identity: src.identity}, err
 	}
 	select {
 	case amReads <- struct{}{}:
 		defer func() { <-amReads }()
 	case <-ctx.Done():
-		return AlertsRead{Identity: src.identity}, ctx.Err()
+		return alertmanager.Read{Identity: src.identity}, ctx.Err()
 	}
 	filter := alertmanager.FilterParams(src.match)
 	q := url.Values{"active": {"true"}, "silenced": {"true"}, "inhibited": {"true"}, "unprocessed": {"true"}, "filter": filter}
 	alerts, err := amGet(ctx, src, "/api/v2/alerts", q, alertmanager.ParseAlerts)
 	if err != nil {
-		return AlertsRead{Identity: src.identity}, err
+		return alertmanager.Read{Identity: src.identity}, err
 	}
 	gq := url.Values{"active": {"true"}, "muted": {"true"}, "silenced": {"false"}, "inhibited": {"false"}, "filter": filter}
 	groups, err := amGet(ctx, src, "/api/v2/alerts/groups", gq, alertmanager.ParseGroups)
 	if err != nil {
-		return AlertsRead{Identity: src.identity}, err
+		return alertmanager.Read{Identity: src.identity}, err
 	}
 	appearances := 0
 	for _, g := range groups {
 		appearances += len(g.Alerts)
 	}
 	if appearances > amMaxAppearances {
-		return AlertsRead{Identity: src.identity}, fmt.Errorf("the alert groups held more than %d appearances; mutes would be incomplete", amMaxAppearances)
+		return alertmanager.Read{Identity: src.identity}, fmt.Errorf("the alert groups held more than %d appearances; mutes would be incomplete", amMaxAppearances)
 	}
 	if c.creds.Revisions.Revision(c.name, config.EndpointAlertmanager) != src.rev {
-		return AlertsRead{Identity: src.identity}, errors.New("the endpoint's credential changed during the read; it is read again next time")
+		return alertmanager.Read{Identity: src.identity}, errors.New("the endpoint's credential changed during the read; it is read again next time")
 	}
 	kept := alerts[:0]
 	for _, a := range alerts {
@@ -553,13 +572,13 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (AlertsRead, e
 		}
 	}
 	reduced := alertmanager.Reduce(kept, groups)
-	out := AlertsRead{Identity: src.identity, Source: src.redactor.Text(src.display), Match: src.match, Note: src.redactor.Text(src.note), ReadAt: c.clk.Now()}
+	out := alertmanager.Read{Identity: src.identity, Source: src.redactor.Text(src.display), Match: src.match, Note: src.redactor.Text(src.note), ReadAt: c.clk.Now()}
 	if len(reduced) > amMaxAlerts {
 		reduced, out.Truncated = reduced[:amMaxAlerts], true
 	}
-	out.Alerts = make([]AlertItem, 0, len(reduced))
+	out.Alerts = make([]alertmanager.Item, 0, len(reduced))
 	for _, r := range reduced {
-		out.Alerts = append(out.Alerts, AlertItem{Subject: alertmanager.SubjectOf(r.Labels), Counted: r.Counted(), Display: alertmanager.Display(r, src.redactor)})
+		out.Alerts = append(out.Alerts, alertmanager.Item{Subject: alertmanager.SubjectOf(r.Labels), Counted: r.Counted(), Display: alertmanager.Display(r, src.redactor)})
 	}
 	return out, nil
 }
@@ -653,4 +672,15 @@ func amIdentityOf(e *config.EndpointConfig) string {
 		at = serviceAt(serviceOf(e.ServiceRef))
 	}
 	return amIdentity("cfg", at, e.Tenant, e.Match)
+}
+
+// RefreshAlerts asks the alerts snapshot for a fresh read of its own (after
+// Settings' Test): it never carries the Test's result.
+func (c *ClusterConn) RefreshAlerts() {
+	c.mu.RLock()
+	o := c.health
+	c.mu.RUnlock()
+	if o != nil {
+		o.Refresh(healthsrc.SnapAlerts)
+	}
 }

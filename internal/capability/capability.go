@@ -172,4 +172,5 @@ type Set struct {
 	Velero          VeleroCapability
 	Admission       AdmissionCapability
 	LoadBalancing   LoadBalancingCapability
+	Alerting        AlertingCapability // coverage S8a: evidence, not a probe
 }

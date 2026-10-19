@@ -227,6 +227,7 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 		part.Coverage = Absent // every counted source is absent: a live dependency cannot make it observed
 	} else {
 		part.Counts, part.Native, part.Evidence, part.Top, part.Next = res.Counts, res.Native, res.Evidence, res.Top, res.Next
+		part.Alerts = res.Alerts
 	}
 
 	prev := p.last

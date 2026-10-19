@@ -41,11 +41,12 @@ type endpointConnFake struct {
 	cfg  config.MetricsConfig
 	capb metrics.MetricsCapability
 	// Alertmanager
-	amCfg    *config.EndpointConfig
-	amSet    []*config.EndpointConfig
-	amStatus alertmanager.Status
-	amSrc    string
-	amErr    error
+	amCfg       *config.EndpointConfig
+	amSet       []*config.EndpointConfig
+	amStatus    alertmanager.Status
+	amSrc       string
+	amErr       error
+	amRefreshed int
 }
 
 func (f *endpointConnFake) AlertmanagerConfig() *config.EndpointConfig {
@@ -68,6 +69,11 @@ func (f *endpointConnFake) ChangeAlertmanagerCredential(c *config.EndpointConfig
 	f.amSet = append(f.amSet, c)
 	f.amCfg = c
 	return nil
+}
+func (f *endpointConnFake) RefreshAlerts() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.amRefreshed++
 }
 func (f *endpointConnFake) AlertmanagerStatus(context.Context) (alertmanager.Status, string, error) {
 	f.mu.Lock()

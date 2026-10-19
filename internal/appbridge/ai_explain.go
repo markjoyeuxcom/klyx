@@ -168,6 +168,9 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 			}
 		}
 	}
+	if alerts, q := alertEvidence(ctx, conn, t.UID, sc); len(alerts) > 0 {
+		ev.Alerts, ev.Qualifications = alerts, append(ev.Qualifications, q)
+	}
 	if t.Task == healthsrc.TaskLB {
 		ev = lbEvidence(ev) // S4 §7: no controller message anywhere in the document
 	}
@@ -200,6 +203,9 @@ func (s *AIService) objectEvidence(ctx context.Context, conn AIConn, cluster str
 		Related:        s.relatedEvidence(ctx, conn, detail, sc),
 		Operators:      sc.operators(s.operators(cluster)),
 		Qualifications: []string{"Conditions, facts and events were fetched at " + fetchedAt + "."},
+	}
+	if alerts, q := alertEvidence(ctx, conn, detail.UID, sc); len(alerts) > 0 {
+		ev.Alerts, ev.Qualifications = alerts, append(ev.Qualifications, q)
 	}
 	return ev, fmt.Sprintf("%s/%s (no Klyx verdict for this kind)", detail.Kind, nsName(detail.Namespace, detail.Name)), nil
 }

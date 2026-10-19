@@ -1,12 +1,15 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/healthsrc"
@@ -335,6 +338,7 @@ type explainEvidence struct {
 	Related        []evidenceObject `json:"related,omitempty"`
 	IssuanceChain  *evidenceChain   `json:"issuanceChain,omitempty"`
 	Operators      *operatorHealth  `json:"operators,omitempty"`
+	Alerts         []evidenceAlert  `json:"alerts,omitempty"` // coverage S8a §7
 	Qualifications []string         `json:"qualifications,omitempty"`
 	Truncated      bool             `json:"truncated,omitempty"`
 }
@@ -518,3 +522,42 @@ func marshalCapped(ev explainEvidence) ([]byte, bool, error) {
 }
 
 var errEvidenceTooLarge = errors.New("the evidence for this object is too large to send, even trimmed; nothing was sent")
+
+// evidenceAlert is an active Alertmanager alert matched to the target by
+// label (coverage S8a §7): display values only, scrubbed and capped again.
+type evidenceAlert struct {
+	Name       string `json:"name"`
+	Severity   string `json:"severity,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	MatchedBy  string `json:"matchedBy"`
+}
+
+// alertEvidence is the active alerts the alerts part correlates to the
+// object uid, and the qualification that says what they are.
+func alertEvidence(ctx context.Context, conn AIConn, uid string, sc *scrubber) ([]evidenceAlert, string) {
+	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskAlerts, "alerts")
+	if !ok {
+		return nil, ""
+	}
+	r, ok := rows.Rows.(healthsrc.AlertRows)
+	if !ok {
+		return nil, ""
+	}
+	var out []evidenceAlert
+	for _, a := range r.Alerts {
+		if uid == "" || a.SubjectUID != uid || a.Alert.State != alertmanager.StateActive {
+			continue
+		}
+		if len(out) == evidenceListMax {
+			break
+		}
+		out = append(out, evidenceAlert{Name: sc.text(a.Alert.Name), Severity: sc.text(a.Alert.Severity), StartedAt: rfcOrEmpty(a.Alert.StartsAt),
+			LastSeenAt: rfcOrEmpty(r.ReadAt), Summary: sc.text(a.Alert.Summary), MatchedBy: "label " + strings.Join(a.Alert.Subject.Basis, "/")})
+	}
+	if len(out) == 0 {
+		return nil, ""
+	}
+	return out, "The alerts are Alertmanager's, matched to this object by label, not by UID; each was last seen active at its read, " + rfcOrEmpty(r.ReadAt) + "."
+}

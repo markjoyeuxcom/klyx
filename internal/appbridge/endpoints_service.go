@@ -37,6 +37,7 @@ type EndpointConn interface {
 	SetAlertmanagerConfig(*config.EndpointConfig)
 	ChangeAlertmanagerCredential(cfg *config.EndpointConfig, install func() error) error
 	AlertmanagerStatus(ctx context.Context) (alertmanager.Status, string, error)
+	RefreshAlerts()
 }
 
 // syncAlertmanager is syncMetrics for the Alertmanager endpoint (S8a §4).
@@ -375,6 +376,8 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 		if err != nil {
 			return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
 		}
+		// the alerts snapshot reads again on its own, with its own outcome
+		conn.RefreshAlerts()
 		return EndpointActionDTO{OK: true, Message: "Available: " + amStatusText(st) + " at " + src + ", answered."}
 	}
 	_, capb := conn.ClusterMetrics(ctx, true)

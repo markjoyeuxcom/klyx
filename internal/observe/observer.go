@@ -124,6 +124,7 @@ type PartResult struct {
 	Counts   *Counts
 	Native   *NativeCounts
 	Evidence *int
+	Alerts   *AlertCounts // an alerts part's counts (coverage S8a §6)
 	Top      []Ref
 	Rows     any
 	Next     *time.Time
@@ -605,6 +606,29 @@ func (o *Observer) unrefSourceLocked(name string) {
 	ss.refs--
 	if ss.refs == 0 {
 		o.stopSnap(ss)
+	}
+}
+
+// RekeySnapshot gives a snapshot a new generation carrying key, unless its
+// generation already carries it (coverage S8a §4). The new generation has
+// no items, coverage checking and no as-of time; every outcome of the ended
+// one - items, errors, truncation and freshness - is discarded by apply's
+// generation check. A snapshot that is not running starts with the key
+// when it next starts.
+func (o *Observer) RekeySnapshot(snapshot, key string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ss := o.snaps[snapshot]
+	if ss == nil {
+		return
+	}
+	if ss.key == key && (ss.gen == nil || ss.gen.key == key) {
+		return
+	}
+	ss.key = key
+	if ss.gen != nil {
+		o.stopSnap(ss)
+		o.startSnap(ss)
 	}
 }
 

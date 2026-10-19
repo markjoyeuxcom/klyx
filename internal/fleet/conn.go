@@ -810,6 +810,7 @@ func (c *ClusterConn) Snapshot() Snapshot {
 func (c *ClusterConn) capsLocked() capability.Set {
 	caps := c.caps
 	caps.LoadBalancing.ServicesSeen = c.lbServicesSeen
+	caps.Alerting.Present = c.alertsPresent() // lock-free: never c.am.mu under c.mu
 	return caps
 }
 
@@ -872,9 +873,12 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
-	snaps = append(snaps, es...)
-	domains = append(append(domains, hd...), ed...)
+	as, ad := healthsrc.Alerts(healthsrc.AlertsDeps{Cluster: c.name, Read: c.ReadAlerts}) // S8a
+	snaps = append(append(snaps, es...), as...)
+	domains = append(append(append(domains, hd...), ed...), ad...)
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
+	// a change of the alert source re-keys this Observer's alerts snapshot
+	c.setAlertsRekey(func(key string) { o.RekeySnapshot(healthsrc.SnapAlerts, key) })
 	c.mu.Lock()
 	c.health = o
 	c.mu.Unlock()
