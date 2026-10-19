@@ -1,6 +1,6 @@
 # Coverage S8b: log history, from Loki
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses.
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses. Revision 1 answers Codex's design review of 6438d43 (§14).
 
 The roadmap's contract:
 - **History for a pod beyond its previous container,** gone pods included, over a selectable time range, from the logs pane.
@@ -60,41 +60,63 @@ The three common shippers label the same pod differently (lab finding 1):
 | k8s-monitoring 4.5.3 (Alloy) | `namespace` (index) | `pod` (structured metadata) | `container` (index) | none |
 | OTLP (Loki's defaults) | `k8s_namespace_name` (index) | `k8s_pod_name` (index; Loki recommends demoting it) | `k8s_container_name` (index) | `k8s_pod_uid` (structured metadata) |
 
-Klyx never assumes a shape. Each history read starts with **one labels read**: `/loki/api/v1/labels` with `query={match}` (no query without `match`) over the read's own range.
-- It answers which names are index labels for this cluster's streams in that range. That is an index read, never a scan of lines.
-- `{"status":"success"}` with no `data` (an unknown tenant reads the same, lab finding 7) is said as "no streams for this cluster's match in the range on tenant T". It is never "no logs for this pod".
+Klyx never assumes a shape, and never assumes one shape for all of a cluster's streams. A cluster can ship two ways under one `match`. Codex's review of 6438d43 showed, and the lab confirmed, that a selector chosen from a label union drops streams: with SD and Alloy under one `cluster`, `pod` is in the union because SD indexes it, and `{…, pod="P"}` drops every Alloy stream (lab finding 10).
 
-**The selector, from the labels read:**
-1. **The stream selector:**
-   - opens with `match`;
-   - adds the namespace: `k8s_namespace_name` when indexed, else `namespace`;
-   - adds the pod: `k8s_pod_name` or `pod` when indexed;
-   - adds the container (when one is chosen): `k8s_container_name` or `container` when indexed;
-   - adds the UID, `k8s_pod_uid`, when it is an index label (rare, but then it selects streams).
-2. **What is not indexed** becomes a label filter on structured metadata, placed before any parser. The pod is `| k8s_pod_name="P" or pod="P"`, the container likewise.
-   - Klyx names both spellings because it cannot list structured metadata keys without scanning lines.
-   - A filter on a key the lines lack matches nothing (lab finding 4), so naming both never widens the selection.
-3. **No namespace label indexed:** history is not offered for this Loki. The reason is "no namespace label in this cluster's streams (looked for k8s_namespace_name, namespace)". A selector of `match` alone would select the whole cluster.
+**The labels read only prunes.** `/loki/api/v1/labels` with `query={match}` (no query without `match`) over the read's range lists the label names of this cluster's streams.
+- Loki may consult a wider span than asked, and merges names across streams. The list is a superset for the range, never proof of what any one stream carries.
+- Klyx uses it only to skip branches whose label no stream could carry, and to say why nothing was found:
+  - `{"status":"success"}` with no `data` (an unknown tenant reads the same, lab finding 7) gets one more labels read without a query. That tells "match names cluster, which is not an index label on tenant T" from "no streams match cluster="X" on tenant T".
+  - Neither is "no logs for this pod".
+- **Neither namespace spelling in the list:** history is not offered for this Loki, with "no namespace label in this cluster's streams (looked for k8s_namespace_name, namespace)". A selector of `match` alone would select the whole cluster.
 
-The values are Kubernetes names, which LogQL's string quoting carries without escaping trouble. Klyx escapes them with Go's `strconv.Quote` all the same.
+**Disjoint branches select every stream exactly once.** An empty matcher selects streams without that label (lab finding 10). For each namespace spelling in the list, at most three pod branches:
+
+| branch | stream selector | filter |
+|---|---|---|
+| pod indexed | `{M, NS="N", pod="P"}` | |
+| k8s_pod_name indexed | `{M, NS="N", k8s_pod_name="P", pod=""}` | |
+| neither indexed | `{M, NS="N", pod="", k8s_pod_name=""}` | `\| pod="P" or k8s_pod_name="P"` |
+
+- **Namespaces are disjoint too.** When both spellings are listed, the `k8s_namespace_name` branches add `namespace=""`, so a stream carrying both belongs to the `namespace` branches only.
+- **Pruning:**
+  - The indexed branches run only when their label is listed.
+  - The "neither" branch always runs, since structured metadata cannot be listed without scanning lines. Where every stream indexes its pod, its selector selects nothing, at no line cost.
+  - That is at most six branches, typically two.
+- **A chosen container** is a label filter on every branch: `| container="C" or k8s_container_name="C"`. Label filters read index labels and structured metadata alike (lab finding 10), so one form serves every shape. Naming both spellings never widens the selection (lab finding 9).
+- **The UID** is likewise a label filter on every branch: `| k8s_pod_uid="U"`, whether the shipper indexed it or not.
+- **Values** are quoted with Go's `strconv.Quote`.
 
 ## 4. The pod's identity: UID when the lines prove it, else a stated weaker selector
 
-**The main read selects by name**, inside the read's range. It asks with `X-Loki-Response-Encoding-Flags: categorize-labels`, so each entry carries its structured metadata apart from its stream (lab finding 2).
+**A page set** is the lines one history view reads, from the newest back.
+- Its first page reads every branch by name, with `X-Loki-Response-Encoding-Flags: categorize-labels`, so each entry carries its structured metadata apart from its stream (lab finding 2).
+- The merged entries decide the mode, once.
 
-**The entries returned decide the strength:**
-- **Every returned entry carries `k8s_pod_uid`.**
-  - Klyx re-reads with `| k8s_pod_uid="<uid>"` added: the **UID selector**. That is one more read, only when UIDs exist. Its lines are said to be this pod's: "selected by this pod's UID (k8s_pod_uid)".
-  - Generations of one name separate: history-db-0's gen1 and gen2 read 31 and 50 lines, the name read 81 (lab finding 3).
-- **Some carry it and some do not** (a namespace shipped two ways): the name selector stands, and is said as such: "some lines carry a pod UID, some do not; selected by name".
-- **Under the UID selector,** older lines a shipper wrote without the UID are not shown. The strength sentence says so: "lines without a pod UID are not shown".
-  - "Select by name instead" re-reads with the name selector and its own sentence. It is the person's explicit choice, never a silent fallback.
-- **None carries it:** the **name selector**, said with its bound:
-  - **With the pod's lifetime known** (created time from the row; for a gone pod, the time Klyx last observed it, or now): "selected by namespace and name, from this pod's creation". A pod's name is unique in its namespace at any moment, so a same-name pod can only appear before its creation or after its removal.
-    - The range starts at the creation time.
-    - For a gone pod the end is open (Klyx does not know the deletion time), and the line says: "a later pod with this name would match after this one was removed".
-  - **No lifetime known** (`PinnedGone` has no created time): "selected by namespace and name only: every pod with this name in the range".
-- **No entry at all:** "no lines for this selector in the range". The selector is shown. Absence is never evidence that the pod logged nothing: the shipper may not have collected it, or retention may have passed.
+**The decision:**
+- **Every entry of the first page carries `k8s_pod_uid`:** the page set is in **UID mode**. The first page is re-read with the UID filter on every branch, one more read set, only then. Its lines are said to be this pod's: "selected by this pod's UID (k8s_pod_uid); lines without a pod UID are not shown".
+  - Generations of one name separate: history-db-0's gen1 and gen2 read apart under the UID, where the name read mixes them (lab finding 3).
+- **Some carry it or none do:** the page set is in **name mode**, said with its bound. Name mode never adds a UID filter, even where the shipper indexed it.
+- **"Select by name instead"** (from UID mode) and "Select by UID" (when the first page's entries all carry one) are the person's explicit choices. Each starts a new page set; it is never a silent fallback.
+
+**The mode is locked for the page set.**
+- It is bound into the page set's cursor with:
+  - the branches;
+  - the absolute range (its end fixed at the first read);
+  - the source's lineage key and endpoint revision (§6);
+  - the pod UID and the container.
+- Load older keeps all of them.
+  - An older page of UID-less lines never turns a UID view into a name view, nor the reverse.
+  - Under UID mode those lines are filtered out, as the sentence says.
+- Any change of mode, range, container or source starts a new page set from the newest. Refresh does too.
+
+**The name sentence is always the weaker one, even for a live pod.**
+- The creation bound filters by the timestamps the lines report.
+- The application's, the shipper's and the cluster's clocks can disagree, so a timestamp bound narrows but never proves identity.
+- The sentences:
+  - **With a created time** (the row's, or the removed inspector's): "selected by namespace and name, lines timestamped from this pod's creation; another pod with this name in that time would match too". For a gone pod the end is open: "a later pod with this name would match after this one was removed".
+  - **Without one** (`PinnedGone`): "selected by namespace and name only: every pod with this name in the range".
+- **Some carry a UID:** "some lines carry a pod UID, some do not; selected by name".
+- **No entry at all:** "no lines for this selector in the range", with the selector shown. Absence is never evidence that the pod logged nothing: the shipper may not have collected it, or retention may have passed.
 
 **The pod's UID is the one Klyx holds:**
 - the live pod's;
@@ -108,28 +130,39 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
 - **The range:**
   - presets of 1 hour, 6 hours, 24 hours and 7 days, plus "since this pod was created" when the created time is known;
   - the default is since creation, clipped to 7 days, else 24 hours;
-  - there is no custom range picker in S8b.
+  - there is no custom range picker in S8b;
+  - the range is absolute once a page set starts (§4).
 - **The cost.**
-  - When the pod is an index label, the read selects its streams only.
-  - When it is structured metadata (the k8s-monitoring default), Loki reads every line of the namespace's streams in the range to filter them.
-  - Klyx therefore narrows with the container when one is chosen and defaults to the pod's lifetime. A Loki timeout or limit is shown in Loki's words, with "narrow the range or choose a container".
-- **Each page is one `query_range`:**
-  - backward, with the stream selector and filters;
-  - `limit` 1,000 entries (Loki's default maximum is 5,000; lab finding 5);
-  - `start` and `end` in nanoseconds;
-  - categorize-labels.
-- **The first page is the newest.** "Load older" reads the next page.
-  - Its `end` is the oldest timestamp held plus one nanosecond, since `end` is exclusive (lab finding 6).
-  - Entries already held are dropped by (stream labels, timestamp, line) before they join.
-- **A page shorter than its limit** means the range is exhausted, and the view says "start of the range reached". A full page offers "Load older". Nothing claims completeness the read did not prove.
-- **The view holds at most 10,000 lines** (`LogsPane`'s cap). Past it, the oldest held lines are dropped and the view says so, as the live view does.
+  - The indexed branches select the pod's streams only.
+  - The "neither indexed" branch makes Loki read the lines of the namespace's streams that index no pod, to filter them. For the k8s-monitoring default, that is every stream of the namespace.
+  - Klyx defaults to the pod's lifetime. A Loki timeout or limit is shown in Loki's words, with "narrow the range or choose a container".
+- **A page across branches:**
+  - Each active branch is read backward:
+    - `limit` 1,000 (Loki's default maximum is 5,000; lab finding 5);
+    - `start` and the branch's own `end`, in nanoseconds;
+    - categorize-labels.
+  - The results merge newest first, and the newest 1,000 overall are kept.
+  - Each branch's `end` moves to the oldest timestamp it contributed to the kept lines, plus one nanosecond (`end` is exclusive; lab finding 6). Entries already held drop out by their dedupe key: branch, stream labels, structured metadata, timestamp and line, all raw.
+- **Exhaustion is read from the raw response,** never from what remains after the dedupe.
+  - A branch is exhausted when its raw response held fewer entries than its limit and every one was kept.
+  - "Start of the range reached" is said only when every branch is exhausted.
+- **Saturation** (lab finding 11): a branch's raw response is full, and holds no entry older than the boundary timestamp T, so it cannot advance.
+  - Klyx re-reads that branch once with `limit` 5,000.
+  - If it is still saturated, or the server refuses the limit (its 400, in its words), the branch stops with a marker among the lines: "more than N lines share the timestamp T on this selector; Klyx could not list them all".
+  - The person may choose "Skip past T" (`end` = T). That leaves those lines out, and the marker says so.
+  - Never a silent skip, an endless repeat, or "start of the range reached".
+- **What a view holds:** at most 10,000 lines and 32 MiB of line text.
+  - Load older at the cap evicts from the newest end and keeps the cursor, so older pages stay reachable.
+  - The view says "newer lines dropped (N held); Refresh returns to the newest".
 - **Rendering:**
+  - History renders every held line through a virtualized list (`chrome/VirtualList`), not Live's newest-2,000 window.
+  - Load older keeps the scroll anchor on the first line held before it.
   - Lines show with their timestamp (RFC 3339, milliseconds), so `logline.ts` dims it.
-  - Streams merge by timestamp; equal timestamps keep their stream order.
+  - Streams merge by timestamp; equal timestamps keep a stable branch and stream order.
   - A line over 64 KiB is clipped and marked.
   - A container column shows when no container is chosen and the streams name several.
 - **Non-2xx responses:**
-  - A 400 (Loki's limits) is shown with Loki's own text, redacted (lab finding 5: the body is plain text).
+  - A 400 (Loki's limits) is shown with Loki's own text, as a display value (lab finding 5: the body is plain text).
   - A 401 without a tenant reads "Loki requires a tenant; set loki.tenant".
   - Any other status names it.
 - **The response is parsed strictly.**
@@ -138,18 +171,30 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
   - Each value must be `[ns-string, line, {structuredMetadata?, parsed?}]`, or the two-element form when the server ignored the flag. Without the flag's echo (`encodingFlags`), structured metadata is merged into the stream labels, and Klyx reads the UID from there.
   - Anything else fails the page whole, and `null` is not an empty list (S8a revision 1).
 
-**Text and redaction:**
-- The operator's own log view stays honest and unscrubbed (C5).
-- One exception, as S8a's display values: the endpoint's own credential, in its exact and quoted spellings, is redacted from lines and labels. A response can only echo the credential it was sent.
-- No line goes to AI in S8b: chat's `get_pod_logs` stays on the kube API.
+**Text and the credential boundary:**
+- **Raw values stay in process.** Raw queries, label values and identities serve the HTTP request, the matching, the UID classification, the order and the dedupe, all before any redaction or clip.
+- **Log content** (lines, stream labels, structured metadata) stays honest and unscrubbed, as C5 holds for the operator's own log view. It passes only the endpoint's own credential through an exact-only redactor (`Redactor.Exact`): its exact and quoted spellings, never the general credential shapes, which would alter honest log text.
+- **Everything else Klyx says** goes out as a display value with the read's redactor (S8a's `Text`: the exact spellings and the general shapes), clipped:
+  - the selector line, the source, the tenant and the strength sentence;
+  - the errors and Settings' text.
+- **Copy LogQL** copies the query only when its display form equals the raw query.
+  - Otherwise it is unavailable: "the query names a value equal to the endpoint's credential; Klyx does not copy it".
+  - Klyx never offers a redacted query as the executable one, and never puts the credential on the clipboard.
+- **No line goes to AI in S8b:** chat's `get_pod_logs` stays on the kube API.
 
 ## 6. The source contract
 
-- **History is on demand, not an Observer snapshot.** There is no polling, no part and no counting. A history view is one source read at a time.
-- **Each read carries the source identity it resolved:** how | location | tenant | sorted match (S8a §4). The view shows the source line.
-- **A configuration or credential change while pages are held** ends the view's lineage. The next page re-reads from the newest, never mixing two sources' lines. The credential fence is C5's: a read across a revision fails.
-- **Settings' Test** reads `/loki/api/v1/status/buildinfo` (no tenant needed), then a labels read in this cluster's `match` over the last hour. It reports:
-  - "Available: Loki 3.7.8 at <source>; this cluster's streams carry N index labels (namespace: k8s_namespace_name)"; or
+- **History is on demand, not an Observer snapshot.** There is no polling, no part and no counting.
+- **Each page set carries the source it resolved:**
+  - its identity (how | location | tenant | sorted match, S8a §4), kept in process;
+  - its lineage key (the identity, hashed, as S8a's `SourceKey`);
+  - its endpoint revision.
+  - The view shows the source line as a display value.
+- **Load older** sends the cursor back.
+  - A lineage key or revision that no longer matches the connection's ends the page set: "the source changed; reading the newest again". It never mixes two sources' lines.
+  - The credential fence is C5's: a read across a revision fails.
+- **Settings' Test** reads `/loki/api/v1/status/buildinfo` (no tenant needed), then a labels read in this cluster's `match` over the last hour. It reports, as display values:
+  - "Available: Loki 3.7.8 at <source>; this cluster's streams carry the namespace label k8s_namespace_name"; or
   - "answered, but no streams match this cluster's match in the last hour on tenant T (check tenant and match)".
   - It never reads lines.
 
@@ -157,10 +202,10 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
 
 - **The logs pane gains a mode: Live (the kube API, as today) | History (Loki).**
   - History is offered when `logHistory` is present.
-  - The range sits beside the container, and the selector line sits above the lines, for example:
-    - `{k8s_cluster_name="kind-klyx", k8s_namespace_name="klyx-s8b-lab", k8s_pod_name="history-db-0"} | k8s_pod_uid="1b28…"` · selected by this pod's UID · Service klyx-s8b-lab/loki:http · tenant lab
-  - Copy LogQL copies the exact query, so the person can paste it into Grafana.
-  - Follow, previous and tail are Live's controls; History has the range, Load older and Refresh (the newest page again).
+  - The range sits beside the container, and the selector line sits above the lines. It shows the branch count when there is more than one ("2 selectors"), each expandable, for example:
+    - `{k8s_cluster_name="kind-klyx", k8s_namespace_name="klyx-s8b-lab", k8s_pod_name="history-db-0", pod=""} | k8s_pod_uid="1b28…"` · selected by this pod's UID · Service klyx-s8b-lab/loki:http · tenant lab
+  - Copy LogQL copies each branch's query (§5's boundary).
+  - Follow, previous and tail are Live's controls. History has the range, Load older, Refresh (a new page set from the newest), and the mode choice of §4.
 - **Gone pods:**
   - The removed-pod inspector's Logs action becomes "Log history" when `logHistory` is present. It opens History with the last row's UID, namespace, name, created time and containers.
   - `PinnedGone` gains the same action, with "all containers" and no created time (§4).
@@ -169,38 +214,55 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
 - **The words:**
   - "history from Loki";
   - the strength sentence of §4;
-  - "start of the range reached" or "Load older";
+  - "start of the range reached", "Load older", or the saturation marker;
+  - the cap notice;
   - a failed read in its own words, with the last pages kept and marked "not refreshed".
 
 ## 8. Bounds
 
 - **Per response:** 8 MiB (endpointhttp's cap, Loki's kind limit). A page over it fails with "the Loki response exceeded 8 MiB; narrow the range or choose a container".
-- **Per page:** 1,000 entries. Per view: 10,000 lines.
-- **Time:** a 30-second deadline per read. The range is at most 7 days in the UI (Loki's default maximum is 30 days 1 hour).
-- **Concurrency:** one history read per view at a time (a new request cancels the old), at most two per cluster and four fleet-wide.
-- **Memory:** a page decodes into at most 1,000 lines of up to 64 KiB displayed. The 8 MiB body bounds the decode.
-- **The labels read** adds one index request per page set (§3), never one per line.
+- **Per page:** 1,000 entries kept, from at most six branch reads (typically two), plus one 5,000-entry read per saturated branch.
+- **Per view:** 10,000 lines and 32 MiB of held line text.
+- **Time:** a 30-second deadline per page. The range is at most 7 days in the UI (Loki's default maximum is 30 days 1 hour).
+- **Concurrency:** one page per view at a time (a new request cancels the old), at most two per cluster and four fleet-wide. A page's branch reads share its slot.
+- **Memory, measured on full shapes:**
+  - the heap a page retains, at six branches of 8 MiB each and with redaction expansion;
+  - the bytes of its DTO;
+  - a view at both caps.
+  - Measured as S8a's budget test was.
+- **The labels read** adds one index request per page set, two when it comes back empty, never one per line.
 
 ## 9. The wiring
 
+- **`internal/endpointhttp`, a small extension:** C5's redirect, cap-below-decoding and revision tests stay, with new ones for each addition.
+  - Request headers on both paths (`X-Loki-Response-Encoding-Flags`). Today `Get` takes none.
+  - The proxied path returning a non-2xx body, capped, as the direct path does. Today `Proxy.Get` discards it, and Loki's 400 diagnosis is that body. client-go's `Result.Raw` returns the body beside the error.
+- **`safehttp.Redactor.Exact`:** the exact and quoted spellings only, for log content (§5).
 - **`internal/loki` (pure):**
-  - `Shape` from the labels read;
-  - `Selector` (stream selector, filters, the UID variant, and the LogQL string);
+  - `Branches` from the labels read (§3);
+  - `Query` (each branch's LogQL in name or UID mode, with the container filter), in raw and display forms;
   - `ParseStreams` (categorize-labels, and the two-element fallback);
-  - `Merge` (dedupe and order);
-  - `Strength` (the §4 decision from a page's entries).
+  - `Page` (the k-way merge, per-branch cursors, the dedupe, exhaustion and saturation);
+  - `Mode` (the §4 decision from a first page's entries);
+  - the cursor (mode, branches, absolute range, lineage key, revision, UID, container; opaque to the UI).
 - **`fleet` `lokiState`:**
   - resolves the endpoint or the service proxy with `endpointAuth` and Loki limits;
   - holds the source identity;
   - limits reads;
-  - `ReadLogHistory(ctx, req)` returns one page with its selector, strength, source line and range;
+  - `ReadLogHistory(ctx, req)` returns one page with its selector, strength, source line, range and cursor;
   - `LokiStatus(ctx)` serves Settings.
 - **`appbridge` `LogHistoryService`:**
-  - `ReadPodLogHistory(cluster, podRef{uid, ns, name, created, container}, range, cursor)` returns a `LogHistoryPageDTO`: lines with timestamp, container and stream, plus selector, strength, source, a next cursor or none, and an error;
+  - `ReadPodLogHistory(cluster, podRef{uid, ns, name, created, container}, range, mode, cursor)` returns a `LogHistoryPageDTO`. It carries:
+    - lines with timestamp, container and stream (display values);
+    - the selector line (one per branch) and the strength sentence;
+    - the source;
+    - Copy LogQL's availability;
+    - a next cursor or "start of the range reached";
+    - any saturation markers, and an error;
   - it is request/response, not an event stream: a page is bounded and small.
 - **`EndpointsService`:** Test for Loki, Set through the connection (as S8a), and `logHistory` on the cluster DTO.
 - **The frontend:**
-  - `LogsPane` gains its mode, the range, the selector line, Load older and Refresh;
+  - `LogsPane` gains its mode, the range, the selector line, Load older, Refresh and the mode choice. History renders through `VirtualList`, holding at most 10,000 lines and 32 MiB, and evicts from the newest end;
   - the removed-pod inspector and `PinnedGone` gain "Log history";
   - Settings' Loki Test.
 
@@ -212,47 +274,76 @@ On `kind-klyx`, in `klyx-s8b-lab`:
 - **A curl pod** pushes the lines (lab setup through Loki's own API; Klyx never writes to Loki).
 - **Pod identities:** `history-db-0` in two generations, a live `history-web` pod with 3,000 chatty lines, and `history-gone`, deleted for good.
 - **Each identity is written in the three shapes of §3,** one cluster label value each: `kind-klyx-sd`, `kind-klyx-alloy`, and `kind-klyx` (OTLP through `/otlp/v1/logs`).
+- **The three shapes are also written under ONE match:**
+  - `kind-klyx-mixed`: SD and Alloy under `cluster`, Alloy and OTLP under `k8s_cluster_name`;
+  - `history-db-0`'s generations in each (lab finding 10).
+- **`history-burst`** carries 1,200 lines at one nanosecond across two streams, with older lines behind them (lab finding 11).
 - **The smoke fleet** reads `klyx-s8b-lab/loki:http` with `tenant: lab` and `match: {k8s_cluster_name: kind-klyx}`.
 - **The captures** switch `match` to the SD and Alloy clusters to show the weaker selectors.
 
 ## 11. Tests
 
 - **Pure:**
-  - `Shape` for the three shapes, a missing namespace label, and a `match` key not indexed;
-  - `Selector` for each shape, with and without a container, and the UID variant, with quoting;
+  - `Branches`:
+    - each shape alone;
+    - all three under the same match, with an indexed-pod and a metadata-pod stream sharing the spelling `pod`;
+    - both namespace spellings, and the pruning;
+    - a missing namespace label, and a `match` key not indexed;
+  - `Query` for each branch in both modes, with and without a container, quoting, and an indexed UID left out in name mode;
   - `ParseStreams` for categorize-labels, the two-element fallback, `null`, a non-streams result, a bad timestamp and a non-success status;
-  - `Merge` for dedupe at a page boundary sharing a nanosecond, order, and the 10,000 cap;
-  - `Strength` for all with a UID, mixed, none, and none with and without a lifetime.
+  - `Page`:
+    - the k-way merge across branches, per-branch cursors and the dedupe;
+    - exhaustion from raw lengths, never from what remains after dedupe;
+    - 1,000 or more entries at one nanosecond in one stream and across streams: one 5,000 re-read, then the explicit marker and "Skip past T", never a loop or a false "start reached";
+  - `Mode`:
+    - all with a UID, some, none;
+    - a UID-only newest page followed by UID-less and mixed older pages, and the reverse, the mode held;
+    - an explicit change starting a new page set;
+  - the name sentence for a live pod, a gone pod and `PinnedGone`, always weaker.
 - **Transport:**
   - both paths with the tenant header;
   - the 8 MiB cap;
   - a 400 plain-text body shown redacted;
   - 401 with no tenant;
   - the credential fence across a revision;
-  - redaction of the exact credential from lines and labels.
+  - the request headers and the proxied non-2xx body on both paths;
+  - the credential boundary, with exact and quoted needles:
+    - a credential equal to a match value, to a pod name and to a label key;
+    - redacted from the selector, source, strength, errors and Settings;
+    - Copy LogQL unavailable whenever its display form differs;
+    - log content passed through `Exact` only;
+    - the raw values still selecting, classifying and deduping.
 - **Source:**
-  - a configuration change between pages ends the lineage;
+  - a configuration or revision change between pages ends the page set ("the source changed");
   - an unknown tenant's empty labels answer is said as such, never "no logs".
 - **The frontend:**
   - the mode switch;
   - the selector line and strength sentence for each strength;
   - Load older and the start-of-range state;
+  - navigation past 2,000 and past 10,000 held lines (the newest end evicted, older pages reachable, the anchor kept);
+  - the saturation marker and "Skip past T";
   - the cap notice;
   - the removed-pod and `PinnedGone` entries;
   - a replaced pod opening the gone UID;
   - a failure keeping pages, marked.
 - **The lab:**
-  - the smoke opens History for `history-db-0` and sees 50 lines, gen2 only, under the UID selector;
+  - the smoke opens History for `history-db-0` and sees gen2 only, under the UID selector;
+  - with `match` on `kind-klyx-mixed`, the captures show both branches' lines (SD and Alloy) under one view;
+  - `history-burst` shows the saturation path;
   - with the Alloy cluster's `match`, the captures show the name selector's sentence;
   - the gone pod's history is captured from the removed inspector, by deleting a lab pod under a running server-mode app.
 - **Mutations:**
-  - the UID decision (all / some / none);
-  - `end` + 1 ns and the dedupe;
+  - the UID decision (all / some / none) and its lock;
+  - the empty matchers that keep branches disjoint;
+  - the "neither" branch always running;
+  - `end` + 1 ns, the dedupe and exhaustion from raw lengths;
+  - the saturation re-read and the marker;
+  - the eviction end;
   - the shape's namespace requirement;
-  - the not-indexed filter placement;
   - the categorize-labels header;
   - the null and status checks;
-  - the redaction;
+  - the exact-only log redaction and the display redaction;
+  - Copy LogQL's availability;
   - the fence.
 
 ## 12. Staging
@@ -272,3 +363,28 @@ On `kind-klyx`, in `klyx-s8b-lab`:
 - **Live tail from Loki** (`/loki/api/v1/tail`): Live stays the kube API.
 - **Metrics from LogQL** (rates, volumes).
 - **A custom range picker.**
+
+## 14. Revision 1: Codex's design review of 6438d43
+
+Codex requested changes with five findings. The lab gained the cases behind them (findings 10 and 11).
+
+1. **A label-name union cannot choose one shape for all streams.** Mixed shippers under one `match` lost streams.
+   - §3 now reads the labels only to prune.
+   - It selects through disjoint branches with empty matchers, at most six: each namespace spelling, then pod indexed as `pod`, as `k8s_pod_name`, or neither.
+   - The container and the UID are label filters on every branch.
+   - The lab shows SD, Alloy and OTLP lines of one pod under one `match` each kept exactly once.
+2. **Saturated pages.**
+   - Exhaustion is read from raw response lengths.
+   - A branch that cannot advance past one timestamp is re-read once at 5,000, then stops with an explicit marker and a "Skip past T" choice. Never a loop, a silent skip or a false "start reached" (§5).
+3. **The cap defeated backward browsing.** History holds 10,000 lines and 32 MiB, evicts from the newest end, keeps its cursor, and renders through a virtualized list, so older pages stay reachable past 2,000 and 10,000 lines (§5).
+4. **Mode must be locked per page set.** The mode, branches, absolute range, lineage key and revision, UID and container are bound into the cursor. Load older keeps them; an explicit choice starts a new page set (§4).
+5. **The credential boundary for Klyx's own text.**
+   - Raw values stay in process.
+   - Log content passes an exact-only redactor; everything Klyx says is a display value.
+   - Copy LogQL is unavailable when the display query differs from the raw one (§5).
+
+**Guidance adopted:**
+- the `endpointhttp` extension (request headers; the proxied non-2xx body) and `Redactor.Exact` (§9);
+- the creation bound as a timestamp filter, the name sentence always weaker;
+- label presence never treated as per-stream or exact-range proof;
+- a held-byte budget and full-shape memory measurement (§8).
