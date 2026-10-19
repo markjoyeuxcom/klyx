@@ -1,5 +1,5 @@
 // Package endpointhttp is the HTTP path to an external endpoint Klyx reads
-// (metrics, Alertmanager, later Loki), whatever the endpoint speaks. It holds
+// (metrics, Alertmanager, Loki), whatever the endpoint speaks. It holds
 // what coverage C5 built and accepted for metrics, made kind-neutral
 // (coverage S8a §3): the direct transport (the credential and tenant headers,
 // a revision gate on every round trip, a completion re-check, errors
@@ -104,6 +104,13 @@ func (d *Direct) Redactor() safehttp.Redactor { return d.auth.Redactor }
 // the tenant are set here, for the endpoint's origin; the redirect policy
 // keeps them on that origin.
 func (d *Direct) Get(ctx context.Context, path string, q url.Values) (int, []byte, error) {
+	return d.GetWith(ctx, path, q, nil)
+}
+
+// GetWith is Get with protocol headers (coverage S8b: Loki's
+// X-Loki-Response-Encoding-Flags). They never replace the credential or the
+// tenant this transport sets.
+func (d *Direct) GetWith(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 	u := d.base + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -115,6 +122,7 @@ func (d *Direct) Get(ctx context.Context, path string, q url.Values) (int, []byt
 	if d.auth.Live != nil && !d.auth.Live() {
 		return 0, nil, ErrCredentialChanged
 	}
+	setProtocolHeaders(req, hdr)
 	if d.auth.Header != "" {
 		req.Header.Set("Authorization", d.auth.Header)
 	}
@@ -161,6 +169,26 @@ func ReadCapped(r io.Reader, lim Limits) ([]byte, error) {
 // credential. The cap sits below client-go's decoding, so a non-2xx body -
 // which client-go reads whole - is bounded too.
 func NewGuardedProxyREST(cfg *rest.Config, lim Limits) (rest.Interface, error) {
+	g, err := NewGuardedProxy(cfg, lim)
+	if err != nil {
+		return nil, err
+	}
+	return g.REST, nil
+}
+
+// GuardedProxy is the guarded service-proxy client pair for one kind's
+// Limits: REST builds service-proxy requests, and HTTP is the http.Client
+// beneath it - the cluster's credentials and TLS (rest.HTTPClientFor), the
+// same-origin redirect check, and the cap - for reads client-go's response
+// handling cannot carry (RawProxy).
+type GuardedProxy struct {
+	REST      rest.Interface
+	HTTP      *http.Client
+	UserAgent string
+}
+
+// NewGuardedProxy builds the pair (see NewGuardedProxyREST for the guard).
+func NewGuardedProxy(cfg *rest.Config, lim Limits) (*GuardedProxy, error) {
 	c := rest.CopyConfig(cfg)
 	c.APIPath = "/api"
 	c.GroupVersion = &corev1.SchemeGroupVersion
@@ -174,7 +202,11 @@ func NewGuardedProxyREST(cfg *rest.Config, lim Limits) (rest.Interface, error) {
 	}
 	hc.CheckRedirect = safehttp.SameOriginRedirect(safehttp.MaxRedirects)
 	hc.Transport = safehttp.Cap(hc.Transport, lim.MaxBytes, lim.TooLarge)
-	return rest.RESTClientForConfigAndClient(c, hc)
+	rc, err := rest.RESTClientForConfigAndClient(c, hc)
+	if err != nil {
+		return nil, err
+	}
+	return &GuardedProxy{REST: rc, HTTP: hc, UserAgent: c.UserAgent}, nil
 }
 
 // Service is an in-cluster Service read through the API server's service
@@ -199,22 +231,21 @@ func NewProxy(r rest.Interface, svc Service, tenant string, lim Limits) *Proxy {
 	return &Proxy{rest: r, svc: svc, tenant: tenant, lim: lim}
 }
 
-// Get reads path (beginning "/") under the Service's path prefix, streamed
-// and capped. A non-2xx answer returns its status and no body: client-go
-// folds it into a StatusError.
-func (p *Proxy) Get(ctx context.Context, path string, q url.Values) (int, []byte, error) {
-	scheme := p.svc.Scheme
+// proxyRequest is the service-proxy request for path (beginning "/") under
+// the Service's path prefix, with the query's repeated parameters in order.
+func proxyRequest(r rest.Interface, svc Service, path string, q url.Values) *rest.Request {
+	scheme := svc.Scheme
 	if scheme == "" {
 		scheme = "http"
 	}
-	name := scheme + ":" + p.svc.Name + ":" + p.svc.Port
-	suffix := strings.Trim(p.svc.Path, "/")
+	name := scheme + ":" + svc.Name + ":" + svc.Port
+	suffix := strings.Trim(svc.Path, "/")
 	if suffix != "" {
 		suffix += "/"
 	}
 	suffix += strings.TrimLeft(path, "/")
-	req := p.rest.Get().
-		Namespace(p.svc.Namespace).
+	req := r.Get().
+		Namespace(svc.Namespace).
 		Resource("services").
 		Name(name).
 		SubResource("proxy").
@@ -229,6 +260,14 @@ func (p *Proxy) Get(ctx context.Context, path string, q url.Values) (int, []byte
 			req = req.Param(k, v)
 		}
 	}
+	return req
+}
+
+// Get reads path (beginning "/") under the Service's path prefix, streamed
+// and capped. A non-2xx answer returns its status and no body: client-go
+// folds it into a StatusError.
+func (p *Proxy) Get(ctx context.Context, path string, q url.Values) (int, []byte, error) {
+	req := proxyRequest(p.rest, p.svc, path, q)
 	if p.tenant != "" {
 		req = req.SetHeader("X-Scope-OrgID", p.tenant)
 	}
@@ -246,4 +285,72 @@ func (p *Proxy) Get(ctx context.Context, path string, q url.Values) (int, []byte
 		return 0, nil, err
 	}
 	return 200, body, nil
+}
+
+// RawProxy reads a Service through the API server's service proxy and
+// returns the status and the bounded body for any status (coverage S8b §9):
+// Loki's 400 diagnosis is a plain-text body. client-go cannot carry it -
+// Do(ctx) drops a non-2xx body it cannot decode before Result.Raw, and
+// DoRaw overwrites a body-read error (the cap) with a status error - so the
+// REST client only builds the URL, and the request runs through the guarded
+// http.Client: the cluster's credentials and TLS, the same-origin redirect
+// check, the cap. No endpoint credential is ever sent here (C5 §4).
+type RawProxy struct {
+	g      *GuardedProxy
+	svc    Service
+	tenant string
+	lim    Limits
+}
+
+// NewRawProxy builds a raw service-proxy transport.
+func NewRawProxy(g *GuardedProxy, svc Service, tenant string, lim Limits) *RawProxy {
+	return &RawProxy{g: g, svc: svc, tenant: tenant, lim: lim}
+}
+
+// Get reads path with the query and the protocol headers. The body is read,
+// capped, before the status is looked at: a body-read, cap or cancellation
+// error takes precedence, and only a complete body is paired with its
+// status, 2xx or not.
+func (p *RawProxy) Get(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
+	r := proxyRequest(p.g.REST, p.svc, path, q)
+	if err := r.Error(); err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL().String(), nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	setProtocolHeaders(req, hdr)
+	req.Header.Set("Accept", "application/json, */*")
+	if p.g.UserAgent != "" {
+		req.Header.Set("User-Agent", p.g.UserAgent)
+	}
+	if p.tenant != "" {
+		req.Header.Set("X-Scope-OrgID", p.tenant)
+	}
+	resp, err := p.g.HTTP.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := ReadCapped(resp.Body, p.lim)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
+// setProtocolHeaders copies a caller's protocol headers. The credential and
+// the tenant are the transport's alone: a caller's Authorization or
+// X-Scope-OrgID is never sent.
+func setProtocolHeaders(req *http.Request, hdr http.Header) {
+	for k, vs := range hdr {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "X-Scope-Orgid", "Proxy-Authorization", "Cookie":
+			continue
+		}
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
 }

@@ -1,6 +1,8 @@
 package loki
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -25,25 +27,15 @@ func (f fakeBranch) read(branch int, start, end int64, limit int) Read {
 
 type fakeBranch []Entry // newest first
 
-// page drives one page as the reader will: read every active branch, the
-// saturated ones once more at RetryLimit, stop those still saturated, keep.
+// page drives one page through ReadPage against the fake branches.
 func page(ps *PageSet, fs []fakeBranch) []Kept {
-	var reads []Read
-	for i, b := range ps.Branches {
-		if !b.Active() {
-			continue
-		}
-		r := fs[i].read(i, ps.Start, b.End, PageLimit)
-		if ps.Saturated(r) {
-			r = fs[i].read(i, ps.Start, b.End, RetryLimit)
-			if ps.Saturated(r) {
-				ps.Stop(r)
-				continue
-			}
-		}
-		reads = append(reads, r)
+	kept, _, err := ReadPage(context.Background(), func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
+		return fs[i].read(i, start, end, limit).Entries, nil
+	}, ps)
+	if err != nil {
+		panic(err)
 	}
-	return ps.Apply(reads, PageLimit)
+	return kept
 }
 
 func burst(ts int64, n int, prefix string) fakeBranch {
@@ -202,5 +194,37 @@ func TestStopCountsDeliveredAndRead(t *testing.T) {
 	ps.Stop(Read{Branch: 0, Limit: 2, Entries: []Entry{c, d}})
 	if b := ps.Branches[0]; !b.Stopped || b.StoppedCount != 4 {
 		t.Fatalf("at least: %+v", b)
+	}
+}
+
+// A re-read the server refuses (its 4xx: a lower max_entries_limit) stops
+// the branch with the server's words; any other failure fails the page
+// whole and leaves the page set where it was.
+func TestReadPageRefusalsAndFailures(t *testing.T) {
+	f := append(burst(5000, 1500, "t"), older(4999, 10, "o")...)
+	ps := NewPageSet(1, 10_000, 1)
+	page(ps, []fakeBranch{f}) // 1,000 at T delivered
+	refuse := func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
+		if limit == RetryLimit {
+			return nil, &StatusError{Code: 400, Text: "max entries limit per query exceeded (5000 > 2000)"}
+		}
+		return f.read(i, start, end, limit).Entries, nil
+	}
+	kept, markers, err := ReadPage(context.Background(), refuse, ps)
+	if err != nil || len(kept) != 0 || len(markers) != 1 || markers[0].Count != 1000 || markers[0].TS != 5000 ||
+		markers[0].Refused != "max entries limit per query exceeded (5000 > 2000)" || !ps.Branches[0].Stopped {
+		t.Fatalf("refused: %v %+v %v", kept, markers, err)
+	}
+	ps = NewPageSet(1, 10_000, 2)
+	before := fmt.Sprintf("%+v", ps.Branches)
+	boom := errors.New("connection reset")
+	fail := func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
+		if i == 1 {
+			return nil, boom
+		}
+		return f.read(i, start, end, limit).Entries, nil
+	}
+	if _, _, err := ReadPage(context.Background(), fail, ps); !errors.Is(err, boom) || fmt.Sprintf("%+v", ps.Branches) != before {
+		t.Fatalf("a failed read moved the page set: %v %+v", err, ps.Branches)
 	}
 }

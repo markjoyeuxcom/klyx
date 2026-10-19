@@ -55,6 +55,7 @@ func DefaultConnFactory(clk clock.Clock, creds Credentials) ConnFactory {
 		conn.WithRESTConfig(rc)
 		conn.WithCredentials(creds)
 		conn.WithAlertmanager(cc.Alertmanager)
+		conn.WithLoki(cc.Loki)
 		return conn, nil
 	}
 }

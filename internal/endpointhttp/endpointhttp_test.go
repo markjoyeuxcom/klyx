@@ -142,3 +142,127 @@ func TestDirectRedactsTransportErrors(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 }
+
+func rawProxy(t *testing.T, apiURL string, max int64) *RawProxy {
+	t.Helper()
+	g, err := NewGuardedProxy(&rest.Config{Host: apiURL, BearerToken: "kube-token"}, Limits{MaxBytes: max, TooLarge: errBig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewRawProxy(g, Service{Namespace: "logs", Name: "loki", Port: "http", Path: "/loki"}, "lab", Limits{MaxBytes: max, TooLarge: errBig})
+}
+
+// Coverage S8b §9, the transport contract (Codex's probes of c2b4e26): a
+// plain-text non-2xx body arrives whole - client-go's Do().Raw() returns
+// none of it - and so does a 2xx one.
+func TestRawProxyKeepsAPlainTextNon2xxBody(t *testing.T) {
+	const msg = "max entries limit per query exceeded, limit > max_entries_limit_per_query (6000 > 5000)"
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/logs/services/http:loki:http/proxy/loki/loki/api/v1/query_range" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, msg)
+	}))
+	defer api.Close()
+	code, body, err := rawProxy(t, api.URL, 1<<20).Get(context.Background(), "/loki/api/v1/query_range", url.Values{"limit": {"6000"}}, nil)
+	if err != nil || code != 400 || string(body) != msg {
+		t.Fatalf("got %d %q %v", code, body, err)
+	}
+}
+
+// The cap's sentinel survives a non-2xx (DoRaw would replace it with a
+// status error), and a cancellation wins over the status.
+func TestRawProxyReadErrorsWinOverTheStatus(t *testing.T) {
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, strings.Repeat("x", 64))
+	}))
+	defer big.Close()
+	if code, body, err := rawProxy(t, big.URL, 16).Get(context.Background(), "/x", nil, nil); !errors.Is(err, errBig) || code != 0 || body != nil {
+		t.Fatalf("cap on a 400: %d %q %v", code, body, err)
+	}
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer slow.Close()
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if code, body, err := rawProxy(t, slow.URL, 1<<20).Get(ctx, "/x", nil, nil); !errors.Is(err, context.DeadlineExceeded) || code != 0 || body != nil {
+		t.Fatalf("cancellation: %d %q %v", code, body, err)
+	}
+}
+
+// The cluster's own credential and the tenant travel; a caller's protocol
+// header does too; a caller's Authorization or tenant never does (no
+// endpoint credential on the proxy path, C5 §4).
+func TestRawProxyHeaders(t *testing.T) {
+	var got http.Header
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = io.WriteString(w, "{}")
+	}))
+	defer api.Close()
+	hdr := http.Header{"X-Loki-Response-Encoding-Flags": {"categorize-labels"}, "Authorization": {"Bearer endpoint-secret"}, "X-Scope-OrgID": {"other"}}
+	if _, _, err := rawProxy(t, api.URL, 1<<20).Get(context.Background(), "/x", nil, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer kube-token" || got.Get("X-Scope-OrgID") != "lab" || got.Get("X-Loki-Response-Encoding-Flags") != "categorize-labels" {
+		t.Fatalf("headers: %v", got)
+	}
+}
+
+// Redirects: the API server's own origin only; a cross-origin redirect is
+// refused before any request reaches the other server.
+func TestRawProxyRedirectGuard(t *testing.T) {
+	var elsewhere int
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { elsewhere++ }))
+	defer other.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/same" {
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/away") {
+			http.Redirect(w, r, other.URL+"/steal", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, "/same", http.StatusFound)
+	}))
+	defer api.Close()
+	p := rawProxy(t, api.URL, 1<<20)
+	if code, body, err := p.Get(context.Background(), "/here", nil, nil); err != nil || code != 200 || string(body) != "ok" {
+		t.Fatalf("same origin: %d %q %v", code, body, err)
+	}
+	if _, _, err := p.Get(context.Background(), "/away", nil, nil); err == nil || elsewhere != 0 {
+		t.Fatalf("cross origin: %v, the other server saw %d", err, elsewhere)
+	}
+}
+
+// GetWith carries protocol headers; the transport's credential and tenant
+// are never replaced by a caller's.
+func TestDirectGetWith(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header.Clone() }))
+	defer srv.Close()
+	d := NewDirect(srv.URL, Auth{Header: "Bearer endpoint", Tenant: "lab", Redactor: safehttp.NewRedactor(safehttp.Bearer("endpoint"))},
+		srv.Client(), Limits{MaxBytes: 1 << 20, TooLarge: errBig})
+	hdr := http.Header{"X-Loki-Response-Encoding-Flags": {"categorize-labels"}, "Authorization": {"Bearer other"}, "X-Scope-Orgid": {"other"}}
+	if _, _, err := d.GetWith(context.Background(), "/x", nil, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer endpoint" || got.Get("X-Scope-OrgID") != "lab" || got.Get("X-Loki-Response-Encoding-Flags") != "categorize-labels" ||
+		len(got.Values("Authorization")) != 1 {
+		t.Fatalf("headers: %v", got)
+	}
+}

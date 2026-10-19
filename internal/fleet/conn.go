@@ -228,6 +228,8 @@ type ClusterConn struct {
 
 	// am is the Alertmanager endpoint (coverage S8a).
 	am alertmanagerState
+	// loki is the Loki endpoint (coverage S8b).
+	loki lokiState
 }
 
 func NewClusterConn(name string, typed kubernetes.Interface, meta metadata.Interface,
@@ -811,6 +813,7 @@ func (c *ClusterConn) capsLocked() capability.Set {
 	caps := c.caps
 	caps.LoadBalancing.ServicesSeen = c.lbServicesSeen
 	caps.Alerting.Present = c.alertsPresent() // lock-free: never c.am.mu under c.mu
+	caps.LogHistory.Present = c.logHistoryPresent()
 	return caps
 }
 
