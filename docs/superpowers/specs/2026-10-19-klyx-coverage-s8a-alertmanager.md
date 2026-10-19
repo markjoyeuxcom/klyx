@@ -1,6 +1,6 @@
 # Coverage S8a: alerts, from Alertmanager
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8a, after C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`, implementation accepted at 6c17617). S8b (Loki) follows with its own note.
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8a, after C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`, implementation accepted at 6c17617). S8b (Loki) follows with its own note. Revision 1 answers Codex's design review of 4bc4685 and the lab's first findings (§14).
 
 The owner's answer (roadmap §5): **S8a reads Alertmanager.** The roadmap fixes the contract this note builds:
 - **States:** active, suppressed and unprocessed stay distinct.
@@ -28,8 +28,11 @@ The owner's answer (roadmap §5): **S8a reads Alertmanager.** The roadmap fixes 
   - The direct transport's request paths are PromQL.
   - The guarded proxy client carries the metrics cap and its error, and lives under `metricsMu`.
   - `credentialMoved`, `metricsAuth`, `SetMetricsConfig` and `ChangeMetricsCredential` are wired to `config.EndpointMetrics`.
+  - The metrics `discover()` discards its GET and LIST errors: a forbidden or failed lookup reads as "nothing found". S8a must not inherit that (§2).
 - **The periodic read Klyx already has.** The Observer's snapshot (`observe.SnapshotSpec`: a named cadence, a read deadline, single-flight, with `ReadSnapshot` and `Refresh` for on-demand reads) carries Helm (5 min) and Warning Events (60 s).
-  - A snapshot source is `ModeSampled`, and `healthnotify.Apply` returns before any episode logic for a sampled batch (`internal/healthnotify/engine.go:300-302`).
+  - A failed read keeps the last good items.
+  - A counted snapshot's batches are `ModeSampled`, and `healthnotify.Apply` returns before any episode logic for a sampled batch (`internal/healthnotify/engine.go:300-302`).
+  - A snapshot has no "not installed" outcome today: a read error is a failed read.
 - **Needs you.**
   - `fleetQueue` (`frontend/src/fleet/queue.ts:61-120`) adds rows only for lines in the `attention` state and counts `faults` and `attention`.
   - An evidence part (Events) is computed but never reaches Needs you.
@@ -37,41 +40,53 @@ The owner's answer (roadmap §5): **S8a reads Alertmanager.** The roadmap fixes 
 - **Inspectors.**
   - `InspectorLayout` has no shared section slot. Each inspector lists its own blocks.
   - `useInspectorAI` is the precedent for a per-object block every inspector places itself.
-- **The lab has no Alertmanager.** C6 plans one (a small single binary) on `kind-klyx`.
+- **The Observer holds** pods, deployments, statefulsets, daemonsets, replicasets, nodes and namespaces among the kinds an alert can name. It does not hold Jobs, CronJobs, PersistentVolumeClaims or HPAs.
 
-Alertmanager's own API (OpenAPI on `main`, releases through 0.34.1 of 2026-09-17), as S8a uses it:
+**Alertmanager's API, read from its v0.34.1 code** (the release Klyx's lab runs), as S8a uses it:
 - **`GET /api/v2/alerts`** takes `active`, `silenced`, `inhibited` and `unprocessed` (all default true), `filter` (matchers, repeatable), and `receiver`.
+  - It drops alerts whose `endsAt` has passed before returning.
+  - Its `mutedBy` is always empty: the handler passes no mute information to the converter (`api/v2/api.go:277`, `compat.go:133`). Silences and inhibition are reported.
 - **A `gettableAlert`** has:
   - `labels`, `annotations`, `fingerprint`;
   - `startsAt`, `updatedAt`, `endsAt`;
   - `receivers`, `generatorURL`;
   - `status{state: active|suppressed|unprocessed, silencedBy[], inhibitedBy[], mutedBy[]}`.
-- **`mutedBy`** (time-interval muting) is reported since 0.28.0. An older Alertmanager omits it, and Klyx treats the field as optional.
+- **`GET /api/v2/alerts/groups`** (`api.go:469`) takes `active`, `silenced`, `inhibited` and `muted` (all default true), `filter` and `receiver`.
+  - It returns aggregation groups: `labels`, `receiver{name}`, and the group's alerts.
+  - Each alert has *that group's* status, so time-interval muting is reported here, per route.
+  - An alert in several routes appears in several groups. An unprocessed alert is in none.
 - **`GET /api/v2/status`** returns `versionInfo`, `cluster{status: ready|settling|disabled, peers}` and `uptime`.
 
-## 2. Configuration: which alerts are this cluster's
+**The lab confirmed this on a real Alertmanager 0.34.1.** One muted alert reads `active` with `mutedBy: []` on `/alerts`, and `suppressed` with `mutedBy: ["always"]` on `/alerts/groups`. Its lab notes add one behaviour: the mute stage runs in a receiver's notify pipeline, so an alert routed only to a receiver with no integration is never marked muted.
+
+## 2. Configuration and discovery: which Alertmanager, which alerts
 
 The `alertmanager` block keeps C5's shape: `endpoint`, `serviceRef`, `tlsSkipVerify`, `auth`, `tenant`. S8a adds two fields:
 
 - **`match`**, the labels that make an alert this cluster's in a shared Alertmanager, e.g. `match: {cluster: aks-prd-weu}`.
   - Equality matchers only: a valid label name, and a non-empty value without control characters.
-  - Sent as `filter` parameters (`cluster="aks-prd-weu"`), and checked again on every alert Klyx receives. An Alertmanager-compatible API that ignores `filter` cannot leak another cluster's alerts in.
-  - `match` belongs to `EndpointConfig`, so S8b's Loki block takes the same field. It counts in C5's endpoint revision.
+  - Sent as `filter` parameters (`cluster="aks-prd-weu"`) on both reads, and checked again on every alert Klyx receives. An Alertmanager-compatible API that ignores `filter` cannot leak another cluster's alerts in.
+  - `match` belongs to `EndpointConfig`, so S8b's Loki block takes the same field. It counts in C5's endpoint revision and in the source identity (§4).
 - **`serviceRef.path`**, a path prefix behind the Service: Mimir's Alertmanager is served under `/alertmanager`.
   - The same field is honoured by the metrics service proxy, which has the same need (Mimir's Prometheus API under `/prometheus`). One shape, one rule.
 
 **Without `match`,** every alert on the Alertmanager is read as this cluster's. That is right for an Alertmanager inside the cluster, and the source line says so: "every alert on this Alertmanager is read as this cluster's". Two clusters configured with the same Alertmanager and no `match` get a load warning naming both.
 
-**Resolution follows metrics':**
+**Resolution:**
 1. an `endpoint`;
 2. else a `serviceRef` through the API server's service proxy;
 3. else discovery.
 
-**Discovery is deliberately narrow:**
-- the Prometheus Operator's `alertmanager-operated` Service, the one it creates for every Alertmanager resource, through its port named `web` (it also carries the mesh ports, so "a single port" would not fit);
-- else a single Service labelled `app.kubernetes.io/name=alertmanager` with a port named `web` or `http`, or exactly one port.
-
-More than one candidate reads "several Alertmanagers found; set alertmanager.serviceRef". Mimir, Grafana and other path-prefixed or multi-tenant Alertmanagers are configured explicitly.
+**Discovery goes through the Prometheus Operator, and must prove one installation.**
+- **The governing Service is shared.** The operator's governing `alertmanager-operated` Service selects every Alertmanager pod in its namespace by application name (Prometheus Operator v0.94.1, `makeStatefulSetService`). One such Service is therefore not proof of one installation, and Klyx never treats it as one.
+- **The rule:**
+  1. Read `alertmanagers.monitoring.coreos.com` across the cluster. When the resource is not served, there is no discovery.
+  2. **Exactly one Alertmanager resource:** use a Service in its namespace whose selector pins that instance (`alertmanager: <name>`, as kube-prometheus-stack's instance Service does), through its port named `web` or `http-web`. Several such Services select the same pods, so the first by name serves.
+  3. **No instance Service:** the governing `alertmanager-operated` is used only when its EndpointSlices hold exactly the pods of that instance's StatefulSet (`alertmanager-<name>-<n>` by `targetRef`), read complete. This is the proof of one installation behind it.
+  4. **More than one Alertmanager resource, or a governing Service fronting pods of more than one instance:** "several Alertmanagers found; set alertmanager.serviceRef". This is ambiguity, never a guess.
+- **A standalone Alertmanager without the operator** is configured with a `serviceRef`. The label-only fallback of the first draft is gone: a label does not prove an installation either.
+- **Every discovery read must succeed and be complete.** A forbidden list, a timeout, or a capped or continued list makes discovery "could not be read" with the reason, never "not installed".
+- **Discovery is cached for five minutes** and re-run at once after a failure or a configuration change. Its outcome joins the source identity (§4).
 
 ## 3. The reader
 
@@ -82,12 +97,9 @@ More than one candidate reads "several Alertmanagers found; set alertmanager.ser
   - capped reads that error.
 - They are offered as `Get(ctx, path, query)`, with the cap, timeout and too-large error per kind.
 - `internal/metrics` keeps its API and becomes a caller of it. Every C5 test passes unchanged; that is the gate on the refactor.
-- **Per kind:**
-  - metrics keeps 4 MiB and a 3 s timeout;
-  - Alertmanager reads up to 8 MiB within 10 s.
 
 **One endpoint state per kind on the connection.**
-- `fleet` gets a small `endpointState` (its configuration, resolution cache, credential revision, and its own lock) for `alertmanager`, and later `loki`.
+- `fleet` gets a small `endpointState` (its configuration, discovery cache, resolution, credential revision, and its own lock) for `alertmanager`, and later `loki`.
 - It has the metrics path's guarantees:
   - a read drops a result that crossed a revision move;
   - a configuration change moves the revision inside the lock;
@@ -96,55 +108,95 @@ More than one candidate reads "several Alertmanagers found; set alertmanager.ser
 
 **`internal/alertmanager` (pure):**
 - `ParseAlerts(body)` to `[]Alert`, tolerant of a missing `mutedBy` and strict about everything else.
-- `Alert`:
-  - `Fingerprint`, `Labels`, `Annotations`;
-  - `StartsAt`, `UpdatedAt`, `EndsAt`;
-  - `State` (`active`, `suppressed`, `unprocessed`, or the unknown value kept as written);
-  - `SilencedBy`, `InhibitedBy`, `MutedBy`;
-  - `Receivers`, `GeneratorURL`.
-- `ParseStatus(body)` for Settings' Test.
-- `Dedupe`, by fingerprint: one alert per fingerprint. Where two copies disagree, the copy with the later `updatedAt` stands, and the disagreement is kept as "replicas disagreed" on that alert.
+- `ParseGroups(body)` to `[]Group{Receiver, Labels, Alerts []GroupAlert{Fingerprint, State, MutedBy, SilencedBy, InhibitedBy}}`.
+- `ParseStatus(body)`.
+- `Reduce(alerts, groups) []Alert`, the one place states are decided (below).
 - `Subjects(labels)`, the correlation (§5).
 - `Severity(labels)`, the counting class (§6).
+- `Display(alert, redactor)`, the safe display values (below).
 
-**The read:**
-- `GET {base}/api/v2/alerts?active=true&silenced=true&inhibited=true&unprocessed=true&filter=…`, through the resolved transport.
-- The re-check of `match`, then deduplication.
-- Labels and annotations are kept as sent: they are data and display text, not secrets.
-- A response that is not JSON, not an array, or holds an alert without `fingerprint`, `labels` or `status.state` is a failed read, never a partial list.
+**The read is one snapshot read made of two GETs**, both through the resolved transport, with the same `filter`:
+1. `GET {base}/api/v2/alerts?active=true&silenced=true&inhibited=true&unprocessed=true&filter=…` gives the members, and each one's state, silences and inhibitions.
+2. `GET {base}/api/v2/alerts/groups?active=true&muted=true&silenced=false&inhibited=false&filter=…` gives the mutes, per group.
+
+Both must succeed, or the snapshot read fails as one. A response that is not JSON, has the wrong shape, or holds an alert without `fingerprint`, `labels` or `status.state` is a failed read, never a partial list.
+
+**`Reduce` decides each alert's state:**
+- **Membership is the alerts list's.** A fingerprint only in the groups (it arrived between the two GETs) is ignored.
+- **Duplicates in the alerts list** (a front that merges HA replicas) collapse to one per fingerprint.
+  - When the copies' states differ, the alert is active if any copy is active, and the alert keeps "copies disagreed: active and silenced".
+  - When the copies' silences or inhibitions differ, the alert keeps the union.
+- **Silenced or inhibited** in the alerts list: suppressed with those causes. The groups are not consulted; silence and inhibition are alert-wide.
+- **Active** in the alerts list: its group appearances decide muting. One appearance is one group (route and group labels) under one receiver.
+  - **Every appearance muted:** the alert is **muted**, a suppressed cause, with the time intervals named (`always`).
+  - **Some appearances muted:** the alert stays **active and counted**, with "muted for receiver lab-muted; active for lab". Muting is per route, and a route still notifying is not quiet.
+  - **No appearance:** the alert stays active and counted, with "mute not read: not in any group yet".
+- **Unprocessed** in the alerts list: unprocessed. It is in no group by definition.
+- **An unknown state** is kept as written and never counted.
+
+**Raw values and display values are separate.**
+- **Raw values** (labels, annotations, fingerprints, receiver names) are kept as decoded. They serve `match`, deduplication, the reduction and correlation, and nothing else.
+- **Every string that leaves `internal/alertmanager`** for a DTO, a summary ref, Needs you, the lens, an inspector, AI or Settings' Test is a display value. That includes alert and receiver names, label values, annotations, URLs, reasons, and the status fields. It is made in C5's order:
+  1. the read's own credential redactor: the exact forms of the credential the transport carried, and their Go-quoted spellings;
+  2. `scrub.Credentials` for general shapes;
+  3. URLs (`generatorURL`, `runbook_url` and any http(s) URL in an annotation): userinfo removed, the rest shown as text;
+  4. then the clip (§8), never before.
+- **The redactor is the one the reading transport carried.** A response can only echo the credential it was sent.
+- **A JSON-escaped echo** (`c5/…`) is whole once decoded, and is redacted after decoding, as C5's revision 1 established for metrics.
 
 ## 4. The source contract (C1)
 
 - **Acquisition mode:** an Observer snapshot, `alerts`.
-  - It reads every 30 s with a 10 s deadline, single-flight per cluster.
-  - `ReadSnapshot` serves the Alerts lens's refresh and Settings' Test through the same flight.
-  - It is always registered. A read that finds no Alertmanager, configured or discovered, returns a new `observe.ErrSourceAbsent`. The snapshot's coverage is then `absent`: not installed, no evidence, no gap, kept distinct from a failed read.
-  - The connection keeps a capability fact, `Alerting{Source: configured|discovered|none, Endpoint}`, refreshed on the capability re-probe, never per read. The Alerts lens's gate reads it.
-  - A change of source (discovery finding an Alertmanager, or one going away) needs no Observer restart: the next read resolves again.
+  - It reads every 30 s with a 10 s deadline covering both GETs, single-flight per cluster.
+  - The Alerts lens's refresh goes through `ReadSnapshot`, the same flight.
+  - Settings' Test does **not**: it is a separate `GET /api/v2/status` through the reviewed endpoint (C5's review fence and configuration sync), and it never touches the snapshot's freshness or result. After a successful Test it asks the snapshot for a fresh read, which has its own outcome.
+  - **The snapshot is always registered.** A read returns the new `observe.ErrSourceAbsent` only when the cluster has no `alertmanager` configuration and discovery completed and found no candidate. The snapshot's coverage is then `absent`: not installed, no evidence, no gap.
+    - A failed discovery is a failed read, which keeps any retained evidence (§2).
+  - **The lens and inspector gate** reads the alerts part's coverage in the cluster summary: hidden when absent, shown otherwise. Retained or newly found evidence and the gate move on the same 30 s cadence. There is no separate capability fact.
 - **Scope, projection and versions:**
   - Scope is this cluster's alerts, as `match` defines them (§2).
-  - The projection is the parsed `Alert`; nothing else is held.
+  - The projection is the reduced `Alert` with its display values; nothing else is held.
   - The API is v2 only. v1 was removed in 0.27.0 and returns 410, which reads as "Alertmanager's v1 API is gone; Klyx reads v2".
-  - An unknown `state` is kept and shown, never counted as active.
-- **The counted entity and its identity:** an alert, identified by its fingerprint on its endpoint.
-  - The endpoint's identity is the cluster, the canonical origin or `namespace/service:port/path`, and the tenant.
+- **The source identity, and evidence partitioned by it:**
+  - **The source identity** is:
+    - the cluster;
+    - the resolution (`endpoint`, `serviceRef` or discovered);
+    - the effective location: the canonical origin plus path for an endpoint, `namespace/service:port` plus path for a Service;
+    - the tenant;
+    - the `match` set, sorted.
+  - The canonical origin is the credential boundary (C5); the source identity is the evidence boundary. `/am-a` and `/am-b` on one origin are two sources, and so are `cluster=A` and `cluster=B` on one Alertmanager.
+  - **Every read's items carry the identity they were read under.** The connection publishes the current identity as a fact on every configuration change, Settings action or discovery outcome. It also asks the snapshot to read again.
+  - **The alerts part counts only items whose identity is the current one.** Items retained from another identity are not this source's evidence. A source change starts an unread collection ("not read yet for this source"), never a recovery.
+    - So a read in flight across a change is ignored by identity, without a separate fence.
+    - So a failed first read after a change shows nothing of the old source.
+  - A read that crosses a credential revision move is dropped as C5 does.
+- **The counted entity and its identity:** an alert, identified by its fingerprint within its source identity.
   - A fingerprint is Alertmanager's hash of the labels: the same labels firing again later is the same fingerprint, and `startsAt` tells the occasions apart.
+  - Identical fingerprints from different sources never share anything.
   - The ref has no UID and no GVR of its own. Its subject is a correlation (§5).
-- **Dependency completeness:**
-  - **The endpoint unresolved, unreachable, refusing the credential, or answering non-JSON:** the snapshot's read fails. The part reads "could not be read" with the reason (redacted per C5), and the last good list is kept, marked stale with its as-of time.
-  - **Never cleared, never recovered.** A failed read never empties the list and never turns an active alert into "resolved".
-  - **A subject's object missing from the cache** (not listed, not watched, or deleted): the alert stays, and its subject reads "names pod team/api-1, not found in this cluster now".
+- **Dependency completeness:** every negative claim needs complete, current evidence, or it is qualified.
+  - **A read failing** (endpoint unresolved or unreachable, the credential refused, a malformed answer, discovery not read): the part reads "could not be read" with the reason (a display value), and the last good list of the *same* source identity is kept, marked stale with its as-of time.
+    - A failed read never empties the list and never turns an alert into "resolved".
+  - **A capped read** (§8): every count reads "at least".
+    - Per object, "no alert" becomes "no alert among the 5,000 read (more exist)". An alert absent from a capped read is not established either way.
+  - **Klyx keeps no alert history in S8a.** An alert absent from a complete read is simply not listed. Nothing claims "resolved" or "no longer matched".
+  - **A subject's object:**
+    - "not found" is said only when the subject's kind is one the Observer holds, its coverage is live and complete, and the object is not there;
+    - for a held kind that is stale, capped or not yet read, "not established (pods not read complete)";
+    - for a kind the Observer does not hold (Jobs, CronJobs, PVCs, HPAs), "named, not looked up". The alert still shows; the subject is a name.
 - **Clock boundaries:**
   - The list is as of its read.
-  - An alert whose `endsAt` has passed while it is still listed reads "ending" (Alertmanager keeps a resolved alert until its next cycle).
-  - "Firing for" ages from `startsAt` on the clock, never from Klyx's first sight.
+  - A row reads "started 2h ago" (Alertmanager's `startsAt`) and "last seen active 14:02" (the successful read's time). Stale, it reads "last seen active 14:02; reads failing since 14:03".
+  - Klyx never derives an ending, a resolution, or continued firing from `endsAt` on its own clock: the producer can renew it after Klyx's last read. The alert inspector shows `endsAt` as "end as last reported: 16:00", qualified the same way when stale.
   - The snapshot's freshness (cadence plus grace) marks a list stale when reads stop arriving.
-- **Notification eligibility:** none. The source is sampled, and `healthnotify` drops sampled batches before any episode logic. A test pins it.
+- **Notification eligibility:** none.
+  - The counted snapshot's batches are sampled, and `healthnotify` drops sampled batches before any episode logic.
+  - The test pins it with the Observer-produced alerts batch fed to the engine, not a hand-built sampled input.
   - An alert fingerprint is not a Kubernetes UID. Notifying on alerts would need its own design, and the roadmap keeps it out of this programme.
 - **No synthetic evidence:**
   - Klyx never invents a state, a severity, a subject or a time.
   - A missing `severity` label is "no severity", not "warning".
-  - A missing `mutedBy` is "not reported by this Alertmanager", not "not muted".
+  - An active alert in no group is "mute not read", not "not muted".
 
 ## 5. Alerts on objects: correlation, never a join
 
@@ -165,80 +217,105 @@ An alert names its subject only through labels. The conventions here are kube-st
 
 **Rules:**
 - **Labels never read as subjects:** `job`, `instance`, `service`, `endpoint` and `container`. They describe the scrape, or a part of a pod.
-  - `container` refines a pod subject ("container app"), never names one.
+  - `container` refines a pod subject ("container web"), never names one.
 - **The most specific subject is the alert's subject.** `namespace` + `pod` is the Pod, and the namespace also lists it.
 - **One subject only.** An alert with labels for two subjects (`pod` and `deployment`) takes the first in the table's order, and shows the rest as "also names".
 - **Every match is labelled as what it is:** "matched by label `namespace`/`pod`". It is never UID-pinned.
   - When the alert's `startsAt` is earlier than the object's `creationTimestamp`, the alert started before this object existed: "started before this object was created (an earlier object of this name?)".
-- **A workload's inspector** also lists alerts naming its *current* pods, joined by the pods Klyx holds for that workload today, under "on its pods".
+- **Not-found wording** follows §4's completeness rule.
+- **A workload's inspector** also lists alerts naming its *current* pods, under "on its pods". The pods are the ones Klyx holds for that workload today, read complete; otherwise the list is qualified the same way.
 - **An alert whose labels name no subject** is a cluster alert. It shows in the Alerts lens and in Needs you, with no object.
 
 ## 6. Counting: Needs you, separately
 
-**Counted:** an alert counts in Needs you only when it is **active** and its `severity` label is `critical` or `warning` (case-insensitive).
+**Counted:** an alert counts in Needs you only when, after `Reduce`, it is **active** and its `severity` label is `critical` or `warning` (case-insensitive).
+- Muted, silenced, inhibited and unprocessed alerts are never counted.
+- An alert muted for some receivers and active for others is active, and counted.
 - Other severities (`info`, `none`, or none at all) are listed in the Alerts lens and in inspectors, never counted.
-- kube-prometheus's `Watchdog` and `InfoInhibitor` (severity `none`) therefore never nag.
-- The lens says how many active alerts carry no counted severity.
+  - kube-prometheus's `Watchdog` and `InfoInhibitor` (severity `none`) therefore never nag.
+  - The lens says how many active alerts carry no counted severity.
 
 **Kept apart from object faults:**
 - **Needs you gets an `alert` row** and a third count: "3 faults · 2 need a look · 4 alerts".
-  - A row reads: alert name, the subject or "cluster", severity, "firing for", and the `summary` annotation if present.
+  - A row reads: alert name, the subject or "cluster", severity, "started … ago", "last seen active …", and the `summary` annotation if present, all display values.
   - An alert row is never folded into an object's row, so one incident is never counted as several objects, and one object's alert is never counted as a fault.
 - **The filters:** Faults keeps critical alerts; prd keeps the prd clusters' alerts.
 - **The fleet spine and the cluster lamp do not light for an alert.** Only Klyx's own verdicts light them ("only faults glow"). An alert is external evidence.
   - The mast's reading adds an alerts count beside it: "2 alerts".
 - **A failed or stale read** is a coverage row ("Alerts: could not be read - …", or "as of 14:02"), like any part's gap.
-  - The last good alerts stay counted, marked stale, so a dead Alertmanager never reads as calm.
+  - The same source's last good alerts stay counted, marked stale, so a dead Alertmanager never reads as calm.
+- **A source change** before its first read is a coverage row: "Alerts: not read yet for this source".
 
 ## 7. What the operator sees
 
-- **The Alerts lens** is capability-gated: an Alertmanager configured or discovered. It sits under the cluster's observability group.
-  - **Grouping:** active first, then unprocessed, then suppressed, each group ordered by severity then "firing for".
-  - **A row:** alert name, severity, subject (a link, labelled as a label match), state and its cause, "firing for", and the `summary` annotation.
-  - **Suppressed reasons:**
+Every string below is a display value (§3).
+
+- **The Alerts lens** is gated by the alerts part (§4). It sits under the cluster's observability group.
+  - **Grouping:** active first, then unprocessed, then suppressed, each group ordered by severity then "started".
+  - **A row:**
+    - alert name, severity, and the subject (a link, labelled as a label match);
+    - state and its cause;
+    - "started … ago" and "last seen active …";
+    - the `summary` annotation.
+  - **Suppressed causes:**
     - "silenced (silence 3f1c…)";
-    - "inhibited by 9a2e…" (the inhibiting fingerprint, with its alert name when that alert is in the list);
-    - "muted by a time interval".
-  - **The source line:** the endpoint (redacted per C5), `match`, the as-of time, and "N active alerts without a counted severity".
+    - "inhibited by 0a05fbb6…" (the inhibiting fingerprint, with its alert name when that alert is in the list);
+    - "muted by time interval always" (every route muted);
+    - and for an active alert, "muted for receiver …; active for …".
+  - **The source line:**
+    - the source (redacted per C5) and how it was resolved (configured, or discovered as `monitoring/main` through Service `kube-prometheus-stack-alertmanager`);
+    - `match`, and the as-of time;
+    - "N active alerts without a counted severity".
   - **Filters:** state, severity, namespace, and subject kind.
 - **The alert inspector** shows:
   - the labels, sorted;
   - the annotations, including `description` and `runbook_url`;
-  - the receivers, the fingerprint and the timestamps;
+  - the receivers and each one's state;
+  - the fingerprint, `startsAt`, `updatedAt`, and the end as last reported;
   - `generatorURL` as copyable text, which Klyx does not open;
-  - the subject correlation with its basis.
+  - the subject correlation with its basis and §4's completeness wording.
 - **The Alerts block in inspectors** (Pod, Workload, Node, and the generic inspector for Namespace, PVC, Job, CronJob and HPA) is placed by each inspector like `useInspectorAI`'s block.
   - It lists the alerts correlated to this object: active, unprocessed and suppressed, the suppressed ones marked as such.
   - It carries its as-of time and basis.
-  - With no Alertmanager it renders nothing (capability detection).
-- **Settings > External endpoints:** Test is enabled for Alertmanager. It reads `GET /api/v2/status` through the reviewed endpoint, under C5's review fence and configuration sync.
-  - It reports: "Available: Alertmanager 0.34.1, cluster ready with 3 peers, answered."
-- **AI Explain** for an object adds its correlated active alerts: alert name, severity, state, "firing for", and `summary`, through the field allowlist. Labels beyond those and other annotations stay out.
+  - "No alert" is said only from a complete, live read (§4).
+  - With the alerts part absent it renders nothing.
+- **Settings > External endpoints:** Test is enabled for Alertmanager, through the separate status read (§4).
+  - It reports, for example: "Available: Alertmanager 0.34.1, clustering disabled, answered." The version and cluster status are display values.
+- **AI Explain** for an object adds its correlated active alerts as display values: alert name, severity, state, "started", "last seen active", and `summary`. They go through the field allowlist.
+  - Labels beyond those and other annotations stay out.
   - Chat is unchanged in S8a. Its attention tool reports the alerts count only.
 - **Verbs:** none. Klyx does not create or expire silences, does not acknowledge, and never posts alerts. Silencing stays in Alertmanager's UI and `amtool`.
 
 ## 8. Bounds
 
-- **One read per cluster per 30 s**, single-flight, with a 10 s deadline, and cancelled when the connection or the Observer stops.
-- **The response cap is 8 MiB**, which errors rather than truncating.
-- **The entry cap is 5,000 alerts after `match`.** Past it, the list is truncated and every count reads "at least".
+- **Reads:**
+  - one snapshot read (two GETs) per cluster per 30 s, single-flight, within a 10 s deadline, cancelled when the connection or the Observer stops;
+  - at most four alert reads in flight fleet-wide (a shared limiter in `fleet`); a read waiting on it counts against its own deadline.
+- **Responses:**
+  - each GET's response is capped at 8 MiB, which errors rather than truncating;
+  - group appearances are capped at 20,000 per read, and past that the read fails, since mutes would be incomplete.
+- **Entries:** 5,000 alerts after `match` and deduplication. Past it the list is truncated, and §4's "at least" and per-object qualifications apply.
+- **Display caps, applied after redaction:**
+  - 64 labels and 64 annotations per alert;
+  - 256 bytes per label value, 512 for `summary`, 4 KiB for `description` and other annotations;
+  - 2 KiB per URL.
+  - The raw values used for matching are not clipped.
 - **No per-alert follow-up reads.** Silences and inhibiting alerts are named from the alert's own fields.
-- **Memory:** the parsed list, in one generation, per cluster.
-- **Evaluation:** the alerts part's evaluation is linear in the alerts and the subject lookups, which come from cache maps. It is measured in the slice's budget test against 5,000 alerts.
+- **Memory and DTOs:** the reduced list, in one generation, per cluster. The budget test measures the retained heap and the encoded DTO of 5,000 *full-shape* alerts (labels and annotations at their caps, four receivers each), not 5,000 small ones.
+- **Discovery:** three API reads, at most once per five minutes per cluster, or after a failure or a change.
 
 ## 9. The wiring (C1)
 
 **Backend:**
 - `internal/endpointhttp`, with `internal/metrics` moved onto it;
 - `internal/alertmanager` (pure);
-- `fleet.endpointState` for `alertmanager`;
+- `fleet.endpointState` for `alertmanager`: the discovery, the source identity fact, and the fleet-wide limiter;
 - `observe.ErrSourceAbsent`, a snapshot read's "not installed", with its coverage tests;
-- the `Alerting` capability fact and the lens gate;
-- the `alerts` snapshot and the `alerts` task and part, classifier `alerts`, in `healthsrc`;
+- the `alerts` snapshot and the `alerts` task and part, classifier `alerts`, in `healthsrc`, with deps on the held subject kinds for the completeness wording;
 - the rows converter and its DTO mirror;
 - the AI allowlist entry;
 - the chat attention count;
-- Settings' Test and `CanTest`;
+- Settings' Test (the status read) and `CanTest`;
 - the `match` and `serviceRef.path` config fields, with validation and warnings.
 
 **Frontend:**
@@ -247,7 +324,7 @@ An alert names its subject only through labels. The conventions here are kube-st
 - `NeedsYou.tsx`: the third count;
 - the mast's count;
 - `reveal.ts` and `openHit.ts` for an alert;
-- the Alerts lens and its registry entry;
+- the Alerts lens and its registry entry, gated by the part;
 - the shared Alerts block and its placement in the inspectors listed in §7;
 - the smoke `TITLES` entry.
 
@@ -259,60 +336,100 @@ An alert names its subject only through labels. The conventions here are kube-st
 ## 10. Tests
 
 - **Pure (`internal/alertmanager`):**
-  - parse every state;
-  - a missing `mutedBy`;
+  - parse every state and the groups shape;
   - an unknown state kept;
-  - each malformed shape failing the read whole;
-  - deduplication, including disagreeing replicas;
-  - the subject table, each excluded label, precedence, and "also names";
-  - severity classes.
+  - each malformed shape failing the read whole.
+  - **Reduce:**
+    - all appearances muted;
+    - some muted;
+    - none;
+    - a fingerprint only in the groups;
+    - silenced and inhibited not consulting the groups;
+    - duplicate copies agreeing and disagreeing.
+  - The subject table, each excluded label, precedence, and "also names".
+  - Severity classes.
+- **Display values:**
+  - For every surface (alert name, label value, `summary`, `description`, `generatorURL`, `runbook_url`, receiver name, the status fields in Test, the reasons, the AI facts), three needles: the credential literal, the credential JSON-escaped in the body, and a credential with a quote and a backslash (its quoted spelling).
+  - None reaches a DTO, a ref, Needs you, AI or Test, and the raw value still matches and correlates.
+  - Userinfo is removed from every URL.
+  - Clipping comes after redaction.
 - **Transport:**
   - `internal/endpointhttp` carries C5's tests, and every metrics test passes unchanged.
-  - New per-kind tests for:
-    - the Alertmanager cap and deadline;
+  - New per-kind tests:
+    - the Alertmanager caps and deadline across both GETs;
     - `filter` encoding;
     - the client-side `match` re-check against a server that ignores `filter`;
-    - the path prefix through the service proxy.
+    - the path prefix through the service proxy;
+    - the groups cap failing the read.
+- **Discovery:**
+  - two Alertmanager resources sharing one governing Service is ambiguous;
+  - an instance Service is preferred;
+  - the governing Service accepted only with its EndpointSlices proven;
+  - a forbidden or failed list is "could not be read", never absent;
+  - the operator not served, with no configuration, is absent.
+- **Source identity:**
+  - a `serviceRef.path` change followed by a failed read;
+  - a `match` change followed by a failed read;
+  - a discovered source replaced;
+  - a read in flight across each.
+  - None of them shows or counts the old source's alerts. Each reads "not read yet for this source".
 - **Credentials:**
   - C5's Live, revision-fence and one-step-install tests repeated for `alertmanager` through `endpointState`;
   - Remove stopping an Alertmanager read in flight.
-- **Recovery:**
-  - a failed read keeps the last list marked stale, and never empties it;
-  - an alert absent from the next good read is gone, never "resolved";
-  - a truncated read counts "at least".
+- **Recovery and completeness:**
+  - a failed read keeps the same source's last list, stale, and never empties it;
+  - a capped read counts "at least", and an object's "no alert" is qualified;
+  - a subject of a held kind not found only when that kind is live and complete; stale, capped and unread kinds read "not established";
+  - an unheld kind reads "named, not looked up".
+- **Clock:** an alert renewed upstream (a later `endsAt`) across failed polls, and the local clock past the old `endsAt`. Nothing reads ending or resolved; the row reads "last seen active" at the last good read.
 - **Counting:**
   - Needs you counts only active critical and warning alerts, apart from object faults;
+  - a partly muted alert counted, a fully muted one not;
   - an object both faulty and alerting is one fault row and one alert row;
-  - the lamp and spine stay unlit for an alert alone;
-  - suppressed and unprocessed alerts are never counted.
-- **Notification:** a sampled alerts batch never reaches an episode.
-- **Correlation and time:**
-  - the `startsAt` before `creationTimestamp` case;
-  - a subject not found;
-  - a workload's "on its pods".
+  - the lamp and spine stay unlit for an alert alone.
+- **Notification:** the Observer-produced alerts batch, fed to `healthnotify`, opens no episode.
+- **Test flight:**
+  - a successful status read never advances the alerts freshness;
+  - it never replaces a failed alerts result;
+  - it triggers a separate fresh read.
+- **Correlation:** the `startsAt`-before-`creationTimestamp` case, and a workload's "on its pods".
 - **Parity:** the alerts part and the lens read the same snapshot. The parity oracle gains the alerts part, and `parityGate.test.tsx` its row.
-- **Budget:** 5,000 alerts parsed and evaluated within the slice's budget.
-- **Mutations** on the state classes, the counting rule, the `match` re-check, the stale-keep rule and the correlation precedence.
+- **Budget:** the full-shape heap and DTO case of §8.
+- **Mutations** on:
+  - the reduction's mute rule;
+  - the counting rule;
+  - the `match` re-check;
+  - the identity filter;
+  - the stale-keep rule;
+  - the completeness wording;
+  - the display order (clip before redact);
+  - the correlation precedence.
 
 ## 11. The lab
 
-- **`kind-klyx` gets a real Alertmanager 0.34.1** in namespace `klyx-s8-lab`. It is a ClusterIP Service, labelled with a teardown script.
-- **Its configuration** gives the states the slice needs:
+On `kind-klyx`, in namespace `klyx-s8-lab`: ClusterIP only, labelled `klyx.dev/lab=s8a`, with a teardown script.
+- **Two real Alertmanager 0.34.1 instances:**
+  - `alertmanager`, with route prefix `/`;
+  - `alertmanager-prefixed`, under `/alertmanager`, read through a `serviceRef` path.
+- **Their configuration:**
   - one route and receiver;
-  - an inhibition rule (a `KlyxLabCritical` alert inhibits a `KlyxLabWarning` of the same namespace);
-  - a mute time interval that always applies, routed by a label, so `mutedBy` is real.
-- **A lab script posts synthetic alerts** to Alertmanager's own `/api/v2/alerts`. That is lab setup, not Klyx: Klyx never posts. Each alert has `cluster=kind-klyx` and an `endsAt` two hours out, re-posted by `relabs.sh`.
-  - The alerts are:
-    - a pod alert, a deployment alert, a node alert and a namespace alert;
+  - an inhibition rule: `KlyxLabCritical` inhibits `KlyxLabWarning` of the same namespace;
+  - an always-on mute time interval for `klyx_lab_mute="true"`. It is routed to a receiver with an integration (a discard-port webhook that is never called), because the mute stage needs a notify pipeline.
+- **A lab script posts synthetic alerts with `amtool`** inside each Alertmanager. That is lab setup through Alertmanager's own API: Klyx never posts. Each alert has `cluster=kind-klyx` and an end two hours out, re-posted by `relabs.sh`.
+  - **The alerts:**
+    - a pod alert naming the lab Deployment's pod;
+    - a deployment alert, a node alert and a namespace alert (`info`);
     - a cluster alert;
     - a `severity: none` watchdog;
     - an inhibited pair;
     - a muted alert;
-    - an alert for another cluster (`cluster=elsewhere`), which `match` must keep out.
-  - The script also creates a silence through Alertmanager's API.
-- **A second, `match`-less Alertmanager** is reached through the service proxy with a `serviceRef` path prefix, to cover the prefix.
+    - a silenced alert, with its silence;
+    - an alert naming a pod that does not exist;
+    - an alert for `cluster=elsewhere`, which `match` must keep out.
+  - Each state has been read back through the service proxy: silenced and inhibited on both endpoints, muted only on the groups endpoint, and `cluster=elsewhere` filtered out.
+- **The Prometheus Operator path** is covered by fixtures that copy the shapes v0.94.1 creates (its governing Service, StatefulSets and EndpointSlices), including two instances in one namespace. Klyx's lab does not run the operator.
 - **The native smoke:**
-  - opens the Alerts lens and checks each state group;
+  - opens the Alerts lens and checks each state group, the muted and the partly muted cases among them;
   - opens a pod's inspector to its Alerts block;
   - checks the Needs you third count;
   - runs Settings' Test for Alertmanager.
@@ -322,22 +439,49 @@ An alert names its subject only through labels. The conventions here are kube-st
 
 1. `internal/endpointhttp`, with metrics moved onto it. Every C5 test passes unchanged.
 2. The config fields (`match`, `serviceRef.path`, honoured for metrics too), validation and warnings.
-3. `internal/alertmanager`, pure, with its tests.
-4. `fleet.endpointState` for Alertmanager: resolution, discovery, the credential path, Set and Test.
-5. The `alerts` snapshot and part, the rows converter, the attention count for chat, and the AI allowlist.
+3. `internal/alertmanager`, pure: the parsers, `Reduce`, `Subjects`, `Severity` and `Display`, with their tests.
+4. `fleet.endpointState` for Alertmanager: resolution, operator discovery, the source identity fact, the limiter, the credential path, Set and Test.
+5. `observe.ErrSourceAbsent`; the `alerts` snapshot and part; the rows converter; the attention count for chat; the AI allowlist.
 6. The frontend:
    - Needs you's alert row and third count, and the mast's count;
    - the Alerts lens and inspector;
    - the shared inspector block;
    - Settings' Test.
-7. The lab, parity, the smoke step, captures and the as-built notes.
+7. The lab, parity, the smoke step, captures, the budget measurement and the as-built notes.
 
 ## 13. Not in S8a
 
 - OS notifications for alerts (roadmap: no).
 - Silences or acknowledgements of any kind (read-only).
-- Alert groups (`/api/v2/alerts/groups`) and receiver routing views.
+- Receiver routing views. The groups are read for mutes only.
+- Alert history: what fired and stopped between reads.
 - Prometheus or Grafana-managed rule state (`/api/v1/rules`): Alertmanager is the source the owner chose.
+- Discovery without the Prometheus Operator: a standalone Alertmanager is configured with a `serviceRef`.
 - Chat tools beyond the attention count.
 - `receiver_matchers` (0.33.0 and later only).
 - A configurable set of counted severities, for stacks that page on `page`, `error` or `high`. It is deferred until asked for; meanwhile the lens names the active alerts it does not count.
+
+## 14. Revision 1: Codex's design review of 4bc4685, and the lab
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 (P1) | Decoded labels and annotations can echo the credential into Needs you, inspectors and Explain; "not secrets" is no boundary | §3: raw values for matching only; every string that leaves the package is a display value (the read's own redactor, quoted spellings, `scrub.Credentials`, URL userinfo removed, then clipped). §10: three needles on every surface |
+| 2 (P1) | `/api/v2/alerts` cannot report time-interval mutes (0.34.1 passes none); the lab's muted alert would read active and enter Needs you; dedupe across receivers was undefined | §1, §3: the read is `/alerts` for membership, silences and inhibitions, plus `/alerts/groups` for mutes. `Reduce`: every route muted is muted; some muted is active and counted; none read is "mute not read". The lab found the same independently (§11) |
+| 3 (P1) | Source identity must cover the path, tenant and `match` scope; a failed first read after a change would keep counting the old source | §4: the source identity; items carry it; the part counts only the current identity's items; a change starts an unread collection. §10: path and `match` changes followed by failed reads |
+| 4 (P2) | One `alertmanager-operated` Service is not one installation (its selector is namespace-wide) | §2: discovery through Alertmanager resources; an instance Service, or the governing Service only with its EndpointSlices proven; otherwise ambiguity. The label-only fallback is removed |
+| 5 (P2) | Negative claims need complete, current evidence: absent discovery, "not found" subjects, omissions from a capped read | §2, §4: absent only from complete discovery; failed discovery is a failed read; "not found" only for held, live, complete kinds, else "not established" or "named, not looked up"; capped reads qualify per object; no history, so nothing claims "no longer matched" |
+| 6 (P2) | An ending state or continued firing cannot be derived from an expired `endsAt` | §4: "started" and "last seen active"; `endsAt` is "end as last reported", never a state. §10: a renewed alert across failed polls |
+
+**Codex's guidance, adopted:**
+- the notification exclusion pinned with the Observer-produced batch (§4, §10);
+- Settings' Test as a separate status read that never moves the alerts snapshot (§4);
+- the gate read from the alerts part, on the snapshot's cadence, instead of a five-minute capability fact (§4);
+- a full-shape heap and DTO measurement, named display caps, and a fleet-wide limit (§8).
+
+Kept as Codex judged them sound:
+- the `endpointhttp` extraction;
+- `match` with the client re-check;
+- the no-`match` option with its warning;
+- the separate alerts count;
+- no OS notifications;
+- always-register with a proven-absence outcome.
