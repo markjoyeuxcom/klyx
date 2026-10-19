@@ -92,7 +92,7 @@ func NewProxyTransport(r rest.Interface, c ServiceCandidate) Querier {
 
 // NewProxyTransportTenant is NewProxyTransport with a tenant header.
 func NewProxyTransportTenant(r rest.Interface, c ServiceCandidate, tenant string) Querier {
-	svc := endpointhttp.Service{Namespace: c.Namespace, Name: c.Name, Port: c.Port, Scheme: schemeOr(c.Scheme)}
+	svc := endpointhttp.Service{Namespace: c.Namespace, Name: c.Name, Port: c.Port, Scheme: schemeOr(c.Scheme), Path: c.Path}
 	return &proxyTransport{p: endpointhttp.NewProxy(r, svc, tenant, limits)}
 }
 

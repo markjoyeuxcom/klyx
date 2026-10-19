@@ -162,3 +162,27 @@ func TestEndpointRevision(t *testing.T) {
 		t.Fatal("an endpoint that is not configured has no revision")
 	}
 }
+
+// Coverage S8a §2, §4: match and serviceRef.path are part of what the person
+// reviewed - an edit to either moves the endpoint's revision.
+func TestEndpointRevisionCoversMatchAndPath(t *testing.T) {
+	doc := "clusters:\n  - name: prd\n    alertmanager:\n      serviceRef: {namespace: m, name: am, port: web, path: /alertmanager}\n      match: {cluster: prd}\n"
+	rev := func(d string) string {
+		t.Helper()
+		s, err := ReadSnapshot(writeFleetMode(t, d, 0o600))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.EndpointRevision("prd", EndpointAlertmanager)
+	}
+	base := rev(doc)
+	for name, edited := range map[string]string{
+		"match value": strings.Replace(doc, "cluster: prd", "cluster: stg", 1),
+		"match label": strings.Replace(doc, "{cluster: prd}", "{cluster: prd, env: prd}", 1),
+		"path":        strings.Replace(doc, "/alertmanager", "/am", 1),
+	} {
+		if r := rev(edited); r == "" || r == base {
+			t.Errorf("%s: the revision did not move", name)
+		}
+	}
+}

@@ -35,6 +35,8 @@ const (
 // ServiceCandidate is an in-cluster Prometheus Service to proxy to.
 type ServiceCandidate struct {
 	Namespace, Name, Port, Scheme string
+	// Path is the prefix the Service serves the API under (S8a §2).
+	Path string
 }
 
 // DiscoveryResult is the single reduced outcome of in-cluster discovery: at

@@ -15,7 +15,11 @@ func schemeOr(s string) string {
 }
 
 func sourceStr(c ServiceCandidate) string {
-	return c.Namespace + "/" + c.Name + ":" + c.Port
+	s := c.Namespace + "/" + c.Name + ":" + c.Port
+	if p := strings.Trim(c.Path, "/"); p != "" {
+		s += "/" + p
+	}
+	return s
 }
 
 // Resolve applies the 4-tier priority: endpoint -> serviceRef -> discovery ->
@@ -40,7 +44,7 @@ func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf Tran
 		return Resolution{Mode: ModeExplicitEndpoint, Source: base, Transport: tf.Direct(base, auth, cfg.TLSSkipVerify), Warning: warn}
 	}
 	if sr := cfg.ServiceRef; sr != nil {
-		c := ServiceCandidate{Namespace: sr.Namespace, Name: sr.Name, Port: sr.Port}
+		c := ServiceCandidate{Namespace: sr.Namespace, Name: sr.Name, Port: sr.Port, Path: sr.Path}
 		c.Scheme = schemeOr(sr.Scheme)
 		return Resolution{Mode: ModeExplicitService, Source: sourceStr(c), Transport: tf.Proxy(c, cfg.Tenant)}
 	}
