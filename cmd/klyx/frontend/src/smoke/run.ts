@@ -863,6 +863,26 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { counts: counts.textContent };
   });
 
+  // ---- coverage S8b: log history from the lab's real Loki (lab-s8b) ----
+  // the smoke fleet reads klyx-s8b-lab/loki:http, tenant lab, match
+  // k8s_cluster_name=kind-klyx (the OTLP shape, which carries pod UIDs):
+  // history-db-0's second generation only, by its UID
+  await step(steps, "Log history: a pod's lines from Loki, by its UID", async () => {
+    await open("pods");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "logs-pod", cluster, namespace: "klyx-s8b-lab", name: "history-db-0" });
+    await within(20_000, "the logs dock", () => $("[data-testid='logs-dock']"));
+    (await within(8000, "History", () => byText<HTMLElement>("[data-testid='logs-mode'] button", /^History$/))).click();
+    await within(30_000, "the UID selector", () => /selected by this pod's UID/.test($("[data-testid='history-strength']")?.textContent ?? ""));
+    const lines = [...document.querySelectorAll("[data-testid='history-line']")].map((l) => l.textContent ?? "");
+    if (lines.length === 0 || lines.some((l) => /gen1/.test(l)) || !lines.every((l) => /gen2/.test(l))) {
+      throw new Error(`the lines are not gen2's alone: ${lines.length} lines, first ${(lines[0] ?? "").slice(0, 120)}`);
+    }
+    if (!/k8s_pod_uid=/.test($("[data-testid='history-selector']")?.textContent ?? "")) throw new Error("the selector does not show the UID");
+    $<HTMLElement>("button[aria-label='close logs dock']")?.click();
+    return { lines: lines.length, strength: $("[data-testid='history-strength']")?.textContent?.slice(0, 80) };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();
@@ -876,6 +896,9 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if ($("[data-testid='endpoints-error']")) throw new Error(`the endpoints panel could not read fleet.yaml: ${$("[data-testid='endpoints-error']")?.textContent}`);
     (await within(8000, "the Alertmanager Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Alertmanager endpoint']"))).click();
     const result = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Alertmanager 0\.34\.1/));
+    // S8b: Loki's Test reads its build info and this cluster's label names
+    (await within(8000, "the Loki Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Loki endpoint']"))).click();
+    await within(20_000, "Loki's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Loki 3\.7\.8/));
     return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length, test: result.textContent?.trim().slice(0, 120) };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {

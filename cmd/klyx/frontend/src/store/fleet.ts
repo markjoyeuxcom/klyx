@@ -31,7 +31,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
