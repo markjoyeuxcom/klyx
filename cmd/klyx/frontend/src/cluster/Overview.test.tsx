@@ -113,7 +113,7 @@ describe("Overview attention reads the cluster's summary (health 1c slice 4)", (
     render(<Overview c={dto} />);
     expect(area("pods").textContent).toContain("1 unverified");
     expect(area("nodes").textContent).toContain("could not be read (forbidden)");
-    expect(screen.getByText("No attention in the 4 areas read; 2 unverified.")).toBeTruthy();
+    expect(screen.getByText("No attention in the 5 areas read; 2 unverified.")).toBeTruthy();
   });
 
   it("each area opens its lens with that lens's attention filter", () => {
@@ -301,7 +301,7 @@ describe("Overview names what the summary does not carry (slice 6 §4)", () => {
       expect(area(id).getAttribute("data-state")).toBe("checking");
       expect(area(id).textContent).toContain("checking…");
     }
-    expect(screen.getByText(/No attention in the 5 areas read; 4 unverified\./)).toBeTruthy();
+    expect(screen.getByText(/No attention in the 6 areas read; 4 unverified\./)).toBeTruthy();
     expect(container.textContent).not.toContain("not covered");
   });
 

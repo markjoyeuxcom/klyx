@@ -147,11 +147,15 @@ func (f *fakeConn) StoreIdentity(context.Context, string, string, string, string
 func (f *fakeConn) KEDAInspect(context.Context, string, string, string, string) (KEDAInspection, error) {
 	return KEDAInspection{}, nil
 }
-func (f *fakeConn) KEDAJobsOf(context.Context, string, string, string) (KEDAJobs, error) { return KEDAJobs{}, nil }
+func (f *fakeConn) KEDAJobsOf(context.Context, string, string, string) (KEDAJobs, error) {
+	return KEDAJobs{}, nil
+}
 func (f *fakeConn) ReplicaOwner(context.Context, string, string, string) ReplicaOwnership {
 	return ReplicaOwnership{}
 }
-func (f *fakeConn) KEDASetPaused(context.Context, string, string, string, string, bool) error { return nil }
+func (f *fakeConn) KEDASetPaused(context.Context, string, string, string, string, bool) error {
+	return nil
+}
 func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
 	return VeleroRestores{}, nil
 }

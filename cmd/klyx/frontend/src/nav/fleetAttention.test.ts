@@ -161,7 +161,7 @@ describe("the health reading keeps every gap and every time", () => {
       native("sources", { ok: 1 }, 0, "not ready", [kind("gitrepositories")]))], {}, "a"));
     const t = lamp(cl("a", "Synced", { fluxPresent: true })).title;
     expect(t).toMatch(/Flux Reconciliations: 2 not ready \(cluster summary as of /);
-    expect(t).toMatch(/no attention: Workloads, Pods, Nodes, Events, Helm releases, Flux Sources \(cluster summary as of /);
+    expect(t).toMatch(/no attention: Workloads, Pods, Nodes, Events, Helm releases, Flux Sources, HPAs \(cluster summary as of /);
     const u = lamp(cl("a", "Failed", { reason: "dial tcp", fluxPresent: true })).title;
     expect(u).toMatch(/^a - failed: dial tcp\n/);
     expect(u).toMatch(/no attention: .* \(cluster summary as of /);

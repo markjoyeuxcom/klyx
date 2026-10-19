@@ -22,6 +22,7 @@ const OBJECT_KINDS: Record<string, string> = {
   validatingadmissionpolicies: "ValidatingAdmissionPolicy", mutatingadmissionpolicies: "MutatingAdmissionPolicy",
   listenersets: "ListenerSet",
   services: "Service", ipaddresspools: "IPAddressPool", ciliumloadbalancerippools: "CiliumLoadBalancerIPPool", configurationstates: "ConfigurationState",
+  horizontalpodautoscalers: "HorizontalPodAutoscaler", scaledobjects: "ScaledObject", scaledjobs: "ScaledJob",
 };
 
 /** kindOfRef: the object's kind from its GVR's resource, or "". */
@@ -34,14 +35,14 @@ const SELECTS = new Set([
   "argo/applications", "argo/applicationsets", "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores",
   "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
   "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb",
-  "alerts/alerts",
+  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs",
 ]);
 export const selectsOnReveal = (task: string, part: string) => SELECTS.has(`${task}/${part}`);
 
 // The lens section (and route view) of each task.
-const SECTIONS: Record<string, "certs" | "externalsecrets" | "gatewayApi" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts"> = {
+const SECTIONS: Record<string, "certs" | "externalsecrets" | "gatewayApi" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts" | "autoscaling"> = {
   certs: "certs", eso: "externalsecrets", gateway: "gatewayApi", karpenter: "karpenter", velero: "velero", admission: "admission", lb: "loadbalancers",
-  alerts: "alerts",
+  alerts: "alerts", autoscaling: "autoscaling", keda: "autoscaling",
 };
 
 export function reveal(cluster: string, task: string, part: string, ref: RevealRef): void {

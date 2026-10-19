@@ -53,7 +53,8 @@ describe("navigation registry (redesign step 7a)", () => {
 
   it("group entry is the first available task, else the first resource", () => {
     const autoscaling = NAV_GROUPS.find((g) => g.id === "autoscaling")!;
-    expect(entryOf(c(), autoscaling)?.label).toBe("HorizontalPodAutoscalers");
+    // coverage S9: the Autoscalers task needs no capability
+    expect(entryOf(c(), autoscaling)?.label).toBe("Autoscalers");
     expect(entryOf(c({ karpenterPresent: true }), autoscaling)?.id).toBe("karpenter");
     expect(entryOf(c(), NAV_GROUPS.find((g) => g.id === "config")!)?.label).toBe("ConfigMaps");
   });

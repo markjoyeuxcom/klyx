@@ -24,6 +24,7 @@ vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn(async () => 
 vi.mock("../bridge/metrics", () => ({ getWorkloadSparklines: vi.fn(async () => ({ available: false, cpu: [], mem: [] })) }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
 vi.mock("../bridge/crd", () => ({ copyText: vi.fn(async () => {}) }));
+vi.mock("../bridge/keda", () => ({ replicaOwner: vi.fn(async () => ({ autoscaler: "unowned", gitops: "unowned", owners: [] })) }));
 vi.mock("./LogsPane", () => ({ LogsPane: () => null }));
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
 import { rolloutHistory, rolloutRestart, rolloutUndo, scaleWorkload } from "../bridge/workloads";
@@ -216,7 +217,7 @@ describe("verbs are pinned to the armed workload and pod", () => {
     expect(rolloutRestart).not.toHaveBeenCalled();
   });
 
-  it("the dispatch carries the armed UIDs - restart, scale and pod delete", () => {
+  it("the dispatch carries the armed UIDs - restart, scale and pod delete", async () => {
     seed([wl("api")]);
     render(<WorkloadsView cluster="x" />);
     select("api");
@@ -225,6 +226,7 @@ describe("verbs are pinned to the armed workload and pod", () => {
     expect(rolloutRestart).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api");
     fireEvent.click(inspector().getByRole("button", { name: /^More/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Scale/ }));
+    await act(async () => {}); // the replica owner (S9 §7): proven unowned here
     fireEvent.change(screen.getByRole("spinbutton", { name: /replica count/i }), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "apply scale" }));
     expect(scaleWorkload).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api", 3);

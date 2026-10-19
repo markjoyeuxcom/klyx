@@ -36,6 +36,11 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "listenersets", label: "ListenerSets" }, { part: "routes", label: "Routes" }] },
   { task: "lb", label: "Load balancers", groupId: "network", destinationId: "loadbalancers", cap: "loadBalancing",
     parts: [{ part: "services", label: "LoadBalancer Services", destinationId: "loadbalancers" }, { part: "pools", label: "Address pools" }, { part: "metallb", label: "MetalLB configuration" }] },
+  // coverage S9: standalone HPAs (KEDA-owned ones under their ScaledObject)
+  { task: "autoscaling", label: "HPAs", groupId: "autoscaling", destinationId: "autoscaling",
+    parts: [{ part: "hpas", label: "HorizontalPodAutoscalers", destinationId: "autoscaling" }] },
+  { task: "keda", label: "KEDA", groupId: "autoscaling", destinationId: "autoscaling", cap: "keda",
+    parts: [{ part: "scaledobjects", label: "ScaledObjects", destinationId: "autoscaling" }, { part: "scaledjobs", label: "ScaledJobs" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
   { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
@@ -63,6 +68,8 @@ const KIND_LABELS: Record<string, string> = {
   ipaddresspools: "IPAddressPools", l2advertisements: "L2Advertisements", bgpadvertisements: "BGPAdvertisements",
   configurationstates: "ConfigurationStates", ciliumloadbalancerippools: "CiliumLoadBalancerIPPools",
   alerts: "Alertmanager alerts",
+  horizontalpodautoscalers: "HorizontalPodAutoscalers", scaledobjects: "ScaledObjects", scaledjobs: "ScaledJobs",
+  triggerauthentications: "TriggerAuthentications", clustertriggerauthentications: "ClusterTriggerAuthentications",
 };
 const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 

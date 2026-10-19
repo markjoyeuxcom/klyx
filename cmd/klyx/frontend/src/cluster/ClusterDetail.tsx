@@ -20,6 +20,7 @@ import { ConnectivityView } from "./ConnectivityView";
 import { KarpenterView } from "./KarpenterView";
 import { VeleroView } from "./VeleroView";
 import { AdmissionView } from "./AdmissionView";
+import { AutoscalingView } from "./AutoscalingView";
 import { LoadBalancersView } from "./LoadBalancersView";
 import { AlertsView } from "./AlertsView";
 
@@ -68,6 +69,7 @@ export function ClusterDetail() {
   if (route.section === "velero") return <VeleroView cluster={cluster.name} />;
   if (route.section === "admission") return <AdmissionView cluster={cluster.name} />;
   if (route.section === "loadbalancers") return <LoadBalancersView cluster={cluster.name} />;
+  if (route.section === "autoscaling") return <AutoscalingView cluster={cluster.name} />;
   if (route.section === "alerts") return <AlertsView cluster={cluster.name} />;
   // Every section is routed above; a persisted unknown section never reaches
   // here (persist.ts validates it), but say so rather than render nothing.

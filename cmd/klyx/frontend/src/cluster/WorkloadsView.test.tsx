@@ -17,6 +17,9 @@ vi.mock("../bridge/workloads", () => ({
   workloadCompare: vi.fn(() => new Promise(() => {})), // never settles: only the dialog's presence matters
 }));
 vi.mock("../bridge/workload-metrics", () => ({ getWorkloadMetrics: vi.fn().mockResolvedValue(undefined) }));
+// coverage S9 §7: who owns the replica count, per test
+const owner = vi.hoisted(() => ({ value: { autoscaler: "unowned", gitops: "unowned", owners: [] as string[] } as Record<string, unknown> }));
+vi.mock("../bridge/keda", () => ({ replicaOwner: vi.fn(async () => owner.value) }));
 vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn().mockResolvedValue(true) }));
 vi.mock("../bridge/pods", () => ({
   deletePod: vi.fn().mockResolvedValue(undefined),
@@ -244,14 +247,47 @@ describe("WorkloadsView", () => {
     expect((input as HTMLInputElement).value).toBe("1");
   });
 
-  it("confirming scale dispatches scaleWorkload with the entered replica count", () => {
+  it("confirming scale dispatches scaleWorkload with the entered replica count (a count proven unowned)", async () => {
+    owner.value = { autoscaler: "unowned", gitops: "unowned", owners: [] };
     seed([broken]);
     const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
     select("ollama");
     chooseMore(/^Scale/);
+    await act(async () => {});
     fireEvent.change(getByRole("spinbutton", { name: /replica count/i }), { target: { value: "3" } });
     fireEvent.click(getByRole("button", { name: "apply scale" }));
     expect(scaleWorkload).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama", 3);
+  });
+
+  // coverage S9 §7: an owned or unverified count takes the full
+  // confirmation, naming the owner and its consequence
+  it("an owned replica count says so and scales only through the confirmation", async () => {
+    vi.mocked(scaleWorkload).mockClear();
+    owner.value = { autoscaler: "owned", gitops: "owned", owners: ["KEDA ScaledObject ollama, through HPA keda-hpa-ollama"], gitopsOwner: "Kustomization flux-system/apps" };
+    seed([broken]);
+    const { getByRole, getByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
+    await act(async () => {});
+    expect(getByTestId("scale-owner").textContent).toContain("pause the ScaledObject instead");
+    expect(getByRole("button", { name: "apply scale" }).textContent).toBe("scale anyway");
+    fireEvent.change(getByRole("spinbutton", { name: /replica count/i }), { target: { value: "3" } });
+    fireEvent.click(getByRole("button", { name: "apply scale" }));
+    expect(scaleWorkload).not.toHaveBeenCalled();
+    expect(screen.getByText(/Kustomization flux-system\/apps sets it back/)).toBeTruthy();
+  });
+
+  it("an unverified owner never takes the popover-only path", async () => {
+    vi.mocked(scaleWorkload).mockClear();
+    owner.value = { autoscaler: "unverified", autoscalerWhy: "the HPA or ScaledObject read is incomplete", gitops: "unowned", owners: [] };
+    seed([broken]);
+    const { getByRole } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    chooseMore(/^Scale/);
+    await act(async () => {});
+    fireEvent.click(getByRole("button", { name: "apply scale" }));
+    expect(scaleWorkload).not.toHaveBeenCalled();
+    expect(screen.getByText(/could not prove no autoscaler sets this count/)).toBeTruthy();
   });
 
   // --- Reloader forward "reloads on" view ---

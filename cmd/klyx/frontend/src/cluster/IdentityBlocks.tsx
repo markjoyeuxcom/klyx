@@ -167,6 +167,11 @@ export function ServiceAccountIdentity({ cluster, namespace, name, uid, active }
                 <span className="t-secondary"> · {s.provider} {s.mode} · {s.via === "controller" ? "no auth: the controller runs as this ServiceAccount" : s.referent ? "for ExternalSecrets in this namespace" : "serviceAccountRef"}</span></div>
             ))}
             {r.storesRead === "cut" && <div className="t-secondary">More stores than shown.</div>}
+            {((r.keda?.length ?? 0) > 0 || r.kedaRead === "partial") && <div className="t-legend" style={{ marginTop: 6 }}>KEDA authentications using it</div>}
+            {(r.keda ?? []).map((k) => (
+              <div key={`${k.kind}/${k.namespace ?? ""}/${k.name}`} className="t-body" data-testid="identity-keda">{k.kind} {k.namespace ? `${k.namespace}/` : ""}{k.name}<span className="t-secondary"> · {k.via}</span></div>
+            ))}
+            {r.kedaRead === "partial" && <div className="t-secondary" data-testid="identity-keda-partial">The KEDA objects were not read completely: others may use it.</div>}
             <Limits limits={r.limits} />
           </>}
         <ReadAgain at={r?.readAt || undefined} reading={!dto} onRead={refresh} />

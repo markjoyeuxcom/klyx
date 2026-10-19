@@ -52,6 +52,10 @@ const LENSES: Record<string, Lens> = {
   "metallb.io/ipaddresspools": { task: "lb", part: "pools", label: "Load balancers" },
   "cilium.io/ciliumloadbalancerippools": { task: "lb", part: "pools", label: "Load balancers" },
   "metallb.io/configurationstates": { task: "lb", part: "metallb", label: "Load balancers" },
+  // coverage S9
+  "autoscaling/horizontalpodautoscalers": { task: "autoscaling", part: "hpas", label: "Autoscaling" },
+  "keda.sh/scaledobjects": { task: "keda", part: "scaledobjects", label: "Autoscaling" },
+  "keda.sh/scaledjobs": { task: "keda", part: "scaledjobs", label: "Autoscaling" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;

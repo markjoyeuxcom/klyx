@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/gitops/flux"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
 
@@ -151,7 +152,17 @@ type Scaler struct {
 	Conds       []Cond    `json:"conds,omitempty"`
 	CondsCut    bool      `json:"condsCut,omitempty"`
 	LastActive  time.Time `json:"lastActive,omitempty"`
-	Size        int       `json:"-"`
+	// Owner is the GitOps unit its labels or Argo tracking name, read from
+	// the full object before any cut: the verbs' ownership line (C4).
+	Owner *GitOwner `json:"owner,omitempty"`
+	Size  int       `json:"-"`
+}
+
+// GitOwner is a scaler's GitOps owner, by its labels or annotation.
+type GitOwner struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
 }
 
 // Cond returns the named condition, nil when absent.
@@ -420,6 +431,9 @@ func scalerOf(u *unstructured.Unstructured) Scaler {
 		s.Conds = append(s.Conds, Cond{Type: clip(mstr(m, "type"), maxShort), Status: clip(mstr(m, "status"), 16),
 			Reason: clip(mstr(m, "reason"), maxShort), Message: Display(mstr(m, "message"), maxMessage)})
 	}
+	if o := flux.OwnerOf(u.GetLabels(), u.GetAnnotations()); o != nil {
+		s.Owner = &GitOwner{Kind: o.Kind, Namespace: clip(o.Namespace, maxName), Name: clip(o.Name, 512)}
+	}
 	if t := str(u, "status", "lastActiveTime"); t != "" {
 		if at, err := time.Parse(time.RFC3339, t); err == nil {
 			s.LastActive = at
@@ -543,6 +557,9 @@ func metaSize(m Meta) int {
 
 func scalerSize(s *Scaler) int {
 	n := metaSize(s.Meta) + 64
+	if s.Owner != nil {
+		n += 48 + len(s.Owner.Namespace) + len(s.Owner.Name)
+	}
 	for _, p := range []*string{s.Pause.Paused, s.Pause.PausedReplicas, s.Pause.ScaleIn, s.Pause.ScaleOut} {
 		if p != nil {
 			n += 16 + len(*p)

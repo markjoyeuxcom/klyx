@@ -52,7 +52,7 @@ type PersistedRoute =
 // an older or newer build) falls back to overview rather than rendering nothing.
 const KNOWN_SECTIONS = new Set([
   "overview", "gitops", "argo", "helm", "certs", "externalsecrets",
-  "gatewayApi", "flows", "resources", "crds", "workloads", "pods", "events", "nodes", "access", "upgrade", "connectivity", "karpenter", "velero", "admission", "loadbalancers", "alerts",
+  "gatewayApi", "flows", "resources", "crds", "workloads", "pods", "events", "nodes", "access", "upgrade", "connectivity", "karpenter", "velero", "admission", "loadbalancers", "alerts", "autoscaling",
 ]);
 
 export function saveRoute(route: Route): void {

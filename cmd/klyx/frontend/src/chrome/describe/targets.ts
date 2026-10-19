@@ -51,6 +51,11 @@ const GROUPS: Record<string, string> = {
   Backup: "velero.io",
   Restore: "velero.io",
   BackupStorageLocation: "velero.io",
+  // KEDA (coverage S9)
+  ScaledObject: "keda.sh",
+  ScaledJob: "keda.sh",
+  TriggerAuthentication: "keda.sh",
+  ClusterTriggerAuthentication: "keda.sh",
   // load balancing (coverage S4)
   IPAddressPool: "metallb.io",
   L2Advertisement: "metallb.io",

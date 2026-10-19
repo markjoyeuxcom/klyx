@@ -26,7 +26,7 @@ describe("lens index entries (§4.1)", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
     const m = model(cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, loadBalancingPresent: true, alertsPresent: true }));
     expect(m.needsYou).toEqual([]);
-    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Alerts", "Upgrade check", "Workloads", "Pods", "Admission", "Karpenter", "Connectivity check", "Gateways and routes", "Load balancers", "Hubble flows",
+    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Alerts", "Upgrade check", "Workloads", "Pods", "Admission", "Karpenter", "Autoscalers", "Connectivity check", "Gateways and routes", "Load balancers", "Hubble flows",
       "Access check", "Flux CD", "Argo CD", "cert-manager", "External Secrets", "Velero", "Helm", "API browser", "Resources"]);
     expect(m.absent).toEqual([]);
   });

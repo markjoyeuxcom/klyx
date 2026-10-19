@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -93,7 +93,14 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: "autoscaling", label: "Autoscaling", destinations: [
       task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "provisioning"] }),
+      // coverage S9: HPAs judged as a part (the generic list stays in
+      // Resources), and KEDA in its own vocabulary
+      task("autoscaling", "Autoscalers", section("autoscaling"), { keywords: ["hpa", "horizontal pod autoscaler", "keda", "scaledobject", "scaledjob", "triggerauthentication", "pause"] }),
       res("HorizontalPodAutoscalers", r("autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", "Namespaced"), { keywords: ["hpa"] }),
+      res("ScaledObjects", r("keda.sh", "v1alpha1", "scaledobjects", "ScaledObject", "Namespaced"), { cap: "keda" }),
+      res("ScaledJobs", r("keda.sh", "v1alpha1", "scaledjobs", "ScaledJob", "Namespaced"), { cap: "keda" }),
+      res("TriggerAuthentications", r("keda.sh", "v1alpha1", "triggerauthentications", "TriggerAuthentication", "Namespaced"), { cap: "keda" }),
+      res("ClusterTriggerAuthentications", r("keda.sh", "v1alpha1", "clustertriggerauthentications", "ClusterTriggerAuthentication", "Cluster"), { cap: "keda" }),
       res("PodDisruptionBudgets", r("policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget", "Namespaced"), { keywords: ["pdb"] }),
       res("NodePools", r("karpenter.sh", "v1", "nodepools", "NodePool", "Cluster"), { cap: "karpenter" }),
       res("NodeClaims", r("karpenter.sh", "v1", "nodeclaims", "NodeClaim", "Cluster"), { cap: "karpenter" }),
@@ -267,6 +274,7 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     gatewayAPI: Boolean(c.gatewayAPIVersion),
     karpenter: c.karpenterPresent ?? false,
     velero: c.veleroPresent ?? false,
+    keda: c.kedaPresent ?? false,
     admission: c.admissionPresent ?? false,
     loadBalancing: c.loadBalancingPresent ?? false,
     metallb: c.metallbPresent ?? false,

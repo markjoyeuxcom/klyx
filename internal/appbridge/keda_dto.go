@@ -184,8 +184,16 @@ type ScaledObjectDTO struct {
 	Version          string             `json:"version"`
 	AuthsRead        string             `json:"authsRead"`
 	Findings         []KEDAFindingDTO   `json:"findings"`
+	Owner            *FluxOpOwnerDTO    `json:"owner,omitempty"`
 	Reason           string             `json:"reason,omitempty"`
 	Rule             RuleDTO            `json:"rule"`
+}
+
+func kedaOwner(o *keda.GitOwner) *FluxOpOwnerDTO {
+	if o == nil {
+		return nil
+	}
+	return &FluxOpOwnerDTO{Kind: o.Kind, Namespace: o.Namespace, Name: o.Name}
 }
 
 func kedaConditions(cs []keda.Cond) []KEDAConditionDTO {
@@ -265,7 +273,7 @@ func scaledObjectDTO(r healthsrc.Row[healthsrc.ScaledObjectRow]) ScaledObjectDTO
 		HealthTracked: so.Health != nil, LastActive: timePtrOf(so.LastActive),
 		Pause:      kedaPause(so.Pause, v.Intent, so.PausedCount, v.Completed),
 		HPACurrent: r.Data.HPACurrent, HPAComplete: r.Data.HPAComplete, Others: nonNil(r.Data.Others),
-		Version: r.Data.Version.String(), AuthsRead: r.Data.AuthsRead, Findings: kedaFindings(v.Findings),
+		Version: r.Data.Version.String(), AuthsRead: r.Data.AuthsRead, Findings: kedaFindings(v.Findings), Owner: kedaOwner(so.Owner),
 		Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
 	if f := so.Fallback; f != nil {
 		d.Fallback = &KEDAFallbackDTO{FailureThreshold: f.FailureThreshold, Replicas: f.Replicas, Behavior: f.Behavior}
@@ -297,6 +305,7 @@ type ScaledJobDTO struct {
 	Pause           KEDAPauseDTO       `json:"pause"`
 	Version         string             `json:"version"`
 	Findings        []KEDAFindingDTO   `json:"findings"`
+	Owner           *FluxOpOwnerDTO    `json:"owner,omitempty"`
 	Reason          string             `json:"reason,omitempty"`
 	Rule            RuleDTO            `json:"rule"`
 }
@@ -307,7 +316,7 @@ func scaledJobDTO(r healthsrc.Row[healthsrc.ScaledJobRow]) ScaledJobDTO {
 		Triggers: kedaTriggers(j.Triggers), TriggerCount: j.TriggerN, TriggersCut: j.TriggersCut,
 		Conditions: kedaConditions(j.Conds), ConditionsCut: j.CondsCut, LastActive: timePtrOf(j.LastActive),
 		SuccessfulLimit: j.SuccessfulLimit, FailedLimit: j.FailedLimit, Pause: kedaPause(j.Pause, v.Intent, nil, v.Completed),
-		Version: r.Data.Version.String(), Findings: kedaFindings(v.Findings), Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
+		Version: r.Data.Version.String(), Findings: kedaFindings(v.Findings), Owner: kedaOwner(j.Owner), Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
 }
 
 // KEDARefDTO is one object an authentication source names: never a value.
