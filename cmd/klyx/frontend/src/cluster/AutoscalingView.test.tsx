@@ -170,3 +170,52 @@ describe("AutoscalingView (coverage S9)", () => {
     expect(pauseDetail({ resource: "scaledobjects", pause: false, target: "Deployment/web" })).toContain("KEDA recreates its HPA and resumes scaling Deployment/web");
   });
 });
+
+// Implementation review 1, finding 7 (Codex's mounted probe, kept): the
+// authentication evidence re-reads when the scaler's references or its
+// backend evidence revision change, and an old reply is never shown for
+// the new revision; omitted references are counted.
+describe("S9 implementation review 1", () => {
+  beforeEach(() => {
+    hpas = part([], ["HorizontalPodAutoscaler"]);
+    sjs = part([], ["ScaledJob"]);
+    auths = part([], ["TriggerAuthentication", "ClusterTriggerAuthentication"]);
+    useFleet.setState({ clusters: [{ name: "c", state: "Synced", kedaPresent: true } as never] });
+    vi.mocked(keda.inspectScaler).mockReset();
+  });
+
+  it("refreshes authentication evidence when this scaler's references change", async () => {
+    const old = so("web", "ok", "Active", { triggers: [{ type: "prometheus", authName: "old-auth" }] });
+    sos = part([old], ["ScaledObject"]);
+    vi.mocked(keda.inspectScaler).mockResolvedValueOnce({ uid: old.uid, handler: "keda/operator", version: "2.21.0", candidates: [], disagree: [], auths: [{ kind: "TriggerAuthentication", name: "old-auth", state: "not found", visible: {}, refs: [] }] });
+    vi.mocked(keda.inspectScaler).mockImplementationOnce(() => new Promise(() => {}));
+    const r = render(<AutoscalingView cluster="c" />);
+    await act(async () => { fireEvent.click(screen.getByText("team/web")); });
+    expect(screen.getByTestId("keda-auth-evidence").textContent).toContain("old-auth: not found");
+    sos = part([{ ...old, triggers: [{ type: "prometheus", authName: "new-auth" }] }], ["ScaledObject"]);
+    r.rerender(<AutoscalingView cluster="c" />);
+    expect(vi.mocked(keda.inspectScaler).mock.calls.length).toBe(2);
+    expect(screen.queryByTestId("keda-auth-evidence")?.textContent ?? "").not.toContain("old-auth: not found");
+  });
+
+  it("a backend evidence revision alone (labels, generation) re-reads too", async () => {
+    const before = so("web", "ok", "Active", { triggers: [{ type: "prometheus", authName: "a" }], evidenceRev: "r1" });
+    sos = part([before], ["ScaledObject"]);
+    vi.mocked(keda.inspectScaler).mockResolvedValue({ uid: before.uid, handler: "keda/operator", version: "2.21.0", candidates: [], disagree: [], auths: [] });
+    const r = render(<AutoscalingView cluster="c" />);
+    await act(async () => { fireEvent.click(screen.getByText("team/web")); });
+    sos = part([{ ...before, evidenceRev: "r2" }], ["ScaledObject"]);
+    await act(async () => { r.rerender(<AutoscalingView cluster="c" />); });
+    expect(vi.mocked(keda.inspectScaler).mock.calls.length).toBe(2);
+  });
+
+  it("says how many references are not listed", async () => {
+    const s = so("web", "ok", "Active", { triggers: [{ type: "prometheus", authName: "big" }] });
+    sos = part([s], ["ScaledObject"]);
+    vi.mocked(keda.inspectScaler).mockResolvedValue({ uid: s.uid, handler: "keda/operator", version: "2.21.0", candidates: [], disagree: [],
+      auths: [{ kind: "TriggerAuthentication", name: "big", state: "exists", visible: {}, refs: [{ source: "secretTargetRef", kind: "Secret", name: "s0", state: "exists" }], refsCut: true, refsOmitted: 3 }] });
+    render(<AutoscalingView cluster="c" />);
+    await act(async () => { fireEvent.click(screen.getByText("team/web")); });
+    expect(screen.getByTestId("keda-auth-evidence").textContent).toContain("3 more references are not listed");
+  });
+});

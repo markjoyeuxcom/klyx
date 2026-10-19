@@ -130,6 +130,17 @@ func ConfigOf(name, namespace string, pods []OperatorPod) Config {
 	return c
 }
 
+// Incomplete is the candidate when not every one of its running pods was
+// read (a continued list, more pods than the read keeps): an omitted pod
+// may run another scope, ServiceAccount or version, so none is resolved.
+func (c Config) Incomplete(why string) Config {
+	out := Config{Name: c.Name, Namespace: c.Namespace, Settings: map[string]Setting{}, Disagree: c.Disagree, Pods: c.Pods}
+	for _, n := range OperatorEnvNames {
+		out.Settings[n] = Setting{Reason: why}
+	}
+	return out
+}
+
 // emptyScope is KEDA's empty forms: "" and the literal two characters ""
 // (pkg/util/watch.go).
 func emptyScope(v string) bool { return v == "" || v == `""` }
@@ -184,13 +195,28 @@ func selects(s Setting, lbls map[string]string, cut bool) Tri {
 	if err != nil {
 		return Unknown
 	}
-	if sel.Matches(labels.Set(lbls)) {
-		return Yes
+	if !cut {
+		if sel.Matches(labels.Set(lbls)) {
+			return Yes
+		}
+		return No
 	}
-	if cut {
-		return Unknown // the cut labels might have matched
+	// A cut label map proves only what its retained keys say: a requirement
+	// on a key it holds is decided by that value; one on a key it lacks -
+	// positive or negative ("!hidden", "hidden!=x") - might be decided
+	// either way by an omitted label.
+	reqs, _ := sel.Requirements()
+	out := Yes
+	for _, r := range reqs {
+		if _, held := lbls[r.Key()]; !held {
+			out = Unknown
+			continue
+		}
+		if !r.Matches(labels.Set(lbls)) {
+			return No
+		}
 	}
-	return No
+	return out
 }
 
 // Handling is who handles one user (§6.1).
@@ -198,12 +224,16 @@ type Handling struct {
 	Handler    *Config  // exactly one resolved candidate that applies
 	None       bool     // every candidate resolved and none applies
 	Candidates []string // when unverified: the candidates that might apply
+	// Unread: candidates exist past the read (the cap), any of which might
+	// apply - never a handler, never none.
+	Unread bool
 }
 
 // HandlerOf decides a user's handling operator from its own scope: one
-// that applies is the handler; none, with every candidate resolved, is
-// none; anything else is unverified, the candidates listed, never a pick.
-func HandlerOf(cands []Config, ns string, lbls map[string]string, cut bool) Handling {
+// that applies is the handler; none, with every candidate read and
+// resolved, is none; anything else is unverified, the candidates listed,
+// never a pick. unread says candidates exist that were not read.
+func HandlerOf(cands []Config, unread bool, ns string, lbls map[string]string, cut bool) Handling {
 	var yes []int
 	var maybe []string
 	for i, c := range cands {
@@ -217,6 +247,8 @@ func HandlerOf(cands []Config, ns string, lbls map[string]string, cut bool) Hand
 	}
 	sort.Strings(maybe)
 	switch {
+	case unread:
+		return Handling{Candidates: maybe, Unread: true}
 	case len(yes) == 1 && len(maybe) == 1:
 		return Handling{Handler: &cands[yes[0]]}
 	case len(maybe) == 0:

@@ -282,6 +282,10 @@ type PodIdentity struct {
 	IdentityOwner string `json:"identityOwner,omitempty"`
 	RoleARN       string `json:"roleArn,omitempty"`
 	IdentityID    string `json:"identityId,omitempty"`
+	// IdentityTenantID is azure-workload's requested tenant: part of the
+	// credential KEDA builds (NewADWorkloadIdentityCredential); "" is the
+	// operator's default tenant.
+	IdentityTenantID string `json:"identityTenantId,omitempty"`
 }
 
 // Auth is a TriggerAuthentication or ClusterTriggerAuthentication (§10):
@@ -493,7 +497,7 @@ func ProjectAuth(u *unstructured.Unstructured, cluster bool) *Auth {
 	}
 	if p, ok := spec["podIdentity"].(map[string]any); ok {
 		a.PodIdentity = &PodIdentity{Provider: clip(mstr(p, "provider"), maxShort), IdentityOwner: clip(mstr(p, "identityOwner"), maxShort),
-			RoleARN: clip(mstr(p, "roleArn"), maxDetail), IdentityID: clip(mstr(p, "identityId"), maxDetail)}
+			RoleARN: clip(mstr(p, "roleArn"), maxDetail), IdentityID: clip(mstr(p, "identityId"), maxDetail), IdentityTenantID: clip(mstr(p, "identityTenantId"), maxDetail)}
 	}
 	a.Size = authSize(a)
 	return a
@@ -605,7 +609,7 @@ func authSize(a *Auth) int {
 		}
 	}
 	if p := a.PodIdentity; p != nil {
-		n += 48 + len(p.Provider) + len(p.IdentityOwner) + len(p.RoleARN) + len(p.IdentityID)
+		n += 48 + len(p.Provider) + len(p.IdentityOwner) + len(p.RoleARN) + len(p.IdentityID) + len(p.IdentityTenantID)
 	}
 	return n
 }

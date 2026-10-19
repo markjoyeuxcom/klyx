@@ -43,7 +43,10 @@ func kedaGVR(resource string) schema.GroupVersionResource {
 // KEDAOperatorConfigs reads each candidate operator's configuration from
 // its running pods (S9 §6.1): at most 4 candidates and 8 pods each, fenced
 // by owner UID through the Deployment's ReplicaSets; only the allowlisted
-// env names are read.
+// env names are read. cut says candidates exist past the four read: none
+// of the read ones is then a proven handler. A candidate whose pods were
+// not all read (a continued list, more than 8) resolves nothing
+// (implementation review 1, finding 1).
 func (c *ClusterConn) KEDAOperatorConfigs(ctx context.Context) (configs []keda.Config, cut bool, err error) {
 	c.mu.RLock()
 	ops := append([]capKEDAOperator(nil), operatorsOf(c)...)
@@ -57,9 +60,13 @@ func (c *ClusterConn) KEDAOperatorConfigs(ctx context.Context) (configs []keda.C
 	}
 	for _, op := range ops {
 		rctx, cancel := context.WithTimeout(ctx, kedaReadTimeout)
-		pods := c.kedaOperatorPods(rctx, op)
+		pods, partial := c.kedaOperatorPods(rctx, op)
 		cancel()
-		configs = append(configs, keda.ConfigOf(op.Name, op.Namespace, pods))
+		cfg := keda.ConfigOf(op.Name, op.Namespace, pods)
+		if partial != "" {
+			cfg = cfg.Incomplete(partial)
+		}
+		configs = append(configs, cfg)
 	}
 	return configs, cut, nil
 }
@@ -74,10 +81,15 @@ func operatorsOf(c *ClusterConn) []capKEDAOperator {
 	return out
 }
 
-func (c *ClusterConn) kedaOperatorPods(ctx context.Context, op capKEDAOperator) []keda.OperatorPod {
+// kedaOperatorPods reads an operator's running pods; partial says why the
+// read is not every one of them.
+func (c *ClusterConn) kedaOperatorPods(ctx context.Context, op capKEDAOperator) ([]keda.OperatorPod, string) {
 	rss, err := c.typed.AppsV1().ReplicaSets(op.Namespace).List(ctx, metav1.ListOptions{Limit: 500})
 	if err != nil {
-		return []keda.OperatorPod{{Name: op.Name, Namespace: op.Namespace}}
+		return []keda.OperatorPod{{Name: op.Name, Namespace: op.Namespace}}, ""
+	}
+	if rss.Continue != "" {
+		return nil, "the operator's ReplicaSets were not all read"
 	}
 	owned := map[string]bool{}
 	for i := range rss.Items {
@@ -87,7 +99,10 @@ func (c *ClusterConn) kedaOperatorPods(ctx context.Context, op capKEDAOperator) 
 	}
 	pods, err := c.typed.CoreV1().Pods(op.Namespace).List(ctx, metav1.ListOptions{Limit: 500})
 	if err != nil {
-		return []keda.OperatorPod{{Name: op.Name, Namespace: op.Namespace}}
+		return []keda.OperatorPod{{Name: op.Name, Namespace: op.Namespace}}, ""
+	}
+	if pods.Continue != "" {
+		return nil, "the operator's pods were not all read"
 	}
 	var out []keda.OperatorPod
 	for i := range pods.Items {
@@ -96,11 +111,11 @@ func (c *ClusterConn) kedaOperatorPods(ctx context.Context, op capKEDAOperator) 
 			continue
 		}
 		if len(out) == kedaMaxOperatorPods {
-			break
+			return out, fmt.Sprintf("more than %d running pods: not every one was read", kedaMaxOperatorPods)
 		}
 		out = append(out, operatorPodOf(p))
 	}
-	return out
+	return out, ""
 }
 
 // operatorPodOf reads one pod's KEDA container: its image, its
@@ -180,8 +195,12 @@ type KEDAAuthCheck struct {
 	// "unverified" (§6.1).
 	Visible map[string]string
 	Refs    []KEDARef
-	RefsCut bool
-	Subject *identity.Subject
+	// RefsCut: not every reference was checked - past the existence-read
+	// limit, not kept by the projection, or dropped to fit the reply;
+	// RefsOmitted counts the references not listed at all.
+	RefsCut     bool
+	RefsOmitted int
+	Subject     *identity.Subject
 }
 
 // KEDAInspection is the inspector's on-demand evidence for one scaler.
@@ -235,12 +254,12 @@ func (c *ClusterConn) KEDAInspect(ctx context.Context, resource, ns, name, uid s
 	out.CandidatesCut = cut
 	var handler *keda.Config
 	if err == nil {
-		h := keda.HandlerOf(configs, ns, sc.Labels, sc.LabelsCut)
+		h := keda.HandlerOf(configs, cut, ns, sc.Labels, sc.LabelsCut)
 		switch {
 		case h.Handler != nil:
 			handler = h.Handler
 			out.Handler, out.Version, out.Disagree = h.Handler.Namespace+"/"+h.Handler.Name, h.Handler.Version.String(), h.Handler.Disagree
-		case h.None && !cut:
+		case h.None:
 			out.None = true
 		default:
 			out.Candidates = h.Candidates
@@ -279,7 +298,7 @@ func (c *ClusterConn) KEDAInspect(ctx context.Context, resource, ns, name, uid s
 					chk.Visible[configs[i].Namespace+"/"+configs[i].Name] = visibleWord(configs[i].SeesAuth(a.Labels, a.LabelsCut))
 				}
 			}
-			chk.Refs, chk.RefsCut, budget = c.kedaRefs(ctx, handler, a, budget)
+			chk.Refs, chk.RefsCut, budget, chk.RefsOmitted = c.kedaRefs(ctx, handler, a, budget)
 			if a.PodIdentity != nil {
 				var op *identity.SARef
 				if handler != nil && handler.ServiceAccount != "" {
@@ -291,6 +310,7 @@ func (c *ClusterConn) KEDAInspect(ctx context.Context, resource, ns, name, uid s
 		}
 		out.Auths = append(out.Auths, chk)
 	}
+	out.Fit(KEDAInspectionLimit)
 	return out, nil
 }
 
@@ -316,10 +336,15 @@ func splitRef(ref string) (kind, name string) {
 // kedaRefs checks each referenced Secret and ConfigMap with a metadata-only
 // read, at the namespace the handler reads it from (§6.2's table); never a
 // value. Past the budget the rest are unverified, and the cut is said.
-func (c *ClusterConn) kedaRefs(ctx context.Context, handler *keda.Config, a *keda.Auth, budget int) ([]KEDARef, bool, int) {
+func (c *ClusterConn) kedaRefs(ctx context.Context, handler *keda.Config, a *keda.Auth, budget int) ([]KEDARef, bool, int, int) {
 	var out []KEDARef
-	cut := false
+	cut, omitted := false, 0
 	for _, src := range a.Sources {
+		// the projection keeps 16 references per source: the rest are
+		// counted, never checked (implementation review 1, finding 9)
+		if n := src.RefN - len(src.Refs); n > 0 {
+			cut, omitted = true, omitted+n
+		}
 		for _, r := range src.Refs {
 			if r.Kind != "Secret" && r.Kind != "ConfigMap" {
 				continue
@@ -365,7 +390,58 @@ func (c *ClusterConn) kedaRefs(ctx context.Context, handler *keda.Config, a *ked
 			out = append(out, ref)
 		}
 	}
-	return out, cut, budget
+	return out, cut, budget, omitted
+}
+
+// KEDAInspectionLimit bounds the inspector's reply (S9 §10).
+const KEDAInspectionLimit = 256 << 10
+
+// Fit bounds the inspection's encoded size to limit (implementation review
+// 1, finding 8). References are dropped - unverified ones before any
+// finding ("exists", "not found"), each from the longest list first - and
+// counted in RefsOmitted with RefsCut set; never a count, and never an
+// authentication's own state.
+func (in *KEDAInspection) Fit(limit int) {
+	b, err := json.Marshal(in)
+	if err != nil || len(b) <= limit {
+		return
+	}
+	over := len(b) - limit
+	// pick: the last droppable reference of the longest list
+	pick := func(unverifiedOnly bool) (int, int) {
+		ai, ri, n := -1, -1, -1
+		for i := range in.Auths {
+			for j := len(in.Auths[i].Refs) - 1; j >= 0; j-- {
+				if unverifiedOnly && in.Auths[i].Refs[j].State != "unverified" {
+					continue
+				}
+				if len(in.Auths[i].Refs) > n {
+					ai, ri, n = i, j, len(in.Auths[i].Refs)
+				}
+				break
+			}
+		}
+		return ai, ri
+	}
+	for over > 0 {
+		ai, ri := pick(true)
+		if ai < 0 {
+			if ai, ri = pick(false); ai < 0 {
+				return
+			}
+		}
+		a := &in.Auths[ai]
+		rb, _ := json.Marshal(a.Refs[ri])
+		a.Refs = append(a.Refs[:ri], a.Refs[ri+1:]...)
+		a.RefsCut, a.RefsOmitted = true, a.RefsOmitted+1
+		over -= len(rb) + 1
+		if over <= 0 {
+			// a count's digits can grow: confirm
+			if b, err := json.Marshal(in); err == nil && len(b) > limit {
+				over = len(b) - limit
+			}
+		}
+	}
 }
 
 // targetServiceAccount is a ScaledObject's target's pod template
@@ -618,11 +694,14 @@ func (c *ClusterConn) KEDASetPaused(ctx context.Context, resource, ns, name, uid
 	if err != nil {
 		return fmt.Errorf("%s %w", verb, err)
 	}
-	configs, _, err := c.KEDAOperatorConfigs(ctx)
+	configs, cut, err := c.KEDAOperatorConfigs(ctx)
 	if err != nil {
 		return fmt.Errorf("%s is not offered: %v - nothing was written", verb, err)
 	}
-	h := keda.HandlerOf(configs, ns, labelsOf(u), false)
+	h := keda.HandlerOf(configs, cut, ns, labelsOf(u), false)
+	if h.Unread {
+		return fmt.Errorf("%s is not offered: more KEDA operators run than Klyx reads (%d), so the handling operator is unverified - nothing was written", verb, kedaMaxCandidates)
+	}
 	if h.Handler == nil || !h.Handler.Version.Known {
 		return fmt.Errorf("%s is not offered: the handling KEDA operator or its version is unverified, so Klyx cannot prove it applies %s - nothing was written", verb, keda.AnnPaused)
 	}

@@ -47,6 +47,14 @@ func TriggerAuthSubject(pi *keda.PodIdentity, operator *SARef, workload *SARef, 
 			sub.Requested = append(sub.Requested, "client "+valueOf(pi.IdentityID, shapeGUID).Shown)
 			sub.Notes = append(sub.Notes, "the client must federate with the KEDA operator's ServiceAccount")
 		}
+		// the tenant is part of the credential KEDA builds: an explicit one
+		// is requested; none is the operator's default (implementation
+		// review 1, finding 10)
+		if pi.IdentityTenantID != "" {
+			sub.Requested = append(sub.Requested, "tenant "+valueOf(pi.IdentityTenantID, shapeTenant).Shown)
+		} else {
+			sub.Notes = append(sub.Notes, "no identityTenantId: the operator's default tenant (its AZURE_TENANT_ID)")
+		}
 	case "gcp":
 		sub.Base = "the KEDA operator's GKE Workload Identity"
 	case "aws-eks":

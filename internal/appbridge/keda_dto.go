@@ -1,7 +1,11 @@
 package appbridge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/moomora/klyx/internal/healthsrc"
@@ -187,6 +191,35 @@ type ScaledObjectDTO struct {
 	Owner            *FluxOpOwnerDTO    `json:"owner,omitempty"`
 	Reason           string             `json:"reason,omitempty"`
 	Rule             RuleDTO            `json:"rule"`
+	// EvidenceRev changes with every input the on-demand evidence reads
+	// from the scaler itself: the inspector re-reads on its change and
+	// shows a reply only for its own revision (implementation review 1,
+	// finding 7).
+	EvidenceRev string `json:"evidenceRev"`
+}
+
+// evidenceRev fingerprints the scaler inputs the on-demand evidence reads
+// (§6): its generation (every spec change, a ScaledJob's Job template's
+// ServiceAccount among them), its namespace and labels (the handling
+// operator; a label change writes no generation), its target (the
+// workload's ServiceAccount) and its authentication references.
+func evidenceRev(s *keda.Scaler, target string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d\n%s\n%s\n", s.Generation, s.Namespace, target)
+	keys := make([]string, 0, len(s.Labels))
+	for k := range s.Labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k + "=" + s.Labels[k] + "\n")
+	}
+	fmt.Fprintf(&b, "%v|%d|%v\n", s.LabelsCut, s.TriggerN, s.TriggersCut)
+	for _, t := range s.Triggers {
+		b.WriteString(t.AuthKind + "/" + t.AuthName + "\n")
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:8])
 }
 
 func kedaOwner(o *keda.GitOwner) *FluxOpOwnerDTO {
@@ -274,7 +307,7 @@ func scaledObjectDTO(r healthsrc.Row[healthsrc.ScaledObjectRow]) ScaledObjectDTO
 		Pause:      kedaPause(so.Pause, v.Intent, so.PausedCount, v.Completed),
 		HPACurrent: r.Data.HPACurrent, HPAComplete: r.Data.HPAComplete, Others: nonNil(r.Data.Others),
 		Version: r.Data.Version.String(), AuthsRead: r.Data.AuthsRead, Findings: kedaFindings(v.Findings), Owner: kedaOwner(so.Owner),
-		Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
+		Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval), EvidenceRev: evidenceRev(&so.Scaler, group+"/"+kind+"/"+name)}
 	if f := so.Fallback; f != nil {
 		d.Fallback = &KEDAFallbackDTO{FailureThreshold: f.FailureThreshold, Replicas: f.Replicas, Behavior: f.Behavior}
 		if d.Fallback.Behavior == "" {
@@ -308,6 +341,7 @@ type ScaledJobDTO struct {
 	Owner           *FluxOpOwnerDTO    `json:"owner,omitempty"`
 	Reason          string             `json:"reason,omitempty"`
 	Rule            RuleDTO            `json:"rule"`
+	EvidenceRev     string             `json:"evidenceRev"`
 }
 
 func scaledJobDTO(r healthsrc.Row[healthsrc.ScaledJobRow]) ScaledJobDTO {
@@ -316,7 +350,8 @@ func scaledJobDTO(r healthsrc.Row[healthsrc.ScaledJobRow]) ScaledJobDTO {
 		Triggers: kedaTriggers(j.Triggers), TriggerCount: j.TriggerN, TriggersCut: j.TriggersCut,
 		Conditions: kedaConditions(j.Conds), ConditionsCut: j.CondsCut, LastActive: timePtrOf(j.LastActive),
 		SuccessfulLimit: j.SuccessfulLimit, FailedLimit: j.FailedLimit, Pause: kedaPause(j.Pause, v.Intent, nil, v.Completed),
-		Version: r.Data.Version.String(), Findings: kedaFindings(v.Findings), Owner: kedaOwner(j.Owner), Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval)}
+		Version: r.Data.Version.String(), Findings: kedaFindings(v.Findings), Owner: kedaOwner(j.Owner), Reason: r.Eval.Reason, Rule: toRuleDTO(r.Eval),
+		EvidenceRev: evidenceRev(&j.Scaler, "")}
 }
 
 // KEDARefDTO is one object an authentication source names: never a value.
@@ -339,10 +374,11 @@ type KEDASourceDTO struct {
 
 // KEDAPodIdentityDTO is podIdentity.
 type KEDAPodIdentityDTO struct {
-	Provider      string `json:"provider"`
-	IdentityOwner string `json:"identityOwner,omitempty"`
-	RoleARN       string `json:"roleArn,omitempty"`
-	IdentityID    string `json:"identityId,omitempty"`
+	Provider         string `json:"provider"`
+	IdentityOwner    string `json:"identityOwner,omitempty"`
+	RoleARN          string `json:"roleArn,omitempty"`
+	IdentityID       string `json:"identityId,omitempty"`
+	IdentityTenantID string `json:"identityTenantId,omitempty"`
 }
 
 // KEDAAuthDTO is one authentication: a fact row (S9 §6.2).
@@ -371,7 +407,7 @@ func kedaAuthDTO(r healthsrc.Row[healthsrc.AuthRow]) KEDAAuthDTO {
 		d.Sources = append(d.Sources, src)
 	}
 	if p := a.PodIdentity; p != nil {
-		d.PodIdentity = &KEDAPodIdentityDTO{Provider: p.Provider, IdentityOwner: p.IdentityOwner, RoleARN: p.RoleARN, IdentityID: p.IdentityID}
+		d.PodIdentity = &KEDAPodIdentityDTO{Provider: p.Provider, IdentityOwner: p.IdentityOwner, RoleARN: p.RoleARN, IdentityID: p.IdentityID, IdentityTenantID: p.IdentityTenantID}
 	}
 	return d
 }

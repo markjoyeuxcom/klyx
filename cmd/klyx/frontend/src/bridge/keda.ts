@@ -40,6 +40,8 @@ export type ScaledObjectDTO = {
   hpa?: { name: string; uid: string; min?: number; max: number; current: number; desired: number; conditions: HPAConditionDTO[] };
   hpaCurrent: boolean; hpaComplete: boolean; others: string[]; version: string; authsRead: string;
   findings: KEDAFindingDTO[]; owner?: FluxOpOwnerDTO; reason?: string; rule: RuleDTO;
+  // changes with every scaler input the on-demand evidence reads
+  evidenceRev?: string;
 };
 
 export type ScaledJobDTO = {
@@ -47,14 +49,14 @@ export type ScaledJobDTO = {
   triggers: KEDATriggerDTO[]; triggerCount: number; triggersCut?: boolean;
   conditions: KEDAConditionDTO[]; conditionsCut?: boolean; lastActive?: string;
   successfulLimit?: number; failedLimit?: number; pause: KEDAPauseDTO; version: string;
-  findings: KEDAFindingDTO[]; owner?: FluxOpOwnerDTO; reason?: string; rule: RuleDTO;
+  findings: KEDAFindingDTO[]; owner?: FluxOpOwnerDTO; reason?: string; rule: RuleDTO; evidenceRev?: string;
 };
 
 export type KEDARefDTO = { kind: string; name: string; key?: string; parameter?: string };
 export type KEDASourceDTO = { kind: string; refs: KEDARefDTO[]; refCount: number; cut?: boolean; detail?: string; method?: string };
 export type KEDAAuthDTO = {
   uid: string; gvr: string; namespace?: string; name: string; cluster: boolean; created?: string;
-  sources: KEDASourceDTO[]; podIdentity?: { provider: string; identityOwner?: string; roleArn?: string; identityId?: string };
+  sources: KEDASourceDTO[]; podIdentity?: { provider: string; identityOwner?: string; roleArn?: string; identityId?: string; identityTenantId?: string };
   users: string[]; usersComplete: boolean;
 };
 
@@ -65,7 +67,7 @@ export type KEDASubjectDTO = {
 };
 export type KEDAAuthCheckDTO = {
   kind: string; name: string; state: string; why?: string; visible: Record<string, string>;
-  refs: KEDARefCheckDTO[]; refsCut?: boolean; subject?: KEDASubjectDTO;
+  refs: KEDARefCheckDTO[]; refsCut?: boolean; refsOmitted?: number; subject?: KEDASubjectDTO;
 };
 export type KEDAInspectionDTO = {
   uid: string; handler?: string; none?: boolean; candidates: string[]; candidatesCut?: boolean;

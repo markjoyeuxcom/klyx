@@ -219,6 +219,20 @@ func hpaResult(so *ScaledObject, intent Intent, in SOInputs) []Finding {
 			if failed {
 				return []Finding{{Role: health.Fault, Label: hpaLabel(verb), Text: text, cond: health.CondAt(c.Type, c.Status, c.At)}}
 			}
+			// health is established only as §4 establishes it: an HPA the
+			// controller has not reported, or one behind its generation,
+			// never clears KEDA's copy (implementation review 1, finding 3)
+			if est := hpa.Rule(j, in.Now, ev.Others); est.Role != health.OK {
+				what := "the HPA controller has not reported this HPA"
+				if j.Lag() {
+					what = fmt.Sprintf("the HPA controller has not observed generation %d (observed %d)", j.Generation, *j.ObservedGeneration)
+				}
+				if mirrorFalse {
+					return []Finding{{Role: health.Unknown, Label: "HPA health not established",
+						Text: fmt.Sprintf("KEDA reports HPAActive=False (%s); %s", m.Reason, what), next: est.Next, boundary: est.Boundary}}
+				}
+				return []Finding{{Role: est.Role, Label: "HPA: " + est.Label, Text: what, next: est.Next, boundary: est.Boundary}}
+			}
 			if mirrorFalse {
 				return []Finding{{Role: health.OK, Note: true, Label: "KEDA's copy disagrees",
 					Text: fmt.Sprintf("KEDA last reported HPAActive=False (%s); the HPA itself is healthy now", m.Reason)}}

@@ -48,23 +48,32 @@ type trackedObs struct {
 	eps map[EpisodeKind]Episode
 }
 
+// hpaDependent are the states that read the HPA kind (a full pause
+// completes when the HPA is gone; awaiting is the HPA's absence): an
+// unwritten scaler does not prove them unchanged while the HPAs changed.
+const hpaDependent = EpPausing | EpAwaitingHPA
+
 // Tracker keeps each scaler's episodes, keyed by UID (§3.1), from
 // level-triggered, newest-wins snapshots. As S4's tracker: a state that
 // held in the previous snapshot carries on only when the snapshot proves
-// it stayed - the scaler not written since (its resourceVersion
-// unchanged), or the snapshots contiguous (one change at most across the
-// kinds read) - otherwise it restarts as a lower bound. A state first seen
-// after it did not hold has an observed start. A new UID is a new scaler.
+// it stayed - the scaler not written since (its resourceVersion unchanged)
+// and, for a state that reads the HPAs, the HPA kind unchanged too; or the
+// snapshots contiguous (one change at most across the kinds read) -
+// otherwise it restarts as a lower bound: an HPA created and deleted
+// between two snapshots writes no scaler (implementation review 1, finding
+// 5). A state first seen after it did not hold has an observed start. A
+// new UID is a new scaler.
 type Tracker struct {
 	cont  Continuity
 	began bool
 	last  map[string]trackedObs
 }
 
-// Observe applies one complete, live snapshot taken at now under c and
-// returns every scaler's open episodes. contiguous says the kinds changed
-// once at most, in total, since the previous snapshot.
-func (t *Tracker) Observe(c Continuity, now time.Time, obs map[string]Obs, contiguous bool) map[string]map[EpisodeKind]Episode {
+// Observe applies one live snapshot taken at now under c and returns every
+// observed scaler's open episodes. contiguous says the kinds changed once
+// at most, in total, since the previous snapshot; depsSteady that the HPA
+// kind did not change at all (a ScaledJob's states read no HPA: true).
+func (t *Tracker) Observe(c Continuity, now time.Time, obs map[string]Obs, contiguous, depsSteady bool) map[string]map[EpisodeKind]Episode {
 	gap := !t.began || c != t.cont
 	next := make(map[string]trackedObs, len(obs))
 	out := map[string]map[EpisodeKind]Episode{}
@@ -80,7 +89,7 @@ func (t *Tracker) Observe(c Continuity, now time.Time, obs map[string]Obs, conti
 			switch {
 			case gap || !had:
 				ep = Episode{Start: now} // a lower bound: the start was not observed
-			case held && (prev.obs.RV == o.RV || contiguous):
+			case held && (contiguous || prev.obs.RV == o.RV && (k&hpaDependent == 0 || depsSteady)):
 				ep = pe // provably the same stretch
 			case held:
 				ep = Episode{Start: now} // written between snapshots: it may have left the state meanwhile

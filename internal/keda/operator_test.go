@@ -64,28 +64,57 @@ func TestHandler(t *testing.T) {
 	if teams.Watches("team-b", nil, false) != Yes || teams.Watches("team-c", nil, false) != No {
 		t.Fatal("the namespace list")
 	}
-	if prod.Watches("x", map[string]string{"env": "prod"}, false) != Yes || prod.Watches("x", map[string]string{"env": "dev"}, false) != No ||
-		prod.Watches("x", map[string]string{"env": "dev"}, true) != Unknown {
-		t.Fatal("the label selector, and cut labels")
+	if prod.Watches("x", map[string]string{"env": "prod"}, false) != Yes || prod.Watches("x", map[string]string{"env": "dev"}, false) != No {
+		t.Fatal("the label selector")
+	}
+	// a cut map decides only the keys it holds: their values are exact
+	if prod.Watches("x", map[string]string{"env": "dev"}, true) != No || prod.Watches("x", map[string]string{"env": "prod"}, true) != Yes ||
+		prod.Watches("x", map[string]string{"a": "1"}, true) != Unknown {
+		t.Fatal("cut labels")
+	}
+	// a negative requirement on a key the cut map lacks proves nothing
+	// (implementation review 1, finding 2)
+	// (KEDA parses both with metav1.ParseToLabelSelector, as Klyx does: "!="
+	// is invalid there, so a negative value test is "notin")
+	neg := cfg("keda", map[string]EnvEntry{EnvWatchNamespace: lit(""), EnvWatchSelector: lit("!hidden"), EnvWatchAuthSelector: lit("hidden notin (x)")})
+	if neg.Watches("team", map[string]string{"a": "1"}, true) != Unknown || neg.SeesAuth(map[string]string{"a": "1"}, true) != Unknown {
+		t.Fatal("a cut map proved a negative selector")
+	}
+	if neg.Watches("team", map[string]string{"a": "1"}, false) != Yes || neg.Watches("team", map[string]string{"hidden": "x"}, true) != No ||
+		neg.SeesAuth(map[string]string{"hidden": "y"}, true) != Yes {
+		t.Fatal("a negative selector on held keys")
 	}
 	if bad.Watches("x", nil, false) != Unknown {
 		t.Fatal("an invalid selector is unresolved")
 	}
-	if h := HandlerOf([]Config{teams, prod}, "team-a", map[string]string{"env": "dev"}, false); h.Handler == nil || h.Handler.Namespace != "keda-teams" {
+	if h := HandlerOf([]Config{teams, prod}, false, "team-a", map[string]string{"env": "dev"}, false); h.Handler == nil || h.Handler.Namespace != "keda-teams" {
 		t.Fatalf("one handler: %+v", h)
 	}
-	if h := HandlerOf([]Config{teams}, "team-z", nil, false); !h.None {
+	if h := HandlerOf([]Config{teams}, false, "team-z", nil, false); !h.None {
 		t.Fatalf("no handler: %+v", h)
 	}
-	if h := HandlerOf([]Config{all, teams}, "team-a", nil, false); h.Handler != nil || len(h.Candidates) != 2 {
+	if h := HandlerOf([]Config{all, teams}, false, "team-a", nil, false); h.Handler != nil || len(h.Candidates) != 2 {
 		t.Fatalf("two handlers are unverified: %+v", h)
 	}
-	if h := HandlerOf([]Config{teams, unres}, "team-a", nil, false); h.Handler != nil || len(h.Candidates) != 2 {
+	if h := HandlerOf([]Config{teams, unres}, false, "team-a", nil, false); h.Handler != nil || len(h.Candidates) != 2 {
 		t.Fatalf("an unresolved candidate makes it unverified: %+v", h)
+	}
+	// candidates past the read: never a handler, never none (implementation
+	// review 1, finding 1)
+	if h := HandlerOf([]Config{teams}, true, "team-a", nil, false); h.Handler != nil || h.None || !h.Unread || len(h.Candidates) != 1 {
+		t.Fatalf("an unread candidate: %+v", h)
+	}
+	if h := HandlerOf([]Config{teams}, true, "team-z", nil, false); h.Handler != nil || h.None || !h.Unread {
+		t.Fatalf("none with an unread candidate: %+v", h)
+	}
+	// a candidate whose pods were not all read resolves nothing
+	part := teams.Incomplete("not every running pod was read")
+	if part.Watches("team-a", nil, false) != Unknown || part.Version.Known || part.ServiceAccount != "" || part.Settings[EnvClusterObjectNS].Res == Resolved {
+		t.Fatalf("an incomplete candidate: %+v", part)
 	}
 	// authentication visibility is separate from handling
 	authSel := cfg("keda", map[string]EnvEntry{EnvWatchNamespace: lit(""), EnvWatchAuthSelector: lit("keda=yes")})
-	if h := HandlerOf([]Config{authSel}, "team", nil, false); h.Handler == nil {
+	if h := HandlerOf([]Config{authSel}, false, "team", nil, false); h.Handler == nil {
 		t.Fatal("the authentication selector decided the handler")
 	}
 	if authSel.SeesAuth(map[string]string{"keda": "no"}, false) != No || authSel.SeesAuth(map[string]string{"keda": "yes"}, false) != Yes {

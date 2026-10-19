@@ -513,12 +513,12 @@ func TestTracker(t *testing.T) {
 	c := Continuity{Generation: 1, Epoch: 1, HPAGeneration: 1, HPAEpoch: 1}
 	t0 := now
 	// first seen already pausing: a lower bound
-	got := tr.Observe(c, t0, map[string]Obs{"a": {States: EpPausing, RV: "1"}, "b": {RV: "1"}}, true)
+	got := tr.Observe(c, t0, map[string]Obs{"a": {States: EpPausing, RV: "1"}, "b": {RV: "1"}}, true, true)
 	if ep := got["a"][EpPausing]; ep.Observed || !ep.Start.Equal(t0) {
 		t.Fatalf("first seen: %+v", ep)
 	}
 	// an old object newly paused: an observed start
-	got = tr.Observe(c, t0.Add(time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "1"}, "b": {States: EpPausing, RV: "2"}}, true)
+	got = tr.Observe(c, t0.Add(time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "1"}, "b": {States: EpPausing, RV: "2"}}, true, true)
 	if ep := got["b"][EpPausing]; !ep.Observed || !ep.Start.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("newly paused: %+v", ep)
 	}
@@ -526,7 +526,7 @@ func TestTracker(t *testing.T) {
 		t.Fatalf("unchanged object carries on: %+v", ep)
 	}
 	// written between non-contiguous snapshots: restart as a lower bound
-	got = tr.Observe(c, t0.Add(2*time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "9"}, "b": {States: EpPausing, RV: "2"}}, false)
+	got = tr.Observe(c, t0.Add(2*time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "9"}, "b": {States: EpPausing, RV: "2"}}, false, true)
 	if ep := got["a"][EpPausing]; ep.Observed || !ep.Start.Equal(t0.Add(2*time.Minute)) {
 		t.Fatalf("written, not contiguous: %+v", ep)
 	}
@@ -536,12 +536,12 @@ func TestTracker(t *testing.T) {
 	// a gap (the HPA kind relisted): every episode restarts as a lower bound
 	gap := c
 	gap.HPAEpoch++
-	got = tr.Observe(gap, t0.Add(3*time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "9"}, "b": {States: EpPausing, RV: "2"}}, true)
+	got = tr.Observe(gap, t0.Add(3*time.Minute), map[string]Obs{"a": {States: EpPausing, RV: "9"}, "b": {States: EpPausing, RV: "2"}}, true, true)
 	if ep := got["b"][EpPausing]; ep.Observed || !ep.Start.Equal(t0.Add(3*time.Minute)) {
 		t.Fatalf("after a gap: %+v", ep)
 	}
 	// a UID replacement is a new object; clearing drops the episode
-	got = tr.Observe(gap, t0.Add(4*time.Minute), map[string]Obs{"a2": {States: EpPausing, RV: "1"}, "b": {RV: "3"}}, true)
+	got = tr.Observe(gap, t0.Add(4*time.Minute), map[string]Obs{"a2": {States: EpPausing, RV: "1"}, "b": {RV: "3"}}, true, true)
 	if _, ok := got["b"]; ok {
 		t.Fatal("a cleared episode stayed")
 	}
@@ -549,9 +549,44 @@ func TestTracker(t *testing.T) {
 		t.Fatalf("a replacement first seen pausing is a lower bound: %+v", ep)
 	}
 	tr.Break()
-	got = tr.Observe(gap, t0.Add(5*time.Minute), map[string]Obs{"a2": {States: EpPausing, RV: "1"}}, true)
+	got = tr.Observe(gap, t0.Add(5*time.Minute), map[string]Obs{"a2": {States: EpPausing, RV: "1"}}, true, true)
 	if ep := got["a2"][EpPausing]; !ep.Start.Equal(t0.Add(5 * time.Minute)) {
 		t.Fatalf("after Break: %+v", ep)
+	}
+}
+
+// Implementation review 1, finding 5: a state that reads the HPAs
+// (pausing, awaiting an HPA) carries on across a non-contiguous step only
+// when the HPA kind did not change at all; resuming reads no HPA.
+func TestTrackerHPADependency(t *testing.T) {
+	var tr Tracker
+	c := Continuity{Generation: 1, Epoch: 1, HPAGeneration: 1, HPAEpoch: 1}
+	t0 := now
+	all := EpPausing | EpResuming | EpAwaitingHPA
+	tr.Observe(c, t0, map[string]Obs{"a": {States: all, RV: "1"}}, true, true)
+	// unwritten, the HPAs steady, many other changes: every state carries on
+	got := tr.Observe(c, t0.Add(time.Minute), map[string]Obs{"a": {States: all, RV: "1"}}, false, true)
+	for _, k := range []EpisodeKind{EpPausing, EpResuming, EpAwaitingHPA} {
+		if !got["a"][k].Start.Equal(t0) {
+			t.Fatalf("%v with the HPAs steady: %+v", k, got["a"][k])
+		}
+	}
+	// unwritten, the HPAs changed more than once: the HPA-dependent states
+	// restart as lower bounds; resuming carries on
+	at := t0.Add(2 * time.Minute)
+	got = tr.Observe(c, at, map[string]Obs{"a": {States: all, RV: "1"}}, false, false)
+	if !got["a"][EpResuming].Start.Equal(t0) {
+		t.Fatalf("resuming: %+v", got["a"][EpResuming])
+	}
+	for _, k := range []EpisodeKind{EpPausing, EpAwaitingHPA} {
+		if ep := got["a"][k]; !ep.Start.Equal(at) || ep.Observed {
+			t.Fatalf("%v across an HPA change: %+v", k, ep)
+		}
+	}
+	// contiguous: carried whatever changed
+	got = tr.Observe(c, t0.Add(3*time.Minute), map[string]Obs{"a": {States: all, RV: "2"}}, true, false)
+	if !got["a"][EpAwaitingHPA].Start.Equal(at) {
+		t.Fatalf("contiguous: %+v", got["a"][EpAwaitingHPA])
 	}
 }
 

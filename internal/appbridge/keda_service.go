@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/moomora/klyx/internal/fleet"
@@ -67,7 +68,10 @@ type KEDAAuthCheckDTO struct {
 	Visible map[string]string `json:"visible"`
 	Refs    []KEDARefCheckDTO `json:"refs"`
 	RefsCut bool              `json:"refsCut,omitempty"`
-	Subject *KEDASubjectDTO   `json:"subject,omitempty"`
+	// RefsOmitted counts the references not listed: not kept by the
+	// projection, or dropped to fit the reply.
+	RefsOmitted int             `json:"refsOmitted,omitempty"`
+	Subject     *KEDASubjectDTO `json:"subject,omitempty"`
 }
 
 // KEDAInspectionDTO is the inspector's on-demand evidence for one scaler.
@@ -112,10 +116,22 @@ func (s *KEDAService) Inspect(cluster, resource, namespace, name, uid string) KE
 		out.Error = urlscrub.Text(err.Error()).Text
 		return out
 	}
-	out.Handler, out.None, out.Candidates, out.CandidatesCut = in.Handler, in.None, orEmpty(in.Candidates), in.CandidatesCut
-	out.Version, out.Disagree = in.Version, orEmpty(in.Disagree)
+	// the reply is bounded as it crosses (S9 §10; implementation review 1,
+	// finding 8): the fleet's fit tightened until the DTO fits
+	for limit := fleet.KEDAInspectionLimit; ; limit -= 8 << 10 {
+		in.Fit(limit)
+		dto := inspectionDTO(uid, in)
+		if b, err := json.Marshal(dto); err != nil || len(b) <= fleet.KEDAInspectionLimit || limit <= 64<<10 {
+			return dto
+		}
+	}
+}
+
+func inspectionDTO(uid string, in fleet.KEDAInspection) KEDAInspectionDTO {
+	out := KEDAInspectionDTO{UID: uid, Candidates: orEmpty(in.Candidates), Disagree: orEmpty(in.Disagree), Auths: []KEDAAuthCheckDTO{}}
+	out.Handler, out.None, out.CandidatesCut, out.Version = in.Handler, in.None, in.CandidatesCut, in.Version
 	for _, a := range in.Auths {
-		d := KEDAAuthCheckDTO{Kind: a.Kind, Name: a.Name, State: a.State, Why: a.Why, Visible: a.Visible, Refs: []KEDARefCheckDTO{}, RefsCut: a.RefsCut}
+		d := KEDAAuthCheckDTO{Kind: a.Kind, Name: a.Name, State: a.State, Why: a.Why, Visible: a.Visible, Refs: []KEDARefCheckDTO{}, RefsCut: a.RefsCut, RefsOmitted: a.RefsOmitted}
 		for _, r := range a.Refs {
 			d.Refs = append(d.Refs, KEDARefCheckDTO(r))
 		}

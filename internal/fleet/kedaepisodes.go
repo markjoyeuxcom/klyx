@@ -27,19 +27,33 @@ func (c *ClusterConn) kedaVersion() keda.Version {
 
 // startKEDAEpisodes keeps FactKEDAEpisodes (coverage S9 §3.1): each
 // scaler's pausing, resuming and awaiting-HPA episodes, from the scaler
-// kinds' and the HPA kind's states. A scaler kind that is not live and
-// complete breaks its tracker's continuity, and the next observation
-// restarts every episode as a lower bound; a relist or error of the HPA
-// kind changes the ScaledObjects' continuity the same way. The episodes are
-// as S4's: carried on only when a scaler was not written between two
-// snapshots, or the snapshots are contiguous (one change at most across the
-// kinds read).
+// kinds' and the HPA kind's states. A scaler kind that is not live breaks
+// its tracker's continuity, and the next observation restarts every
+// episode as a lower bound; a relist or error of the HPA kind changes the
+// ScaledObjects' continuity the same way. A live kind that is capped is
+// observed for the scalers it retains: their clocks age, and one that
+// drops out of the model starts again as a lower bound when it returns
+// (implementation review 1, finding 4). An episode carries on only when
+// the scaler was not written between two snapshots - and, for a state that
+// reads the HPAs, the HPA kind did not change either - or the snapshots
+// are contiguous (one change at most across the kinds read; finding 5).
+// Updates are serialized, so each visit is compared with the one before.
 func startKEDAEpisodes(ctx context.Context, h kedaObserver, now func() time.Time, version func() keda.Version) {
 	var mu sync.Mutex
 	var soTr, sjTr keda.Tracker
 	var lastSO, lastSJ, lastHPA uint64
 	visited := false
+	// delta is a kind's changes since the last visit; a watermark that went
+	// back (a new generation) counts as many
+	delta := func(seq, last uint64) uint64 {
+		if seq < last {
+			return 2
+		}
+		return seq - last
+	}
 	update := func(observe.KindState) {
+		mu.Lock()
+		defer mu.Unlock()
 		if ctx.Err() != nil {
 			return
 		}
@@ -55,7 +69,7 @@ func startKEDAEpisodes(ctx context.Context, h kedaObserver, now func() time.Time
 		})
 		hpaProven := hOK && hComplete && hst.Coverage == observe.Live && !hst.Truncated
 		soObs := map[string]keda.Obs{}
-		sost, soComplete, soOK := h.VisitKind(healthsrc.KindScaledObjects, func(obj any) bool {
+		sost, _, soOK := h.VisitKind(healthsrc.KindScaledObjects, func(obj any) bool {
 			if so, ok := obj.(*keda.ScaledObject); ok {
 				absent := hpaProven && !controlled[so.UID]
 				soObs[so.UID] = keda.Obs{States: keda.States(so, v, absent), RV: so.RV}
@@ -63,29 +77,28 @@ func startKEDAEpisodes(ctx context.Context, h kedaObserver, now func() time.Time
 			return true
 		})
 		sjObs := map[string]keda.Obs{}
-		sjst, sjComplete, sjOK := h.VisitKind(healthsrc.KindScaledJobs, func(obj any) bool {
+		sjst, _, sjOK := h.VisitKind(healthsrc.KindScaledJobs, func(obj any) bool {
 			if j, ok := obj.(*keda.ScaledJob); ok {
 				sjObs[j.UID] = keda.Obs{States: keda.JobStates(j, v), RV: j.RV}
 			}
 			return true
 		})
-		mu.Lock()
-		defer mu.Unlock()
 		out := map[string]map[keda.EpisodeKind]keda.Episode{}
 		// deliveries are newest-wins: contiguous only when the kinds read
 		// changed once at most, in total, since the last visit
-		if soOK && soComplete && sost.Coverage == observe.Live && !sost.Truncated {
-			moved := (sost.Seq - lastSO) + (hst.Seq - lastHPA)
+		if soOK && sost.CountKnown && sost.Coverage == observe.Live {
+			hpaMoved := delta(hst.Seq, lastHPA)
+			moved := delta(sost.Seq, lastSO) + hpaMoved
 			cont := keda.Continuity{Generation: sost.Generation, Epoch: sost.Epoch, HPAGeneration: hst.Generation, HPAEpoch: hst.Epoch}
-			for uid, eps := range soTr.Observe(cont, now(), soObs, visited && moved <= 1) {
+			for uid, eps := range soTr.Observe(cont, now(), soObs, visited && moved <= 1, visited && hpaMoved == 0) {
 				out[uid] = eps
 			}
 		} else {
 			soTr.Break()
 		}
-		if sjOK && sjComplete && sjst.Coverage == observe.Live && !sjst.Truncated {
+		if sjOK && sjst.CountKnown && sjst.Coverage == observe.Live {
 			cont := keda.Continuity{Generation: sjst.Generation, Epoch: sjst.Epoch}
-			for uid, eps := range sjTr.Observe(cont, now(), sjObs, visited && sjst.Seq-lastSJ <= 1) {
+			for uid, eps := range sjTr.Observe(cont, now(), sjObs, visited && delta(sjst.Seq, lastSJ) <= 1, true) {
 				out[uid] = eps
 			}
 		} else {

@@ -179,8 +179,8 @@ func (d *Detector) kedaDeployments(ctx context.Context, selectors []string) ([]a
 // chain, or an image not KEDA's own leave it unknown (S9 §1.8).
 func (d *Detector) kedaRunningVersion(ctx context.Context, dep *appsv1.Deployment) keda.Version {
 	rss, err := d.cs.AppsV1().ReplicaSets(dep.Namespace).List(ctx, metav1.ListOptions{Limit: 500})
-	if err != nil {
-		return keda.Version{}
+	if err != nil || rss.Continue != "" {
+		return keda.Version{} // a continued list may omit a pod on another version
 	}
 	owned := map[string]bool{}
 	for i := range rss.Items {
@@ -189,7 +189,7 @@ func (d *Detector) kedaRunningVersion(ctx context.Context, dep *appsv1.Deploymen
 		}
 	}
 	pods, err := d.cs.CoreV1().Pods(dep.Namespace).List(ctx, metav1.ListOptions{Limit: 500})
-	if err != nil {
+	if err != nil || pods.Continue != "" {
 		return keda.Version{}
 	}
 	var v keda.Version

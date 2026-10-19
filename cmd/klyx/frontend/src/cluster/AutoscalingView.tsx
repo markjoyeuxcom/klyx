@@ -420,17 +420,26 @@ function PauseBlock({ p, resource, version, onPause, gone }: { p: KEDAPauseDTO; 
   );
 }
 
+// evidenceKey is the revision of what the on-demand evidence reads from a
+// scaler: the backend's (generation, labels, target) and the references
+// the row shows.
+const evidenceKey = (rev: string | undefined, triggers: KEDATriggerDTO[], count: number, cut?: boolean) =>
+  `${rev ?? ""}|${count}|${cut ? 1 : 0}|${triggers.map((t) => `${t.authKind ?? ""}/${t.authName ?? ""}`).join(",")}`;
+
 // The on-demand authentication evidence (S9 §6): the handling operator,
 // each authentication's existence and visibility, the referenced objects'
-// existence where KEDA reads them, and the subject.
-function AuthEvidence({ cluster, resource, ns, name, uid, refs }: { cluster: string; resource: "scaledobjects" | "scaledjobs"; ns: string; name: string; uid: string; refs: number }) {
-  const [res, setRes] = useState<KEDAInspectionDTO | null>(null);
+// existence where KEDA reads them, and the subject. It re-reads when the
+// scaler's evidence revision changes, and shows a reply only for its own
+// object and revision (implementation review 1, finding 7).
+function AuthEvidence({ cluster, resource, ns, name, uid, rev, refs }: { cluster: string; resource: "scaledobjects" | "scaledjobs"; ns: string; name: string; uid: string; rev: string; refs: number }) {
+  const [held, setHeld] = useState<{ uid: string; rev: string; r: KEDAInspectionDTO } | null>(null);
   useEffect(() => {
     let live = true;
-    setRes(null);
-    void inspectScaler(cluster, resource, ns, name, uid).then((r) => { if (live && r.uid === uid) setRes(r); });
+    setHeld(null);
+    void inspectScaler(cluster, resource, ns, name, uid).then((r) => { if (live && r.uid === uid) setHeld({ uid, rev, r }); });
     return () => { live = false; };
-  }, [cluster, resource, ns, name, uid]);
+  }, [cluster, resource, ns, name, uid, rev]);
+  const res = held && held.uid === uid && held.rev === rev ? held.r : null;
   return (
     <InspectorBlock title="Operator and authentication">
       {!res ? <div className="t-secondary">reading…</div> : res.error ? <div className="t-secondary" style={{ color: "var(--color-text-warning)" }}>Not read: {res.error}</div> : (
@@ -447,7 +456,8 @@ function AuthEvidence({ cluster, resource, ns, name, uid, refs }: { cluster: str
               <div className="t-body">{a.kind} {a.name}: <span style={{ color: a.state === "not found" ? "var(--color-text-danger)" : undefined }}>{a.state}</span>{a.why ? <span className="t-secondary"> ({a.why})</span> : null}</div>
               {Object.entries(a.visible).map(([op, v]) => <div key={op} className="t-secondary">{v === "excluded" ? <span style={{ color: "var(--color-text-danger)" }}>outside {op}'s authentication selector: KEDA cannot read it</span> : `${v} to ${op}`}</div>)}
               {a.refs.map((r, i) => <div key={i} className="t-secondary">{r.kind} {r.name}{r.key ? ` · key ${r.key}` : ""}{r.namespace ? ` in ${r.namespace}` : ""}: <span style={{ color: r.state === "not found" ? "var(--color-text-danger)" : undefined }}>{r.state}</span>{r.why ? ` (${r.why})` : ""}</div>)}
-              {a.refsCut && <div className="t-secondary">More references than Klyx reads: the rest are unverified.</div>}
+              {(a.refsOmitted ?? 0) > 0 && <div className="t-secondary">{a.refsOmitted} more reference{a.refsOmitted === 1 ? " is" : "s are"} not listed (past the 16 per source Klyx keeps, or the reply's limit): unverified.</div>}
+              {a.refsCut && !a.refsOmitted && <div className="t-secondary">More references than Klyx reads: the rest are unverified.</div>}
               {a.subject && <div className="t-secondary" data-testid="keda-subject">
                 Authenticates as {a.subject.base}{a.subject.serviceAccount ? ` (ServiceAccount ${a.subject.serviceAccount})` : ""}
                 {a.subject.requested.length > 0 ? ` · ${a.subject.requested.join(", ")}` : ""}
@@ -504,7 +514,7 @@ function ScaledObjectInspector({ cluster, s, now, gone, onPause, onClose }: { cl
         </InspectorBlock>}
         <Triggers triggers={s.triggers} cut={s.triggersCut} count={s.triggerCount} metrics={s.metrics} tracked={s.healthTracked} />
         <PauseBlock p={s.pause} resource="scaledobjects" version={s.version} onPause={onPause} gone={gone} />
-        {!gone && <AuthEvidence cluster={cluster} resource="scaledobjects" ns={s.namespace} name={s.name} uid={s.uid} refs={refs} />}
+        {!gone && <AuthEvidence cluster={cluster} resource="scaledobjects" ns={s.namespace} name={s.name} uid={s.uid} rev={evidenceKey(s.evidenceRev, s.triggers, s.triggerCount, s.triggersCut)} refs={refs} />}
       </InspectorLayout>
       {describe.sheet}
     </div>
@@ -545,7 +555,7 @@ function ScaledJobInspector({ cluster, j, gone, onPause, onClose }: { cluster: s
         </InspectorBlock>
         <Triggers triggers={j.triggers} cut={j.triggersCut} count={j.triggerCount} />
         <PauseBlock p={j.pause} resource="scaledjobs" version={j.version} onPause={onPause} gone={gone} />
-        {!gone && <AuthEvidence cluster={cluster} resource="scaledjobs" ns={j.namespace} name={j.name} uid={j.uid} refs={j.triggers.filter((t) => t.authName).length} />}
+        {!gone && <AuthEvidence cluster={cluster} resource="scaledjobs" ns={j.namespace} name={j.name} uid={j.uid} rev={evidenceKey(j.evidenceRev, j.triggers, j.triggerCount, j.triggersCut)} refs={j.triggers.filter((t) => t.authName).length} />}
       </InspectorLayout>
       {describe.sheet}
     </div>
