@@ -1,6 +1,6 @@
 # Coverage S8a: alerts, from Alertmanager
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8a, after C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`, implementation accepted at 6c17617). S8b (Loki) follows with its own note. Revision 1 answers Codex's design review of 4bc4685 and the lab's first findings (§14).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8a, after C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`, implementation accepted at 6c17617). S8b (Loki) follows with its own note. Revision 1 answers Codex's design review of 4bc4685 and the lab's first findings (§14); revision 2 answers its re-review of a9cfe4e (§15).
 
 The owner's answer (roadmap §5): **S8a reads Alertmanager.** The roadmap fixes the contract this note builds:
 - **States:** active, suppressed and unprocessed stay distinct.
@@ -55,6 +55,7 @@ The owner's answer (roadmap §5): **S8a reads Alertmanager.** The roadmap fixes 
   - It returns aggregation groups: `labels`, `receiver{name}`, and the group's alerts.
   - Each alert has *that group's* status, so time-interval muting is reported here, per route.
   - An alert in several routes appears in several groups. An unprocessed alert is in none.
+  - **The two lists are built differently.** The flat list's `receivers` come from matching the alert against the routes now (`api.go:293`, one entry per matching route, so a receiver shared by two routes appears twice). The groups come from the aggregation groups that exist (`dispatch.go:314`), and a new group can be refused at the group limit (`dispatch.go:435`). Two successful GETs therefore do not certify that their routes agree.
 - **`GET /api/v2/status`** returns `versionInfo`, `cluster{status: ready|settling|disabled, peers}` and `uptime`.
 
 **The lab confirmed this on a real Alertmanager 0.34.1.** One muted alert reads `active` with `mutedBy: []` on `/alerts`, and `suppressed` with `mutedBy: ["always"]` on `/alerts/groups`. Its lab notes add one behaviour: the mute stage runs in a receiver's notify pipeline, so an alert routed only to a receiver with no integration is never marked muted.
@@ -82,7 +83,12 @@ The `alertmanager` block keeps C5's shape: `endpoint`, `serviceRef`, `tlsSkipVer
 - **The rule:**
   1. Read `alertmanagers.monitoring.coreos.com` across the cluster. When the resource is not served, there is no discovery.
   2. **Exactly one Alertmanager resource:** use a Service in its namespace whose selector pins that instance (`alertmanager: <name>`, as kube-prometheus-stack's instance Service does), through its port named `web` or `http-web`. Several such Services select the same pods, so the first by name serves.
-  3. **No instance Service:** the governing `alertmanager-operated` is used only when its EndpointSlices hold exactly the pods of that instance's StatefulSet (`alertmanager-<name>-<n>` by `targetRef`), read complete. This is the proof of one installation behind it.
+  3. **No instance Service:** the governing `alertmanager-operated` is used only with a proof of ownership, read complete:
+     - every endpoint in its EndpointSlices has a `targetRef` to a Pod;
+     - every such Pod is owned, by UID, by one StatefulSet;
+     - that StatefulSet is owned, by UID, by the Alertmanager resource.
+
+     A name pattern is not the proof. A missing `targetRef` or incomplete ownership leaves the governing Service unproven, and discovery reads it as ambiguity.
   4. **More than one Alertmanager resource, or a governing Service fronting pods of more than one instance:** "several Alertmanagers found; set alertmanager.serviceRef". This is ambiguity, never a guess.
 - **A standalone Alertmanager without the operator** is configured with a `serviceRef`. The label-only fallback of the first draft is gone: a label does not prove an installation either.
 - **Every discovery read must succeed and be complete.** A forbidden list, a timeout, or a capped or continued list makes discovery "could not be read" with the reason, never "not installed".
@@ -127,10 +133,17 @@ Both must succeed, or the snapshot read fails as one. A response that is not JSO
   - When the copies' states differ, the alert is active if any copy is active, and the alert keeps "copies disagreed: active and silenced".
   - When the copies' silences or inhibitions differ, the alert keeps the union.
 - **Silenced or inhibited** in the alerts list: suppressed with those causes. The groups are not consulted; silence and inhibition are alert-wide.
-- **Active** in the alerts list: its group appearances decide muting. One appearance is one group (route and group labels) under one receiver.
-  - **Every appearance muted:** the alert is **muted**, a suppressed cause, with the time intervals named (`always`).
-  - **Some appearances muted:** the alert stays **active and counted**, with "muted for receiver lab-muted; active for lab". Muting is per route, and a route still notifying is not quiet.
-  - **No appearance:** the alert stays active and counted, with "mute not read: not in any group yet".
+- **Active** in the alerts list: its group appearances decide muting, but only once they are shown to cover the routes the alert is expected in.
+  - **One appearance is one group in the groups response.** Appearances are never collapsed by receiver and group labels: two routes that share a receiver are two appearances.
+  - **The expected appearances** are the alert's own flat `receivers`, as a multiset: a receiver named twice is expected twice.
+  - **Covered** means the alert's appearances, as a multiset of receivers, equal its expected multiset.
+  - **Covered, every appearance muted:** the alert is **muted**, a suppressed cause, with the time intervals named (`always`).
+  - **Covered, some appearances muted:** the alert stays **active and counted**, with "muted for receiver lab-muted; active for lab". Muting is per route, and a route still notifying is not quiet.
+  - **Not covered:** the alert stays **active and counted**, with "mute evidence incomplete: expected receivers lab, lab-muted; groups show lab-muted". This covers:
+    - an expected receiver with fewer appearances;
+    - a receiver appearing more often than expected, or not expected at all (the routes changed between the two GETs);
+    - no appearance (not in any group yet, or refused at the group limit).
+  - The two GETs are never treated as one instant. Only a match between them lets a mute take an alert out of Needs you.
 - **Unprocessed** in the alerts list: unprocessed. It is in no group by definition.
 - **An unknown state** is kept as written and never counted.
 
@@ -165,10 +178,18 @@ Both must succeed, or the snapshot read fails as one. A response that is not JSO
     - the tenant;
     - the `match` set, sorted.
   - The canonical origin is the credential boundary (C5); the source identity is the evidence boundary. `/am-a` and `/am-b` on one origin are two sources, and so are `cluster=A` and `cluster=B` on one Alertmanager.
-  - **Every read's items carry the identity they were read under.** The connection publishes the current identity as a fact on every configuration change, Settings action or discovery outcome. It also asks the snapshot to read again.
-  - **The alerts part counts only items whose identity is the current one.** Items retained from another identity are not this source's evidence. A source change starts an unread collection ("not read yet for this source"), never a recovery.
-    - So a read in flight across a change is ignored by identity, without a separate fence.
-    - So a failed first read after a change shows nothing of the old source.
+  - **A read's whole outcome belongs to one identity, through the snapshot's generation.** Items alone cannot carry it: the Observer keeps a snapshot's coverage, as-of time and truncation in the generation, apart from the items, and an empty read carries no item at all.
+    - **`observe.Observer.RekeySnapshot(name, key)`** (new) ends the snapshot's current generation and starts a new one carrying `key`, under the Observer's lock, unless the current generation already carries it.
+      - A new generation starts with no items, coverage `checking`, and no as-of time.
+      - The existing generation check in `apply` discards every outcome of an ended generation: its items, its error, its truncation and its freshness. So an old in-flight completion can never advance the new identity's freshness.
+    - **The snapshot's `Read` receives its generation's key** (`Read func(ctx, key string)`; Helm and Events ignore it).
+      - The alerts read resolves its source from `endpointState` and refuses with "the source changed during the read" when the resolved identity is not the key.
+      - It returns one envelope item, `{Identity, Alerts, Truncated, ReadAt}`, so even an empty read names the identity it read.
+    - **The connection re-keys the snapshot inside `endpointState`'s lock** whenever the identity changes: configuration sync, a Settings action, or a discovery outcome. An identity change and its re-key are therefore one step for every read.
+  - **Consequences:**
+    - A source change starts an unread collection ("not read yet for this source"), never a recovery.
+    - Until the new identity's first read, the part is `checking`. When that read fails, the part is `unreadable`, with no evidence and nothing stale from the old source. When it succeeds empty, the part is `live` with no alerts.
+    - "No alert" and every completeness claim need a successful read in the current generation.
   - A read that crosses a credential revision move is dropped as C5 does.
 - **The counted entity and its identity:** an alert, identified by its fingerprint within its source identity.
   - A fingerprint is Alertmanager's hash of the labels: the same labels firing again later is the same fingerprint, and `startsAt` tells the occasions apart.
@@ -301,7 +322,12 @@ Every string below is a display value (§3).
   - 2 KiB per URL.
   - The raw values used for matching are not clipped.
 - **No per-alert follow-up reads.** Silences and inhibiting alerts are named from the alert's own fields.
-- **Memory and DTOs:** the reduced list, in one generation, per cluster. The budget test measures the retained heap and the encoded DTO of 5,000 *full-shape* alerts (labels and annotations at their caps, four receivers each), not 5,000 small ones.
+- **Memory and DTOs:** the reduced list, in one generation, per cluster.
+  - The wire caps bound what can be admitted: each GET is at most 8 MiB, so 5,000 alerts arrive at about 1.6 KiB each, and alerts at their display caps (some 300 KiB each) arrive a few dozen at a time.
+  - The budget test measures the retained heap and the encoded DTO of the admitted worst shapes, not of an impossible product of every cap:
+    - 5,000 alerts filling an 8 MiB response;
+    - the most alerts at their display caps that fit in 8 MiB;
+    - a groups response at its 20,000-appearance cap.
 - **Discovery:** three API reads, at most once per five minutes per cluster, or after a failure or a change.
 
 ## 9. The wiring (C1)
@@ -310,7 +336,7 @@ Every string below is a display value (§3).
 - `internal/endpointhttp`, with `internal/metrics` moved onto it;
 - `internal/alertmanager` (pure);
 - `fleet.endpointState` for `alertmanager`: the discovery, the source identity fact, and the fleet-wide limiter;
-- `observe.ErrSourceAbsent`, a snapshot read's "not installed", with its coverage tests;
+- `observe.ErrSourceAbsent`, a snapshot read's "not installed", and `RekeySnapshot` with the keyed `Read`, with their coverage tests;
 - the `alerts` snapshot and the `alerts` task and part, classifier `alerts`, in `healthsrc`, with deps on the held subject kinds for the completeness wording;
 - the rows converter and its DTO mirror;
 - the AI allowlist entry;
@@ -340,9 +366,12 @@ Every string below is a display value (§3).
   - an unknown state kept;
   - each malformed shape failing the read whole.
   - **Reduce:**
-    - all appearances muted;
-    - some muted;
-    - none;
+    - covered and all appearances muted;
+    - covered and some muted;
+    - flat receivers [A, B] with only A, muted, in the groups: not covered, counted;
+    - flat receivers [A, A] (two routes, one receiver), with both appearances muted, one muted, and only one present;
+    - a receiver in the groups the flat list does not expect: not covered;
+    - no appearance;
     - a fingerprint only in the groups;
     - silenced and inhibited not consulting the groups;
     - duplicate copies agreeing and disagreeing.
@@ -353,6 +382,7 @@ Every string below is a display value (§3).
   - None reaches a DTO, a ref, Needs you, AI or Test, and the raw value still matches and correlates.
   - Userinfo is removed from every URL.
   - Clipping comes after redaction.
+  - A synthetic credential equal to a namespace, a pod name or a fingerprint is redacted from display values, while the raw keys still match, deduplicate and correlate.
 - **Transport:**
   - `internal/endpointhttp` carries C5's tests, and every metrics test passes unchanged.
   - New per-kind tests:
@@ -364,15 +394,21 @@ Every string below is a display value (§3).
 - **Discovery:**
   - two Alertmanager resources sharing one governing Service is ambiguous;
   - an instance Service is preferred;
-  - the governing Service accepted only with its EndpointSlices proven;
+  - the governing Service accepted only with its ownership proven by UID;
+  - an endpoint without a `targetRef`, a Pod with another owner, or a StatefulSet not owned by the resource leaves it unproven;
   - a forbidden or failed list is "could not be read", never absent;
   - the operator not served, with no configuration, is absent.
 - **Source identity:**
-  - a `serviceRef.path` change followed by a failed read;
-  - a `match` change followed by a failed read;
+  - a prior *empty* success of source A, then a change to B, then:
+    - an immediate capture before B replies, which reads `checking` and "not read yet", never "no alerts";
+    - B failing, which reads `unreadable` with nothing of A and no A freshness;
+    - B succeeding empty, which reads `live` with no alerts;
+  - the same with a prior non-empty A;
+  - a `serviceRef.path` change and a `match` change, each followed by a failed read;
   - a discovered source replaced;
-  - a read in flight across each.
-  - None of them shows or counts the old source's alerts. Each reads "not read yet for this source".
+  - A's read in flight completing after the re-key: discarded, freshness untouched;
+  - a read whose resolved identity is not its generation's key: refused.
+  - `RekeySnapshot` keeps Helm and Events unchanged (they never re-key).
 - **Credentials:**
   - C5's Live, revision-fence and one-step-install tests repeated for `alertmanager` through `endpointState`;
   - Remove stopping an Alertmanager read in flight.
@@ -396,7 +432,8 @@ Every string below is a display value (§3).
 - **Parity:** the alerts part and the lens read the same snapshot. The parity oracle gains the alerts part, and `parityGate.test.tsx` its row.
 - **Budget:** the full-shape heap and DTO case of §8.
 - **Mutations** on:
-  - the reduction's mute rule;
+  - the reduction's mute rule and its coverage check;
+  - the re-key and the generation check;
   - the counting rule;
   - the `match` re-check;
   - the identity filter;
@@ -441,7 +478,7 @@ On `kind-klyx`, in namespace `klyx-s8-lab`: ClusterIP only, labelled `klyx.dev/l
 2. The config fields (`match`, `serviceRef.path`, honoured for metrics too), validation and warnings.
 3. `internal/alertmanager`, pure: the parsers, `Reduce`, `Subjects`, `Severity` and `Display`, with their tests.
 4. `fleet.endpointState` for Alertmanager: resolution, operator discovery, the source identity fact, the limiter, the credential path, Set and Test.
-5. `observe.ErrSourceAbsent`; the `alerts` snapshot and part; the rows converter; the attention count for chat; the AI allowlist.
+5. `observe.ErrSourceAbsent` and `RekeySnapshot` with the keyed `Read`; the `alerts` snapshot and part; the rows converter; the attention count for chat; the AI allowlist.
 6. The frontend:
    - Needs you's alert row and third count, and the mast's count;
    - the Alerts lens and inspector;
@@ -485,3 +522,15 @@ Kept as Codex judged them sound:
 - the separate alerts count;
 - no OS notifications;
 - always-register with a proven-absence outcome.
+
+## 15. Revision 2: Codex's re-review of a9cfe4e
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 (P2) | "Every returned appearance muted" does not show every expected route was read. The flat receivers come from route matching now; the groups from existing groups, which the group limit can refuse | §1 (how the two lists are built), §3: a mute takes an alert out of Needs you only when its appearances, as a multiset of receivers, equal its flat `receivers`. Routes sharing a receiver count twice. Any mismatch is "mute evidence incomplete", active and counted. §10: [A, B] with only A, [A, A] variants, an unexpected receiver |
+| 2 (P2) | Items carrying an identity cannot partition a read's outcome. Coverage, as-of time and truncation live in the snapshot's generation, and an empty read has no item | §4: `RekeySnapshot` gives each identity its own generation (no items, `checking`, no as-of time), and `apply`'s generation check discards an ended generation's outcomes. `Read` receives the key and refuses a mismatch; the envelope names the identity even when empty; the connection re-keys inside `endpointState`'s lock. §10: the prior-empty sequence Codex named, and an old completion after the re-key |
+
+**Codex's guidance, adopted:**
+- discovery's proof is ownership by UID, from `targetRef` through the Pod to the StatefulSet to the resource, never a name pattern (§2);
+- raw keys stay separate from display values even when a credential equals a namespace, a pod name or a fingerprint (§10);
+- the sizing test measures the admitted worst shapes under the 8 MiB wire caps (§8).
