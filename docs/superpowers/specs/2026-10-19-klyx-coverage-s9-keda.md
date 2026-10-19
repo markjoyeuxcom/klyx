@@ -1,6 +1,6 @@
 # Coverage S9: KEDA and autoscaling ownership
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers. Revision 1 answers Codex's design review of 5b165d8 (§14); revision 2 its re-review of 0cca474 (§15).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers. Revision 1 answers Codex's design review of 5b165d8 (§14); revision 2 its re-review of 0cca474 (§15); revision 3 its re-review of 76f1fef (§16).
 
 The roadmap's S9:
 - **The kinds:**
@@ -29,7 +29,7 @@ The facts below come from KEDA v2.21.0 (2026-09-23, the latest release) and keda
 |---|---|---|
 | Ready | True `ScaledObjectReady`, rewritten by the scale loop on **every polling tick**; False `ScaledObjectCheckFailed` (spec, target, scaler build), `TriggerError` (no trigger active, a scaler errored, no fallback), `ErrorGettingCurrentReplicas`, `ErrorScalingTarget`; Unknown `PartialTriggerError` (some triggers active, some errored) | False and `PartialTriggerError` prove a fault. True is weak: it stays True while a fallback absorbs errors, and reads "ScaledObject is paused" during a full pause |
 | Active | True `ScalerActive`; False `ScalerNotActive` or `ScalerCooldown`; Unknown `UnknownState` after a failed check | activation (0 or idle to min), not HPA scaling. False is the intended idle state |
-| Fallback | True `FallbackExists`; False `NoFallbackFound` (forced False without a valid fallback spec) | True: at least one trigger failed more than `failureThreshold` times, and KEDA feeds the HPA a replacement metric per its fallback behaviour. That does not prove which replica count results (§3 rule 7) |
+| Fallback | True `FallbackExists`; False `NoFallbackFound` (forced False without a valid fallback spec) | True: at least one trigger failed more than `failureThreshold` times, and KEDA feeds the HPA a replacement metric per its fallback behaviour. That does not prove which replica count results (§3.2) |
 | Paused | True `ScaledObjectPaused` for a full pause **and** for a directional one; False `ScaledObjectUnpaused`; initialised False since 2.18, Unknown before | which pause only the annotations say (§1.3) |
 | HPAActive | since 2.20.2, appended lazily: True `HPAActive`; True `ScalingDisabled` (target at 0); False with the HPA's own reason passed through (`FailedGetExternalMetric`, `AmbiguousSelector`) or `HPAMetricsUnavailable` | the HPA's own ScalingActive, copied; it never changes Ready |
 
@@ -53,7 +53,7 @@ The lab proves the case S9 exists for (finding 5). A ScaledObject whose only tri
 - **It can be set before the pause has finished.** 2.21's `handlePause` sets Paused=True *before* it stops the loop, deletes the HPA, scales the target and records `pausedReplicaCount`. A failure after that leaves Paused=True, no HPA, and Ready=False `ScaledObjectCheckFailed` ("failed to scale target to paused replica count: …").
 - **Ready's message is not proof either.** Between 2.11 and 2.20, the reconcile after a pause returns the ordinary Ready message. While the target is still moving to its count, KEDA returns Ready=False "ScaledObject paused replicas are being scaled".
 
-**What proves a completed full pause** (§3 rule 3):
+**What proves a completed full pause** (§3.2):
 
 | Version | Evidence |
 |---|---|
@@ -139,7 +139,7 @@ The lab proves the case S9 exists for (finding 5). A ScaledObject whose only tri
 | Version | What reads differently |
 |---|---|
 | before 2.20.2 | no `HPAActive`: the HPA's health is read from the joined HPA (§3), and a missing HPAActive is "not reported", never healthy |
-| 2.20.0 and 2.20.1 | Ready=False `HPAMetricsUnavailable` or `ScalingDegraded` means HPA trouble, not an invalid ScaledObject: read as the HPA fault (§3 rule 4) |
+| 2.20.0 and 2.20.1 | Ready=False `HPAMetricsUnavailable` or `ScalingDegraded` means HPA trouble, not an invalid ScaledObject: read as the HPA fault (§3's HPA result) |
 | before 2.18 | Paused initialised Unknown, read as not paused; `status.hpaName` absent after adoption (the join uses the controller reference anyway); `paused-replicas` paused only once `status.pausedReplicaCount` was set |
 | before 2.16 | `status.health` may list metrics without a fallback; `triggersTypes`/`authenticationsTypes` absent (derived from spec) |
 | before 2.19 | no `triggersActivity` |
@@ -199,15 +199,28 @@ The lab proves the case S9 exists for (finding 5). A ScaledObject whose only tri
 The verdict kinds are the shared engine's (`health.Kind`). Each rule below gives the kind it produces and the label Klyx shows.
 
 **The joined HPA** is the HPA whose controller ownerReference UID is this ScaledObject's UID: never a name, and never the prefix.
-- **Its own conditions are the primary evidence of HPA health whenever it is retained in the model,** whether or not the HPA read is complete or capped. Completeness is needed only to prove an HPA *absent*.
-- **A retained HPA while the kind's watch is in a gap** (a relist or a failing watch) is used, qualified "as of <time>".
 
-**HPAActive is KEDA's cached copy.** KEDA keeps the last value when it cannot read the HPA, so the lab saw HPAActive=False while the HPA itself already read ScalingActive=True (t1, `failing`).
-- **The joined HPA is retained:** its own conditions decide. A disagreeing HPAActive, in either direction, is shown as "KEDA last reported HPAActive=<status> (<reason>)", a finding that is never attention by itself.
-- **No joined HPA is retained, and the read cannot prove its absence** (capped, or failed): HPAActive=False is the evidence, qualified "as KEDA last saw it". HPAActive=True proves nothing.
-- **The 2.20.0 and 2.20.1 Ready reasons** `HPAMetricsUnavailable` and `ScalingDegraded` are KEDA-reported HPA evidence, read the same way. They are not rule 2's Ready=False.
+**Two properties of the HPA evidence are kept apart:**
+- **current:** the HPA kind's watch is live, so the retained object is the latest the API delivered;
+- **complete:** the read is uncut and not failed, so absence can be proven.
 
-**Proven failures and proven absence come before degradation.** Rules 2, 4 and 5 are faults and run before the degraded rules 6 to 8, which then become additional findings.
+A retained HPA under a cap is current. A retained HPA from before a watch gap is stale: dated evidence, qualified "as of <time>". It can never establish recovery.
+
+**HPAActive is KEDA's cached copy.** KEDA keeps the last value when it cannot read the HPA, and the copy carries no time. The lab saw HPAActive=False while the HPA itself already read ScalingActive=True (t1, `failing`). The 2.20.0 and 2.20.1 Ready reasons `HPAMetricsUnavailable` and `ScalingDegraded` are read as HPAActive=False.
+
+**The HPA result** (one finding; §3.2 combines it with the others):
+
+| Joined HPA | HPAActive | Result |
+|---|---|---|
+| retained, current, failed (AbleToScale=False, or ScalingActive=False with any reason but `ScalingDisabled`) | any | **fault**: "the HPA cannot <change scale \| compute replicas>: <reason>: <message>". `AmbiguousSelector` also names the other autoscalers on the same target, each with its owner |
+| retained, current, healthy | False | **ok** for the HPA, plus the finding "KEDA last reported HPAActive=False (<reason>); the HPA itself is healthy now". The current direct read is fresh, and the copy is not |
+| retained, current, healthy | True or absent | **ok** for the HPA |
+| retained, stale, failed | any | **fault**, qualified "as of <time>" |
+| retained, stale, healthy | False | **unknown**, "HPA health not established: KEDA reports HPAActive=False (<reason>); Klyx's last HPA read (as of <time>) was healthy". Neither piece can be ordered in time |
+| retained, stale, healthy | True or absent | **unknown**, "HPA health not current: last read healthy as of <time>" |
+| none retained; absence proven (current and complete) | any | **progressing** "awaiting HPA" while the awaiting-HPA episode (§3.1) is under 2 minutes; then **fault**: "no HPA controlled by this ScaledObject (KEDA reported ready)". A standalone HPA may still scale the target, so this never says "no autoscaler". It applies only when the object is not fully paused and Ready=True |
+| none retained; absence not proven (capped, failed or stale) | False | **fault**, qualified "as KEDA last saw it" |
+| none retained; absence not proven | True or absent | **unknown**, "HPA join not established", with the coverage limit. A cached True proves nothing |
 
 ### 3.1 The episode tracker
 
@@ -223,43 +236,45 @@ Three of the rules depend on how long a state has lasted, and the object's creat
 - **Next** is the episode's start plus 2 minutes, so a clock-only crossing is re-evaluated without a new event.
 - **Bound:** one entry per UID in an open episode, at most the kind's admitted objects. Entries are dropped on deletion.
 
-### 3.2 The rules
+### 3.2 The findings and the verdict
 
-1. **No conditions.** The object was created less than 2 minutes ago: progressing, "waiting for KEDA". Here creation does date the state, because a reconciled object keeps its conditions. Past 2 minutes it is unknown, "KEDA has not reconciled this ScaledObject", naming the reason where §6.1 proves it: no handling operator's scope covers it, or its operator is down. The controller task carries the operator's own state, and the object is not counted as a fault.
-2. **Ready=False** (all reasons except the 2.20.0 and 2.20.1 HPA ones). A fault, KEDA's reason and message verbatim. Klyx adds its own evidence where it is provable:
-   - **With a full-pause annotation:** the label reads "pause failed: <message>", with the pause request as context. Paused=True does not make a failed pause a pause (§1.3).
-   - **KEDA's own transient** "ScaledObject paused replicas are being scaled" (2.11 to 2.20), while a pausing episode is within its 2 minutes, is progressing ("pausing: scaling to n"). Past 2 minutes it is the fault above.
-   - **An authentication KEDA cannot read.** An `authenticationRef` names a TriggerAuthentication or ClusterTriggerAuthentication that is absent from a complete, uncut read of its kind, or that the handling operator's authentication selector excludes (§6.1). The headline is "TriggerAuthentication X does not exist" or "TriggerAuthentication X is outside the handling operator's authentication selector", with KEDA's message beneath. KEDA's own message never names it (§1.5).
-3. **A full pause** (§1.3's evidence, version-aware): **paused**, never attention. The label reads "paused: held at n replicas" (the target's actual replicas proven equal), or "paused: frozen at the current replicas", or "paused at n" with the count's evidence said. A changed request reads "paused at 3; 5 requested". A directional pause (`paused-scale-in` or `-out` only, 2.18 and later) is not a pause verdict, and the remaining rules apply with a note.
-   - **A pausing episode without completion evidence:** progressing, "pausing", within 2 minutes of its start (§3.1). Past that it is unknown, with the reason:
-     - "pause requested; completion not established", because the HPA read is capped, the target's replicas are unreadable, or the episode has a lower-bound start;
-     - "pause requested; this KEDA version does not apply <annotation>", only when the handling operator's version is resolved and does not;
-     - "pause requested; whether this KEDA applies it is unverified", when the version is unknown.
+Each item below is an independent finding. **The verdict is the worst finding** in the engine's triage order (fault, degraded, unknown, progressing, paused, ok). Ties take the order listed. Every other finding stays in the inspector, and pause intent stays as context on the label. "No fault rule matched" never establishes health: ok is the verdict only when every finding is ok.
 
-     **Completion "not established" never reads "not applied".**
-   - **A resuming episode:** progressing, "resuming", for 2 minutes; then unknown, "resume not established".
-4. **The joined HPA has failed.** A fault, on the evidence above:
-   - AbleToScale=False ("the HPA cannot change <target>'s scale: <reason>: <message>");
-   - ScalingActive=False with any reason but `ScalingDisabled` ("the HPA cannot compute replicas: <reason>: <message>");
-   - **`AmbiguousSelector`** also names the other autoscalers: the HPAs scaling the same target (by group, kind and name in the namespace), each with its owner (a ScaledObject, or a plain HPA), listed as "also scaling this target".
-5. **No HPA controlled by this ScaledObject.** A fault when:
-   - absence is proven (a complete, uncut HPA read);
-   - the object is not fully paused and Ready=True;
-   - the awaiting-HPA episode (§3.1) has lasted 2 minutes.
+**Two outcomes stand alone:**
+1. **No conditions.** Nothing else is readable. The object was created less than 2 minutes ago: progressing, "waiting for KEDA". Here creation does date the state, because a reconciled object keeps its conditions. Past 2 minutes it is unknown, "KEDA has not reconciled this ScaledObject", naming the reason where §6.1 proves it: no handling operator's scope covers it, or its operator is down. The controller task carries the operator's own state.
+2. **A confirmed completed full pause** (§1.3's evidence, version-aware): **paused**, never attention.
+   - The evidence includes no controlled HPA and Ready not False, so no HPA or Ready finding can apply.
+   - The label reads "paused: held at n replicas" (the target's actual replicas proven equal), or "paused: frozen at the current replicas", or "paused at n" with the count's evidence said. A changed request reads "paused at 3; 5 requested".
+   - A directional pause (`paused-scale-in` or `-out` only, 2.18 and later) is never a completed pause. It is a note on the label.
 
-   The label reads "no HPA controlled by this ScaledObject (KEDA reported ready)". A standalone HPA may still scale the target, so this never says "no autoscaler". Within the episode's 2 minutes, or with an incomplete read, the rule does not match.
-6. **Ready=Unknown with `PartialTriggerError`.** Degraded, "some triggers are failing", with the failing triggers named where `status.health` or events name them. Any other Ready=Unknown, before the first poll, is progressing.
-7. **Fallback=True.** Degraded, "fallback active (<behavior>): <trigger> failed <n> times (threshold <t>)".
-   - **What Klyx does not claim:** a held replica count, or that the HPA is healthy because of the fallback. The `currentReplicas*` and `scalingModifiers` behaviours, another trigger that succeeds, and the HPA's own bounds all change the result.
-   - **What it shows instead,** separately and labelled: the configured fallback (behavior, replicas), the HPA's current and desired replicas, and the target's actual replicas.
-8. **`status.hpaName` names a different HPA** from the joined one: degraded, "status names HPA X; the HPA KEDA controls is Y".
-9. **Otherwise ok**, in KEDA's vocabulary:
-   - "active (n replicas, wants m)";
-   - "idle" (Active=False, `ScalerNotActive`);
-   - "cooling down" (`ScalerCooldown`);
-   - plus a directional-pause note.
+**Otherwise, the findings:**
+- **Ready=False** (all reasons except the 2.20.0 and 2.20.1 HPA ones, read in §3's HPA result): **fault**, KEDA's reason and message verbatim. The copy is temporal:
+  - **"pause failed: <message>"** only for KEDA's own pause-step errors: "failed to update paused status", "failed to stop the scale loop for paused ScaledObject", "failed to delete HPA for paused ScaledObject", "failed to scale target to paused replica count", "failed to update paused replica count status".
+  - **Any other Ready=False while a pause is requested** reads "<message> (while a pause is requested)". It never claims KEDA tried and failed the new request.
+  - **KEDA's own transient** "ScaledObject paused replicas are being scaled" (2.11 to 2.20) is **progressing**, "pausing: scaling to n", while the pausing episode is under 2 minutes. Past that it is the fault above.
+  - **Klyx's own evidence,** where provable: an `authenticationRef` naming a TriggerAuthentication or ClusterTriggerAuthentication absent from a complete, uncut read of its kind, or one the handling operator's authentication selector excludes (§6.1). The headline is then "TriggerAuthentication X does not exist" or "… is outside the handling operator's authentication selector", with KEDA's message beneath. KEDA's own message never names it (§1.5).
+- **The HPA result** (§3's table).
+- **Ready=Unknown with `PartialTriggerError`:** **degraded**, "some triggers are failing", naming the failing triggers where `status.health` or events name them. Any other Ready=Unknown, before the first poll, is **progressing**.
+- **Fallback=True:** **degraded**, "fallback active (<behavior>): <trigger> failed <n> times (threshold <t>)".
+  - **What Klyx does not claim:** a held replica count, or that the HPA is healthy because of the fallback. The `currentReplicas*` and `scalingModifiers` behaviours, another trigger that succeeds, and the HPA's own bounds all change the result.
+  - **What it shows instead,** separately and labelled: the configured fallback (behavior, replicas), the HPA's current and desired replicas, and the target's actual replicas.
+- **`status.hpaName` names a different HPA** from the joined one: **degraded**, "status names HPA X; the HPA KEDA controls is Y".
+- **A pause or resume not yet completed** (§3.1's episodes):
+  - **progressing** "pause requested" or "resuming", while the episode is under 2 minutes;
+  - then **unknown**, with the reason:
+    - "pause requested; completion not established": the HPA read is capped, the target's replicas are unreadable, or the episode has a lower-bound start;
+    - "pause requested; this KEDA version does not apply <annotation>": only when the handling operator's version is resolved and does not;
+    - "pause requested; whether this KEDA applies it is unverified": the version is unknown;
+    - "resume not established".
 
-   **Active=False never lights.**
+  Intent never clears an observed failure. A proven HPA fault, or Ready=False, during a pending pause is still the verdict, with "pause requested" as context. **Completion "not established" never reads "not applied".**
+- **Healthy facts:** **ok**, in KEDA's vocabulary:
+  - "active (n replicas, wants m)";
+  - "idle" (Active=False, `ScalerNotActive`);
+  - "cooling down" (`ScalerCooldown`);
+  - plus a directional-pause note.
+
+  **Active=False never lights.**
 
 The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants more than maxReplicaCount" to an ok label. It is a capacity fact, not attention (§4).
 
@@ -277,7 +292,7 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 3. **ScalingActive=False.** Any reason except `ScalingDisabled` is a fault:
    - `FailedGetResourceMetric`, "unable to fetch metrics": no metrics server, finding 14;
    - `FailedGetExternalMetric`;
-   - `AmbiguousSelector`, which names the other autoscalers, as in §3 rule 4.
+   - `AmbiguousSelector`, which names the other autoscalers, as in §3's HPA result.
 
    `ScalingDisabled` (the target at 0 replicas) is ok, "scaling disabled: target at 0".
 4. **A reported lag.** `status.observedGeneration` is present, positive and below `generation`: progressing, the ratified "Syncing…" mark. Never confirmed healthy while pending.
@@ -290,11 +305,15 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 
 ## 5. The ScaledJob rule
 
-1. **No conditions:** as §3 rule 1.
-2. **Ready=False:** a fault (`ScaledJobCheckFailed`, `TriggerError`, `KEDAJobCreateFailed`), with §3 rule 2's pause context and authentication evidence.
-3. **Paused** (2.11 and later): `autoscaling.keda.sh/paused` in effect for the version (§1.3), with Paused=True and Ready not False: paused, "paused: no new Jobs; running Jobs continue". A ScaledJob has no HPA, so that is its completion evidence. The pausing and resuming episodes (§3.1) read as in §3 rule 3. Before 2.11, the annotation reads "this KEDA version does not apply autoscaling.keda.sh/paused". With the version unknown, it reads "unverified".
-4. **Ready=Unknown `PartialTriggerError`:** degraded.
-5. **Otherwise ok:** "active" or "idle". Fallback is ignored (never written for ScaledJobs).
+The same structure as §3.2: the worst finding, with two outcomes that stand alone.
+- **No conditions:** as for ScaledObjects.
+- **A confirmed completed pause** (2.11 and later): `autoscaling.keda.sh/paused` in effect for the version (§1.3), with Paused=True and Ready not False. It reads **paused**, "paused: no new Jobs; running Jobs continue". A ScaledJob has no HPA, so that is its completion evidence.
+- **The findings otherwise:**
+  - **Ready=False:** a fault (`ScaledJobCheckFailed`, `TriggerError`, `KEDAJobCreateFailed`), with §3.2's temporal copy and authentication evidence;
+  - **Ready=Unknown `PartialTriggerError`:** degraded;
+  - **the pausing and resuming episodes** (§3.1), as in §3.2. Before 2.11, the annotation reads "this KEDA version does not apply autoscaling.keda.sh/paused". With the version unknown, it reads "unverified";
+  - **healthy facts:** ok, "active" or "idle".
+- **Fallback is ignored:** KEDA never writes it for ScaledJobs.
 
 **Jobs are not part of the verdict.** A Job's failure is the workload's, not KEDA's. The inspector lists them (§6).
 
@@ -330,13 +349,13 @@ No other env is read.
 - **Labels.** `WATCH_LABEL_SELECTOR`, where set, must select the user's labels.
 - **The result:**
   - exactly one resolved candidate that applies is **the handling operator**;
-  - none, with every candidate resolved, is "no KEDA operator watches this object" (§3 rule 1's reason);
+  - none, with every candidate resolved, is "no KEDA operator watches this object" (§3.2's "no conditions" reason);
   - several, or any unresolved candidate that might apply, is **unverified**, with the candidates listed. Klyx never picks one.
 
 **Authentication visibility is a separate question, asked within each operator that handles the user.**
 - **`WATCH_LABEL_SELECTOR_FOR_TRIGGERAUTH`** filters which TriggerAuthentications and ClusterTriggerAuthentications that operator's cache holds. It does not decide whether the operator reconciles the user.
 - **Per referenced authentication and per handler,** the result is visible, excluded (the selector, resolved, does not select its labels) or unverified.
-- **Excluded is a configuration failure of the scaler** (§3 rule 2: KEDA cannot find it), never evidence that the user has no handler.
+- **Excluded is a configuration failure of the scaler** (§3.2's Ready=False evidence: KEDA cannot find it), never evidence that the user has no handler.
 - **An unverified handler** lists the visibility per candidate.
 
 ### 6.2 References, sources and existence
@@ -460,7 +479,7 @@ This lands the join S5 deferred. Unverified handling is listed as such, never dr
 
 **Honest outcomes.**
 - The verb says "pause requested".
-- Completion is §1.3's evidence (§3 rule 3; for a ScaledJob, §5 rule 3), as of its next read. A Paused=True already present from a directional pause is never read as completion.
+- Completion is §1.3's evidence (§3.2; for a ScaledJob, §5), as of its next read. A Paused=True already present from a directional pause is never read as completion.
 
 **The non-goal crossing.** Pause and Resume are a new write path, under C4's pre-authorised KEDA pause. They drive a controller and author no desired state.
 
@@ -566,7 +585,7 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
 ## 11. Tests, lab, parity, smoke
 
 **Unit tests (`internal/keda`, pure):**
-- every §3 rule, including:
+- every §3.2 finding, including:
   - each condition reason in §1.2;
   - all three pause annotations, alone and together (`paused-replicas` wins over `paused: "false"`), an unparseable `paused`, the "pausing" and "resuming" mismatches, and directional pauses;
   - the join by controller UID with a custom name, an adopted HPA, a `hpaName` mismatch, a missing HPA within and past the grace, and an incomplete HPA read;
@@ -583,7 +602,7 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
   - pause on 2.10 (`pausedReplicaCount` set, zero included, and unset), 2.11 (`paused` with no effect), 2.12 (`paused: "false"` pausing), 2.17 and an unknown version;
   - a directional pause already Paused=True, then a full pause requested (not completed until the HPA is gone);
 - **revision 2:**
-  - a current retained failing HPA in a capped read (rule 4 applies);
+  - a current retained failing HPA in a capped read (the HPA result is a fault);
   - HPAActive disagreeing in both directions under the cap;
   - Fallback=True with a proven missing HPA past the episode (rule 5, a fault, with the fallback as a finding);
   - a failed paused-count write after the HPA's deletion (Paused=True, no HPA, Ready=False: "pause failed");
@@ -592,7 +611,16 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
   - a capped HPA read during a pause ("not established", never "not applied");
   - KEDA's transient "paused replicas are being scaled" within and past the episode;
   - 2.11 `paused-replicas` with a nonzero and a non-nil zero count;
-  - the episode tracker: an old object newly paused, first seen already pausing (lower bound), a gap during an episode (restart), a UID replacement, and a clock-only crossing through `Next`.
+  - the episode tracker: an old object newly paused, first seen already pausing (lower bound), a gap during an episode (restart), a UID replacement, and a clock-only crossing through `Next`;
+- **revision 3:** every row of §3's HPA result table, including:
+  - a 2.17-shaped object (Ready=True, Active=True, no HPAActive, no `hpaName`) with a capped or unreadable HPA read ("HPA join not established", never ok);
+  - HPAActive=True with an unreadable join (unknown);
+  - a complete empty HPA read within the awaiting-HPA episode (progressing);
+  - both directions of disagreement with the direct read current and stale;
+  - a full pause requested while a current owned HPA reads `AmbiguousSelector` (fault, with "pause requested" as context);
+  - a resuming episode with an HPA fault;
+  - KEDA's transient "being scaled" alongside an independent HPA failure (the fault wins);
+  - Ready=False present before a new pause annotation ("while a pause is requested", never "pause failed").
 
 **`internal/identity`:**
 - `TriggerAuthSubject` for each provider and owner;
@@ -716,3 +744,11 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
 - empty scope forms (§6.1);
 - "no HPA controlled by this ScaledObject" (§3 rule 5);
 - encoded budget against heap (§10).
+
+## 16. Revision 3: Codex's re-review of 76f1fef
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | An unproven or pre-deadline HPA join fell through to ok | §3's HPA result table: "awaiting HPA" (progressing) during the episode, "HPA join not established" (unknown) without proven absence, and a cached HPAActive=True proving nothing. §3.2: ok only when every finding is ok |
+| 2 | A stale retained positive HPA dismissed a KEDA-reported failure | §3: currentness kept apart from completeness. A stale positive is dated evidence that never establishes recovery, and against HPAActive=False it is unknown, "HPA health not established" |
+| 3 | A pending pause or resume hid a proven HPA fault, and "pause failed" was claimed too early | §3.2: independent findings with the worst as the verdict. Only a confirmed completed pause stands alone; intent is context and never clears a failure. "Pause failed" applies only to KEDA's own pause-step errors |
