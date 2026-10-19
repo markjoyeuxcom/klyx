@@ -220,6 +220,13 @@ var parityParts = []parityPart{
 	{"lb", "metallb", "native", []string{"configurationstates"}},
 	// coverage S8a: the fixture's real Alertmanager, apart from every object
 	{"alerts", "alerts", "alerts", nil},
+	// coverage S9: standalone HPAs only (a KEDA-owned HPA is its
+	// ScaledObject's fact row, parityMemberOf), KEDA's scalers, and its
+	// authentications (evidence)
+	{"autoscaling", "hpas", "native", []string{"horizontalpodautoscalers"}},
+	{"keda", "scaledobjects", "native", []string{"scaledobjects"}},
+	{"keda", "scaledjobs", "native", []string{"scaledjobs"}},
+	{"keda", "authentications", "evidence", []string{"triggerauthentications", "clustertriggerauthentications"}},
 }
 
 // parityAlertsCounted is the fixture's posted alerts that count: two
@@ -255,6 +262,9 @@ var parityResource = map[string]string{
 	"mutatingadmissionpolicies":       "mutatingadmissionpolicies.admissionregistration.k8s.io",
 	"services":                        "services", "ipaddresspools": "ipaddresspools.metallb.io",
 	"ciliumloadbalancerippools": "ciliumloadbalancerippools.cilium.io", "configurationstates": "configurationstates.metallb.io",
+	"horizontalpodautoscalers": "horizontalpodautoscalers.autoscaling",
+	"scaledobjects":            "scaledobjects.keda.sh", "scaledjobs": "scaledjobs.keda.sh",
+	"triggerauthentications": "triggerauthentications.keda.sh", "clustertriggerauthentications": "clustertriggerauthentications.keda.sh",
 }
 
 // parityMember is one counted object's declared evaluation.
@@ -288,8 +298,13 @@ type caseExpect struct {
 
 type parityObj struct {
 	Metadata struct {
-		UID         string            `json:"uid"`
-		Annotations map[string]string `json:"annotations"`
+		UID             string            `json:"uid"`
+		Annotations     map[string]string `json:"annotations"`
+		OwnerReferences []struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Controller *bool  `json:"controller"`
+		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
 		Type string `json:"type"`
@@ -297,10 +312,18 @@ type parityObj struct {
 }
 
 // parityMemberOf: whether a counted kind's object is a member of the part
-// (coverage S4: the lb services part counts only LoadBalancer Services).
+// (coverage S4: the lb services part counts only LoadBalancer Services;
+// coverage S9: the hpas part counts only HPAs no ScaledObject controls).
 func parityMemberOf(task, part string, o parityObj) bool {
-	if task == "lb" && part == "services" {
+	switch {
+	case task == "lb" && part == "services":
 		return o.Spec.Type == "LoadBalancer"
+	case task == "autoscaling" && part == "hpas":
+		for _, r := range o.Metadata.OwnerReferences {
+			if r.Controller != nil && *r.Controller && r.Kind == "ScaledObject" && strings.HasPrefix(r.APIVersion, "keda.sh/") {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -327,7 +350,7 @@ func addRole(c *observe.Counts, role string) {
 // coverage overrides a kind's expected coverage.
 func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
 	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
-	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb"} {
+	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb", "keda"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
@@ -426,6 +449,8 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 				// Backup, a binding
 				Counted *bool
 				Binding json.RawMessage
+				// a KEDA-owned HPA (coverage S9): its ScaledObject's fact
+				KEDAOwner string
 			}
 		}
 	}
@@ -437,7 +462,8 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 		// a listed fact, by its part's own marker: no evaluation, and no member
 		// of the counted set (FluxInstance rows carry an unrelated Binding)
 		if (key == "velero/backups" && x.Data.Counted != nil && !*x.Data.Counted) ||
-			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") {
+			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") ||
+			(key == "autoscaling/hpas" && x.Data.KEDAOwner != "") {
 			continue
 		}
 		var m parityMember
@@ -806,6 +832,7 @@ func TestParityGate(t *testing.T) {
 		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none}, {"5d", "Synced", none}, {"5e", "Synced", none},
 		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
 		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
+		{"9", "Synced", none}, // coverage S9: a fallback ScaledObject and an HPA that cannot scale
 	} {
 		l.apply(c.name)
 		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))

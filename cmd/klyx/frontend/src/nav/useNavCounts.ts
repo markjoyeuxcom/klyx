@@ -42,7 +42,10 @@ function noteOf(l: Line): string {
 }
 
 // navCounts (slice 4 §2.2, §5.2): a group shows its strongest lit line,
-// never a sum; a destination shows exactly its own part.
+// never a sum; a destination shows exactly its own part - or, where parts
+// share one (Flux's operator view; coverage S9's Autoscalers, with the
+// standalone HPAs and KEDA's ScaledObjects), the strongest of them, as a
+// group does: never the last one written.
 export function navCounts(m: ClusterAttention | null): NavCounts {
   if (!m) return EMPTY;
   const out: NavCounts = { group: {}, destination: {}, groupNote: {}, destinationNote: {}, attention: new Set() };
@@ -66,17 +69,18 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
       }
     }
   }
+  const shown = new Map<string, { a: Area; l: Line }[]>();
   for (const a of m.areas) {
     const notes: string[] = [];
     for (const l of a.lines) {
       if (l.destinationId) {
         // the part's own count: lit, evidence, or an unlit count in the
         // tool's word (neutral, as its lens shows it; review 1/3 #2)
-        if (l.state === "attention" || l.state === "evidence" || l.state === "unlit" || l.state === "alerts") out.destination[l.destinationId] = badge(a, l);
+        if (l.state === "attention" || l.state === "evidence" || l.state === "unlit" || l.state === "alerts") shown.set(l.destinationId, [...(shown.get(l.destinationId) ?? []), { a, l }]);
         if (l.state === "attention") out.attention.add(l.destinationId);
         const w = noteOf(l);
         // "checking…" is said once, on the group - not beside every view
-        if (w && w !== "checking…") out.destinationNote[l.destinationId] = w;
+        if (w && w !== "checking…") out.destinationNote[l.destinationId] = stronger(out.destinationNote[l.destinationId], w);
       } else if (l.state === "attention" || l.state === "unlit" || (noteOf(l) && noteOf(l) !== "checking…")) {
         // a part without a destination of its own: a note on its task's
         // destination, never a number on that badge or a resource's
@@ -86,6 +90,11 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
     if (a.controller?.state === "not ready") notes.unshift("controller not ready");
     if (a.controller?.state === "not ready" || a.lines.some((l) => l.state === "attention" && !l.destinationId)) out.attention.add(a.destinationId);
     if (notes.length) out.destinationNote[a.destinationId] = [out.destinationNote[a.destinationId], ...notes].filter(Boolean).join(" · ");
+  }
+  for (const [id, lines] of shown) {
+    const best = strongestLine(lines.map((x) => x.l));
+    const pick = lines.find((x) => x.l === best) ?? lines[0];
+    out.destination[id] = badge(pick.a, pick.l);
   }
   return out;
 }

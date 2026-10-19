@@ -15,7 +15,9 @@
 # cluster klyx-parity this script created, recognised by its ownership
 # marker and its loopback API server. Its kubeconfig is a separate file
 # ($KLYX_PARITY_KUBECONFIG), never ~/.kube/config, so no current-context
-# changes. The CRD source (kind-klyx) is only ever read.
+# changes. The CRD source (kind-klyx) is only ever read. KEDA's release
+# manifest (coverage S9) is fetched once into the state directory and
+# applied only when it matches its pinned digest.
 #
 # The state directory ($KLYX_PARITY_DIR) is the script's only when it holds
 # the script's directory marker: up refuses a non-empty directory without
@@ -31,7 +33,10 @@ dir=${KLYX_PARITY_DIR:-${TMPDIR:-/tmp}/klyx-parity}
 dirmark=$dir/.klyx-parity-dir
 kubeconfig=$dir/kubeconfig
 state=$dir/owner
-own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark")
+keda_version=2.21.0
+keda_sha256=b43c89ffeef81722d7e2dd2c079d74789767a0f89cae1336cff784994814f6d7
+keda_manifest=$dir/keda-$keda_version.yaml
+own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark" "$keda_manifest" "$keda_manifest.part")
 src=${KLYX_PARITY_CRD_SOURCE:-kind-klyx}
 here=$(cd "$(dirname "$0")" && pwd)
 fixtures=$here/parity

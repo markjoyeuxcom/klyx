@@ -883,6 +883,36 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { lines: lines.length, strength: $("[data-testid='history-strength']")?.textContent?.slice(0, 80) };
   });
 
+  // ---- coverage S9: KEDA and autoscaling ownership (lab-s9, a real KEDA 2.21.0) ----
+  // failing's prometheus trigger reaches nothing: KEDA's fallback holds,
+  // and the verdict says so, with the trigger's failure count apart from
+  // the HPA's replicas
+  await step(steps, "KEDA: a ScaledObject on fallback", async () => {
+    await open("autoscaling");
+    await closeDrawer();
+    (await within(20_000, "failing", () => $<HTMLElement>("[data-testid='as-row-failing']"))).click();
+    const panel = await within(8000, "the ScaledObject inspector", () => $("[data-testid='keda-so-panel']"));
+    await within(8000, "the fallback verdict", () => /Fallback active \(static\)/.test(panel.textContent ?? ""));
+    const failures = (await within(8000, "the failure count", () => /(\d+) failures \(Failing\)/.exec($("[data-testid='keda-triggers']")?.textContent ?? "")))[1];
+    const hpa = $("[data-testid='keda-hpa']")?.textContent ?? "";
+    if (!/^keda-hpa-failing: \d+ → \d+/.test(hpa)) throw new Error(`the HPA line: ${hpa}`);
+    return { failures, hpa };
+  });
+  // the scale verb names what owns the count; cancelled, never applied
+  await step(steps, "Scale: the popover names the KEDA ScaledObject", async () => {
+    await open("workloads");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "scale-workload", cluster, workloadKind: "Deployment", namespace: "klyx-s9-lab", name: "active-web" });
+    const note = await within(20_000, "the owner line", () => {
+      const t = $("[data-testid='scale-owner']")?.textContent ?? "";
+      return /KEDA ScaledObject active-web/.test(t) ? t : null;
+    });
+    if (!byText<HTMLElement>("button", /^scale anyway$/)) throw new Error("the apply button does not read \"scale anyway\"");
+    (await within(4000, "cancel", () => $<HTMLElement>("button[aria-label='cancel scale']"))).click();
+    await within(2000, "the popover closed", () => !$("[data-testid='scale-owner']"));
+    return { owner: note.slice(0, 160) };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();

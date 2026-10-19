@@ -904,6 +904,200 @@ EOF
 	die "the parity Alertmanager's alerts were not all processed"
 }
 
+# KEDA (coverage S9): the real 2.21.0 release manifest, pinned by its
+# digest (klyx-parity.sh) and cached in the state directory, so the
+# capability reads what it reads on any cluster - the operator by its
+# labels and running image, the admission webhooks, and the external
+# metrics APIService served by KEDA's own metrics server. A stand-in
+# operator cannot serve that API, and its absence is a controller issue
+# (S9 §2), which a healthy baseline cannot carry. The operator and the
+# metrics server watch only the keda namespace, so nothing reconciles the
+# fixture's scalers: their statuses are written here, as every capability
+# object's is. The admission webhooks keep the release's cluster-wide scope
+# and validate every fixture scaler, as they would anywhere.
+keda_install() {
+	local got d i
+	if [[ ! -f $keda_manifest || $(openssl dgst -sha256 -r "$keda_manifest" | awk '{print $1}') != "$keda_sha256" ]]; then
+		curl -fsSL --max-time 120 -o "$keda_manifest.part" "https://github.com/kedacore/keda/releases/download/v$keda_version/keda-$keda_version.yaml" ||
+			die "could not fetch KEDA $keda_version's release manifest"
+		got=$(openssl dgst -sha256 -r "$keda_manifest.part" | awk '{print $1}')
+		[[ $got == "$keda_sha256" ]] || { rm -f "$keda_manifest.part"; die "KEDA's release manifest has digest $got, pinned $keda_sha256"; }
+		mv "$keda_manifest.part" "$keda_manifest"
+	fi
+	k create --dry-run=client -o json -f "$keda_manifest" |
+		jq 'if .kind == "Deployment" and (.metadata.name == "keda-operator" or .metadata.name == "keda-metrics-apiserver")
+			then .spec.template.spec.containers |= map(.env |= map(if .name == "WATCH_NAMESPACE" then .value = "keda" else . end))
+			else . end' |
+		k apply --server-side --force-conflicts --field-manager=klyx-parity -f - >/dev/null
+	for d in keda-operator keda-metrics-apiserver; do
+		[[ $(k -n keda get deployment "$d" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WATCH_NAMESPACE")].value}') == keda ]] ||
+			die "KEDA's $d does not watch only the keda namespace"
+	done
+	for d in keda-operator keda-metrics-apiserver keda-admission; do
+		k -n keda rollout status "deployment/$d" --timeout=300s >/dev/null
+	done
+	# the operator's certificate rotation writes the CA the APIService needs
+	for ((i = 0; i < 90; i++)); do
+		[[ $(k get apiservices.apiregistration.k8s.io v1beta1.external.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}') == True ]] && return
+		sleep 2
+	done
+	die "KEDA's external metrics API did not become available"
+}
+
+# zero_target <name>: a Deployment at 0 replicas - KEDA's idle scale - so
+# kind's HPA controller reports AbleToScale=True and ScalingActive=False
+# ScalingDisabled, the same status every sync and never a metric read: no
+# timer flips an HPA. The Deployment reads Scaled to 0.
+zero_target() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks paused false)
+spec:
+  replicas: 0
+  selector: {matchLabels: {app: $1}}
+  template:
+    metadata: {labels: {app: $1}}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: pause, image: $pause, imagePullPolicy: Never}]
+EOF
+}
+
+# keda_hpa <scaledobject> <target>: the HPA KEDA creates for a
+# ScaledObject - its name, labels and controller reference - since no KEDA
+# reconciles the fixture's scalers.
+keda_hpa() {
+	local uid
+	uid=$(k -n "$ns" get scaledobjects.keda.sh "$1" -o jsonpath='{.metadata.uid}')
+	k apply -f - >/dev/null <<EOF
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: keda-hpa-$1
+  namespace: $ns
+  labels: {app.kubernetes.io/managed-by: keda-operator, app.kubernetes.io/name: keda-hpa-$1, app.kubernetes.io/part-of: $1, scaledobject.keda.sh/name: $1}
+  ownerReferences: [{apiVersion: keda.sh/v1alpha1, kind: ScaledObject, name: $1, uid: "$uid", controller: true, blockOwnerDeletion: true}]
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: $2}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: External, external: {metric: {name: s0-prometheus, selector: {matchLabels: {scaledobject.keda.sh/name: $1}}}, target: {type: AverageValue, averageValue: "10"}}}]
+EOF
+}
+
+# hpa_reported <name> <condition> <reason>: wait until kind's HPA
+# controller has reported the HPA (it syncs each every 15s).
+hpa_reported() {
+	local i
+	for ((i = 0; i < 60; i++)); do
+		[[ $(k -n "$ns" get horizontalpodautoscalers.autoscaling "$1" -o jsonpath="{.status.conditions[?(@.type==\"$2\")].reason}" 2>/dev/null) == "$3" ]] && return
+		sleep 2
+	done
+	die "the HPA controller did not report $ns/$1 $2 $3"
+}
+
+# so_status <name> <conditions json> [extra status json, without braces]:
+# a ScaledObject's status as KEDA 2.21 writes it (no condition times).
+so_status() {
+	status scaledobjects.keda.sh "$ns" "$1" "{\"conditions\":$2${3:+,$3}}"
+}
+
+kcond() { printf '{"type":"%s","status":"%s","reason":"%s","message":"%s"}' "$@"; }
+
+keda_objects() {
+	# The baseline (coverage S9): a ScaledObject idle at zero with its HPA
+	# and an authentication; a ScaledObject whose full pause completed (no
+	# HPA); an idle ScaledJob; and a standalone HPA. Faults are case 9's.
+	keda_install
+	zero_target parity-keda-idle
+	zero_target parity-keda-paused
+	zero_target parity-hpa-target
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata: {name: parity-keda-secret, namespace: $ns}
+stringData: {token: parity-fixture}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata: {name: parity-keda-auth, namespace: $ns}
+spec:
+  secretTargetRef: [{parameter: bearerToken, name: parity-keda-secret, key: token}]
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-idle
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  scaleTargetRef: {name: parity-keda-idle}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  triggers:
+  - type: prometheus
+    metadata: {serverAddress: "http://prometheus.$ns.svc:9090", query: "sum(rate(http_requests_total[1m]))", threshold: "10", authModes: bearer}
+    authenticationRef: {name: parity-keda-auth}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-paused
+  namespace: $ns
+  annotations:
+    autoscaling.keda.sh/paused: "true"
+    $(marks paused false)
+spec:
+  scaleTargetRef: {name: parity-keda-paused}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  triggers: [{type: cron, metadata: {timezone: UTC, start: "0 0 * * *", end: "59 23 * * *", desiredReplicas: "2"}}]
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: parity-sj
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  maxReplicaCount: 1
+  jobTargetRef:
+    template:
+      spec:
+        restartPolicy: Never
+        containers: [{name: pause, image: $pause, imagePullPolicy: Never}]
+  triggers: [{type: cron, metadata: {timezone: UTC, start: "0 3 * * *", end: "1 3 * * *", desiredReplicas: "1"}}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: parity-hpa-plain
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: parity-hpa-target}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}}]
+EOF
+	keda_hpa parity-so-idle parity-keda-idle
+	local gvkr='"scaleTargetGVKR":{"group":"apps","kind":"Deployment","resource":"deployments","version":"v1"},"scaleTargetKind":"apps/v1.Deployment"'
+	so_status parity-so-idle "[$(kcond Ready True ScaledObjectReady "ScaledObject is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),$(kcond Fallback False NoFallbackFound "No fallbacks are active on this scaled object"),{\"type\":\"Paused\",\"status\":\"False\"},$(kcond HPAActive True HPAActive "HPA is actively scaling")]" \
+		"\"hpaName\":\"keda-hpa-parity-so-idle\",\"externalMetricNames\":[\"s0-prometheus\"],\"originalReplicaCount\":0,$gvkr,\"triggersTypes\":\"prometheus\",\"authenticationsTypes\":\"parity-keda-auth\",\"triggersActivity\":{\"s0-prometheus\":{\"isActive\":false}}"
+	so_status parity-so-paused "[$(kcond Ready True ScaledObjectReady "ScaledObject is paused"),{\"type\":\"Active\",\"status\":\"Unknown\"},$(kcond Fallback False NoFallbackFound "No fallbacks are active on this scaled object"),$(kcond Paused True ScaledObjectPaused "ScaledObject is paused")]"
+	status scaledjobs.keda.sh "$ns" parity-sj "{\"conditions\":[$(kcond Ready True ScaledJobReady "ScaledJob is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),{\"type\":\"Fallback\",\"status\":\"Unknown\"},{\"type\":\"Paused\",\"status\":\"False\"}],\"triggersTypes\":\"cron\"}"
+	hpa_reported keda-hpa-parity-so-idle ScalingActive ScalingDisabled
+	hpa_reported parity-hpa-plain ScalingActive ScalingDisabled
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -918,6 +1112,7 @@ baseline() {
 	velero_objects
 	admission_objects
 	lb_objects
+	keda_objects
 	alerts_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
@@ -998,6 +1193,45 @@ EOF
 		stand_in cert-manager cert-manager fault ;;
 	6b) # the Flux controller down: the GitOps tier degrades the connection
 		stand_in flux-system kustomize-controller fault ;;
+	9) # coverage S9: a ScaledObject on fallback (degraded) with its HPA, and
+		# a standalone HPA whose target does not exist (kind's HPA controller
+		# reports AbleToScale=False FailedGetScale every sync)
+		zero_target parity-keda-fallback
+		k apply -f - >/dev/null <<EOF
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-fallback
+  namespace: $ns
+  annotations:
+    $(marks degraded true)
+spec:
+  scaleTargetRef: {name: parity-keda-fallback}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  fallback: {failureThreshold: 3, replicas: 2}
+  triggers:
+  - type: prometheus
+    metadata: {serverAddress: "http://prometheus.$ns.svc:9090", query: "sum(rate(http_requests_total[1m]))", threshold: "10"}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: parity-hpa-gone
+  namespace: $ns
+  annotations:
+    $(marks fault true)
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: parity-missing}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}}]
+EOF
+		keda_hpa parity-so-fallback parity-keda-fallback
+		so_status parity-so-fallback "[$(kcond Ready True ScaledObjectReady "ScaledObject is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),$(kcond Fallback True FallbackExists "At least one trigger is falling back on this scaled object"),{\"type\":\"Paused\",\"status\":\"False\"},$(kcond HPAActive True HPAActive "HPA is actively scaling")]" \
+			'"hpaName":"keda-hpa-parity-so-fallback","externalMetricNames":["s0-prometheus"],"health":{"s0-prometheus":{"numberOfFailures":7,"status":"Failing"}},"scaleTargetGVKR":{"group":"apps","kind":"Deployment","resource":"deployments","version":"v1"},"scaleTargetKind":"apps/v1.Deployment","triggersTypes":"prometheus"'
+		hpa_reported keda-hpa-parity-so-fallback ScalingActive ScalingDisabled
+		hpa_reported parity-hpa-gone AbleToScale FailedGetScale ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -1018,6 +1252,9 @@ revert_case() {
 	5e) k -n "$ns" delete tcproutes.gateway.networking.k8s.io parity-tcp-noport --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
 	6b) stand_in flux-system kustomize-controller "" ;;
+	9) k -n "$ns" delete scaledobjects.keda.sh parity-so-fallback --wait >/dev/null
+		k -n "$ns" delete horizontalpodautoscalers.autoscaling keda-hpa-parity-so-fallback parity-hpa-gone --ignore-not-found --wait >/dev/null
+		k -n "$ns" delete deployment parity-keda-fallback --wait >/dev/null ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"

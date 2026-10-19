@@ -64,14 +64,19 @@ type Capture = {
   rows: { cluster: string; incarnation: number; task: string; evaluatedAt: string; part: HealthPart }[];
   dtos: Record<string, RowsDTO<DtoRow>>; // the production sink's emitted messages: the lens DTOs
 };
-type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string };
+type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string; kedaOwner?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
 const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
-  "alerts/alerts"];
+  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications"];
+
+// inventory parts the attention model does not carry (coverage S9 §2: KEDA's
+// authentications are rows, never Needs you); their kinds' gaps read on the
+// parts that depend on them
+const INVENTORY = new Set(["keda/authentications"]);
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };
@@ -113,6 +118,9 @@ function assertRowDTOs(c: Capture) {
     const key = `${pe.task}/${pe.part}`;
     const dto = c.dtos[key];
     if (!dto) continue;
+    // evidence rows (coverage S9: KEDA's authentications) are facts: no
+    // evaluation, no counts
+    if (pe.classifier === "evidence") continue;
     if (pe.classifier === "alerts") {
       // coverage S8a: the lens rows and the summary come from one read;
       // the counted rows are the part's counted alerts and the oracle's
@@ -126,9 +134,10 @@ function assertRowDTOs(c: Capture) {
     let included = 0;
     const seen = new Set<string>();
     for (const row of dto.rows ?? []) {
-      // a listed fact (coverage S2b, S3a: an uncounted Backup, a binding)
-      // carries no evaluation and is no member of the counted set
-      if (native && !row.rule && (row.counted === false || row.entity === "binding")) continue;
+      // a listed fact (coverage S2b, S3a: an uncounted Backup, a binding;
+      // S9: a KEDA-owned HPA) carries no evaluation and is no member of the
+      // counted set
+      if (native && !row.rule && (row.counted === false || row.entity === "binding" || !!row.kedaOwner)) continue;
       const uid = row.uid ?? "";
       const role = native ? row.rule?.role : row.health?.kind;
       expect(role, `${c.case} ${key} ${uid}: no evaluation`).toBeTruthy();
@@ -172,8 +181,12 @@ function assertModel(c: Capture, m: ClusterAttention) {
   // every step 7e area present
   expect(m.areas.map((a) => a.id).sort()).toEqual(TASKS.map((t) => t.task).sort());
   for (const pe of ex.parts) {
-    const { a, l } = lineOf(m, pe.task, pe.part);
     const where = `${c.case} ${pe.task}/${pe.part}`;
+    if (INVENTORY.has(`${pe.task}/${pe.part}`)) {
+      expect(m.areas.find((x) => x.id === pe.task)?.lines.some((x) => x.part === pe.part), where).toBe(false);
+      continue;
+    }
+    const { a, l } = lineOf(m, pe.task, pe.part);
     if (pe.classifier === "evidence") {
       expect(l.state, where).not.toBe("attention"); // evidence is never attention
       continue;
