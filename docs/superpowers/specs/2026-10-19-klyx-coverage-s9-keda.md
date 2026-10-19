@@ -754,3 +754,123 @@ Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
 | 3 | A pending pause or resume hid a proven HPA fault, and "pause failed" was claimed too early | §3.2: independent findings with the worst as the verdict. Only a confirmed completed pause stands alone; intent is context and never clears a failure. "Pause failed" applies only to KEDA's own pause-step errors |
 
 **Design accepted at 279a50d** (Codex, revision 3, handoff f7b5315d, 2026-10-19), with no remaining findings. This accepts the design only; the implementation and its gates keep their own review. Two choices remain the owner's: the popover-only scale for a workload proven unowned on an unprotected cluster (§7), and `TooManyReplicas` as a capacity fact without attention (§4).
+
+## 17. As built
+
+Built on `feat/coverage-s8` after the design's acceptance at 279a50d:
+- **481c5b7** - the pure packages `internal/hpa` and `internal/keda`.
+- **68481ab** - owner and target links resolved through discovery (§7).
+- **3b4c639** - the capability, the kinds and parts, the controller task and the episode tracker.
+- **374b79b** - the rows, the AI and chat allowlists, and the Vault token mask.
+- **199f4eb** - the on-demand reads, the S5 join, replica ownership and Pause/Resume.
+- **f67578a** - the Autoscaling lens, the scale verb's owner line and the identity join.
+- **0e12561** - parity with a real KEDA and case 9, the smoke steps, the episode goroutine's tests, and a shared destination's strongest line.
+- **1a3db14** - the mutations' tests, a scaler's `MaxObject` bounding its cap product, the budget calibration and the load fixture.
+- **The commit carrying this section** - these notes.
+
+### 17.1 What it is
+
+- **`internal/hpa`:** the HPA projection (§10, `observedGeneration` presence kept, the controller reference, the target, conditions with their times), §4's rule with `OKLabel`, and the helpers the ScaledObject rule shares (`Failure`, `Lag`, `KEDAOwner`, `Scales`).
+- **`internal/keda`:**
+  - the projections of all four kinds, with every cut flagged and the Vault token never read;
+  - `Version` from an image, the pause intent per version (§1.3), and both completion rules;
+  - the episode tracker (§3.1);
+  - §3.2's findings and verdict, §3's HPA result table, and §5's ScaledJob rule;
+  - the handling operator, its settings and scopes, and §6.2's namespace table.
+- **`capability`:** KEDA's detection (§2): the operators and their running version, the admission webhooks, and the external metrics APIService with its owner proven through the Service's EndpointSlices to the backing pods' images.
+- **`observe`, `healthsrc`, `fleet`:**
+  - the shared HPA kind with its two consumers (C3), `autoscaling/hpas`, and KEDA's three parts and controller task;
+  - `Capture.AsOf`, so stale HPA evidence is dated;
+  - the episode goroutine, which publishes `FactKEDAEpisodes`;
+  - on-demand: `KEDAInspect` (the handler, authentication existence and visibility, the subject), `KEDAJobsOf`, `ReplicaOwner` and `KEDASetPaused`;
+  - the S5 join: a ServiceAccount's report lists the authentications that act as it.
+- **`appbridge`:** the rows' DTOs (a fact row carries no rule), `KEDAService`, the AI and chat allowlists with literal-needle tests, and the Vault token's `SanitizeEmbedded` surfaces.
+- **The frontend:** the Autoscaling section (HPAs, ScaledObjects, ScaledJobs, Authentications) with its inspectors, Pause and Resume behind a confirmation, the scale popover's owner line with "scale anyway", owner links, and KEDA links in the identity blocks.
+
+### 17.2 Decided while building
+
+- **Per-object maxima are larger than §10's table, from measurement.**
+  - **Scalers: 40 KiB, bounding the product of every cap.** A ScaledObject with every retained field at its cap projects to 34,849 bytes and a ScaledJob to 25,112 (`TestMaxObjectBoundsTheCapProduct`). No ScaledObject or ScaledJob is left out for its shape, only for the budget. The design's 4 KiB could have dropped exactly the faulty ones, those with long messages.
+  - **HPAs: 8 KiB,** which bounds their cap product (pinned by `hpa.TestProject`; 6,167 bytes at the calibration's caps). An HPA keeps 6 conditions.
+  - **Authentications: 16 KiB.** Their cap product cannot be bounded sensibly within their 128 KiB and 64 KiB budgets: one at every cap of its in-cluster sources alone is 36 KiB, before the external sources' references. A large realistic one (16 references in each in-cluster source, Vault and a pod identity) is 8.5 KiB. One past 16 KiB is counted, not retained: its kinds read truncated, so a missing authentication stays unverified, never claimed.
+  - Sizes count retained bytes, and every clipped string is a copy.
+- **A finding can be a note** (`Finding.Note`): informational, never the headline. "KEDA's copy disagrees" (the HPA healthy now) and "the pause annotation is unverified" are notes.
+- **The running version is read at the capability probe,** from the operator's ready pods fenced by owner UID (Deployment, ReplicaSets, pods), not from the observer's pods model. It follows the re-probe interval.
+- **`KEDA_RESTRICT_SECRET_ACCESS` applies to every Secret reference** (KEDA's `resolveAuthSecret`), not only `secretTargetRef`.
+- **Episode continuity is bounded by contiguity.** An HPA created and deleted between two coalesced snapshots within one continuity is not seen. A stretch is carried only when the scaler was not written, or the kinds changed once at most since the last visit; otherwise the start restarts as a lower bound.
+- **Scalers carry their GitOps owner** (`flux.OwnerOf` on the full object, before any cut) for the verbs' ownership line, and `GitOpsOwnership` returns one value.
+- **Parity runs a real KEDA, scoped to its own namespace.** §11 planned a stand-in operator. A stand-in cannot serve the external metrics API, and that API's absence is a controller issue (§2), so the baseline could not read healthy. The fixture applies KEDA 2.21.0's release manifest, pinned by digest, with the operator and metrics server watching only `keda`. The admission webhooks keep their cluster-wide scope and validate every fixture scaler. The fallback ScaledObject moved to case 9: the baseline carries no fault or degraded object.
+- **A destination parts share shows its strongest line.** Parity's case 9 found it. `navCounts` wrote each line's badge in turn, so KEDA's degraded ScaledObject (later in `TASKS`) hid the HPA fault's danger on the shared Autoscalers destination. Flux's operator view (FluxInstance and ResourceSets) had the same last-write-wins. A shared destination now shows its strongest line, as a group does, never a sum.
+- **KEDA's authentications are not an attention line.** They are inventory rows (§2: never Needs you), and their kinds' gaps read on the ScaledObjects line as dependencies. The frontend gate declares the part inventory and asserts the model does not carry it.
+- **The smoke's title** is the section's, "Autoscaling", since HPAs and KEDA share it.
+
+### 17.3 Verified
+
+- **The lab** (`lab-s9`, a real KEDA 2.21.0 on kind-klyx; `FINDINGS.md` 1 to 14).
+- **The parity gate**, both stages, with a real KEDA on `kind-klyx-parity`:
+  - **baseline:** a ScaledObject idle at zero with its HPA and authentication, a completed full pause, an idle ScaledJob, and a standalone HPA. Every target is at 0 replicas, so kind's HPA controller writes the same status every sync;
+  - **case 9:** a ScaledObject on fallback (degraded) with its HPA, and an HPA whose target does not exist (a fault). It settles in about 2.9 s and the baseline returns in about 2.7 s.
+- **The captures** (headless, the server-mode build on the smoke fleet; night and day at 1440 and 1024), none scrolling sideways:
+  - **Overview:** HPAs "5 cannot scale" with hpa-gone, plain-api and shared-plain; KEDA's ScaledObjects "7 failing or not scaling" with bad-auth, cluster-auth and ghost-auth's "TriggerAuthentication no-such-auth does not exist"; ScaledJobs "none failing";
+  - **the ScaledObjects list,** broken first in KEDA's words: the faults, then `failing` ("Fallback active (static)"), the two completed pauses, then the healthy ones;
+  - **the inspectors:** `failing` (its trigger's failure count beside the HPA's replicas), `paused` ("paused (completed)", "none: a full pause deletes it"), `ghost-auth`, `one-way` ("scale-in paused"), `wl-identity`, `hpa-gone`, the ScaledJob `batch` with its Jobs, and the authentication `aws-workload`;
+  - **the Pause confirmation** on `active-web` (cancelled): it names the HPA KEDA deletes and the held Deployment, and says "requested" until KEDA's status shows the pause;
+  - **the scale popover** on `active-web` (cancelled): "KEDA ScaledObject active-web, through HPA keda-hpa-active-web: pause the ScaledObject instead to hold a count", with "scale anyway".
+- **The budget calibration** (`TestKEDAHeapCalibration`): each kind filled to its budget, each source built and dropped inside the measurement.
+
+| Kind | Shape | Objects | Encoded each | Retained heap | Heap per encoded byte |
+|---|---|---|---|---|---|
+| scaledobjects | typical | 349 | 1,502 B | 853 KB | 1.63 |
+| scaledobjects | at the caps | 19 | 27,495 B | 554 KB | 1.06 |
+| scaledjobs | typical | 113 | 1,153 B | 163 KB | 1.25 |
+| scaledjobs | at the caps | 6 | 20,235 B | 134 KB | 1.10 |
+| triggerauthentications | typical | 414 | 316 B | 160 KB | 1.22 |
+| triggerauthentications | large | 15 | 8,509 B | 174 KB | 1.37 |
+| clustertriggerauthentications | typical | 212 | 308 B | 80 KB | 1.22 |
+| clustertriggerauthentications | large | 7 | 8,501 B | 81 KB | 1.36 |
+| horizontalpodautoscalers | typical | 566 | 926 B | 483 KB | 0.92 |
+| horizontalpodautoscalers | at the caps | 85 | 6,167 B | 586 KB | 1.12 |
+
+  The encoded admission budget is 1.31 MiB per cluster, 512 KiB of it (the HPAs) on every cluster. At full budgets the retained heap is about 1.9 MB per cluster. An authentication at every cap (about 36 KiB) is counted, not retained.
+- **The load test** (`TestLoad`) now carries S9: 200 ScaledObjects with their HPAs, 100 plain HPAs, 20 ScaledJobs and 50 authentications on the large cluster, and a tenth of that on each small one. The same fixture ran on the code before S9 (eadf234, the objects unwatched in the fake API) and after, three times each, on an idle machine:
+
+| | before | after |
+|---|---|---|
+| first complete summary, large | 1.06-1.07s | 1.07s |
+| Observers' retained heap, steady | 59.6-59.7 MB | 61.0 MB |
+| recovery peak / steady | 1.21x, 1.31x, 1.25x | 1.40x, 1.28x, 1.22x |
+| full evaluation, large (max of 5) | 67.7-69.6 ms | 70.6-74.3 ms |
+| every kind live after the API recovered | 8.25-8.51s | 8.42-8.63s |
+
+  - **What S9 costs at this scale:** about 1.3 MB of steady heap and about 3 ms of full evaluation (four more parts).
+  - **The recovery peak** stays within its 1.5x budget in all six runs.
+  - **Full evaluation** misses 50 ms before and after alike. It remains the open owner question.
+
+### 17.4 Gates
+
+- **The native smoke:** 193 of 193 steps in each of night and day at 1440 and 1024 on 1a3db14, with the two S9 steps:
+  - **fallback:** `failing` reads "Fallback active (static)" with its trigger's 635 failures, and the HPA line "keda-hpa-failing: 2 → 2 (min 1, max 3)" apart;
+  - **the scale verb:** the popover names "KEDA ScaledObject active-web, through HPA keda-hpa-active-web" and offers "scale anyway"; cancelled, never applied.
+- **The parity gate:** both stages pass on 1a3db14, every case and both recoveries.
+- **`relabs.sh`** applies `lab-s9` with the other labs.
+- **Go:** `go test -race` passes for `keda`, `hpa`, `healthsrc`, `capability`, `fleet`, `appbridge`, `identity`, `observe` and `crd`; golangci-lint reports 0 issues.
+- **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S9), and vitest passes 2,328 tests.
+- **Mutations:** 75, all caught.
+  - 52 on the first pass. Six more did not build (a mutation left a variable unused) and were rewritten to compile.
+  - The 16 survivors each gained a test:
+    - the capacity fact only on `TooManyReplicas`;
+    - a ScaledJob paused while Ready=False;
+    - `KEDAOwner`'s group;
+    - an HPA never its own "other autoscaler";
+    - a complete HPA read gone stale proving nothing;
+    - a same-named target in another namespace;
+    - AmbiguousSelector naming the others;
+    - mixed and non-pod backing endpoints;
+    - a not-ready webhook;
+    - an unproven ScaledObject read;
+    - an unknown handler version's refusal;
+    - a 2.11 ScaledJob's pause, in the backend and in the frontend;
+    - the protected grant on Pause/Resume;
+    - Git ownership in the scale confirmation.
+  - `ReplicaOwner`'s read became `autoscalersOf` over the `VisitKind` interface, so its proofs are tested without a running Observer. That added one mutation (no Observer proves nothing).
+  - No equivalents.
