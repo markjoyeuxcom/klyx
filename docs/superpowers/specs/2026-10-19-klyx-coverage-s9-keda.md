@@ -1,6 +1,6 @@
 # Coverage S9: KEDA and autoscaling ownership
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers.
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S9. It takes the KEDA authentication joins S5 deferred (`2026-10-18-klyx-coverage-s5-workload-identity.md`), and follows C3's shared-kind gate (S3a §2) for a new shared kind, HorizontalPodAutoscalers. Revision 1 answers Codex's design review of 5b165d8 (§14).
 
 The roadmap's S9:
 - **The kinds:**
@@ -29,7 +29,7 @@ The facts below come from KEDA v2.21.0 (2026-09-23, the latest release) and keda
 |---|---|---|
 | Ready | True `ScaledObjectReady`, rewritten by the scale loop on **every polling tick**; False `ScaledObjectCheckFailed` (spec, target, scaler build), `TriggerError` (no trigger active, a scaler errored, no fallback), `ErrorGettingCurrentReplicas`, `ErrorScalingTarget`; Unknown `PartialTriggerError` (some triggers active, some errored) | False and `PartialTriggerError` prove a fault. True is weak: it stays True while a fallback absorbs errors, and reads "ScaledObject is paused" during a full pause |
 | Active | True `ScalerActive`; False `ScalerNotActive` or `ScalerCooldown`; Unknown `UnknownState` after a failed check | activation (0 or idle to min), not HPA scaling. False is the intended idle state |
-| Fallback | True `FallbackExists`; False `NoFallbackFound` (forced False without a valid fallback spec) | True: at least one trigger failed more than `failureThreshold` times and KEDA is feeding the HPA a synthetic metric so it lands on `fallback.replicas` |
+| Fallback | True `FallbackExists`; False `NoFallbackFound` (forced False without a valid fallback spec) | True: at least one trigger failed more than `failureThreshold` times, and KEDA feeds the HPA a replacement metric per its fallback behaviour. That does not prove which replica count results (§3 rule 6) |
 | Paused | True `ScaledObjectPaused` for a full pause **and** for a directional one; False `ScaledObjectUnpaused`; initialised False since 2.18, Unknown before | which pause only the annotations say (§1.3) |
 | HPAActive | since 2.20.2, appended lazily: True `HPAActive`; True `ScalingDisabled` (target at 0); False with the HPA's own reason passed through (`FailedGetExternalMetric`, `AmbiguousSelector`) or `HPAMetricsUnavailable` | the HPA's own ScalingActive, copied; it never changes Ready |
 
@@ -39,11 +39,17 @@ The lab proves the case S9 exists for (finding 5). A ScaledObject whose only tri
 
 | Annotation | Since | Effect |
 |---|---|---|
-| `autoscaling.keda.sh/paused-replicas: "<n>"` | 2.7 (presence pauses since 2.18) | pauses by presence, whatever `paused` says; KEDA deletes the HPA and scales the target to n; `status.pausedReplicaCount` |
-| `autoscaling.keda.sh/paused` | 2.12 (ScaledObject) | parsed as a bool, an unparseable value counts as true; KEDA deletes the HPA and freezes the target at its current replicas |
-| `autoscaling.keda.sh/paused-scale-in` / `paused-scale-out` | 2.18 | the HPA is kept, one scaling direction disabled; Paused=True with the same reason and message (finding 12) |
+| `autoscaling.keda.sh/paused-replicas: "<n>"` | 2.7 | KEDA deletes the HPA and scales the target to n. Since 2.18 the annotation's presence pauses, whatever `paused` says. Before 2.18 the pause took effect once `status.pausedReplicaCount` was set (non-nil, zero included) |
+| `autoscaling.keda.sh/paused` (ScaledObject) | 2.12 | KEDA deletes the HPA and freezes the target at its current replicas. Since 2.13 it is parsed as a bool, and an unparseable value counts as true. Before 2.13 its presence paused even with "false" (fixed in 2.13). It has no effect before 2.12 |
+| `autoscaling.keda.sh/paused` (ScaledJob) | 2.11 | KEDA stops creating Jobs; Jobs already running continue |
+| `autoscaling.keda.sh/paused-scale-in` / `paused-scale-out` | 2.18 | the HPA is kept, and one scaling direction is disabled. Paused=True, with the same reason and message as a full pause (finding 12) |
 
-A ScaledJob honours `autoscaling.keda.sh/paused` only.
+**The Paused condition:**
+- exists since 2.11;
+- is initialised Unknown before 2.18 and False since;
+- is written for a full pause and a directional one alike.
+
+**Positive evidence of a completed full pause** on 2.12 and later is the HPA's deletion: Paused=True and no HPA controlled by the ScaledObject in a complete HPA read. Paused=True alone does not tell a full pause from a directional one. Before 2.11 there is no condition, and `status.pausedReplicaCount` set is the only evidence.
 
 ### 1.4 The HPA join
 
@@ -124,8 +130,18 @@ A ScaledJob honours `autoscaling.keda.sh/paused` only.
 | before 2.18 | Paused initialised Unknown, read as not paused; `status.hpaName` absent after adoption (the join uses the controller reference anyway); `paused-replicas` paused only once `status.pausedReplicaCount` was set |
 | before 2.16 | `status.health` may list metrics without a fallback; `triggersTypes`/`authenticationsTypes` absent (derived from spec) |
 | before 2.19 | no `triggersActivity` |
+| before 2.13 | `paused: "false"` still paused |
+| before 2.12 | `paused` on a ScaledObject has no effect |
+| before 2.11 | no Paused condition, and no ScaledJob pause |
 
-The version comes from the operator Deployment's `app.kubernetes.io/version` label, or its image tag. When neither is readable, the conservative reading applies: no HPAActive means read the HPA, and Paused=Unknown means not paused.
+**Supported reading range: KEDA 2.10 and later.** That is the range compared in source. Ready, Active and the HPA join read on any version, because they need no version-specific field. Pause and HPA-health readings below 2.10 read "unsupported KEDA version".
+
+**The version is the handling operator's running version** (§6.1): the image tag of its running pods, from the pods model. The Deployment's label is not used, because a rollout's template need not be what runs.
+- **One operator in the cluster, or several on one version:** that version applies to every ScaledObject in the observer's rules.
+- **Several operators on different versions, or an unreadable tag:** the observer reads "version unknown". Each rule then takes its conservative reading:
+  - no HPAActive means read the HPA;
+  - Paused=Unknown means not paused;
+  - a pause annotation whose effect depends on the version reads "pause requested; whether this KEDA version applies it is unverified" (unknown, never paused).
 
 ## 2. The source contract (C1) and C3
 
@@ -144,14 +160,17 @@ The version comes from the operator Deployment's `app.kubernetes.io/version` lab
 - **No borrowed presence:** the `keda` consumer never reads "KEDA installed" from the HPA kind being open, and the HPA part never depends on KEDA.
 
 **The KEDA controller task** (C2, with `ControllerTasks` and `ControllerIssues`):
-- **The operator.** A Deployment labelled `app=keda-operator` (or `app.kubernetes.io/name=keda-operator`), in whatever namespace holds it. A readable, not-ready Deployment lights the task; an unreadable one is unknown.
-- **The metrics adapter.** The APIService `v1beta1.external.metrics.k8s.io`:
-  - absent: a fault, "no external metrics API: KEDA's HPAs cannot get their metrics";
-  - `Available=False`: a fault, with its reason;
-  - held by another adapter: a fault. KEDA's own is positive evidence: labelled `part-of=keda-operator`, or its Service lives in the operator's namespace. Any other APIService reads "held by <ns>/<service>, not KEDA's metrics server";
-  - unreadable: unknown.
+- **The operators.**
+  - Deployments labelled `app=keda-operator` (or `app.kubernetes.io/name=keda-operator`), in whatever namespaces hold them. Each is a candidate handling operator (§6.1).
+  - A readable, not-ready one lights the task; an unreadable one is unknown.
+- **The metrics adapter.** The APIService `v1beta1.external.metrics.k8s.io`, read at the capability probe (its re-probe interval), never watched.
+  - **Ownership needs positive proof.** Klyx traces `spec.service` to the Service, its EndpointSlices and their target pods, and each pod's owner chain to a Deployment, through the shared Services and EndpointSlices kinds where they are open and bounded reads (at most 16 pods) where they are not. The adapter is **KEDA's** when that Deployment runs a container image from the `kedacore/keda-metrics-apiserver` repository (ghcr.io or docker.io). It is **another adapter** when the backing pods are proven and none runs that image. Anything short of that reads "ownership unverified", never KEDA's and never foreign. Sharing the operator's namespace proves nothing.
+  - **The verdicts:**
+    - absent, `Available=False`, or proven foreign: a fault. The consequence is qualified: "external metrics are not served by KEDA: its external triggers (every type except cpu and memory) cannot scale". ScaledObjects with only cpu and memory triggers do not depend on it.
+    - ownership unverified: a stated limit, not a fault.
+  - **Reads stay bounded,** and failures read "unverified".
 - **The admission webhooks.** A not-ready webhook Deployment, where one exists, is degraded: "admission checks are off: two autoscalers on one target are not refused".
-- **Management** (C2). No managed-install evidence is verified (§1.7), so management reads "unknown" unless the slice gains a positive-evidence table. Faults are never suppressed.
+- **Management** (C2). No managed-install evidence is verified (§1.7), so management reads "unknown". Faults are never suppressed.
 - **No operator Deployment visible,** while ScaledObjects carry conditions: "controller health not directly observed", neither healthy nor failed.
 
 **No synthetic evidence.**
@@ -163,24 +182,32 @@ The version comes from the operator Deployment's `app.kubernetes.io/version` lab
 
 The verdict kinds are the shared engine's (`health.Kind`). Each rule below gives the kind it produces and the label Klyx shows.
 
-1. **No conditions.** The object was created less than 2 minutes ago: progressing, "waiting for KEDA". Past 2 minutes it is unknown, "KEDA has not reconciled this ScaledObject (the operator may be down, or this namespace outside its watch)". The controller task carries the operator's own state, and the object is not counted as a fault.
-2. **A full pause.** Paused=True, with `paused-replicas` present, or `paused` parsing true: **paused**, "paused: held at n replicas" or "paused: frozen at the current replicas". It is never attention.
-   - Paused=True with no pause annotation: progressing, "resuming" (the annotation was removed and KEDA has not reconciled yet).
-   - A pause annotation with Paused not True: progressing, "pausing".
-   - **A directional pause** (`paused-scale-in` or `-out` only) is not a pause verdict. The remaining rules apply, and the label adds "scale-in paused".
-3. **Ready=False.** A fault, KEDA's reason and message verbatim. Klyx adds its own evidence where it is provable from complete reads:
-   - **An authentication that does not exist.** `authenticationRef` names a TriggerAuthentication or ClusterTriggerAuthentication absent from a complete read of its kind. The headline is "TriggerAuthentication X does not exist", with KEDA's message beneath. KEDA's own message never names it (§1.5).
-   - **The 2.20.0 and 2.20.1 HPA reasons** (`HPAMetricsUnavailable`, `ScalingDegraded`) read as rule 6.
-4. **Ready=Unknown with `PartialTriggerError`.** Degraded, "some triggers are failing", with the failing triggers named where `status.health` or the HPA's message names them. Any other Ready=Unknown, before the first poll, is progressing.
-5. **Fallback=True.** Degraded: "falling back: <trigger> failed <n> times; KEDA holds <target> at fallback.replicas=<r>". The label names the HPA as "healthy only because of the fallback".
-6. **The HPA cannot compute replicas.** A fault: "the HPA cannot compute replicas: <reason>: <message>". The evidence is:
-   - HPAActive=False, where KEDA reports it;
-   - otherwise the joined HPA's ScalingActive=False, any reason but `ScalingDisabled`, cited with its condition time.
+**The joined HPA** is the HPA whose controller ownerReference UID is this ScaledObject's UID: never a name, and never the prefix. Its own conditions, from the HPA model, are the primary evidence of HPA health.
 
-   **`AmbiguousSelector` names the other autoscaler.** The HPAs scaling the same target (by group, kind and name in the namespace), each with its owner (a ScaledObject, or a plain HPA), are listed as "also scaling this target".
+**HPAActive is KEDA's cached copy.** KEDA keeps the last value when it cannot read the HPA, so the lab saw HPAActive=False while the HPA itself already read ScalingActive=True (t1, `failing`).
+- **The joined HPA is in a complete model:** its own conditions decide. A disagreeing HPAActive is shown as "KEDA last reported HPAActive=<status> (<reason>)", a finding that is never attention by itself.
+- **The HPA is not in a complete model** (capped, or a failed read): HPAActive=False is the evidence, qualified "as KEDA last saw it". HPAActive=True proves nothing.
+- **The 2.20.0 and 2.20.1 Ready reasons** `HPAMetricsUnavailable` and `ScalingDegraded` are KEDA-reported HPA evidence, read the same way.
+
+**The rules:**
+1. **No conditions.** The object was created less than 2 minutes ago: progressing, "waiting for KEDA". Past 2 minutes it is unknown, "KEDA has not reconciled this ScaledObject", naming the reason where §6.1 proves it: no operator's scope covers its namespace or labels, or its operator is down. The controller task carries the operator's own state, and the object is not counted as a fault.
+2. **A full pause** (§1.3, version-aware): **paused**, "paused: held at n replicas" or "paused: frozen at the current replicas". It is never attention.
+   - **Evidence on 2.12 and later:** a full-pause annotation, Paused=True, and no controlled HPA in a complete HPA read.
+   - **Evidence before 2.11:** `paused-replicas` with `status.pausedReplicaCount` set.
+   - **A full-pause annotation without that evidence:** progressing, "pausing". Past 2 minutes, or when the version is unknown or does not apply that annotation, it is unknown, "pause requested; not applied (KEDA <version>)".
+   - **Paused=True with no pause annotation:** progressing, "resuming".
+   - **A directional pause** (`paused-scale-in` or `-out` only, 2.18 and later) is not a pause verdict. Paused=True from a directional pause is never read as a completed full pause. The remaining rules apply, and the label adds "scale-in paused".
+3. **Ready=False** (all reasons except the 2.20.0 and 2.20.1 HPA ones). A fault, KEDA's reason and message verbatim. Klyx adds its own evidence where it is provable from complete reads: an `authenticationRef` naming a TriggerAuthentication or ClusterTriggerAuthentication absent from a complete, uncut read of its kind. The headline is then "TriggerAuthentication X does not exist", with KEDA's message beneath, because KEDA's own message never names it (§1.5).
+4. **The joined HPA has failed** (proven by the evidence above). A fault, applied before rules 5 and 6, which then become additional findings:
+   - AbleToScale=False ("the HPA cannot change <target>'s scale: <reason>: <message>");
+   - ScalingActive=False with any reason but `ScalingDisabled` ("the HPA cannot compute replicas: <reason>: <message>");
+   - **`AmbiguousSelector`** also names the other autoscalers: the HPAs scaling the same target (by group, kind and name in the namespace), each with its owner (a ScaledObject, or a plain HPA), listed as "also scaling this target".
+5. **Ready=Unknown with `PartialTriggerError`.** Degraded, "some triggers are failing", with the failing triggers named where `status.health` or events name them. Any other Ready=Unknown, before the first poll, is progressing.
+6. **Fallback=True.** Degraded, "fallback active (<behavior>): <trigger> failed <n> times (threshold <t>)".
+   - **What Klyx does not claim:** a held replica count, or that the HPA is healthy because of the fallback. The `currentReplicas*` and `scalingModifiers` behaviours, another trigger that succeeds, and the HPA's own bounds all change the result.
+   - **What it shows instead,** separately and labelled: the configured fallback (behavior, replicas), the HPA's current and desired replicas, and the target's actual replicas.
 7. **The join.**
-   - **The joined HPA** is the HPA whose controller ownerReference UID is this ScaledObject's UID. Never a name, and never the prefix.
-   - **No such HPA.** The rule applies only when the object is not fully paused, Ready=True, and the HPA read is complete. Past 2 minutes from the ScaledObject's creation or its last unpause seen, it is a fault: "no HPA scales this target (KEDA reported ready)". Within that time, or with an incomplete HPA read, it is unknown, never a fault.
+   - **No joined HPA.** The rule applies only when the object is not fully paused, Ready=True, and the HPA read is complete and uncut. Past 2 minutes from the ScaledObject's creation or its last unpause seen, it is a fault: "no HPA scales this target (KEDA reported ready)". Otherwise it is unknown, never a fault.
    - **`status.hpaName` names a different HPA** from the joined one: degraded, "status names HPA X; the HPA KEDA controls is Y".
 8. **Otherwise ok**, in KEDA's vocabulary:
    - "active (n replicas, wants m)";
@@ -198,6 +225,8 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 - **A KEDA-owned HPA** is never counted here, whether or not its ScaledObject is in the model. Its owner's deletion is a garbage-collection moment, not a fault.
 - **Rows still show KEDA-owned HPAs,** marked "KEDA's (ScaledObject X)", with their own conditions, linking to their ScaledObject.
 
+**Fact rows, never verdicts from a zero evaluation.** KEDA-owned HPA rows and authentication rows are fact rows, behind the same counting gate S2b established: their zero `NativeEval` never becomes a Fault, and they never count toward Needs you.
+
 **Rules:**
 1. **No conditions.** Less than 60 seconds since creation: progressing. After that: unknown, "the HPA controller has not reported".
 2. **AbleToScale=False.** A fault, with the controller's reason and message: `FailedGetScale`, "deployments.apps "X" not found" (finding 14); `FailedUpdateScale`.
@@ -207,7 +236,10 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
    - `AmbiguousSelector`, which names the other autoscalers, as in §3 rule 6.
 
    `ScalingDisabled` (the target at 0 replicas) is ok, "scaling disabled: target at 0".
-4. **`generation > status.observedGeneration`.** Progressing, the ratified "Syncing…" mark. Never confirmed healthy while pending.
+4. **A reported lag.** `status.observedGeneration` is present, positive and below `generation`: progressing, the ratified "Syncing…" mark. Never confirmed healthy while pending.
+   - **The field is optional.** Kubernetes 1.32's HPA controller rebuilds status without it, and the lab's failing HPA had none (finding 14).
+   - **Absent or zero** reads "the HPA controller does not report which generation it observed", a stated limit, never Syncing.
+   - **Reported faults (rules 2 and 3) stand either way.**
 5. **Otherwise ok:** "n replicas (min a, max b, wants d)".
    - **`ScalingLimited=True` with `TooManyReplicas`** adds "at maximum, wants d". It is shown and never attention: a pegged HPA is a capacity signal, and lighting it would make peak hours noisy. **This is a stated choice for the owner's ruling.**
    - **`TooFewReplicas`** (at the minimum) is normal and not shown.
@@ -215,7 +247,7 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 ## 5. The ScaledJob rule
 
 1. **No conditions:** as §3 rule 1.
-2. **Paused.** `autoscaling.keda.sh/paused` true, with Paused=True: paused. The mismatches read "pausing" or "resuming", as in §3 rule 2.
+2. **Paused** (2.11 and later): `autoscaling.keda.sh/paused` in effect for the version (§1.3), with Paused=True: paused, "paused: no new Jobs; running Jobs continue". The mismatches read "pausing" or "resuming", as in §3 rule 2. Before 2.11, or with the version unknown, the annotation reads "pause requested; not applied" or "unverified", as in §3 rule 2.
 3. **Ready=False:** a fault (`ScaledJobCheckFailed`, `TriggerError`, `KEDAJobCreateFailed`), with §3 rule 3's authentication evidence.
 4. **Ready=Unknown `PartialTriggerError`:** degraded.
 5. **Otherwise ok:** "active" or "idle". Fallback is ignored (never written for ScaledJobs).
@@ -224,30 +256,83 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 
 ## 6. Authentications, references and the S5 join
 
-**References** are computed from the ScaledObjects' and ScaledJobs' specs: `triggers[].authenticationRef {name, kind}`, with kind defaulting to TriggerAuthentication. They are namespaced, so a ClusterTriggerAuthentication's users are listed with their namespaces. **The authentications' own `status.scaledobjects` strings are never used** (§1.5).
+### 6.1 The handling operator
 
-**The authentications rows** (`keda/authentications`) give, for each authentication:
-- its source kinds, with names: Secret and key, env name, ConfigMap name, Vault address and method, Key Vault URI, provider and `identityOwner`;
-- its users;
-- for a ClusterTriggerAuthentication, the namespace its secrets are read from (§1.5):
-  - the operator Deployment's literal `KEDA_CLUSTER_OBJECT_NAMESPACE` env value, else the operator's namespace;
-  - a `valueFrom` env, or an unreadable Deployment: "unverified".
+Any claim about a subject, a namespace or a running version depends on which operator handles the ScaledObject or ScaledJob. KEDA allows several operators, scoped by namespace and by label.
+
+**Candidates.** Each Deployment labelled as a KEDA operator (§2), with its running pods: the pods owned through the Deployment's ReplicaSets, fenced by owner UID, from the pods model.
+
+**Each candidate's configuration** comes from its running pods, never the Deployment template, because a rollout's template need not be what runs. On demand, a bounded GET of at most 8 running pods per candidate reads:
+- `spec.serviceAccountName`;
+- the image tag;
+- the namespace;
+- the literal values of an allowlist of env names: `WATCH_NAMESPACE`, `WATCH_LABEL_SELECTOR`, `WATCH_LABEL_SELECTOR_FOR_TRIGGERAUTH`, `KEDA_CLUSTER_OBJECT_NAMESPACE`, `KEDA_RESTRICT_SECRET_ACCESS`.
+
+No other env is read.
+
+**Disagreements and gaps:**
+- Running pods that disagree (a rollout in progress) leave the candidate's configuration unresolved, with both values listed.
+- A `valueFrom` env, or an unreadable pod, is unresolved.
+
+**Applicability, per user:**
+- **Namespaces.** `WATCH_NAMESPACE` is a comma list, and empty means every namespace; it must name the user's namespace.
+- **Labels.** `WATCH_LABEL_SELECTOR`, where set, must select the user's labels.
+- **Authentications.** For a ClusterTriggerAuthentication or TriggerAuthentication, `WATCH_LABEL_SELECTOR_FOR_TRIGGERAUTH`, where set, must select the authentication's labels.
+- **The result:**
+  - exactly one applicable, fully resolved candidate is **the handling operator**;
+  - none, with every candidate resolved, is "no KEDA operator watches this object" (§3 rule 1's reason);
+  - several, or any unresolved candidate, is **unverified**, with the candidates listed. Klyx never picks one.
+
+### 6.2 References, sources and existence
+
+**References** are computed from the ScaledObjects' and ScaledJobs' specs: `triggers[].authenticationRef {name, kind}`, with kind defaulting to TriggerAuthentication. They are namespaced, so a ClusterTriggerAuthentication's users are listed with their namespaces.
+- **The authentications' own `status.scaledobjects` strings are never used** (§1.5).
+- **A cut trigger list** (§10) makes the inverse "users" list incomplete. The list says so, and an authentication is never shown as unused while any user's triggers are cut.
+
+**The authentications rows** (`keda/authentications`, fact rows) give each authentication's source kinds with their names (Secret and key, env name, ConfigMap name, Vault address and method, Key Vault URI, provider and `identityOwner`), and its users.
+
+**Where KEDA reads each referenced object,** resolved per user through its handling operator (§6.1):
+
+| Source | TriggerAuthentication | ClusterTriggerAuthentication |
+|---|---|---|
+| `secretTargetRef` | the authentication's namespace, unless the operator's `KEDA_RESTRICT_SECRET_ACCESS` is "true" (case-insensitive); then the cluster-object namespace | the cluster-object namespace |
+| `configMapTargetRef` | the authentication's namespace (the restriction does not apply) | the cluster-object namespace |
+| the cloud secret managers, Vault and Key Vault | external, not checked | external, not checked |
+
+**The cluster-object namespace** is the operator's non-empty `KEDA_CLUSTER_OBJECT_NAMESPACE`, else its pods' namespace. An unresolved env or an unverified handling operator makes the namespace, and the existence check, unverified.
 
 **On demand, in the inspector** (never in the observer):
-- **Referenced Secrets and ConfigMaps:** a metadata-only GET, with the namespace per §1.5. It reads "exists", "not found" or "unverified (forbidden)". Values are never read.
-- **The authenticating subject for `podIdentity`,** through S5's machinery (`internal/identity`). A new `TriggerAuthSubject` beside `StoreSubject`:
-  - **`identityOwner: keda`** (default), and `azure-workload`/`gcp` whatever the owner: "authenticates as the KEDA operator", the operator Deployment's ServiceAccount. Its declared identity comes from `DeclaredOf`, and the operator pod's injected identity from `PodOf`. `roleArn` and `identityId` read "the operator assumes <role>" / "uses client <id>".
-  - **`aws` with `identityOwner: workload`:** per user, the target workload's pod template ServiceAccount (else `default`):
-    - **Its `eks.amazonaws.com/role-arn`** reads "the KEDA operator assumes <role> (from ServiceAccount X)".
-    - **No annotation:** "KEDA requires eks.amazonaws.com/role-arn on ServiceAccount X; it has none, so this scaler cannot authenticate (an EKS Pod Identity association is not read by KEDA)". It is shown on the ScaledObject's inspector beside its Ready=False.
-  - `identityOwner: workload` on `azure-workload` or `gcp` reads "ignored by this provider".
-  - **Cloud trust and permissions stay unverified** (S5).
-- **S5's ServiceAccount report** gains "TriggerAuthentications that authenticate as this ServiceAccount": for the operator's ServiceAccount, the operator-owned ones; for a workload's ServiceAccount, the `aws`/workload ones whose users target workloads running as it. This lands the join S5 deferred.
+- **Existence:** a metadata-only GET per referenced Secret or ConfigMap, in the resolved namespace. It reads "exists", "not found" or "unverified (forbidden, or unresolved namespace)". Values are never read.
+- **The bounds,** as S5's on-demand reads:
+  - at most 32 GETs per inspector open, each with a 5-second timeout, and a 15-second total;
+  - the reply fenced to the cluster and to the inspected object's UID, so a reply for a replaced object is discarded;
+  - a cut beyond 32 is said, and leaves the rest unverified.
 
-**ScaledJob Jobs:**
+### 6.3 The authenticating subject (the S5 join)
+
+A new `TriggerAuthSubject` in `internal/identity`, beside `StoreSubject`, reuses S5's `DeclaredOf` and `PodOf`. It always resolves through the handling operator: KEDA authenticates as its operator pod (§1.5). An unverified operator leaves the subject unverified, with the candidates listed.
+- **`identityOwner: keda`** (default), and `azure-workload` or `gcp` whatever the owner: "authenticates as the KEDA operator".
+  - **The ServiceAccount** is the operator's running pods' `serviceAccountName` (§6.1). Its declared identity comes from `DeclaredOf`, and the running pod's injected identity from `PodOf`.
+  - `roleArn` and `identityId` read "the operator assumes <role>" / "uses client <id>".
+- **`aws` with `identityOwner: workload`:** per user, the target workload's pod template ServiceAccount, else `default`.
+  - **Its `eks.amazonaws.com/role-arn`** reads "the KEDA operator assumes <role> (from ServiceAccount X)".
+  - **No annotation:** "KEDA requires eks.amazonaws.com/role-arn on ServiceAccount X; it has none, so this scaler cannot authenticate (an EKS Pod Identity association is not read by KEDA)". It is shown on the ScaledObject's inspector beside its Ready=False.
+- `identityOwner: workload` on `azure-workload` or `gcp` reads "ignored by this provider".
+- **Cloud trust and permissions stay unverified** (S5).
+
+**S5's ServiceAccount report** gains "TriggerAuthentications that authenticate as this ServiceAccount", computed through the same handling-operator resolution:
+- for an operator's ServiceAccount, the operator-owned ones it handles;
+- for a workload's ServiceAccount, the `aws`/workload ones whose users target workloads running as it.
+
+This lands the join S5 deferred. Unverified handling is listed as such, never dropped.
+
+### 6.4 ScaledJob Jobs and events
+
+**The Jobs list:**
 - Jobs in the namespace labelled `scaledjob.keda.sh/name=<sj>`, kept only when their controller ownerReference UID is the ScaledJob's (the label alone is not proof).
-- The newest 20, with each one's outcome and age. The count beyond 20 is said.
+- A label-selected list with a limit of 200; the newest 20 are kept, with each one's outcome and age, and any count beyond is said.
 - KEDA's own failed-Jobs history limit (default 100) is named.
+- The same bounds and fences as §6.2.
 
 **Recent KEDA Warning events** (`KEDAScalerFailed`, `ScaledObjectCheckFailed`, `KEDAJobCreateFailed`) come through the inspector's existing events read, UID-filtered.
 
@@ -260,6 +345,7 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
   - each reference is resolved through discovery (`resolveGVK`, `fleet/adhoc.go`, TTL-cached) to group, version and plural.
 - **The core switch remains** only as the fallback when discovery is unavailable and the `apiVersion` matches the core kind's group.
 - **An unresolvable kind** (an unserved CRD, or a malformed `apiVersion`) renders as plain text, never a guessed plural.
+- **The namespace follows the discovered scope:** a cluster-scoped kind is linked without one. Failed discovery leaves the link unverified, as plain text.
 - **The result:**
   - an HPA links to its ScaledObject;
   - a Job links to its ScaledJob;
@@ -267,34 +353,39 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 - **The generic inspector's owner link** matches by group, kind and name, not kind and name alone.
 - **The HPA detail's target link** opens the target object itself (`InstanceDetail.tsx` today only switches to the workloads section).
 
-**Who owns the replica count** is a join over the HPA and ScaledObject models, as of their last update, and said so:
-- **an HPA** whose `scaleTargetRef` (group, kind, name) is the workload, named with its owner. A KEDA-owned one reads "KEDA ScaledObject X, through HPA Y";
-- **a ScaledObject** targeting it, including a fully paused one (paused ScaledObjects have no HPA): "KEDA ScaledObject X is paused and will resume control";
-- **GitOps,** from the existing ownership facts:
-  - **Flux:** `workloads.extractOwner` and `GitOpsOwnerFromLabels`;
-  - **Argo:** its tracking label.
+**Who owns the replica count.** For one workload, each kind of owner reads as **owned**, **proven unowned** or **unverified**:
+- **Autoscalers,** from the HPA and ScaledObject models:
+  - **owned:** an HPA whose `scaleTargetRef` (group, kind, name) is the workload, named with its owner ("KEDA ScaledObject X, through HPA Y"); or a ScaledObject targeting it, including a fully paused one ("KEDA ScaledObject X is paused and will resume control");
+  - **proven unowned:** none of those, with the HPA read complete and uncut, and the ScaledObject read complete and uncut, or KEDA's API not served;
+  - **unverified:** any other case, such as a forbidden, failed or capped read.
+- **GitOps,** from the authoritative `GitOpsOwnership` check (`fleet/gitops_ownership.go`), read on demand when the popover opens (bounded, as the edit flow reads it). It reads Flux inventories and Argo Application resources, and covers Argo annotation tracking and inventory-only Flux ownership, which labels miss.
+  - **owned:** the object-level owner (Basis `flux-inventory` or `argo-resources`). The line reads "if Git sets replicas, <Flux|Argo> sets it back on its next reconcile"; Klyx cannot see whether the manifest sets replicas.
+  - **proven unowned:** no object-level owner and no warnings.
+  - **unverified:** any warning, or a failed check.
+  - **Labels are hints only.** `extractOwner` and `GitOpsOwnerFromLabels` are shown as such, never as proof either way.
 
-  The line reads "if Git sets replicas, <Flux|Argo> sets it back on its next reconcile". Klyx cannot see whether the manifest sets replicas.
+**The workloads inspector** shows a "Replicas owned by" line from the same join, with unverified said.
 
-**The workloads inspector** shows a "Replicas owned by" line from the same join.
-
-**The scale verb** (C4). The existing `ScaleWorkload` (Deployments and StatefulSets, with a UID precondition) gains:
-- **An owned workload:** the popover names the owner, and its action reads "Scale anyway". The ConfirmDialog, required for an owned workload on every cluster, states the consequence:
+**The scale verb** (C4). The existing `ScaleWorkload` (Deployments and StatefulSets, with a UID precondition) changes as follows:
+- **Owned, or unverified on either axis:** the popover names the owners (or the coverage limit), and its action reads "Scale anyway". The ConfirmDialog is required on every cluster and states the consequence:
   - **HPA:** "the HPA sets replicas back within its sync period (about 15 s)";
   - **ScaledObject:** "pause the ScaledObject instead to hold a count";
-  - **GitOps:** the line above.
-- **An unowned workload on an unprotected cluster** keeps today's behaviour: the popover, with an explicit count and an explicit Scale action, is its confirmation. This predates C4. **It is stated here for the owner's ruling, not silently kept.**
+  - **GitOps:** the line above;
+  - **Unverified:** "Klyx could not prove nothing else sets this count: <limit>".
+- **Proven unowned on both axes, on an unprotected cluster:** today's behaviour stays. The popover, with an explicit count and an explicit Scale action, is its confirmation. This predates C4, and **is stated here for the owner's ruling, not silently kept**.
 - **Protected clusters** keep the typed confirmation (ProtectGuard).
 
 ## 8. Verbs (C4)
 
-| Kind | Pause / Resume | Otherwise |
-|---|---|---|
-| ScaledObject | **Pause:** merge-patch `autoscaling.keda.sh/paused: "true"`. **Resume:** remove `autoscaling.keda.sh/paused`, offered only when it is the object's only pause annotation | `paused-replicas`, `paused-scale-in`/`-out` and `force-activation` are never set or removed by Klyx. An object paused by them reads "paused by <annotation>, set outside Klyx". `paused-replicas` is a different operation, not offered (C4) |
-| ScaledJob | the same, `autoscaling.keda.sh/paused` only | - |
-| TriggerAuthentication, ClusterTriggerAuthentication | none | - |
-| HorizontalPodAutoscaler | none | editing min, max or metrics is authoring |
-| Deployment, StatefulSet | - | the existing scale verb, with §7's warning |
+| Kind | Pause / Resume | Offered when | Otherwise |
+|---|---|---|---|
+| ScaledObject | **Pause:** merge-patch `autoscaling.keda.sh/paused: "true"`. **Resume:** remove `autoscaling.keda.sh/paused`, offered only when it is the object's only pause annotation | the handling operator (§6.1) is resolved and runs **2.12 or later** | `paused-replicas`, `paused-scale-in`/`-out` and `force-activation` are never set or removed by Klyx. An object paused by them reads "paused by <annotation>, set outside Klyx". `paused-replicas` is a different operation, not offered (C4) |
+| ScaledJob | the same, `autoscaling.keda.sh/paused` only | the handling operator runs **2.11 or later** | - |
+| TriggerAuthentication, ClusterTriggerAuthentication | none | - | - |
+| HorizontalPodAutoscaler | none | - | editing min, max or metrics is authoring |
+| Deployment, StatefulSet | - | - | the existing scale verb, with §7's warning |
+
+**When the version or handling operator is unverified,** Pause and Resume are not offered. The verb says why: "KEDA version unknown: Klyx cannot prove this KEDA applies the pause annotation". A patch that would succeed and pause nothing is never offered.
 
 **Every verb carries:**
 - the UID precondition (`guardUID`, `fleet/gitopsactions.go`): the patch acts on the object the user saw, or refuses;
@@ -302,13 +393,15 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 - a unique request token, as S1a's verbs do.
 
 **The consequence copy:**
-- **Pause:** "KEDA deletes its HPA (<name>) and holds <target> at its current replicas until resumed".
-- **Resume:** "KEDA recreates its HPA and resumes scaling <target>".
+- **ScaledObject Pause:** "KEDA deletes its HPA (<name>) and holds <target> at its current replicas until resumed".
+- **ScaledObject Resume:** "KEDA recreates its HPA and resumes scaling <target>".
+- **ScaledJob Pause:** "KEDA stops creating Jobs; Jobs already running continue".
+- **ScaledJob Resume:** "KEDA resumes creating Jobs from its triggers".
 - **GitOps:** the existing `ownershipLine(owner, "annotation")`. If Git declares the annotation, the controller restores Git's value on its next reconcile.
 
 **Honest outcomes.**
 - The verb says "pause requested".
-- Completion is the object's own Paused condition, as of its next read, never assumed.
+- Completion is §3 rule 2's positive evidence (Paused=True and the HPA gone, for a ScaledObject), as of its next read. A Paused=True already present from a directional pause is never read as completion.
 
 **The non-goal crossing.** Pause and Resume are a new write path, under C4's pre-authorised KEDA pause. They drive a controller and author no desired state.
 
@@ -329,53 +422,87 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 - **ScaledJob:** the same shape, with the Jobs list in place of the HPA.
 - **Authentication:** sources, users, and the subject.
 
-**Needs you, the mast, the fleet spine.** The counted parts join the shared engine. A fault reads "ScaledObject team/web: falling back".
+**Needs you, the mast, the fleet spine.** The counted parts join the shared engine. A degraded row reads "ScaledObject team/web: fallback active".
 
 **AI and chat.**
 - **AI allowlist fields:** names, the target, conditions (type, status, reason, clipped message), `hpaName`, the pause kind, trigger types and metric keys, authentication names and source kinds, and the subject's kind.
 - **Never sent:** trigger metadata, authentication source details, and env or Secret names beyond the reference.
 - **Chat's GVR-to-task map** gains `keda.sh/scaledobjects`, `keda.sh/scaledjobs` and `autoscaling/horizontalpodautoscalers`.
+- **`chat_project.go` gains explicit KEDA projections.** The unknown-CRD projection would otherwise copy trigger metadata and authentication source details.
+- **Literal-needle tests pin the exclusions:** a sentinel in trigger metadata, in a Vault token and in an authentication's Secret name. They check that none reaches chat tools, snapshots, Explain, instance facts or notifications.
 - **The notification kind labels** gain `scaledobjects`, `scaledjobs` and `horizontalpodautoscalers` (UID objects, eligible; notifications stay off by default).
 
 ## 10. Projections, budget and sensitive data
 
-**ScaledObject projection:**
-- namespace, name, UID, generation, creation time;
-- the pause and transfer annotations only (an allowlist of keys);
-- `scaleTargetRef` {apiVersion, kind, name}, `horizontalPodAutoscalerConfig.name`, min, max and idle, the fallback {failureThreshold, replicas, behavior}, and whether `scalingModifiers` is present;
-- triggers, up to 16, with the count said: type, name, metricType, `authenticationRef` {name, kind} and `useCachedMetrics`. **Never `metadata`.**
-- status:
-  - conditions (type, status, reason, and the message clipped under the URL rule);
-  - `hpaName`, `scaleTargetGVKR` and `pausedReplicaCount`;
-  - `health` and `triggersActivity`, up to 16 keys;
-  - `lastActiveTime`.
+**Per-field caps** (applied in the projection; each cut is flagged, and counts are kept exact):
 
-**ScaledJob projection:** the same where it applies, plus the history limits. **The `jobTargetRef` pod spec is never retained.**
+| Field | Cap |
+|---|---|
+| condition messages | 512 bytes, scrubbed under the URL rule before clipping |
+| conditions | 8 per object |
+| triggers | 16 per object, with `triggersCut` and the exact count |
+| `health` and `triggersActivity` | 16 keys each, with a cut flag |
+| an authentication's references | 16 per source kind, with a cut flag and the exact count |
+| names | their Kubernetes maxima |
 
-**HPA projection:**
-- namespace, name, UID, generation, observedGeneration and creation time;
-- the controller ownerReference {apiVersion, kind, name, uid};
-- `scaleTargetRef`, min and max, current and desired replicas, and `lastScaleTime`;
-- the metric count and types;
-- conditions (type, status, reason, clipped message, `lastTransitionTime`).
+**Cut semantics.** A cut never manufactures a clean join, and every membership or absence claim requires an uncut input:
+- an authentication "does not exist" or "unused";
+- "no HPA";
+- "proven unowned";
+- an inverse identity report.
 
-**Authentication projection:**
-- namespace (if any), name and UID;
-- source kinds with reference names and keys;
-- podIdentity {provider, identityOwner, roleArn present, identityId present};
-- the Vault address and authentication method;
-- **never `hashiCorpVault.credential.token`:** only the authentication method ("token") is kept.
+A cut makes that claim unverified. Known faults stay, with their detail qualified.
 
-**Budget:**
-- **New watches per cluster:** one, HPAs (C3, always); plus four where KEDA is served.
-- **Retained:** about 2 KB per ScaledObject, 1 KB per HPA and 0.5 KB per authentication. Clusters typically run tens to hundreds of each.
-- **Measurement:** `SizeOf` per projection, with the load test rerun before and after, as S4 did.
-- **Live sets:** the S9 part reads live HPAs and authentications from the model, never per render.
+**Projections:**
+- **ScaledObject:**
+  - namespace, name, UID, generation, creation time, and labels (for operator selectors, capped at 32 with a cut flag);
+  - the pause and transfer annotations only (an allowlist of keys);
+  - `scaleTargetRef` {apiVersion, kind, name}, `horizontalPodAutoscalerConfig.name`, min, max and idle, the fallback {failureThreshold, replicas, behavior}, and whether `scalingModifiers` is present;
+  - triggers: type, name, metricType, `authenticationRef` {name, kind} and `useCachedMetrics`, **never `metadata`**;
+  - status: conditions, `hpaName`, `scaleTargetGVKR`, `pausedReplicaCount` (presence kept: nil and zero are different), `health`, `triggersActivity` and `lastActiveTime`.
+- **ScaledJob:** the same where it applies, plus the history limits. **The `jobTargetRef` pod spec is never retained.**
+- **HPA:**
+  - namespace, name, UID, generation, creation time, and `observedGeneration` (presence kept);
+  - the controller ownerReference {apiVersion, kind, name, uid};
+  - `scaleTargetRef`, min and max, current and desired replicas, and `lastScaleTime`;
+  - the metric count and types;
+  - conditions with `lastTransitionTime`.
+- **Authentication:**
+  - namespace (if any), name, UID, and labels (capped at 32);
+  - source kinds, with their reference names and keys;
+  - podIdentity {provider, identityOwner, roleArn present, identityId present};
+  - the Vault address and authentication method.
+  - **Never `hashiCorpVault.credential.token`:** only the method ("token") is kept.
+
+**Budgets per cluster** (`KindSpec.Budget` and `MaxObject`; S1a §3's admission, where a full budget reads "capped" and the cut semantics above apply):
+
+| Kind | Budget | MaxObject |
+|---|---|---|
+| `scaledobjects` | 512 KiB | 4 KiB |
+| `scaledjobs` | 128 KiB | 4 KiB |
+| `horizontalpodautoscalers` (always watched) | 512 KiB | 2 KiB |
+| `triggerauthentications` | 128 KiB | 2 KiB |
+| `clustertriggerauthentications` | 64 KiB | 2 KiB |
+
+That is 1.31 MiB per cluster at most. Of it, 512 KiB (the HPAs) is present on every cluster, and the rest only where KEDA is served.
+
+**The on-demand reads** (§6, §7) are bounded per inspector open:
+- 32 existence GETs;
+- 8 running pods per operator candidate, with at most 4 candidates read;
+- one Jobs list (limit 200);
+- one `GitOpsOwnership` check;
+- one ServiceAccount GET per subject.
+
+Each read has a 5-second timeout, and each reply is capped at 256 KiB encoded.
+
+**Measurement.** Encoded model bytes (`SizeOf`) against actual heap, under a fixture that fills each budget, as S8a and S4 did. The load test is rerun before and after.
 
 **Sensitive data:**
-- **Masked everywhere** (`crd/sanitize.go`): `hashiCorpVault.credential.token`, in the generic YAML view, Describe and the edit surface, as Secret data is.
+- **The Vault token** (`hashiCorpVault.credential.token`) goes through `SanitizeEmbedded`'s policy (S0b), like Secret data:
+  - it is masked in the YAML view and the edit surface, with placeholder idempotence, and a sanitized re-apply is refused;
+  - generic Describe text is withheld, rather than rewritten, where that policy requires it.
 - **Trigger metadata** is configuration. It shows in the on-demand object read and YAML, and is never retained in the observer or sent to AI.
-- **Controller messages** are clipped under the URL rule.
+- **Controller messages** are scrubbed before they are clipped.
 
 ## 11. Tests, lab, parity, smoke
 
@@ -388,13 +515,35 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
   - `AmbiguousSelector` with KEDA's and a plain HPA;
 - every §1.8 version shape as a fixture: 2.17 (no `hpaName` after adoption, no HPAActive, Paused Unknown), 2.20.0 (`HPAMetricsUnavailable`), and 2.15 (health without a fallback);
 - §4's and §5's rules;
-- the clock seams, with an injected clock: the no-conditions grace and the no-HPA grace.
+- the clock seams, with an injected clock: the no-conditions grace, the no-HPA grace and the "pausing" grace;
+- **revision 1:**
+  - a Fallback=True object whose HPA reads `AmbiguousSelector` (a fault, with the fallback as an additional finding);
+  - an HPA with AbleToScale=False and ScalingActive=True;
+  - HPAActive against the direct HPA, disagreeing in both directions, with the HPA in and out of a complete model;
+  - each fallback behaviour, a healthy second trigger, and a failing HPA, with no "held at" claim;
+  - pause on 2.10 (`pausedReplicaCount` set, zero included, and unset), 2.11 (`paused` with no effect), 2.12 (`paused: "false"` pausing), 2.17 and an unknown version;
+  - a directional pause already Paused=True, then a full pause requested (not completed until the HPA is gone).
 
 **`internal/identity`:**
 - `TriggerAuthSubject` for each provider and owner;
 - the role-arn annotation, present and absent;
 - `roleArn` with the operator's identity;
 - `identityId`.
+
+**The HPA rule:** a healthy older-controller HPA with conditions and replicas but no `observedGeneration` (never Syncing); an explicit zero; a positive lag.
+
+**The handling operator and the namespace table:**
+- two scoped operators sharing a ClusterTriggerAuthentication;
+- an old/new pod rollout with disagreeing env;
+- `KEDA_CLUSTER_OBJECT_NAMESPACE` set and unset, and `KEDA_RESTRICT_SECRET_ACCESS` with a ConfigMap reference (unaffected);
+- a blank and a `valueFrom` env;
+- a partial read.
+
+**The metrics adapter:** an unrelated adapter in the operator's namespace (foreign or unverified, never KEDA's), a positively identified KEDA server, and an unreadable backing-service join.
+
+**Ownership for the scale verb:** Argo annotation tracking without the instance label, inventory-only Flux ownership, and a forbidden or capped HPA read (each unverified, so the full confirmation).
+
+**Budgets:** every cut flag; an authentication used only by trigger 17 (never "unused"); and a full-budget fixture measured as §10.
 
 **Discovery owner links:** a core kind, a CRD owner (a ScaledObject), an unserved kind, and a same-named kind in another group (never linked).
 
@@ -424,7 +573,7 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
 
 **Native smoke:**
 - a `TITLES` entry "KEDA";
-- a step that opens `failing` and asserts the "falling back" verdict with its HPA shown healthy only through the fallback;
+- a step that opens `failing` and asserts the "fallback active" verdict, with its trigger's failure count and the HPA's replicas shown separately;
 - a step that opens `active-web`'s workload and asserts the scale popover names "KEDA ScaledObject active-web".
 
 **Live captures:** night and day at 1440 and 1024, headless.
@@ -453,3 +602,24 @@ The joined HPA's `ScalingLimited=True` with reason `TooManyReplicas` adds "wants
    - the scale warning's facts.
 5. **The frontend:** the registry and section, the rows and inspectors, the verbs, the scale popover and the owner links.
 6. **The lab, parity, smoke, captures and the as-built notes.**
+
+## 14. Revision 1: Codex's design review of 5b165d8
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | A joined HPA's failure ranked after the degraded rules, and KEDA's cached HPAActive read as fresh | §3: the direct HPA is the primary evidence, and HPAActive is evidence only when the HPA is not in a complete model; rule 4 (AbleToScale or ScalingActive failure, `AmbiguousSelector`) runs before PartialTriggerError and Fallback, which become additional findings; §11's combinations |
+| 2 | "Held at fallback.replicas" and "healthy only because of fallback" are not proven | §3 rule 6: "fallback active (<behavior>)" with failures and threshold; the configured fallback and the HPA's and target's replicas shown separately; no held claim |
+| 3 | An absent HPA `observedGeneration` read as a perpetual lag | §4 rule 4: Syncing only on a reported positive lag; absent or zero is a stated limit; §10 keeps presence |
+| 4 | "Unowned" judged from labels and incomplete models | §7: owned / proven unowned / unverified per axis; the authoritative `GitOpsOwnership` check, with labels as hints; unverified takes the full confirmation |
+| 5 | The subject, namespace and version claimed from "the operator Deployment" | §6.1: candidates resolved per user from running pods' allowlisted env and watch scope; several or unresolved is unverified. §6.2: the exact namespace table and bounded, fenced reads; §6.3 resolves through the handling operator |
+| 6 | Pause and verbs not version-aware | §1.3 and §1.8's version table (2.10 and later); §3 rule 2's positive evidence per version, including the HPA's deletion; §8 offers Pause only on a resolved 2.12+ (ScaledJob 2.11+) operator |
+| 7 | APIService ownership inferred from a namespace | §2: traced to the backing pods' image; otherwise "ownership unverified"; the consequence qualified to external triggers |
+| 8 | Typical sizes instead of budgets; no cut semantics | §10: per-field caps with flags, per-kind `Budget` and `MaxObject`, bounded on-demand reads, cut semantics for every membership or absence claim, a full-budget measurement |
+
+**Implementation guidance adopted:**
+- the S2b fact-row gate (§4);
+- ScaledJob pause copy (§5, §8);
+- directional pause against completion (§3, §8);
+- explicit `chat_project.go` cases and literal-needle tests (§9);
+- the Vault token through `SanitizeEmbedded` (§10);
+- discovery-scoped namespaces, and failed discovery kept unverified (§7).
