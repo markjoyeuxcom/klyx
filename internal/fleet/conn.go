@@ -65,6 +65,11 @@ type Conn interface {
 	ServiceAccountIdentity(ctx context.Context, ns, name, uid string) (identity.SAReport, error)
 	PodIdentity(ctx context.Context, ns, name, uid string) (identity.PodInspectorReport, error)
 	StoreIdentity(ctx context.Context, kind, ns, name, uid string) (identity.StoreReport, error)
+	// coverage S9: KEDA's on-demand reads and verb
+	KEDAInspect(ctx context.Context, resource, ns, name, uid string) (KEDAInspection, error)
+	KEDAJobsOf(ctx context.Context, ns, name, uid string) (KEDAJobs, error)
+	ReplicaOwner(ctx context.Context, kind, ns, name string) ReplicaOwnership
+	KEDASetPaused(ctx context.Context, resource, ns, name, uid string, pause bool) error
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)

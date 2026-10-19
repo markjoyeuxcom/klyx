@@ -210,6 +210,16 @@ func main() {
 		return c, true
 	})
 
+	// coverage S9: KEDA's on-demand inspector reads, the replica owner and
+	// Pause/Resume
+	kedaSvc := appbridge.NewKEDAService(func(name string) (appbridge.KEDAConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
 	certManagerSvc := appbridge.NewCertManagerService(
 		func(name string) (appbridge.CertManagerConn, bool) {
 			c, ok := reg.Conn(name)
@@ -601,6 +611,7 @@ func main() {
 		application.NewService(veleroSvc),
 		application.NewService(admissionSvc),
 		application.NewService(identitySvc),
+		application.NewService(kedaSvc),
 		application.NewService(crdSvc),
 		application.NewService(gatewaySvc),
 		application.NewService(meshSvc),

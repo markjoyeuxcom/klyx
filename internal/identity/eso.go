@@ -46,7 +46,10 @@ type Subject struct {
 	ControllerEnv bool `json:"controllerEnv,omitempty"`
 	// Requested is the chain on top of the base, in order (AWS: each of
 	// additionalRoles, then role; GCP: the impersonated GSA).
-	Requested  []string `json:"requested,omitempty"`
+	Requested []string `json:"requested,omitempty"`
+	// RoleFrom: KEDA's aws identityOwner workload reads the role from this
+	// ServiceAccount, while the operator authenticates (coverage S9 §6.3).
+	RoleFrom   *SARef   `json:"roleFrom,omitempty"`
 	Refusals   []string `json:"refusals,omitempty"`
 	Unresolved []string `json:"unresolved,omitempty"`
 	Notes      []string `json:"notes,omitempty"`

@@ -21,7 +21,7 @@ func s9Objects() (so, ta *unstructured.Unstructured) {
 	so = &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ScaledObject",
 		"metadata": map[string]any{"namespace": "team", "name": "web", "uid": "so-1"},
 		"spec": map[string]any{"scaleTargetRef": map[string]any{"name": "web"}, "triggers": []any{map[string]any{"type": "prometheus",
-			"metadata": map[string]any{"serverAddress": "http://" + s9Needle + ".svc", "query": s9Needle, "password": s9Needle},
+			"metadata":          map[string]any{"serverAddress": "http://" + s9Needle + ".svc", "query": s9Needle, "password": s9Needle},
 			"authenticationRef": map[string]any{"name": "ta"}}}},
 		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}}
 	ta = &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "TriggerAuthentication",
