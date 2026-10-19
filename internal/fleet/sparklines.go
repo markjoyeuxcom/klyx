@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,52 +40,45 @@ func (c *ClusterConn) WorkloadSparklines(ctx context.Context, kind, namespace, n
 		return SparklineSet{CPU: []metrics.Point{}, Mem: []metrics.Point{}}, nil
 	}
 
-	cl, now, err := c.sparklineClient(ctx)
-	if err != nil {
-		return SparklineSet{}, err
-	}
-
 	sel := metrics.Equals("namespace", namespace) + "," + metrics.MatchAnyOf("pod", "", pods, "") + `,container!="",container!="POD"`
 	cpuQ := fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, sel)
 	memQ := fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, sel)
 
-	return querySparklines(ctx, cl, now, cpuQ, memQ)
+	return c.sparklines(ctx, cpuQ, memQ)
 }
 
 // ClusterSparklines returns 30m cluster-wide cpu/mem utilisation fractions,
 // the range twins of the instant cpuQuery/memQuery powering the Overview
 // readout.
 func (c *ClusterConn) ClusterSparklines(ctx context.Context) (SparklineSet, error) {
-	cl, now, err := c.sparklineClient(ctx)
-	if err != nil {
-		return SparklineSet{}, err
-	}
-	return querySparklines(ctx, cl, now, cpuQuery, memQuery)
+	return c.sparklines(ctx, cpuQuery, memQuery)
 }
 
-// sparklineClient resolves the metrics transport (same lazy probe + cache as
-// every other metrics read) and returns a ready Client plus "now".
-func (c *ClusterConn) sparklineClient(ctx context.Context) (*metrics.Client, time.Time, error) {
+// sparklines resolves the metrics transport (same lazy probe + cache as
+// every other metrics read) and queries the pair through it; a pair read
+// across a credential change is dropped (C5 §7).
+func (c *ClusterConn) sparklines(ctx context.Context, cpuQ, memQ string) (SparklineSet, error) {
 	clk := c.clk
 	if clk == nil { // defensive: manual struct construction in tests
 		clk = clock.Real{}
 	}
 	now := clk.Now()
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
 		if cap.Reason != "" {
 			msg += ": " + cap.Reason
 		}
-		return nil, now, fmt.Errorf("%s", msg)
+		return SparklineSet{}, fmt.Errorf("%s", msg)
 	}
-	return metrics.NewClient(transport), now, nil
+	set, err := querySparklines(ctx, metrics.NewClient(transport), now, cpuQ, memQ)
+	if err == nil && c.credentialMoved(mr.rev) {
+		return SparklineSet{}, errors.New("metrics unavailable: " + reasonCredentialChanged)
+	}
+	return set, err
 }
 
 func querySparklines(ctx context.Context, cl *metrics.Client, now time.Time, cpuQ, memQ string) (SparklineSet, error) {

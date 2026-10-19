@@ -7,12 +7,43 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+
+	"github.com/moomora/klyx/internal/safehttp"
 )
 
 // Client runs queries through a Querier and parses Prometheus responses.
+// Every error it returns passes, after decoding, through the redactor of the
+// credential its transport carries (coverage C5 §5): a JSON-escaped echo of
+// the secret is whole again only once decoded. Samples - label names and
+// values, timestamps, values - are returned as the endpoint sent them: they
+// are what joins and measurements use, and a credential that happens to
+// equal one of them must not change the data. A decoded string Klyx shows
+// passes through Display.
 type Client struct{ q Querier }
 
 func NewClient(q Querier) *Client { return &Client{q: q} }
+
+// credentialed is a Querier that carries a credential.
+type credentialed interface{ redactor() safehttp.Redactor }
+
+func (c *Client) red() safehttp.Redactor {
+	if r, ok := c.q.(credentialed); ok {
+		return r.redactor()
+	}
+	return safehttp.Redactor{}
+}
+
+// redact is err as it may leave the package.
+func (c *Client) redact(err error) error {
+	if err == nil {
+		return nil
+	}
+	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge)
+}
+
+// Display is a decoded string from a response (a label value Klyx shows)
+// without the credential the transport carries.
+func (c *Client) Display(s string) string { return c.red().Exact(s) }
 
 type promEnvelope struct {
 	Status string `json:"status"`
@@ -60,7 +91,8 @@ func parseValueTuple(raw json.RawMessage) (float64, error) {
 // InstantScalar runs an instant query expecting a scalar or single-element
 // vector. Empty vector or a non-finite (NaN/Inf) value → Sample{Absent:true}.
 // Multi-element vector → error.
-func (c *Client) InstantScalar(ctx context.Context, promql string) (Sample, error) {
+func (c *Client) InstantScalar(ctx context.Context, promql string) (s Sample, err error) {
+	defer func() { err = c.redact(err) }()
 	status, body, err := c.q.InstantQuery(ctx, promql)
 	if err != nil {
 		return Sample{}, err
@@ -114,7 +146,8 @@ func (c *Client) InstantScalar(ctx context.Context, promql string) (Sample, erro
 
 // Liveness runs vector(1) and returns nil only on a valid Prometheus 200 whose
 // single value parses to 1.0.
-func (c *Client) Liveness(ctx context.Context) error {
+func (c *Client) Liveness(ctx context.Context) (err error) {
+	defer func() { err = c.redact(err) }()
 	s, err := c.InstantScalar(ctx, "vector(1)")
 	if err != nil {
 		return err

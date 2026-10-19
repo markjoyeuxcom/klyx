@@ -32,6 +32,11 @@ var DefaultKinds = []KindRef{
 	{"gateway.networking.k8s.io", "v1", "gateways", "Gateway"},
 	{"gateway.networking.k8s.io", "v1", "httproutes", "HTTPRoute"},
 	{"gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRoute"},
+	// coverage S7: the ListenerSets and the L4 route kinds have lenses too
+	{"gateway.networking.k8s.io", "v1", "listenersets", "ListenerSet"},
+	{"gateway.networking.k8s.io", "v1", "tlsroutes", "TLSRoute"},
+	{"gateway.networking.k8s.io", "v1", "tcproutes", "TCPRoute"},
+	{"gateway.networking.k8s.io", "v1", "udproutes", "UDPRoute"},
 	{"", "v1", "configmaps", "ConfigMap"},
 	{"", "v1", "secrets", "Secret"},
 	{"", "v1", "persistentvolumeclaims", "PersistentVolumeClaim"},

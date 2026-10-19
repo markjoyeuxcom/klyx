@@ -61,11 +61,11 @@ func (c *ClusterConn) attachIndex() {
 
 // IndexGaps names the Observer projections that keep no labels or no
 // creation time (§2.1): ReplicaSets and Services keep identity and creation
-// time only; namespaces keep name and UID.
+// time only; namespaces keep name, UID and, since coverage S7a, labels.
 func IndexGaps() map[string]fleetindex.Gap {
 	return map[string]fleetindex.Gap{
 		healthsrc.KindReplicaSets:     {NoLabels: true},
 		healthsrc.KindGatewayServices: {NoLabels: true},
-		healthsrc.KindNamespaces:      {NoLabels: true, NoCreated: true},
+		healthsrc.KindNamespaces:      {NoCreated: true},
 	}
 }

@@ -68,6 +68,10 @@ type baseline struct {
 	hasReady bool
 	exported string
 	unproven bool // rebuilt from a lost marker: no disabled state behind it
+	// resumedAt is the first capture that showed the object enabled since
+	// this baseline (coverage S2a §4.2, revision 1): a grace starts at the
+	// resume, never at the last paused capture.
+	resumedAt time.Time
 }
 
 type lostMark struct {
@@ -123,7 +127,7 @@ func (t *Tracker) Observe(at time.Time, c Sample) Resume {
 		_, lost := t.lost[c.UID]
 		if lost || (t.saturated[c.Kind] && !t.proven[c.Kind][c.UID]) {
 			delete(t.lost, c.UID)
-			t.base[c.UID] = baseline{kind: c.Kind, at: at, seen: at, fp: fp, hasReady: has, exported: exported, unproven: true}
+			t.base[c.UID] = baseline{kind: c.Kind, at: at, seen: at, fp: fp, hasReady: has, exported: exported, unproven: true, resumedAt: at}
 			return Unproven
 		}
 		return Current
@@ -134,6 +138,10 @@ func (t *Tracker) Observe(at time.Time, c Sample) Resume {
 	}
 	if at.After(b.seen) {
 		b.seen = at
+		t.base[c.UID] = b
+	}
+	if b.resumedAt.IsZero() && !at.Before(b.at) {
+		b.resumedAt = at
 		t.base[c.UID] = b
 	}
 	if at.Before(b.at) {
@@ -160,6 +168,19 @@ func (t *Tracker) Observe(at time.Time, c Sample) Resume {
 		t.proven[c.Kind][c.UID] = true
 	}
 	return Current
+}
+
+// ResumedAt is the first capture that showed a tracked object enabled since
+// its baseline; ok is false when the object has no baseline or has not been
+// seen enabled since.
+func (t *Tracker) ResumedAt(uid string) (time.Time, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	b, ok := t.base[uid]
+	if !ok || b.resumedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return b.resumedAt, true
 }
 
 // Sample is one capture of an object, as the tracker reads it.

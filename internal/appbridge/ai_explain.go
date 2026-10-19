@@ -115,7 +115,8 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 		return explainEvidence{}, "", errReplaced
 	}
 	verdict, err := anchorVerdict(rows, row)
-	if err != nil {
+	fact := errors.Is(err, errFactRow)
+	if err != nil && !fact {
 		return explainEvidence{}, "", err
 	}
 	group, version, plural, err := splitGVR(row.ref.GVR)
@@ -132,11 +133,18 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 	fetchedAt := time.Now().UTC().Format(time.RFC3339)
 
 	ev := explainEvidence{Target: sc.detailObject(detail, ""), KlyxVerdict: &verdict, Anchor: anchorRecord(rows, row, fetchedAt, sc)}
+	if fact {
+		// a listed fact: the object is explained, with no verdict of Klyx's
+		ev.KlyxVerdict = nil
+	}
 	ev.WarningEvents = sc.warningEvents(detail.Events)
 	ev.LensFields = lensFields(key, rows, row, allowed, sc)
 	ev.Related = s.relatedEvidence(ctx, conn, detail, sc)
 	ev.Operators = sc.operators(s.operators(cluster))
 	ev.Qualifications = qualifications(rows, row, detail.Generation, fetchedAt)
+	if fact {
+		ev.Qualifications = append(ev.Qualifications, "Klyx lists this object as a fact and has no verdict for it.")
+	}
 	if key == healthsrc.TaskCerts+"/certificates" {
 		// A certificate's cause usually sits down its issuance chain; resolve
 		// it fresh, as the Certs lens does.
@@ -160,7 +168,13 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 			}
 		}
 	}
+	if t.Task == healthsrc.TaskLB {
+		ev = lbEvidence(ev) // S4 §7: no controller message anywhere in the document
+	}
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
+	if fact {
+		grounded = fmt.Sprintf("No Klyx verdict (a listed fact) as of %s · %s/%s", verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
+	}
 	return ev, grounded, nil
 }
 
@@ -276,11 +290,20 @@ func findRow(rows any, uid string) (capturedRow, bool) {
 	return capturedRow{}, false
 }
 
+// errFactRow: the row is a listed fact, not one of Klyx's verdicts
+// (coverage S2b §3, healthsrc.FactRow).
+var errFactRow = errors.New("this row is a listed fact: Klyx has no verdict for it")
+
 // anchorVerdict reads the row's evaluation from its declared source: a
 // verdict part's Data.Health, a route's reduced attachment, or a native
-// part's Eval. A missing evaluation is an error, never a guess.
+// part's Eval. A missing evaluation is an error, never a guess, and a row
+// that is a listed fact has none (errFactRow): this is the one gate AI
+// Explain and the chat verdict map share.
 func anchorVerdict(rows observe.Rows, row capturedRow) (evidenceVerdict, error) {
 	v := evidenceVerdict{Classifier: rows.Part.Classifier, EvaluatedAt: rows.EvaluatedAt.UTC().Format(time.RFC3339), Generation: row.ref.Generation}
+	if f, ok := row.data.(healthsrc.FactRow); ok && f.FactOnly() {
+		return v, errFactRow
+	}
 	switch rows.Part.Classifier {
 	case "verdict":
 		dv := reflect.ValueOf(row.data)
@@ -301,7 +324,7 @@ func anchorVerdict(rows observe.Rows, row capturedRow) (evidenceVerdict, error) 
 	case "native":
 		included := row.eval.Included
 		role, label := row.eval.Role.String(), row.eval.Label
-		if a, ok := row.data.(observe.Attached); ok { // routes carry the reduced attachment
+		if a, ok := row.data.(healthsrc.RouteRow); ok { // routes carry the reduced attachment
 			included, role, label = a.Included, a.Role, a.Label
 		}
 		v.Role, v.Label, v.IncludedInAttention = role, label, &included

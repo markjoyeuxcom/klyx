@@ -2,7 +2,10 @@ package healthsrc
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,10 +49,27 @@ type NativeDeps struct {
 	// Served resolves one CRD resource's served version from discovery
 	// (absent, a version, or an error that confirms nothing).
 	Served func(ctx context.Context, group, resource, fallback string) (observe.Probe, error)
+	// ServedAmong resolves the first of a resource's candidate versions
+	// discovery serves (coverage S7 §2). Nil: Served with the first
+	// candidate as its fallback, its answer checked against the list.
+	ServedAmong func(ctx context.Context, group, resource string, candidates []string) (observe.Probe, error)
 	// Typed and Meta serve the core kinds the Gateway routes part reads as
 	// evidence (EndpointSlices, Service existence).
 	Typed kubernetes.Interface
 	Meta  metadata.Interface
+}
+
+// servedAmong resolves a resource's version among candidates: a version
+// outside them is a named gap, never a list Klyx would misread.
+func (d NativeDeps) servedAmong(ctx context.Context, group, resource string, candidates []string) (observe.Probe, error) {
+	if d.ServedAmong != nil {
+		return d.ServedAmong(ctx, group, resource, candidates)
+	}
+	p, err := d.Served(ctx, group, resource, candidates[0])
+	if err == nil && p.Served && !slices.Contains(candidates, p.Version) {
+		return observe.Probe{}, fmt.Errorf("%s/%s is served at %s; Klyx reads %s", group, resource, p.Version, strings.Join(candidates, " or "))
+	}
+	return p, err
 }
 
 // Native returns the cert-manager, External Secrets and Karpenter kinds and

@@ -15,7 +15,7 @@ const (
 // ControllerTasks are the tasks whose controller health the capability
 // detector reports. Each always has an entry in ControllerIssues, so a
 // recovery clears a previous issue.
-var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway}
+var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway, TaskVelero, TaskLB}
 
 // ControllerIssues maps the capability tiers onto per-task controller
 // issues (nil when healthy or not installed), in the detector's own words.
@@ -56,11 +56,23 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	if caps.Karpenter.Present && !caps.Karpenter.Healthy {
 		out[TaskKarpenter] = issue(stateOf(caps.Karpenter.Verified), caps.Karpenter.Reason)
 	}
+	// Velero (S2a §3): not ready only for a server read not ready; an
+	// unreadable list, or no server found while the CRDs are served, is
+	// unknown (a retained CRD is not an active install)
+	if caps.Velero.Present && !caps.Velero.Healthy {
+		out[TaskVelero] = issue(stateOf(caps.Velero.Verified), caps.Velero.Reason)
+	}
 	// The network tier degrades only on the Gateway API data plane: every
 	// GatewayClass rejected (not ready), or the classes unreadable or their
 	// acceptance pending or unreported (unknown).
 	if caps.Network.GatewayAPIVersion != "" && caps.Network.Tier == capability.Degraded {
 		out[TaskGateway] = issue(stateOf(!caps.Network.GatewayUnverified), caps.Network.Reason)
+	}
+	// MetalLB (S4 §2): not ready only for a controller read not ready; an
+	// unreadable list, or no controller found while the CRDs are served,
+	// is unknown. Its ConfigurationStates are their own part, never this.
+	if lbc := caps.LoadBalancing; lbc.MetalLB && !lbc.Healthy {
+		out[TaskLB] = issue(stateOf(lbc.Verified), lbc.Reason)
 	}
 	return out
 }

@@ -127,7 +127,7 @@ export const TITLES: Record<string, string | ((cluster: string) => string)> = {
   overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
   karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
   flux: "Flux CD", "flux-sources": "Flux CD", "flux-operator": "Flux CD", "flux-images": "Flux CD", "flux-composition": "Flux CD", "flux-notifications": "Flux CD", argo: "Argo CD", "argo-projects": "Argo CD",
-  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", helm: "Helm",
+  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", loadbalancers: "Load balancers", helm: "Helm",
   crds: "API browser", builtins: "Resources",
 };
 
@@ -148,10 +148,11 @@ export function partOf(): { shown: string | null; pressed: string | null } | nul
 // The identity column is chosen by its id - both tables lead with the row
 // mark's empty head (13b review 2). Null while they disagree or either is
 // missing.
-export function gatewayView(): "gateways" | "routes" | null {
+export function gatewayView(): "gateways" | "listenersets" | "routes" | null {
   const pressed = document.querySelector<HTMLElement>('[data-testid="gateway-views"] [aria-pressed="true"]')?.dataset.view;
   const head = document.querySelector('.lens-table-head > [data-col="name"]')?.textContent?.trim();
-  const shown = head === "HTTPRoute" ? "routes" : head === "Gateway" ? "gateways" : null;
+  // coverage S7b: the Routes table's identity column is "Route" (every kind)
+  const shown = head === "Route" ? "routes" : head === "Gateway" ? "gateways" : head === "ListenerSet" ? "listenersets" : null;
   return shown !== null && pressed === shown ? shown : null;
 }
 
@@ -162,6 +163,10 @@ function key(target: EventTarget, init: KeyboardEventInit): void {
 function typeInto(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function chooseOption(select: HTMLSelectElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 function byText<T extends HTMLElement = HTMLElement>(sel: string, text: RegExp): T | undefined {
   return [...document.querySelectorAll<T>(sel)].find((el) => text.test(el.textContent?.trim() ?? ""));
@@ -351,6 +356,263 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/produced by ArtifactGenerator team-a\/apps/.test(line.textContent ?? "")) throw new Error(`the bound source's producer: ${line.textContent}`);
     noNeedle("the Flux inspector");
   });
+  // Coverage S2a: the Velero lens from the lab's fixtures (scratchpad
+  // lab-s2a): schedules broken first, a missed schedule's rail and its
+  // storage location block, a withheld location message, an unscheduled
+  // backup, and no protected value on screen.
+  const noVeleroNeedle = (where: string) => {
+    if ((document.body.textContent ?? "").includes("S2aLABneedle")) throw new Error(`a protected value is on screen: ${where}`);
+  };
+  await step(steps, "Velero schedules", async () => {
+    await open("velero");
+    await closeDrawer();
+    const first = await within(10_000, "schedule rows", () => $<HTMLElement>(".lens-row"));
+    if (!/daily-missed|nightly-failed/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the missed schedule", () => byText<HTMLElement>(".lens-row", /velero\/daily-missed/))).click();
+    const panel = await within(8000, "the schedule inspector", () => $("[data-testid='velero-schedule-panel']"));
+    if (!/Missed/.test(panel.textContent ?? "")) throw new Error(`the missed verdict: ${(panel.textContent ?? "").slice(0, 200)}`);
+    const owed = await within(8000, "the owed station", () => $("[data-testid='velero-owed']"));
+    if (!/missed/.test(owed.textContent ?? "") || !owed.querySelector('[data-aspect="fault"]')) throw new Error(`the owed station: ${owed.textContent}`);
+    const loc = await within(8000, "the location block", () => $("[data-testid='velero-location-block']"));
+    if (!/default/.test(loc.textContent ?? "") || !/Available/.test(loc.textContent ?? "")) throw new Error(`the location block: ${loc.textContent}`);
+    (await within(4000, "the regular schedule", () => byText<HTMLElement>(".lens-row", /velero\/regular/))).click();
+    const hourly = await within(8000, "the regular inspector", () => byText<HTMLElement>("[data-testid='velero-schedule-panel']", /Completed/));
+    await within(8000, "the rail", () => $("[data-testid='velero-rail']"));
+    if (!/commands withheld/.test(hourly.textContent ?? "")) throw new Error("the hooks are not withheld");
+    if (!$("[data-testid='velero-synced']")) throw new Error("the synced backup is not said");
+    noVeleroNeedle("the Velero schedules");
+  });
+  await step(steps, "Velero storage locations", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Storage locations tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Storage locations/))).click();
+    (await within(10_000, "the dr location", () => byText<HTMLElement>(".lens-row", /velero\/dr/))).click();
+    await within(8000, "the withheld message", () => $("[data-testid='velero-message-withheld']"));
+    noVeleroNeedle("a storage location");
+    (await within(4000, "the minio location", () => byText<HTMLElement>(".lens-row", /velero\/minio/))).click();
+    await within(8000, "its vocabulary", () => /AccessDenied/.test($("[data-testid='velero-location-panel']")?.textContent ?? ""));
+    noVeleroNeedle("a storage location");
+  });
+  await step(steps, "Velero unscheduled backups", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Unscheduled backups tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Unscheduled backups/))).click();
+    (await within(10_000, "the pre-upgrade backup", () => byText<HTMLElement>(".lens-row", /velero\/pre-upgrade/))).click();
+    const panel = await within(8000, "the backup inspector", () => $("[data-testid='velero-backup-panel']"));
+    if (!/the storage location is Unavailable/.test(panel.textContent ?? "")) throw new Error(`the validation class: ${panel.textContent}`);
+    noVeleroNeedle("an unscheduled backup");
+  });
+  // Coverage S2b (scratchpad lab-s2b): the horizon beside the verdict, every
+  // retained Backup as a fact, the Restores read, and the fleet view.
+  await step(steps, "Velero horizon", async () => {
+    await open("velero");
+    await closeDrawer();
+    // the lens keeps its tab across visits: the previous step left another
+    (await within(4000, "the Schedules tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Schedules/))).click();
+    const cell = await within(10_000, "the horizon cell", () => $<HTMLElement>("[data-testid='velero-success-partial-weekly']"));
+    if (!/ago/.test(cell.textContent ?? "") || !/partial/.test(cell.textContent ?? "")) throw new Error(`the horizon cell: ${cell.textContent}`);
+    const none = await within(4000, "the synced-only cell", () => $<HTMLElement>("[data-testid='velero-success-synced-only']"));
+    if (!/none/.test(none.textContent ?? "")) throw new Error(`a synced success counted: ${none.textContent}`);
+    (await within(4000, "the partial schedule", () => byText<HTMLElement>(".lens-row", /velero\/partial-weekly/))).click();
+    const hz = await within(8000, "the horizon block", () => $("[data-testid='velero-horizon']"));
+    if (!/latest proven retained success/.test(hz.textContent ?? "")) throw new Error(`the horizon: ${hz.textContent}`);
+    if (!/a newer run partially failed/.test($("[data-testid='velero-schedule-panel']")?.textContent ?? "")) throw new Error("the newer partial run is not said");
+    noVeleroNeedle("the horizon");
+  });
+  await step(steps, "Velero backups", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Backups tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Backups/))).click();
+    await within(8000, "the retained note", () => $("[data-testid='velero-retained-note']"));
+    const expired = await within(10_000, "the expired backup", () => byText<HTMLElement>(".lens-row", /velero\/manual-expired/));
+    if (!/expired, awaiting deletion/.test(expired.textContent ?? "")) throw new Error(`the expired backup: ${expired.textContent}`);
+    (await within(4000, "the synced backup", () => byText<HTMLElement>(".lens-row", /velero\/synced-only-2026/))).click();
+    const fact = await within(8000, "the fact inspector", () => $("[data-testid='velero-backup-fact']"));
+    if (!/looks synced from object storage/i.test(fact.textContent ?? "")) throw new Error(`the attribution: ${fact.textContent}`);
+    noVeleroNeedle("the Backups tab");
+  });
+  await step(steps, "Velero restores", async () => {
+    await open("velero");
+    await closeDrawer();
+    (await within(4000, "the Restores tab", () => byText<HTMLElement>("[aria-label='Velero objects'] button", /^Restores/))).click();
+    await within(10_000, "the restores read", () => $("[data-testid='velero-restores-note']"));
+    (await within(8000, "the completed restore", () => byText<HTMLElement>(".lens-row", /velero\/restore-ok/))).click();
+    const src = await within(8000, "the restore source", () => $("[data-testid='velero-restore-source']"));
+    if (!/regular-/.test(src.textContent ?? "") || !/proven run of regular|matched by name to regular/.test(src.textContent ?? "")) throw new Error(`the source join: ${src.textContent}`);
+    (await within(4000, "the failed restore", () => byText<HTMLElement>(".lens-row", /velero\/drill/))).click();
+    await within(8000, "its class", () => /the restore failed while running/.test($("[data-testid='velero-restore-panel']")?.textContent ?? ""));
+    noVeleroNeedle("the Restores tab");
+  });
+  await step(steps, "Fleet backups", async () => {
+    useFleet.getState().openFleet("backups");
+    const row = await within(15_000, "a fleet backups row", () => $<HTMLElement>("[data-testid^='fleet-backups-row-']"));
+    if (!/Missed|failed|Partially|Deferred|Not processed|Never/i.test(row.textContent ?? "")) throw new Error(`not broken-first: ${row.textContent}`);
+    await within(8000, "the partial schedule", () => $("[data-testid$='-partial-weekly']"));
+    noVeleroNeedle("the fleet Backups view");
+  });
+  // Coverage S3a (scratchpad lab-s3a): configurations broken first, a
+  // backend chain and the limits, routing-dependent states, a policy's
+  // verdict, and no needle on screen (a URL path, a CEL literal in a
+  // type-checking warning).
+  const noAdmissionNeedle = (where: string) => {
+    if ((document.body.textContent ?? "").includes("S3aLABneedle")) throw new Error(`a protected value is on screen: ${where}`);
+  };
+  await step(steps, "Admission webhooks", async () => {
+    await open("admission");
+    await closeDrawer();
+    (await within(4000, "the Webhooks tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Webhooks/))).click();
+    const first = await within(10_000, "configuration rows", () => $<HTMLElement>(".lens-row"));
+    if (!/lab-fail-missing|lab-fail-noready/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    (await within(4000, "the missing backend", () => byText<HTMLElement>(".lens-row", /lab-fail-missing/))).click();
+    const panel = await within(8000, "the configuration inspector", () => $("[data-testid='admission-config-panel']"));
+    if (!/matching requests may fail/.test(panel.textContent ?? "")) throw new Error(`the fault: ${(panel.textContent ?? "").slice(0, 200)}`);
+    await within(8000, "the backend chain", () => $("[data-testid='admission-chain']"));
+    const limits = await within(8000, "the limits", () => $("[data-testid='admission-limits']"));
+    if (!/routing mode/.test(limits.textContent ?? "")) throw new Error("the routing-mode limit is not said");
+    (await within(4000, "the headless backend", () => byText<HTMLElement>(".lens-row", /lab-headless/))).click();
+    await within(8000, "routing-dependent", () => /Routing-dependent/.test($("[data-testid='admission-config-panel']")?.textContent ?? ""));
+    noAdmissionNeedle("the webhooks");
+  });
+  await step(steps, "Admission policies", async () => {
+    await open("admission");
+    await closeDrawer();
+    (await within(4000, "the Policies tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Policies/))).click();
+    (await within(10_000, "the params policy", () => byText<HTMLElement>(".lens-row", /lab-params/))).click();
+    await within(8000, "paramKind not served", () => /paramKind not served/.test($("[data-testid='admission-policy-panel']")?.textContent ?? ""));
+    (await within(4000, "the warning policy", () => byText<HTMLElement>(".lens-row", /lab-warning/))).click();
+    const warn = await within(8000, "the warnings", () => $("[data-testid='admission-warnings']"));
+    if (!/text is not shown/.test(warn.textContent ?? "")) throw new Error(`the warnings: ${warn.textContent}`);
+    noAdmissionNeedle("the policies");
+  });
+  // Coverage S4 (scratchpad lab-s4: a real MetalLB v0.16.1 on kind-klyx,
+  // with Cilium pool and svclb fixtures): Services pending first with a
+  // lower-bound start, a UID-joined MetalLB event, the chain and the
+  // limits; pools broken first with exact counts; MetalLB's states.
+  await step(steps, "Load balancer Services", async () => {
+    await open("loadbalancers");
+    await closeDrawer();
+    (await within(4000, "the Services tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^Services/))).click();
+    const first = await within(10_000, "service rows", () => $<HTMLElement>(".lens-row"));
+    if (!/Pending|No address/.test(first.textContent ?? "")) throw new Error(`not pending first: the first row is ${first.textContent}`);
+    (await within(4000, "the exhausted request", () => byText<HTMLElement>(".lens-row", /lab-s4\/one-b/))).click();
+    const panel = await within(8000, "the Service inspector", () => $("[data-testid='lb-service-panel']"));
+    await within(8000, "MetalLB's own event", () => /AllocationFailed/.test($("[data-testid='lb-evidence']")?.textContent ?? ""));
+    await within(8000, "the chain", () => $("[data-testid='lb-chain']"));
+    if (!/proves allocation/.test($("[data-testid='lb-limits']")?.textContent ?? "")) throw new Error("the allocation limit is not said");
+    if (!/Pending at least|Pending for|No address/.test(panel.textContent ?? "")) throw new Error(`the pending time: ${(panel.textContent ?? "").slice(0, 200)}`);
+    (await within(4000, "the unknown class", () => byText<HTMLElement>(".lens-row", /lab-s4\/fresh/))).click();
+    await within(8000, "no known controller", () => /no controller Klyx knows serves class lab\.klyx\.dev\/none/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+    (await within(4000, "the svclb Service", () => byText<HTMLElement>(".lens-row", /lab-s4\/svclb-demo/))).click();
+    await within(8000, "the host port conflict", () => /no node has the Service's ports free/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+    (await within(4000, "the Cilium Service", () => byText<HTMLElement>(".lens-row", /lab-s4\/cilium-l2/))).click();
+    await within(8000, "Cilium's condition", () => /out_of_ips/.test($("[data-testid='lb-service-panel']")?.textContent ?? ""));
+  });
+  await step(steps, "Load balancer pools", async () => {
+    await open("loadbalancers");
+    await closeDrawer();
+    (await within(4000, "the Pools tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^Pools/))).click();
+    // the tab's rows replace the Services rows on the next render: wait for a pool's
+    const first = await within(10_000, "pool rows", () => { const r = $<HTMLElement>(".lens-row"); return r && !/lab-s4\//.test(r.textContent ?? "") ? r : null; });
+    if (!/lab-s4-cilium-conflict/.test(first.textContent ?? "")) throw new Error(`not broken first: the first row is ${first.textContent}`);
+    (await within(4000, "the unadvertised pool", () => byText<HTMLElement>(".lens-row", /lab-s4-silent/))).click();
+    await within(8000, "no advertisement", () => /No advertisement/.test($("[data-testid='lb-pool-panel']")?.textContent ?? ""));
+    if (!/announcement state/.test($("[data-testid='lb-pool-limits']")?.textContent ?? "")) throw new Error("the advertisement limit is not said");
+    (await within(4000, "the IPv6 pool", () => byText<HTMLElement>(".lens-row", /lab-s4-cilium-v6/))).click();
+    await within(8000, "exact counts", () => /18446744073709551614 of 18446744073709551616/.test($("[data-testid='lb-counts']")?.textContent ?? ""));
+    (await within(4000, "the configuration tab", () => byText<HTMLElement>("[aria-label='Load balancer objects'] button", /^MetalLB configuration/))).click();
+    // the name column always shows; the writer column can be hidden at 1024
+    await within(8000, "MetalLB's states", () => [...document.querySelectorAll(".lens-row")].some((r) => /speaker-/.test(r.textContent ?? "")));
+  });
+  // Coverage S5 (scratchpad lab-s5): a ServiceAccount's Identity block (a
+  // stale-role pod read as Differs, the limits), that pod's own block in the
+  // Pods lens, and an ESO store's subject and handling controller; the lab's
+  // needle (a non-identity env value, URL user info and query, static keys)
+  // never reaches an identity block.
+  const noIdentityNeedle = (where: string) => {
+    const text = [...document.querySelectorAll("[data-testid^='identity-']")].map((e) => e.textContent ?? "").join("\n");
+    if (text.includes("S5LABneedle")) throw new Error(`a protected value is in an identity block: ${where}`);
+  };
+  // a block read for its subject: a split inspector can still show the
+  // previous selection's block until the new selection lands
+  const identityShows = async (sel: string, subject: RegExp, what: string) => {
+    const end = Date.now() + 20_000;
+    for (;;) {
+      const b = $<HTMLElement>(sel);
+      const t = b?.textContent ?? "";
+      if (b && /Read at/.test(t) && subject.test(t)) return b;
+      if (Date.now() > end) throw new Error(`timed out after 20000ms waiting for ${what}; the block reads: ${(t || "none").slice(0, 200)}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  await step(steps, "Identity: a ServiceAccount", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "", version: "v1", plural: "serviceaccounts", kind: "ServiceAccount", scope: "Namespaced" });
+    useFleet.getState().openInstance("klyx-identity-lab", "irsa");
+    sized(await identityShows("[data-testid='identity-sa']", /role\/lab-current/, "the Identity block"), "the Identity block");
+    const stale = $("[data-testid='identity-reading-differs']")?.textContent ?? "";
+    if (!/role\/lab-old/.test(stale)) throw new Error(`the stale-role pod is not read as Differs: ${stale.slice(0, 200)}`);
+    if (!/Cloud trust/.test($("[data-testid='identity-limits']")?.textContent ?? "")) throw new Error("the limits are not said");
+    noIdentityNeedle("the ServiceAccount");
+    useFleet.getState().closeResource();
+  });
+  await step(steps, "Identity: a pod", async () => {
+    await open("pods");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: "klyx-identity-lab", name: "irsa-stale" });
+    await identityShows("[data-testid='identity-pod']", /irsa-stale[\s\S]*Differs: the pod carries arn:aws:iam::111122223333:role\/lab-old/, "irsa-stale's Differs reading");
+    noIdentityNeedle("the pod");
+  });
+  await step(steps, "Identity: an ESO store's subject", async () => {
+    await open("eso");
+    await closeDrawer();
+    (await within(4000, "the Stores view", () => byText<HTMLElement>("[aria-label='External Secrets view'] button", /^Stores/))).click();
+    (await within(8000, "the jwt store", () => byText<HTMLElement>(".lens-row", /aws-jwt/))).click();
+    await identityShows("[data-testid='identity-store-auth']", /role\/lab-current → arn:aws:iam::111122223333:role\/lab-hop → arn:aws:iam::111122223333:role\/lab-target/, "the jwt store's principal chain");
+    (await within(4000, "the controller store", () => byText<HTMLElement>(".lens-row", /aws-controller/))).click();
+    await identityShows("[data-testid='identity-store-auth']", /eso-standin as klyx-identity-lab\/eso-controller/, "the handling controller");
+    noIdentityNeedle("the stores");
+    (await within(4000, "the ExternalSecrets view", () => byText<HTMLElement>("[aria-label='External Secrets view'] button", /^ExternalSecrets/))).click();
+  });
+  // Coverage S6 (scratchpad lab-s6, a real kubelet): a completed in-place
+  // resize's desired, allocated and actual values and its acknowledged
+  // generation; a pod with a failed debug container that is still Running;
+  // the debug chooser naming sysadmin's privilege, cancelled.
+  const podBlock = async (name: string, sel: string, re: RegExp, what: string) => {
+    useFleet.getState().requestNavIntent({ kind: "select-pod", cluster, namespace: "klyx-resize-lab", name });
+    const end = Date.now() + 20_000;
+    for (;;) {
+      const t = $(sel)?.textContent ?? "";
+      if ($("#inspector-identity")?.textContent?.includes(name) && re.test(t)) return t;
+      if (Date.now() > end) throw new Error(`timed out waiting for ${what}; the block reads: ${(t || "none").slice(0, 200)}`);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  await step(steps, "Pods: a completed in-place resize", async () => {
+    await open("pods");
+    await closeDrawer();
+    await podBlock("resize-done", "[data-testid='pod-resources']", /desired 150m · allocated 150m · actual 150m[\s\S]*acknowledged generation 2/, "resize-done's Resources");
+    if (!/assuming kube-scheduler 1\.\d+/.test($("[data-testid='pod-sched']")?.textContent ?? "")) throw new Error("the scheduled estimate does not name its assumption");
+  });
+  await step(steps, "Pods: a failed debug container is evidence, not the app's failure", async () => {
+    await open("pods");
+    await closeDrawer();
+    await podBlock("debug-target", "[data-testid='pod-debug-containers']", /dbg-failed[\s\S]*exited 3/, "debug-target's debug containers");
+    const row = [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /debug-target/.test(r.textContent ?? ""));
+    if (row && !/Running/.test(row.textContent ?? "")) throw new Error(`the pod's verdict changed: ${row.textContent}`);
+  });
+  await step(steps, "Pods: the debug chooser names sysadmin's privilege", async () => {
+    const panel = await within(8000, "the pod inspector", () => $("[data-testid='lens-inspector']"));
+    (await within(4000, "More", () => [...panel.querySelectorAll<HTMLElement>("button[aria-haspopup='menu']")].find((b) => /^More/.test(b.textContent ?? "")))).click();
+    (await within(4000, "Debug shell", () => byText<HTMLElement>("[role='menuitem']", /Debug shell/))).click();
+    const target = await within(1500, "a container choice", () => byText<HTMLElement>("[role='menuitem']", /^app$/)).catch(() => null);
+    target?.click();
+    await within(10_000, "the kubectl gate", () => /kubectl v1\./.test($("[data-testid='debug-kubectl']")?.textContent ?? ""));
+    (await within(4000, "sysadmin", () => [...document.querySelectorAll<HTMLInputElement>("input[name='debug-profile']")].find((i) => i.value === "sysadmin"))).click();
+    (await within(4000, "Continue", () => $<HTMLButtonElement>("[data-testid='debug-continue']"))).click();
+    await within(4000, "the confirmation naming the privilege", () => /profile sysadmin: privileged/.test($("[data-testid='confirm-detail']")?.textContent ?? ""));
+    (await within(4000, "Cancel", () => [...document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((b) => b.textContent === "Cancel"))).click();
+    await within(2000, "the dialog closed", () => !$("[data-testid='confirm-detail']"));
+  });
   await step(steps, "cert-manager issuance chain", async () => {
     await open("certs");
     sized(await within(10_000, "the issuance chain", () => $("ol[data-rail][aria-label='Issuance chain']")), "the issuance chain");
@@ -358,6 +620,32 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   await step(steps, "External Secrets chain", async () => {
     await open("eso");
     sized(await within(10_000, "the ExternalSecret chain", () => $("ol[data-rail][aria-label='Store, ExternalSecret and target Secret']")), "the ExternalSecret chain");
+  });
+  // Coverage S7a (scratchpad lab-s7: Gateway API 1.6 experimental CRDs, a
+  // stand-in controller's status): the ListenerSets view broken first, the
+  // NotAllowed one first; a Gateway's ListenerSets in its merge order.
+  await step(steps, "ListenerSets: the NotAllowed one first", async () => {
+    await open("gateway");
+    await closeDrawer();
+    (await within(4000, "the ListenerSets switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="listenersets"]'))).click();
+    await within(8000, "the ListenerSets view", () => gatewayView() === "listenersets" && !loading());
+    const first = await within(8000, "the first row", () => $<HTMLElement>("[data-testid='listenerset-row']"));
+    if (!/ls-other/.test(first.textContent ?? "") || !/not accepted: NotAllowed/.test(first.textContent ?? "")) throw new Error(`the first row reads: ${first.textContent}`);
+    return { first: first.textContent?.slice(0, 80) };
+  });
+  await step(steps, "a Gateway's ListenerSets in merge order", async () => {
+    (await within(4000, "the Gateways switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="gateways"]'))).click();
+    await within(8000, "the Gateways view", () => gatewayView() === "gateways" && !loading());
+    (await within(8000, "lab-gw", () => $<HTMLElement>('.lens-row .lens-cell-name[title="klyx-gateway-lab/lab-gw"]'))).click();
+    const block = await within(8000, "the ListenerSets block", () => {
+      const b = $("[data-testid='gateway-listenersets']");
+      return b && b.querySelectorAll("[data-testid='gateway-listenerset']").length === 3 ? b : null;
+    });
+    const order = [...block.querySelectorAll("[data-testid='gateway-listenerset']")].map((e) => (e.textContent ?? "").replace(/\s+/g, " ").slice(0, 40));
+    const want = [/^1st · klyx-gateway-lab\/ls-first/, /^2nd · klyx-gateway-other\/ls-other/, /^3rd · klyx-gateway-lab\/ls-conflict/];
+    if (!want.every((re, i) => re.test(order[i] ?? ""))) throw new Error(`the merge order reads: ${order.join(" | ")}`);
+    if (!/the controller reports 2 attached/.test($("[data-testid='gateway-listenersets-count']")?.textContent ?? "")) throw new Error("the controller's attached count is not beside the ListenerSets found");
+    return { order };
   });
   await step(steps, "Gateway data path", async () => {
     await open("gateway");
@@ -369,6 +657,41 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
     (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
     sized(await within(10_000, "the data path", () => $("[data-testid='data-path']")), "the data path");
+  });
+  // Coverage S7b (scratchpad lab-s7b): the Routes view's kind filter keeps
+  // the TCPRoutes; a TCPRoute's topology lane draws a data path whose rule
+  // matches every connection - no match step - and reads no HTTP metrics.
+  await step(steps, "Routes: the kind filter shows a TCPRoute", async () => {
+    await open("gateway");
+    await closeDrawer();
+    (await within(4000, "the Routes switch", () => $<HTMLElement>('[data-testid="gateway-views"] [data-view="routes"]'))).click();
+    await within(8000, "the Routes view", () => gatewayView() === "routes" && !loading());
+    const filter = await within(8000, "the kind filter", () => $<HTMLSelectElement>("[data-testid='route-kind-filter']"));
+    if (![...filter.options].some((o) => o.value === "TCPRoute")) throw new Error(`no TCPRoute among the kinds: ${[...filter.options].map((o) => o.value).join(", ")}`);
+    chooseOption(filter, "TCPRoute");
+    const rows = await within(4000, "TCPRoute rows only", () => {
+      const r = [...document.querySelectorAll<HTMLElement>(".lens-row")];
+      return r.length > 0 && r.every((x) => x.querySelector("[data-col='kind']")?.textContent === "TCPRoute") ? r : null;
+    });
+    const names = rows.map((r) => r.querySelector(".lens-cell-name")?.getAttribute("title") ?? "");
+    if (!names.includes("TCPRoute klyx-gateway-lab/pg")) throw new Error(`the TCPRoutes read: ${names.join(", ")}`);
+    return { tcproutes: names };
+  });
+  await step(steps, "an L4 data path has no match step", async () => {
+    const row = await within(8000, "the pg TCPRoute", () => $<HTMLElement>('.lens-row .lens-cell-name[title="TCPRoute klyx-gateway-lab/pg"]'));
+    row.click();
+    const panel = await within(8000, "the route's inspector", () => $("[data-testid='route-row-panel']"));
+    (await within(8000, "Open topology", () => [...panel.querySelectorAll<HTMLElement>("button")].find((b) => /^Open topology/.test(b.textContent ?? "")))).click();
+    const path = await within(10_000, "the TCPRoute's data path", () => {
+      const p = $("[data-testid='route-panel'] [data-testid='data-path']");
+      return p && /TCPRoute/.test(p.textContent ?? "") ? p : null;
+    });
+    sized(path, "the L4 data path");
+    const text = (path.textContent ?? "").replace(/\s+/g, " ");
+    if (!/every connection on pg :5432/.test(text)) throw new Error(`the rule reads: ${text.slice(0, 200)}`);
+    if (/every request|PathPrefix/.test(text)) throw new Error(`an L4 rule shows a match step: ${text.slice(0, 200)}`);
+    if (!/HTTP request metrics do not apply to TCPRoute/.test(text)) throw new Error("the L4 rule claims HTTP request metrics");
+    return { rule: text.match(/rule 1[^·]*/)?.[0]?.trim() };
   });
 
   // ---- Describe (slice 14) ----
@@ -511,7 +834,12 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     useFleet.getState().openSettings();
     await within(8000, "the Notifications panel", () => $("[data-testid='notification-settings']"));
     const text = document.body.textContent ?? "";
-    for (const s of ["Appearance", "Git", "Notifications"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
+    // their credential states (the smoke fleet configures none)
+    const ep = await within(8000, "the endpoints panel", () => $("[data-testid='endpoints-settings']"));
+    if ($("[data-testid='endpoints-error']")) throw new Error(`the endpoints panel could not read fleet.yaml: ${$("[data-testid='endpoints-error']")?.textContent}`);
+    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");

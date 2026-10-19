@@ -54,6 +54,12 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	c.caps.Karpenter = set.Karpenter
 	c.caps.Reloader = set.Reloader
 	c.caps.Network = set.Network
+	c.caps.Admission = set.Admission
+	c.caps.LoadBalancing = set.LoadBalancing
+	// Velero's servers are re-read too (found during S4: the re-probe had
+	// never refreshed them, so a server going not ready after connect was
+	// never seen)
+	c.caps.Velero = set.Velero
 	switch {
 	case set.Network.Tier == capability.Degraded:
 		if next, ok := Transition(c.state, EvCapUnhealthy); ok {

@@ -69,12 +69,11 @@ func policyDiscovery() []*metav1.APIResourceList {
 
 func TestGatewayTopologyAttachesEnvoyPolicies(t *testing.T) {
 	scheme := dynScheme()
-	listKinds := map[schema.GroupVersionResource]string{
-		gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList",
+	listKinds := gwListKinds(map[schema.GroupVersionResource]string{
 		ctpGVR(): "ClientTrafficPolicyList", btpGVR(): "BackendTrafficPolicyList", btlsGVR(): "BackendTLSPolicyList",
 		{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "securitypolicies"}:       "SecurityPolicyList",
 		{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Resource: "envoyextensionpolicies"}: "EnvoyExtensionPolicyList",
-	}
+	})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	seed := func(gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
 		ns, _, _ := unstructured.NestedString(o.Object, "metadata", "namespace")
@@ -117,9 +116,7 @@ func TestGatewayTopologyAttachesEnvoyPolicies(t *testing.T) {
 
 func TestGatewayTopologyPolicyWarnings(t *testing.T) {
 	scheme := dynScheme()
-	listKinds := map[schema.GroupVersionResource]string{
-		gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList", btpGVR(): "BackendTrafficPolicyList",
-	}
+	listKinds := gwListKinds(map[schema.GroupVersionResource]string{btpGVR(): "BackendTrafficPolicyList"})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	ns := func(o *unstructured.Unstructured) string {
 		s, _, _ := unstructured.NestedString(o.Object, "metadata", "namespace")

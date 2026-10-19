@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -77,6 +77,19 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // coverage S3a: read-only; one view with its own tabs (Webhooks,
+    // Policies, Bindings). Detected, not assumed: admissionregistration v1.
+    id: "admission", label: "Admission", cap: "admission", lens: "group", destinations: [
+      task("admission", "Admission", section("admission"), { keywords: ["webhook", "admission webhook", "validating", "mutating", "policy", "vap", "cel", "binding"] }),
+      res("ValidatingWebhookConfigurations", r("admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", "ValidatingWebhookConfiguration", "Cluster")),
+      res("MutatingWebhookConfigurations", r("admissionregistration.k8s.io", "v1", "mutatingwebhookconfigurations", "MutatingWebhookConfiguration", "Cluster")),
+      res("ValidatingAdmissionPolicies", r("admissionregistration.k8s.io", "v1", "validatingadmissionpolicies", "ValidatingAdmissionPolicy", "Cluster")),
+      res("ValidatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBinding", "Cluster")),
+      res("MutatingAdmissionPolicies", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicies", "MutatingAdmissionPolicy", "Cluster")),
+      res("MutatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBinding", "Cluster")),
+    ],
+  },
+  {
     id: "autoscaling", label: "Autoscaling", destinations: [
       task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "provisioning"] }),
       res("HorizontalPodAutoscalers", r("autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", "Namespaced"), { keywords: ["hpa"] }),
@@ -91,19 +104,32 @@ export const NAV_GROUPS: NavGroup[] = [
       task("connectivity", "Connectivity check", section("connectivity"), { keywords: ["can reach", "network policy"] }),
       // The list of Gateways and their routes; "Gateway topology" is the graph
       // a Gateway opens (UI review 2026-10-13).
-      task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "envoy", "topology"] }),
+      task("gateway", "Gateways and routes", section("gatewayApi"), { cap: "gatewayAPI", keywords: ["gateway api", "httproute", "listenerset", "envoy", "topology"] }),
+      // coverage S4: LoadBalancer Services and the on-prem controllers that
+      // serve them; read-only
+      task("loadbalancers", "Load balancers", section("loadbalancers"), { cap: "loadBalancing",
+        keywords: ["load balancer", "loadbalancer", "pending service", "external ip", "metallb", "cilium lb ipam", "ip pool", "servicelb", "kube-vip"] }),
       task("flows", "Hubble flows", section("flows"), { cap: "hubble", keywords: ["cilium", "drops"] }),
       res("Services", r("", "v1", "services", "Service", "Namespaced")),
       res("Ingresses", r("networking.k8s.io", "v1", "ingresses", "Ingress", "Namespaced")),
       res("NetworkPolicies", r("networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy", "Namespaced")),
       res("EndpointSlices", r("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice", "Namespaced")),
+      res("IPAddressPools", r("metallb.io", "v1beta1", "ipaddresspools", "IPAddressPool", "Namespaced"), { cap: "metallb" }),
+      res("L2Advertisements", r("metallb.io", "v1beta1", "l2advertisements", "L2Advertisement", "Namespaced"), { cap: "metallb" }),
+      res("BGPAdvertisements", r("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisement", "Namespaced"), { cap: "metallb" }),
+      res("ConfigurationStates", r("metallb.io", "v1beta1", "configurationstates", "ConfigurationState", "Namespaced"), { cap: "metallb" }),
+      res("CiliumLoadBalancerIPPools", r("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPool", "Cluster"), { cap: "cilium" }),
       res("IngressClasses", r("networking.k8s.io", "v1", "ingressclasses", "IngressClass", "Cluster")),
       res("Gateways", r("gateway.networking.k8s.io", "v1", "gateways", "Gateway", "Namespaced"), { cap: "gatewayAPI" }),
       res("HTTPRoutes", r("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRoute", "Namespaced"), { cap: "gatewayAPI" }),
       res("GRPCRoutes", r("gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRoute", "Namespaced"), { cap: "gatewayAPI" }),
+      res("TLSRoutes", r("gateway.networking.k8s.io", "v1", "tlsroutes", "TLSRoute", "Namespaced"), { cap: "gatewayAPI" }),
+      res("TCPRoutes", r("gateway.networking.k8s.io", "v1", "tcproutes", "TCPRoute", "Namespaced"), { cap: "gatewayAPI" }),
+      res("UDPRoutes", r("gateway.networking.k8s.io", "v1", "udproutes", "UDPRoute", "Namespaced"), { cap: "gatewayAPI" }),
+      res("ListenerSets", r("gateway.networking.k8s.io", "v1", "listenersets", "ListenerSet", "Namespaced"), { cap: "gatewayAPI" }),
       res("GatewayClasses", r("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClass", "Cluster"), { cap: "gatewayAPI" }),
       res("ReferenceGrants", r("gateway.networking.k8s.io", "v1beta1", "referencegrants", "ReferenceGrant", "Namespaced"), { cap: "gatewayAPI" }),
-      res("BackendTLSPolicies", r("gateway.networking.k8s.io", "v1alpha3", "backendtlspolicies", "BackendTLSPolicy", "Namespaced"), { cap: "gatewayAPI" }),
+      res("BackendTLSPolicies", r("gateway.networking.k8s.io", "v1", "backendtlspolicies", "BackendTLSPolicy", "Namespaced"), { cap: "gatewayAPI" }),
       res("ClientTrafficPolicies", r("gateway.envoyproxy.io", "v1alpha1", "clienttrafficpolicies", "ClientTrafficPolicy", "Namespaced"), { cap: "gatewayAPI" }),
       res("BackendTrafficPolicies", r("gateway.envoyproxy.io", "v1alpha1", "backendtrafficpolicies", "BackendTrafficPolicy", "Namespaced"), { cap: "gatewayAPI" }),
       res("SecurityPolicies", r("gateway.envoyproxy.io", "v1alpha1", "securitypolicies", "SecurityPolicy", "Namespaced"), { cap: "gatewayAPI" }),
@@ -184,6 +210,26 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // coverage S2a: read-only; one view with its own tabs (Schedules,
+    // Storage locations, Unscheduled backups)
+    id: "velero", label: "Velero", cap: "velero", lens: "group", destinations: [
+      task("velero", "Backups", section("velero"), { keywords: ["velero", "backup", "schedule", "backup storage location", "bsl", "restore", "storage location"] }),
+      res("Schedules", r("velero.io", "v1", "schedules", "Schedule", "Namespaced")),
+      res("Backups", r("velero.io", "v1", "backups", "Backup", "Namespaced")),
+      res("Restores", r("velero.io", "v1", "restores", "Restore", "Namespaced")),
+      res("BackupStorageLocations", r("velero.io", "v1", "backupstoragelocations", "BackupStorageLocation", "Namespaced"), { keywords: ["bsl"] }),
+      res("VolumeSnapshotLocations", r("velero.io", "v1", "volumesnapshotlocations", "VolumeSnapshotLocation", "Namespaced"), { keywords: ["vsl"] }),
+      res("BackupRepositories", r("velero.io", "v1", "backuprepositories", "BackupRepository", "Namespaced")),
+      res("PodVolumeBackups", r("velero.io", "v1", "podvolumebackups", "PodVolumeBackup", "Namespaced")),
+      res("PodVolumeRestores", r("velero.io", "v1", "podvolumerestores", "PodVolumeRestore", "Namespaced")),
+      res("DataUploads", r("velero.io", "v2alpha1", "datauploads", "DataUpload", "Namespaced")),
+      res("DataDownloads", r("velero.io", "v2alpha1", "datadownloads", "DataDownload", "Namespaced")),
+      res("DeleteBackupRequests", r("velero.io", "v1", "deletebackuprequests", "DeleteBackupRequest", "Namespaced")),
+      res("DownloadRequests", r("velero.io", "v1", "downloadrequests", "DownloadRequest", "Namespaced")),
+      res("ServerStatusRequests", r("velero.io", "v1", "serverstatusrequests", "ServerStatusRequest", "Namespaced")),
+    ],
+  },
+  {
     id: "helm", label: "Helm", lens: "group", destinations: [
       task("helm", "Releases", section("helm"), { keywords: ["helm", "charts", "rollback"] }),
     ],
@@ -219,6 +265,10 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     externalSecrets: c.externalSecretsPresent ?? false,
     gatewayAPI: Boolean(c.gatewayAPIVersion),
     karpenter: c.karpenterPresent ?? false,
+    velero: c.veleroPresent ?? false,
+    admission: c.admissionPresent ?? false,
+    loadBalancing: c.loadBalancingPresent ?? false,
+    metallb: c.metallbPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

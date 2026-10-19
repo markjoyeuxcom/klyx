@@ -26,6 +26,7 @@ type fakeExecConn struct {
 	// describeArgvErr, when set, is DescribeArgv's refusal.
 	describeArgvErr error
 	armErr          error    // CheckPodArmed's answer
+	kubectlRefuse   string   // DebugKubectlCheck refuses with this reason
 	armChecks       []string // ns/name@uid the arm check was asked about
 	// kindGroup/kindName/kindErr are DescribeTarget's answer (coverage S0b);
 	// the default is a core Pod. snaps are DescribeSnapshot's answers, in
@@ -107,16 +108,28 @@ func (f *fakeExecConn) DescribeArgv(kindArg, namespace, name string, events bool
 	return append(argv, "--", name), nil
 }
 
+// DebugKubectlCheck passes unless the test sets kubectlRefuse.
+func (f *fakeExecConn) DebugKubectlCheck(context.Context) fleet.DebugKubectl {
+	if f.kubectlRefuse != "" {
+		return fleet.DebugKubectl{Reason: f.kubectlRefuse}
+	}
+	return fleet.DebugKubectl{OK: true, Version: "v1.37.1", Minor: 37}
+}
+
 func (f *fakeExecConn) CheckPodArmed(_ context.Context, namespace, name, uid string) error {
 	f.armChecks = append(f.armChecks, namespace+"/"+name+"@"+uid)
 	return f.armErr
 }
 
-func (f *fakeExecConn) DebugCommand(namespace, pod, container string) ([]string, error) {
+func (f *fakeExecConn) DebugCommand(namespace, pod, container string, o fleet.DebugOptions) ([]string, error) {
 	if f.kubeContext == "" {
 		return nil, errEmptyContext
 	}
-	argv := []string{"kubectl", "--context", f.kubeContext, "-n", namespace, "debug", "-it", pod, "--image=busybox:1.36"}
+	o, err := fleet.ValidateDebugOptions(o)
+	if err != nil {
+		return nil, err
+	}
+	argv := []string{"kubectl", "--context", f.kubeContext, "-n", namespace, "debug", "-it", pod, "--image=" + o.Image, "--profile=" + o.Profile}
 	if container != "" {
 		argv = append(argv, "--target="+container)
 	}
@@ -446,17 +459,17 @@ func TestGetDebugCommand(t *testing.T) {
 	s := NewExecService(func(string) (ExecConn, bool) {
 		return &fakeExecConn{kubeContext: "ctx"}, true
 	})
-	dto := s.GetDebugCommand("c", "cert-manager", "cm-abc", "cert-manager-controller")
+	dto := s.GetDebugCommand("c", "cert-manager", "cm-abc", "cert-manager-controller", "", "")
 	if dto.Error != "" {
 		t.Fatalf("unexpected error: %s", dto.Error)
 	}
-	want := "kubectl --context ctx -n cert-manager debug -it cm-abc --image=busybox:1.36 --target=cert-manager-controller -- sh"
+	want := "kubectl --context ctx -n cert-manager debug -it cm-abc --image=busybox:1.36 --profile=general --target=cert-manager-controller -- sh"
 	if dto.Command != want {
 		t.Fatalf("command:\n got %q\nwant %q", dto.Command, want)
 	}
 
 	miss := NewExecService(func(string) (ExecConn, bool) { return nil, false })
-	if d := miss.GetDebugCommand("nope", "ns", "p", "c"); d.Error == "" {
+	if d := miss.GetDebugCommand("nope", "ns", "p", "c", "", ""); d.Error == "" {
 		t.Fatal("cluster miss must error")
 	}
 }
@@ -476,7 +489,7 @@ func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 		return &fakeExecConn{kubeContext: "prd"}, true
 	})
 
-	r := svc.OpenDebugTerminal("prd-cluster", "ns", "pod", "uid-pod", "app")
+	r := svc.OpenDebugTerminal("prd-cluster", "ns", "pod", "uid-pod", "app", "", "")
 	if r.OK || !strings.Contains(r.Error, "not armed") {
 		t.Fatalf("unarmed debug launch on a protected cluster must refuse, got %+v", r)
 	}
@@ -484,7 +497,7 @@ func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 		t.Fatal("the gate must refuse before resolving the cluster or building the argv")
 	}
 
-	if dto := svc.GetDebugCommand("prd-cluster", "ns", "pod", "app"); dto.Error != "" || dto.Command == "" {
+	if dto := svc.GetDebugCommand("prd-cluster", "ns", "pod", "app", "", ""); dto.Error != "" || dto.Command == "" {
 		t.Fatalf("copying the debug command must stay ungated, got %+v", dto)
 	}
 }
@@ -494,7 +507,7 @@ func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 func TestOpenDebugTerminal_RefusesAReplacedPod(t *testing.T) {
 	conn := &fakeExecConn{kubeContext: "dev", armErr: fmt.Errorf("pod ns/web-0: %w", fleet.ErrReplaced)}
 	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
-	r := svc.OpenDebugTerminal("c", "ns", "web-0", "uid-old", "app")
+	r := svc.OpenDebugTerminal("c", "ns", "web-0", "uid-old", "app", "", "")
 	if r.OK || !strings.Contains(r.Error, "replaced") || !strings.Contains(r.Error, "nothing was started") {
 		t.Fatalf("a replaced pod must launch nothing: %+v", r)
 	}
@@ -705,5 +718,23 @@ func TestDescribeBracketIsPinned(t *testing.T) {
 		if r := s.Describe(context.Background(), "kind-klyx", "ks", "flux-system", "apps"); r.Withheld == "" || r.Output != "" || conn.gotPinned != "" {
 			t.Fatalf("no identity or version withholds before kubectl runs (%+v): %+v", snap, r)
 		}
+	}
+}
+
+// Coverage S6 §6: the kubectl gate refuses before the pod is touched, and
+// the preflight says what the dialog shows.
+func TestOpenDebugTerminal_KubectlGate(t *testing.T) {
+	conn := &fakeExecConn{kubeContext: "dev", kubectlRefuse: "kubectl v1.29.0 is older than 1.30"}
+	svc := NewExecService(func(string) (ExecConn, bool) { return conn, true })
+	r := svc.OpenDebugTerminal("c", "ns", "web-0", "uid", "app", "busybox:1.36", "sysadmin")
+	if r.OK || !strings.Contains(r.Error, "older than 1.30") || !strings.Contains(r.Error, "nothing was started") || len(conn.armChecks) != 0 {
+		t.Fatalf("refused before the pod is touched: %+v %v", r, conn.armChecks)
+	}
+	if r := svc.OpenDebugTerminal("c", "ns", "web-0", "uid", "app", "Bad Image", "general"); r.OK || !strings.Contains(r.Error, "not an image reference") {
+		t.Fatalf("a bad image launches nothing: %+v", r)
+	}
+	p := svc.DebugPreflight("c")
+	if p.OK || p.Reason == "" || len(p.Profiles) != 5 || p.DefaultImage != "busybox:1.36" || p.DefaultProfile != "general" || p.Profiles[4].Name != "sysadmin" || !strings.Contains(p.Profiles[4].Adds, "privileged") {
+		t.Fatalf("preflight: %+v", p)
 	}
 }

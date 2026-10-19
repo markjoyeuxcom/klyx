@@ -36,11 +36,8 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 		return nil, workloads.UsageStatus{Available: false, Message: "pod list failed: " + err.Error()}
 	}
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -60,6 +57,9 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
+	if c.credentialMoved(mr.rev) {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	}
 	st := workloads.UsageStatus{Available: true, UpdatedAt: now}
 	if truncated {
 		st.Message = "pod list capped - node usage may under-count"
@@ -78,11 +78,8 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 	}
 	now := clk.Now()
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -102,6 +99,9 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
+	if c.credentialMoved(mr.rev) {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	}
 	out := make(map[string]workloads.Usage, len(cpuByCt)+len(memByCt))
 	for name, v := range cpuByCt {
 		u := out[name]

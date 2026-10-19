@@ -231,3 +231,20 @@ describe("externalsecrets slice", () => {
     expect(useFleet.getState().externalsecrets.selectedKey).toBeNull();
   });
 });
+
+test("re-opening the list already shown keeps its read; another kind starts a new one", () => {
+  const ref = { group: "", version: "v1", plural: "serviceaccounts", kind: "ServiceAccount", scope: "Namespaced" };
+  useFleet.getState().openCluster("y");
+  useFleet.getState().openResource(ref);
+  useFleet.getState().setInstancePage([{ namespace: "n", name: "a", created: "" }], "");
+  useFleet.getState().setInstanceFilter("a");
+  useFleet.getState().openInstance("n", "a");
+  useFleet.getState().openResource({ ...ref });
+  const st = useFleet.getState();
+  expect(st.instances.rows.length).toBe(1);
+  expect(st.instances.loading).toBe(false);
+  expect(st.instances.filter).toBe("a");
+  expect(st.route).toEqual({ name: "cluster", cluster: "y", section: "resources", resource: ref });
+  useFleet.getState().openResource({ group: "", version: "v1", plural: "secrets", kind: "Secret", scope: "Namespaced" });
+  expect(useFleet.getState().instances).toMatchObject({ rows: [], loading: true, filter: "" });
+});

@@ -23,6 +23,12 @@ type PodDetail struct {
 	YAML           string
 	QoSClass       string
 	ServiceAccount string
+	// Coverage S6: the resizable units, the debug containers, and what the
+	// scheduler model assumes.
+	Resources       []workloads.ResizeResources
+	Ephemeral       []workloads.EphemeralContainer
+	EphemeralMore   int
+	SchedAssumption string
 }
 
 // PodDetail fetches one pod by namespace/name and assembles its detail view.
@@ -45,7 +51,7 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	// Resolve a ReplicaSet owner to its controller exactly like ListPods does,
 	// so the inspector offers "restart deployment" for Deployment pods (the
 	// detail read previously kept the raw ReplicaSet and hid the verb).
-	sums := workloads.SummarizePods([]corev1.Pod{*p}, now)
+	sums := workloads.SummarizePodsModel([]corev1.Pod{*p}, now, c.schedModel())
 	c.resolveReplicaSetOwners(ctx, p.Namespace, sums)
 	summary := sums[0]
 
@@ -85,15 +91,20 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	}
 
 	events := c.instanceEvents(ctx, string(p.GetUID()))
+	eph, more := workloads.EphemeralOf(p)
 
 	return PodDetail{
-		Summary:        summary,
-		Labels:         labels,
-		Annotations:    annotations,
-		Conditions:     conds,
-		Events:         events,
-		YAML:           yamlStr,
-		QoSClass:       string(p.Status.QOSClass),
-		ServiceAccount: p.Spec.ServiceAccountName,
+		Summary:         summary,
+		Labels:          labels,
+		Annotations:     annotations,
+		Conditions:      conds,
+		Events:          events,
+		YAML:            yamlStr,
+		QoSClass:        string(p.Status.QOSClass),
+		ServiceAccount:  p.Spec.ServiceAccountName,
+		Resources:       workloads.ResizeResourcesOf(p),
+		Ephemeral:       eph,
+		EphemeralMore:   more,
+		SchedAssumption: c.schedModel().Assumption(),
 	}, nil
 }

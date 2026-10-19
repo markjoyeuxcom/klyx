@@ -2,9 +2,12 @@ package crd
 
 import (
 	"fmt"
+	neturl "net/url"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 func init() {
@@ -38,8 +41,12 @@ func webhookFacts(u *unstructured.Unstructured) []Fact {
 		cc := asMap(m["clientConfig"])
 		target := ""
 		if url, _ := cc["url"].(string); url != "" {
+			// the origin only, and whether a path is set (coverage S3a §8)
 			external = true
-			target = url
+			target = urlscrub.OriginOf(url)
+			if u, err := neturl.Parse(url); err == nil && u.Path != "" && u.Path != "/" {
+				target += " (path set)"
+			}
 		} else if svc := asMap(cc["service"]); svc != nil {
 			ns, _ := svc["namespace"].(string)
 			sn, _ := svc["name"].(string)
@@ -48,7 +55,7 @@ func webhookFacts(u *unstructured.Unstructured) []Fact {
 				target += ":" + port
 			}
 			if path, _ := svc["path"].(string); path != "" {
-				target += path
+				target += " (path set)"
 			}
 		}
 

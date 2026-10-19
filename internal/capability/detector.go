@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -171,6 +172,9 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 			ExternalSecrets: ExternalSecretsCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Reloader:        ReloaderCapability{Base: Base{Tier: Absent, Reason: msg}},
 			Karpenter:       KarpenterCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Velero:          VeleroCapability{Base: Base{Tier: Absent, Reason: msg}},
+			Admission:       AdmissionCapability{Base: Base{Tier: Absent, Reason: msg}},
+			LoadBalancing:   LoadBalancingCapability{Base: Base{Tier: Absent, Reason: msg}},
 		}, err
 	}
 	return Set{
@@ -180,6 +184,9 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 		ExternalSecrets: d.detectExternalSecrets(ctx, served),
 		Reloader:        d.detectReloader(ctx),
 		Karpenter:       d.detectKarpenter(ctx, served),
+		Velero:          d.detectVelero(ctx, served),
+		Admission:       AdmissionCapability{Present: served["admissionregistration.k8s.io/v1"]},
+		LoadBalancing:   d.detectLoadBalancing(ctx, served),
 	}, nil
 }
 
@@ -262,6 +269,7 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 	}
 	out.GatewayAPIVersion = gwVersion
 	out.HasEnvoyProxy = served["gateway.envoyproxy.io"]
+	out.GatewayExperimentalKinds, out.GatewayExperimentalGap = d.experimentalGatewayKinds(served)
 
 	gwPresent := gwVersion != ""
 	if !gwPresent && !out.CiliumPresent {
@@ -304,6 +312,48 @@ func (d *Detector) detectNetwork(ctx context.Context, served map[string]bool) Ne
 		out.Base.Tier = Healthy
 	}
 	return out
+}
+
+// gatewayExperimentalGroup is the experimental channel's own group (S7 §7).
+const gatewayExperimentalGroup = "gateway.networking.x-k8s.io"
+
+// experimentalGatewayKinds lists the kinds every served version of the
+// experimental group carries, deduplicated and sorted, without their
+// subresources. A version whose resources cannot be read is a gap.
+func (d *Detector) experimentalGatewayKinds(served map[string]bool) ([]string, string) {
+	if !served[gatewayExperimentalGroup] {
+		return nil, ""
+	}
+	var versions []string
+	for gv := range served {
+		if v, ok := strings.CutPrefix(gv, gatewayExperimentalGroup+"/"); ok {
+			versions = append(versions, v)
+		}
+	}
+	sort.Strings(versions)
+	kinds, unread := map[string]bool{}, []string(nil)
+	for _, v := range versions {
+		rl, err := d.cs.Discovery().ServerResourcesForGroupVersion(gatewayExperimentalGroup + "/" + v)
+		if err != nil || rl == nil {
+			unread = append(unread, v)
+			continue
+		}
+		for _, r := range rl.APIResources {
+			if r.Kind != "" && !strings.Contains(r.Name, "/") {
+				kinds[r.Kind] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(kinds))
+	for k := range kinds {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	gap := ""
+	if len(unread) > 0 {
+		gap = "the " + gatewayExperimentalGroup + " resources at " + strings.Join(unread, ", ") + " could not be read"
+	}
+	return out, gap
 }
 
 // readGatewayClasses lists GatewayClasses through the discovery REST client

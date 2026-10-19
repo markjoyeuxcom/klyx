@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/urlscrub"
+	"github.com/moomora/klyx/internal/velero"
 )
 
 // Message rules (coverage S1b §6). Some controllers publish text no rule can
@@ -396,7 +397,43 @@ const EventWithheld = "the event's message is withheld: Klyx cannot tell which o
 
 // EventSubject is a reference an Event carries, by its kind: "" when the
 // reference is present without a usable kind.
-type EventSubject struct{ Kind string }
+type EventSubject struct {
+	Kind string
+	// Group is the reference's API group when its apiVersion says
+	// (GroupKnown); an unknown group errs towards withholding.
+	Group      string
+	GroupKnown bool
+}
+
+// VeleroEventWithheld replaces an Event about a Velero object (S2a §6):
+// Velero records none for the kinds Klyx reads, so the text is another
+// tool's, and unbounded.
+const VeleroEventWithheld = "the event's message is withheld: an event about a Velero object can quote a provider's error"
+
+// veleroSubject reports a subject that is, or may be, a Velero object.
+func veleroSubject(s EventSubject) bool {
+	if !velero.Kinds[s.Kind] {
+		return false
+	}
+	return !s.GroupKnown || s.Group == velero.Group
+}
+
+// groupOfAPIVersion splits an apiVersion's group ("" for the core group).
+func groupOfAPIVersion(av string) (string, bool) {
+	if av == "" {
+		return "", false
+	}
+	if i := strings.Index(av, "/"); i >= 0 {
+		return av[:i], true
+	}
+	return "", true
+}
+
+// SubjectOf builds an EventSubject from a reference's kind and apiVersion.
+func SubjectOf(kind, apiVersion string) EventSubject {
+	g, known := groupOfAPIVersion(apiVersion)
+	return EventSubject{Kind: kind, Group: g, GroupKnown: known}
+}
 
 // EventMessage is an Event's text under the rules of the objects it names
 // (Codex's Stage 0 reviews 1 and 2). Every adapter - the generic sanitiser
@@ -414,6 +451,9 @@ func EventMessage(reason, msg string, subjects []EventSubject) (string, bool) {
 	for _, s := range subjects {
 		if s.Kind == "" {
 			return EventWithheld, true
+		}
+		if veleroSubject(s) {
+			return VeleroEventWithheld, true
 		}
 	}
 	out, changed := msg, false
@@ -442,7 +482,8 @@ func eventSubjects(o map[string]any) []EventSubject {
 		}
 		ref, _ := v.(map[string]any)
 		k, _ := ref["kind"].(string)
-		out = append(out, EventSubject{Kind: k})
+		av, _ := ref["apiVersion"].(string)
+		out = append(out, SubjectOf(k, av))
 	}
 	if !primary {
 		out = append(out, EventSubject{})

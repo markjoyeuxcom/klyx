@@ -83,9 +83,9 @@ func typeOrder(t string) int {
 // involvedObject's rule, and its related object's when set (Codex's Stage 0
 // review 2: every event reader shares the one classifier).
 func EventMessage(e *corev1.Event) string {
-	subjects := []crd.EventSubject{{Kind: e.InvolvedObject.Kind}}
+	subjects := []crd.EventSubject{crd.SubjectOf(e.InvolvedObject.Kind, e.InvolvedObject.APIVersion)}
 	if e.Related != nil {
-		subjects = append(subjects, crd.EventSubject{Kind: e.Related.Kind})
+		subjects = append(subjects, crd.SubjectOf(e.Related.Kind, e.Related.APIVersion))
 	}
 	msg, _ := crd.EventMessage(e.Reason, e.Message, subjects)
 	return msg

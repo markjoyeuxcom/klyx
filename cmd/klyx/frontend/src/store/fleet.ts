@@ -26,9 +26,12 @@ export type ClusterDTO = {
   networkTier: string;
   networkReason: string;
   gatewayAPIVersion?: string;
+  // The experimental channel's own group: recognised, never read (S7b §7).
+  gatewayExperimentalKinds?: string[] | null;
+  gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -374,7 +377,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
 export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
@@ -425,8 +428,12 @@ export type ConnectivityReportDTO = { allowed: boolean; ingress: DirectionVerdic
 // Survivability headroom simulation.
 export type HeadroomPodRefDTO = { namespace: string; name: string; cpuReq: number; memReq: number };
 export type PDBBlockerDTO = { namespace: string; name: string; disruptionsAllowed: number };
-export type HeadroomResultDTO = { lostNodes: number; survivorNodes: number; displaced: number; rescheduled: number; unplaced: HeadroomPodRefDTO[]; cpuShortfall: number; memShortfall: number };
-export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlockerDTO[]; podListCapped: boolean; error?: string };
+// Coverage S6 §2: altCpu/altMem are how much more a scheduler one minor
+// behind would reserve on the survivors; versionDependent names the
+// survivors whose spare after placement is below that difference.
+export type HeadroomResultDTO = { lostNodes: number; survivorNodes: number; displaced: number; rescheduled: number; unplaced: HeadroomPodRefDTO[]; cpuShortfall: number; memShortfall: number;
+  altCpu?: number; altMem?: number; versionDependent?: string[] };
+export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlockerDTO[]; podListCapped: boolean; schedAssumption?: string; error?: string };
 
 // Fleet expiry horizon: one cluster's expiring certificate material.
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
@@ -500,7 +507,15 @@ export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | nul
 export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
 export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
-export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike };
+export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike;
+  observedGeneration?: number; resize?: ResizeDTO; sched?: SchedDTO };
+// Coverage S6: a pod's resize state, its reservation and its debug containers.
+export type ResizeConditionDTO = { reason: string; message?: string; generation: number; sinceUnix?: number };
+export type ResizeDTO = { pending?: ResizeConditionDTO; inProgress?: ResizeConditionDTO; legacy?: string };
+export type TripleDTO = { desired: number | null; allocated: number | null; actual: number | null; differs?: boolean };
+export type ResizeResourcesDTO = { name: string; sidecar?: boolean; cpuReq: TripleDTO; memReq: TripleDTO; cpuLim: TripleDTO; memLim: TripleDTO; cpuRestart?: string; memoryRestart?: string };
+export type SchedDTO = { cpu: number; mem: number; desiredCpu: number; desiredMem: number; altCpu?: number; altMem?: number; assumption: string };
+export type EphemeralDTO = { name: string; image: string; target?: string; privileged?: boolean; capsAdded?: string[]; runAsNonRoot?: boolean | null; state: string; reason?: string; exitCode?: number; startedUnix?: number; finishedUnix?: number };
 // A pod on the rows transport (1c slice 3 addendum §3.2): bounded and
 // time-stable - no relative age (ticked from createdUnix), no legacy
 // rank/reason/phase. The verdict message and each container's image, ports,
@@ -510,11 +525,13 @@ export type PodRowDTO = {
   namespace: string; name: string; uid: string; gvr?: string; generation?: number;
   ownerKind: string; ownerName: string; ownerUid?: string; node: string; ip: string;
   ready: boolean; restarts: number; createdUnix?: number; health?: HealthLike; containers: PodRowContainerDTO[];
+  observedGeneration?: number; resize?: ResizeDTO; evidenceRev?: string;
 };
 // RowsVer is the (incarnation, Ver) of the rows a slice holds - the §6a
 // probe anchors a push's timing to the lens commit that shows it.
 export type RowsVer = { incarnation: number; ver: number };
-export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string };
+export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
+  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.
@@ -712,7 +729,7 @@ export type InstanceDetailSlice = { cluster: string | null; resource: ResourceRe
 
 // Fleet-level views (redesign step 7d): the board, the promotion tracker and
 // the expiry horizon share the Fleet band.
-export type FleetView = "promotion" | "expiry";
+export type FleetView = "promotion" | "expiry" | "backups";
 export type Route =
   | { name: "fleet"; view?: FleetView }
   | { name: "forwards" }
@@ -742,6 +759,9 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   upgrade: "Upgrade",
   connectivity: "Connectivity",
   karpenter: "Karpenter",
+  velero: "Velero",
+  admission: "Admission",
+  loadbalancers: "Load balancers",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
@@ -783,17 +803,58 @@ export type GatewayAddressDTO = { type: string; value: string };
 // CondDTO: one status condition as observed. status "" = absent (no
 // controller wrote it) - distinct from "False" (rejected) and "Unknown".
 export type CondDTO = { status: string; reason: string; message: string; observedGeneration: number };
-export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO };
-// One HTTPRoute of the Gateways task's routes part (1c slice 3 §4a): counted
-// once by UID with its worst attachment's captured role/label/parent, and
-// every attachment. The topology stays the route's data path.
-export type GatewayRouteAttachmentDTO = { parent: string; rule: RuleDTO };
-export type GatewayRouteRowDTO = { uid?: string; gvr?: string; generation?: number; namespace: string; name: string; parent: string; rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[] };
+export type GatewayRefDTO = { rule: RuleDTO; uid?: string; gvr?: string; namespace: string; name: string; className: string; addresses?: GatewayAddressDTO[]; listeners?: ListenerDTO[]; accepted: boolean; programmed: boolean; stale?: boolean; generation?: number; observedGeneration?: number; acceptedCond?: CondDTO; programmedCond?: CondDTO;
+  // coverage S7a §4: allowedListeners as written, and the controller's count
+  // of attached ListenerSets (null when unreported)
+  allowedListeners?: NamespaceAllowanceDTO; attachedListenerSets?: number | null };
+// Coverage S7a §3: a listener's status as its controller reported it. A
+// stale condition describes an older generation: shown, never judged.
+export type RouteKindDTO = { group: string; kind: string };
+export type ListenerConditionDTO = { type: string; status: string; reason: string; message: string; observedGeneration: number; lastTransitionTime?: string; stale: boolean };
+export type ListenerStatusDTO = { supportedKinds: RouteKindDTO[]; attachedRoutes: number; conditions: ListenerConditionDTO[] };
+// A namespaces allowance as written: set = the field was written; from "" =
+// unset (its default applies); selector in kubectl's form.
+export type NamespaceAllowanceDTO = { set: boolean; from: string; selector?: string; selectorInvalid?: boolean };
+export type AllowedRoutesDTO = { namespaces: NamespaceAllowanceDTO; kinds: RouteKindDTO[] };
+// One ListenerSet of the Gateways task's ListenerSets part (S7a §4), with its
+// captured verdict. parentState: "found" | "not found" (a complete read
+// proves it) | "not established" | "unsupported" (another kind). allowance is
+// Klyx's own reading of the parent's allowedListeners - evidence beside the
+// controller's verdict; allowed "yes" | "no" | "" (not established).
+export type ListenerParentDTO = { group: string; kind: string; namespace: string; name: string };
+export type AllowanceDTO = { from: string; allowed: string; text: string; disagrees: boolean };
+export type ListenerSetRowDTO = {
+  uid?: string; gvr?: string; generation?: number; namespace: string; name: string; created?: string;
+  parent: ListenerParentDTO; parentState: string; parentCurrent?: boolean; listeners: ListenerDTO[];
+  acceptedCond: CondDTO; programmedCond: CondDTO; stale: boolean; observedGeneration: number;
+  allowance: AllowanceDTO; precedence: number; siblings: number; precedenceComplete: boolean; rule: RuleDTO;
+};
+// One route of the Gateways task's routes part (1c slice 3 §4a; coverage
+// S7b §5): any of the five kinds, counted once by UID with its worst
+// attachment's captured role/label/parent, and every attachment. parent is
+// an attachment's identity (the whole normalised parentRef), parentLabel
+// its name, gateway the "namespace/name" of the Gateway it lands on ("" when
+// not established). The topology stays the route's data path.
+export type ParentRefDTO = { group: string; kind: string; namespace: string; name: string; sectionName?: string; port?: number };
+// Another controller's entry for the same reference: shown, never judged.
+export type OtherStatusDTO = { controller: string; accepted: string; resolvedRefs: string };
+// A cross-namespace backend's ReferenceGrant evidence; allowed "yes" | "no" | "" (not established).
+export type GrantDTO = { rule: number; backend: string; allowed: string; by?: string; text: string };
+// An attachment's evidence (S7b §5, §6): the expected controller or why it
+// is not established, other controllers' entries, and Klyx's own readings
+// beside the controller's status, never replacing it.
+export type AttachmentEvDTO = { controller?: string; controllerWhy?: string; others?: OtherStatusDTO[]; allowance: AllowanceDTO; grants?: GrantDTO[]; features?: string[]; disagreements?: string[] };
+export type GatewayRouteAttachmentDTO = { parent: string; parentLabel?: string; parentRef?: ParentRefDTO; gateway?: string; rule: RuleDTO; evidence?: AttachmentEvDTO };
+export type GatewayRouteRowDTO = {
+  uid?: string; gvr?: string; generation?: number; kind?: string; namespace: string; name: string;
+  parent: string; parentLabel?: string; gateway?: string; hostnames?: string[]; hostnameCount?: number;
+  rule: RuleDTO; attachments: GatewayRouteAttachmentDTO[];
+};
 export type PolicyDetailDTO = { key: string; value: string };
 export type PolicyRefDTO = { kind: string; namespace: string; name: string; targetKind: string; targetNamespace: string; targetName: string; targetSectionName: string; summary: string; details: PolicyDetailDTO[]; inferred: boolean; match: string };
 export type CertificateRefDTO = { group: string; kind: string; namespace: string; name: string };
-export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[] };
-export type MatchDTO = { pathType: string; pathValue: string; method: string; rule?: number };
+export type ListenerDTO = { name: string; protocol: string; hostname: string; port: number; certificateRefs?: CertificateRefDTO[]; tlsMode?: string; allowedRoutes?: AllowedRoutesDTO; status?: ListenerStatusDTO };
+export type MatchDTO = { pathType: string; pathValue: string; method: string; rule?: number; grpcService?: string; grpcMethod?: string };
 // One spec.rules entry with its verdict and each backend's own (The Line
 // slice 8d): weight is the effective configured weight (1 when unset).
 export type RouteRuleBackendDTO = { kind: string; namespace: string; name: string; port: number; weight: number; weightSet: boolean; rule: RuleDTO };
@@ -803,13 +864,26 @@ export type EndpointCountDTO = { ready: number; total: number; nonPod: number; e
 // weightSet false: the backendRef wrote no weight (the Gateway API default
 // of 1); an explicit weight 0 sends the backend no traffic. rule is the
 // spec.rules index listing it - weights split traffic within one rule.
-export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; rule?: number; state?: "resolved" | "not-found" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
+// transport is TCP, or UDP for a UDPRoute: the Service port is selected by
+// number and transport, and only the slices carrying it count (S7b §5);
+// "no-port" is a Service without that port.
+export type BackendDTO = { kind: string; name: string; namespace: string; port: number; weight: number; weightSet?: boolean; rule?: number; transport?: string; state?: "resolved" | "not-found" | "no-port" | "unreadable" | "unsupported"; error?: string; endpoints?: EndpointCountDTO };
 export type PodCountDTO = { ready: number; total: number; unknown: boolean };
 export type ServiceNodeDTO = { namespace: string; name: string; type: string; port: number; resolved: boolean; global: boolean; meshClusters: string[]; meshUnconfirmed: boolean; policies: PolicyRefDTO[]; cnps: PolicyRefDTO[] };
 export type GatewayNodeDTO = { rule: RuleDTO; namespace: string; name: string; className: string; listeners: ListenerDTO[]; addresses?: GatewayAddressDTO[]; accepted: boolean; programmed: boolean; policies: PolicyRefDTO[]; acceptedCond?: CondDTO; programmedCond?: CondDTO; generation?: number };
-export type RouteNodeDTO = { uid?: string; rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string; accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO; policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number };
+// A topology lane (coverage S7b §9): one attachment of a route of any kind.
+// attachment is its identity (the whole normalised parentRef), rule the
+// attachment's verdict; controller is the parent's class's, controllerWhy
+// why it is not established; others are other controllers' entries.
+export type RouteNodeDTO = {
+  uid?: string; rule: RuleDTO; namespace: string; name: string; hostnames: string[]; matches: MatchDTO[]; parentSectionName?: string;
+  accepted: boolean; resolvedRefs: boolean; backends: BackendDTO[]; rules?: RouteRuleDTO[]; services: ServiceNodeDTO[]; pods: PodCountDTO;
+  policies: PolicyRefDTO[]; parentFound?: boolean; acceptedCond?: CondDTO; resolvedRefsCond?: CondDTO; generation?: number;
+  kind?: string; apiVersion?: string; attachment?: string; attachmentLabel?: string; parentRef?: ParentRefDTO;
+  controller?: string; controllerWhy?: string; others?: OtherStatusDTO[]; evidence?: AttachmentEvDTO; ruleNames?: string[]; hostnameCount?: number;
+};
 // error = the topology could not be read at all (never a snapshot);
-// routesComplete = the HTTPRoute list succeeded (absence is then proof).
+// routesComplete = every served route kind's list succeeded (absence is then proof).
 export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clusterPolicies?: PolicyRefDTO[]; warnings?: string[]; error?: string; routesComplete?: boolean; routesError?: string };
 export type GatewayRef = { namespace: string; name: string };
 
@@ -1217,9 +1291,12 @@ export const useFleet = create<FleetState>((set) => ({
       if (s.route.name !== "cluster") return {};
       // Preserve the current section if it is a resource-browsing section; otherwise default to "resources".
       const section: ClusterSection = (s.route.section === "crds" || s.route.section === "resources") ? s.route.section : "resources";
+      // Re-opening the list already shown keeps its read: the list loads when
+      // its cluster or GVR changes, so a reset here would never be refilled.
+      const shown = sameResource(s.route.resource, resource) && s.instances.cluster === s.route.cluster && sameResource(s.instances.ref, resource);
       return {
         route: { name: "cluster", cluster: s.route.cluster, section, resource },
-        instances: { cluster: s.route.cluster, ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false },
+        ...(shown ? {} : { instances: { cluster: s.route.cluster, ref: resource, rows: [], nextToken: "", loading: true, filter: "", riskOnly: false } }),
       };
     }),
   closeResource: () =>

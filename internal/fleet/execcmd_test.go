@@ -74,14 +74,14 @@ func TestExecCommand(t *testing.T) {
 func TestDebugCommand(t *testing.T) {
 	fakeKubectl(t, true)
 	c := &ClusterConn{kubeContext: "kubernetes-admin@homelab-nelli"}
-	argv, err := c.DebugCommand("cert-manager", "cert-manager-7d65955cff-c8s5r", "cert-manager-controller")
+	argv, err := c.DebugCommand("cert-manager", "cert-manager-7d65955cff-c8s5r", "cert-manager-controller", DebugOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"/fake/kubectl", "--context", "kubernetes-admin@homelab-nelli",
 		"-n", "cert-manager", "debug", "-it", "cert-manager-7d65955cff-c8s5r",
-		"--image=busybox:1.36", "--target=cert-manager-controller", "--", "sh",
+		"--image=busybox:1.36", "--profile=general", "--target=cert-manager-controller", "--", "sh",
 	}
 	if len(argv) != len(want) {
 		t.Fatalf("argv: got %v, want %v", argv, want)
@@ -95,7 +95,7 @@ func TestDebugCommand(t *testing.T) {
 
 func TestDebugCommandNoTarget(t *testing.T) {
 	c := &ClusterConn{kubeContext: "ctx"}
-	argv, _ := c.DebugCommand("ns", "pod", "")
+	argv, _ := c.DebugCommand("ns", "pod", "", DebugOptions{})
 	for _, a := range argv {
 		if strings.HasPrefix(a, "--target") {
 			t.Fatalf("empty container must omit --target: %v", argv)
@@ -105,7 +105,7 @@ func TestDebugCommandNoTarget(t *testing.T) {
 
 func TestDebugCommandNoContext(t *testing.T) {
 	c := &ClusterConn{}
-	if _, err := c.DebugCommand("ns", "pod", "c"); err == nil {
+	if _, err := c.DebugCommand("ns", "pod", "c", DebugOptions{}); err == nil {
 		t.Fatal("want error without kube context")
 	}
 }
@@ -125,7 +125,7 @@ func TestExecDebugCommandRefuseInvalidNames(t *testing.T) {
 		if _, err := c.ExecCommand(b.ns, b.pod, b.container); err == nil {
 			t.Errorf("ExecCommand(%q,%q,%q): want error", b.ns, b.pod, b.container)
 		}
-		if _, err := c.DebugCommand(b.ns, b.pod, b.container); err == nil {
+		if _, err := c.DebugCommand(b.ns, b.pod, b.container, DebugOptions{}); err == nil {
 			t.Errorf("DebugCommand(%q,%q,%q): want error", b.ns, b.pod, b.container)
 		}
 	}

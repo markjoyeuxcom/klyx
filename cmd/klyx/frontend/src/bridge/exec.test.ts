@@ -117,15 +117,15 @@ describe("debug shell bridge", () => {
     const { copyDebugCommand } = await import("./exec");
     const r = await copyDebugCommand("cl", "ns", "p", "c");
     expect(r).toBe("copied");
-    expect(mockGetDebugCommand).toHaveBeenCalledWith("cl", "ns", "p", "c");
+    expect(mockGetDebugCommand).toHaveBeenCalledWith("cl", "ns", "p", "c", "", "");
   });
 
   it("openDebugTerminal surfaces errors via the action toast", async () => {
     mockOpenDebugTerminal.mockResolvedValue({ ok: false, error: "no kubectl" });
     const { openDebugTerminal } = await import("./exec");
-    await openDebugTerminal("cl", "ns", "p", "uid-p", "c");
+    await openDebugTerminal("cl", "ns", "p", "uid-p", "c", "busybox:1.36", "restricted");
     // the pod OBJECT the debug shell was armed against (design §5b)
-    expect(mockOpenDebugTerminal).toHaveBeenCalledWith("cl", "ns", "p", "uid-p", "c");
+    expect(mockOpenDebugTerminal).toHaveBeenCalledWith("cl", "ns", "p", "uid-p", "c", "busybox:1.36", "restricted");
     expect(useFleet.getState().actionStatus?.kind).toBe("error");
     expect(useFleet.getState().actionStatus?.message).toBe("no kubectl");
   });

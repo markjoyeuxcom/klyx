@@ -175,9 +175,9 @@ func TestExplain_NativeIncludedIsNotFault(t *testing.T) {
 
 // A route's evaluation is its reduced attachment, not Eval.
 func TestExplain_RouteAnchorFromAttachment(t *testing.T) {
-	set := healthsrc.RowSet[observe.Attached]{Rows: []healthsrc.Row[observe.Attached]{{
+	set := healthsrc.RowSet[healthsrc.RouteRow]{Rows: []healthsrc.Row[healthsrc.RouteRow]{{
 		Ref:  healthsrc.RowRef{UID: "rt-uid", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "shop", Name: "api"},
-		Data: observe.Attached{UID: "rt-uid", Namespace: "shop", Name: "api", Role: "fault", Label: "backend not found", Included: true},
+		Data: healthsrc.RouteRow{Attached: observe.Attached{UID: "rt-uid", Namespace: "shop", Name: "api", Role: "fault", Label: "backend not found", Included: true}},
 	}}}
 	rows := observe.Rows{Task: healthsrc.TaskGateway, EvaluatedAt: evalAt, Part: observe.Part{ID: "routes", Classifier: "native"}, Rows: set}
 	cl := &fakeCompleter{reply: "x"}
@@ -411,9 +411,9 @@ func TestExplain_OperatorReasonsAreScrubbed(t *testing.T) {
 // parents with conflicting Accepted conditions stay distinguishable; a scope
 // is scrubbed like any other text.
 func TestExplain_ConditionScopesSurvive(t *testing.T) {
-	set := healthsrc.RowSet[observe.Attached]{Rows: []healthsrc.Row[observe.Attached]{{
+	set := healthsrc.RowSet[healthsrc.RouteRow]{Rows: []healthsrc.Row[healthsrc.RouteRow]{{
 		Ref:  healthsrc.RowRef{UID: "rt-uid", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "shop", Name: "api"},
-		Data: observe.Attached{UID: "rt-uid", Role: "fault", Label: "not accepted by infra/eg", Included: true},
+		Data: healthsrc.RouteRow{Attached: observe.Attached{UID: "rt-uid", Role: "fault", Label: "not accepted by infra/eg", Included: true}},
 	}}}
 	rows := observe.Rows{Task: healthsrc.TaskGateway, EvaluatedAt: evalAt, Part: observe.Part{ID: "routes", Classifier: "native"}, Rows: set}
 	detail := crd.InstanceDetail{Kind: "HTTPRoute", Namespace: "shop", Name: "api", UID: "rt-uid", Conditions: []crd.Condition{

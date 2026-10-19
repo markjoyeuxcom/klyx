@@ -32,7 +32,17 @@ type allow map[string]allow
 var (
 	condAllow  = allow{"status": nil, "reason": nil, "message": nil, "observedGeneration": nil}
 	argoCond   = allow{"type": nil, "status": nil, "reason": nil, "message": nil}
-	attachment = allow{"parent": nil, "rule": allow{"included": nil, "role": nil, "label": nil}}
+	attachment = allow{"parent": nil, "parentLabel": nil, "gateway": nil, "rule": allow{"included": nil, "role": nil, "label": nil},
+		// coverage S7b: an attachment's evidence
+		"evidence": allow{"controller": nil, "controllerWhy": nil, "others": allow{"controller": nil, "accepted": nil, "resolvedRefs": nil},
+			"allowance": allow{"allowed": nil, "text": nil}, "grants": allow{"backend": nil, "allowed": nil, "text": nil}, "features": nil, "disagreements": nil}}
+	// coverage S7a: a listener with its status and allowedRoutes
+	routeKind     = allow{"group": nil, "kind": nil}
+	listenerAllow = allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil, "tlsMode": nil,
+		"allowedRoutes": allow{"namespaces": allow{"set": nil, "from": nil, "selector": nil}, "kinds": routeKind},
+		"status": allow{"attachedRoutes": nil, "supportedKinds": routeKind,
+			"conditions": allow{"type": nil, "status": nil, "reason": nil, "message": nil, "observedGeneration": nil, "stale": nil}}}
+	nsAllowance = allow{"set": nil, "from": nil, "selector": nil, "selectorInvalid": nil}
 )
 
 // aiEvidenceFields is the allowlist of lens row fields per part (the lens's
@@ -56,9 +66,15 @@ var aiEvidenceFields = map[string]allow{
 		"memUsed": nil, "nodes": nil},
 	healthsrc.TaskKarpenter + "/nodeclaims": {"pool": nil, "nodeName": nil, "ready": nil, "failingType": nil, "failingStatus": nil, "failingReason": nil,
 		"failingMessage": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil, "instanceType": nil, "ageSeconds": nil},
-	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": allow{"name": nil, "protocol": nil, "hostname": nil, "port": nil},
-		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow},
-	healthsrc.TaskGateway + "/routes": {"parent": nil, "attachments": attachment, "generation": nil},
+	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": listenerAllow,
+		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow,
+		"allowedListeners": nsAllowance, "attachedListenerSets": nil},
+	// coverage S7a §4: the ListenerSet, its parent as established, Klyx's
+	// allowance reading (evidence) and its place in the parent's merge
+	healthsrc.TaskGateway + "/listenersets": {"parent": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil}, "parentState": nil,
+		"listeners": listenerAllow, "acceptedCond": condAllow, "programmedCond": condAllow, "stale": nil, "generation": nil, "observedGeneration": nil,
+		"allowance": allow{"from": nil, "allowed": nil, "text": nil, "disagrees": nil}, "precedence": nil, "siblings": nil, "precedenceComplete": nil},
+	healthsrc.TaskGateway + "/routes": {"kind": nil, "parent": nil, "parentLabel": nil, "gateway": nil, "hostnames": nil, "hostnameCount": nil, "attachments": attachment, "generation": nil},
 	healthsrc.TaskNodes + "/nodes": {"roles": nil, "ready": nil, "unschedulable": nil, "problems": nil, "version": nil, "os": nil, "arch": nil,
 		"taintCount": nil, "cpuCapacity": nil, "cpuAllocatable": nil, "memCapacity": nil, "memAllocatable": nil, "podCapacity": nil,
 		"ageSeconds": nil, "pool": nil, "zone": nil},
@@ -98,7 +114,73 @@ var aiEvidenceFields = map[string]allow{
 	healthsrc.TaskFlux + "/receivers": {"type": nil, "ready": nil, "reason": nil, "suspended": nil, "events": nil, "meaning": nil, "stalled": nil,
 		"resources": allow{"kind": nil, "name": nil, "namespace": nil}, "resourceCount": nil, "filterCount": nil,
 		"generation": nil, "observedGeneration": nil, "readyGeneration": nil},
+	// Coverage S2a §6: kinds, verdicts, phases, the cron and zone, times,
+	// counts, a location's name, provider, bucket and prefix, and Klyx's
+	// classes; never a config value, a Secret's name, a hook or a selector.
+	healthsrc.TaskVelero + "/schedules": {"cron": nil, "zone": nil, "library": nil, "paused": nil, "phase": nil, "useOwnerReferences": nil,
+		"lastBackup": nil, "lastSkipped": nil, "due": nil, "dueZero": nil, "dueUnknown": nil, "validation": nil, "nState": nil,
+		"n": veleroRunAllow, "deciding": veleroRunAllow, "previous": veleroRunAllow, "previousNamed": nil, "blocker": veleroRunAllow,
+		"runs": veleroRunAllow, "newer": veleroRunAllow, "synced": nil, "resumed": nil, "reason": nil,
+		"template": allow{"storageLocation": nil, "ttl": nil, "snapshotVolumes": nil, "defaultVolumesToFsBackup": nil, "snapshotMoveData": nil,
+			"includedCount": nil, "excludedCount": nil, "hooks": nil},
+		"location": allow{"state": nil, "name": nil, "byDefault": nil, "label": nil, "role": nil, "validated": nil},
+		// S2b §5: the horizon, with its wording, so its confidence travels
+		"horizon": allow{"state": nil, "success": veleroRunAllow, "at": nil, "proven": nil, "untimed": nil, "orderUnknown": nil,
+			"incomplete": nil, "window": nil, "tier0": nil, "partial": veleroRunAllow, "partialProven": nil, "partialOrderUnknown": nil,
+			"expired": nil, "nextExpiry": nil, "text": nil, "partialText": nil}},
+	healthsrc.TaskVelero + "/locations": {"provider": nil, "bucket": nil, "prefix": nil, "default": nil, "accessMode": nil, "phase": nil,
+		"lastValidation": nil, "lastSynced": nil, "validationFrequency": nil, "syncPeriod": nil, "message": nil, "messageWithheld": nil,
+		"configCount": nil, "schedules": allow{"name": nil, "label": nil, "role": nil}, "schedulesState": nil, "expired": nil,
+		"expiredState": nil, "gcFailures": nil, "severalDefaults": nil, "reason": nil},
+	healthsrc.TaskVelero + "/backups": {"phase": nil, "created": nil, "started": nil, "completed": nil, "expires": nil, "scheduleLabel": nil,
+		"storageLocation": nil, "errors": nil, "warnings": nil, "itemsTotal": nil, "itemsBackedUp": nil, "failure": nil, "validation": nil,
+		"validationCount": nil, "hooksFailed": nil, "operationsFailed": nil, "membership": nil, "disputed": nil, "reason": nil,
+		// S2b §5: whether the row is counted, and its attribution
+		"counted": nil, "schedule": nil, "attribution": nil, "attributionDisputed": nil, "attributionCoverage": nil, "expired": nil, "gcFailure": nil},
 }
+
+// Coverage S3a §8: names, kinds, roles, failure policies, backend states and
+// counts; never a URL, a rule list, an expression or a warning's text.
+var admissionBindingAllow = allow{"name": nil, "policyName": nil, "policyState": nil, "actions": nil,
+	"paramRef": allow{"name": nil, "namespace": nil, "selector": nil, "notFoundAction": nil}}
+
+func init() {
+	aiEvidenceFields[healthsrc.TaskAdmission+"/webhooks"] = allow{"kind": nil, "webhookCount": nil, "cut": nil, "unavailable": nil, "unverified": nil, "reason": nil,
+		"webhooks": allow{"name": nil, "failurePolicy": nil, "failClosed": nil, "sideEffects": nil, "timeoutSeconds": nil, "serviceNamespace": nil,
+			"serviceName": nil, "servicePort": nil, "url": nil, "caBundle": nil, "ruleCount": nil, "namespaceSelector": nil, "objectSelector": nil,
+			"matchConditions": nil, "role": nil, "reason": nil,
+			"backend": allow{"state": nil, "label": nil, "reason": nil, "endpointRouting": nil, "clusterRouting": nil, "terminating": nil, "selectorless": nil}}}
+	aiEvidenceFields[healthsrc.TaskAdmission+"/policies"] = allow{"entity": nil, "kind": nil, "failurePolicy": nil, "failClosed": nil,
+		"paramKind": allow{"apiVersion": nil, "kind": nil, "state": nil, "namespaced": nil}, "matchRuleCount": nil, "validations": nil, "mutations": nil,
+		"variables": nil, "matchConditions": nil, "auditAnnotations": nil, "behind": nil, "warningCount": nil, "warningFields": nil,
+		"bindings": admissionBindingAllow, "binding": admissionBindingAllow, "reason": nil}
+}
+
+// Coverage S4 §7: classes, states, counts, reason tokens and the expected
+// controller; never an address, a hostname, an address block, an
+// annotation's value, a requested pool's name or a controller's message -
+// so never the rule's free-text reason, which quotes them (Codex's S4
+// review finding 1). lbEvidence applies the same policy to the rest of the
+// document.
+func init() {
+	cond := allow{"type": nil, "status": nil, "reason": nil, "current": nil}
+	aiEvidenceFields[healthsrc.TaskLB+"/services"] = allow{"class": nil, "externalTrafficPolicy": nil, "ipFamilies": nil, "ipFamilyPolicy": nil,
+		"allocated": nil, "addressCount": nil, "entries": nil, "families": nil, "portError": nil, "portsErrorCond": nil, "missingFamily": nil,
+		"oneFamilyPreferred": nil, "pendingSince": nil, "pendingObserved": nil, "cilium": cond, "conditionCount": nil, "limits": nil, "cause": nil,
+		"expected": allow{"class": nil, "known": nil, "note": nil, "candidates": allow{"controller": nil, "detected": nil, "limit": nil}},
+		"diagnosis": allow{"eventCount": nil, "eventsRead": nil, "svclbRead": nil, "cilium": cond,
+			"svclb": allow{"pods": nil, "ready": nil, "pending": nil, "hostPortConflict": nil, "pendingReason": nil, "candidates": nil},
+			"pool":  allow{"state": nil}, "silent": nil}}
+	aiEvidenceFields[healthsrc.TaskLB+"/pools"] = allow{"kind": nil, "blockCount": nil, "disabled": nil, "serviceSelector": nil,
+		"counts": allow{"total": nil, "totalState": nil, "available": nil, "availableState": nil, "used": nil, "usedState": nil}, "conflict": cond,
+		"labelsCut": nil, "autoAssign": nil, "serviceAllocation": nil,
+		"status":     allow{"assignedIPv4": nil, "availableIPv4": nil, "assignedIPv6": nil, "availableIPv6": nil},
+		"selectedBy": nil, "unresolved": nil, "adsRead": nil, "statesRead": nil, "instance": nil, "invalid": nil, "limits": nil}
+	aiEvidenceFields[healthsrc.TaskLB+"/metallb"] = allow{"role": nil, "node": nil, "result": nil, "conditionCount": nil}
+}
+
+var veleroRunAllow = allow{"name": nil, "phase": nil, "at": nil, "created": nil, "started": nil, "completed": nil, "proven": nil,
+	"timing": nil, "errors": nil, "warnings": nil, "class": nil}
 
 var imageRefAllow = allow{"name": nil, "tag": nil, "digest": nil, "text": nil}
 

@@ -133,7 +133,7 @@ func toNodeSummaryDTO(n workloads.NodeSummary) NodeSummaryDTO {
 // bin-pack the displaced pods onto what's left (requests-based - the caveats
 // live on workloads.SimulateLoss and in the UI captions). Read-only.
 func (s *NodesService) GetNodeHeadroom(cluster, loseKind, loseName string) HeadroomReportDTO {
-	out := HeadroomReportDTO{Result: HeadroomResultDTO{Unplaced: []HeadroomPodRefDTO{}}, PDBBlockers: []PDBBlockerDTO{}}
+	out := HeadroomReportDTO{Result: HeadroomResultDTO{Unplaced: []HeadroomPodRefDTO{}, VersionDependent: []string{}}, PDBBlockers: []PDBBlockerDTO{}}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		out.Error = "cluster not connected: " + cluster
@@ -151,7 +151,9 @@ func (s *NodesService) GetNodeHeadroom(cluster, loseKind, loseName string) Headr
 		Displaced: r.Result.Displaced, Rescheduled: r.Result.Rescheduled,
 		Unplaced:     make([]HeadroomPodRefDTO, 0, len(r.Result.Unplaced)),
 		CPUShortfall: r.Result.CPUShortfall, MemShortfall: r.Result.MemShortfall,
+		AltCPU: r.Result.AltCPU, AltMem: r.Result.AltMem, VersionDependent: append([]string{}, r.Result.VersionDependent...),
 	}
+	out.SchedAssumption = r.SchedAssumption
 	for _, u := range r.Result.Unplaced {
 		out.Result.Unplaced = append(out.Result.Unplaced, HeadroomPodRefDTO{Namespace: u.Namespace, Name: u.Name, CPUReq: u.CPUReq, MemReq: u.MemReq})
 	}

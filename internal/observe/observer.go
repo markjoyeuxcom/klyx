@@ -29,6 +29,34 @@ type Probe struct {
 	Version string
 }
 
+// Consumer is one reader's own demand for a shared kind (roadmap C3): the
+// kind is acquired when any consumer's demand is proven, and absent only
+// when every consumer proves it has none. Demand returns true for proven
+// demand, false for proven absence, and an error when it cannot tell.
+type Consumer struct {
+	Name   string
+	Demand func(ctx context.Context) (bool, error)
+}
+
+// Demand is one consumer's demand for a shared kind, as last probed.
+type Demand string
+
+const (
+	DemandYes     Demand = "yes"
+	DemandNo      Demand = "no"
+	DemandUnknown Demand = "unknown"
+)
+
+// ConsumerDemand is one consumer's demand, published on a kind's coverage.
+type ConsumerDemand struct {
+	Name   string `json:"name"`
+	Demand Demand `json:"demand"`
+}
+
+// ClassDemand: a part's own consumer cannot tell whether it needs the kind
+// (C3): the kind is unread for that part, whatever another consumer holds.
+const ClassDemand = "demand"
+
 // DomainSpec is one task: its parts and, through them, the kinds and
 // snapshots it reads. Discovery is per kind (KindSpec.Probe); a part is
 // absent when every counted source is absent, a task when every part is.
@@ -53,6 +81,12 @@ type PartSpec struct {
 	// the Observer keeps a role ledger and transition stream for the part
 	// (The Line slice 2b). Evidence-only parts leave it off.
 	Ledger bool
+	// Consumer names the part's own consumer of the shared kinds it reads
+	// (KindSpec.Consumers, C3). The part sees such a kind only through its
+	// consumer's demand: yes is the kind as it is, no reads absent, unknown
+	// reads unread - in its objects, completeness, coverage and ledger
+	// alike. "" reads the kind as it is.
+	Consumer string
 }
 
 // Capture is one part's atomic view: every listed source's objects (sorted
@@ -64,8 +98,21 @@ type Capture struct {
 	// there is: live, with nothing left out by a budget or a cap. Only a
 	// complete source proves an absent object departed.
 	Complete map[string]bool
-	Facts    map[string]any
-	Rows     bool
+	// Current names the sources whose read is Live: their objects are as
+	// the API serves them now, though a budget may have left others out
+	// (coverage S7a, Codex's implementation review finding 3). A confirmed
+	// absence is complete but not current; a stale read is neither. Only a
+	// source both complete and current proves an object of a served kind
+	// absent.
+	Current map[string]bool
+	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
+	// rank of its first left-out object: every object that ranks before it
+	// is here, so a question confined to those has a complete answer
+	// (coverage S2a §3). Absent when the kind is complete, unranked, or
+	// its window is unknown.
+	Windows map[string]string
+	Facts   map[string]any
+	Rows    bool
 	// RoleCap bounds PartResult.Roles: an evaluator appends at most RoleCap
 	// entries, then sets RolesCapped and stops appending. 0 when the part
 	// keeps no ledger.
@@ -218,6 +265,9 @@ func New(cfg Config) *Observer {
 		if _, dup := o.kinds[k.Name]; dup {
 			panic("observe: duplicate kind " + k.Name)
 		}
+		if len(k.Consumers) > 0 && k.Probe != nil {
+			panic("observe: kind " + k.Name + " has both a Probe and Consumers")
+		}
 		o.kinds[k.Name] = &kindState{spec: k}
 	}
 	for _, s := range cfg.Snapshots {
@@ -244,6 +294,9 @@ func New(cfg Config) *Observer {
 				switch {
 				case o.kinds[name] != nil:
 					o.kinds[name].parts = append(o.kinds[name].parts, ps.key)
+					if p.Consumer != "" && len(o.kinds[name].spec.Consumers) > 0 && !hasConsumer(o.kinds[name].spec.Consumers, p.Consumer) {
+						panic(fmt.Sprintf("observe: part %s/%s names consumer %q, which kind %q does not have", d.ID, p.ID, p.Consumer, name))
+					}
 				case o.snaps[name] != nil:
 					o.snaps[name].parts = append(o.snaps[name].parts, ps.key)
 				default:
@@ -255,6 +308,15 @@ func New(cfg Config) *Observer {
 		o.byTask[d.ID] = ds
 	}
 	return o
+}
+
+func hasConsumer(cs []Consumer, name string) bool {
+	for _, c := range cs {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Incarnation identifies this Observer (spec §3.4).

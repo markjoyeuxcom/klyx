@@ -999,6 +999,7 @@ var chatParts = map[string][2]string{
 	"argoproj.io/applications":                   {healthsrc.TaskArgo, "applications"},
 	"argoproj.io/applicationsets":                {healthsrc.TaskArgo, "applicationsets"},
 	"gateway.networking.k8s.io/gateways":         {healthsrc.TaskGateway, "gateways"},
+	"gateway.networking.k8s.io/listenersets":     {healthsrc.TaskGateway, "listenersets"}, // coverage S7a
 	"cert-manager.io/certificates":               {healthsrc.TaskCerts, "certificates"},
 	"cert-manager.io/issuers":                    {healthsrc.TaskCerts, "issuers"},
 	"cert-manager.io/clusterissuers":             {healthsrc.TaskCerts, "issuers"},
@@ -1012,6 +1013,25 @@ var chatParts = map[string][2]string{
 	"source.extensions.fluxcd.io/artifactgenerators": {healthsrc.TaskFlux, "composition"},
 	"source.toolkit.fluxcd.io/externalartifacts":     {healthsrc.TaskFlux, "composition"},
 	"notification.toolkit.fluxcd.io/receivers":       {healthsrc.TaskFlux, "receivers"},
+	// coverage S2a: a scheduled Backup has no verdict of its own (its
+	// schedule's verdict covers it); the backups part is the recent
+	// unscheduled ones
+	"velero.io/schedules":              {healthsrc.TaskVelero, "schedules"},
+	"velero.io/backupstoragelocations": {healthsrc.TaskVelero, "locations"},
+	"velero.io/backups":                {healthsrc.TaskVelero, "backups"},
+	// coverage S3a: a binding's row in the policies part is a fact, never a
+	// verdict (the FactRow gate)
+	"admissionregistration.k8s.io/validatingwebhookconfigurations":   {healthsrc.TaskAdmission, "webhooks"},
+	"admissionregistration.k8s.io/mutatingwebhookconfigurations":     {healthsrc.TaskAdmission, "webhooks"},
+	"admissionregistration.k8s.io/validatingadmissionpolicies":       {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/mutatingadmissionpolicies":         {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/validatingadmissionpolicybindings": {healthsrc.TaskAdmission, "policies"},
+	"admissionregistration.k8s.io/mutatingadmissionpolicybindings":   {healthsrc.TaskAdmission, "policies"},
+	// coverage S4: only a LoadBalancer Service has a verdict
+	"/services":                           {healthsrc.TaskLB, "services"},
+	"metallb.io/ipaddresspools":           {healthsrc.TaskLB, "pools"},
+	"cilium.io/ciliumloadbalancerippools": {healthsrc.TaskLB, "pools"},
+	"metallb.io/configurationstates":      {healthsrc.TaskLB, "metallb"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer

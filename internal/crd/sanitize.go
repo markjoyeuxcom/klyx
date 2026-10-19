@@ -2,11 +2,13 @@ package crd
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/moomora/klyx/internal/urlscrub"
+	"github.com/moomora/klyx/internal/velero"
 )
 
 // The embedded-payload sanitiser (coverage S0b, accepted at 30147ae). Klyx
@@ -75,7 +77,25 @@ const (
 	shapeTemplate                // an ApplicationSet template (its spec's sources)
 	shapeGenerators              // ApplicationSet generators, at any nesting
 	shapeOrigin                  // a URL shown only as its scheme and host
+	// Velero's free text (coverage S2a §6): each message becomes its
+	// class's fixed placeholder; the shape names the field's forms.
+	shapeVeleroLocation
+	shapeVeleroBackupFailure
+	shapeVeleroBackupValidation
+	shapeVeleroScheduleValidation
+	shapeVeleroRestoreFailure
+	shapeVeleroRestoreValidation
 )
+
+// veleroFields maps the Velero message shapes onto velero's fields.
+var veleroFields = map[shape]string{
+	shapeVeleroLocation:           velero.FieldLocationMessage,
+	shapeVeleroBackupFailure:      velero.FieldBackupFailure,
+	shapeVeleroBackupValidation:   velero.FieldBackupValidation,
+	shapeVeleroScheduleValidation: velero.FieldScheduleValidation,
+	shapeVeleroRestoreFailure:     velero.FieldRestoreFailure,
+	shapeVeleroRestoreValidation:  velero.FieldRestoreValidation,
+}
 
 // surface is one registered payload location. A "[]" segment is every item
 // of a list.
@@ -158,6 +178,31 @@ var payloadKinds = map[string][]surface{
 		p("spec.template", shapeTemplate),
 		p("spec.templatePatch", shapeOpaque),
 		p("spec.generators", shapeGenerators),
+	},
+	// S2a §6: hooks carry exec commands (a Restore's init hooks embed whole
+	// containers); provider config is arbitrary and can embed credentials
+	// in a URL; Velero's messages pass a plugin's error text through.
+	"velero.io/Schedule": {
+		p("spec.template.hooks", shapeOpaque),
+		p("status.validationErrors.[]", shapeVeleroScheduleValidation),
+	},
+	"velero.io/Backup": {
+		p("spec.hooks", shapeOpaque),
+		p("status.failureReason", shapeVeleroBackupFailure),
+		p("status.validationErrors.[]", shapeVeleroBackupValidation),
+	},
+	"velero.io/Restore": {
+		p("spec.hooks", shapeOpaque),
+		p("status.failureReason", shapeVeleroRestoreFailure),
+		p("status.validationErrors.[]", shapeVeleroRestoreValidation),
+	},
+	"velero.io/BackupStorageLocation": {
+		p("spec.config", shapeFreeForm),
+		p("spec.objectStorage.caCert", shapeOpaque),
+		p("status.message", shapeVeleroLocation),
+	},
+	"velero.io/VolumeSnapshotLocation": {
+		p("spec.config", shapeFreeForm),
 	},
 }
 
@@ -450,6 +495,17 @@ func (s *sanitizer) transform(v any, sh shape, at string, depth int) any {
 			out = WithheldValue
 		}
 		return out
+	case shapeVeleroLocation, shapeVeleroBackupFailure, shapeVeleroBackupValidation,
+		shapeVeleroScheduleValidation, shapeVeleroRestoreFailure, shapeVeleroRestoreValidation:
+		str, ok := v.(string)
+		if !ok {
+			return s.withhold(v, at)
+		}
+		if isPlaceholder(v) || str == "" {
+			return v
+		}
+		s.mark(at, true)
+		return velero.Placeholder(veleroFields[sh], str)
 	case shapeEmbedded:
 		o, ok := v.(map[string]any)
 		if !ok {
@@ -737,8 +793,13 @@ func isPlaceholder(v any) bool {
 		return false
 	}
 	return str == OmittedText || str == OmittedValue || str == WithheldValue || str == MaskedValue ||
-		strings.HasPrefix(str, OmittedValue+" × ")
+		omittedCount.MatchString(str) || velero.IsPlaceholder(str)
 }
+
+// omittedCount is freeForm's placeholder for a list of scalars, exactly:
+// a prefix alone would let any text that begins with it pass as a
+// placeholder (Codex's S2a implementation review, finding 1).
+var omittedCount = regexp.MustCompile(`^` + regexp.QuoteMeta(OmittedValue) + ` × [0-9]{1,9}$`)
 
 func empty(v any) bool {
 	switch t := v.(type) {

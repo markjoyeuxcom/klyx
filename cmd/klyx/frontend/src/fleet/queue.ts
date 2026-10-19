@@ -32,7 +32,7 @@ const PRD = 3;
 const KINDS: Record<string, string> = {
   pods: "Pod", nodes: "Node", deployments: "Deployment", statefulsets: "StatefulSet", daemonsets: "DaemonSet",
   certificates: "Certificate", externalsecrets: "ExternalSecret", applications: "Application", applicationsets: "ApplicationSet",
-  gateways: "Gateway", httproutes: "HTTPRoute", grpcroutes: "GRPCRoute", nodeclaims: "NodeClaim", nodepools: "NodePool", helmreleases: "HelmRelease",
+  gateways: "Gateway", httproutes: "HTTPRoute", listenersets: "ListenerSet", grpcroutes: "GRPCRoute", nodeclaims: "NodeClaim", nodepools: "NodePool", helmreleases: "HelmRelease",
 };
 // objectKindOf names a ref's kind from its GVR's resource.
 export function objectKindOf(gvr: string): string {

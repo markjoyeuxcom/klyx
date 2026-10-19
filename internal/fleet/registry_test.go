@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/gitops/notify"
+	"github.com/moomora/klyx/internal/identity"
 	"github.com/moomora/klyx/internal/observe"
 	"io"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -134,6 +135,22 @@ func (f *fakeConn) ListInstances(ctx context.Context, group, version, plural str
 func (f *fakeConn) GetInstanceDetail(ctx context.Context, group, version, plural, ns, name string) (crd.InstanceDetail, error) {
 	return crd.InstanceDetail{}, nil
 }
+func (f *fakeConn) ServiceAccountIdentity(context.Context, string, string, string) (identity.SAReport, error) {
+	return identity.SAReport{}, nil
+}
+func (f *fakeConn) PodIdentity(context.Context, string, string, string) (identity.PodInspectorReport, error) {
+	return identity.PodInspectorReport{}, nil
+}
+func (f *fakeConn) StoreIdentity(context.Context, string, string, string, string) (identity.StoreReport, error) {
+	return identity.StoreReport{}, nil
+}
+func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
+	return VeleroRestores{}, nil
+}
+func (f *fakeConn) CheckAdmissionParams(context.Context, string, string, schema.GroupVersionResource, bool) (AdmissionParams, error) {
+	return AdmissionParams{}, nil
+}
+
 func (f *fakeConn) HealthRowsNow(context.Context, string, string) (observe.Rows, bool) {
 	return observe.Rows{}, false
 }
@@ -194,9 +211,10 @@ func (f *fakeConn) DescribeArgv(kindArg, namespace, name string, _ bool) ([]stri
 	return []string{"kubectl", "describe", kindArg, "--", name}, nil
 }
 func (f *fakeConn) CheckPodArmed(context.Context, string, string, string) error { return nil }
-func (f *fakeConn) DebugCommand(namespace, pod, container string) ([]string, error) {
+func (f *fakeConn) DebugCommand(namespace, pod, container string, _ DebugOptions) ([]string, error) {
 	return nil, nil
 }
+func (f *fakeConn) DebugKubectlCheck(context.Context) DebugKubectl { return DebugKubectl{} }
 func (f *fakeConn) ExecCommand(namespace, pod, container string) ([]string, error) {
 	return []string{"kubectl", "exec", pod}, nil
 }

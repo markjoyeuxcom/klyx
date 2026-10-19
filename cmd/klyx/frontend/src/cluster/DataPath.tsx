@@ -3,18 +3,25 @@ import { Sparkline } from "../chrome/Sparkline";
 import type { GatewayNodeDTO, ListenerDTO, RouteNodeDTO, RouteRuleDTO } from "../store/fleet";
 import type { RuleMetric, RuleMetrics, RulePoint, RuleSeries } from "../bridge/ruleMetrics";
 import { fmtRate, fmtShare, latest, onset, onsetText, proximityText, weightShares } from "../line/dataPath";
+import { httpMetricsApply, isL4, noHttpMetricsText, routeKindOf, ruleMatchText, targetListeners } from "./gatewayModel";
 
 // The Gateway data path (The Line slice 8d, parent §5.2): the Gateway, the
-// HTTPRoute, one branch per rule with a bar per backend for its configured
+// route, one branch per rule with a bar per backend for its configured
 // weight, and the Service with its ready endpoints. Measured traffic per
 // rule sits beside the configured weights, never merged with them, only
 // where attribution holds; a missing series is "no samples", never zero.
+// Every route kind draws (coverage S7b §9): a rule says what it matches in
+// its kind's words, an L4 rule matches no fields, and measured HTTP traffic
+// is an HTTPRoute's only.
 
 const DANGER = new Set(["fault", "degraded"]);
 
 export function DataPath({ gateway, route, listeners, metrics }: { gateway: GatewayNodeDTO; route: RouteNodeDTO; listeners: ListenerDTO[]; metrics: RuleMetrics | null }) {
-  const scoped = route.parentSectionName ? listeners.filter((l) => l.name === route.parentSectionName) : listeners;
+  const kind = routeKindOf(route);
+  const viaSet = route.parentRef?.kind === "ListenerSet";
+  const scoped = targetListeners(route, listeners);
   const rules = route.rules ?? [];
+  const m = httpMetricsApply(route) ? metrics : null;
   const steps: RailStep[] = [
     {
       key: "gateway",
@@ -24,7 +31,7 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
       label: <span><span className="rail-kind">Gateway</span> <span className="rail-name">{gateway.name}</span></span>,
       body: (
         <div>
-          {scoped.length === 0 ? "no listener matches the route's section" : scoped.map((l) => `${l.protocol}:${l.port}${l.hostname ? ` ${l.hostname}` : ""}`).join(" · ")}
+          {viaSet ? `through ${route.attachmentLabel || "a ListenerSet"}` : scoped.length === 0 ? "no listener matches the route's section" : scoped.map((l) => `${l.protocol}:${l.port}${l.hostname ? ` ${l.hostname}` : ""}`).join(" · ")}
           {gateway.policies.length > 0 && <> · {gateway.policies.length} polic{gateway.policies.length === 1 ? "y" : "ies"}</>}
         </div>
       ),
@@ -32,27 +39,28 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
     {
       key: "route",
       segment: "chain",
-      name: `HTTPRoute ${route.namespace}/${route.name}`,
+      name: `${kind} ${route.namespace}/${route.name}`,
       aspect: aspectOfVerdict(route.rule.role),
-      label: <span><span className="rail-kind">HTTPRoute</span> <span className="rail-name">{route.name}</span></span>,
-      body: <div>{route.hostnames.length > 0 ? route.hostnames.join(", ") : "any host (from the listener)"}{route.policies.length > 0 ? ` · ${route.policies.length} polic${route.policies.length === 1 ? "y" : "ies"}` : ""}</div>,
-      branches: rules.map((r) => [ruleStep(route, r, metrics)]),
+      label: <span><span className="rail-kind">{kind}</span> <span className="rail-name">{route.name}</span></span>,
+      body: <div>{isL4(kind) ? "every connection" : route.hostnames.length > 0 ? route.hostnames.join(", ") : kind === "TLSRoute" ? "any SNI (from the listener)" : "any host (from the listener)"}{route.policies.length > 0 ? ` · ${route.policies.length} polic${route.policies.length === 1 ? "y" : "ies"}` : ""}</div>,
+      branches: rules.map((r) => [ruleStep(route, r, m, scoped)]),
     },
   ];
   return (
     <div data-testid="data-path" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <Rail label="Data path" steps={steps} />
-      {metrics && metrics.status.available && (
+      {m && m.status.available && (
         <div className="rail-detail">
-          {[...metrics.notes, metrics.backendSplit ? `Per-backend split: ${metrics.backendSplit}.` : "", metrics.scopeNote ?? ""].filter(Boolean).map((n, i) => <div key={i}>{n}</div>)}
+          {[...m.notes, m.backendSplit ? `Per-backend split: ${m.backendSplit}.` : "", m.scopeNote ?? ""].filter(Boolean).map((n, i) => <div key={i}>{n}</div>)}
         </div>
       )}
     </div>
   );
 }
 
-function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | null): RailStep {
-  const matches = r.matches.length > 0 ? r.matches.map((m) => `${m.method || ""}${m.method ? " " : ""}${m.pathValue || "/"}`).join(", ") : "every request";
+function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | null, scoped: ListenerDTO[]): RailStep {
+  const matches = ruleMatchText(routeKindOf(route), route, r.matches, scoped);
+  const ruleName = route.ruleNames?.[r.index];
   const shares = weightShares(r.backends.map((b) => b.weight));
   const ok = r.rule.role === "ok";
   return {
@@ -60,7 +68,7 @@ function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | n
     segment: "chain",
     name: `rule ${r.index + 1}: ${matches}`,
     aspect: aspectOfVerdict(r.rule.role),
-    label: <span><span className="rail-kind">rule {r.index + 1}</span> <span className="rail-name">{matches}</span></span>,
+    label: <span><span className="rail-kind">rule {r.index + 1}{ruleName ? ` ${ruleName}` : ""}</span> <span className="rail-name">{matches}</span></span>,
     tags: ok ? undefined : [r.rule.label],
     body: (
       <div style={{ display: "grid", gap: 6 }}>
@@ -103,6 +111,7 @@ function ruleStep(route: RouteNodeDTO, r: RouteRuleDTO, metrics: RuleMetrics | n
 }
 
 function Measured({ route, index, metrics }: { route: RouteNodeDTO; index: number; metrics: RuleMetrics | null }) {
+  if (!httpMetricsApply(route)) return <span className="t-secondary" data-no-http-metrics>measured: {noHttpMetricsText(route)}</span>;
   if (!metrics) return <span className="t-secondary">measured: reading…</span>;
   if (!metrics.status.available) {
     return <span className="t-secondary" data-no-metrics>{metrics.noEndpoint ? "no route metrics: configure a metrics endpoint" : `no route metrics: ${metrics.status.message}`}</span>;

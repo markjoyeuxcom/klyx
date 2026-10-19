@@ -57,6 +57,12 @@ type HeadroomResultDTO struct {
 	Unplaced      []HeadroomPodRefDTO `json:"unplaced"`
 	CPUShortfall  float64             `json:"cpuShortfall"`
 	MemShortfall  float64             `json:"memShortfall"`
+	// Coverage S6 §2: how much more a scheduler one minor behind would
+	// reserve on the survivors, and the survivors where the result depends
+	// on the scheduler's version.
+	AltCPU           float64  `json:"altCpu,omitempty"`
+	AltMem           float64  `json:"altMem,omitempty"`
+	VersionDependent []string `json:"versionDependent"`
 }
 
 // HeadroomReportDTO is GetNodeHeadroom's payload.
@@ -64,7 +70,10 @@ type HeadroomReportDTO struct {
 	Result        HeadroomResultDTO `json:"result"`
 	PDBBlockers   []PDBBlockerDTO   `json:"pdbBlockers"`
 	PodListCapped bool              `json:"podListCapped"`
-	Error         string            `json:"error,omitempty"`
+	// SchedAssumption: the scheduler model the survivors' reservations
+	// assume (coverage S6 §2).
+	SchedAssumption string `json:"schedAssumption"`
+	Error           string `json:"error,omitempty"`
 }
 
 // NodeTaintDTO is a single taint.

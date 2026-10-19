@@ -226,6 +226,11 @@ describe("opening a hit", () => {
     expect(lensOf("apps", "deployments")).toBe("Workloads");
   });
 
+  it("a kind Klyx's budget truncated is said to be partly indexed (coverage S7a)", () => {
+    expect(coverageNotes([{ cluster: "a", indexed: true, connection: "connected", kinds: [{ key: "/namespaces", kind: "Namespace", state: "partial", entries: 1583 }] }]))
+      .toEqual([expect.stringMatching(/^a: Namespace partly indexed \(1,583 kept within Klyx's budget; more exist\) - search in /)]);
+  });
+
   it("coverage notes skip kinds that are simply not served", () => {
     expect(coverageNotes([{ cluster: "a", indexed: true, connection: "connected · flux degraded", kinds: [{ key: "x/y", kind: "Y", state: "notServed", entries: 0 }] }])).toEqual([]);
   });

@@ -539,3 +539,34 @@ func TestCountAcceptedGatewayClassesNeedsACurrentObservation(t *testing.T) {
 		t.Fatalf("only the current False is a verdict: %+v err=%v", gc, err)
 	}
 }
+
+// Coverage S7b §7: the experimental group's served kinds are recognised,
+// deduplicated across versions and sorted, without subresources; a version
+// whose resources cannot be read is named as a gap.
+func TestExperimentalGatewayKinds(t *testing.T) {
+	groups := []*metav1.APIResourceList{
+		{GroupVersion: "gateway.networking.k8s.io/v1"},
+		{GroupVersion: "gateway.networking.x-k8s.io/v1alpha1", APIResources: []metav1.APIResource{
+			{Name: "xmeshes", Kind: "XMesh"}, {Name: "xmeshes/status", Kind: "XMesh"},
+			{Name: "xlistenersets", Kind: "XListenerSet"}, {Name: "xbackendtrafficpolicies", Kind: "XBackendTrafficPolicy"}}},
+		{GroupVersion: "gateway.networking.x-k8s.io/v1alpha2", APIResources: []metav1.APIResource{{Name: "xmeshes", Kind: "XMesh"}}},
+	}
+	set := NewDetector(newFake(groups)).Detect(context.Background())
+	if got := strings.Join(set.Network.GatewayExperimentalKinds, ","); got != "XBackendTrafficPolicy,XListenerSet,XMesh" || set.Network.GatewayExperimentalGap != "" {
+		t.Fatalf("kinds = %q gap = %q", got, set.Network.GatewayExperimentalGap)
+	}
+
+	cs := newFake(groups)
+	cs.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	gap := NewDetector(cs).Detect(context.Background())
+	if len(gap.Network.GatewayExperimentalKinds) != 0 || !strings.Contains(gap.Network.GatewayExperimentalGap, "x-k8s.io resources at v1alpha1, v1alpha2 could not be read") {
+		t.Fatalf("an unreadable version is a gap: %v %q", gap.Network.GatewayExperimentalKinds, gap.Network.GatewayExperimentalGap)
+	}
+
+	none := NewDetector(newFake(groups[:1])).Detect(context.Background())
+	if none.Network.GatewayExperimentalKinds != nil || none.Network.GatewayExperimentalGap != "" {
+		t.Fatalf("no experimental group, nothing to say: %+v", none.Network)
+	}
+}

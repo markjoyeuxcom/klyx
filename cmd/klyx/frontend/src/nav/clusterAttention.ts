@@ -31,9 +31,15 @@ export const TASKS: TaskMeta[] = [
   { task: "eso", label: "External secrets", groupId: "eso", destinationId: "eso", cap: "externalSecrets",
     parts: [{ part: "externalsecrets", label: "ExternalSecrets", destinationId: "eso" }, { part: "stores", label: "Stores" }] },
   { task: "gateway", label: "Gateways", groupId: "network", destinationId: "gateway", cap: "gatewayAPI",
-    parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "routes", label: "Routes" }] },
+    parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "listenersets", label: "ListenerSets" }, { part: "routes", label: "Routes" }] },
+  { task: "lb", label: "Load balancers", groupId: "network", destinationId: "loadbalancers", cap: "loadBalancing",
+    parts: [{ part: "services", label: "LoadBalancer Services", destinationId: "loadbalancers" }, { part: "pools", label: "Address pools" }, { part: "metallb", label: "MetalLB configuration" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
+  { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
+    parts: [{ part: "schedules", label: "Schedules", destinationId: "velero" }, { part: "locations", label: "Storage locations" }, { part: "backups", label: "Unscheduled backups" }] },
+  { task: "admission", label: "Admission", groupId: "admission", destinationId: "admission", cap: "admission",
+    parts: [{ part: "webhooks", label: "Webhook configurations", destinationId: "admission" }, { part: "policies", label: "Admission policies" }] },
 ];
 
 const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence" };
@@ -44,12 +50,16 @@ const MEMBERSHIP: Record<string, string[]> = { "gateway/routes": ["gateways"] };
 
 const KIND_LABELS: Record<string, string> = {
   pods: "Pods", deployments: "Deployments", statefulsets: "StatefulSets", daemonsets: "DaemonSets", replicasets: "ReplicaSets",
-  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes",
+  nodes: "Nodes", events: "Events", helm: "Helm releases", gatewayclasses: "GatewayClasses", gateways: "Gateways", httproutes: "HTTPRoutes", listenersets: "ListenerSets",
+  grpcroutes: "GRPCRoutes", tlsroutes: "TLSRoutes", tcproutes: "TCPRoutes", udproutes: "UDPRoutes", referencegrants: "ReferenceGrants", namespaces: "Namespaces",
   services: "Services", endpointslices: "EndpointSlices", kustomizations: "Kustomizations", helmreleases: "HelmReleases",
   gitrepositories: "GitRepositories", ocirepositories: "OCIRepositories", buckets: "Buckets", helmrepositories: "HelmRepositories",
   helmcharts: "HelmCharts", applications: "Applications", applicationsets: "ApplicationSets", certificates: "Certificates",
   issuers: "Issuers", clusterissuers: "ClusterIssuers", externalsecrets: "ExternalSecrets", secretstores: "SecretStores",
   clustersecretstores: "ClusterSecretStores", nodepools: "NodePools", nodeclaims: "NodeClaims",
+  schedules: "Schedules", backupstoragelocations: "BackupStorageLocations", backups: "Backups",
+  ipaddresspools: "IPAddressPools", l2advertisements: "L2Advertisements", bgpadvertisements: "BGPAdvertisements",
+  configurationstates: "ConfigurationStates", ciliumloadbalancerippools: "CiliumLoadBalancerIPPools",
 };
 const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 

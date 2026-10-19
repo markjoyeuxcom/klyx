@@ -52,7 +52,7 @@ func Pod(p *corev1.Pod, now time.Time) Verdict {
 	if v.Kind != Fault {
 		v.Note = podNote(p, now)
 	}
-	return v
+	return resizeVerdict(p, v)
 }
 
 func podVerdict(p *corev1.Pod, now time.Time) Verdict {

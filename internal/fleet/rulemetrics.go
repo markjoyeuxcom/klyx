@@ -40,11 +40,15 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 	if !hasEnvoy {
 		return routemetrics.Unavailable(q, "Envoy Gateway not detected"), nil
 	}
-	gw, err := c.dyn.Resource(c.gwGVR("gateways")).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	gwGVR, err := c.gwGVR("gateways")
 	if err != nil {
 		return routemetrics.GatewayRules{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
 	}
-	hrList, err := c.dyn.Resource(c.gwGVR("httproutes")).List(ctx, metav1.ListOptions{})
+	gw, err := c.dyn.Resource(gwGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return routemetrics.GatewayRules{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
+	}
+	hrList, err := c.listGW(ctx, "httproutes")
 	if err != nil {
 		return routemetrics.Unavailable(q, "could not list HTTPRoutes: "+err.Error()), nil
 	}
@@ -59,11 +63,8 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 	}
 	q.Unattributable = c.envoyProxyReason(ctx, gw)
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, q.End)
-	mcap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, q.End)
+	mcap, transport := mr.cap, mr.transport
 	if !mcap.Available {
 		msg := "metrics unavailable"
 		if mcap.Reason != "" {
@@ -86,6 +87,9 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 		return out, nil
 	}
 	res := routemetrics.NewEnvoyRuleSource(metrics.NewClient(transport)).QueryRules(ctx, q)
+	if c.credentialMoved(mr.rev) {
+		return routemetrics.Unavailable(q, "metrics unavailable: "+reasonCredentialChanged), nil
+	}
 	res.Status.UpdatedAt = q.End
 	return res, nil
 }
@@ -108,7 +112,11 @@ func (c *ClusterConn) envoyProxyReason(ctx context.Context, gw *unstructured.Uns
 		refs = append(refs, ref{"the Gateway", g, k, gw.GetNamespace(), n})
 	}
 	if className, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName"); className != "" {
-		gc, err := c.dyn.Resource(c.gwGVR("gatewayclasses")).Get(ctx, className, metav1.GetOptions{})
+		gcGVR, err := c.gwGVR("gatewayclasses")
+		var gc *unstructured.Unstructured
+		if err == nil {
+			gc, err = c.dyn.Resource(gcGVR).Get(ctx, className, metav1.GetOptions{})
+		}
 		if err != nil {
 			return fmt.Sprintf("%s: the GatewayClass %s could not be read: %v", routemetrics.ReasonSharedClusters, className, err)
 		}

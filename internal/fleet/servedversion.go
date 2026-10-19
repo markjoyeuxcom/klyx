@@ -1,5 +1,12 @@
 package fleet
 
+import (
+	"fmt"
+	"slices"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
 // servedVersion resolves the version at which a group serves one RESOURCE: the
 // group's preferred version when it serves the resource, else the first other
 // advertised version that does. A group's preferred version does not establish
@@ -62,6 +69,29 @@ func servedVersion(disc discoveryLike, group, resource, fallback string) (versio
 		}
 	}
 	return unreadable[0], true
+}
+
+// servedResourceAmong is servedVersion for a resource read at one of a list
+// of candidate versions, in order (coverage S7 §2, servedAmong): the first
+// candidate served, a candidate discovery could not rule out, or absence
+// when discovery answers completely. A resource served only at a version
+// outside the candidates is an error. As in servedVersion, discovery that
+// cannot answer at all (it errors, or does not advertise the group - the
+// fake discovery in tests) yields the first candidate, served: the read
+// then fails observably or works.
+func servedResourceAmong(disc discoveryLike, group, resource string, candidates []string) (version string, served bool, err error) {
+	if len(candidates) == 0 {
+		return "", false, fmt.Errorf("%s/%s: no candidate versions", group, resource)
+	}
+	groups, gerr := disc.ServerGroups()
+	if gerr != nil || groups == nil || !slices.ContainsFunc(groups.Groups, func(g metav1.APIGroup) bool { return g.Name == group }) {
+		return candidates[0], true, nil
+	}
+	p, err := servedAmong(groups, disc.ServerResourcesForGroupVersion, func() error { return nil }, group, resource, candidates)
+	if err != nil {
+		return "", false, err
+	}
+	return p.Version, p.Served, nil
 }
 
 // preferredVersion returns the served preferred version for a CRD group, or

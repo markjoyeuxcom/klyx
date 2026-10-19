@@ -28,9 +28,23 @@ type PodSummary struct {
 	AgeSeconds      int       // age at the summary's now
 	Created         time.Time // creation time: the anchor a live view ticks the age from
 	Containers      []ContainerSummary
-	// SchedCPU/SchedMem are the scheduler-effective requests (cores, bytes):
-	// what the scheduler reserves on a node for this pod (podRequests).
-	SchedCPU, SchedMem float64
+	// SchedCPU/SchedMem are the scheduler's reservation (cores, bytes)
+	// under the summary's model (coverage S6 §2): an estimate that assumes
+	// the scheduler's minor and default gates. SchedAltCPU/SchedAltMem are
+	// how much more the alternative model (a scheduler one minor behind)
+	// would reserve, never negative. DesiredCPU/DesiredMem are the spec's
+	// request, what a replacement pod is admitted with.
+	SchedCPU, SchedMem       float64
+	SchedAltCPU, SchedAltMem float64
+	DesiredCPU, DesiredMem   float64
+	// ObservedGeneration is status.observedGeneration: the generation the
+	// kubelet acknowledged (not completed); 0 when it does not report one.
+	ObservedGeneration int64
+	// Resize is the pod's resize state (coverage S6 §3).
+	Resize ResizeState
+	// EvidenceRev revises the inspector's resize and debug evidence: a
+	// status-only change re-reads the selected pod's detail.
+	EvidenceRev string
 	// Health is the shared verdict (internal/health); Rank/Reason are legacy
 	// and stay only until every consumer has migrated.
 	Health health.Verdict
@@ -96,6 +110,12 @@ func rankPod(p *corev1.Pod, sev severity, recent bool) HealthRank {
 // SummarizePods classifies each pod using the shared severity engine and
 // returns them sorted by Rank (worst first), then Namespace, then Name.
 func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
+	return SummarizePodsModel(pods, now, SchedUnknown)
+}
+
+// SummarizePodsModel summarises under a scheduler model: the reservation
+// figures follow it, everything else is model-free.
+func SummarizePodsModel(pods []corev1.Pod, now time.Time, model SchedModel) []PodSummary {
 	out := make([]PodSummary, 0, len(pods))
 	for i := range pods {
 		p := &pods[i]
@@ -109,23 +129,30 @@ func SummarizePods(pods []corev1.Pod, now time.Time) []PodSummary {
 		}
 
 		ps := PodSummary{
-			Namespace:  p.Namespace,
-			Name:       p.Name,
-			Ready:      podReady(p),
-			Phase:      string(p.Status.Phase),
-			Reason:     reason,
-			Rank:       rank,
-			Restarts:   podRestarts(p),
-			Node:       p.Spec.NodeName,
-			IP:         p.Status.PodIP,
-			AgeSeconds: ageSeconds(p.CreationTimestamp.Time, now),
-			Created:    p.CreationTimestamp.Time,
-			Containers: buildContainerSummaries(p),
-			Health:     health.Pod(p, now),
-			SchedCPU:   podRequest(p, corev1.ResourceCPU),
-			SchedMem:   podRequest(p, corev1.ResourceMemory),
-			UID:        p.UID,
-			Generation: p.Generation,
+			Namespace:          p.Namespace,
+			Name:               p.Name,
+			Ready:              podReady(p),
+			Phase:              string(p.Status.Phase),
+			Reason:             reason,
+			Rank:               rank,
+			Restarts:           podRestarts(p),
+			Node:               p.Spec.NodeName,
+			IP:                 p.Status.PodIP,
+			AgeSeconds:         ageSeconds(p.CreationTimestamp.Time, now),
+			Created:            p.CreationTimestamp.Time,
+			Containers:         buildContainerSummaries(p),
+			Health:             health.Pod(p, now),
+			UID:                p.UID,
+			Generation:         p.Generation,
+			ObservedGeneration: p.Status.ObservedGeneration,
+			Resize:             ResizeStateOf(p),
+			EvidenceRev:        EvidenceRev(p),
+		}
+		ps.SchedCPU, ps.SchedMem = cpuMem(model.Requests(p))
+		ps.DesiredCPU, ps.DesiredMem = cpuMem(model.Desired(p))
+		if alt, ok := model.Alternative(); ok {
+			ac, am := cpuMem(alt.Requests(p))
+			ps.SchedAltCPU, ps.SchedAltMem = max(0, ac-ps.SchedCPU), max(0, am-ps.SchedMem)
 		}
 
 		// Owner: first ownerRef where Controller is set and true.
@@ -214,45 +241,6 @@ func buildContainerSummaries(p *corev1.Pod) []ContainerSummary {
 // containerPorts maps spec ports onto the summary shape. Init containers are
 // skipped by the caller (they never serve traffic); protocol defaults to TCP
 // per the API convention.
-// podRequest is the scheduler-effective request for one resource, the
-// kube-scheduler's podRequests rule (Codex review 2026-10-13: init requests
-// were skipped, so a 4-core init container "fit" a 2-core node):
-//   - the app containers' sum, plus every restartable init container
-//     (sidecar), which keeps running beside them;
-//   - at least the init peak: each regular init container runs alone
-//     beside the sidecars started before it;
-//   - pod-level requests replace the container sum when set;
-//   - plus the RuntimeClass overhead.
-func podRequest(p *corev1.Pod, name corev1.ResourceName) float64 {
-	q := func(l corev1.ResourceList) float64 {
-		if v, ok := l[name]; ok {
-			return v.AsApproximateFloat64()
-		}
-		return 0
-	}
-	var apps float64
-	for _, c := range p.Spec.Containers {
-		apps += q(c.Resources.Requests)
-	}
-	var sidecars, initPeak float64
-	for _, c := range p.Spec.InitContainers {
-		r := q(c.Resources.Requests)
-		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-			sidecars += r
-			initPeak = max(initPeak, sidecars)
-			continue
-		}
-		initPeak = max(initPeak, sidecars+r)
-	}
-	total := max(apps+sidecars, initPeak)
-	if p.Spec.Resources != nil {
-		if v, ok := p.Spec.Resources.Requests[name]; ok {
-			total = v.AsApproximateFloat64()
-		}
-	}
-	return total + q(p.Spec.Overhead)
-}
-
 // applyContainerResources copies the spec's declared cpu/memory requests and
 // limits (cores, bytes). Absent quantities stay nil - never a fabricated zero.
 func applyContainerResources(sum *ContainerSummary, c corev1.Container) {

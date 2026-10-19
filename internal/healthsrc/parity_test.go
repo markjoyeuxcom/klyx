@@ -126,6 +126,26 @@ func fixturePods() []corev1.Pod {
 		pod("overhead", ctrl("ReplicaSet", "bare", "uid-rs-bare"), readyStatus(), func(p *corev1.Pod) {
 			p.Spec.Overhead = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("120Mi")}
 		}),
+		// coverage S6: every field the resize rules and the reservation
+		// models read - container allocated and actual, pod-level status,
+		// the resize conditions with their generations, the acknowledged
+		// generation - must survive the projection
+		pod("resizing", ctrl("ReplicaSet", "bare", "uid-rs-bare"), readyStatus(), func(p *corev1.Pod) {
+			cpu := func(v string) corev1.ResourceList {
+				return corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(v)}
+			}
+			p.Generation = 4
+			p.Spec.Containers[0].Resources.Requests = cpu("2")
+			p.Spec.Resources = &corev1.ResourceRequirements{Requests: cpu("3")}
+			p.Status.ObservedGeneration = 4
+			p.Status.ContainerStatuses[0].AllocatedResources = cpu("500m")
+			p.Status.ContainerStatuses[0].Resources = &corev1.ResourceRequirements{Requests: cpu("500m")}
+			p.Status.AllocatedResources = cpu("1")
+			p.Status.Resources = &corev1.ResourceRequirements{Requests: cpu("1")}
+			p.Status.Conditions = append(p.Status.Conditions,
+				corev1.PodCondition{Type: corev1.PodResizePending, Status: corev1.ConditionTrue, Reason: corev1.PodReasonInfeasible, Message: "Node didn't have enough capacity", ObservedGeneration: 4},
+				corev1.PodCondition{Type: corev1.PodResizeInProgress, Status: corev1.ConditionTrue, Reason: corev1.PodReasonError, Message: "runtime refused", ObservedGeneration: 2})
+		}),
 	}
 }
 
@@ -251,6 +271,12 @@ func TestProjectionParityPods(t *testing.T) {
 	workloads.ResolveReplicaSetOwners(projSums, controllers)
 	if !reflect.DeepEqual(rawSums, projSums) {
 		t.Fatalf("pod summaries differ:\nraw  %+v\nproj %+v", rawSums, projSums)
+	} // every scheduler model, not only the unknown maximum
+	for minor := 32; minor <= 37; minor++ {
+		m := workloads.SchedModelFor(minor)
+		if r, p := workloads.SummarizePodsModel(raw, now, m), workloads.SummarizePodsModel(proj, now, m); !reflect.DeepEqual(r, p) {
+			t.Fatalf("1.%d: pod summaries differ", minor)
+		}
 	}
 }
 

@@ -52,8 +52,8 @@ func BuildPolicyRefs(u *unstructured.Unstructured, kind string) []PolicyRef {
 // AttachPolicies places each PolicyRef on the node its resolved target names.
 // A ref whose target matches nothing in this (single-Gateway) topology is dropped.
 // Matching is by TargetKind + namespace + name; targetRef.group is intentionally
-// not matched - the in-scope kinds (Gateway, HTTPRoute, Service) are unambiguous
-// in this environment, so group adds no disambiguation.
+// not matched - the in-scope kinds (Gateway, the five route kinds, Service) are
+// unambiguous in this environment, so group adds no disambiguation.
 func AttachPolicies(topo *Topology, refs []PolicyRef) {
 	for _, p := range refs {
 		switch p.TargetKind {
@@ -61,8 +61,17 @@ func AttachPolicies(topo *Topology, refs []PolicyRef) {
 			if p.TargetNamespace == topo.Gateway.Namespace && p.TargetName == topo.Gateway.Name {
 				topo.Gateway.Policies = append(topo.Gateway.Policies, p)
 			}
-		case "HTTPRoute":
+		case KindHTTPRoute, KindGRPCRoute, KindTLSRoute, KindTCPRoute, KindUDPRoute:
+			// a route target names a lane of its own kind only: a TLSRoute of
+			// the same name as an HTTPRoute is another route (S7b §5)
 			for i := range topo.Routes {
+				k := topo.Routes[i].Kind
+				if k == "" {
+					k = KindHTTPRoute
+				}
+				if k != p.TargetKind {
+					continue
+				}
 				if topo.Routes[i].Namespace == p.TargetNamespace && topo.Routes[i].Name == p.TargetName {
 					topo.Routes[i].Policies = append(topo.Routes[i].Policies, p)
 				}

@@ -32,10 +32,11 @@ func TestGatewayBackendsCarryTheirOwnEvidence(t *testing.T) {
 			{"kind": "Backend", "name": "raw"},
 		})},
 	})
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "apps"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP}}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "apps"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Ports: []corev1.ServicePort{{Port: 80}}}}
 	yes := true
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{Name: "ready-1", Namespace: "apps", Labels: map[string]string{"kubernetes.io/service-name": "ready"}},
+		Ports:      tcp80(),
 		Endpoints: []discoveryv1.Endpoint{
 			{Conditions: discoveryv1.EndpointConditions{Ready: &yes}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "p1", UID: "u1"}},
 			{Conditions: discoveryv1.EndpointConditions{Ready: &yes}}, // an endpoint with no pod behind it
@@ -75,7 +76,7 @@ func TestGatewayBackendsCarryTheirOwnEvidence(t *testing.T) {
 // A failed HTTPRoute list is coverage: no routes, RoutesComplete=false, named.
 func TestGatewayRouteListFailureIsCoverage(t *testing.T) {
 	scheme := dynScheme()
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList"})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gwListKinds(nil))
 	if _, err := dyn.Resource(gwGVR()).Namespace("infra").Create(context.Background(), gw("eg", "infra"), metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}

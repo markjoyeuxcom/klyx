@@ -552,8 +552,9 @@ func TestSummarizePods_CarriesTheCreationAnchor(t *testing.T) {
 	}
 }
 
-// podRequest is the scheduler's rule: the app sum plus sidecars, at least
-// the init peak (each init beside the sidecars started before it), pod-level
+// The scheduler's rule without resize state, on every model from 1.34
+// (pod-level requests counted): the app sum plus sidecars, at least the
+// init peak (each init beside the sidecars started before it), pod-level
 // requests replacing the container sum, plus overhead.
 func TestPodRequestSchedulerEffective(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
@@ -590,8 +591,10 @@ func TestPodRequestSchedulerEffective(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := &corev1.Pod{Spec: c.spec}
-			if got := podRequest(p, corev1.ResourceCPU); got < c.want-1e-9 || got > c.want+1e-9 {
-				t.Fatalf("want %v cores, got %v", c.want, got)
+			for minor := 34; minor <= 37; minor++ {
+				if got, _ := cpuMem(SchedModelFor(minor).Requests(p)); got < c.want-1e-9 || got > c.want+1e-9 {
+					t.Fatalf("1.%d: want %v cores, got %v", minor, c.want, got)
+				}
 			}
 		})
 	}

@@ -51,7 +51,7 @@ func envHas(env []string, want string) bool {
 func TestDefaultConnFactory_KubeconfigReachesCLI(t *testing.T) {
 	fakeKubectl(t, true)
 	p := writeKubeconfig(t, "custom", "https://dev.synthetic.invalid")
-	conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: p})
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: p})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestTerminalArgv_KubeconfigForms(t *testing.T) {
 
 	t.Run("no recorded selection (conn built outside the factory) is plain kubectl", func(t *testing.T) {
 		c := &ClusterConn{kubeContext: "ctx"}
-		argv, err := c.DebugCommand("ns", "pod", "")
+		argv, err := c.DebugCommand("ns", "pod", "", DebugOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func TestTerminalArgv_KubeconfigForms(t *testing.T) {
 
 	t.Run("single file uses --kubeconfig", func(t *testing.T) {
 		c := (&ClusterConn{kubeContext: "ctx"}).WithKubeconfig("/k/dev.yaml")
-		argv, err := c.DebugCommand("ns", "pod", "")
+		argv, err := c.DebugCommand("ns", "pod", "", DebugOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func TestEffectiveSelection_InheritedKUBECONFIGIsPinned(t *testing.T) {
 	selected := writeKubeconfig(t, "selected-dev", "https://dev.synthetic.invalid")
 	t.Setenv("KUBECONFIG", selected)
 
-	conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: "dev", Context: "shared"})
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: "dev", Context: "shared"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestEffectiveSelection_RelativeSelectionIsMadeAbsolute(t *testing.T) {
 	t.Chdir(appDir)
 	wd, _ := os.Getwd()
 
-	conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: "selection"})
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: "selection"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestTerminalArgv_RealKubectlResolvesTheSameCluster(t *testing.T) {
 		selected := writeKubeconfig(t, "selected-dev", "https://dev.synthetic.invalid")
 		terminal := writeKubeconfig(t, "terminal-prd", "https://prd.synthetic.invalid")
 		t.Setenv("KUBECONFIG", selected)
-		conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: "dev", Context: "shared"})
+		conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: "dev", Context: "shared"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -353,7 +353,7 @@ func TestTerminalArgv_RealKubectlResolvesTheSameCluster(t *testing.T) {
 			}
 		}
 		t.Chdir(appDir)
-		conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: "selection"})
+		conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: "dev", Context: "shared", Kubeconfig: "selection"})
 		if err != nil {
 			t.Fatal(err)
 		}

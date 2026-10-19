@@ -2,13 +2,14 @@ package fleet
 
 import (
 	"context"
-	"crypto/tls"
-	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/safehttp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
@@ -40,6 +41,9 @@ var labelSelectors = []string{
 }
 
 type metricsCache struct {
+	// credRev is the endpoint credential's revision the cache was built
+	// under (C5 §7): a different one discards it.
+	credRev   uint64
 	capSet    bool
 	cap       metrics.MetricsCapability
 	capExpiry time.Time // zero = cached for lifetime (available)
@@ -49,19 +53,47 @@ type metricsCache struct {
 	samplesExp time.Time
 }
 
-// transportFactory builds real transports from the cluster REST client.
-type transportFactory struct{ rest rest.Interface }
-
-func (f transportFactory) Direct(base, token string, skip bool) metrics.Querier {
-	tr := &http.Transport{}
-	if skip {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in
-	}
-	return metrics.NewDirectTransport(base, token, &http.Client{Transport: tr, Timeout: metricsHTTPTimeout})
+// transportFactory builds real transports: a direct endpoint through the
+// safe HTTP policy, a Service through the guarded proxy client (C5 §4).
+type transportFactory struct {
+	rest    rest.Interface
+	restErr error // the guarded proxy client could not be built
 }
 
-func (f transportFactory) Proxy(c metrics.ServiceCandidate) metrics.Querier {
-	return metrics.NewProxyTransport(f.rest, c)
+func (f transportFactory) Direct(base string, auth metrics.Auth, skip bool) metrics.Querier {
+	return metrics.NewDirectTransportAuth(base, auth, safehttp.NewClient(metrics.DirectPolicy(metricsHTTPTimeout, skip)))
+}
+
+func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metrics.Querier {
+	if f.restErr != nil {
+		return failedQuerier{err: f.restErr}
+	}
+	return metrics.NewProxyTransportTenant(f.rest, c, tenant)
+}
+
+// failedQuerier reads as unavailable with the reason, never through an
+// unguarded client.
+type failedQuerier struct{ err error }
+
+func (q failedQuerier) InstantQuery(context.Context, string) (int, []byte, error) {
+	return 0, nil, q.err
+}
+func (q failedQuerier) RangeQuery(context.Context, string, time.Time, time.Time, time.Duration) (int, []byte, error) {
+	return 0, nil, q.err
+}
+
+// proxyREST is the REST client the service-proxy path uses: the guarded one
+// built from the cluster's rest.Config, which refuses redirects off the API
+// server's origin (C5 §4). A connection without a rest.Config (fake clients
+// in tests) uses its clientset's. Caller MUST hold c.metricsMu.
+func (c *ClusterConn) proxyREST() (rest.Interface, error) {
+	if c.restConfig == nil {
+		return c.typed.CoreV1().RESTClient(), nil
+	}
+	if c.guardedREST == nil && c.guardedRESTErr == nil {
+		c.guardedREST, c.guardedRESTErr = metrics.NewGuardedProxyREST(c.restConfig)
+	}
+	return c.guardedREST, c.guardedRESTErr
 }
 
 // discover reduces in-cluster Services to a single DiscoveryResult: first
@@ -99,12 +131,15 @@ func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
 // lifetime, unavailable is short-TTL re-probed, forceReprobe bypasses the cache.
 // Caller MUST hold c.metricsMu.
 func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
-	capValid := c.metricsState.capSet && !forceReprobe &&
+	revs := c.creds.Revisions
+	rev := revs.Revision(c.name, config.EndpointMetrics)
+	capValid := c.metricsState.capSet && !forceReprobe && c.metricsState.credRev == rev &&
 		(c.metricsState.cap.Available || now.Before(c.metricsState.capExpiry))
 	if capValid {
 		return
 	}
-	var tf metrics.TransportFactory = transportFactory{rest: c.typed.CoreV1().RESTClient()}
+	pr, prErr := c.proxyREST()
+	var tf metrics.TransportFactory = transportFactory{rest: pr, restErr: prErr}
 	if c.metricsTF != nil {
 		tf = c.metricsTF
 	}
@@ -112,9 +147,17 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil {
 		disco = c.discover(ctx)
 	}
-	res := metrics.Resolve(c.metricsCfg, disco, tf)
+	res := metrics.Resolve(c.metricsCfg, c.metricsAuth(rev), disco, tf)
 	cap := metrics.Probe(ctx, res)
 
+	// a read started under an older credential revision is neither cached
+	// nor shown as the endpoint's availability (C5 §7)
+	if revs.Revision(c.name, config.EndpointMetrics) != rev {
+		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: res.Mode, Source: res.Source,
+			Reason: reasonCredentialChanged}}
+		return
+	}
+	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
 	c.metricsState.cap = cap
 	c.metricsState.transport = res.Transport
@@ -126,6 +169,36 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	// re-probe invalidates any cached samples
 	c.metricsState.samples = metrics.ClusterMetrics{}
 	c.metricsState.samplesExp = time.Time{}
+}
+
+// reasonCredentialChanged is what a read that crossed a change to the
+// endpoint's credential or configuration says (C5 §7).
+const reasonCredentialChanged = "the endpoint's credential changed during the read; it is read again next time"
+
+// metricsRead is what a reader takes under c.metricsMu and queries outside
+// it: the capability, the transport, and the credential revision both were
+// built under.
+type metricsRead struct {
+	cap       metrics.MetricsCapability
+	transport metrics.Querier
+	rev       uint64
+}
+
+// readMetrics resolves the capability (the lazy probe and its cache) and
+// takes a metricsRead of it.
+func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	c.ensureMetricsLocked(ctx, false, now)
+	return metricsRead{cap: c.metricsState.cap, transport: c.metricsState.transport, rev: c.metricsState.credRev}
+}
+
+// credentialMoved reports whether the endpoint's revision moved since rev.
+// A result read across the move is neither shown nor cached, whichever of a
+// reader's queries the move landed in (C5 §7): the transport's own gate
+// refuses a response still arriving, not one already read.
+func (c *ClusterConn) credentialMoved(rev uint64) bool {
+	return c.creds.Revisions.Revision(c.name, config.EndpointMetrics) != rev
 }
 
 // ClusterMetrics returns the proof-of-life metrics and probe-confirmed
@@ -149,7 +222,14 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 	}
 
 	if c.metricsState.samplesExp.IsZero() || now.After(c.metricsState.samplesExp) {
-		c.metricsState.samples = querySamples(ctx, c.metricsState.transport)
+		rev := c.metricsState.credRev
+		samples := querySamples(ctx, c.metricsState.transport)
+		if c.credentialMoved(rev) {
+			c.metricsState = metricsCache{}
+			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
+				Reason: reasonCredentialChanged}
+		}
+		c.metricsState.samples = samples
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)
 	}
 	return c.metricsState.samples, cap
@@ -167,4 +247,23 @@ func querySamples(ctx context.Context, q metrics.Querier) metrics.ClusterMetrics
 		out.MemFraction = &v
 	}
 	return out
+}
+
+// metricsAuth is the metrics endpoint's credential and tenant as resolved
+// now, gated on revision rev (C5 §3, §7).
+func (c *ClusterConn) metricsAuth(rev uint64) metrics.Auth {
+	revs := c.creds.Revisions
+	cred := endpointcred.Resolve(c.creds.Store, endpointcred.Input{Cluster: c.name, Kind: config.EndpointMetrics,
+		Spec: c.metricsCfg.Spec(), LegacyToken: c.metricsCfg.Token, Revoked: revs.Revoked(c.name, config.EndpointMetrics)})
+	auth := metrics.Auth{Tenant: c.metricsCfg.Tenant}
+	if !cred.Usable() {
+		auth.Unusable = cred.Why
+		if auth.Unusable == "" {
+			auth.Unusable = "the credential is " + string(cred.State)
+		}
+		return auth
+	}
+	auth.Header, auth.Redactor = cred.Header(), cred.Redactor()
+	auth.Live = revs.Live(c.name, config.EndpointMetrics, rev)
+	return auth
 }

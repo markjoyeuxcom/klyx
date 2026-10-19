@@ -32,8 +32,26 @@ const LENSES: Record<string, Lens> = {
   "external-secrets.io/clustersecretstores": { task: "eso", part: "stores", label: "External Secrets" },
   "gateway.networking.k8s.io/gateways": { task: "gateway", part: "gateways", label: "Gateway API" },
   "gateway.networking.k8s.io/httproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  // coverage S7: every route kind and the ListenerSets have the lens's views
+  "gateway.networking.k8s.io/grpcroutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/tlsroutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/tcproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/udproutes": { task: "gateway", part: "routes", label: "Gateway API" },
+  "gateway.networking.k8s.io/listenersets": { task: "gateway", part: "listenersets", label: "Gateway API" },
   "karpenter.sh/nodeclaims": { task: "karpenter", part: "nodeclaims", label: "Karpenter" },
   "karpenter.sh/nodepools": { task: "karpenter", part: "nodepools", label: "Karpenter" },
+  "velero.io/schedules": { task: "velero", part: "schedules", label: "Velero" },
+  "velero.io/backupstoragelocations": { task: "velero", part: "locations", label: "Velero" },
+  "velero.io/backups": { task: "velero", part: "backups", label: "Velero" },
+  "admissionregistration.k8s.io/validatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
+  "admissionregistration.k8s.io/mutatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
+  "admissionregistration.k8s.io/validatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  "admissionregistration.k8s.io/mutatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  // coverage S4: a Service opens in Resources (only a LoadBalancer has a
+  // verdict, and a hit does not carry the type)
+  "metallb.io/ipaddresspools": { task: "lb", part: "pools", label: "Load balancers" },
+  "cilium.io/ciliumloadbalancerippools": { task: "lb", part: "pools", label: "Load balancers" },
+  "metallb.io/configurationstates": { task: "lb", part: "metallb", label: "Load balancers" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;

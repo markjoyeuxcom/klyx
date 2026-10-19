@@ -35,7 +35,7 @@ export function condState(c: CondDTO | undefined, generation: number | undefined
 const because = (c: CondState) => [c.reason, c.message].filter(Boolean).join(": ");
 const observedFor = (c: CondState) => (c.observedGeneration > 0 ? `generation ${c.observedGeneration}` : "an unreported generation");
 
-type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation">;
+type GatewayLike = Pick<GatewayRefDTO, "accepted" | "programmed" | "acceptedCond" | "programmedCond" | "generation"> & { rule?: RuleDTO };
 
 // Gateway roles: an explicit, current Accepted=False is the fault (nothing
 // through it is served by its controller). Absent status is unverified, a
@@ -63,6 +63,8 @@ export function gatewayVerdictDetail(g: GatewayLike): string {
     ? `Programmed was False for ${observedFor(p)}${because(p) ? ` - ${because(p)}` : ""}. The controller has not reported on generation ${g.generation}; whether the data plane is configured now is unverified.`
     : `Accepted, but Programmed is False${because(p) ? ` - ${because(p)}` : ""}. The data plane is not configured for it.`;
   if (a.stale || p.stale) return `Accepted and programmed as of ${observedFor(p.stale ? p : a)}; the controller has not reported on generation ${g.generation} yet.`;
+  // coverage S7a §3: the Go rule degrades a healthy Gateway by its listeners
+  if (g.rule?.role === "degraded" && g.rule.label.startsWith("listener ")) return "Accepted and programmed, but its controller reports a listener failing (below).";
   return "Accepted and programmed by its controller.";
 }
 
@@ -161,11 +163,19 @@ export function backendIssue(b: BackendDTO): RouteIssue | null {
     return { short: `${b.kind} backend not evaluated`, text: `The backend is a ${b.kind}; Klyx evaluates Service backends only.`, severity: "unknown" };
   }
   if (b.state === "not-found") return { short: "backend not found", text: `Backend Service ${b.namespace}/${b.name} not found.`, severity: "fault" };
+  if (b.state === "no-port") {
+    // coverage S7b §5: the Service port by number and the route's transport
+    const t = b.transport || "TCP";
+    const other = /\(([^)]*)\)/.exec(b.error ?? "")?.[1];
+    return { short: `no ${t} port ${b.port}`, text: `Backend Service ${b.namespace}/${b.name} has no ${t} port ${b.port}${other ? ` - ${other}` : ""}.`, severity: "fault" };
+  }
   if (b.state === "unreadable") return { short: "backend unreadable", text: `Backend Service ${b.namespace}/${b.name} could not be read${b.error ? ` - ${b.error}` : ""}; whether it exists is unknown.`, severity: "unknown" };
   if (b.state === "resolved") {
     const ep = b.endpoints;
     if (!ep || ep.error) return { short: "endpoints unreadable", text: `The backend's EndpointSlices could not be read${ep?.error ? ` - ${ep.error}` : ""}.`, severity: "unknown" };
-    if (ep.total === 0) return { short: "no endpoints", text: "The backend Service has no endpoints.", severity: "fault" };
+    // only the slices carrying the selected port count (S7b §5): name it
+    const onPort = b.transport ? ` for its ${b.transport} port ${b.port}` : "";
+    if (ep.total === 0) return { short: "no endpoints", text: `The backend Service has no endpoints${onPort}.`, severity: "fault" };
     if (ep.ready === 0) return { short: "no ready endpoints", text: `${ep.total === 1 ? "The backend's only endpoint is not ready" : `None of the backend's ${ep.total} endpoints is ready`}.`, severity: "fault" };
     if (ep.ready < ep.total) return { short: `${ep.ready}/${ep.total} endpoints ready`, text: `${endpointsText(ep.ready, ep.total, ep.nonPod)} - reduced capacity.`, severity: "degraded" };
     return null;
@@ -178,6 +188,7 @@ export function primaryBackendText(r: RouteNodeDTO): string {
   const b = r.backends[0];
   if (!b) return "no backendRefs";
   if (b.state === "not-found") return "not found";
+  if (b.state === "no-port") return `no ${b.transport || "TCP"} port ${b.port}`;
   if (b.state === "unreadable") return "unreadable";
   if (b.state === "unsupported" || b.kind !== "Service") return `${b.kind} - not evaluated`;
   const svc = r.services.find((s) => s.namespace === b.namespace && s.name === b.name);
@@ -186,7 +197,124 @@ export function primaryBackendText(r: RouteNodeDTO): string {
   return `${svc?.type ?? "Service"} :${b.port || svc?.port || "?"}${eps}`;
 }
 
+// routeKey is a route's namespace/name: the HTTPRoute traffic reads join by it.
 export const routeKey = (r: { namespace: string; name: string }) => `${r.namespace}/${r.name}`;
+
+// ---- route kinds and attachments (coverage S7b §5, §9) ---------------------
+
+export const ROUTE_KINDS = ["HTTPRoute", "GRPCRoute", "TLSRoute", "TCPRoute", "UDPRoute"] as const;
+const ROUTE_PLURALS: Record<string, string> = { HTTPRoute: "httproutes", GRPCRoute: "grpcroutes", TLSRoute: "tlsroutes", TCPRoute: "tcproutes", UDPRoute: "udproutes" };
+/** A route's kind; a payload from before S7b carries none and is an HTTPRoute. */
+export const routeKindOf = (r: { kind?: string }) => r.kind || "HTTPRoute";
+/** The route kind a resource plural names, or "" for another resource. */
+export const routeKindOfPlural = (plural: string) => Object.keys(ROUTE_PLURALS).find((k) => ROUTE_PLURALS[k] === plural) ?? "";
+export const isL4 = (kind: string) => kind === "TCPRoute" || kind === "UDPRoute";
+/** routeId names a route by kind, namespace and name: two kinds never collide. */
+export const routeId = (r: { kind?: string; namespace: string; name: string }) => `${routeKindOf(r)}/${r.namespace}/${r.name}`;
+/** laneKey names a topology lane: the route and the attachment it draws. */
+export const laneKey = (r: { kind?: string; namespace: string; name: string; attachment?: string }) => (r.attachment ? `${routeId(r)}@${r.attachment}` : routeId(r));
+/**
+ * resolveLane finds a selection's lane: a lane key names exactly that lane
+ * (gone when the attachment is - never another one, Codex's S7b review,
+ * finding 3); a bare route identity - kind/namespace/name, or the older
+ * namespace/name of an HTTPRoute - names that route's worst lane.
+ */
+export function resolveLane(key: string | null, lanes: RouteNodeDTO[]): RouteNodeDTO | undefined {
+  if (!key) return undefined;
+  const exact = lanes.find((r) => laneKey(r) === key);
+  if (exact || key.includes("@")) return exact;
+  const want = key.split("/").length === 2 ? `HTTPRoute/${key}` : key;
+  const mine = lanes.filter((r) => routeId(r) === want);
+  return mine.sort((a, b) => RANK[routeRole(a).kind] - RANK[routeRole(b).kind])[0];
+}
+/** A route's object reference, at the version it was read when known. */
+export function routeRef(kind: string, apiVersion?: string): ResourceRef {
+  const version = apiVersion?.includes("/") ? apiVersion.split("/")[1] : "v1";
+  return { group: "gateway.networking.k8s.io", version, plural: ROUTE_PLURALS[kind] ?? "httproutes", kind: ROUTE_PLURALS[kind] ? kind : "HTTPRoute", scope: "Namespaced" };
+}
+
+/**
+ * targetListeners are the parent listeners an attachment names: its section
+ * and its port, each when set (the Go model's targetListeners; Codex's S7b
+ * review, finding 4). Through a ListenerSet the Gateway's listeners are not
+ * its parent's, so none are.
+ */
+export function targetListeners(r: Pick<RouteNodeDTO, "parentRef" | "parentSectionName">, listeners: ListenerDTO[]): ListenerDTO[] {
+  if (r.parentRef?.kind === "ListenerSet") return [];
+  const section = r.parentRef?.sectionName ?? r.parentSectionName ?? "";
+  const port = r.parentRef?.port ?? 0;
+  return listeners.filter((l) => (!section || l.name === section) && (!port || l.port === port));
+}
+
+/** Where a lane attaches: its listener, port or ListenerSet. */
+export function attachmentWhere(r: Pick<RouteNodeDTO, "parentRef" | "parentSectionName">): string {
+  const p = r.parentRef;
+  const section = p?.sectionName ?? r.parentSectionName ?? "";
+  const port = p?.port ? `:${p.port}` : "";
+  const listener = section ? `listener ${section}${port}` : port ? `port ${p!.port}` : "all listeners";
+  return p?.kind === "ListenerSet" ? `ListenerSet ${p.name} · ${listener}` : listener;
+}
+
+/** What one rule matches, in its kind's words (S7b §5's table). */
+export function ruleMatchText(kind: string, r: Pick<RouteNodeDTO, "hostnames">, matches: RouteNodeDTO["matches"], scoped: ListenerDTO[]): string {
+  if (isL4(kind)) {
+    const on = scoped.map((l) => `${l.name || l.protocol}${l.port > 0 ? ` :${l.port}` : ""}`).join(", ");
+    return `every connection${on ? ` on ${on}` : ""}`;
+  }
+  if (kind === "TLSRoute") return r.hostnames.length > 0 ? `SNI ${r.hostnames.join(", ")}` : "any SNI";
+  if (kind === "GRPCRoute") return matches.length > 0 ? matches.map((m) => `${m.grpcService || "any service"}/${m.grpcMethod || "any method"}`).join(", ") : "every call";
+  return matches.length > 0 ? matches.map((m) => `${m.method || ""}${m.method ? " " : ""}${m.pathValue || "/"}`).join(", ") : "every request";
+}
+
+/** What a lane's route box says it matches. */
+export function laneMatchText(r: RouteNodeDTO): string {
+  const kind = routeKindOf(r);
+  if (isL4(kind)) return "every connection";
+  const hosts = `${r.hostnames[0] ?? (kind === "TLSRoute" ? "any SNI" : "any host")}${r.hostnames.length > 1 ? ` +${r.hostnames.length - 1}` : ""}`;
+  if (kind === "TLSRoute") return `SNI ${hosts}`;
+  const m = r.matches[0];
+  const first = kind === "GRPCRoute" ? (m ? `${m.grpcService || "any service"}/${m.grpcMethod || "any method"}` : "every call") : (m?.pathValue ?? "/");
+  return `${hosts} · ${first}${r.matches.length > 1 ? ` +${r.matches.length - 1}` : ""}`;
+}
+
+/**
+ * experimentalText is the one line the lens says about the experimental
+ * channel's own group (S7b §7): its served kinds are recognised, never read
+ * or judged. "" when the group is not served.
+ */
+export function experimentalText(kinds?: string[] | null, gap?: string): string {
+  const ks = kinds ?? [];
+  const parts: string[] = [];
+  if (ks.length > 0) parts.push(`Experimental Gateway API kinds served: ${ks.join(", ")}; Klyx does not read them`);
+  if (ks.includes("XListenerSet")) parts.push("Gateway API 1.5 promoted XListenerSet to ListenerSet (gateway.networking.k8s.io/v1)");
+  if (gap) parts.push(ks.length > 0 ? `${gap}, so the list may be partial` : `The experimental Gateway API group is served, but ${gap}`);
+  return parts.length > 0 ? `${parts.join(". ")}.` : "";
+}
+
+/** HTTP request metrics read HTTPRoute rules only (S7b §9). */
+export const httpMetricsApply = (r: { kind?: string }) => routeKindOf(r) === "HTTPRoute";
+export const noHttpMetricsText = (r: { kind?: string }) => `HTTP request metrics do not apply to ${routeKindOf(r)}`;
+
+/**
+ * laneIssues is routeIssues with the attachment's own verdict first when the
+ * attachment rule decided before the route's status could (S7b §5): the
+ * parent missing or not established, a ListenerSet not accepted, or the
+ * controller judging the parent not established.
+ */
+export function laneIssues(r: RouteNodeDTO, listeners: ListenerDTO[] = []): RouteIssue[] {
+  const issues = routeIssues(r, listeners);
+  const role = routeRole(r);
+  if (role.kind === "ok" || issues.some((i) => i.short === role.label)) return issues;
+  const parent = r.parentRef ? `${r.parentRef.kind} ${r.parentRef.namespace}/${r.parentRef.name}` : "parent";
+  let text = `${role.label.charAt(0).toUpperCase()}${role.label.slice(1)}.`;
+  if (role.label.startsWith("the controller judging")) text = `The controller expected to judge this route on ${parent} is not established${r.controllerWhy ? ` - ${r.controllerWhy}` : ""}. Klyx judges only the expected controller's status entry and does not choose among others.`;
+  else if (role.label.endsWith(" not found")) text = `The ${parent} does not exist in a complete, current read.`;
+  else if (role.label.endsWith(" not established")) text = `Whether the ${parent} exists is not established - its read is not complete and current, so nothing is claimed.`;
+  else if (role.label === "parent ListenerSet not accepted") text = `Its ${parent} is not accepted by its Gateway's controller, so nothing attaches through it.`;
+  else if (role.label.startsWith("no status for this ")) text = `No status from the expected controller for this ${r.parentRef?.kind ?? "parent"} - attachment is unverified.`;
+  // the route's own "no status for this Gateway" is the same fact, said once
+  return [{ short: role.label, text, severity: role.kind }, ...issues.filter((i) => i.short !== "no status for this Gateway")];
+}
 export const routeHasGlobal = (r: RouteNodeDTO) => r.services.some((s) => s.global);
 export const routeHasPolicies = (r: RouteNodeDTO) => r.policies.length > 0 || r.services.some((s) => s.policies.length > 0 || s.cnps.length > 0);
 
@@ -243,13 +371,15 @@ export const REFS = {
   gateway: { group: gw, version: "v1", plural: "gateways", kind: "Gateway", scope: "Namespaced" },
   gatewayClass: { group: gw, version: "v1", plural: "gatewayclasses", kind: "GatewayClass", scope: "Cluster" },
   httpRoute: { group: gw, version: "v1", plural: "httproutes", kind: "HTTPRoute", scope: "Namespaced" },
+  listenerSet: { group: gw, version: "v1", plural: "listenersets", kind: "ListenerSet", scope: "Namespaced" },
   service: { group: "", version: "v1", plural: "services", kind: "Service", scope: "Namespaced" },
   secret: { group: "", version: "v1", plural: "secrets", kind: "Secret", scope: "Namespaced" },
   certificate: { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" },
 } satisfies Record<string, ResourceRef>;
 
 export const POLICY_REFS: Record<string, ResourceRef> = {
-  BackendTLSPolicy: { group: gw, version: "v1alpha3", plural: "backendtlspolicies", kind: "BackendTLSPolicy", scope: "Namespaced" },
+  // v1 since Gateway API 1.4; 1.6 serves no other version
+  BackendTLSPolicy: { group: gw, version: "v1", plural: "backendtlspolicies", kind: "BackendTLSPolicy", scope: "Namespaced" },
   ClientTrafficPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "clienttrafficpolicies", kind: "ClientTrafficPolicy", scope: "Namespaced" },
   BackendTrafficPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "backendtrafficpolicies", kind: "BackendTrafficPolicy", scope: "Namespaced" },
   SecurityPolicy: { group: "gateway.envoyproxy.io", version: "v1alpha1", plural: "securitypolicies", kind: "SecurityPolicy", scope: "Namespaced" },
@@ -272,15 +402,22 @@ export const policyKey = (p: PolicyRefDTO) => `${p.kind}/${p.namespace}/${p.name
 // about one route belongs to that route's inspector (its lane already shows
 // the diagnosis); anything else - a list that failed, a selector Klyx did not
 // evaluate - is an evidence gap and stays in the notice.
+// byRoute is keyed by routeId: the backend names the route's kind (S7b),
+// and a note without one is an HTTPRoute's.
 export type SortedWarnings = { absentKinds: string[]; byRoute: Map<string, string[]>; gaps: string[] };
-const ROUTE_NOTE = /^route ([^/\s]+\/[^:\s]+)(?::| has )/;
+const ROUTE_NOTE = /^route (?:([A-Z][A-Za-z]*Route) )?([^/\s]+\/[^:\s]+)(?::| has )/;
 export function sortWarnings(warnings: string[] = []): SortedWarnings {
   const out: SortedWarnings = { absentKinds: [], byRoute: new Map(), gaps: [] };
   for (const w of warnings) {
     const absent = /^(\S+) CRD not installed$/.exec(w);
     if (absent) { out.absentKinds.push(absent[1]); continue; }
     const route = ROUTE_NOTE.exec(w);
-    if (route) { out.byRoute.set(route[1], [...(out.byRoute.get(route[1]) ?? []), w.slice(`route ${route[1]}`.length).replace(/^:\s*/, "").trim()]); continue; }
+    if (route) {
+      const id = `${route[1] ?? "HTTPRoute"}/${route[2]}`;
+      const head = `route ${route[1] ? `${route[1]} ` : ""}${route[2]}`;
+      out.byRoute.set(id, [...(out.byRoute.get(id) ?? []), w.slice(head.length).replace(/^:\s*/, "").trim()]);
+      continue;
+    }
     out.gaps.push(w);
   }
   return out;

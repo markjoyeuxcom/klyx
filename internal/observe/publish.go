@@ -270,7 +270,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	// evaluate at it, and its batches and rows are stamped with it - never an
 	// earlier cycle time, which a slow evaluation before it would make stale.
 	at := o.clk.Now()
-	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}}
+	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}, Current: map[string]bool{}}
 	cp := captured{at: at, connEpoch: o.connEpoch, connUsable: o.connUsable}
 	if p.ledger != nil {
 		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
@@ -307,6 +307,12 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 					kc.Objects = len(ks.gen.model)
 					kc.Truncated, kc.NotRetained = ks.gen.capped, ks.gen.notRetained
 					c.Complete[name] = f.cov == Live && !ks.gen.capped
+					if w, ok := ks.gen.windowLocked(); ok {
+						if c.Windows == nil {
+							c.Windows = map[string]string{}
+						}
+						c.Windows[name] = w
+					}
 					if cp.truncated != nil {
 						// a budgeted kind's left-out objects are not deletions:
 						// the ledger treats the read as capped (S1a §3)
@@ -339,9 +345,49 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				}
 			}
 		}
+		viewed := false // the part's consumer view replaced the kind (C3)
+		if ks := o.kinds[name]; ks != nil && len(ks.spec.Consumers) > 0 {
+			kc.Consumers = demandVector(ks.demand)
+			// the part's own consumer decides what of the shared kind is its
+			// evidence (C3): objects, completeness, coverage and the ledger's
+			// source identity alike
+			switch d, probed := ks.consumerView(p.spec.Consumer); {
+			case d == DemandYes:
+			case d == DemandNo:
+				viewed = true
+				delete(c.Objects, name)
+				delete(c.Windows, name)
+				c.Complete[name] = true
+				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Absent, Consumers: kc.Consumers}
+				if cp.truncated != nil {
+					delete(cp.truncated, name)
+				}
+			default:
+				viewed = true
+				delete(c.Objects, name)
+				delete(c.Windows, name)
+				c.Complete[name] = false
+				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Checking, Consumers: kc.Consumers}
+				if probed {
+					kc.Coverage, kc.Class, kc.Error = Unreadable, ClassDemand, "whether "+p.spec.Consumer+" needs this kind is not known: "+ks.probeErr
+				}
+				if cp.truncated != nil {
+					delete(cp.truncated, name)
+				}
+			}
+		}
+		c.Current[name] = kc.Coverage == Live
 		kinds = append(kinds, kc)
 		if cp.ids != nil {
-			cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
+			if viewed {
+				// the part's own absence or gap: a stable identity that
+				// borrows nothing of the other consumers' generation, so
+				// their relists are never this part's loss (Codex's S3a
+				// implementation review, finding 1)
+				cp.ids[name] = SourceIdentity{Source: name, Coverage: kc.Coverage}
+			} else {
+				cp.ids[name] = o.sourceIdentityLocked(name, kc.Coverage)
+			}
 		}
 	}
 	for _, n := range p.spec.Counted {
@@ -357,11 +403,26 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	return c, kinds, absent, cp
 }
 
+// demandVector is a kind's demand, sorted by consumer.
+func demandVector(m map[string]Demand) []ConsumerDemand {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]ConsumerDemand, 0, len(m))
+	for n, d := range m {
+		out = append(out, ConsumerDemand{Name: n, Demand: d})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func (o *Observer) buildSummaryLocked(now time.Time) Summary {
 	s := Summary{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Seq: o.seq, EvaluatedAt: now, Connection: o.conn}
 	if ks := o.kinds[o.cfg.NamespacesKind]; ks != nil && ks.gen != nil && ks.gen.fresh.cov == Live {
-		n := len(ks.gen.model)
-		s.Namespaces = &n // unknown (nil) unless complete and current
+		// the count stays exact past a budget: the objects left out are
+		// counted (coverage S7 §8)
+		n := len(ks.gen.model) + ks.gen.notRetained
+		s.Namespaces = &n // unknown (nil) unless current
 	}
 	for _, d := range o.domains {
 		t := Task{ID: d.spec.ID}

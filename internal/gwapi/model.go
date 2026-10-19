@@ -4,7 +4,13 @@
 // unstructured. Policy attachment is M5-b (the Policies fields stay empty here).
 package gwapi
 
-import "time"
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/moomora/klyx/internal/health"
+)
 
 // Topology is the per-Gateway data path.
 type Topology struct {
@@ -37,6 +43,10 @@ type GatewayNode struct {
 	Addresses                  []GatewayAddress
 	Accepted, Programmed       bool
 	Policies                   []PolicyRef // M5-b; empty in M5-a
+	// AllowedListeners is spec.allowedListeners.namespaces as written (S7
+	// §4); AttachedListenerSets the controller's count, nil when unreported.
+	AllowedListeners     NamespaceAllowance
+	AttachedListenerSets *int32
 
 	AcceptedCond, ProgrammedCond Cond
 	Generation                   int64
@@ -65,6 +75,22 @@ type RouteNode struct {
 	ParentFound                    bool
 	AcceptedCond, ResolvedRefsCond Cond
 	Generation                     int64
+
+	// Coverage S7b §5: the route's kind; the attachment this lane draws (its
+	// identity, its label and the reference); the verdict the attachment
+	// rule gave (nil: judge with RouteRule); its evidence; the controller
+	// expected to judge it (or why it is not established) and the other
+	// controllers' entries; the rules' names by index; the hostname count.
+	Kind                        string
+	APIVersion                  string // the version the route was read at (S7b)
+	Attachment, AttachmentLabel string
+	ParentRef                   RouteParentRef
+	Verdict                     *health.NativeEval
+	Evidence                    *AttachmentEvidence
+	Controller, ControllerWhy   string
+	OtherControllers            []ParentStatus
+	RuleNames                   []string
+	HostnameCount               int
 }
 
 type ServiceNode struct {
@@ -81,7 +107,69 @@ type Listener struct {
 	Name, Protocol, Hostname string
 	Port                     int32
 	CertificateRefs          []CertificateRef
+	// TLSMode is spec tls.mode as written: "" when unset (the API defaults
+	// it to Terminate).
+	TLSMode string
+	// AllowedRoutes is the listener's allowedRoutes as written (S7 §3):
+	// nil when unset, where the API's default is routes from the same
+	// namespace, of the protocol's kinds.
+	AllowedRoutes *AllowedRoutes
+	// Status is the controller's status.listeners entry of this name (S7
+	// §3): nil when none was reported.
+	Status *ListenerStatus
 }
+
+// AllowedRoutes is a listener's allowedRoutes: which namespaces and kinds
+// of routes may attach.
+type AllowedRoutes struct {
+	Namespaces NamespaceAllowance
+	Kinds      []RouteKind // as written: empty means the protocol's kinds
+}
+
+// NamespaceAllowance is a namespaces field as written - a listener's
+// allowedRoutes.namespaces or a Gateway's allowedListeners.namespaces.
+// Set: the field was written at all. From is as written ("" when unset);
+// the field's own default applies (Same for routes, None for ListenerSets).
+// SelectorInvalid: a selector was written that Klyx could not read.
+type NamespaceAllowance struct {
+	Set             bool
+	From            string
+	Selector        *metav1.LabelSelector
+	SelectorInvalid bool
+}
+
+// RouteKind is one route group and kind; Group as written ("" is the
+// Gateway API group by the API's default).
+type RouteKind struct{ Group, Kind string }
+
+// ListenerStatus is one listener's status as its controller reported it:
+// the route kinds it supports, how many routes attached, and every
+// condition in the order reported.
+type ListenerStatus struct {
+	SupportedKinds []RouteKind
+	AttachedRoutes int32
+	Conditions     []TypedCond
+}
+
+// TypedCond is one condition with its type.
+type TypedCond struct {
+	Type string
+	Cond
+}
+
+// Of returns the condition of a type ("" status when absent).
+func (s *ListenerStatus) Of(condType string) Cond {
+	if s == nil {
+		return Cond{}
+	}
+	for _, c := range s.Conditions {
+		if c.Type == condType {
+			return c.Cond
+		}
+	}
+	return Cond{}
+}
+
 type GatewayAddress struct{ Type, Value string }
 type CertificateRef struct {
 	Group, Kind, Namespace, Name string
@@ -92,10 +180,16 @@ type CertificateRef struct {
 type Match struct {
 	PathType, PathValue, Method string
 	Rule                        int
+	// GRPCRoute's method match (S7b §5): service and method, either empty
+	// when the match leaves it open.
+	GRPCService, GRPCMethod string
 }
 type Backend struct {
-	Kind, Name, Namespace string
-	Port, Weight          int32
+	Group, Kind, Name, Namespace string
+	Port, Weight                 int32
+	// Transport is the protocol the route reaches it over (S7b §5): UDP
+	// for a UDPRoute, TCP otherwise; "" before resolution.
+	Transport string
 	// WeightSet: the backendRef wrote a weight. Unset means the Gateway API
 	// default of 1; an explicit 0 sends this backend no traffic.
 	WeightSet bool
@@ -122,6 +216,9 @@ const (
 	BackendNotFound    BackendState = "not-found"   // the API said NotFound
 	BackendUnreadable  BackendState = "unreadable"  // forbidden, timeout, ... - existence unknown
 	BackendUnsupported BackendState = "unsupported" // not a core Service; Klyx does not evaluate it
+	// BackendNoPort: the Service was read (current) and has no port of the
+	// backendRef's number for the route's transport (S7b §5).
+	BackendNoPort BackendState = "no-port"
 )
 
 // EndpointCount is a Service's EndpointSlice endpoints - endpoints, not
@@ -174,6 +271,9 @@ type GatewayRef struct {
 	Accepted, Programmed       bool
 	Addresses                  []GatewayAddress
 	Listeners                  []Listener
+	// AllowedListeners and AttachedListenerSets as GatewayNode's (S7 §4).
+	AllowedListeners     NamespaceAllowance
+	AttachedListenerSets *int32
 	// Stale reports that the spec changed and the controller has not observed
 	// it yet (the Programmed condition's observedGeneration lags
 	// metadata.generation). While stale, Accepted/Programmed reflect the

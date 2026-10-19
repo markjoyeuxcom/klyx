@@ -77,6 +77,9 @@ type KindCoverage struct {
 	// observed (a live reflector keeps running; spec §3.3). A consumer
 	// treats it as a capability gap, never as data staleness.
 	Discovery string `json:"discovery,omitempty"`
+	// Consumers is a shared kind's demand vector (C3), sorted by name: who
+	// holds it open.
+	Consumers []ConsumerDemand `json:"consumers,omitempty"`
 }
 
 // Counts is a complete partition of a verdict part by verdict.

@@ -7,7 +7,7 @@ func simNode(name, zone string, cpu, mem float64) SimNode {
 }
 
 func simPod(ns, name, node string, cpu, mem float64) SimPod {
-	return SimPod{Namespace: ns, Name: name, Node: node, CPUReq: cpu, MemReq: mem}
+	return SimPod{Namespace: ns, Name: name, Node: node, CPUReq: cpu, MemReq: mem, CPUNeed: cpu, MemNeed: mem}
 }
 
 func TestSimulateLoss_ZoneLossFits(t *testing.T) {
@@ -66,5 +66,30 @@ func TestSimulateLoss_DaemonSetAndUnschedulableRules(t *testing.T) {
 	// The DaemonSet pod dies with the node - only the app pod is displaced.
 	if r.Displaced != 1 || r.Rescheduled != 1 {
 		t.Fatalf("daemonset exclusion: %+v", r)
+	}
+}
+
+// Coverage S6 §2: survivors occupy their scheduled reservation; a displaced
+// pod is placed by its desired request; the alternative model's difference,
+// summed per survivor, is checked against the spare after placement
+// (equality fits).
+func TestSimulateLossScheduledDesiredAndTheVersionGuard(t *testing.T) {
+	nodes := []SimNode{{Name: "lost", Schedulable: true, CPUAlloc: 8, MemAlloc: 8}, {Name: "s1", Schedulable: true, CPUAlloc: 8, MemAlloc: 8}}
+	stay := SimPod{Namespace: "a", Name: "stay", Node: "s1", CPUReq: 4, MemReq: 1, CPUNeed: 2, MemNeed: 1, AltCPU: 2}
+	move := SimPod{Namespace: "a", Name: "move", Node: "lost", CPUReq: 6, MemReq: 1, CPUNeed: 2, MemNeed: 1}
+	r := SimulateLoss(nodes, []SimPod{stay, move}, LossTarget{Kind: "node", Name: "lost"})
+	// s1: 8 - 4 (scheduled) - 2 (move's desired) = 2 spare; alt 2: equality fits
+	if r.Rescheduled != 1 || len(r.Unplaced) != 0 || r.AltCPU != 2 || len(r.VersionDependent) != 0 {
+		t.Fatalf("desired placement, equality fits: %+v", r)
+	}
+	stay.AltCPU = 2.5
+	r = SimulateLoss(nodes, []SimPod{stay, move}, LossTarget{Kind: "node", Name: "lost"})
+	if len(r.VersionDependent) != 1 || r.VersionDependent[0] != "s1" {
+		t.Fatalf("spare below the difference depends on the version: %+v", r)
+	}
+	stay.AltCPU, stay.AltMem = 0, 6.5
+	r = SimulateLoss(nodes, []SimPod{stay, move}, LossTarget{Kind: "node", Name: "lost"})
+	if len(r.VersionDependent) != 1 {
+		t.Fatalf("memory is guarded too: %+v", r)
 	}
 }

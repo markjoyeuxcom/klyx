@@ -23,6 +23,7 @@ import { openTerminal } from "../bridge/configsvc";
 import { zoomIn, zoomOut, zoomPercent, zoomReset } from "../app/zoom";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
 import { reveal } from "../nav/reveal";
+import { laneKey, routeId, routeKindOf } from "../cluster/gatewayModel";
 import { targetKey, usePendingExplain } from "../ai/AIExplain";
 import type { ExplainTarget } from "../bridge/ai";
 
@@ -99,12 +100,10 @@ function apiHint(ref: ResourceRef): string {
   return `${api} · ${ref.plural} · ${ref.scope.toLowerCase()}`;
 }
 
-function routeKey(r: RouteNodeDTO): string {
-  return `${r.namespace}/${r.name}`;
-}
-
 function routeHint(r: RouteNodeDTO): string | undefined {
-  const status = !r.accepted ? "not accepted" : !r.resolvedRefs ? "unresolved refs" : "";
+  // a lane's own verdict (S7b: the attachment's); a payload from before it
+  // carries only the booleans
+  const status = r.rule && r.rule.role !== "ok" ? r.rule.label : !r.accepted ? "not accepted" : !r.resolvedRefs ? "unresolved refs" : "";
   const hostnames = r.hostnames.filter(Boolean).join(", ");
   const backends = r.backends.map((b) => nsName(b.namespace, b.name)).join(", ");
   return [status, hostnames || backends].filter(Boolean).join(" · ") || undefined;
@@ -148,6 +147,7 @@ export function buildCommands(s: FleetStore): Command[] {
   cmds.push({ id: "fleet", group: "Application", title: "Fleet board", hint: "every cluster, attention first", run: () => s.openFleet() });
   cmds.push({ id: "fleet:promotion", group: "Application", title: "Promotion tracker", hint: "applied GitOps revisions per cluster", run: () => s.openFleet("promotion") });
   cmds.push({ id: "fleet:expiry", group: "Application", title: "Expiry horizon", hint: "certificates and CAs fleet-wide, soonest first", run: () => s.openFleet("expiry") });
+  cmds.push({ id: "fleet:backups", group: "Application", title: "Backups", hint: "Velero schedules fleet-wide, the longest without a retained success first", run: () => s.openFleet("backups") });
   cmds.push({ id: "forwards", group: "Application", title: "Port-forwards", hint: (s.forwards?.length ?? 0) > 0 ? `${s.forwards.length} active` : "none active", run: () => s.openForwards() });
   cmds.push({ id: "activity", group: "Application", title: "Activity log", hint: "recent action outcomes", run: () => s.openActivity() });
   cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "fleet config · kubeconfig contexts", run: () => s.openSettings() });
@@ -494,12 +494,16 @@ export function buildCommands(s: FleetStore): Command[] {
 
   if (cluster && s.network.cluster === cluster && s.network.topology?.routes?.length) {
     const gw = s.network.topology.gateway;
+    // one command per lane (an attachment); a route with several lanes here
+    // names each by its parent
+    const lanes = new Map<string, number>();
+    for (const r of s.network.topology.routes) lanes.set(routeId(r), (lanes.get(routeId(r)) ?? 0) + 1);
     for (const r of s.network.topology.routes) {
-      const key = routeKey(r);
+      const key = laneKey(r);
       cmds.push({
         id: `gateway-route:${key}`,
         group: "Objects",
-        title: `HTTPRoute ${key}`,
+        title: `${routeKindOf(r)} ${r.namespace}/${r.name}${(lanes.get(routeId(r)) ?? 0) > 1 && r.attachmentLabel ? ` · ${r.attachmentLabel}` : ""}`,
         hint: routeHint(r),
         run: () => {
           openSection(s, "gatewayApi", cluster);

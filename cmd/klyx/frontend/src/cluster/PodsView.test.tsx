@@ -30,10 +30,18 @@ vi.mock("../bridge/metrics", () => ({
 vi.mock("../bridge/windows", () => ({
   openLogsWindow: vi.fn().mockResolvedValue(true),
 }));
+// coverage S6 §6: the debug dialog's preflight (the kubectl gate)
+const PROFILES = [
+  { name: "general", adds: "adds SYS_PTRACE" }, { name: "baseline", adds: "no added privilege" }, { name: "restricted", adds: "non-root" },
+  { name: "netadmin", adds: "adds NET_ADMIN and NET_RAW" }, { name: "sysadmin", adds: "privileged: this container has full access to the node" },
+];
+let debugPre: { profiles: typeof PROFILES; defaultImage: string; defaultProfile: string; kubectl?: string; ok: boolean; reason?: string; qualified?: string } =
+  { profiles: PROFILES, defaultImage: "busybox:1.36", defaultProfile: "general", kubectl: "v1.37.1", ok: true };
 vi.mock("../bridge/exec", () => ({
   copyExecCommand: vi.fn().mockResolvedValue("copied"),
   openExecTerminal: vi.fn().mockResolvedValue(undefined),
   openDebugTerminal: vi.fn().mockResolvedValue(undefined),
+  debugPreflight: vi.fn(async () => debugPre),
   describeResource: vi.fn().mockResolvedValue({ ok: true, output: "Name:         grafana-xyz", error: "" }),
 }));
 import { openPodDetail, deletePod } from "../bridge/pods";
@@ -505,23 +513,55 @@ describe("PodsView", () => {
 
   // Review 2026-10-03 (finding A): kubectl debug permanently adds an ephemeral
   // container to the pod, so the launch must go through the confirm dialog.
-  it("debug shell asks for confirmation before launching kubectl debug", () => {
+  // coverage S6 §6: the profile and image are chosen first, then the
+  // confirmation names them and the privilege the profile adds
+  it("debug shell chooses an image and profile, then confirms naming them, before launching kubectl debug", async () => {
+    debugPre = { profiles: PROFILES, defaultImage: "busybox:1.36", defaultProfile: "general", kubectl: "v1.37.1", ok: true };
     openDetailPanel(healthy);
-    const { getByText, getByRole } = render(<PodsView cluster="homelab" />);
+    const { getByText, getByRole, findByTestId } = render(<PodsView cluster="homelab" />);
     chooseMore(/Debug shell/, getByRole);
+    await findByTestId("debug-kubectl");
     expect(openDebugTerminal).not.toHaveBeenCalled();
-    expect(getByText(/stays on the pod spec until the pod is recreated/i)).toBeTruthy();
+    fireEvent.click(getByRole("radio", { name: /restricted/ }));
+    fireEvent.click(getByRole("button", { name: "Continue" }));
+    expect(getByText(/profile restricted: non-root.*stays on the pod until the pod is recreated/i)).toBeTruthy();
     fireEvent.click(getByRole("button", { name: "Attach" }));
-    expect(openDebugTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz", "app");
+    expect(openDebugTerminal).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz", "app", "busybox:1.36", "restricted");
   });
 
-  it("cancelling the debug shell confirmation launches nothing", () => {
+  it("cancelling the debug shell launches nothing", async () => {
     openDetailPanel(healthy);
-    const { getByRole, queryByRole } = render(<PodsView cluster="homelab" />);
+    const { getByRole, queryByRole, findByTestId } = render(<PodsView cluster="homelab" />);
     chooseMore(/Debug shell/, getByRole);
+    await findByTestId("debug-kubectl");
     fireEvent.click(getByRole("button", { name: "Cancel" }));
     expect(queryByRole("button", { name: "Attach" })).toBeNull();
+    expect(queryByRole("button", { name: "Continue" })).toBeNull();
     expect(openDebugTerminal).not.toHaveBeenCalled();
+  });
+
+  it("sysadmin takes a typed 'privileged' interlock even off a protected cluster", async () => {
+    openDetailPanel(healthy);
+    const { getByText, getByRole, getByPlaceholderText, findByTestId } = render(<PodsView cluster="homelab" />);
+    chooseMore(/Debug shell/, getByRole);
+    await findByTestId("debug-kubectl");
+    fireEvent.click(getByRole("radio", { name: /sysadmin/ }));
+    fireEvent.click(getByRole("button", { name: "Continue" }));
+    expect(getByText(/privileged: this container has full access to the node/)).toBeTruthy();
+    const attach = getByRole("button", { name: "Attach" }) as HTMLButtonElement;
+    expect(attach.disabled).toBe(true);
+    fireEvent.change(getByPlaceholderText("privileged"), { target: { value: "privileged" } });
+    expect(attach.disabled).toBe(false);
+  });
+
+  it("a refused kubectl continues nowhere and says why", async () => {
+    debugPre = { profiles: PROFILES, defaultImage: "busybox:1.36", defaultProfile: "general", kubectl: "v1.29.0", ok: false, reason: "kubectl v1.29.0 is older than 1.30" };
+    openDetailPanel(healthy);
+    const { getByRole, findByTestId } = render(<PodsView cluster="homelab" />);
+    chooseMore(/Debug shell/, getByRole);
+    expect((await findByTestId("debug-kubectl")).textContent).toContain("older than 1.30");
+    expect((getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(true);
+    debugPre = { profiles: PROFILES, defaultImage: "busybox:1.36", defaultProfile: "general", kubectl: "v1.37.1", ok: true };
   });
 
   it("restart owner is offered for a Deployment owner, named with its target", () => {
@@ -1008,5 +1048,39 @@ describe("PodsView open-scratch intent", () => {
     const { queryByRole } = render(<PodsView cluster="homelab" />);
     expect(queryByRole("dialog", { name: "scratch objects" })).toBeNull();
     expect(useFleet.getState().navIntent).toEqual({ kind: "open-scratch", cluster: "elsewhere" });
+  });
+});
+
+// Coverage S6 implementation review 1: a status-only change to the resize
+// or debug evidence (an acknowledgement, an actuation, a debug container
+// exiting) changes no other row field; its evidence revision re-reads the
+// selected pod's detail, under the same UID.
+describe("S6 detail continuity", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+  const setRow = (overrides: Record<string, unknown>) => useFleet.setState((s) => ({
+    pods: { ...s.pods, items: s.pods.items.map((p) => ({ ...p, ...overrides })) },
+  }));
+  it("re-reads the detail when only the evidence revision changes", async () => {
+    seed([{ ...healthy, generation: 2 }]);
+    setRow({ observedGeneration: 1, resize: { inProgress: { reason: "", generation: 2 } }, evidenceRev: "aaaaaaaaaaaaaaaa" });
+    const view = render(<PodsView cluster="homelab" />);
+    fireEvent.click(view.getByText("grafana-xyz"));
+    act(() => useFleet.setState((s) => ({ pods: { ...s.pods,
+      selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
+      detail: { ...fakeDetail, summary: { ...healthy, generation: 2, observedGeneration: 1, resize: { inProgress: { reason: "", generation: 2 } } } }, detailLoading: false,
+    } })));
+    await act(async () => {});
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ observedGeneration: 2, resize: undefined, evidenceRev: "bbbbbbbbbbbbbbbb" }));
+    await act(async () => {});
+    expect(openPodDetail).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz");
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ evidenceRev: "cccccccccccccccc" })); // an actuation or a debug exit alone
+    await act(async () => {});
+    expect(openPodDetail).toHaveBeenCalledTimes(1);
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ ip: "10.9.9.9" })); // not evidence: nothing re-read
+    await act(async () => {});
+    expect(openPodDetail).not.toHaveBeenCalled();
   });
 });

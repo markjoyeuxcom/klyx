@@ -166,8 +166,8 @@ describe("sortWarnings", () => {
       "CiliumNetworkPolicy apps/x: matchExpressions-only selector not evaluated",
     ]);
     expect(w.absentKinds).toEqual(["SecurityPolicy"]);
-    expect(w.byRoute.get("apps/share")).toEqual(["has 2 backends; the lane shows the primary"]);
-    expect(w.byRoute.get("apps/cart")).toEqual(["backend Service apps/cart not found"]);
+    expect(w.byRoute.get("HTTPRoute/apps/share")).toEqual(["has 2 backends; the lane shows the primary"]);
+    expect(w.byRoute.get("HTTPRoute/apps/cart")).toEqual(["backend Service apps/cart not found"]);
     expect(w.gaps).toEqual(["could not list BackendTrafficPolicy: forbidden", "CiliumNetworkPolicy apps/x: matchExpressions-only selector not evaluated"]);
   });
 });
@@ -202,7 +202,7 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     const lanes = screen.getAllByRole("listitem");
     expect(lanes[0].textContent).toContain("cart");
     expect(lanes[1].textContent).toContain("share");
-    expect(useFleet.getState().network.selectedRoute).toBe("apps/cart");
+    expect(useFleet.getState().network.selectedRoute).toBe("HTTPRoute/apps/cart");
     expect(within(screen.getByTestId("route-panel")).getByText(/References not resolved - BackendNotFound/)).toBeTruthy();
     expect(screen.getByText("▲ 1 broken")).toBeTruthy();
   });
@@ -248,24 +248,24 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
   it("a first read whose HTTPRoute list failed is a coverage failure, never 'no routes'", () => {
     seed(topo([], { routesComplete: false, routesError: "could not list HTTPRoutes: forbidden" }));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(screen.getByText("Could not list HTTPRoutes.")).toBeTruthy();
-    expect(screen.queryByText(/No HTTPRoutes are attached/)).toBeNull();
+    expect(screen.getByText("Could not list every route kind.")).toBeTruthy();
+    expect(screen.queryByText(/No routes are attached/)).toBeNull();
   });
 
   it("a forbidden HTTPRoute list after a complete read keeps the lanes and claims no detachment", () => {
     seed(topo([route("apps", "share"), route("apps", "cart", { acceptedCond: F("NotAllowedByListeners") })]));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(useFleet.getState().network.selectedRoute).toBe("apps/cart");
+    expect(useFleet.getState().network.selectedRoute).toBe("HTTPRoute/apps/cart");
     act(() => { useFleet.getState().setTopology(topo([], { routesComplete: false, routesError: "could not list HTTPRoutes: forbidden" })); });
-    expect(screen.getByText(/HTTPRoute list failed - the lanes are from the complete read/)).toBeTruthy();
-    expect(within(screen.getByRole("list", { name: "HTTPRoute lanes" })).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText(/A route list failed - the lanes are from the complete read/)).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "Route lanes" })).getAllByRole("listitem")).toHaveLength(2);
     expect(screen.queryByText("No longer attached.")).toBeNull();
     expect(screen.getByText(/\(last complete read\)/)).toBeTruthy();
   });
   it("a route gone from a complete re-read is named as gone, with its last evidence", () => {
     seed(topo([route("apps", "share"), route("apps", "cart", { acceptedCond: F("NotAllowedByListeners") })]));
     render(<GatewayTopology cluster="x" gateway={gateway} />);
-    expect(useFleet.getState().network.selectedRoute).toBe("apps/cart");
+    expect(useFleet.getState().network.selectedRoute).toBe("HTTPRoute/apps/cart");
     act(() => { useFleet.getState().setTopology(topo([route("apps", "share")])); });
     expect(within(screen.getByTestId("route-panel")).getByText("No longer attached.")).toBeTruthy();
   });

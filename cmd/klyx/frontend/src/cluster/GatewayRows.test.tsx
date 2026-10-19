@@ -224,7 +224,7 @@ describe("the Routes part view", () => {
     fireEvent.click(panel.getByRole("button", { name: "Open topology (infra/b)" }));
     const r = useFleet.getState().route;
     expect(r.name === "cluster" && r.gateway).toEqual({ namespace: "infra", name: "b" });
-    expect(useFleet.getState().network.selectedRoute).toBe("apps/web");
+    expect(useFleet.getState().network.selectedRoute).toBe("HTTPRoute/apps/web");
   });
 
   it("A4 moves the routes part's counts with the notice", () => {
@@ -305,8 +305,8 @@ describe("the Routes part view", () => {
       openRoutes(); applyRows("r", routesDTO(1, 1, [], routeKinds({}, { gateways: { coverage: "unreadable", class: "forbidden", error: "rbac" } })));
       render(<GatewayApiView cluster="x" />);
       toRoutes();
-      expect(screen.getByText("Attached HTTPRoutes are unverified.")).toBeTruthy();
-      expect(screen.queryByText("No HTTPRoutes attached to a Gateway.")).toBeNull();
+      expect(screen.getByText("Attached routes are unverified.")).toBeTruthy();
+      expect(screen.queryByText("No routes attached to a Gateway.")).toBeNull();
     });
   });
 
@@ -328,7 +328,7 @@ describe("the Routes part view", () => {
     expect(screen.queryByTestId("route-row-panel")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /^All/ }));
     fireEvent.click(screen.getByText("bad").closest(".lens-row")!);
-    fireEvent.change(screen.getByLabelText("Search HTTPRoutes"), { target: { value: "ok" } });
+    fireEvent.change(screen.getByLabelText("Search routes"), { target: { value: "ok" } });
     expect(screen.queryByTestId("route-row-panel")).toBeNull();
   });
 });
@@ -375,7 +375,7 @@ describe("a Top link reveals its object", () => {
     render(<GatewayApiView cluster="x" />);
     reveal("routes", { gvr: "gateway.networking.k8s.io/v1/httproutes", namespace: "apps", name: "web", parent: "gateway infra/eg" });
     expect(useFleet.getState().navIntent).toBeNull();
-    expect(useFleet.getState().actionStatus?.message).toBe("route apps/web is no longer attached to a Gateway - it may still exist");
+    expect(useFleet.getState().actionStatus?.message).toBe("HTTPRoute apps/web is no longer attached to a Gateway - it may still exist");
   });
 });
 

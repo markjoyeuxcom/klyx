@@ -19,13 +19,13 @@ func routeRows(inc uint64, at time.Time, live bool, routes map[string][]string) 
 	if !live {
 		cov = observe.Stale
 	}
-	var rows []healthsrc.Row[observe.Attached]
+	var rows []healthsrc.Row[healthsrc.RouteRow]
 	for uid, fps := range routes {
-		rows = append(rows, healthsrc.Row[observe.Attached]{Ref: healthsrc.RowRef{UID: uid}, Data: observe.Attached{UID: uid, Rules: fps}})
+		rows = append(rows, healthsrc.Row[healthsrc.RouteRow]{Ref: healthsrc.RowRef{UID: uid}, Data: healthsrc.RouteRow{Attached: observe.Attached{UID: uid, Rules: fps}}})
 	}
 	return observe.Rows{Cluster: "prd", Incarnation: inc, Task: healthsrc.TaskGateway, EvaluatedAt: at,
 		Part: observe.Part{ID: "routes", Kinds: []observe.KindCoverage{{Kind: healthsrc.KindHTTPRoutes, Coverage: cov}, {Kind: healthsrc.KindGateways, Coverage: observe.Live}}},
-		Rows: healthsrc.RowSet[observe.Attached]{Rows: rows}}
+		Rows: healthsrc.RowSet[healthsrc.RouteRow]{Rows: rows}}
 }
 
 func TestRuleIntervals(t *testing.T) {

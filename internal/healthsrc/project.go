@@ -1,6 +1,7 @@
 package healthsrc
 
 import (
+	"encoding/json"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -158,6 +159,36 @@ func ProjectNameMeta(obj any) (any, error) {
 		return nil, fmt.Errorf("healthsrc: want *PartialObjectMetadata, got %T", obj)
 	}
 	return &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: m.Name, UID: m.UID}}, nil
+}
+
+// ProjectNamespaceMeta keeps a namespace's name, UID and labels: the labels
+// are what the Gateway API's namespace selectors read (coverage S7 §8).
+func ProjectNamespaceMeta(obj any) (any, error) {
+	m, ok := obj.(*metav1.PartialObjectMetadata)
+	if !ok {
+		return nil, fmt.Errorf("healthsrc: want *PartialObjectMetadata, got %T", obj)
+	}
+	out := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: m.Name, UID: m.UID}}
+	if len(m.Labels) > 0 {
+		out.Labels = make(map[string]string, len(m.Labels))
+		for k, v := range m.Labels {
+			out.Labels[k] = v
+		}
+	}
+	return out, nil
+}
+
+// namespaceSize is a projected namespace's JSON-encoded length.
+func namespaceSize(v any) int {
+	m, ok := v.(*metav1.PartialObjectMetadata)
+	if !ok {
+		return 1 << 30
+	}
+	b, err := json.Marshal(m.ObjectMeta)
+	if err != nil {
+		return 1 << 30
+	}
+	return len(b)
 }
 
 func errWant(want string, got any) error {

@@ -601,7 +601,7 @@ func shares(cls []metrics.LabeledSeries, clsErr error, r503 []metrics.LabeledSer
 	for _, s := range cls {
 		c := s.Labels[lRespClass]
 		if len(c) != 1 || c[0] < '1' || c[0] > '5' {
-			return ClassSeries{Availability: MetricFailed, Error: fmt.Sprintf("unexpected response class %q", c)},
+			return ClassSeries{Availability: MetricFailed, Error: "a response class other than 1xx to 5xx"},
 				Series{Availability: MetricFailed, Error: "the response classes could not be read"}
 		}
 		key := c + "xx"

@@ -14,7 +14,7 @@ func TestDefaultFactoryBuildsConn(t *testing.T) {
 		Context:    "prd-we",
 		Kubeconfig: filepath.Join("..", "cluster", "testdata", "kubeconfig.yaml"),
 	}
-	f := DefaultConnFactory(clock.Real{})
+	f := DefaultConnFactory(clock.Real{}, Credentials{})
 	conn, err := f(cc)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

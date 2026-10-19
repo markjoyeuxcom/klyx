@@ -39,12 +39,14 @@ import (
 //	KLYX_LOAD=1 go test ./internal/healthsrc -run TestLoad -v -timeout 10m
 
 type loadScale struct {
-	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims int
+	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims, listenersets int
 }
 
+// Coverage S7 §8: the large cluster carries about 500 routes and 50
+// ListenerSets, its Gateways and ListenerSets with listener status.
 var (
-	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 300, claims: 50}
-	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 30, claims: 5}
+	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50}
+	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5}
 )
 
 // chaos is an API outage switch for one cluster's list/watch: while down,
@@ -465,6 +467,12 @@ func init() {
 	add("gateway.networking.k8s.io", "v1", "gatewayclasses", "GatewayClassList")
 	add("gateway.networking.k8s.io", "v1", "gateways", "GatewayList")
 	add("gateway.networking.k8s.io", "v1", "httproutes", "HTTPRouteList")
+	add("gateway.networking.k8s.io", "v1", "listenersets", "ListenerSetList")
+	add("gateway.networking.k8s.io", "v1", "grpcroutes", "GRPCRouteList")
+	add("gateway.networking.k8s.io", "v1", "tlsroutes", "TLSRouteList")
+	add("gateway.networking.k8s.io", "v1", "tcproutes", "TCPRouteList")
+	add("gateway.networking.k8s.io", "v1", "udproutes", "UDPRouteList")
+	add("gateway.networking.k8s.io", "v1", "referencegrants", "ReferenceGrantList")
 	// coverage S1a-S1c: every group is served here, so every watched kind
 	// is registered
 	add("fluxcd.controlplane.io", "v1", "fluxinstances", "FluxInstanceList")
@@ -477,6 +485,19 @@ func init() {
 	add("source.extensions.fluxcd.io", "v1beta1", "artifactgenerators", "ArtifactGeneratorList")
 	add("source.toolkit.fluxcd.io", "v1", "externalartifacts", "ExternalArtifactList")
 	add("notification.toolkit.fluxcd.io", "v1", "receivers", "ReceiverList")
+	add("velero.io", "v1", "schedules", "ScheduleList")
+	add("velero.io", "v1", "backupstoragelocations", "BackupStorageLocationList")
+	add("velero.io", "v1", "backups", "BackupList")
+	for _, r := range [][2]string{{"validatingwebhookconfigurations", "ValidatingWebhookConfigurationList"}, {"mutatingwebhookconfigurations", "MutatingWebhookConfigurationList"},
+		{"validatingadmissionpolicies", "ValidatingAdmissionPolicyList"}, {"mutatingadmissionpolicies", "MutatingAdmissionPolicyList"},
+		{"validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBindingList"}, {"mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBindingList"}} {
+		add("admissionregistration.k8s.io", "v1", r[0], r[1])
+	}
+	add("metallb.io", "v1beta1", "ipaddresspools", "IPAddressPoolList")
+	add("metallb.io", "v1beta1", "l2advertisements", "L2AdvertisementList")
+	add("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisementList")
+	add("metallb.io", "v1beta1", "configurationstates", "ConfigurationStateList")
+	add("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPoolList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -557,18 +578,29 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}})
 	}
 	for i := 0; i < 50; i++ {
-		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i))}})
+		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i)),
+			Labels: map[string]string{"kubernetes.io/metadata.name": ns(i), "team": fmt.Sprintf("team-%d", i%8)}}})
 	}
 	svcs := sc.routes
 	for i := 0; i < svcs; i++ {
-		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))}})
+		// the shared Services kind is a typed watch (C3)
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%04d", i), Namespace: ns(i), UID: types.UID(fmt.Sprintf("svc-%04d", i))},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: map[string]string{"app": "x"}, Ports: []corev1.ServicePort{{Name: "http", Port: 80, Protocol: corev1.ProtocolTCP}}}}
+		if i%10 == 0 { // coverage S4: every tenth a LoadBalancer, half of them pending
+			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+			svc.Annotations = map[string]string{"metallb.io/address-pool": "pool-00"}
+			if i%20 == 0 {
+				svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: fmt.Sprintf("192.168.%d.%d", i/250, i%250)}}
+			}
+		}
+		typedObjs = append(typedObjs, svc)
 	}
 	for i := 0; i < sc.slices; i++ {
 		svc := fmt.Sprintf("svc-%04d", i%svcs)
 		ready := true
 		es := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%05d", svc, i), Namespace: ns(i % svcs), UID: types.UID(fmt.Sprintf("es-%05d", i)),
-			Labels: map[string]string{discoveryv1.LabelServiceName: svc}}, AddressType: discoveryv1.AddressTypeIPv4}
+			Labels: map[string]string{discoveryv1.LabelServiceName: svc}}, AddressType: discoveryv1.AddressTypeIPv4,
+			Ports: []discoveryv1.EndpointPort{{Name: ptr("http"), Protocol: ptr(corev1.ProtocolTCP)}}}
 		for e := 0; e < 3; e++ {
 			es.Endpoints = append(es.Endpoints, discoveryv1.Endpoint{Addresses: []string{fmt.Sprintf("10.%d.%d.%d", i/250, i%250, e)}, Conditions: discoveryv1.EndpointConditions{Ready: &ready},
 				TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: ns(i % svcs), Name: fmt.Sprintf("p-%05d-%d", i, e), UID: types.UID(fmt.Sprintf("p-%05d-%d", i, e))}})
@@ -589,6 +621,44 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			t.Fatal(err)
 		}
 	}
+	// coverage S3a: webhook configurations (two webhooks each, on the
+	// shared Services) and bound policies, scaled with the gateways
+	for i := 0; i < 2*sc.gateways; i++ {
+		hook := func(n int) map[string]any {
+			return map[string]any{"name": fmt.Sprintf("h%d.load.klyx.dev", n), "failurePolicy": "Fail", "sideEffects": "None", "admissionReviewVersions": []any{"v1"},
+				"clientConfig": map[string]any{"service": map[string]any{"namespace": ns(i), "name": fmt.Sprintf("svc-%04d", i%svcs), "port": int64(443)}},
+				"rules":        []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{"lab.klyx.dev"}, "apiVersions": []any{"v1"}, "resources": []any{"widgets"}}}}
+		}
+		create("admissionregistration.k8s.io", "v1", "validatingwebhookconfigurations", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d", i), "uid": fmt.Sprintf("vwc-%03d", i)}, "webhooks": []any{hook(0), hook(1)}}})
+		create("admissionregistration.k8s.io", "v1", "validatingadmissionpolicies", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicy",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d", i), "uid": fmt.Sprintf("vap-%03d", i)}, "spec": map[string]any{"validations": []any{map[string]any{"expression": "true"}}}}})
+		create("admissionregistration.k8s.io", "v1", "validatingadmissionpolicybindings", &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingAdmissionPolicyBinding",
+			"metadata": map[string]any{"name": fmt.Sprintf("load-%03d-b", i), "uid": fmt.Sprintf("vapb-%03d", i)}, "spec": map[string]any{"policyName": fmt.Sprintf("load-%03d", i), "validationActions": []any{"Deny"}}}})
+	}
+	// coverage S4: MetalLB pools with an advertisement and a controller
+	// ConfigurationState, and Cilium pools with their counts
+	for i := 0; i < sc.gateways; i++ {
+		create("metallb.io", "v1beta1", "ipaddresspools", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "IPAddressPool",
+			"metadata": map[string]any{"name": fmt.Sprintf("pool-%02d", i), "namespace": "metallb-system", "uid": fmt.Sprintf("mp-%02d", i), "labels": map[string]any{"tier": "gold"}},
+			"spec":     map[string]any{"addresses": []any{fmt.Sprintf("192.168.%d.0/24", i)}},
+			"status":   map[string]any{"assignedIPv4": int64(10), "availableIPv4": int64(244), "assignedIPv6": int64(0), "availableIPv6": int64(0)}}})
+		create("cilium.io", "v2", "ciliumloadbalancerippools", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cilium.io/v2", "kind": "CiliumLoadBalancerIPPool",
+			"metadata": map[string]any{"name": fmt.Sprintf("cpool-%02d", i), "uid": fmt.Sprintf("cp-%02d", i), "generation": int64(1)},
+			"spec":     map[string]any{"blocks": []any{map[string]any{"cidr": fmt.Sprintf("10.200.%d.0/24", i)}}},
+			"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "cilium.io/IPsTotal", "status": "Unknown", "reason": "noreason", "message": "256", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"},
+				map[string]any{"type": "cilium.io/IPsAvailable", "status": "Unknown", "reason": "noreason", "message": "250", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"},
+				map[string]any{"type": "cilium.io/IPsUsed", "status": "Unknown", "reason": "noreason", "message": "6", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T00:00:00Z"}}}}})
+	}
+	create("metallb.io", "v1beta1", "l2advertisements", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "L2Advertisement",
+		"metadata": map[string]any{"name": "l2", "namespace": "metallb-system", "uid": "l2-0"},
+		"spec":     map[string]any{"ipAddressPoolSelectors": []any{map[string]any{"matchLabels": map[string]any{"tier": "gold"}}}}}})
+	create("metallb.io", "v1beta1", "configurationstates", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "ConfigurationState",
+		"metadata": map[string]any{"name": "controller", "namespace": "metallb-system", "uid": "cs-0"}, "status": map[string]any{"result": "Valid"}}})
 	readyIf := func(i int) string {
 		if i%25 == 0 {
 			return "False"
@@ -636,13 +706,36 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	for i := 0; i < sc.gateways; i++ {
 		u := gw(fmt.Sprintf("gw-%02d", i), "True")
 		u.SetUID(types.UID(fmt.Sprintf("gw-%02d", i)))
+		loadListeners(u, 1)
+		u.Object["spec"].(map[string]any)["allowedListeners"] = map[string]any{"namespaces": map[string]any{"from": "All"}}
 		create("gateway.networking.k8s.io", "v1", "gateways", u)
 	}
+	for i := 0; i < sc.listenersets; i++ {
+		u := cr("gateway.networking.k8s.io/v1", "ListenerSet", ns(i), fmt.Sprintf("ls-%03d", i), map[string]any{"parentRef": map[string]any{"name": fmt.Sprintf("gw-%02d", i%sc.gateways), "namespace": "infra"}},
+			[]any{cond("Accepted", "True", "Accepted"), cond("Programmed", "True", "Programmed")}, nil)
+		u.SetUID(types.UID(fmt.Sprintf("ls-%03d", i)))
+		u.SetCreationTimestamp(created)
+		loadListeners(u, 2)
+		create("gateway.networking.k8s.io", "v1", "listenersets", u)
+	}
+	// coverage S7b: four routes in ten are of the other kinds, one each; the
+	// UDPRoutes' backends publish TCP only (no-port), as a real mix would
+	others := []struct{ kind, resource string }{{"GRPCRoute", "grpcroutes"}, {"TLSRoute", "tlsroutes"}, {"TCPRoute", "tcproutes"}, {"UDPRoute", "udproutes"}}
 	for i := 0; i < sc.routes; i++ {
 		u := httpRoute(fmt.Sprintf("route-%04d", i), []string{fmt.Sprintf("gw-%02d", i%sc.gateways)}, fmt.Sprintf("svc-%04d", i%svcs), nil)
 		u.SetNamespace(ns(i))
 		u.SetUID(types.UID(fmt.Sprintf("route-%04d", i)))
-		create("gateway.networking.k8s.io", "v1", "httproutes", u)
+		resource := "httproutes"
+		if k := i % 10; k >= 6 {
+			u.SetKind(others[k-6].kind)
+			resource = others[k-6].resource
+		}
+		create("gateway.networking.k8s.io", "v1", resource, u)
+	}
+	for i := 0; i < sc.gateways; i++ {
+		create("gateway.networking.k8s.io", "v1", "referencegrants", cr("gateway.networking.k8s.io/v1", "ReferenceGrant", ns(i), fmt.Sprintf("grant-%02d", i), map[string]any{
+			"from": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "shop"}},
+			"to":   []any{map[string]any{"group": "", "kind": "Service"}}}, nil, nil))
 	}
 	create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{}, []any{cond("Ready", "True", "Ready")}, nil))
 	for i := 0; i < sc.claims; i++ {
@@ -660,7 +753,8 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	}
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native} {
+	kinds = append(kinds, SharedNetworkKinds(nd)...)
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}
@@ -697,4 +791,29 @@ func TestLoadCompletenessWaitsForNamespaces(t *testing.T) {
 	if complete(live) {
 		t.Fatal("a stale task: not complete")
 	}
+}
+
+// loadListeners gives an object n listeners and the status a controller
+// writes for them (coverage S7 §8's load fixture).
+func loadListeners(u *unstructured.Unstructured, n int) {
+	var spec, status []any
+	for l := 0; l < n; l++ {
+		name := fmt.Sprintf("https-%d", l)
+		spec = append(spec, map[string]any{"name": name, "protocol": "HTTPS", "port": int64(8443 + l), "hostname": fmt.Sprintf("%s-%d.apps.example.com", u.GetName(), l),
+			"tls": map[string]any{"mode": "Terminate", "certificateRefs": []any{map[string]any{"name": u.GetName() + "-tls"}}}})
+		var cs []any
+		for _, c := range [][2]string{{"Accepted", "Accepted"}, {"Conflicted", "NoConflicts"}, {"ResolvedRefs", "ResolvedRefs"}, {"Programmed", "Programmed"}} {
+			cs = append(cs, map[string]any{"type": c[0], "status": map[bool]string{true: "False", false: "True"}[c[0] == "Conflicted"], "reason": c[1],
+				"message": "Listener has been successfully translated", "observedGeneration": int64(1), "lastTransitionTime": "2026-10-18T09:00:00Z"})
+		}
+		status = append(status, map[string]any{"name": name, "attachedRoutes": int64(3), "conditions": cs,
+			"supportedKinds": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute"}}})
+	}
+	u.Object["spec"].(map[string]any)["listeners"] = spec
+	st, _ := u.Object["status"].(map[string]any)
+	if st == nil {
+		st = map[string]any{}
+		u.Object["status"] = st
+	}
+	st["listeners"] = status
 }

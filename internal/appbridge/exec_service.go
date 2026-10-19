@@ -11,13 +11,15 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
 
 // ExecConn is the per-cluster surface ExecService needs (lookup seam).
 type ExecConn interface {
 	ExecCommand(namespace, pod, container string) ([]string, error)
-	DebugCommand(namespace, pod, container string) ([]string, error)
+	DebugCommand(namespace, pod, container string, o fleet.DebugOptions) ([]string, error)
+	DebugKubectlCheck(ctx context.Context) fleet.DebugKubectl
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	DescribeCmd(ctx context.Context, kindArg, namespace, name string) (*exec.Cmd, error)
 	DescribeArgv(kindArg, namespace, name string, events bool) ([]string, error)
@@ -97,15 +99,58 @@ func (s *ExecService) OpenExecTerminal(cluster, ns, pod, container string) Actio
 	return launchTerminal(argv)
 }
 
-// GetDebugCommand returns the kubectl debug argv (ephemeral busybox container,
-// process-namespace-targeted at the given container) and its display string -
-// the escape hatch for distroless images where exec has no shell to run.
-func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCommandDTO {
+// DebugProfileDTO is one offered debug profile and what it adds.
+type DebugProfileDTO struct {
+	Name string `json:"name"`
+	Adds string `json:"adds"`
+}
+
+// DebugPreflightDTO is what the debug dialog shows before the confirmation
+// (coverage S6 §6): the profiles, the default image, and the kubectl the
+// terminal runs - whether it may launch, and any qualification.
+type DebugPreflightDTO struct {
+	Profiles       []DebugProfileDTO `json:"profiles"`
+	DefaultImage   string            `json:"defaultImage"`
+	DefaultProfile string            `json:"defaultProfile"`
+	Kubectl        string            `json:"kubectl,omitempty"` // its gitVersion
+	OK             bool              `json:"ok"`
+	Reason         string            `json:"reason,omitempty"`
+	Qualified      string            `json:"qualified,omitempty"`
+	Error          string            `json:"error,omitempty"`
+}
+
+var debugProfileOrder = []string{"general", "baseline", "restricted", "netadmin", "sysadmin"}
+
+// DebugPreflight reads the kubectl gate for the debug dialog. It runs
+// `kubectl version --client` only; nothing touches the cluster.
+func (s *ExecService) DebugPreflight(cluster string) DebugPreflightDTO {
+	out := DebugPreflightDTO{DefaultImage: fleet.DefaultDebugImage, DefaultProfile: fleet.DefaultDebugProfile}
+	for _, name := range debugProfileOrder {
+		out.Profiles = append(out.Profiles, DebugProfileDTO{Name: name, Adds: fleet.DebugProfiles[name]})
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		out.Error = "cluster not connected: " + cluster
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	k := conn.DebugKubectlCheck(ctx)
+	out.Kubectl, out.OK, out.Reason, out.Qualified = k.Version, k.OK, k.Reason, k.Qualified
+	return out
+}
+
+// GetDebugCommand returns the kubectl debug argv (an ephemeral container
+// with the chosen image and an explicit profile, process-namespace-targeted
+// at the given container where the runtime supports it) and its display
+// string - the escape hatch for distroless images where exec has no shell.
+// Copying runs nothing, so it is ungated.
+func (s *ExecService) GetDebugCommand(cluster, ns, pod, container, image, profile string) ExecCommandDTO {
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ExecCommandDTO{Error: "cluster not connected: " + cluster}
 	}
-	argv, err := conn.DebugCommand(ns, pod, container)
+	argv, err := conn.DebugCommand(ns, pod, container, fleet.DebugOptions{Image: image, Profile: profile})
 	if err != nil {
 		return ExecCommandDTO{Error: err.Error()}
 	}
@@ -126,7 +171,10 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container string) ExecCo
 // pod launches nothing. kubectl debug takes a name, so a same-name
 // replacement landing between that check and kubectl's own request is the
 // residual window (a StatefulSet's recreated pod-0, say).
-func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container string) ActionResultDTO {
+//
+// The kubectl the terminal runs is checked first (coverage S6 §6): an
+// unresolved, unreadable or pre-1.30 kubectl launches nothing.
+func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container, image, profile string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -134,12 +182,15 @@ func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container string)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	argv, err := conn.DebugCommand(ns, pod, container)
+	argv, err := conn.DebugCommand(ns, pod, container, fleet.DebugOptions{Image: image, Profile: profile})
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
+	if k := conn.DebugKubectlCheck(ctx); !k.OK {
+		return ActionResultDTO{Error: "debug refused: " + k.Reason + " - nothing was started"}
+	}
 	if err := conn.CheckPodArmed(ctx, ns, pod, uid); err != nil {
 		return ActionResultDTO{Error: "debug " + err.Error() + " - nothing was started"}
 	}

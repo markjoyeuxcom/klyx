@@ -273,6 +273,10 @@ func TestNativeRulesGolden(t *testing.T) {
 	route("backend not found", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "gone", State: gwapi.BackendNotFound}}}))
 	route("primary backend not found of several", acc(gwapi.RouteNode{Backends: withPrimary(gwapi.Backend{Kind: "Service", Name: "gone", State: gwapi.BackendNotFound}, 1)}))
 	route("backend unreadable", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "x", State: gwapi.BackendUnreadable, Error: "forbidden"}}}))
+	// coverage S7b §5: the Service port by number and the route's transport
+	route("backend has no TCP port", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "db", Port: 5432, Transport: "TCP", State: gwapi.BackendNoPort, Error: "Service has no TCP port 5432"}}}))
+	route("backend has no UDP port, TCP only", acc(gwapi.RouteNode{Backends: []gwapi.Backend{{Kind: "Service", Name: "dns", Port: 53, Transport: "UDP", State: gwapi.BackendNoPort, Error: "Service has no UDP port 53 (port 53 exists for TCP only)"}}}))
+	route("no-port primary of several", acc(gwapi.RouteNode{Backends: withPrimary(gwapi.Backend{Kind: "Service", Name: "db", Port: 5432, Transport: "TCP", State: gwapi.BackendNoPort}, 1)}))
 	route("endpoints not read", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(nil)}}))
 	route("endpoints unreadable", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{Error: "forbidden"})}}))
 	route("no endpoints", acc(gwapi.RouteNode{Backends: []gwapi.Backend{resolved(&gwapi.EndpointCount{})}}))

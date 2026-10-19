@@ -96,9 +96,11 @@ export async function copyDebugCommand(
   ns: string,
   pod: string,
   container: string,
+  image = "",
+  profile = "",
 ): Promise<"copied" | "error"> {
   try {
-    const dto = (await ExecService.GetDebugCommand(cluster, ns, pod, container)) as ExecCommandDTO;
+    const dto = (await ExecService.GetDebugCommand(cluster, ns, pod, container, image, profile)) as ExecCommandDTO;
     if (!dto) return "error";
     if (dto.error) {
       useFleet.getState().setActionStatus({ kind: "error", message: dto.error });
@@ -122,13 +124,29 @@ export async function openDebugTerminal(
   pod: string,
   uid: string,
   container: string,
+  image: string,
+  profile: string,
 ): Promise<void> {
   try {
-    const r = (await ExecService.OpenDebugTerminal(cluster, ns, pod, uid, container)) as ActionResultDTO;
+    const r = (await ExecService.OpenDebugTerminal(cluster, ns, pod, uid, container, image, profile)) as ActionResultDTO;
     if (!r?.ok) {
       useFleet.getState().setActionStatus({ kind: "error", message: r?.error || "could not open debug terminal" });
     }
   } catch (e) {
     useFleet.getState().setActionStatus({ kind: "error", message: String(e) });
+  }
+}
+
+// Coverage S6 §6: the debug dialog's preflight - the profiles and what each
+// adds, the defaults, and the kubectl the terminal runs (whether it may
+// launch, and any qualification). Nothing touches the cluster.
+export type DebugProfileDTO = { name: string; adds: string };
+export type DebugPreflightDTO = { profiles: DebugProfileDTO[]; defaultImage: string; defaultProfile: string; kubectl?: string; ok: boolean; reason?: string; qualified?: string; error?: string };
+
+export async function debugPreflight(cluster: string): Promise<DebugPreflightDTO> {
+  try {
+    return (await ExecService.DebugPreflight(cluster)) as unknown as DebugPreflightDTO;
+  } catch (e) {
+    return { profiles: [], defaultImage: "busybox:1.36", defaultProfile: "general", ok: false, error: e instanceof Error ? e.message : "the preflight failed" };
   }
 }

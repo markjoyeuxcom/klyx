@@ -264,6 +264,26 @@ describe("NodesView", () => {
     expect(getByText(/pod list capped: the verdict may be optimistic/)).toBeTruthy();
   });
 
+  // coverage S6 §2: the reservation is an estimate under a named
+  // assumption; a fit that a scheduler one minor behind would break depends
+  // on the scheduler version, never "fits"
+  it("survivability: a version-dependent fit says so, with the assumption and the difference", async () => {
+    vi.mocked(getNodeHeadroom).mockResolvedValue({
+      result: { lostNodes: 1, survivorNodes: 2, displaced: 2, rescheduled: 2, unplaced: [], cpuShortfall: 0, memShortfall: 0, altCpu: 3, altMem: 0, versionDependent: ["node-healthy"] },
+      pdbBlockers: [], podListCapped: false, schedAssumption: "assuming kube-scheduler 1.37 at its default gates",
+    });
+    seed([healthy]);
+    const { getByText, findByTestId, getByTestId } = render(<NodesView cluster="homelab" />);
+    openSimulator(); fireEvent.click(getByText("simulate"));
+    const verdict = await findByTestId("survivability-verdict");
+    expect(verdict.textContent).toContain("depends on the scheduler version");
+    expect(verdict.textContent).not.toContain("fits -");
+    expect(getByTestId("survivability-alt").textContent).toContain("+3.00 cpu");
+    expect(getByTestId("survivability-alt").textContent).toContain("short on node-healthy");
+    expect(getByTestId("survivability-caveat").textContent).toContain("assuming kube-scheduler 1.37");
+    expect(getByTestId("survivability-caveat").textContent).toContain("displaced pods by their desired requests");
+  });
+
   it("consumes a parked drain-node intent by opening the drain composer", () => {
     seed([healthy]);
     useFleet.getState().requestNavIntent({ kind: "drain-node", cluster: "homelab", node: "node-healthy" });

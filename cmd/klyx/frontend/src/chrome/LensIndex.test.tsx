@@ -124,7 +124,7 @@ describe("the lens index", () => {
     r1.unmount();
     useFleet.setState({ route: { name: "settings" } });
     render(<LensIndex />);
-    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-current"))).toEqual([null, null, null]);
+    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-current"))).toEqual([null, null, null, null]);
   });
 });
 

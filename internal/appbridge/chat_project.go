@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/crd"
 )
@@ -340,6 +341,34 @@ func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Un
 		"/namespaces", "/persistentvolumeclaims", "/persistentvolumes", "storage.k8s.io/storageclasses":
 		return p.tree(nestedMap(obj, "spec"), ".spec", 0, chatTreeDepth, chatStringMax, false),
 			p.tree(nestedMap(obj, "status"), ".status", 0, chatTreeDepth, chatStringMax, false)
+	}
+	switch key {
+	case "admissionregistration.k8s.io/validatingadmissionpolicies", "admissionregistration.k8s.io/mutatingadmissionpolicies":
+		// Coverage S3a §8: counts and presence, never an expression or a
+		// type-checking warning's text (it quotes expression source)
+		pol := admission.ProjectPolicy(u, admission.KindOf(gvr.Resource))
+		out := map[string]any{"failurePolicy": pol.FailurePolicy, "validations": pol.Validations, "mutations": pol.Mutations,
+			"variables": pol.Variables, "matchConditions": pol.MatchConditions, "auditAnnotations": pol.AuditAnnotations,
+			"matchRules": pol.MatchRuleCount}
+		if pol.ParamKind != nil {
+			out["paramKind"] = map[string]any{"apiVersion": pol.ParamKind.APIVersion, "kind": pol.ParamKind.Kind}
+		}
+		p.drop(".spec (expressions)")
+		var st map[string]any
+		if pol.HasStatus {
+			st = map[string]any{"observedGeneration": pol.ObservedGeneration, "typeCheckingWarnings": pol.WarningCount, "warningFields": pol.WarningFields}
+			p.drop(".status.typeChecking (warning text)")
+		}
+		return out, st
+	case "admissionregistration.k8s.io/validatingadmissionpolicybindings", "admissionregistration.k8s.io/mutatingadmissionpolicybindings":
+		b := admission.ProjectBinding(u, admission.KindOf(gvr.Resource))
+		out := map[string]any{"policyName": b.PolicyName, "validationActions": b.Actions, "matchRules": b.MatchRules}
+		if b.ParamRef != nil {
+			out["paramRef"] = map[string]any{"name": b.ParamRef.Name, "namespace": b.ParamRef.Namespace, "selectorSet": b.ParamRef.Selector,
+				"parameterNotFoundAction": b.ParamRef.NotFoundAction}
+		}
+		p.drop(".spec (selector values)")
+		return out, nil
 	}
 	if key == "image.toolkit.fluxcd.io/imageupdateautomations" {
 		// Coverage S1b §6: the author's email and the policy selector are

@@ -31,7 +31,7 @@ export function entryKey(e: HistoryEntry): string {
 // entryLabel names a place for the Recent menu and the Back/Forward tooltips.
 export function entryLabel(e: HistoryEntry): { cluster: string | null; place: string } {
   const r = e.route;
-  if (r.name === "fleet") return { cluster: null, place: r.view === "promotion" ? "Promotion tracker" : r.view === "expiry" ? "Expiry horizon" : "Fleet board" };
+  if (r.name === "fleet") return { cluster: null, place: r.view === "promotion" ? "Promotion tracker" : r.view === "expiry" ? "Expiry horizon" : r.view === "backups" ? "Backups" : "Fleet board" };
   if (r.name === "forwards") return { cluster: null, place: "Port-forwards" };
   if (r.name === "activity") return { cluster: null, place: "Activity" };
   if (r.name === "settings") return { cluster: null, place: "Settings" };

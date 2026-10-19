@@ -137,7 +137,7 @@ func labConn(t *testing.T) Conn {
 	if !strings.HasPrefix(ctxName, "kind-") {
 		t.Fatalf("refusing %q: the lab runs only against kind-* contexts", ctxName)
 	}
-	conn, err := DefaultConnFactory(clock.Real{})(config.ClusterConfig{Name: ctxName, Context: ctxName})
+	conn, err := DefaultConnFactory(clock.Real{}, Credentials{})(config.ClusterConfig{Name: ctxName, Context: ctxName})
 	if err != nil {
 		t.Fatal(err)
 	}

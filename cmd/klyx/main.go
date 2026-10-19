@@ -18,11 +18,13 @@ import (
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/secretstore"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/dock"
@@ -86,7 +88,10 @@ func main() {
 	// handle is installed atomically once it exists (events before that are
 	// dropped; HealthService.Summaries bootstraps the retained summaries).
 	em := &appbridge.LateEmitter{}
-	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}))
+	// External endpoints' credentials (coverage C5): the OS keychain, and
+	// the in-memory revisions Settings > Endpoints moves.
+	endpointCreds := fleet.Credentials{Store: secretstore.OS{}, Revisions: endpointcred.NewRegistry()}
+	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}, endpointCreds))
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer
@@ -180,6 +185,30 @@ func main() {
 		},
 		time.Now,
 	)
+
+	veleroSvc := appbridge.NewVeleroService(func(name string) (appbridge.VeleroConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
+	admissionSvc := appbridge.NewAdmissionService(func(name string) (appbridge.AdmissionConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
+
+	identitySvc := appbridge.NewIdentityService(func(name string) (appbridge.IdentityConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	})
 
 	certManagerSvc := appbridge.NewCertManagerService(
 		func(name string) (appbridge.CertManagerConn, bool) {
@@ -328,6 +357,17 @@ func main() {
 			return nil, false
 		}
 		return c, true
+	})
+
+	// Settings > Endpoints (coverage C5): credentials for the external
+	// endpoints, fenced against the fleet.yaml the person reviewed.
+	endpointsSvc := appbridge.NewEndpointsService(configPath(), endpointCreds.Store, endpointCreds.Revisions, func(name string) (appbridge.EndpointConn, bool) {
+		c, ok := reg.Conn(name)
+		if !ok {
+			return nil, false
+		}
+		ec, ok := c.(appbridge.EndpointConn)
+		return ec, ok
 	})
 
 	workloadsSvc := appbridge.NewWorkloadsService(func(name string) (appbridge.WorkloadsConn, bool) {
@@ -548,6 +588,9 @@ func main() {
 		application.NewService(healthSvc),
 		application.NewService(gitopsSvc),
 		application.NewService(certManagerSvc),
+		application.NewService(veleroSvc),
+		application.NewService(admissionSvc),
+		application.NewService(identitySvc),
 		application.NewService(crdSvc),
 		application.NewService(gatewaySvc),
 		application.NewService(meshSvc),
@@ -557,6 +600,7 @@ func main() {
 		application.NewService(gitSvc),
 		application.NewService(writesSvc),
 		application.NewService(metricsSvc),
+		application.NewService(endpointsSvc),
 		application.NewService(workloadsSvc),
 		application.NewService(podsSvc),
 		application.NewService(logsSvc),

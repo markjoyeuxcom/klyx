@@ -205,9 +205,19 @@ var parityParts = []parityPart{
 	{"eso", "externalsecrets", "native", []string{"externalsecrets"}},
 	{"eso", "stores", "native", []string{"secretstores", "clustersecretstores"}},
 	{"gateway", "gateways", "native", []string{"gateways"}},
-	{"gateway", "routes", "native", []string{"httproutes"}},
+	{"gateway", "listenersets", "native", []string{"listenersets"}},                                              // coverage S7a
+	{"gateway", "routes", "native", []string{"httproutes", "grpcroutes", "tlsroutes", "tcproutes", "udproutes"}}, // coverage S7b
 	{"karpenter", "nodeclaims", "native", []string{"nodeclaims"}},
 	{"karpenter", "nodepools", "native", []string{"nodepools"}},
+	{"velero", "schedules", "native", []string{"schedules"}},
+	{"velero", "locations", "native", []string{"backupstoragelocations"}},
+	{"velero", "backups", "native", []string{"backups"}},
+	{"admission", "webhooks", "native", []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"}},
+	{"admission", "policies", "native", []string{"validatingadmissionpolicies", "mutatingadmissionpolicies"}},
+	// coverage S4: only a LoadBalancer Service is a member (parityMemberOf)
+	{"lb", "services", "native", []string{"services"}},
+	{"lb", "pools", "native", []string{"ipaddresspools", "ciliumloadbalancerippools"}},
+	{"lb", "metallb", "native", []string{"configurationstates"}},
 }
 
 var parityResource = map[string]string{
@@ -222,6 +232,9 @@ var parityResource = map[string]string{
 	"externalsecrets": "externalsecrets.external-secrets.io", "secretstores": "secretstores.external-secrets.io",
 	"clustersecretstores": "clustersecretstores.external-secrets.io",
 	"gateways":            "gateways.gateway.networking.k8s.io", "httproutes": "httproutes.gateway.networking.k8s.io",
+	"listenersets": "listenersets.gateway.networking.k8s.io",
+	"grpcroutes":   "grpcroutes.gateway.networking.k8s.io", "tlsroutes": "tlsroutes.gateway.networking.k8s.io",
+	"tcproutes": "tcproutes.gateway.networking.k8s.io", "udproutes": "udproutes.gateway.networking.k8s.io",
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
@@ -229,6 +242,13 @@ var parityResource = map[string]string{
 	"imageupdateautomations": "imageupdateautomations.image.toolkit.fluxcd.io",
 	"artifactgenerators":     "artifactgenerators.source.extensions.fluxcd.io", "externalartifacts": "externalartifacts.source.toolkit.fluxcd.io",
 	"receivers": "receivers.notification.toolkit.fluxcd.io",
+	"schedules": "schedules.velero.io", "backupstoragelocations": "backupstoragelocations.velero.io", "backups": "backups.velero.io",
+	"validatingwebhookconfigurations": "validatingwebhookconfigurations.admissionregistration.k8s.io",
+	"mutatingwebhookconfigurations":   "mutatingwebhookconfigurations.admissionregistration.k8s.io",
+	"validatingadmissionpolicies":     "validatingadmissionpolicies.admissionregistration.k8s.io",
+	"mutatingadmissionpolicies":       "mutatingadmissionpolicies.admissionregistration.k8s.io",
+	"services":                        "services", "ipaddresspools": "ipaddresspools.metallb.io",
+	"ciliumloadbalancerippools": "ciliumloadbalancerippools.cilium.io", "configurationstates": "configurationstates.metallb.io",
 }
 
 // parityMember is one counted object's declared evaluation.
@@ -262,6 +282,18 @@ type parityObj struct {
 		UID         string            `json:"uid"`
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
+	Spec struct {
+		Type string `json:"type"`
+	} `json:"spec"`
+}
+
+// parityMemberOf: whether a counted kind's object is a member of the part
+// (coverage S4: the lb services part counts only LoadBalancer Services).
+func parityMemberOf(task, part string, o parityObj) bool {
+	if task == "lb" && part == "services" {
+		return o.Spec.Type == "LoadBalancer"
+	}
+	return true
 }
 
 func addRole(c *observe.Counts, role string) {
@@ -286,7 +318,7 @@ func addRole(c *observe.Counts, role string) {
 // coverage overrides a kind's expected coverage.
 func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
 	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
-	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter"} {
+	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
@@ -305,6 +337,9 @@ func (l *parityLab) oracle(name, state string, coverage map[string]string, contr
 				l.t.Fatalf("oracle %s: %v", kind, err)
 			}
 			for _, o := range list.Items {
+				if !parityMemberOf(p.Task, p.Part, o) {
+					continue
+				}
 				m := parityMember{Role: o.Metadata.Annotations["klyx.dev/parity-role"], Included: o.Metadata.Annotations["klyx.dev/parity-included"] == "true"}
 				if m.Role == "" {
 					m.Role = "ok"
@@ -375,6 +410,10 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 				Health   *struct{ Kind int }
 				Role     string
 				Included bool
+				// a listed fact's markers (coverage S2b, S3a): an uncounted
+				// Backup, a binding
+				Counted *bool
+				Binding json.RawMessage
 			}
 		}
 	}
@@ -383,6 +422,12 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 	}
 	out := make(map[string]parityMember, len(env.Rows))
 	for _, x := range env.Rows {
+		// a listed fact, by its part's own marker: no evaluation, and no member
+		// of the counted set (FluxInstance rows carry an unrelated Binding)
+		if (key == "velero/backups" && x.Data.Counted != nil && !*x.Data.Counted) ||
+			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") {
+			continue
+		}
 		var m parityMember
 		switch {
 		case key == "workloads/workloads" || key == "pods/pods" || key == "nodes/nodes":
@@ -625,7 +670,7 @@ type parityConn struct {
 func (l *parityLab) connect(kubeconfig string) *parityConn {
 	l.t.Helper()
 	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig}
-	conn, err := fleet.DefaultConnFactory(clock.Real{})(cc)
+	conn, err := fleet.DefaultConnFactory(clock.Real{}, fleet.Credentials{})(cc)
 	if err != nil {
 		l.t.Fatal(err)
 	}
@@ -730,7 +775,7 @@ func TestParityGate(t *testing.T) {
 		controllers map[string]string
 	}{
 		{"1", "Synced", none}, {"2", "Synced", none}, {"3", "Synced", none}, {"4", "Synced", none},
-		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none},
+		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none}, {"5d", "Synced", none}, {"5e", "Synced", none},
 		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
 		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
 	} {

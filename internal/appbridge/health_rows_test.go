@@ -417,8 +417,8 @@ func TestGatewayRouteRowsCarryTheReducedCapture(t *testing.T) {
 			{UID: "r1", Namespace: "apps", Name: "web", Parent: "infra/a", Role: "ok", Label: "attached"},
 			{UID: "r1", Namespace: "apps", Name: "web", Parent: "infra/b", Role: "fault", Label: "not accepted", Included: true},
 		}}
-	set := healthsrc.RowSet[observe.Attached]{Rows: []healthsrc.Row[observe.Attached]{
-		{Ref: healthsrc.RowRef{UID: "r1", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "apps", Name: "web", Generation: 3}, Data: a},
+	set := healthsrc.RowSet[healthsrc.RouteRow]{Rows: []healthsrc.Row[healthsrc.RouteRow]{
+		{Ref: healthsrc.RowRef{UID: "r1", GVR: "gateway.networking.k8s.io/v1/httproutes", Namespace: "apps", Name: "web", Generation: 3}, Data: healthsrc.RouteRow{Attached: a}},
 	}}
 	out, err := rowsConverters[healthsrc.TaskGateway+"/routes"](set, time.Now())
 	if err != nil {

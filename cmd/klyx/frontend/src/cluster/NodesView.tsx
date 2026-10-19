@@ -910,6 +910,9 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
 
   const r = report?.result;
   const fits = r ? r.unplaced.length === 0 : false;
+  // coverage S6 §2: a fit whose spare on some survivor is below what a
+  // scheduler one minor behind would also reserve depends on the version
+  const versionDependent = (r?.versionDependent ?? []).length > 0;
   return (
     <div data-testid="survivability" style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0, padding: "8px 10px", background: "var(--line-sunk, var(--color-background-secondary))", borderRadius: "var(--radius-sm)", boxShadow: "var(--line-well-ring, inset 0 0 0 1px var(--color-border-tertiary))" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -920,8 +923,10 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
         </select>
         <button onClick={() => void run()} disabled={busy} style={{ ...btn, fontSize: 10 }}>{busy ? "packing…" : "simulate"}</button>
         {report && !report.error && r && (
-          <span data-testid="survivability-verdict" style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: fits ? "var(--color-text-success)" : "var(--color-text-danger)" }}>
-            {fits
+          <span data-testid="survivability-verdict" style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: fits && !versionDependent ? "var(--color-text-success)" : fits ? "var(--color-text-warning)" : "var(--color-text-danger)" }}>
+            {fits && versionDependent
+              ? `depends on the scheduler version - fits under the assumed rule, but ${r.versionDependent!.length} survivor${r.versionDependent!.length === 1 ? "" : "s"} would be short under a scheduler one minor behind`
+              : fits
               ? `fits - ${r.displaced} displaced pod${r.displaced === 1 ? "" : "s"} reschedule onto ${r.survivorNodes} node${r.survivorNodes === 1 ? "" : "s"}`
               : `${r.unplaced.length} pod${r.unplaced.length === 1 ? "" : "s"} won't fit (short ${fmtCpu(r.cpuShortfall)} cpu / ${fmtMem(r.memShortfall)})`}
           </span>
@@ -933,7 +938,7 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
           {r.unplaced.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontFamily: "var(--font-mono)", fontSize: 10 }}>
               {r.unplaced.slice(0, 6).map((p) => (
-                <span key={`${p.namespace}/${p.name}`} style={{ color: "var(--color-text-danger)" }} title={`requests ${fmtCpu(p.cpuReq)} cpu / ${fmtMem(p.memReq)}`}>
+                <span key={`${p.namespace}/${p.name}`} style={{ color: "var(--color-text-danger)" }} title={`desired ${fmtCpu(p.cpuReq)} cpu / ${fmtMem(p.memReq)}`}>
                   {p.namespace}/{p.name}
                 </span>
               ))}
@@ -946,7 +951,14 @@ function SurvivabilityModule({ cluster, nodes }: { cluster: string; nodes: NodeR
               {report.pdbBlockers.length > 4 ? ` +${report.pdbBlockers.length - 4} more` : ""} - PDBs at 0 allowed disruptions stall the drain even when capacity fits
             </div>
           )}
-          <div style={{ fontSize: 9, color: "var(--color-text-tertiary)" }}>
+          {((r.altCpu ?? 0) > 0 || (r.altMem ?? 0) > 0) && (
+            <div data-testid="survivability-alt" style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>
+              during an upgrade a scheduler one minor behind may reserve up to +{fmtCpu(r.altCpu ?? 0)} cpu / +{fmtMem(r.altMem ?? 0)} more on these nodes
+              {versionDependent ? ` - short on ${r.versionDependent!.slice(0, 4).join(", ")}${r.versionDependent!.length > 4 ? ` +${r.versionDependent!.length - 4} more` : ""}` : ""}
+            </div>
+          )}
+          <div data-testid="survivability-caveat" style={{ fontSize: 9, color: "var(--color-text-tertiary)" }}>
+            scheduled reservations on survivors, an estimate {report.schedAssumption ? `(${report.schedAssumption})` : ""}; displaced pods by their desired requests -
             requests-based upper bound - affinity, taints, and topology spread not modeled; DaemonSet pods excluded
             {hasKarpenter ? " · Karpenter present: lost capacity would be re-provisioned, this verdict is a floor" : ""}
             {report.podListCapped ? " · pod list capped: the verdict may be optimistic" : ""}

@@ -299,7 +299,8 @@ kind: Gateway
 metadata: {name: parity-gw, namespace: $ns, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
 spec:
   gatewayClassName: parity-gc
-  listeners: [{name: http, port: 80, protocol: HTTP}]
+  allowedListeners: {namespaces: {from: Same}}
+  listeners: [{name: http, port: 80, protocol: HTTP}, {name: tcp, port: 5432, protocol: TCP}]
 EOF
 	local g
 	g=$(gen gatewayclasses.gateway.networking.k8s.io - parity-gc)
@@ -308,6 +309,49 @@ EOF
 	status gateways.gateway.networking.k8s.io "$ns" parity-gw "{\"conditions\":[$(cond Accepted True Accepted "$g"),$(cond Programmed True Programmed "$g")]}"
 	backend parity-backend true
 	route parity-route parity-backend True ResolvedRefs ok false
+	listenerset parity-ls True Accepted ok false
+	tcproute parity-tcp 80 ok false
+}
+
+# tcproute <name> <backend port> <role> <included>: a TCPRoute on parity-gw's
+# tcp listener to parity-backend (coverage S7b), accepted with references
+# resolved; its backend resolves by port number and TCP
+tcproute() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: TCPRoute
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks "$3" "$4")
+spec:
+  parentRefs: [{name: parity-gw, sectionName: tcp}]
+  rules: [{backendRefs: [{name: parity-backend, port: $2}]}]
+EOF
+	local g
+	g=$(gen tcproutes.gateway.networking.k8s.io "$ns" "$1")
+	status tcproutes.gateway.networking.k8s.io "$ns" "$1" "{\"parents\":[{\"parentRef\":{\"group\":\"gateway.networking.k8s.io\",\"kind\":\"Gateway\",\"name\":\"parity-gw\",\"namespace\":\"$ns\",\"sectionName\":\"tcp\"},\"controllerName\":\"example.dev/parity\",\"conditions\":[$(cond Accepted True Accepted "$g"),$(cond ResolvedRefs True ResolvedRefs "$g")]}]}"
+}
+
+# listenerset <name> <Accepted status> <reason> <role> <included>: a
+# ListenerSet under parity-gw (coverage S7a), its controller's verdict
+listenerset() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: ListenerSet
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks "$4" "$5")
+spec:
+  parentRef: {name: parity-gw}
+  listeners: [{name: extra, port: 8080, protocol: HTTP, hostname: $1.parity.example}]
+EOF
+	local g
+	g=$(gen listenersets.gateway.networking.k8s.io "$ns" "$1")
+	status listenersets.gateway.networking.k8s.io "$ns" "$1" "{\"conditions\":[$(cond Accepted "$2" "$3" "$g"),$(cond Programmed "$2" "$3" "$g")]}"
 }
 
 karpenter_objects() {
@@ -576,6 +620,224 @@ EOF
 	ready receivers.notification.toolkit.fluxcd.io "$ns" parity-receiver True Succeeded "\"webhookPath\":\"/hook/parity\""
 }
 
+velero_objects() {
+	# Velero (coverage S2a): a stand-in server (component=velero, a container
+	# named velero) and a healthy, time-free baseline. Velero has no status
+	# subresource, so status is written by a plain merge patch. A paused
+	# schedule; a yearly schedule awaiting its first run (none is owed for
+	# months, so this fixture is not for New Year's Eve); an Available
+	# location; and a completed unscheduled backup. Every Backup of the
+	# baseline is unscheduled: the oracle counts every object of a counted
+	# kind, and the backups part counts only those. Faults and
+	# clock-driven states are covered by internal/velero's fake-clock tests
+	# and internal/healthsrc's observer-path test.
+	k create namespace velero --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velero
+  namespace: velero
+  labels: {component: velero}
+  annotations:
+    $(marks ok true)
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: velero}}
+  template:
+    metadata:
+      labels: {app: velero, deploy: velero, component: velero}
+      annotations:
+        klyx.dev/parity-role: "ok"
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: velero, image: $pause, imagePullPolicy: Never}]
+EOF
+	k -n velero rollout status deployment/velero --timeout=120s >/dev/null
+	settled_pods velero velero Running
+	local stamp t
+	stamp=$(date -u +%Y%m%d%H%M%S)
+	t="${stamp:0:4}-${stamp:4:2}-${stamp:6:2}T${stamp:8:2}:${stamp:10:2}:${stamp:12:2}Z"
+	k apply -f - >/dev/null <<EOF
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: parity-paused
+  namespace: velero
+  annotations:
+    $(marks paused false)
+spec: {schedule: "0 2 * * *", paused: true, template: {storageLocation: parity-available}}
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: parity-yearly
+  namespace: velero
+  annotations:
+    $(marks progressing false)
+spec: {schedule: "0 0 1 1 *", template: {storageLocation: parity-available}}
+---
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: parity-available
+  namespace: velero
+  annotations:
+    $(marks ok false)
+spec: {provider: aws, default: true, objectStorage: {bucket: parity}}
+---
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: parity-manual
+  namespace: velero
+  annotations:
+    $(marks ok false)
+spec: {storageLocation: parity-available}
+EOF
+	vstatus() { k -n velero patch "$1" "$2" --type=merge -p "{\"status\":$3}" >/dev/null; }
+	vstatus schedules.velero.io parity-paused '{"phase":"Enabled"}'
+	vstatus schedules.velero.io parity-yearly '{"phase":"Enabled"}'
+	vstatus backupstoragelocations.velero.io parity-available "{\"phase\":\"Available\",\"lastValidationTime\":\"$t\"}"
+	vstatus backups.velero.io parity-manual "{\"phase\":\"Completed\",\"startTimestamp\":\"$t\",\"completionTimestamp\":\"$t\"}"
+}
+
+admission_objects() {
+	# Admission (coverage S3a): a healthy baseline that admits nothing. The
+	# webhook targets a group and resource that do not exist, fails open,
+	# and is backed by a Service over the Velero stand-in's ready pod; the
+	# policy's expression is true and its binding matches no namespace.
+	# Faults and every backend and policy state are covered by
+	# internal/admission's tests and the kind-klyx lab (lab-s3a).
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Service
+metadata: {name: parity-admission-hook, namespace: velero}
+spec:
+  selector: {app: velero}
+  ports: [{name: https, port: 443, targetPort: 8443, protocol: TCP}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: parity-admission
+  annotations:
+    $(marks ok false)
+webhooks:
+- name: parity.lab.klyx.dev
+  failurePolicy: Ignore
+  sideEffects: None
+  admissionReviewVersions: [v1]
+  clientConfig: {service: {namespace: velero, name: parity-admission-hook, port: 443}}
+  rules: [{operations: [CREATE], apiGroups: [lab.klyx.dev], apiVersions: [v1], resources: [widgets]}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: parity-policy
+  annotations:
+    $(marks ok false)
+spec:
+  failurePolicy: Ignore
+  matchConstraints: {resourceRules: [{operations: [CREATE], apiGroups: [lab.klyx.dev], apiVersions: [v1], resources: [widgets]}]}
+  validations: [{expression: "true"}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: parity-policy-b}
+spec:
+  policyName: parity-policy
+  validationActions: [Deny]
+  matchResources: {namespaceSelector: {matchLabels: {klyx.dev/parity: none}}}
+EOF
+}
+
+lb_objects() {
+	# Load balancing (coverage S4): a healthy baseline with no controller
+	# writing. A stand-in MetalLB controller (its native labels); a pool
+	# with written counts, selected by an L2Advertisement, in the namespace
+	# of a Valid controller ConfigurationState; a LoadBalancer Service whose
+	# address the fixture writes (kind runs no load-balancer controller, and
+	# a Service of another class is ignored by every controller); and a
+	# Cilium pool with current counts. Pending, exhaustion, conflict,
+	# advertisement and configuration faults are covered by internal/lb's
+	# tests and the kind-klyx lab (lab-s4, a real MetalLB).
+	k create namespace metallb-system --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller
+  namespace: metallb-system
+  labels: {app: metallb, component: controller}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: metallb-stand-in}}
+  template:
+    metadata:
+      labels: {app: metallb-stand-in}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: controller, image: $pause, imagePullPolicy: Never}]
+EOF
+	k -n metallb-system rollout status deployment/controller --timeout=120s >/dev/null
+	settled_pods metallb-system metallb-stand-in Running
+	k apply -f - >/dev/null <<EOF
+apiVersion: metallb.io/v1beta1
+kind: ConfigurationState
+metadata:
+  name: controller
+  namespace: metallb-system
+  annotations:
+    $(marks ok false)
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: parity-pool
+  namespace: metallb-system
+  labels: {tier: gold}
+  annotations:
+    $(marks ok false)
+spec: {addresses: ["192.0.2.0/28"], autoAssign: false}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata: {name: parity-l2, namespace: metallb-system}
+spec:
+  ipAddressPoolSelectors: [{matchLabels: {tier: gold}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: parity-lb
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  type: LoadBalancer
+  loadBalancerClass: parity.klyx.dev/written
+  selector: {app: parity-none}
+  ports: [{name: http, port: 80, targetPort: 8080, protocol: TCP}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: parity-cilium
+  annotations:
+    $(marks ok false)
+spec: {blocks: [{cidr: "198.51.100.0/28"}]}
+EOF
+	status configurationstates.metallb.io metallb-system controller '{"result":"Valid"}'
+	status ipaddresspools.metallb.io metallb-system parity-pool '{"assignedIPv4":1,"availableIPv4":15,"assignedIPv6":0,"availableIPv6":0}'
+	status services "$ns" parity-lb '{"loadBalancer":{"ingress":[{"ip":"192.0.2.1"}]}}'
+	local g
+	g=$(gen ciliumloadbalancerippools.cilium.io - parity-cilium)
+	status ciliumloadbalancerippools.cilium.io - parity-cilium "{\"conditions\":[$(cond cilium.io/IPsTotal Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsAvailable Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsUsed Unknown noreason "$g" | sed 's/klyx parity fixture/0/')]}"
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -587,6 +849,9 @@ baseline() {
 	eso_objects
 	gateway_objects
 	karpenter_objects
+	velero_objects
+	admission_objects
+	lb_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 
@@ -657,6 +922,10 @@ EOF
 	5c) # a route whose backend has no endpoints at all
 		backend parity-empty none
 		route parity-route-empty parity-empty True ResolvedRefs fault true ;;
+	5d) # a ListenerSet its controller did not accept (coverage S7a)
+		listenerset parity-ls-notallowed False NotAllowed fault true ;;
+	5e) # a TCPRoute whose backend Service has no TCP port 6432 (coverage S7b)
+		tcproute parity-tcp-noport 6432 fault true ;;
 	6) # cert-manager down, no cert-manager object fault (core: its
 		# Deployment and the Pending pod are faults, declared)
 		stand_in cert-manager cert-manager fault ;;
@@ -678,6 +947,8 @@ revert_case() {
 		k -n "$ns" delete service/parity-unready endpointslice/parity-unready-1 --wait >/dev/null ;;
 	5c) k -n "$ns" delete httproutes.gateway.networking.k8s.io parity-route-empty --wait >/dev/null
 		k -n "$ns" delete service/parity-empty endpointslice/parity-empty-1 --wait >/dev/null ;;
+	5d) k -n "$ns" delete listenersets.gateway.networking.k8s.io parity-ls-notallowed --wait >/dev/null ;;
+	5e) k -n "$ns" delete tcproutes.gateway.networking.k8s.io parity-tcp-noport --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
 	6b) stand_in flux-system kustomize-controller "" ;;
 	*) die "unknown case '$1'" ;;
@@ -727,11 +998,25 @@ restart_apiserver() {
 	local node=$name-control-plane
 	[[ $(docker inspect "$node" --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}' 2>/dev/null) == "$name" ]] ||
 		die "container $node is not the $name kind node"
+	# Returned only once the new API server serves and the kubelet has
+	# reported its pod Ready again with a higher restart count: /readyz alone
+	# can answer from the old process, and the pod's mirror status reads
+	# Ready=False for about ten seconds after the restart - a pod the
+	# Observer then rightly reads as Progressing, which a hold check would
+	# race (found in S2a's parity runs).
+	local pod=kube-apiserver-$node before i rc ready
+	before=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}')
 	docker exec "$node" sh -c 'crictl stop $(crictl ps --name kube-apiserver -q)' >/dev/null
-	local i
 	for ((i = 0; i < 120; i++)); do
-		k get --raw /readyz >/dev/null 2>&1 && { echo "klyx-parity: API server restarted"; return; }
+		if k get --raw /readyz >/dev/null 2>&1; then
+			rc=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || true)
+			ready=$(k -n kube-system get pod "$pod" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+			if [[ -n $rc && $rc -gt $before && $ready == True ]]; then
+				echo "klyx-parity: API server restarted"
+				return
+			fi
+		fi
 		sleep 1
 	done
-	die "the API server did not come back within 120s"
+	die "the API server did not come back, reported Ready with a new restart, within 120s"
 }

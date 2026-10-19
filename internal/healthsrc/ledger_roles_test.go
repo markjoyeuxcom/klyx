@@ -119,19 +119,34 @@ func TestLedgerRolesStopAtTheCap(t *testing.T) {
 	}
 }
 
-// Routes: a route attached to no Gateway in the capture emits no role (the
-// Observer's membership names it unevaluated, never gone).
-func TestLedgerRoutesEmitOnlyAttachedRoutes(t *testing.T) {
+// Routes (coverage S7b §5): every route with a parent Klyx reads emits a
+// role - a parent absent from a complete, current read is a fault, from any
+// other read unknown - partitioned by the route's kind; a route whose only
+// parent is a kind Klyx does not read (mesh) emits none.
+func TestLedgerRoutesEmitTheirAttachments(t *testing.T) {
 	attached := httpRoute("web", []string{"a"}, "web", nil)
 	orphan := httpRoute("orphan", []string{"gone"}, "web", nil)
 	orphan.SetUID("uid-orphan")
-	c := observe.Capture{Now: time.Now(), RoleCap: 10, Objects: map[string][]any{
-		KindHTTPRoutes: {attached, orphan}, KindGateways: {gw("a", "True")},
-		KindGatewayServices: {serviceMeta("web")}, KindGatewayEndpoints: {slice("web", true)},
-	}}
+	mesh := httpRoute("mesh", nil, "web", nil)
+	mesh.SetUID("uid-mesh")
+	mesh.Object["spec"].(map[string]any)["parentRefs"] = []any{map[string]any{"group": "", "kind": "Service", "name": "web"}}
+	c := routesCapture(t, []*unstructured.Unstructured{attached, orphan, mesh}, gw("a", "True"))
 	res := evalRoutes("c1")(c)
-	if len(res.Roles) != 1 || res.Roles[0].Name != "web" || res.Roles[0].Source != KindHTTPRoutes || res.Roles[0].Key == "" {
-		t.Fatalf("route roles: %+v", res.Roles)
+	roles := map[string]string{}
+	for _, r := range res.Roles {
+		if r.Source != KindHTTPRoutes || r.Key == "" {
+			t.Fatalf("route role: %+v", r)
+		}
+		roles[r.Name] = r.Role + " " + r.Label
+	}
+	if len(roles) != 2 || roles["web"] != "ok resolved" || roles["orphan"] != "fault parent Gateway not found" {
+		t.Fatalf("route roles: %v", roles)
+	}
+	c.Complete[KindGateways] = false
+	for _, r := range evalRoutes("c1")(c).Roles {
+		if r.Name == "orphan" && r.Role != "unknown" {
+			t.Fatalf("an incomplete read never proves the parent missing: %+v", r)
+		}
 	}
 }
 

@@ -8,6 +8,11 @@ type ListenerDTO struct {
 	Hostname        string              `json:"hostname"`
 	Port            int32               `json:"port"`
 	CertificateRefs []CertificateRefDTO `json:"certificateRefs"`
+	// S7a §3: the TLS mode and allowedRoutes as written, and the status its
+	// controller reported (absent when none was).
+	TLSMode       string             `json:"tlsMode,omitempty"`
+	AllowedRoutes *AllowedRoutesDTO  `json:"allowedRoutes,omitempty"`
+	Status        *ListenerStatusDTO `json:"status,omitempty"`
 }
 type CertificateRefDTO struct {
 	Group     string `json:"group"`
@@ -46,8 +51,10 @@ type CondDTO struct {
 	ObservedGeneration int64  `json:"observedGeneration"`
 }
 
+// condDTO's message is made safe here too (coverage S7a, Codex's review
+// finding 1): a Cond built elsewhere than condOf reaches no DTO unscrubbed.
 func condDTO(c gwapi.Cond) CondDTO {
-	return CondDTO{Status: c.Status, Reason: c.Reason, Message: c.Message, ObservedGeneration: c.ObservedGeneration}
+	return CondDTO{Status: c.Status, Reason: c.Reason, Message: gwapi.SafeMessage(c.Message), ObservedGeneration: c.ObservedGeneration}
 }
 
 // EndpointCountDTO is one Service's EndpointSlice endpoints (not pods:
@@ -72,6 +79,10 @@ type GatewayNodeDTO struct {
 	AcceptedCond   CondDTO `json:"acceptedCond"`
 	ProgrammedCond CondDTO `json:"programmedCond"`
 	Generation     int64   `json:"generation"`
+	// S7a §4: allowedListeners as written, and the controller's count of
+	// attached ListenerSets (null when unreported).
+	AllowedListeners     NamespaceAllowanceDTO `json:"allowedListeners"`
+	AttachedListenerSets *int32                `json:"attachedListenerSets"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
@@ -80,6 +91,9 @@ type MatchDTO struct {
 	PathValue string `json:"pathValue"`
 	Method    string `json:"method"`
 	Rule      int    `json:"rule"` // the spec.rules index it belongs to
+	// GRPCRoute's method match (S7b §5)
+	GRPCService string `json:"grpcService,omitempty"`
+	GRPCMethod  string `json:"grpcMethod,omitempty"`
 }
 
 // RouteRuleDTO is one spec.rules entry with its verdict and each backend's
@@ -110,8 +124,9 @@ type BackendDTO struct {
 	Namespace string `json:"namespace"`
 	Port      int32  `json:"port"`
 	Weight    int32  `json:"weight"`
-	WeightSet bool   `json:"weightSet"` // false: unset, the Gateway API default of 1
-	Rule      int    `json:"rule"`      // the spec.rules index listing it; weights split within one rule
+	WeightSet bool   `json:"weightSet"`           // false: unset, the Gateway API default of 1
+	Rule      int    `json:"rule"`                // the spec.rules index listing it; weights split within one rule
+	Transport string `json:"transport,omitempty"` // TCP, or UDP for a UDPRoute (S7b §5)
 
 	// state: resolved | not-found | unreadable | unsupported
 	State     string            `json:"state"`
@@ -154,8 +169,24 @@ type RouteNodeDTO struct {
 	AcceptedCond     CondDTO `json:"acceptedCond"`
 	ResolvedRefsCond CondDTO `json:"resolvedRefsCond"`
 	Generation       int64   `json:"generation"`
-	// Rule is the relocated lens rule (1c addendum §2).
+	// Rule is the relocated lens rule (1c addendum §2); for a lane the
+	// topology read evaluated, the attachment rule's verdict (S7b §5).
 	Rule RuleDTO `json:"rule"`
+	// Coverage S7b: the route's kind; the attachment the lane draws (its
+	// identity, its label, the reference); the controller expected to judge
+	// it (or why not established) and other controllers' entries; the
+	// evidence; rule names by index; the hostname count.
+	Kind            string           `json:"kind"`
+	APIVersion      string           `json:"apiVersion,omitempty"` // the version read: opening the route uses it
+	Attachment      string           `json:"attachment"`
+	AttachmentLabel string           `json:"attachmentLabel"`
+	ParentRef       *ParentRefDTO    `json:"parentRef,omitempty"`
+	Controller      string           `json:"controller,omitempty"`
+	ControllerWhy   string           `json:"controllerWhy,omitempty"`
+	Others          []OtherStatusDTO `json:"others,omitempty"`
+	Evidence        *AttachmentEvDTO `json:"evidence,omitempty"`
+	RuleNames       []string         `json:"ruleNames"`
+	HostnameCount   int              `json:"hostnameCount"`
 }
 type TopologyDTO struct {
 	Gateway         GatewayNodeDTO `json:"gateway"`
@@ -188,15 +219,62 @@ type GatewayRefDTO struct {
 	AcceptedCond       CondDTO `json:"acceptedCond"`
 	ProgrammedCond     CondDTO `json:"programmedCond"`
 	ObservedGeneration int64   `json:"observedGeneration"`
+	// S7a §4, as GatewayNodeDTO's.
+	AllowedListeners     NamespaceAllowanceDTO `json:"allowedListeners"`
+	AttachedListenerSets *int32                `json:"attachedListenerSets"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
 }
 
-// GatewayRouteAttachmentDTO is one route x parent Gateway attachment with
-// its captured evaluation.
+// GatewayRouteAttachmentDTO is one attachment - one parentRef (coverage S7b
+// §5) - with its captured evaluation and evidence. parent is its identity
+// (the whole normalised reference); parentLabel names it; gateway is
+// "namespace/name" of the Gateway it lands on ("" when not established).
 type GatewayRouteAttachmentDTO struct {
-	Parent string  `json:"parent"` // "namespace/name" of the parent Gateway
-	Rule   RuleDTO `json:"rule"`
+	Parent      string           `json:"parent"`
+	ParentLabel string           `json:"parentLabel"`
+	ParentRef   *ParentRefDTO    `json:"parentRef,omitempty"`
+	Gateway     string           `json:"gateway"`
+	Rule        RuleDTO          `json:"rule"`
+	Evidence    *AttachmentEvDTO `json:"evidence,omitempty"`
+}
+
+// ParentRefDTO is a parentRef with its defaults applied.
+type ParentRefDTO struct {
+	Group       string `json:"group"`
+	Kind        string `json:"kind"`
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	SectionName string `json:"sectionName,omitempty"`
+	Port        int32  `json:"port,omitempty"`
+}
+
+// AttachmentEvDTO is an attachment's evidence (S7b §5, §6): the expected
+// controller (or why it is not established), other controllers' entries
+// for the same reference (shown, never judged), and Klyx's own readings.
+type AttachmentEvDTO struct {
+	Controller    string           `json:"controller,omitempty"`
+	ControllerWhy string           `json:"controllerWhy,omitempty"`
+	Others        []OtherStatusDTO `json:"others,omitempty"`
+	Allowance     AllowanceDTO     `json:"allowance"`
+	Grants        []GrantDTO       `json:"grants,omitempty"`
+	Features      []string         `json:"features,omitempty"`
+	Disagreements []string         `json:"disagreements,omitempty"`
+}
+
+type OtherStatusDTO struct {
+	Controller   string `json:"controller"`
+	Accepted     string `json:"accepted"`
+	ResolvedRefs string `json:"resolvedRefs"`
+}
+
+// GrantDTO is one cross-namespace backend's ReferenceGrant evidence.
+type GrantDTO struct {
+	Rule    int    `json:"rule"`
+	Backend string `json:"backend"`
+	Allowed string `json:"allowed"`
+	By      string `json:"by,omitempty"`
+	Text    string `json:"text"`
 }
 
 // GatewayRouteRowDTO is one HTTPRoute of the Gateways task's routes part
@@ -204,14 +282,21 @@ type GatewayRouteAttachmentDTO struct {
 // label and parent - the captured evaluation, never a new one - and every
 // attachment. The topology stays the route's data path.
 type GatewayRouteRowDTO struct {
-	UID         string                      `json:"uid,omitempty"`
-	GVR         string                      `json:"gvr,omitempty"`
-	Generation  int64                       `json:"generation,omitempty"`
-	Namespace   string                      `json:"namespace"`
-	Name        string                      `json:"name"`
-	Parent      string                      `json:"parent"` // the worst attachment's parent
-	Rule        RuleDTO                     `json:"rule"`
-	Attachments []GatewayRouteAttachmentDTO `json:"attachments"`
+	UID        string `json:"uid,omitempty"`
+	GVR        string `json:"gvr,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	// Kind is the route's kind (S7b §5): identity is kind/namespace/name.
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Parent, ParentLabel and Gateway are the worst attachment's.
+	Parent        string                      `json:"parent"`
+	ParentLabel   string                      `json:"parentLabel"`
+	Gateway       string                      `json:"gateway"`
+	Hostnames     []string                    `json:"hostnames"`
+	HostnameCount int                         `json:"hostnameCount"`
+	Rule          RuleDTO                     `json:"rule"`
+	Attachments   []GatewayRouteAttachmentDTO `json:"attachments"`
 }
 
 // RouteMetricDTO is a route's traffic readout. Nil fractions serialize as JSON
@@ -262,10 +347,9 @@ func toTopologyDTO(t gwapi.Topology) TopologyDTO {
 	g := t.Gateway
 	gd := GatewayNodeDTO{Namespace: g.Namespace, Name: g.Name, ClassName: g.ClassName, Accepted: g.Accepted, Programmed: g.Programmed, Policies: policyDTOs(g.Policies),
 		AcceptedCond: condDTO(g.AcceptedCond), ProgrammedCond: condDTO(g.ProgrammedCond), Generation: g.Generation,
-		Rule: toRuleDTO(gwapi.GatewayRule(g.AcceptedCond, g.ProgrammedCond, g.Generation))}
-	for _, l := range g.Listeners {
-		gd.Listeners = append(gd.Listeners, ListenerDTO{Name: l.Name, Protocol: l.Protocol, Hostname: l.Hostname, Port: l.Port, CertificateRefs: certificateRefDTOs(l.CertificateRefs)})
-	}
+		AllowedListeners: allowanceDTO(g.AllowedListeners), AttachedListenerSets: g.AttachedListenerSets,
+		Rule: toRuleDTO(gwapi.GatewayVerdict(g.AcceptedCond, g.ProgrammedCond, g.Generation, g.Listeners))}
+	gd.Listeners = listenerDTOs(g.Listeners, g.Generation)
 	for _, a := range g.Addresses {
 		gd.Addresses = append(gd.Addresses, GatewayAddressDTO{Type: a.Type, Value: a.Value})
 	}
@@ -282,6 +366,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd := RouteNodeDTO{UID: r.UID, Namespace: r.Namespace, Name: r.Name, Hostnames: r.Hostnames, ParentSectionName: r.ParentSectionName, Accepted: r.Accepted, ResolvedRefs: r.ResolvedRefs, Pods: PodCountDTO{Ready: r.Pods.Ready, Total: r.Pods.Total, Unknown: r.Pods.Unknown}, Policies: policyDTOs(r.Policies),
 		ParentFound: r.ParentFound, AcceptedCond: condDTO(r.AcceptedCond), ResolvedRefsCond: condDTO(r.ResolvedRefsCond), Generation: r.Generation,
 		Rule: toRuleDTO(gwapi.RouteRule(r, listeners))}
+	routeNodeS7b(&rd, r)
 	// Slices always serialize as arrays: a route with no backendRefs (a
 	// redirect-only HTTPRoute) used to reach the lens as backends: null, and
 	// the lane code reads backends[0] (found by the 1c golden gate).
@@ -290,7 +375,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 	rd.Backends = make([]BackendDTO, 0, len(r.Backends))
 	rd.Services = make([]ServiceNodeDTO, 0, len(r.Services))
 	for _, m := range r.Matches {
-		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method, Rule: m.Rule})
+		rd.Matches = append(rd.Matches, MatchDTO{PathType: m.PathType, PathValue: m.PathValue, Method: m.Method, Rule: m.Rule, GRPCService: m.GRPCService, GRPCMethod: m.GRPCMethod})
 	}
 	rd.Rules = make([]RouteRuleDTO, 0, r.RuleCount)
 	for _, rv := range gwapi.RuleVerdicts(r) {
@@ -313,7 +398,7 @@ func toRouteNodeDTO(r gwapi.RouteNode, listeners []gwapi.Listener) RouteNodeDTO 
 		rd.Rules = append(rd.Rules, rr)
 	}
 	for _, b := range r.Backends {
-		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, State: string(b.State), Error: b.Error}
+		bd := BackendDTO{Kind: b.Kind, Name: b.Name, Namespace: b.Namespace, Port: b.Port, Weight: b.Weight, WeightSet: b.WeightSet, Rule: b.Rule, Transport: b.Transport, State: string(b.State), Error: b.Error}
 		if b.Endpoints != nil {
 			bd.Endpoints = &EndpointCountDTO{Ready: b.Endpoints.Ready, Total: b.Endpoints.Total, NonPod: b.Endpoints.NonPod, Error: b.Endpoints.Error}
 		}

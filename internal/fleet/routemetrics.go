@@ -32,11 +32,8 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 		return nil, routemetrics.Status{Available: false, Message: "Envoy Gateway not detected"}
 	}
 
-	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
-	cap := c.metricsState.cap
-	transport := c.metricsState.transport
-	c.metricsMu.Unlock()
+	mr := c.readMetrics(ctx, now)
+	cap, transport := mr.cap, mr.transport
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -50,6 +47,9 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 	out, st, err := src.QueryRouteMetrics(ctx, routeKeys)
 	if err != nil {
 		return nil, routemetrics.Status{Available: false, Message: "route metrics query failed: " + err.Error()}
+	}
+	if c.credentialMoved(mr.rev) {
+		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
 	return out, st

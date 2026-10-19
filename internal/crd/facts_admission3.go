@@ -5,20 +5,13 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/admission"
 )
 
 func init() {
 	factBuilders["admissionregistration.k8s.io/validatingadmissionpolicies"] = validatingAdmissionPolicyFacts
 	factBuilders["admissionregistration.k8s.io/validatingadmissionpolicybindings"] = validatingAdmissionPolicyBindingFacts
-}
-
-// admissionPolicyTruncate keeps a long CEL type-check warning readable in a row.
-func admissionPolicyTruncate(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) > max {
-		return s[:max-1] + "…"
-	}
-	return s
 }
 
 // admissionPolicyResourceRuleStr summarizes one matchConstraints.resourceRules[]
@@ -84,10 +77,10 @@ func validatingAdmissionPolicyFacts(u *unstructured.Unstructured) []Fact {
 		if m == nil {
 			continue
 		}
+		// the warning's text quotes expression source, literals included:
+		// only its validated field crosses (coverage S3a §8)
 		fieldRef, _ := m["fieldRef"].(string)
-		warning, _ := m["warning"].(string)
-		val := admissionPolicyTruncate(fieldRef+": "+warning, 160)
-		facts = append(facts, row("Type Warnings", fmt.Sprintf("warning %d", i+1), val, "danger"))
+		facts = append(facts, row("Type Warnings", fmt.Sprintf("warning %d", i+1), "type-checking warning on "+admission.WarningField(fieldRef), "danger"))
 	}
 
 	return facts

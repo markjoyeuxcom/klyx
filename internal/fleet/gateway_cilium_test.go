@@ -50,11 +50,10 @@ func ciliumDiscovery() []*metav1.APIResourceList {
 
 func TestAttachCiliumPolicies(t *testing.T) {
 	scheme := dynScheme()
-	listKinds := map[schema.GroupVersionResource]string{
-		gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList",
+	listKinds := gwListKinds(map[schema.GroupVersionResource]string{
 		cnpGVR():  "CiliumNetworkPolicyList",
 		ccnpGVR(): "CiliumClusterwideNetworkPolicyList",
-	}
+	})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	put := func(gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
 		ns, _, _ := unstructured.NestedString(o.Object, "metadata", "namespace")
@@ -105,9 +104,7 @@ func TestAttachCiliumPolicies(t *testing.T) {
 
 func TestAttachCiliumExpressionsOnlyWarns(t *testing.T) {
 	scheme := dynScheme()
-	listKinds := map[schema.GroupVersionResource]string{
-		gwGVR(): "GatewayList", hrGVR(): "HTTPRouteList", cnpGVR(): "CiliumNetworkPolicyList",
-	}
+	listKinds := gwListKinds(map[schema.GroupVersionResource]string{cnpGVR(): "CiliumNetworkPolicyList"})
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	put := func(gvr schema.GroupVersionResource, o *unstructured.Unstructured) {
 		ns, _, _ := unstructured.NestedString(o.Object, "metadata", "namespace")

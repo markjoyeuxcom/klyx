@@ -15,13 +15,36 @@ func RoleRank(role string) int {
 }
 
 // Attachment is one evaluation of an object against one parent - a route
-// under one Gateway (spec §1.3).
+// under one parentRef (spec §1.3, coverage S7b §5).
 type Attachment struct {
 	UID, Namespace, Name string
-	Parent               string // "namespace/name" of the parent
-	Role, Label          string
-	Reason               string // the rule's capped reason, when it names one
-	Included             bool
+	// Kind is the attached object's kind (a route kind), "" when the
+	// caller has one kind only.
+	Kind string
+	// Parent is the attachment's identity: for a route, the full
+	// normalised parentRef (gwapi.RouteParentRef.Key), so two references
+	// to one parent differing by section or port are two attachments.
+	Parent string
+	// ParentLabel names it for display; ParentRef is the reference itself;
+	// Gateway is "namespace/name" of the Gateway it lands on - the parent,
+	// or a ListenerSet parent's Gateway - "" when not established.
+	ParentLabel string
+	ParentRef   *ParentRef
+	Gateway     string
+	Role, Label string
+	Reason      string // the rule's capped reason, when it names one
+	Included    bool
+}
+
+// ParentRef is an object reference with the section and port a route may
+// target (Gateway API ParentReference, defaults applied).
+type ParentRef struct {
+	Group       string `json:"group"`
+	Kind        string `json:"kind"`
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	SectionName string `json:"sectionName,omitempty"`
+	Port        int32  `json:"port,omitempty"`
 }
 
 // Attached is one counted object reduced from its attachments: counted once
@@ -29,10 +52,15 @@ type Attachment struct {
 // parent name), Included when any attachment is.
 type Attached struct {
 	UID, Namespace, Name string
+	Kind                 string
 	Role, Label, Parent  string
-	Reason               string
-	Included             bool
-	Attachments          []Attachment // sorted by parent
+	// ParentLabel, ParentRef and Gateway are the worst attachment's.
+	ParentLabel string
+	ParentRef   *ParentRef
+	Gateway     string
+	Reason      string
+	Included    bool
+	Attachments []Attachment // sorted by parent
 	// Rules are a route's per-rule fingerprints, by rule index (The Line
 	// slice 7b): what proves a rule's metric history attributable.
 	Rules []string
@@ -47,7 +75,7 @@ func ReduceAttachments(atts []Attachment) []Attached {
 	for _, a := range atts {
 		e := byUID[a.UID]
 		if e == nil {
-			e = &Attached{UID: a.UID, Namespace: a.Namespace, Name: a.Name}
+			e = &Attached{UID: a.UID, Namespace: a.Namespace, Name: a.Name, Kind: a.Kind}
 			byUID[a.UID] = e
 			order = append(order, a.UID)
 		}
@@ -65,13 +93,17 @@ func ReduceAttachments(atts []Attachment) []Attached {
 			}
 		}
 		e.Role, e.Label, e.Parent, e.Reason = worst.Role, worst.Label, worst.Parent, worst.Reason
+		e.ParentLabel, e.ParentRef, e.Gateway = worst.ParentLabel, worst.ParentRef, worst.Gateway
 		out = append(out, *e)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Kind < out[j].Kind
 	})
 	return out
 }

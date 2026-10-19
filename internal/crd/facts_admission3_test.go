@@ -61,7 +61,7 @@ func TestBuildFacts_ValidatingAdmissionPolicy(t *testing.T) {
 		t.Fatalf("resource rule fact wrong: %+v", f)
 	}
 	if f, ok := factByLabel(facts, "warning 1"); !ok || f.Group != "Type Warnings" || f.Tone != "danger" ||
-		!strings.HasPrefix(f.Value, "spec.validations[0].expression: ") {
+		f.Value != "type-checking warning on spec.validations[0].expression" {
 		t.Fatalf("per-warning fact wrong: %+v", f)
 	}
 }
@@ -84,7 +84,7 @@ func TestBuildFacts_ValidatingAdmissionPolicy_Healthy(t *testing.T) {
 	}
 }
 
-func TestBuildFacts_ValidatingAdmissionPolicy_LongWarningTruncated(t *testing.T) {
+func TestBuildFacts_ValidatingAdmissionPolicy_WarningTextWithheld(t *testing.T) {
 	long := strings.Repeat("x", 500)
 	u := &unstructured.Unstructured{Object: map[string]interface{}{
 		"kind": "ValidatingAdmissionPolicy",
@@ -101,11 +101,10 @@ func TestBuildFacts_ValidatingAdmissionPolicy_LongWarningTruncated(t *testing.T)
 	if !ok {
 		t.Fatalf("expected a warning row")
 	}
-	if len([]rune(f.Value)) > 160 {
-		t.Fatalf("warning value not truncated: len=%d", len([]rune(f.Value)))
-	}
-	if !strings.HasSuffix(f.Value, "…") {
-		t.Fatalf("truncated warning must end with ellipsis: %q", f.Value)
+	// coverage S3a §8: the warning's text quotes expression source, so it
+	// never crosses - only its validated field
+	if f.Value != "type-checking warning on (unrecognised field)" || strings.Contains(f.Value, long[:20]) {
+		t.Fatalf("the warning text crossed: %q", f.Value)
 	}
 }
 

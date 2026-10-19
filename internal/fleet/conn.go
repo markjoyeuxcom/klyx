@@ -42,6 +42,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/hubble"
+	"github.com/moomora/klyx/internal/identity"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/rbac"
@@ -56,6 +57,14 @@ type Conn interface {
 	Snapshot() Snapshot
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
+	// ListVeleroRestores reads the Restores on demand (coverage S2b §3).
+	ListVeleroRestores(ctx context.Context) (VeleroRestores, error)
+	// CheckAdmissionParams reads a policy's params on demand (coverage S3a §6).
+	CheckAdmissionParams(ctx context.Context, policyKind, policyName string, paramGVR schema.GroupVersionResource, namespaced bool) (AdmissionParams, error)
+	// Workload identity, read on demand (coverage S5 §6).
+	ServiceAccountIdentity(ctx context.Context, ns, name, uid string) (identity.SAReport, error)
+	PodIdentity(ctx context.Context, ns, name, uid string) (identity.PodInspectorReport, error)
+	StoreIdentity(ctx context.Context, kind, ns, name, uid string) (identity.StoreReport, error)
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -121,7 +130,8 @@ type Conn interface {
 	// FluxNotifications reads Providers and Alerts on demand (S1c §3).
 	FluxNotifications(ctx context.Context) notify.Read
 	ExecCommand(namespace, pod, container string) ([]string, error)
-	DebugCommand(namespace, pod, container string) ([]string, error)
+	DebugCommand(namespace, pod, container string, o DebugOptions) ([]string, error)
+	DebugKubectlCheck(ctx context.Context) DebugKubectl
 	CheckPodArmed(ctx context.Context, namespace, name, uid string) error
 	PortForward(ctx context.Context, namespace, pod string, localPort, targetPort int) (stop func(), actualLocal int, done <-chan error, err error)
 	ResolveServicePod(ctx context.Context, namespace, service string, port int) (pod string, targetPort int, err error)
@@ -160,11 +170,17 @@ type ClusterConn struct {
 	// outside the factory (tests), which then inherit the environment.
 	kubeconfigPaths []string
 	restConfig      *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
-	typed           kubernetes.Interface
-	meta            metadata.Interface
-	dyn             dynamic.Interface
-	detector        *capability.Detector
-	clk             clock.Clock
+	// guardedREST is the metrics service-proxy client built from restConfig
+	// (C5 §4), once, under metricsMu.
+	guardedREST    rest.Interface
+	guardedRESTErr error
+	// creds resolves external endpoints' credentials (C5 §3, §7).
+	creds    Credentials
+	typed    kubernetes.Interface
+	meta     metadata.Interface
+	dyn      dynamic.Interface
+	detector *capability.Detector
+	clk      clock.Clock
 
 	mu             sync.RWMutex
 	state          ConnState
@@ -196,6 +212,8 @@ type ClusterConn struct {
 	health         *observe.Observer         // the cluster's health observation (1c), from Start
 	healthSyncMu   sync.Mutex                // serializes state->Observer handoffs (see syncHealth)
 	healthSyncHook func()                    // test seam: runs between reading state and handing it over
+	paramKindsKick func()                    // S3a: refreshes FactParamKinds (set once the Observer runs)
+	lbServicesSeen bool                      // S4: a LoadBalancer Service exists (the lens's gate)
 	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
@@ -251,6 +269,57 @@ func (c *ClusterConn) WithKubeconfig(configured string) *ClusterConn {
 // with no recorded selection.
 func (c *ClusterConn) cliEnv() []string {
 	return execenv.KubeconfigEnv(strings.Join(c.kubeconfigPaths, string(os.PathListSeparator)))
+}
+
+// WithCredentials sets where external endpoints' credentials come from.
+func (c *ClusterConn) WithCredentials(cr Credentials) *ClusterConn {
+	c.creds = cr
+	return c
+}
+
+// SetMetricsConfig replaces the metrics endpoint's configuration (a Move to
+// the keychain rewrote it, C5 §6; Settings reviewed a newer one) and drops
+// every cached client built from the old one. The endpoint's revision moves
+// in the same critical section (C5 §7): a reader already holding the old
+// transport drops what it reads, and none rebuilds from the old
+// configuration in between.
+func (c *ClusterConn) SetMetricsConfig(mc config.MetricsConfig) {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	c.metricsCfg = mc
+	c.metricsState = metricsCache{}
+	if c.creds.Revisions != nil {
+		c.creds.Revisions.Bump(c.name, config.EndpointMetrics, false)
+	}
+}
+
+// ChangeMetricsCredential installs a credential and the configuration it
+// was reviewed with as one step for this connection's readers (C5 §7): the
+// metrics lock is held from before install runs until the revision has
+// moved, so no reader builds a client from the new credential with the old
+// configuration, or the old credential with the new one. A client built
+// before keeps its own consistent pair until the move refuses it. When
+// install fails, nothing changes.
+func (c *ClusterConn) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	c.metricsCfg = mc
+	c.metricsState = metricsCache{}
+	if c.creds.Revisions != nil {
+		c.creds.Revisions.Bump(c.name, config.EndpointMetrics, true)
+	}
+	return nil
+}
+
+// MetricsConfig is the metrics endpoint's configuration as this connection
+// uses it.
+func (c *ClusterConn) MetricsConfig() config.MetricsConfig {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	return c.metricsCfg
 }
 
 // WithRESTConfig sets the *rest.Config used to build SPDY transports for
@@ -729,8 +798,23 @@ func (c *ClusterConn) Snapshot() Snapshot {
 		PodsKnown:    c.podsKnown,
 		PodsStale:    c.podsStale,
 		Version:      c.snapVersion,
-		Capabilities: c.caps,
+		Capabilities: c.capsLocked(),
 	}
+}
+
+// capsLocked is the capability set with what the Observer adds (S4: a
+// LoadBalancer Service seen). Called under c.mu.
+func (c *ClusterConn) capsLocked() capability.Set {
+	caps := c.caps
+	caps.LoadBalancing.ServicesSeen = c.lbServicesSeen
+	return caps
+}
+
+// setLBServicesSeen records whether a LoadBalancer Service exists.
+func (c *ClusterConn) setLBServicesSeen(seen bool) {
+	c.mu.Lock()
+	c.lbServicesSeen = seen
+	c.mu.Unlock()
 }
 
 // SetHealthSink gives the conn its health publication sink; it must be called
@@ -772,12 +856,16 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	}
 	kinds, domains := healthsrc.Core(healthsrc.CoreDeps{Cluster: c.name, Typed: c.typed, Meta: c.meta})
 	if c.dyn != nil {
-		nd := healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed, Typed: c.typed, Meta: c.meta}
+		nd := healthsrc.NativeDeps{Cluster: c.name, Dyn: c.dyn, Served: c.crdServed, ServedAmong: c.crdServedAmong, Typed: c.typed, Meta: c.meta}
 		gk, gd := healthsrc.GitOps(nd)
 		wk, wd := healthsrc.Gateway(nd)
 		nk, ndoms := healthsrc.Native(nd)
-		kinds = append(append(append(kinds, gk...), wk...), nk...)
-		domains = append(append(append(domains, gd...), wd...), ndoms...)
+		vk, vd := healthsrc.Velero(nd)
+		ak, ad := healthsrc.Admission(nd)
+		lk, ld := healthsrc.LoadBalancing(nd)
+		// the shared network kinds (C3), once, gated by their consumers
+		kinds = append(append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...), lk...)
+		domains = append(append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...), ld...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
@@ -788,6 +876,10 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	c.health = o
 	c.mu.Unlock()
 	o.Start(ctx)
+	if c.dyn != nil {
+		c.startParamKinds(ctx, o)                               // S3a: FactParamKinds
+		startLBEpisodes(ctx, o, c.clk.Now, c.setLBServicesSeen) // S4: FactLBEpisodes
+	}
 	c.attachIndex()
 	c.syncHealth()
 }
@@ -811,11 +903,19 @@ func (c *ClusterConn) syncHealth() {
 	}
 	word := connectionWord(st, reason)
 	h.SetConnection(word)
+	c.mu.RLock()
+	kick := c.paramKindsKick
+	c.mu.RUnlock()
+	if kick != nil {
+		kick() // the capability re-probe refreshes the param kinds too
+	}
 	if ix != nil {
 		ix.SetConnection(c.name, word) // the same word, in the same handoff
 	}
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
+	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
+	h.SetFact(healthsrc.FactLB, healthsrc.LoadBalancingFact(caps.LoadBalancing))
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])
