@@ -737,3 +737,15 @@ Codex confirmed the four residual issues fixed (its ten earlier mounted probes p
    - An empty set of rows behind the cluster reads "No alerts in the rows held; they are behind the cluster summary." Its hint names the summary's count. It is never the current "No alerts on this Alertmanager for this cluster."
 
 Codex's fourteen mounted probes pass as written. Four mutations were caught: the namespace guard, the headline's part, its cap, and the outdated empty wording.
+
+## 20. Implementation revision 4: Codex's re-review of cb30938
+
+Codex confirmed both fixes; all fourteen earlier mounted probes pass. One P2 remained in the same outdated path: a historical "no Alertmanager" row part overrode a newer summary.
+- The rows held could be an absent part from before an Alertmanager was found, behind a summary now counting seven alerts.
+- That old absence still said "No Alertmanager is configured or found on this cluster." and hid the selected count.
+
+The fix:
+- Absence is said only from the read that applies now: the rows' own part while they are current, the selected counts' part while they are behind.
+- A historical absence reads as the outdated empty state, under the summary's headline.
+
+Codex's fifteen mounted probes pass as written (its new one drives the real health store's bootstrap failure). One mutation was caught: absence from the rows' part.

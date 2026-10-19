@@ -130,7 +130,10 @@ export function AlertsView({ cluster }: { cluster: string }) {
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
   const icon = <IconBellRinging size={28} stroke={1.2} />;
-  const absent = part?.coverage === "absent";
+  // absence is said only from the read that applies now: the rows' own
+  // while they are current, the selected counts' while they are behind - a
+  // historical "no Alertmanager" never hides a newer summary's alerts
+  const absent = outdated ? countsPart?.coverage === "absent" : part?.coverage === "absent";
   const unreadable = kind?.coverage === "unreadable";
   const stale = kind?.coverage === "stale";
   const truncated = facts?.truncated || kind?.truncated;

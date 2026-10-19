@@ -153,6 +153,23 @@ describe("AlertsView after the implementation review", () => {
     expect(document.body.textContent).toContain("The cluster summary counts 7+ active critical or warning alerts");
   });
 
+  it("a historical 'no Alertmanager' from rows behind the cluster never hides a newer summary's alerts", () => {
+    const absentPart = part({ coverage: "absent", kinds: [kindCov({ coverage: "absent", objects: 0 })] });
+    set([], absentPart, null);
+    rows.refreshError = "rows re-bootstrap failed";
+    rows.counts = { ...rows.counts, source: "summary", refreshing: true, refreshError: "rows re-bootstrap failed",
+      part: part({ ver: 2, alerts: { counted: 7, critical: 7, warning: 0, uncounted: 0, suppressed: 0, unprocessed: 0, unknown: 0, truncated: false } }) };
+    const { unmount } = render(<AlertsView cluster="c" />);
+    expect(screen.queryByText("No Alertmanager is configured or found on this cluster.")).toBeNull();
+    expect(screen.getByTestId("alerts-summary").textContent).toContain("7 active critical or warning");
+    expect(screen.getByText("No alerts in the rows held; they are behind the cluster summary.")).toBeTruthy();
+    unmount();
+    // a current absence, from the selected counts, is said
+    set([], absentPart, null);
+    render(<AlertsView cluster="c" />);
+    expect(screen.getByText("No Alertmanager is configured or found on this cluster.")).toBeTruthy();
+  });
+
   it("a re-keyed generation not read yet ends the selection too", () => {
     const a = al("Alert-A", { key: "A/fp" });
     set([a], part(), { alertsSource: "source A", alertsSourceKey: "A", alertsTruncated: false });
