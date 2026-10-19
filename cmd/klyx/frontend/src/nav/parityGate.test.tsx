@@ -55,7 +55,8 @@ import { Overview } from "../cluster/Overview";
 
 type Roles = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
 type Member = { role: string; included: boolean };
-type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; members: Record<string, Member>; coverage: Record<string, string> };
+// alerts: an alerts part's declared counted alerts (coverage S8a)
+type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; members: Record<string, Member>; coverage: Record<string, string>; alerts?: number };
 type CaseExpect = { case: string; parts: PartExpect[]; controllers: Record<string, string>; state: string };
 type Run = { id: string; commit: string; dirty: boolean; startedAt: string; reprobe: string };
 type Capture = {
@@ -66,7 +67,8 @@ type Capture = {
 type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
 const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
-  "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
+  "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
+  "alerts/alerts"];
 
 const OUT = process.env.KLYX_PARITY_OUT;
 const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "7", "8"];
@@ -111,6 +113,14 @@ function assertRowDTOs(c: Capture) {
     const key = `${pe.task}/${pe.part}`;
     const dto = c.dtos[key];
     if (!dto) continue;
+    if (pe.classifier === "alerts") {
+      // coverage S8a: the lens rows and the summary come from one read;
+      // the counted rows are the part's counted alerts and the oracle's
+      const counted = (dto.rows ?? []).filter((r) => r.counted).length;
+      expect(counted, `${c.case} ${key} counted rows`).toBe(findPart(c.summary, pe.task, pe.part)!.alerts!.counted);
+      expect(counted, `${c.case} ${key} counted rows vs the oracle`).toBe(pe.alerts);
+      continue;
+    }
     const native = pe.classifier === "native";
     const derived: Roles = { total: 0, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 };
     let included = 0;
@@ -166,6 +176,12 @@ function assertModel(c: Capture, m: ClusterAttention) {
     const where = `${c.case} ${pe.task}/${pe.part}`;
     if (pe.classifier === "evidence") {
       expect(l.state, where).not.toBe("attention"); // evidence is never attention
+      continue;
+    }
+    if (pe.classifier === "alerts") {
+      // counted apart: an alerts line, never attention (S8a §6)
+      expect(l.n, where).toBe(pe.alerts);
+      expect(l.state, where).toBe((pe.alerts ?? 0) > 0 ? "alerts" : "quiet");
       continue;
     }
     if (pe.classifier === "verdict") {

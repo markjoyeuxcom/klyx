@@ -829,6 +829,40 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(2000, "focus on the inspector's identity", () => document.activeElement?.id === "inspector-identity");
   });
 
+  // ---- coverage S8a: alerts from the lab's real Alertmanager (lab-s8a) ----
+  // the smoke fleet reads klyx-s8-lab/alertmanager:web with match
+  // cluster=kind-klyx: each state real, another cluster's alert kept out
+  await step(steps, "Alerts: each state, from a real Alertmanager", async () => {
+    await open("alerts");
+    await closeDrawer();
+    await within(20_000, "the lab's alerts", () => $("[data-testid='alert-row-KlyxLabPodCrashLooping']"));
+    const text = (name: string) => $(`[data-testid='alert-row-${name}']`)?.textContent ?? "";
+    if (!/active/.test(text("KlyxLabPodCrashLooping"))) throw new Error(`the pod alert: ${text("KlyxLabPodCrashLooping")}`);
+    await within(90_000, "the silence, the inhibition, the mute and the partial mute", () =>
+      /silenced/.test(text("KlyxLabSilenced")) && /inhibited by KlyxLabCritical/.test(text("KlyxLabWarning")) && /muted by time interval always/.test(text("KlyxLabMuted")) &&
+      /active · muted for lab-muted; active for lab/.test(text("KlyxLabPartlyMuted")));
+    if ($("[data-testid='alert-row-KlyxLabElsewhere']")) throw new Error("another cluster's alert is listed: match was not applied");
+    if (!$("[data-testid='alert-row-KlyxLabClusterWide']")) throw new Error("the cluster alert is not listed");
+    const source = $("[data-testid='alerts-source']")?.textContent ?? "";
+    if (!/klyx-s8-lab\/alertmanager:web/.test(source)) throw new Error(`the source line: ${source}`);
+    return { rows: document.querySelectorAll(".lens-row").length, summary: $("[data-testid='alerts-summary']")?.textContent?.trim() };
+  });
+  await step(steps, "Alerts: the pod's inspector lists its alert", async () => {
+    await open("alerts");
+    await closeDrawer();
+    (await within(10_000, "the pod alert", () => $<HTMLElement>("[data-testid='alert-row-KlyxLabPodCrashLooping']"))).click();
+    const panel = await within(8000, "the alert inspector", () => $("[data-testid='alert-panel']"));
+    if (!/matched by label namespace\/pod/.test(panel.textContent ?? "")) throw new Error(`the correlation: ${(panel.textContent ?? "").slice(0, 200)}`);
+    (await within(4000, "Open Pod", () => byText<HTMLElement>("button", /^Open Pod$/))).click();
+    await within(20_000, "the pod inspector's Alerts block", () => $("[data-testid='insp-alert-KlyxLabPodCrashLooping']"));
+  });
+  await step(steps, "Needs you counts alerts apart", async () => {
+    useFleet.getState().openFleet();
+    const counts = await within(20_000, "the alerts count", () => byText<HTMLElement>(".queue-counts", /alert/));
+    await within(8000, "an alert row", () => [...document.querySelectorAll<HTMLElement>(".queue-row")].find((r) => /alert: KlyxLab/.test(r.getAttribute("aria-label") ?? "")));
+    return { counts: counts.textContent };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();
@@ -836,10 +870,13 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const text = document.body.textContent ?? "";
     for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
     // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
-    // their credential states (the smoke fleet configures none)
+    // their credential states (the smoke fleet configures the lab's
+    // Alertmanager); S8a: Test reads its status
     const ep = await within(8000, "the endpoints panel", () => $("[data-testid='endpoints-settings']"));
     if ($("[data-testid='endpoints-error']")) throw new Error(`the endpoints panel could not read fleet.yaml: ${$("[data-testid='endpoints-error']")?.textContent}`);
-    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length };
+    (await within(8000, "the Alertmanager Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Alertmanager endpoint']"))).click();
+    const result = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Alertmanager 0\.34\.1/));
+    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length, test: result.textContent?.trim().slice(0, 120) };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");

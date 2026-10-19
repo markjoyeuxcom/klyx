@@ -61,7 +61,7 @@ export function useInspectorAlerts(cluster: string, target: AlertTarget | null):
       {total === 0 && <div className="t-secondary" data-testid="insp-alerts-none">
         {complete ? "No alert matches this object." : rows === null ? "Alerts not read yet." : "No alert among the alerts read; not established (the read is capped or not current)."}
       </div>}
-      {total > 0 && <div className="t-legend">Matched by label from Alertmanager, not by UID.</div>}
+      {total > 0 && <div className="t-secondary">Matched by label from Alertmanager, not by UID.</div>}
     </InspectorBlock>
   );
 }

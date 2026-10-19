@@ -218,7 +218,13 @@ var parityParts = []parityPart{
 	{"lb", "services", "native", []string{"services"}},
 	{"lb", "pools", "native", []string{"ipaddresspools", "ciliumloadbalancerippools"}},
 	{"lb", "metallb", "native", []string{"configurationstates"}},
+	// coverage S8a: the fixture's real Alertmanager, apart from every object
+	{"alerts", "alerts", "alerts", nil},
 }
+
+// parityAlertsCounted is the fixture's posted alerts that count: two
+// critical and one warning, active (alerts_objects in parity/fixture.sh).
+const parityAlertsCounted = 3
 
 var parityResource = map[string]string{
 	"deployments": "deployments.apps", "statefulsets": "statefulsets.apps", "daemonsets": "daemonsets.apps",
@@ -267,6 +273,9 @@ type partExpect struct {
 	Included   int                     `json:"included"`
 	Members    map[string]parityMember `json:"members"`  // uid -> declared evaluation
 	Coverage   map[string]string       `json:"coverage"` // counted kind -> live | stale | unreadable:<class>
+	// Alerts is an alerts part's declared counted alerts (coverage S8a): the
+	// fixture's posted active critical and warning alerts.
+	Alerts int `json:"alerts,omitempty"`
 }
 
 // caseExpect is one case's declared state.
@@ -323,6 +332,9 @@ func (l *parityLab) oracle(name, state string, coverage map[string]string, contr
 	}
 	for _, p := range parityParts {
 		pe := partExpect{Task: p.Task, Part: p.Part, Classifier: p.Classifier, Counted: p.Counted, Coverage: map[string]string{}, Members: map[string]parityMember{}}
+		if p.Classifier == "alerts" {
+			pe.Alerts = parityAlertsCounted
+		}
 		for _, kind := range p.Counted {
 			cov := "live"
 			if c, ok := coverage[kind]; ok {
@@ -539,6 +551,19 @@ func mismatches(ex caseExpect, sum observe.Summary, rows map[string]observe.Rows
 			}
 			continue
 		}
+		if pe.Classifier == "alerts" {
+			// coverage S8a: counted apart, never roles; checked when the
+			// alerts read is live
+			switch {
+			case p.Alerts == nil:
+				bad = append(bad, key+" has no alert counts")
+			case p.Coverage == observe.Live && p.Alerts.Counted != pe.Alerts:
+				bad = append(bad, fmt.Sprintf("%s counted %d alerts, want %d", key, p.Alerts.Counted, pe.Alerts))
+			case p.Coverage != observe.Live:
+				bad = append(bad, fmt.Sprintf("%s coverage %q, want live", key, p.Coverage))
+			}
+			continue
+		}
 		got, inc, ok := roleCounts(p)
 		if !ok {
 			bad = append(bad, key+" has no counts")
@@ -669,7 +694,10 @@ type parityConn struct {
 
 func (l *parityLab) connect(kubeconfig string) *parityConn {
 	l.t.Helper()
-	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig}
+	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig,
+		// coverage S8a: the fixture's Alertmanager, this cluster's alerts only
+		Alertmanager: &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "parity-alerting", Name: "alertmanager", Port: "web"},
+			Match: map[string]string{"cluster": "kind-klyx-parity"}}}
 	conn, err := fleet.DefaultConnFactory(clock.Real{}, fleet.Credentials{})(cc)
 	if err != nil {
 		l.t.Fatal(err)

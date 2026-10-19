@@ -155,3 +155,65 @@ func TestRekeyToTheSameKeyIsANoOp(t *testing.T) {
 		t.Fatalf("a same-key re-key reset the part: %+v", p)
 	}
 }
+
+// The same sequence after a prior non-empty read of A: nothing of A's items
+// or freshness reaches B's checking, failing or empty reads.
+func TestRekeyAfterANonEmptyRead(t *testing.T) {
+	src := newKeyed()
+	src.set("A", SnapshotRead{Items: []any{"a1", "a2"}})
+	h := keyedHarness(t, src)
+	<-src.entered
+	h.o.RekeySnapshot("alerts", "A")
+	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool { return p.Coverage == Live && evidence(p) == 2 }), "A read two")
+	holdB := src.holdKey("B")
+	src.set("B", SnapshotRead{Err: errors.New("B unreachable")})
+	h.o.RekeySnapshot("alerts", "B")
+	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool { return p.Coverage == Checking && p.AsOf == nil && evidence(p) != 2 }), "checking holds nothing of A")
+	close(holdB)
+	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool {
+		return p.Coverage == Unreadable && p.AsOf == nil && kindOf(p).LastGoodAt == nil && evidence(p) != 2
+	}), "B failing keeps nothing of A")
+	src.set("B", SnapshotRead{})
+	h.o.Refresh("alerts")
+	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool { return p.Coverage == Live && evidence(p) == 0 }), "B empty is live and empty")
+}
+
+// RekeySnapshot touches only the snapshot it names: an unkeyed sibling
+// (Helm, Events) keeps its generation, its items and its coverage.
+func TestRekeyLeavesOtherSnapshots(t *testing.T) {
+	src := newKeyed()
+	src.set("A", SnapshotRead{Items: []any{"a1"}})
+	var mu sync.Mutex
+	helmReads := 0
+	helm := SnapshotSpec{Name: "helm", Scope: "this cluster", Cadence: time.Hour, Timeout: 30 * time.Second, Read: func(context.Context) ([]any, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		helmReads++
+		return []any{"r1", "r2"}, false, nil
+	}}
+	alerts := SnapshotSpec{Name: "alerts", Scope: "this cluster", Cadence: time.Hour, Timeout: 30 * time.Second, ReadKeyed: src.read}
+	count := func(name string) func(Capture) PartResult {
+		return func(c Capture) PartResult { n := len(c.Objects[name]); return PartResult{Evidence: &n} }
+	}
+	h := start(t, Config{Snapshots: []SnapshotSpec{alerts, helm}, Domains: []DomainSpec{
+		{ID: "alerts", Parts: []PartSpec{{ID: "alerts", Classifier: "alerts", Counted: []string{"alerts"}, Evaluate: count("alerts")}}},
+		{ID: "helm", Parts: []PartSpec{{ID: "helm", Classifier: "helm", Counted: []string{"helm"}, Evaluate: count("helm")}}},
+	}})
+	<-src.entered
+	h.eventually(h.partIs("helm", "helm", func(p Part) bool { return p.Coverage == Live && evidence(p) == 2 }), "helm live")
+	mu.Lock()
+	n := helmReads
+	mu.Unlock()
+	h.o.RekeySnapshot("alerts", "A")
+	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool { return p.Coverage == Live && evidence(p) == 1 }), "alerts re-keyed and read")
+	h.o.RekeySnapshot("alerts", "B")
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if helmReads != n {
+		t.Fatalf("a re-key of alerts read helm again: %d reads, was %d", helmReads, n)
+	}
+	if p, _ := h.sink.part("helm", "helm"); p.Coverage != Live || evidence(p) != 2 {
+		t.Fatalf("a re-key of alerts changed helm: %+v", p)
+	}
+}

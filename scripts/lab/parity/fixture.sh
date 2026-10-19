@@ -838,6 +838,72 @@ EOF
 	status ciliumloadbalancerippools.cilium.io - parity-cilium "{\"conditions\":[$(cond cilium.io/IPsTotal Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsAvailable Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsUsed Unknown noreason "$g" | sed 's/klyx parity fixture/0/')]}"
 }
 
+# alerts_objects (coverage S8a): a real Alertmanager 0.34.1 in parity-alerting,
+# read by the parity connection through the service proxy with
+# match cluster=kind-klyx-parity. Posted with amtool inside it: two critical
+# and one warning active (counted: 3), one info active (not counted), one
+# critical silenced (suppressed), and another cluster's alert that match
+# must keep out. The baseline waits until every alert is processed.
+am_ns=parity-alerting
+alerts_objects() {
+	k create namespace $am_ns --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: alertmanager-config, namespace: $am_ns}
+data:
+  alertmanager.yml: |
+    route: {receiver: parity, group_by: [alertname]}
+    receivers: [{name: parity}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: alertmanager, namespace: $am_ns}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata: {labels: {app: alertmanager}}
+    spec:
+      containers:
+        - name: alertmanager
+          image: quay.io/prometheus/alertmanager:v0.34.1
+          args: [--config.file=/etc/am/alertmanager.yml, --storage.path=/data, --cluster.listen-address=]
+          ports: [{name: web, containerPort: 9093}]
+          volumeMounts: [{name: config, mountPath: /etc/am}, {name: data, mountPath: /data}]
+          readinessProbe: {httpGet: {path: /-/ready, port: web}}
+      volumes: [{name: config, configMap: {name: alertmanager-config}}, {name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: alertmanager, namespace: $am_ns}
+spec:
+  selector: {app: alertmanager}
+  ports: [{name: web, port: 9093, targetPort: web}]
+EOF
+	k -n $am_ns rollout status deploy/alertmanager --timeout=240s >/dev/null
+	local ends c=cluster=kind-klyx-parity
+	ends=$(date -u -v+6H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)
+	k -n $am_ns exec deploy/alertmanager -c alertmanager -- sh -c "
+		a() { amtool --alertmanager.url=http://localhost:9093 alert add \"\$@\" --end=$ends >/dev/null; }
+		a alertname=ParityCritA severity=critical $c namespace=$ns
+		a alertname=ParityCritB severity=critical $c
+		a alertname=ParityWarn severity=warning $c namespace=$ns
+		a alertname=ParityInfo severity=info $c
+		a alertname=ParitySilenced severity=critical $c
+		a alertname=ParityElsewhere severity=critical cluster=elsewhere
+		amtool --alertmanager.url=http://localhost:9093 silence add alertname=ParitySilenced --author=klyx-parity --comment=parity --duration=6h >/dev/null"
+	local i
+	for ((i = 0; i < 60; i++)); do
+		if k get --raw "/api/v1/namespaces/$am_ns/services/http:alertmanager:web/proxy/api/v2/alerts?filter=cluster%3D%22kind-klyx-parity%22" |
+			jq -e '(map(select(.status.state == "active")) | length) == 4 and (map(select(.status.state == "suppressed")) | length) == 1' >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	die "the parity Alertmanager's alerts were not all processed"
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -852,6 +918,7 @@ baseline() {
 	velero_objects
 	admission_objects
 	lb_objects
+	alerts_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 
@@ -965,7 +1032,7 @@ rbac() {
 	rules=$(k api-resources --verbs=list,watch -o name | while read -r r; do
 		[[ $deny == *",$r,"* ]] && continue
 		if [[ $r == *.* ]]; then printf '%s\t%s\n' "${r#*.}" "${r%%.*}"; else printf '\t%s\n' "$r"; fi
-	done | jq -Rn '[inputs | split("\t") | {g: .[0], r: .[1]}] | group_by(.g) | map({apiGroups: [.[0].g], resources: map(.r), verbs: ["get", "list", "watch"]})')
+	done | jq -Rn '[inputs | split("\t") | {g: .[0], r: .[1]}] | group_by(.g) | map({apiGroups: [.[0].g], resources: map(.r), verbs: ["get", "list", "watch"]}) + [{apiGroups: [""], resources: ["services/proxy"], verbs: ["get"]}]')
 	k -n kube-system create serviceaccount klyx-parity-observer --dry-run=client -o yaml | k apply -f - >/dev/null
 	jq -n --argjson rules "$rules" '{apiVersion: "rbac.authorization.k8s.io/v1", kind: "ClusterRole", metadata: {name: "klyx-parity-observer"}, rules: $rules}' | k apply -f - >/dev/null
 	k create clusterrolebinding klyx-parity-observer --clusterrole=klyx-parity-observer --serviceaccount=kube-system:klyx-parity-observer --dry-run=client -o yaml | k apply -f - >/dev/null

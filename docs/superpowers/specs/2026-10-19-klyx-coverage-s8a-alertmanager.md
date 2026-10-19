@@ -538,3 +538,108 @@ Kept as Codex judged them sound:
 **Accepted at e3076c1** (Codex, design revision 2, handoff d753d6a2, 2026-10-19), with no remaining design findings. This accepts the design only; the implementation keeps its own review. Codex's implementation notes:
 - **Single-flight across a re-key.** A re-key cancels the old generation, and its worker must finish before the new generation reads, so one cluster never has two alert reads in flight.
 - **No appearance is incomplete,** including an empty expected receiver list, which must never make "every appearance muted" vacuously true.
+
+## 16. As built
+
+Built on `feat/coverage-s8` in seven stages after the design's acceptance at e3076c1:
+- **e73e8dd** - `internal/endpointhttp`, with `internal/metrics` moved onto it.
+- **3bba601** - `match` and `serviceRef.path`.
+- **345e1ef** - `internal/alertmanager`.
+- **59fc978** - the fleet's Alertmanager endpoint, discovery, identity and Settings.
+- **7542eac** - the Observer's absent outcome and re-key, the alerts snapshot and part, rows, Explain and chat.
+- **b37abf1** - the frontend.
+- **Stage 7** (the commit carrying this section) - the parity fixture, the lab's partly muted alert and the smoke, the budget, the captures, the §10 tests still missing, and these notes.
+
+### 16.1 The transport and the configuration (§2, §3)
+
+- **`internal/endpointhttp` carries C5's transport unchanged in behaviour.**
+  - It holds:
+    - `Auth`, and the per-kind `Limits`;
+    - the direct `Get`: the credential and tenant headers, the revision gate on every round trip, the completion re-check, and redacted errors, with bodies as sent;
+    - `ReadCapped`;
+    - a guarded service-proxy REST client per kind;
+    - a proxy `Get` with a Service path prefix and repeated parameters.
+  - `internal/metrics` keeps its API as thin wrappers. Every C5 test and Codex's C5 probes from all three reviews pass unchanged.
+- **`match` and `serviceRef.path`:**
+  - `match` is equality matchers on label names, with values non-empty and free of control characters.
+  - `serviceRef.path` is a plain prefix: no query, fragment or dot segment. The metrics service proxy honours it too.
+  - Both move the endpoint's revision.
+  - Two clusters reading one Alertmanager or Loki endpoint, one of them without `match`, are warned about by name. The origin is compared canonically and the path as written.
+
+### 16.2 The reader (§3, §4)
+
+- **`internal/alertmanager`:**
+  - `ParseAlerts` and `ParseGroups` are strict, and a malformed shape fails the read whole.
+  - `Reduce` decides every state once:
+    - membership comes from the flat list;
+    - duplicates collapse: active, then unprocessed, then suppressed, with causes united and a disagreement kept;
+    - silenced and inhibited alerts never consult the groups;
+    - a mute takes an alert out of Needs you only when its group appearances, as a multiset of receivers, equal its flat receivers. Otherwise it is partial or incomplete, and counted. An empty expectation is never vacuously muted.
+  - `SubjectOf` follows §5's table and its exclusions.
+  - `Display` makes every outgoing string in C5's order: the read's redactor with quoted spellings, the general shapes, URL userinfo removed from the raw parse, then the clip.
+- **`fleet`'s Alertmanager state:**
+  - **Resolution:** an endpoint (C5's credential path, now `endpointAuth` for every kind), a `serviceRef`, or discovery through Alertmanager resources with UID ownership proven from each EndpointSlice `targetRef` through the Pod and StatefulSet to the resource. The route prefix is the path.
+  - **A failed discovery read is a failure, never "none".**
+  - **The source identity** re-keys the snapshot inside the state's lock when it changes. A credential-only change keeps it.
+  - **`ReadAlerts`:**
+    - one read per cluster at a time across re-keys, at most four fleet-wide;
+    - `/alerts` then `/alerts/groups`;
+    - the group-appearance and entry caps, the credential fence, and the `match` re-check.
+  - **`AlertmanagerStatus`** serves Settings' Test.
+- **The Observer:**
+  - `ErrSourceAbsent` makes a snapshot's coverage absent. A later failure is unreadable.
+  - `RekeySnapshot` starts a generation carrying a key: no items, checking, no as-of time. `ReadKeyed` receives the key, and the ended generation's outcomes are discarded by `apply`'s generation check.
+  - The alerts part is never ledgered. An end-to-end test feeds the Observer's batches to `healthnotify`, and no episode opens.
+
+### 16.3 Beyond the design, or decided while building
+
+- **A read keyed otherwise always re-keys.** An Observer restarted with the empty key would otherwise refuse every read forever: the connection's identity had not changed, so the old code never re-keyed. A regression test pins it.
+- **The lens's gate is carried, not probed.** The design read the gate from the alerts part's coverage. Lens gates read the cluster DTO's capabilities, so the connection carries the alerts read's own outcome there as `alertsPresent`, on the snapshot's cadence. It is set when an Alertmanager is configured, or the last keyed read resolved one, and cleared only by a read that found none. It is read lock-free, because a read holds the Alertmanager lock while discovery takes the connection lock.
+- **Rows are an array with the source line as facts:** the rows protocol's shape.
+- **The "mast's count" is the lens index's.** The open cluster's mast has no reading text in this version. The alerts count shows as a neutral badge on the Alerts entry in the lens index; the fleet indicator's reading lists the alerts line; Needs you has the third count. No surface lights for an alert alone.
+- **The inspector block opens no subscription without an Alertmanager.** The generic inspector places it only for the kinds an alert can name.
+- **A fake clientset's typed-nil proxy client** fails the read instead of panicking in the snapshot.
+- **`safehttp.Redactor.Text`** redacts an exact secret inside a credential shape once: "token=[redacted]", never "[redacted]]".
+- **The Alerts lens never drops its State column at a narrow width.** The state and its cause are the reading, so State is the lens's flex column and Summary goes first. The smoke at 1024 found the first layout hiding it; a column-fit test now pins it.
+
+### 16.4 Verified
+
+- **The lab:** two Alertmanager 0.34.1 instances in `klyx-s8-lab` on `kind-klyx` (§11; lab notes in `lab-s8a/FINDINGS.md`).
+  - Every state was read back through the service proxy: silenced and inhibited on both endpoints, muted only on the groups, and `cluster=elsewhere` filtered out.
+  - The lab gained a partly muted alert while building: two routes for one matcher, the first muted with `continue: true`. The groups show it suppressed for `lab-muted` and active for `lab`, so Klyx reads it partial and counts it. The smoke checks it beside the silence, the inhibition and the full mute.
+  - The smoke fleet reads `klyx-s8-lab/alertmanager:web` with `match: {cluster: kind-klyx}`.
+- **The parity gate** runs a real Alertmanager in `parity-alerting` with five posted alerts, three of them counted. The restricted identity of cases 7 and 8 gains only `services/proxy` get.
+  - Both stages pass. The Go oracle sees three counted alerts in every case.
+  - The frontend stage sees the rows equal the summary, and every alerts line read as "alerts", never attention.
+  - The baseline's spine lamp stays healthy with three counted alerts.
+- **The budget (§8), measured on the admitted worst shapes:**
+  - 5,000 alerts in 7.7 MiB retain 21.3 MiB, against a 48 MiB bound.
+  - 99 alerts at their display caps retain 8.3 MiB.
+  - The part's evaluation with rows takes 4.3 ms against 5,000 pods.
+  - A full rows message for 5,000 alerts encodes to 15.9 MiB. It is sent only to a subscribed lens or inspector, and only when the read changed. This is the cost to watch if a fleet runs near the cap.
+
+- **Live captures** (headless Chrome against the server-mode build on the smoke fleet, night and day at 1440 and 1024): the lens, four alert inspectors (a found pod, a pod that is gone, an inhibited alert, a cluster alert), the pod inspector's Alerts block, and Needs you with its third count and alert rows. None scrolls sideways.
+  - The captures found one fix: the block's "matched by label" caption was set in the uppercase legend style, and is now secondary text.
+- **§10's tests not written by stage 6, added in stage 7:**
+  - the re-key sequence after a prior *non-empty* read of A;
+  - a re-key leaving an unkeyed sibling snapshot (Helm, Events) untouched;
+  - Settings' Test asking the alerts snapshot for a separate read on success, and nothing on failure;
+  - an alert whose last reported end has passed, across failing reads, read as "last seen active", never ending or resolved;
+  - the State column kept at every width.
+
+### 16.5 Gates
+
+At stage 7:
+- **The native smoke:** 185 of 185 steps in each of night and day at 1440 and 1024. The Alerts lens reads 12 rows (7 counted, 2 without a counted severity, 3 suppressed); Needs you reads "45 faults · 17 to look at · 7 alerts".
+- **The parity gate:** both stages pass.
+- **Go:**
+  - `go test -race ./internal/...` passes;
+  - golangci-lint v2.14.0 reports 0 issues;
+  - gofmt is clean.
+- **The frontend:**
+  - tsc is clean;
+  - eslint reports 0 errors (its three warnings predate S8a);
+  - vitest: 2,287 tests in 192 files pass.
+- **Mutations:**
+  - 87 caught: 9, 7, 15, 22, 19 and 12 in stages 1 to 6, and 3 in stage 7 (Test's separate read, the stale wording, the State column).
+  - Two are equivalent and recorded: a clause removed in stage 3 with its reason kept as a comment, and an absent snapshot's retained items, which never reach a part.

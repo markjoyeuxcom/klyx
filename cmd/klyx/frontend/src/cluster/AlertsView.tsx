@@ -23,13 +23,14 @@ import { alertsFacts, causeText, groupOf, sevClass, sortAlerts, subjectNote, sub
 // called resolved: an alert is listed as of its read, and a failed read
 // keeps the last good list.
 
-const COLUMNS: (ColumnDef & { label: string })[] = [
-  { id: "sev", label: "Severity", width: 76, priority: 1 },
+// The state and its cause are the reading: never dropped at a narrow width.
+export const COLUMNS: (ColumnDef & { label: string })[] = [
+  { id: "sev", label: "Severity", width: 76, priority: 0 },
   { id: "alert", label: "Alert", width: 200, priority: 0, grow: 0.5 },
+  { id: "state", label: "State", width: 180, priority: 0, flex: true },
   { id: "subject", label: "Subject", width: 220, priority: 1, grow: 0.5 },
-  { id: "state", label: "State", width: 180, priority: 2 },
   { id: "started", label: "Started", width: 72, priority: 2 },
-  { id: "summary", label: "Summary", width: 240, priority: 3, flex: true },
+  { id: "summary", label: "Summary", width: 240, priority: 3, grow: 0.6 },
 ];
 const cell: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 };
 type StateFilter = "all" | AlertGroup;
@@ -186,8 +187,8 @@ export function AlertsView({ cluster }: { cluster: string }) {
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("sev") && <span style={cell}><SevMark a={a} /></span>}
                   {show("alert") && <span className="lens-cell-name" title={a.name}>{a.name}</span>}
-                  {show("subject") && <span style={{ ...cell, color: a.subject.kind ? undefined : "var(--color-text-tertiary)" }} title={subjectNote(a.subject)}>{subjectText(a.subject)}</span>}
                   {show("state") && <span style={{ ...cell, color: a.state === "active" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={cause}>{a.state}{cause ? ` · ${cause}` : ""}</span>}
+                  {show("subject") && <span style={{ ...cell, color: a.subject.kind ? undefined : "var(--color-text-tertiary)" }} title={subjectNote(a.subject)}>{subjectText(a.subject)}</span>}
                   {show("started") && <span style={{ color: "var(--color-text-tertiary)" }}>{a.startsAt ? <Age unixSeconds={unix(a.startsAt)} /> : "-"}</span>}
                   {show("summary") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.summary ?? ""}</span>}
                 </div>

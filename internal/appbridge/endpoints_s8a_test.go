@@ -65,6 +65,11 @@ func TestAlertmanagerTest(t *testing.T) {
 	if len(fake.amSet) != 1 || fake.amSet[0].Match["cluster"] != "prd" {
 		t.Fatalf("the connection was not synced to the reviewed endpoint: %+v", fake.amSet)
 	}
+	// the status read is not the alerts read: a success asks the snapshot
+	// for a separate fresh read with its own outcome (S8a §4)
+	if fake.amRefreshed != 1 {
+		t.Fatalf("a successful Test asked for %d alerts reads, want 1", fake.amRefreshed)
+	}
 	fake.amStatus = alertmanager.Status{Version: "0.34.1", ClusterStatus: "ready", Peers: 3}
 	if res := svc.TestEndpoint("prd", config.EndpointAlertmanager, row.Revision); !strings.Contains(res.Message, "cluster ready with 3 peers") {
 		t.Fatalf("clustered: %+v", res)
@@ -77,6 +82,10 @@ func TestAlertmanagerTest(t *testing.T) {
 	fake.amErr = errors.New("refused: Authorization: Bearer S8-SECRET-TOKEN")
 	if res := svc.TestEndpoint("prd", config.EndpointAlertmanager, row.Revision); res.OK || !strings.HasPrefix(res.Message, "Unavailable: ") || strings.Contains(res.Message, "S8-SECRET-TOKEN") {
 		t.Fatalf("failure: %+v", res)
+	}
+	// a failed Test asks for nothing: the alerts snapshot keeps its own result
+	if fake.amRefreshed != 2 {
+		t.Fatalf("alerts reads asked for: %d, want 2 (one per successful Test)", fake.amRefreshed)
 	}
 }
 

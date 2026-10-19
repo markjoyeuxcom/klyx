@@ -720,6 +720,10 @@ function ServiceBackingSection({
   );
 }
 
+// The kinds an alert's labels can name that the generic inspector shows
+// (coverage S8a §5).
+const ALERT_KINDS = new Set(["Namespace", "PersistentVolumeClaim", "Job", "CronJob", "HorizontalPodAutoscaler"]);
+
 // InstanceDetail - the generic (GVR) inspector on the shared InspectorLayout.
 // Lens descriptor (spec §3, documented variant): a raw resource has no domain
 // verb, so the primary is the universal read-only Describe; the secondary is
@@ -727,10 +731,6 @@ function ServiceBackingSection({
 // and refresh live in More. Overview orders the data path first (facts), then
 // typed sections, conditions, related objects and events; Manifest is the
 // guarded YAML editor. A removed instance keeps its last evidence, read-only.
-// The kinds an alert's labels can name that the generic inspector shows
-// (coverage S8a §5).
-const ALERT_KINDS = new Set(["Namespace", "PersistentVolumeClaim", "Job", "CronJob", "HorizontalPodAutoscaler"]);
-
 export function InstanceDetail({ cluster, resource, instance, removed: listRemoved = false }: { cluster: string; resource: ResourceRef; instance: InstanceRef; removed?: boolean }) {
   // Opened by UID, presence is the direct read's to settle: a list that
   // omits the name (read before it was created) never contradicts a read
@@ -766,7 +766,6 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
   const live = !removed && !!d && !d.error;
   const target = d?.uid ? { kind: "object" as const, group: resource.group, version: resource.version, plural: resource.plural, namespace: instance.namespace, name: instance.name, uid: d.uid } : null;
   const ai = useInspectorAI(target, `${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`, live, cluster);
-  // coverage S8a: the kinds an alert can name that this inspector shows
   const alertKind = ALERT_KINDS.has(resource.kind) && !resource.group.includes(".") ? resource.kind : null;
   const alertTarget = useMemo(() => (alertKind && d?.uid ? { uid: d.uid, kind: alertKind, namespace: instance.namespace || undefined, name: instance.name } : null),
     [alertKind, d?.uid, instance.namespace, instance.name]);

@@ -8,7 +8,8 @@ import type { AMAlertDTO } from "./alertsModel";
 let rows: LensRows<AMAlertDTO>;
 const opened: (string | null)[] = [];
 vi.mock("../health/useRows", () => ({ useRows: (cluster: string | null) => { opened.push(cluster); return rows; } }));
-const { AlertsView } = await import("./AlertsView");
+const { AlertsView, COLUMNS } = await import("./AlertsView");
+const { fitColumns } = await import("../layout/columns");
 const { useInspectorAlerts } = await import("./AlertsBlock");
 
 const kindCov = (over: Partial<KindCoverage> = {}): KindCoverage => ({ kind: "alerts", role: "counted", scope: "", coverage: "live", objects: 1, ...over });
@@ -62,6 +63,24 @@ describe("AlertsView (coverage S8a §7)", () => {
     expect(document.body.textContent).toContain("showing the last good read");
     expect(document.body.textContent).not.toMatch(/resolved(?! )/);
     expect(rowNames()).toEqual(["alert-row-Crit"]);
+  });
+
+  it("an alert whose last reported end has passed, across failing reads, is last seen active - never ending or resolved", () => {
+    set([al("Crit", { endsAt: "2020-01-01T00:00:00Z", updatedAt: "2019-12-31T23:00:00Z" })],
+      part({ kinds: [kindCov({ coverage: "stale", lastGoodAt: "2026-10-19T12:02:00Z", error: "timeout" })] }),
+      { alertsSource: "s", alertsTruncated: false, alertsReadAt: "2026-10-19T12:02:00Z" });
+    render(<AlertsView cluster="c" />);
+    act(() => { useFleet.getState().requestNavIntent({ kind: "reveal", cluster: "c", task: "alerts", part: "alerts", ref: { gvr: "v1/pods", name: "api-1", fingerprint: "fp-Crit" } }); });
+    const panel = screen.getByTestId("alert-panel");
+    expect(panel.textContent).toMatch(/last seen active at .+ \(reads failing since\)/);
+    expect(screen.getByTestId("alert-row-Crit").textContent).toMatch(/^critical.*active/);
+    expect(document.body.textContent).not.toMatch(/resolved(?! )|ending|ended|expired/i);
+  });
+
+  it("the State column is the reading: kept at every width, the others dropped first", () => {
+    for (const w of [360, 520, 640, 800]) expect([...fitColumns(COLUMNS, w).visible], `at ${w}px`).toContain("state");
+    const narrow = fitColumns(COLUMNS, 640).visible;
+    expect(narrow.has("summary")).toBe(false);
   });
 
   it("a reveal selects the alert by fingerprint and the inspector links its subject", () => {
