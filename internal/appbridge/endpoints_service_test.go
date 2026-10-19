@@ -55,6 +55,16 @@ func (f *endpointConnFake) MetricsConfig() config.MetricsConfig {
 	defer f.mu.Unlock()
 	return f.cfg
 }
+func (f *endpointConnFake) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	f.set = append(f.set, mc)
+	f.cfg = mc
+	return nil
+}
 
 // hookStore is a Memory store whose Set runs a hook first (an editor
 // changing fleet.yaml mid-action, or a held action).
@@ -85,8 +95,32 @@ func newEndpointsEnv(t *testing.T) *endpointsEnv {
 		t.Fatal(err)
 	}
 	e := &endpointsEnv{path: p, store: &hookStore{}, revs: endpointcred.NewRegistry(), conn: &endpointConnFake{}}
-	e.svc = NewEndpointsService(p, e.store, e.revs, func(string) (EndpointConn, bool) { return e.conn, true })
+	e.svc = NewEndpointsService(p, e.store, e.revs, func(c string) (EndpointConn, bool) {
+		return boundConnFake{endpointConnFake: e.conn, cluster: c, revs: e.revs}, true
+	})
 	return e
+}
+
+// boundConnFake is the fake as one cluster's connection: like
+// fleet.ClusterConn, it moves the endpoint's revision when its
+// configuration or credential changes.
+type boundConnFake struct {
+	*endpointConnFake
+	cluster string
+	revs    *endpointcred.Registry
+}
+
+func (b boundConnFake) SetMetricsConfig(mc config.MetricsConfig) {
+	b.endpointConnFake.SetMetricsConfig(mc)
+	b.revs.Bump(b.cluster, config.EndpointMetrics, false)
+}
+
+func (b boundConnFake) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
+	if err := b.endpointConnFake.ChangeMetricsCredential(mc, install); err != nil {
+		return err
+	}
+	b.revs.Bump(b.cluster, config.EndpointMetrics, true)
+	return nil
 }
 
 func (e *endpointsEnv) row(t *testing.T, cluster, kind string) EndpointRowDTO {

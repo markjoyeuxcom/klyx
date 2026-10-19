@@ -24,12 +24,7 @@ type vectorElem struct {
 // never reach the reducer or the DTO. An empty vector returns an empty slice
 // and nil error.
 func (c *Client) InstantVector(ctx context.Context, promql string) (res []LabeledSample, err error) {
-	defer func() {
-		for i := range res {
-			res[i].Labels = c.redactLabels(res[i].Labels)
-		}
-		err = c.redact(err)
-	}()
+	defer func() { err = c.redact(err) }()
 	status, body, err := c.q.InstantQuery(ctx, promql)
 	if err != nil {
 		return nil, err

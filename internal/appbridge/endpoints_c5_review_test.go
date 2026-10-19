@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,11 +13,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/safehttp"
 	"github.com/moomora/klyx/internal/secretstore"
 	typedfake "k8s.io/client-go/kubernetes/fake"
 )
@@ -102,5 +105,138 @@ func TestMalformedEndpointURLNeverBecomesAReason(t *testing.T) {
 	_, capb := c.ClusterMetrics(context.Background(), false)
 	if strings.Contains(capb.Reason, "C5-URL-SECRET") {
 		t.Fatalf("metrics capability leaked userinfo: %+v", capb)
+	}
+}
+
+// pausingStore holds its first Set, before or after the write, until
+// released.
+type pausingStore struct {
+	*secretstore.Memory
+	afterWrite       bool
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (p *pausingStore) Set(account, value string) error {
+	var err error
+	if p.afterWrite {
+		err = p.Memory.Set(account, value)
+	}
+	p.once.Do(func() { close(p.entered); <-p.release })
+	if !p.afterWrite {
+		err = p.Memory.Set(account, value)
+	}
+	return err
+}
+
+// Revision 1's review, finding 2 (Codex's probe, in the shape the fix
+// gives the handoff): a reader running while Set installs a credential
+// never pairs the new password with the old username and tenant, or the old
+// password with the new ones, whichever side of the keychain write it
+// lands on; after Set the reviewed pair is sent.
+func TestSetNeverExposesAMixedCredentialAndConfiguration(t *testing.T) {
+	basic := func(u, p string) string { return "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p)) }
+	for _, afterWrite := range []bool{false, true} {
+		var mu sync.Mutex
+		var sent []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			sent = append(sent, r.Header.Get("Authorization")+" tenant="+r.Header.Get("X-Scope-OrgID"))
+			mu.Unlock()
+			_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"scalar","result":[0,"1"]}}`)
+		}))
+		p := filepath.Join(t.TempDir(), "fleet.yaml")
+		doc := "clusters:\n  - name: prd\n    context: prd\n    metrics:\n      endpoint: " + srv.URL + "\n      auth: {type: basic, username: bob}\n      tenant: bob\n"
+		if err := os.WriteFile(p, []byte(doc), 0600); err != nil {
+			t.Fatal(err)
+		}
+		reg := endpointcred.NewRegistry()
+		store := &pausingStore{Memory: &secretstore.Memory{}, afterWrite: afterWrite, entered: make(chan struct{}), release: make(chan struct{})}
+		origin, _ := safehttp.OriginOf(srv.URL)
+		old, _ := endpointcred.Record{V: 1, Origin: origin, Type: "basic", Secret: "OLD-ALICE-PASSWORD"}.Encode()
+		if err := store.Memory.Set(endpointcred.Account("prd", "metrics"), old); err != nil {
+			t.Fatal(err)
+		}
+		live := fleet.NewClusterConn("prd", typedfake.NewSimpleClientset(), nil, nil, nil, clock.Real{},
+			config.MetricsConfig{Endpoint: srv.URL, Auth: &config.EndpointAuth{Type: "basic", Username: "alice"}, Tenant: "alice"})
+		live.WithCredentials(fleet.Credentials{Store: store, Revisions: reg})
+		svc := NewEndpointsService(p, store, reg, func(string) (EndpointConn, bool) { return live, true })
+		row := svc.GetEndpoints().Rows[0]
+		done := make(chan EndpointActionDTO, 1)
+		go func() { done <- svc.SetCredential("prd", "metrics", row.Revision, "NEW-BOB-PASSWORD") }()
+		<-store.entered
+		read := make(chan struct{})
+		go func() { live.ClusterMetrics(context.Background(), false); close(read) }()
+		select {
+		case <-read:
+			t.Errorf("afterWrite=%v: a reader read while the credential was being installed", afterWrite)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(store.release)
+		if res := <-done; !res.OK {
+			t.Fatalf("set: %+v", res)
+		}
+		<-read
+		if _, capb := live.ClusterMetrics(context.Background(), true); !capb.Available {
+			t.Fatalf("read after Set: %+v", capb)
+		}
+		mu.Lock()
+		for _, h := range sent {
+			if h == basic("alice", "NEW-BOB-PASSWORD")+" tenant=alice" || h == basic("bob", "OLD-ALICE-PASSWORD")+" tenant=bob" ||
+				strings.HasPrefix(h, basic("alice", "NEW-BOB-PASSWORD")) || strings.HasPrefix(h, basic("bob", "OLD-ALICE-PASSWORD")) {
+				t.Errorf("afterWrite=%v: a mixed pair was sent: %q", afterWrite, h)
+			}
+		}
+		if last := sent[len(sent)-1]; last != basic("bob", "NEW-BOB-PASSWORD")+" tenant=bob" {
+			t.Errorf("afterWrite=%v: after Set: %q", afterWrite, last)
+		}
+		mu.Unlock()
+		srv.Close()
+	}
+}
+
+// With a live connection, a Set after a Remove lifts the tombstone in the
+// same step: the endpoint reads available again with the new credential.
+func TestSetAfterRemoveOnALiveConnection(t *testing.T) {
+	var mu sync.Mutex
+	var last string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		last = r.Header.Get("Authorization")
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"scalar","result":[0,"1"]}}`)
+	}))
+	defer srv.Close()
+	p := filepath.Join(t.TempDir(), "fleet.yaml")
+	doc := "clusters:\n  - name: prd\n    context: prd\n    metrics:\n      endpoint: " + srv.URL + "\n      auth: {type: bearer}\n"
+	if err := os.WriteFile(p, []byte(doc), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reg := endpointcred.NewRegistry()
+	store := &secretstore.Memory{}
+	live := fleet.NewClusterConn("prd", typedfake.NewSimpleClientset(), nil, nil, nil, clock.Real{},
+		config.MetricsConfig{Endpoint: srv.URL, Auth: &config.EndpointAuth{Type: "bearer"}})
+	live.WithCredentials(fleet.Credentials{Store: store, Revisions: reg})
+	svc := NewEndpointsService(p, store, reg, func(string) (EndpointConn, bool) { return live, true })
+	row := svc.GetEndpoints().Rows[0]
+	if res := svc.SetCredential("prd", "metrics", row.Revision, "C5-FIRST"); !res.OK {
+		t.Fatalf("set: %+v", res)
+	}
+	if res := svc.RemoveCredential("prd", "metrics", row.Revision); !res.OK {
+		t.Fatalf("remove: %+v", res)
+	}
+	if _, capb := live.ClusterMetrics(context.Background(), false); capb.Available {
+		t.Fatalf("available after Remove: %+v", capb)
+	}
+	if res := svc.SetCredential("prd", "metrics", row.Revision, "C5-SECOND"); !res.OK {
+		t.Fatalf("set again: %+v", res)
+	}
+	if _, capb := live.ClusterMetrics(context.Background(), false); !capb.Available {
+		t.Fatalf("a Set after Remove reads unavailable: %+v", capb)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if last != "Bearer C5-SECOND" {
+		t.Fatalf("sent %q", last)
 	}
 }

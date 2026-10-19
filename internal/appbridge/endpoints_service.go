@@ -23,12 +23,14 @@ import (
 // refuses on drift; no secret is ever read back into the page.
 
 // EndpointConn is what the endpoints service needs of a cluster's
-// connection. fleet.ClusterConn satisfies it; its SetMetricsConfig moves
-// the endpoint's revision with the configuration (C5 §7).
+// connection. fleet.ClusterConn satisfies it; its SetMetricsConfig and
+// ChangeMetricsCredential move the endpoint's revision with the
+// configuration, under the lock its readers take (C5 §7).
 type EndpointConn interface {
 	ClusterMetrics(ctx context.Context, forceReprobe bool) (metrics.ClusterMetrics, metrics.MetricsCapability)
 	SetMetricsConfig(config.MetricsConfig)
 	MetricsConfig() config.MetricsConfig
+	ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error
 }
 
 // syncMetrics makes the live connection read the metrics endpoint the
@@ -220,13 +222,20 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 	if err != nil {
 		return fail(red, err)
 	}
-	if err := s.store.Set(endpointcred.Account(cluster, kind), v); err != nil {
+	install := func() error { return s.store.Set(endpointcred.Account(cluster, kind), v) }
+	// a live metrics connection takes the credential and the reviewed
+	// configuration as one step, so no reader pairs the new credential
+	// with the configuration it replaces (Codex's revision 1 review)
+	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointMetrics && cl.Metrics != nil {
+		if err := conn.ChangeMetricsCredential(*cl.Metrics, install); err != nil {
+			return fail(red, err)
+		}
+		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
+	}
+	if err := install(); err != nil {
 		return fail(red, err)
 	}
 	s.revs.Bump(cluster, kind, true)
-	if kind == config.EndpointMetrics {
-		s.syncMetrics(cluster, cl)
-	}
 	return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 }
 

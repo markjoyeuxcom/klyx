@@ -103,3 +103,44 @@ func TestResponseCompletingAfterARevocationIsDropped(t *testing.T) {
 		t.Fatalf("the late response is dropped: %v", err)
 	}
 }
+
+// Revision 1's review, finding 1: an opaque credential equal to a protocol
+// key, the success status, a result type or a value changes nothing about
+// the response; one equal to a label value or a measurement leaves the data
+// as sent. Only what is said about the read loses it.
+func TestACredentialNeverRewritesTheResponse(t *testing.T) {
+	scalar := `{"status":"success","data":{"resultType":"scalar","result":[0,"1"]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("query"), "vector(1)") {
+			_, _ = io.WriteString(w, scalar)
+			return
+		}
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"api-7","namespace":"team"},"value":[0,"42"]}]}}`)
+	}))
+	defer srv.Close()
+	for _, token := range []string{"status", "success", "resultType", "1", "api-7", "pod", "42"} {
+		q := NewDirectTransport(srv.URL, token, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
+		if capb := Probe(context.Background(), Resolution{Transport: q}); !capb.Available {
+			t.Fatalf("%q: a valid response read unavailable: %+v", token, capb)
+		}
+		got, err := NewClient(q).InstantVector(context.Background(), "up")
+		if err != nil || len(got) != 1 || got[0].Labels["pod"] != "api-7" || got[0].Labels["namespace"] != "team" || got[0].Value != 42 {
+			t.Fatalf("%q: the data changed: %+v %v", token, got, err)
+		}
+	}
+}
+
+// An error that quotes a decoded string with %q or strconv escapes it; the
+// credential's quoted spelling is redacted too.
+func TestAQuotedEchoOfTheCredentialDoesNotLeak(t *testing.T) {
+	token := `c5"QUOTED\SECRET`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"scalar","result":[0,"c5\"QUOTED\\SECRET"]}}`)
+	}))
+	defer srv.Close()
+	q := NewDirectTransport(srv.URL, token, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
+	capb := Probe(context.Background(), Resolution{Transport: q})
+	if capb.Available || strings.Contains(capb.Reason, "QUOTED") {
+		t.Fatalf("a quoted echo leaked: %+v", capb)
+	}
+}

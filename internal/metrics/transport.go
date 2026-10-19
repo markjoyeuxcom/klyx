@@ -130,7 +130,9 @@ func (t *directTransport) do(req *http.Request) (int, []byte, error) {
 	if t.auth.Live != nil && !t.auth.Live() {
 		return 0, nil, ErrCredentialChanged
 	}
-	return resp.StatusCode, red.ExactBytes(body), red.Err(err, ErrResponseTooLarge)
+	// the body is returned as sent: a credential is removed from what is
+	// said about it, never from the protocol or the measurements (C5 §5)
+	return resp.StatusCode, body, red.Err(err, ErrResponseTooLarge)
 }
 
 // readCapped reads at most maxResponseBytes; one byte more is

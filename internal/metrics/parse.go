@@ -12,9 +12,13 @@ import (
 )
 
 // Client runs queries through a Querier and parses Prometheus responses.
-// Every error and label it returns passes, after decoding, through the
-// redactor of the credential its transport carries (coverage C5 §5): a
-// JSON-escaped echo of the secret is whole again only once decoded.
+// Every error it returns passes, after decoding, through the redactor of the
+// credential its transport carries (coverage C5 §5): a JSON-escaped echo of
+// the secret is whole again only once decoded. Samples - label names and
+// values, timestamps, values - are returned as the endpoint sent them: they
+// are what joins and measurements use, and a credential that happens to
+// equal one of them must not change the data. A decoded string Klyx shows
+// passes through Display.
 type Client struct{ q Querier }
 
 func NewClient(q Querier) *Client { return &Client{q: q} }
@@ -37,18 +41,9 @@ func (c *Client) redact(err error) error {
 	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge)
 }
 
-// redactLabels removes the credential from decoded label names and values.
-func (c *Client) redactLabels(m map[string]string) map[string]string {
-	r := c.red()
-	if r.Empty() || m == nil {
-		return m
-	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[r.Exact(k)] = r.Exact(v)
-	}
-	return out
-}
+// Display is a decoded string from a response (a label value Klyx shows)
+// without the credential the transport carries.
+func (c *Client) Display(s string) string { return c.red().Exact(s) }
 
 type promEnvelope struct {
 	Status string `json:"status"`

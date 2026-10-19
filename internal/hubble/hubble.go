@@ -107,7 +107,8 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 			continue // a zero-rate reason is settled history, not triage signal
 		}
 		out.DropReasons = append(out.DropReasons, ReasonRate{
-			Reason: d.Labels[lReason], Protocol: d.Labels[lProto], Rate: d.Value,
+			// shown as written, less any credential the endpoint echoed
+			Reason: s.client.Display(d.Labels[lReason]), Protocol: s.client.Display(d.Labels[lProto]), Rate: d.Value,
 		})
 	}
 	sort.Slice(out.DropReasons, func(i, j int) bool { return out.DropReasons[i].Rate > out.DropReasons[j].Rate })

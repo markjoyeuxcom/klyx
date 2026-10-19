@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/moomora/klyx/internal/scrub"
@@ -40,13 +41,19 @@ func Basic(username, password string) []string {
 }
 
 // NewRedactor redacts the given forms, longest first, so a header value is
-// replaced whole before the token inside it.
+// replaced whole before the token inside it. Each form's Go-quoted spelling
+// is redacted too: an error that quotes a decoded string (%q, strconv)
+// escapes a quote, a backslash or a control character in it.
 func NewRedactor(forms ...[]string) Redactor {
 	var all []string
 	for _, f := range forms {
 		for _, s := range f {
-			if s != "" {
-				all = append(all, s)
+			if s == "" {
+				continue
+			}
+			all = append(all, s)
+			if q := strconv.Quote(s); q[1:len(q)-1] != s {
+				all = append(all, q[1:len(q)-1])
 			}
 		}
 	}
@@ -64,14 +71,6 @@ func (r Redactor) Exact(s string) string {
 		s = strings.ReplaceAll(s, sec, Redacted)
 	}
 	return s
-}
-
-// ExactBytes is Exact for a body.
-func (r Redactor) ExactBytes(b []byte) []byte {
-	if r.Empty() {
-		return b
-	}
-	return []byte(r.Exact(string(b)))
 }
 
 // Text removes the exact secrets, then every general credential shape: for a

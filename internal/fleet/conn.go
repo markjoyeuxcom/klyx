@@ -293,6 +293,27 @@ func (c *ClusterConn) SetMetricsConfig(mc config.MetricsConfig) {
 	}
 }
 
+// ChangeMetricsCredential installs a credential and the configuration it
+// was reviewed with as one step for this connection's readers (C5 §7): the
+// metrics lock is held from before install runs until the revision has
+// moved, so no reader builds a client from the new credential with the old
+// configuration, or the old credential with the new one. A client built
+// before keeps its own consistent pair until the move refuses it. When
+// install fails, nothing changes.
+func (c *ClusterConn) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
+	c.metricsMu.Lock()
+	defer c.metricsMu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	c.metricsCfg = mc
+	c.metricsState = metricsCache{}
+	if c.creds.Revisions != nil {
+		c.creds.Revisions.Bump(c.name, config.EndpointMetrics, true)
+	}
+	return nil
+}
+
 // MetricsConfig is the metrics endpoint's configuration as this connection
 // uses it.
 func (c *ClusterConn) MetricsConfig() config.MetricsConfig {

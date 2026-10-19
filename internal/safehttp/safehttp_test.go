@@ -173,3 +173,13 @@ func TestOriginErrorsNeverEchoTheURL(t *testing.T) {
 		}
 	}
 }
+
+// A quoted error spells a quote, a backslash or a control character
+// escaped; that spelling is redacted too.
+func TestRedactorCoversTheQuotedSpelling(t *testing.T) {
+	r := NewRedactor(Bearer("a\"b\\c\n"))
+	out := r.Text(fmt.Sprintf("parsing %q: invalid syntax", "a\"b\\c\n"))
+	if strings.Contains(out, `a\"b`) || !strings.Contains(out, "parsing") {
+		t.Fatalf("quoted spelling: %s", out)
+	}
+}

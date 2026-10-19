@@ -449,3 +449,34 @@ Codex's choices, kept as stated: Set stays refused while the legacy token wins; 
   - Test's and Set's synchronisation, and the in-lock revision move;
   - each reader's fence, and `credentialMoved` itself.
 - **Native smoke:** 181/181 in each of night and day at 1440 and 1024, on this revision's tree, the labs re-applied first.
+
+## 15. Revision 2: Codex's review of revision 1 at 0cf6d97
+
+Codex confirmed all of revision 1's probes pass and requested changes (handoff 0456ee4f, 2026-10-19) with two P2 findings.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 (P2) | The transport still replaced the credential across the raw response, so a valid opaque credential such as `status`, `success`, `resultType` or `1` rewrote the protocol or the value | The transport returns the body as sent, and `safehttp`'s `ExactBytes` is gone. The client returns samples verbatim: label names and values, timestamps and values are the data joins and measurements use. What is *said* about a read loses the credential: every error after decoding, as in revision 1, and the decoded strings Klyx shows, through `Client.Display` (Hubble's drop reason and protocol). The redactor also covers each form's Go-quoted spelling, so `%q` or `strconv` quoting cannot hide one. A rule's unexpected response class is now fixed text | `TestACredentialNeverRewritesTheResponse` (Codex's four tokens, plus a label value, a label name and a measurement), `TestAQuotedEchoOfTheCredentialDoesNotLeak`, `TestRedactorCoversTheQuotedSpelling`, `TestADropReasonEchoingTheCredentialIsShownWithoutIt` |
+| 2 (P2) | Set installed the secret and moved the revision before the connection adopted the reviewed configuration, so a background reader could send the new password with the old username and tenant | `ClusterConn.ChangeMetricsCredential` holds the metrics lock from before the keychain write until the configuration, the cache and the revision (lifting a tombstone) have moved. No reader builds a client between the two halves, and a client built before keeps its own consistent pair until the move refuses it. Set uses it whenever the cluster is connected; with no connection there is no reader to coordinate | `TestSetNeverExposesAMixedCredentialAndConfiguration` (Codex's probe, pausing before and after the keychain write: no request pairs either password with the other's username or tenant, and the reviewed pair is sent after), `TestSetAfterRemoveOnALiveConnection` |
+
+**Why labels are not redacted any more.** Revision 1 redacted decoded label names and values. That is finding 1's fault in another place: a credential equal to `pod` renamed the key every workload join reads, and one equal to a pod's name dropped that pod's usage from a sum still shown as complete. Labels are data. Where one is shown, it is shown through `Display`; today that is Hubble's drop reason and protocol, and a rule's response class, which no longer quotes the label.
+
+**The cost, stated:** a credential short enough to occur in Klyx's own wording (Codex's `1`) is also removed from that wording in messages. That costs a message's readability, never data.
+
+**Codex's revision 1 probe for finding 2** paused inside `MetricsConfig()`, which Set no longer calls. It is adopted in the shape the fix gives the handoff: the pause is in the keychain write.
+
+### 15.1 Gates
+
+- **Go:** `go test -race ./internal/...` passes; golangci-lint reports 0 issues; gofmt is clean on every changed file.
+- **Codex's probes:** both reviews' overlays (bar the Set probe above) pass.
+- **Frontend:** unchanged in this revision; vitest 2,267 passed, tsc clean, eslint 0 errors.
+- **Mutations:** 8 Go, all caught:
+  - the body rewritten again;
+  - `Display` unredacted;
+  - no quoted forms;
+  - Set skipping the connection;
+  - install then configure, unlocked;
+  - install outside the lock;
+  - a change with no revision move;
+  - a change keeping the old configuration.
+- **Native smoke:** 181/181 in each of night and day at 1440 and 1024, on this revision's tree, the labs re-applied first.

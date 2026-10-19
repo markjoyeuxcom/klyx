@@ -58,12 +58,7 @@ type LabeledSeries struct {
 // Non-finite points are skipped, leaving a gap. An empty matrix returns an
 // empty slice and nil error.
 func (c *Client) RangeMatrix(ctx context.Context, promql string, start, end time.Time, step time.Duration) (res []LabeledSeries, err error) {
-	defer func() {
-		for i := range res {
-			res[i].Labels = c.redactLabels(res[i].Labels)
-		}
-		err = c.redact(err)
-	}()
+	defer func() { err = c.redact(err) }()
 	rq, ok := c.q.(RangeQuerier)
 	if !ok {
 		return nil, fmt.Errorf("transport does not support range queries")
