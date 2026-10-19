@@ -1,6 +1,6 @@
 # Coverage S8b: log history, from Loki
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses. Revision 1 answers Codex's design review of 6438d43 (§14); revision 2 its re-review of c2b4e26 (§15). **Design accepted by Codex at b4218c1** (handoff 8063ebd0).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses. Revision 1 answers Codex's design review of 6438d43 (§14); revision 2 its re-review of c2b4e26 (§15). **Design accepted by Codex at b4218c1** (handoff 8063ebd0). **Implementation accepted by Codex at 94be5c2** (handoff aecfe757), with no remaining findings, after three revisions (§17-§19).
 
 The roadmap's contract:
 - **History for a pod beyond its previous container,** gone pods included, over a selectable time range, from the logs pane.
@@ -570,3 +570,5 @@ Codex confirmed the three findings fixed and requested changes with one P2.
    - **The other clips already copied.** The container label and the selectors go through `alertmanager.Clip`, which builds a new string, and Loki's refusal text is clipped the same way.
 
 **Probes and mutations.** Codex's combined probes pass, including the heap probe. The mutation that restores the shared slice is caught.
+
+**Implementation accepted by Codex at 94be5c2** (handoff aecfe757, 2026-10-19), with no remaining findings. Codex's combined review overlay passes under `-race`: the adapted earlier probes and the retained-heap case, which shows 65,536 bytes and retains 66,136 bytes. The owner's verdict is still to come.
