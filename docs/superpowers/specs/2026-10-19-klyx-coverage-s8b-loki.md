@@ -1,6 +1,6 @@
 # Coverage S8b: log history, from Loki
 
-Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses. Revision 1 answers Codex's design review of 6438d43 (§14).
+Parent: `2026-10-16-klyx-coverage-roadmap.md` (accepted at 8281c6e), slice S8b. It follows C5 (`2026-10-18-klyx-coverage-c5-external-credentials.md`) and S8a (`2026-10-19-klyx-coverage-s8a-alertmanager.md`), whose transport, `match`, `serviceRef.path` and source identity it reuses. Revision 1 answers Codex's design review of 6438d43 (§14); revision 2 its re-review of c2b4e26 (§15).
 
 The roadmap's contract:
 - **History for a pod beyond its previous container,** gone pods included, over a selectable time range, from the logs pane.
@@ -141,14 +141,15 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
     - `limit` 1,000 (Loki's default maximum is 5,000; lab finding 5);
     - `start` and the branch's own `end`, in nanoseconds;
     - categorize-labels.
-  - The results merge newest first, and the newest 1,000 overall are kept.
-  - Each branch's `end` moves to the oldest timestamp it contributed to the kept lines, plus one nanosecond (`end` is exclusive; lab finding 6). Entries already held drop out by their dedupe key: branch, stream labels, structured metadata, timestamp and line, all raw.
+  - Entries already delivered in this page set drop out first, by their dedupe key: branch, stream labels, structured metadata, timestamp and line, all raw.
+  - Then the results merge newest first, and the newest 1,000 overall are kept. Removing the overlap before the cut matters: 1,000 held boundary entries plus 200 recovered older ones add those 200.
+  - Each branch's `end` moves to the oldest timestamp it contributed to the kept lines, plus one nanosecond (`end` is exclusive; lab finding 6).
 - **Exhaustion is read from the raw response,** never from what remains after the dedupe.
-  - A branch is exhausted when its raw response held fewer entries than its limit and every one was kept.
+  - A branch is exhausted when its raw response held fewer entries than its limit and every one is now delivered: kept on this page, or already delivered earlier in the page set.
   - "Start of the range reached" is said only when every branch is exhausted.
 - **Saturation** (lab finding 11): a branch's raw response is full, and holds no entry older than the boundary timestamp T, so it cannot advance.
   - Klyx re-reads that branch once with `limit` 5,000.
-  - If it is still saturated, or the server refuses the limit (its 400, in its words), the branch stops with a marker among the lines: "more than N lines share the timestamp T on this selector; Klyx could not list them all".
+  - If it is still saturated, or the server refuses the limit (its 400, in its words), the branch stops with a marker among the lines: "at least N lines share the timestamp T on this selector; Klyx cannot establish whether more remain". N is the count read; a refused retry proves no more.
   - The person may choose "Skip past T" (`end` = T). That leaves those lines out, and the marker says so.
   - Never a silent skip, an endless repeat, or "start of the range reached".
 - **What a view holds:** at most 10,000 lines and 32 MiB of line text.
@@ -235,8 +236,17 @@ A history view is UID-pinned in the UI, as every inspector is. A same-name repla
 ## 9. The wiring
 
 - **`internal/endpointhttp`, a small extension:** C5's redirect, cap-below-decoding and revision tests stay, with new ones for each addition.
-  - Request headers on both paths (`X-Loki-Response-Encoding-Flags`). Today `Get` takes none.
-  - The proxied path returning a non-2xx body, capped, as the direct path does. Today `Proxy.Get` discards it, and Loki's 400 diagnosis is that body. client-go's `Result.Raw` returns the body beside the error.
+  - **Request headers on both paths** (`X-Loki-Response-Encoding-Flags`). Today `Get` takes none.
+  - **A raw proxied read** returning the status and the bounded body for any status, as the direct path does. Loki's 400 diagnosis is that body.
+    - **client-go cannot carry it** (Codex's re-review, pinned v0.36.2 `rest/request.go`):
+      - `Do(ctx)` passes a non-2xx through `transformResponse`. When the negotiated serializer cannot decode `text/plain`, it returns only the transformed error: the body is gone before `Result.Raw`.
+      - `DoRaw(ctx)` keeps the body, but its non-2xx branch overwrites a body-read error with a status error, losing C5's cap sentinel.
+    - **So the raw read executes through the guarded `*http.Client` itself.**
+      - `NewGuardedProxyREST` builds that client (the kube credentials and TLS from `rest.HTTPClientFor`, `SameOriginRedirect`, `safehttp.Cap`). It keeps it beside the REST client.
+      - The REST client only builds the proxy URL: `Get().AbsPath(...).Param(...).URL()`, which runs nothing.
+      - Klyx sends the request with its headers and reads the body through `ReadCapped` first. A body-read, cap or cancellation error takes precedence over the status. Only a complete body is paired with its status, 2xx or not.
+      - The C5 credential stack and redirect guard are the same client's. No endpoint credential is ever sent on this path (C5).
+    - **Codex's two probes are the transport contract:** a plain-text 400 body arrives whole, and the cap sentinel survives a 400.
 - **`safehttp.Redactor.Exact`:** the exact and quoted spellings only, for log content (§5).
 - **`internal/loki` (pure):**
   - `Branches` from the labels read (§3);
@@ -294,7 +304,8 @@ On `kind-klyx`, in `klyx-s8b-lab`:
   - `Page`:
     - the k-way merge across branches, per-branch cursors and the dedupe;
     - exhaustion from raw lengths, never from what remains after dedupe;
-    - 1,000 or more entries at one nanosecond in one stream and across streams: one 5,000 re-read, then the explicit marker and "Skip past T", never a loop or a false "start reached";
+    - 1,000 or more entries at one nanosecond in one stream and across streams: one 5,000 re-read, then the explicit "at least N" marker and "Skip past T", never a loop or a false "start reached";
+    - the overlap removed before the cut (1,000 held at T plus 200 older adds 200), and exhaustion counting entries already delivered;
   - `Mode`:
     - all with a UID, some, none;
     - a UID-only newest page followed by UID-less and mixed older pages, and the reverse, the mode held;
@@ -306,7 +317,12 @@ On `kind-klyx`, in `klyx-s8b-lab`:
   - a 400 plain-text body shown redacted;
   - 401 with no tenant;
   - the credential fence across a revision;
-  - the request headers and the proxied non-2xx body on both paths;
+  - the request headers on both paths;
+  - the raw proxied read:
+    - a plain-text 400 body arrives whole (Codex's probe: 50 bytes, where `Do().Raw()` gave 0);
+    - the cap sentinel survives a 400 (where `DoRaw` replaced it);
+    - a cancellation or read error wins over the status;
+    - the redirect guard and the kube credentials are kept;
   - the credential boundary, with exact and quoted needles:
     - a credential equal to a match value, to a pod name and to a label key;
     - redacted from the selector, source, strength, errors and Settings;
@@ -388,3 +404,14 @@ Codex requested changes with five findings. The lab gained the cases behind them
 - the creation bound as a timestamp filter, the name sentence always weaker;
 - label presence never treated as per-stream or exact-range proof;
 - a held-byte budget and full-shape memory measurement (§8).
+
+## 15. Revision 2: Codex's re-review of c2b4e26
+
+Codex confirmed the five findings addressed: its local model selects each of 45 index and metadata shapes exactly once through the branches. One P2 remained, with two clarifications:
+
+1. **The proxied raw read** cannot be client-go's `Do(ctx).Raw()`, which loses a plain-text 400 body, nor `DoRaw`, which replaces the cap sentinel on a 400.
+   - §9 now executes the raw read through the guarded `*http.Client` that `NewGuardedProxyREST` builds, with the REST client building the URL only.
+   - The body is read capped before the status is looked at, so read, cap and cancellation errors take precedence.
+   - Codex's two probes are the transport's contract tests.
+2. **The overlap is removed before the newest-1,000 cut,** and exhaustion counts entries already delivered (§5).
+3. **The saturation marker says "at least N"** and that Klyx cannot establish whether more remain (§5).
