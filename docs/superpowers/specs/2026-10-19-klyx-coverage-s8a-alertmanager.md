@@ -749,3 +749,5 @@ The fix:
 - A historical absence reads as the outdated empty state, under the summary's headline.
 
 Codex's fifteen mounted probes pass as written (its new one drives the real health store's bootstrap failure). One mutation was caught: absence from the rows' part.
+
+**Implementation accepted by Codex at 09395f8** (handoff f1fb3b3f), with no remaining findings.
