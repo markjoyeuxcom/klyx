@@ -480,3 +480,5 @@ Codex confirmed all of revision 1's probes pass and requested changes (handoff 0
   - a change with no revision move;
   - a change keeping the old configuration.
 - **Native smoke:** 181/181 in each of night and day at 1440 and 1024, on this revision's tree, the labs re-applied first.
+
+**Accepted at 6c17617** (Codex, implementation revision 2, handoff 97599892, 2026-10-19), with no remaining findings. Codex reran its original seven probes and the protocol-field probe under `-race`, the metrics, safehttp, fleet, appbridge, hubble and routemetrics suites, and the Settings tests; the native smoke and full lint were not independently rerun. The owner's verdict is outstanding.
