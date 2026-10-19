@@ -111,9 +111,11 @@ const byName = (s: AMSubjectDTO, t: AlertTarget) => !s.uid && s.exact === true &
   && (s.state === "not looked up" || s.state === "not established");
 
 /** inexactFor: an alert whose subject could be this object but whose name
- * is not shown as written (redacted or clipped): Klyx cannot rule it out. */
-const inexactFor = (s: AMSubjectDTO, t: AlertTarget) => !s.uid && !!s.kind && s.exact !== true
-  && (t.kind === "Namespace" || s.kind === t.kind || (!!t.podUIDs && s.kind === "Pod"));
+ * is not shown as written (redacted or clipped): Klyx cannot rule it out.
+ * A subject's UID resolves that object, never its namespace text, so for a
+ * namespace every inexact subject counts, UID or not. */
+const inexactFor = (s: AMSubjectDTO, t: AlertTarget) => !!s.kind && s.exact !== true
+  && (t.kind === "Namespace" || (!s.uid && (s.kind === t.kind || (!!t.podUIDs && s.kind === "Pod"))));
 
 /** rowsOutdated: why the rows held are not the cluster's newest (a failed or
  * pending re-read after a gap), or null. */

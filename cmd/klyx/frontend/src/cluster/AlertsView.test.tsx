@@ -134,6 +134,25 @@ describe("AlertsView after the implementation review", () => {
     expect(screen.getByTestId("alerts-source").textContent).not.toContain("live");
   });
 
+  it("while the rows are behind, the headline counts and their cap are the summary's, and an empty set is not a current 'no alerts'", () => {
+    const old = { counted: 1, critical: 1, warning: 0, uncounted: 0, suppressed: 0, unprocessed: 0, unknown: 0, truncated: false };
+    const behind = (list: AMAlertDTO[]) => {
+      set(list, part({ alerts: old }));
+      rows.refreshError = "rows re-bootstrap failed";
+      rows.counts = { ...rows.counts, source: "summary", refreshing: true, refreshError: "rows re-bootstrap failed",
+        part: part({ ver: 2, kinds: [kindCov({ truncated: true })], alerts: { ...old, counted: 7, critical: 7, truncated: true } }) };
+    };
+    behind([al("Crit")]);
+    const { unmount } = render(<AlertsView cluster="c" />);
+    expect(screen.getByTestId("alerts-summary").textContent).toContain("7+ active critical or warning");
+    unmount();
+    behind([]);
+    render(<AlertsView cluster="c" />);
+    expect(screen.queryByText("No alerts on this Alertmanager for this cluster.")).toBeNull();
+    expect(screen.getByText("No alerts in the rows held; they are behind the cluster summary.")).toBeTruthy();
+    expect(document.body.textContent).toContain("The cluster summary counts 7+ active critical or warning alerts");
+  });
+
   it("a re-keyed generation not read yet ends the selection too", () => {
     const a = al("Alert-A", { key: "A/fp" });
     set([a], part(), { alertsSource: "source A", alertsSourceKey: "A", alertsTruncated: false });
@@ -223,6 +242,16 @@ describe("the inspector's Alerts block (S8a §7)", () => {
     set([al("Exact", { subject: { kind: "Job", namespace: "team", name: "backup-xyz", state: "not looked up", exact: false } })], part({ kinds: [kindCov(), podsLive] }));
     v = render(<Block target={{ uid: "job-uid", kind: "Job", namespace: "team", name: "backup-xyz" }} />);
     expect(screen.queryByTestId("insp-alert-Exact")).toBeNull();
+    v.unmount();
+    // a found pod whose namespace is not shown exactly: its UID resolves the
+    // pod, never its namespace, so a namespace cannot rule it out
+    set([al("NsHidden", { subject: { kind: "Pod", namespace: "[redacted]", name: "api-1", uid: "pod-uid", state: "found", exact: false } })],
+      part({ kinds: [kindCov(), podsLive, kindCov({ kind: "namespaces", role: "dependency" })] }));
+    v = render(<Block target={{ uid: "ns-uid", kind: "Namespace", name: "team" }} />);
+    expect(screen.getByTestId("insp-alerts-none").textContent).toContain("an alert names an object Klyx cannot show exactly");
+    v.unmount();
+    v = render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);
+    expect(screen.getByTestId("insp-alert-NsHidden")).toBeTruthy(); // the pod itself still matches by UID
     v.unmount();
     // a last-observed subject is said as such, on the object and on its pods
     set([al("Last", { subject: { kind: "Pod", namespace: "team", name: "api-1", uid: "pod-uid", state: "last observed" } })], part({ kinds: [kindCov(), podsLive] }));

@@ -68,7 +68,14 @@ export function AlertsView({ cluster }: { cluster: string }) {
   const part = lr.part ?? lr.counts.part;
   const kind = part?.kinds.find((k) => k.kind === "alerts");
   const facts = alertsFacts(lr.facts);
-  const counts = part?.alerts;
+  // the headline counts are the selected counts' (the rows', or the newer
+  // summary's while the rows are behind), with their own cap; the rows,
+  // their coverage and facts stay the rows' own
+  const countsPart = lr.counts.part ?? part;
+  const counts = countsPart?.alerts;
+  const countsKind = countsPart?.kinds.find((k) => k.kind === "alerts");
+  const countsPlus = counts?.truncated || countsKind?.truncated ? "+" : "";
+  const outdated = rowsOutdated(lr);
   const [stateF, setStateF] = useState<StateFilter>("all");
   const [sevF, setSevF] = useState<SevFilter>("all");
   const [search, setSearch] = useState("");
@@ -139,6 +146,9 @@ export function AlertsView({ cluster }: { cluster: string }) {
   const stateView = state === "loading" ? <SkeletonRows rows={6} label="reading alerts" />
     : state === "unreadable" ? <EmptyState icon={icon} title="Could not read alerts." hint={lr.error ?? kind?.error ?? undefined} />
     : absent ? <EmptyState icon={icon} title="No Alertmanager is configured or found on this cluster." hint="Set alertmanager in fleet.yaml, or install the Prometheus Operator's Alertmanager. Klyx reads alerts and never manages them." />
+    // an empty set of rows behind the cluster is historical, never a current "no alerts"
+    : state === "empty" && outdated ? <EmptyState icon={icon} title="No alerts in the rows held; they are behind the cluster summary."
+      hint={counts ? `The cluster summary counts ${counts.counted}${countsPlus} active critical or warning alerts; the rows are re-reading.` : "The rows are re-reading."} />
     : state === "empty" ? <EmptyState icon={icon} title={stale ? "No alerts in the last good read." : "No alerts on this Alertmanager for this cluster."}
       hint={stale ? "Reads are failing since; see above. Nothing is called resolved." : undefined} />
     : <EmptyState icon={icon} title="No alert matches these filters." action={{ label: "Clear filters", onClick: clearFilters }} />;
@@ -149,7 +159,6 @@ export function AlertsView({ cluster }: { cluster: string }) {
   if (lr.error && lr.rows !== null) notices.push(<WatchErrorBanner key="rows" tool="Klyx" failure="the alerts rows could not be refreshed - showing the last rows received" error={lr.error} />);
   // rows behind the cluster's newest after a gap: said as of their own
   // evaluation, with the failed re-read named, never as live
-  const outdated = rowsOutdated(lr);
   const refreshErr = lr.refreshError ?? lr.counts.refreshError;
   if (outdated && (refreshErr || lr.counts.refreshing || lr.counts.resync)) {
     notices.push(<div key="behind" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-rows-behind">
@@ -167,10 +176,10 @@ export function AlertsView({ cluster }: { cluster: string }) {
       title="Alerts"
       summary={state === "loading" || state === "unreadable" || absent ? null : (
         <span className="t-secondary" data-testid="alerts-summary">
-          {counts ? `${counts.counted}${plus} active critical or warning` : `${all.length}${plus} alerts`}
-          {counts && counts.uncounted > 0 ? ` · ${counts.uncounted}${plus} active without a counted severity` : ""}
-          {counts && counts.unprocessed > 0 ? ` · ${counts.unprocessed}${plus} unprocessed` : ""}
-          {counts && counts.suppressed > 0 ? ` · ${counts.suppressed}${plus} suppressed` : ""}
+          {counts ? `${counts.counted}${countsPlus} active critical or warning` : `${all.length}${plus} alerts`}
+          {counts && counts.uncounted > 0 ? ` · ${counts.uncounted}${countsPlus} active without a counted severity` : ""}
+          {counts && counts.unprocessed > 0 ? ` · ${counts.unprocessed}${countsPlus} unprocessed` : ""}
+          {counts && counts.suppressed > 0 ? ` · ${counts.suppressed}${countsPlus} suppressed` : ""}
         </span>
       )}
       headerEnd={facts ? <span className="t-secondary" data-testid="alerts-source" title={`match: ${matchText}`}>{facts.source}{outdated ? ` · rows as of ${lr.evaluatedAt ? clock(lr.evaluatedAt) : "an earlier read"}` : kind?.coverage === "live" ? " · live" : stale && kind?.lastGoodAt ? ` · last good ${clock(kind.lastGoodAt)}` : ""}</span> : undefined}

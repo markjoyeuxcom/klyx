@@ -722,3 +722,18 @@ Codex confirmed the eleven findings fixed, its probes adapted to the new contrac
 4. **A re-key to a source never read did not end the selection.** Any change of the source key ends it, including to none: a re-keyed generation not read yet carries no facts. The first source back does not reopen it.
 
 Codex's ten mounted probes pass as written. Nine mutations were caught: the exact requirement, the inexact block and its scope, the outdated claim, the block's and the lens's outdated words, the block's last observed, the unread-generation boundary, and the exact flag itself.
+
+## 19. Implementation revision 3: Codex's re-review of 56455fa
+
+Codex confirmed the four residual issues fixed (its ten earlier mounted probes pass unchanged), and named two more:
+
+1. **A found pod's UID does not establish its namespace.**
+   - A credential equal to the namespace redacts it. The pod still resolves by UID, but a Namespace inspector cannot match the redacted namespace text.
+   - For a namespace target, every inexact subject now blocks "No alert matches this object", UID or not. The UID resolves the pod, never its namespace.
+   - The pod's own inspector still matches it by UID.
+2. **The lens's headline counts came from the rows' part.**
+   - While the rows are behind, the selected counts are the newer summary's (`taskCounts`).
+   - The headline counts and their "+" now come from `lr.counts.part`, with the summary's own cap. The rows, their coverage and facts stay the rows' own.
+   - An empty set of rows behind the cluster reads "No alerts in the rows held; they are behind the cluster summary." Its hint names the summary's count. It is never the current "No alerts on this Alertmanager for this cluster."
+
+Codex's fourteen mounted probes pass as written. Four mutations were caught: the namespace guard, the headline's part, its cap, and the outdated empty wording.
