@@ -5,6 +5,9 @@
 export type AMPairDTO = { name: string; value: string };
 export type AMSubjectDTO = {
   kind?: string; gvr?: string; namespace?: string; name?: string; container?: string; basis?: string[]; alsoNames?: AMSubjectDTO[];
+  // exact: namespace and name are shown as written (neither redacted nor
+  // clipped) - only then is a name comparison safe
+  exact?: boolean;
   state?: string; uid?: string; createdAt?: string; startedBeforeCreated?: boolean;
 };
 export type AMMuteDTO = { kind: string; mutedFor?: string[]; activeFor?: string[]; expected?: string[]; shown?: string[] };
@@ -101,12 +104,25 @@ export type AlertTarget = { uid?: string; kind: string; namespace?: string; name
 
 // The alerts part's dependency kind for each kind it resolves by UID.
 const HELD: Record<string, string> = { Pod: "pods", Deployment: "deployments", StatefulSet: "statefulsets", DaemonSet: "daemonsets", Node: "nodes", Namespace: "namespaces" };
-const REDACTED = "[redacted]";
-
 /** byName: an alert whose subject is this object by kind and name only - a
- * kind Klyx does not hold, or a held one it could not establish. */
-const byName = (s: AMSubjectDTO, t: AlertTarget) => !s.uid && s.kind === t.kind && s.name === t.name && (s.namespace ?? "") === (t.namespace ?? "")
+ * kind Klyx does not hold, or a held one it could not establish - compared
+ * only when the backend shows the name as written. */
+const byName = (s: AMSubjectDTO, t: AlertTarget) => !s.uid && s.exact === true && s.kind === t.kind && s.name === t.name && (s.namespace ?? "") === (t.namespace ?? "")
   && (s.state === "not looked up" || s.state === "not established");
+
+/** inexactFor: an alert whose subject could be this object but whose name
+ * is not shown as written (redacted or clipped): Klyx cannot rule it out. */
+const inexactFor = (s: AMSubjectDTO, t: AlertTarget) => !s.uid && !!s.kind && s.exact !== true
+  && (t.kind === "Namespace" || s.kind === t.kind || (!!t.podUIDs && s.kind === "Pod"));
+
+/** rowsOutdated: why the rows held are not the cluster's newest (a failed or
+ * pending re-read after a gap), or null. */
+export function rowsOutdated(lr: { refreshError: string | null; counts: { updating: boolean; refreshing: boolean; resync: boolean; refreshError: string | null } }): string | null {
+  const err = lr.refreshError ?? lr.counts.refreshError;
+  if (err) return `the last re-read of the alerts rows failed: ${err}`;
+  if (lr.counts.refreshing || lr.counts.resync || lr.counts.updating) return "the alerts rows are behind the cluster summary, re-reading";
+  return null;
+}
 
 /** alertsFor: the alerts correlated to an object in its inspector (S8a §5,
  * §7) - by its UID when its subject was found (or last observed); by kind and
@@ -136,15 +152,14 @@ export function alertsFor(xs: AMAlertDTO[], t: AlertTarget): { own: AMAlertDTO[]
  * pods) resolved live and complete, the workload's pod set complete, and no
  * alert whose subject Klyx could not show. Otherwise why not. */
 export function noAlertEstablished(xs: AMAlertDTO[] | null, part: { kinds: { kind: string; coverage: string; truncated?: boolean }[] } | null,
-  t: AlertTarget, readTruncated: boolean): string | null {
+  t: AlertTarget, readTruncated: boolean, outdated: string | null = null): string | null {
   if (xs === null || !part) return "alerts not read yet";
+  if (outdated) return outdated;
   const live = (k: string) => { const c = part.kinds.find((x) => x.kind === k); return !!c && c.coverage === "live" && !c.truncated; };
   if (!live("alerts") || readTruncated) return "the alerts read is capped or not current";
   const held = HELD[t.kind];
   if (held && !live(held)) return `${held} are not read live and complete, so an alert's subject may not be established`;
   if (t.podUIDs && (!live("pods") || t.podsComplete === false)) return "its pods are not read live and complete";
-  if (xs.some((a) => !a.subject.uid && ((a.subject.name ?? "").includes(REDACTED) || (a.subject.namespace ?? "").includes(REDACTED)))) {
-    return "an alert names an object Klyx cannot show (redacted)";
-  }
+  if (xs.some((a) => inexactFor(a.subject, t))) return "an alert names an object Klyx cannot show exactly (redacted or clipped)";
   return null;
 }

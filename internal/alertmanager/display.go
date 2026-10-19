@@ -30,6 +30,10 @@ type DisplaySubject struct {
 	Container string
 	Basis     []string
 	AlsoNames []DisplaySubject
+	// Exact: the namespace and name are shown as written - neither redacted
+	// nor clipped - so a consumer may compare them with an object's name.
+	// Never inferred from the text of a redaction marker, which a clip can cut.
+	Exact bool
 }
 
 // DisplayMute is an active alert's mute evidence as shown.
@@ -145,6 +149,7 @@ func DisplayMatch(m map[string]string, red safehttp.Redactor) map[string]string 
 func displaySubject(s Subject, t func(string, int) string) DisplaySubject {
 	d := DisplaySubject{Kind: s.Kind, Namespace: t(s.Namespace, MaxLabelValue), Name: t(s.Name, MaxLabelValue),
 		Container: t(s.Container, MaxLabelValue), Basis: s.Basis}
+	d.Exact = d.Namespace == s.Namespace && d.Name == s.Name
 	for _, a := range s.AlsoNames {
 		d.AlsoNames = append(d.AlsoNames, displaySubject(a, t))
 	}

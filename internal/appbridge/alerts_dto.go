@@ -24,7 +24,11 @@ type AMSubjectDTO struct {
 	Container string         `json:"container,omitempty"`
 	Basis     []string       `json:"basis,omitempty"` // the label names matched
 	AlsoNames []AMSubjectDTO `json:"alsoNames,omitempty"`
-	// State is found, not found, not established or not looked up (S8a §4).
+	// Exact: namespace and name are shown as written (not redacted or
+	// clipped); only then may the lens compare them with an object's name.
+	Exact bool `json:"exact"`
+	// State is found, not found, not established, not looked up or last
+	// observed (S8a §4, revision 1).
 	State                string `json:"state,omitempty"`
 	UID                  string `json:"uid,omitempty"`
 	CreatedAt            string `json:"createdAt,omitempty"`
@@ -91,7 +95,7 @@ func alertPairs(ps []alertmanager.Pair) []AMPairDTO {
 }
 
 func alertSubject(s alertmanager.DisplaySubject) AMSubjectDTO {
-	d := AMSubjectDTO{Kind: s.Kind, Namespace: s.Namespace, Name: s.Name, Container: s.Container, Basis: s.Basis}
+	d := AMSubjectDTO{Kind: s.Kind, Namespace: s.Namespace, Name: s.Name, Container: s.Container, Basis: s.Basis, Exact: s.Exact}
 	for _, a := range s.AlsoNames {
 		d.AlsoNames = append(d.AlsoNames, alertSubject(a))
 	}

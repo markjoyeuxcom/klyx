@@ -706,3 +706,19 @@ Gates for this revision:
   - four of the five mounted probes pass; the source probe's alerts carry no key.
   - Both scenarios are covered with the new contract in the repository's tests.
 
+## 18. Implementation revision 2: Codex's re-review of bf78ea0
+
+Codex confirmed the eleven findings fixed, its probes adapted to the new contract, and named four residual issues:
+
+1. **A name match inferred display safety from the redaction marker's text.** A clip can cut the marker: a 253-byte PVC name ending in the credential shows as prefix + "[re…".
+   - `DisplaySubject.Exact` says whether namespace and name are shown as written, neither redacted nor clipped. It travels as `subject.exact`.
+   - The lens compares names only for an exact subject.
+   - An inexact subject that could be the object makes "No alert matches this object" not established: same kind, any subject for a namespace, or a pod for a workload.
+2. **Outdated rows read as live.** A failed re-bootstrap after a gap kept the prior rows labelled live.
+   - `rowsOutdated` reads the rows' `refreshError` and the counts' refreshing, resync and updating states.
+   - In the lens, outdated rows show "Rows as of HH:MM - re-reading; the counts are the cluster summary's. Last re-read failed: …", and the source line drops "live".
+   - The inspector block names the failure, says "rows as of", and makes no negative claim until the rows catch up.
+3. **The block never said "last observed".** An alert line on the object or on its pods now says "the subject as last observed (its kind's read is not current)".
+4. **A re-key to a source never read did not end the selection.** Any change of the source key ends it, including to none: a re-keyed generation not read yet carries no facts. The first source back does not reopen it.
+
+Codex's ten mounted probes pass as written. Nine mutations were caught: the exact requirement, the inexact block and its scope, the outdated claim, the block's and the lens's outdated words, the block's last observed, the unread-generation boundary, and the exact flag itself.

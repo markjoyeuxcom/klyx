@@ -150,3 +150,29 @@ func must(b []byte, err error) []byte {
 	}
 	return b
 }
+
+// Codex re-review of bf78ea0: a subject's namespace and name are marked
+// exact only when shown as written. A redaction the clip cuts (a 253-byte
+// PVC name ending in the credential) is not exact, though no complete
+// marker survives in the text.
+func TestDisplaySubjectExact(t *testing.T) {
+	prefix := strings.Repeat(strings.Repeat("a", 60)+".", 4) + strings.Repeat("a", 6)
+	for _, tc := range []struct {
+		name, secret string
+		exact        bool
+	}{
+		{"pvc-data", "unrelated-secret", true},
+		{prefix + "xyz", "xyz", false},           // redacted, then the clip cuts the marker
+		{"team-token-pvc", "token-pvc", false},   // redacted, marker whole
+		{strings.Repeat("b", 300), "zzz", false}, // clipped only
+	} {
+		r := Reduced{Alert: Alert{Fingerprint: "fp", Labels: map[string]string{"alertname": "A", "namespace": "team", "persistentvolumeclaim": tc.name}}, State: StateActive}
+		d := Display(r, safehttp.NewRedactor(safehttp.Bearer(tc.secret)))
+		if d.Subject.Kind != "PersistentVolumeClaim" || d.Subject.Exact != tc.exact {
+			t.Errorf("%q with %q: %+v", tc.name[:min(len(tc.name), 20)], tc.secret, d.Subject)
+		}
+		if !tc.exact && strings.Contains(d.Subject.Name, "xyz") {
+			t.Errorf("the credential survived: %q", d.Subject.Name)
+		}
+	}
+}

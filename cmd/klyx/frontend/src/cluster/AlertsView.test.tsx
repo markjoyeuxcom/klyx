@@ -123,6 +123,30 @@ describe("AlertsView after the implementation review", () => {
     expect(screen.getByText("rows subscription was forbidden")).toBeTruthy();
   });
 
+  it("rows behind the cluster after a failed re-read are said as of their evaluation, never live", () => {
+    set([al("Crit")]);
+    rows.evaluatedAt = "2026-10-19T12:00:00Z";
+    rows.refreshError = "rows re-bootstrap failed";
+    rows.counts = { ...rows.counts, refreshing: true, refreshError: "rows re-bootstrap failed", source: "summary" };
+    render(<AlertsView cluster="c" />);
+    expect(screen.getByTestId("alerts-rows-behind").textContent).toContain("Last re-read failed: rows re-bootstrap failed");
+    expect(screen.getByTestId("alerts-source").textContent).toContain("rows as of");
+    expect(screen.getByTestId("alerts-source").textContent).not.toContain("live");
+  });
+
+  it("a re-keyed generation not read yet ends the selection too", () => {
+    const a = al("Alert-A", { key: "A/fp" });
+    set([a], part(), { alertsSource: "source A", alertsSourceKey: "A", alertsTruncated: false });
+    const view = render(<AlertsView cluster="c" />);
+    fireEvent.click(screen.getByTestId("alert-row-Alert-A"));
+    expect(screen.getByTestId("alert-panel")).toBeTruthy();
+    set([], part({ ver: 2, kinds: [kindCov({ coverage: "checking", objects: 0 })] }), null); // source B, checking, no facts
+    view.rerender(<AlertsView cluster="c" />);
+    set([a], part({ ver: 3 }), { alertsSource: "source A", alertsSourceKey: "A", alertsTruncated: false });
+    view.rerender(<AlertsView cluster="c" />);
+    expect(screen.queryByTestId("alert-panel")).toBeNull();
+  });
+
   it("a source change ends the selection; the same fingerprint on another source is never shown under it", () => {
     const a = al("Alert-A", { fingerprint: "same-fp", key: "A/same-fp" });
     set([a], part(), { alertsSource: "source A", alertsSourceKey: "A", alertsTruncated: false });
@@ -184,10 +208,39 @@ describe("the inspector's Alerts block (S8a §7)", () => {
     v = render(<Block target={{ uid: "dep-uid", kind: "Deployment", namespace: "team", name: "api", podUIDs: [], podsComplete: false }} />);
     expect(screen.getByTestId("insp-alerts-none").textContent).toContain("its pods are not read live and complete");
     v.unmount();
-    // an alert naming an object Klyx cannot show (redacted) blocks the claim
-    set([al("Hidden", { subject: { kind: "Job", namespace: "team", name: "[redacted]", state: "not looked up" } })], part({ kinds: [kindCov(), podsLive] }));
+    // an alert naming an object of this kind that Klyx cannot show exactly
+    // (redacted or clipped - the backend's exact flag, never the marker
+    // text) blocks the claim; one of another kind does not
+    const hidden = al("Hidden", { subject: { kind: "Job", namespace: "team", name: "backup-[re…", state: "not looked up", exact: false } });
+    set([hidden], part({ kinds: [kindCov(), podsLive] }));
+    v = render(<Block target={{ uid: "job-uid", kind: "Job", namespace: "team", name: "backup-xyz" }} />);
+    expect(screen.getByTestId("insp-alerts-none").textContent).toContain("an alert names an object Klyx cannot show exactly");
+    v.unmount();
     v = render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);
-    expect(screen.getByTestId("insp-alerts-none").textContent).toContain("an alert names an object Klyx cannot show");
+    expect(screen.getByTestId("insp-alerts-none").textContent).toBe("No alert matches this object.");
+    v.unmount();
+    // a subject shown exactly is compared; one not shown exactly never is
+    set([al("Exact", { subject: { kind: "Job", namespace: "team", name: "backup-xyz", state: "not looked up", exact: false } })], part({ kinds: [kindCov(), podsLive] }));
+    v = render(<Block target={{ uid: "job-uid", kind: "Job", namespace: "team", name: "backup-xyz" }} />);
+    expect(screen.queryByTestId("insp-alert-Exact")).toBeNull();
+    v.unmount();
+    // a last-observed subject is said as such, on the object and on its pods
+    set([al("Last", { subject: { kind: "Pod", namespace: "team", name: "api-1", uid: "pod-uid", state: "last observed" } })], part({ kinds: [kindCov(), podsLive] }));
+    v = render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);
+    expect(screen.getByTestId("insp-alert-Last").textContent).toContain("the subject as last observed");
+    v.unmount();
+    v = render(<Block target={{ uid: "dep-uid", kind: "Deployment", namespace: "team", name: "api", podUIDs: ["pod-uid"], podsComplete: true }} />);
+    expect(screen.getByTestId("insp-alert-Last").textContent).toContain("the subject as last observed");
+    v.unmount();
+    // rows behind the cluster after a failed re-read: named, never "live",
+    // and no negative claim
+    set([], part({ kinds: [kindCov(), podsLive] }));
+    rows.refreshError = "rows re-bootstrap failed";
+    rows.counts = { ...rows.counts, refreshing: true, refreshError: "rows re-bootstrap failed", source: "summary" };
+    v = render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);
+    expect(screen.getByTestId("insp-alerts-none").textContent).toContain("not established: the last re-read of the alerts rows failed");
+    expect(screen.getByTestId("insp-alerts-failure").textContent).toContain("rows re-bootstrap failed");
+    expect(screen.getByTestId("block").textContent).not.toContain("live");
     v.unmount();
     // a failed read is said in the block
     set([], part({ kinds: [kindCov({ coverage: "stale", lastGoodAt: "2026-10-19T12:00:00Z", error: "read timed out" }), podsLive] }));

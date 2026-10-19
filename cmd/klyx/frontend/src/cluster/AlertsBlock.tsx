@@ -4,7 +4,7 @@ import { Age } from "../chrome/Age";
 import { navigate, NAV_GROUPS } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 import { useRows } from "../health/useRows";
-import { alertsFacts, alertsFor, causeText, noAlertEstablished, sevClass, sevWord, stateWord, type AMAlertDTO, type AlertTarget } from "./alertsModel";
+import { alertsFacts, alertsFor, causeText, noAlertEstablished, rowsOutdated, sevClass, sevWord, stateWord, type AMAlertDTO, type AlertTarget } from "./alertsModel";
 
 // The Alerts block an inspector places (coverage S8a §7), like
 // useInspectorAI's: the alerts correlated to this object by label - active,
@@ -31,7 +31,8 @@ function AlertLine({ cluster, a, byFp, nameOnly }: { cluster: string; a: AMAlert
       style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 8, textAlign: "left", width: "100%" }}>
       <span style={{ color: tone }}>{sevWord(a)}</span>
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {a.name}<span className="t-secondary"> · {stateWord(a)}{cause ? ` · ${cause}` : ""}{nameOnly ? ` · by name only (${a.subject.state})` : ""}</span>
+        {a.name}<span className="t-secondary"> · {stateWord(a)}{cause ? ` · ${cause}` : ""}{nameOnly ? ` · by name only (${a.subject.state})` : ""}
+          {a.subject.state === "last observed" ? " · the subject as last observed (its kind's read is not current)" : ""}</span>
         {a.summary && <span className="t-secondary" style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.summary}</span>}
       </span>
       <span className="t-secondary">{a.startsAt ? <Age unixSeconds={unix(a.startsAt)} /> : ""}</span>
@@ -51,11 +52,15 @@ export function useInspectorAlerts(cluster: string, target: AlertTarget | null):
   const byFp = useMemo(() => new Map((rows ?? []).map((a) => [a.fingerprint, a])), [rows]);
   if (!target || !present || !part || part.coverage === "absent") return null;
   const kind = part.kinds.find((k) => k.kind === "alerts");
-  const freshness = kind?.coverage === "live" ? "live"
+  // rows behind the cluster's newest (a failed or pending re-read) are said
+  // as of their evaluation, never as live, and make no negative claim
+  const outdated = rowsOutdated(lr);
+  const freshness = outdated ? `rows as of ${lr.evaluatedAt ? clock(lr.evaluatedAt) : "an earlier read"}`
+    : kind?.coverage === "live" ? "live"
     : kind?.coverage === "stale" ? `last good ${kind.lastGoodAt ? clock(kind.lastGoodAt) : "read"}`
     : kind?.coverage === "unreadable" ? "could not be read" : "not read yet";
-  const failure = lr.error ?? (kind?.coverage === "stale" || kind?.coverage === "unreadable" ? kind.error ?? "the read failed" : null);
-  const why = noAlertEstablished(rows, part, target, !!facts?.truncated);
+  const failure = lr.error ?? lr.refreshError ?? lr.counts.refreshError ?? (kind?.coverage === "stale" || kind?.coverage === "unreadable" ? kind.error ?? "the read failed" : null);
+  const why = noAlertEstablished(rows, part, target, !!facts?.truncated, outdated);
   const total = own.length + onPods.length;
   return (
     <InspectorBlock title="Alerts" count={total > 0 ? total : undefined} extra={<span className="t-secondary" style={{ marginLeft: "auto" }}>{freshness}</span>}>

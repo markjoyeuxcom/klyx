@@ -14,7 +14,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useClusterKey } from "./useClusterKey";
-import { alertsFacts, causeText, groupOf, sevClass, sevWord, sortAlerts, stateWord, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup } from "./alertsModel";
+import { alertsFacts, causeText, groupOf, rowsOutdated, sevClass, sevWord, sortAlerts, stateWord, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup } from "./alertsModel";
 
 // The Alerts lens (coverage S8a §7): Alertmanager's alerts for this
 // cluster, read-only. Active alerts first, then unprocessed, then
@@ -83,13 +83,14 @@ export function AlertsView({ cluster }: { cluster: string }) {
   // the selection's and the reveal's index
   const byFp = useMemo(() => new Map(all.map((a) => [a.fingerprint, a])), [all]);
   const byKey = useMemo(() => new Map(all.map((a) => [a.key, a])), [all]);
-  // a source change ends the selection: an alert of the new source is never
-  // shown under the old one's
+  // a source change ends the selection - to another source, or to a re-keyed
+  // generation not read yet (no source at all): an alert is never shown
+  // under another source's, and the first source back does not reopen it
   const sourceKey = facts?.sourceKey;
   const lastSource = useRef(sourceKey);
   useEffect(() => {
-    if (sourceKey && lastSource.current && sourceKey !== lastSource.current) { setSelKey(null); setCursorKey(null); }
-    if (sourceKey) lastSource.current = sourceKey;
+    if (lastSource.current !== undefined && sourceKey !== lastSource.current) { setSelKey(null); setCursorKey(null); }
+    lastSource.current = sourceKey;
   }, [sourceKey, setSelKey]);
   const q = search.trim().toLowerCase();
   const visible = useMemo(() => all.filter((a) => {
@@ -146,6 +147,15 @@ export function AlertsView({ cluster }: { cluster: string }) {
   // a failure is said whatever the last good read held, an empty one included
   if (stale) notices.push(<WatchErrorBanner key="stale" tool="Alertmanager" failure={`read failed - showing the last good read${kind?.lastGoodAt ? ` from ${clock(kind.lastGoodAt)}` : ""}; nothing here is called resolved`} error={kind?.error ?? ""} />);
   if (lr.error && lr.rows !== null) notices.push(<WatchErrorBanner key="rows" tool="Klyx" failure="the alerts rows could not be refreshed - showing the last rows received" error={lr.error} />);
+  // rows behind the cluster's newest after a gap: said as of their own
+  // evaluation, with the failed re-read named, never as live
+  const outdated = rowsOutdated(lr);
+  const refreshErr = lr.refreshError ?? lr.counts.refreshError;
+  if (outdated && (refreshErr || lr.counts.refreshing || lr.counts.resync)) {
+    notices.push(<div key="behind" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-rows-behind">
+      Rows as of {lr.evaluatedAt ? clock(lr.evaluatedAt) : "an earlier read"} - re-reading; the counts are the cluster summary's.{refreshErr ? ` Last re-read failed: ${refreshErr}` : ""}
+    </div>);
+  }
   if (truncated) notices.push(<div key="cap" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-capped">The first 5,000 alerts only: every count is at least, and an alert not listed is not established either way.</div>);
 
   const matchText = facts?.match && Object.keys(facts.match).length > 0
@@ -163,7 +173,7 @@ export function AlertsView({ cluster }: { cluster: string }) {
           {counts && counts.suppressed > 0 ? ` · ${counts.suppressed}${plus} suppressed` : ""}
         </span>
       )}
-      headerEnd={facts ? <span className="t-secondary" data-testid="alerts-source" title={`match: ${matchText}`}>{facts.source}{kind?.coverage === "live" ? " · live" : stale && kind?.lastGoodAt ? ` · last good ${clock(kind.lastGoodAt)}` : ""}</span> : undefined}
+      headerEnd={facts ? <span className="t-secondary" data-testid="alerts-source" title={`match: ${matchText}`}>{facts.source}{outdated ? ` · rows as of ${lr.evaluatedAt ? clock(lr.evaluatedAt) : "an earlier read"}` : kind?.coverage === "live" ? " · live" : stale && kind?.lastGoodAt ? ` · last good ${clock(kind.lastGoodAt)}` : ""}</span> : undefined}
       controls={
         <>
           <div role="group" aria-label="Alert state" className="l-seg">
@@ -214,7 +224,7 @@ export function AlertsView({ cluster }: { cluster: string }) {
       footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length} of {all.length}{plus} alerts · match {matchText}</span>}
       inspector={selKey && selected ? (
-        <AlertInspector key={selKey} cluster={cluster} a={selected} byFp={byFp} live={kind?.coverage === "live"} lastGoodAt={stale ? kind?.lastGoodAt : undefined} onClose={close} />
+        <AlertInspector key={selKey} cluster={cluster} a={selected} byFp={byFp} live={kind?.coverage === "live" && !outdated} lastGoodAt={stale ? kind?.lastGoodAt : undefined} onClose={close} />
       ) : undefined}
       inspectorLabel="Alert details"
       onCloseInspector={close}
