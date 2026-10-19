@@ -59,8 +59,11 @@ export function ObjectBlock({ cluster, d, related }: { cluster: string; d: Insta
   const git = detectGitOwner(d.labels ?? {}, d.annotations ?? {});
   const helm = d.labels?.["app.kubernetes.io/managed-by"] === "Helm" ? (d.annotations?.["meta.helm.sh/release-name"] ?? "a Helm release") : null;
   const owners = d.owners ?? [];
-  const openOwner = (kind: string, name: string) => {
-    const ref = related.find((r) => r.relation === "owner" && r.kind === kind && r.name === name);
+  // an owner links only to the related ref of its own group, kind and name
+  // (coverage S9 §7): a same-named kind in another group is never it
+  const openOwner = (apiVersion: string, kind: string, name: string) => {
+    const group = apiVersion.includes("/") ? apiVersion.split("/")[0] : "";
+    const ref = related.find((r) => r.relation === "owner" && r.group === group && r.kind === kind && r.name === name);
     if (!ref) return null;
     return () => {
       useFleet.getState().openResource({ group: ref.group, version: ref.version, plural: ref.plural, kind: ref.kind, scope: ref.scope });
@@ -86,7 +89,7 @@ export function ObjectBlock({ cluster, d, related }: { cluster: string; d: Insta
   }
   if (owners.length > 0) {
     rows.push(["Owners", <ul className="gen-list">{owners.map((o) => {
-      const go = openOwner(o.kind, o.name);
+      const go = openOwner(o.apiVersion ?? "", o.kind, o.name);
       const text = <>{o.kind} <span className="gen-mono">{o.name}</span>{o.controller ? <span className="gen-dim"> · controller</span> : null}</>;
       return <li key={`${o.kind}/${o.name}`}>{go ? <button className="gen-link" onClick={go}>{text}</button> : text}</li>;
     })}</ul>]);

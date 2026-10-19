@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/keda"
 	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -1409,7 +1410,7 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		out = append(out, ref)
 	}
 
-	for _, owner := range ownerRefs(ns, u) {
+	for _, owner := range c.ownerRefs(ns, u) {
 		add(owner)
 	}
 
@@ -1423,9 +1424,35 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 			add(resourceRef("Service", ns, svc, "", "v1", "services", "Namespaced", "service"))
 		}
 	case group == "autoscaling" && plural == "horizontalpodautoscalers":
+		// the target with its own apiVersion, resolved through discovery
+		// (coverage S9 §7): a Rollout or any scalable CRD links too
+		api := nestedString(u.Object, "spec", "scaleTargetRef", "apiVersion")
 		kind := nestedString(u.Object, "spec", "scaleTargetRef", "kind")
 		target := nestedString(u.Object, "spec", "scaleTargetRef", "name")
-		if ref, ok := kindResourceRef(kind, ns, target, "scale target"); ok {
+		if ref, ok := c.refFor(api, kind, ns, target, "scale target"); ok {
+			add(ref)
+		}
+	case group == keda.Group && plural == keda.ResourceScaledObjects:
+		// KEDA defaults the target to apps/v1 Deployment
+		api := nestedString(u.Object, "spec", "scaleTargetRef", "apiVersion")
+		if api == "" {
+			api = "apps/v1"
+		}
+		kind := nestedString(u.Object, "spec", "scaleTargetRef", "kind")
+		if kind == "" {
+			kind = "Deployment"
+		}
+		if ref, ok := c.refFor(api, kind, ns, nestedString(u.Object, "spec", "scaleTargetRef", "name"), "scale target"); ok {
+			add(ref)
+		}
+		for _, ref := range c.kedaHPARefs(ctx, ns, string(u.GetUID())) {
+			add(ref)
+		}
+		for _, ref := range c.kedaAuthRefs(u, ns) {
+			add(ref)
+		}
+	case group == keda.Group && plural == keda.ResourceScaledJobs:
+		for _, ref := range c.kedaAuthRefs(u, ns) {
 			add(ref)
 		}
 	case group == "cert-manager.io" && plural == "certificates":
@@ -1521,6 +1548,44 @@ func resourceRef(kind, namespace, name, group, version, plural, scope, relation 
 	}
 }
 
+// refFor resolves an object reference to a related ref through discovery
+// (coverage S9 §7): its group, version and plural from the served API, and
+// the namespace from the discovered scope - a cluster-scoped kind links
+// without one. The core switch is only the fallback for a core kind whose
+// apiVersion names its own group, when discovery cannot answer; anything
+// else is unresolved and renders as plain text, never a guessed plural.
+func (c *ClusterConn) refFor(apiVersion, kind, namespace, name, relation string) (crd.RelatedRef, bool) {
+	if apiVersion == "" || kind == "" || name == "" {
+		return crd.RelatedRef{}, false
+	}
+	if c.typed != nil {
+		if gvr, res, err := c.resolveGVK(apiVersion, kind); err == nil {
+			scope, ns := "Cluster", ""
+			if res.Namespaced {
+				scope, ns = "Namespaced", namespace
+			}
+			return resourceRef(kind, ns, name, gvr.Group, gvr.Version, gvr.Resource, scope, relation), true
+		}
+	}
+	return coreKindRef(apiVersion, kind, namespace, name, relation)
+}
+
+// coreKindRef is the core kinds' fallback: only when the apiVersion's group
+// is the kind's own (a Deployment in another group is not apps').
+func coreKindRef(apiVersion, kind, namespace, name, relation string) (crd.RelatedRef, bool) {
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return crd.RelatedRef{}, false
+	}
+	ref, ok := kindResourceRef(kind, namespace, name, relation)
+	if !ok || ref.Group != gv.Group {
+		return crd.RelatedRef{}, false
+	}
+	return ref, true
+}
+
+// kindResourceRef is the core kinds' table, by kind alone: callers check
+// the group (coreKindRef).
 func kindResourceRef(kind, namespace, name, relation string) (crd.RelatedRef, bool) {
 	switch kind {
 	case "Deployment":
@@ -1543,11 +1608,60 @@ func kindResourceRef(kind, namespace, name, relation string) (crd.RelatedRef, bo
 	return crd.RelatedRef{}, false
 }
 
-func ownerRefs(namespace string, u *unstructured.Unstructured) []crd.RelatedRef {
+// ownerRefs resolves each owner reference with its own apiVersion (S9 §7):
+// an HPA links to its ScaledObject, a Job to its ScaledJob.
+func (c *ClusterConn) ownerRefs(namespace string, u *unstructured.Unstructured) []crd.RelatedRef {
 	owners := u.GetOwnerReferences()
 	out := make([]crd.RelatedRef, 0, len(owners))
 	for _, owner := range owners {
-		if ref, ok := kindResourceRef(owner.Kind, namespace, owner.Name, "owner"); ok {
+		if ref, ok := c.refFor(owner.APIVersion, owner.Kind, namespace, owner.Name, "owner"); ok {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// kedaHPARefs are the HPAs a ScaledObject controls: by controller UID,
+// never the name (S9 §1.4). Bounded; a failed read adds nothing.
+func (c *ClusterConn) kedaHPARefs(ctx context.Context, ns, uid string) []crd.RelatedRef {
+	if c.typed == nil || uid == "" {
+		return nil
+	}
+	list, err := c.typed.AutoscalingV2().HorizontalPodAutoscalers(ns).List(ctx, metav1.ListOptions{Limit: 500})
+	if err != nil || list == nil {
+		return nil
+	}
+	var out []crd.RelatedRef
+	for i := range list.Items {
+		for _, r := range list.Items[i].OwnerReferences {
+			if r.Controller != nil && *r.Controller && string(r.UID) == uid {
+				out = append(out, resourceRef("HorizontalPodAutoscaler", ns, list.Items[i].Name, "autoscaling", "v2", "horizontalpodautoscalers", "Namespaced", "HPA"))
+			}
+		}
+	}
+	return out
+}
+
+// kedaAuthRefs are a scaler's authentication references, resolved
+// through discovery (a ClusterTriggerAuthentication is cluster-scoped).
+func (c *ClusterConn) kedaAuthRefs(u *unstructured.Unstructured, ns string) []crd.RelatedRef {
+	triggers, _, _ := unstructured.NestedSlice(u.Object, "spec", "triggers")
+	var out []crd.RelatedRef
+	for _, t := range triggers {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		ar, ok := m["authenticationRef"].(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := ar["name"].(string)
+		kind, _ := ar["kind"].(string)
+		if kind != keda.KindClusterTriggerAuth {
+			kind = keda.KindTriggerAuth
+		}
+		if ref, ok := c.refFor(keda.Group+"/"+keda.APIVersion, kind, ns, name, "authentication"); ok {
 			out = append(out, ref)
 		}
 	}

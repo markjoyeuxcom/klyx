@@ -125,11 +125,11 @@ var (
 	hpaOK    = []string{"AbleToScale=True:ReadyForNewScale", "ScalingActive=True:ValidMetricFound", "ScalingLimited=False:DesiredWithinRange"}
 )
 
-func current(h *hpa.HPA) HPAEvidence  { return HPAEvidence{Joined: h, Current: true, Complete: true} }
-func absent() HPAEvidence              { return HPAEvidence{Current: true, Complete: true} }
-func capped(h *hpa.HPA) HPAEvidence    { return HPAEvidence{Joined: h, Current: true} }
-func stale(h *hpa.HPA) HPAEvidence     { return HPAEvidence{Joined: h, AsOf: now.Add(-5 * time.Minute)} }
-func unreadable() HPAEvidence          { return HPAEvidence{} }
+func current(h *hpa.HPA) HPAEvidence { return HPAEvidence{Joined: h, Current: true, Complete: true} }
+func absent() HPAEvidence            { return HPAEvidence{Current: true, Complete: true} }
+func capped(h *hpa.HPA) HPAEvidence  { return HPAEvidence{Joined: h, Current: true} }
+func stale(h *hpa.HPA) HPAEvidence   { return HPAEvidence{Joined: h, AsOf: now.Add(-5 * time.Minute)} }
+func unreadable() HPAEvidence        { return HPAEvidence{} }
 func eps(k EpisodeKind, age time.Duration, observed bool) map[EpisodeKind]Episode {
 	return map[EpisodeKind]Episode{k: {Start: now.Add(-age), Observed: observed}}
 }
@@ -248,12 +248,12 @@ func TestProjectNeverRetains(t *testing.T) {
 
 func TestVersionOfImage(t *testing.T) {
 	for img, want := range map[string]string{
-		"ghcr.io/kedacore/keda:2.21.0":                  "2.21.0",
-		"kedacore/keda:2.17.3@sha256:abc":               "2.17.3",
-		"docker.io/kedacore/keda:v2.12.1":               "2.12.1",
-		"registry.example/kedacore/keda:2.21.0":         "unknown", // not KEDA's own repository
+		"ghcr.io/kedacore/keda:2.21.0":                   "2.21.0",
+		"kedacore/keda:2.17.3@sha256:abc":                "2.17.3",
+		"docker.io/kedacore/keda:v2.12.1":                "2.12.1",
+		"registry.example/kedacore/keda:2.21.0":          "unknown", // not KEDA's own repository
 		"ghcr.io/kedacore/keda-metrics-apiserver:2.21.0": "unknown", // not the operator
-		"ghcr.io/kedacore/keda:main":                    "unknown",
+		"ghcr.io/kedacore/keda:main":                     "unknown",
 	} {
 		if got := VersionOfImage(img).String(); got != want {
 			t.Errorf("%s: %s, want %s", img, got, want)
@@ -365,7 +365,9 @@ func TestHPAResultTable(t *testing.T) {
 	mirrorFalse := func() *ScaledObject {
 		return so(nil, ready, active, noFb, notPause, "HPAActive=False:FailedGetExternalMetric:HPA is not actively scaling")
 	}
-	mirrorTrue := func() *ScaledObject { return so(nil, ready, active, noFb, notPause, "HPAActive=True:HPAActive:HPA is actively scaling") }
+	mirrorTrue := func() *ScaledObject {
+		return so(nil, ready, active, noFb, notPause, "HPAActive=True:HPAActive:HPA is actively scaling")
+	}
 	for _, tc := range []struct {
 		name  string
 		s     *ScaledObject

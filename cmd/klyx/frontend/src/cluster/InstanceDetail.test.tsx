@@ -800,20 +800,25 @@ describe("InstanceDetail — HPA scaling", () => {
     expect(getByText("—")).toBeTruthy();
   });
 
-  it("Deployment target renders workloads link", () => {
+  // coverage S9 §7: the target resolved through discovery opens the object
+  // itself; an unresolved target is plain text
+  const scaleTarget = { relation: "scale target", kind: "Rollout", namespace: "default", name: "web", group: "argoproj.io", version: "v1alpha1", plural: "rollouts", scope: "Namespaced" };
+
+  it("a resolved target renders a link", () => {
+    seedHPA({ detail: { ...hpaDetail, related: [scaleTarget] } });
     const { getByTestId } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);
     expect(getByTestId("hpa-target-link")).toBeTruthy();
   });
 
-  it("clicking Deployment target link sets section to workloads", () => {
+  it("clicking the target link opens the target object itself", () => {
     useFleet.getState().openCluster("x");
-    seedHPA();
+    seedHPA({ detail: { ...hpaDetail, related: [scaleTarget] } });
     const { getByTestId } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);
     fireEvent.click(getByTestId("hpa-target-link"));
-    expect(useFleet.getState().route).toMatchObject({ section: "workloads" });
+    expect(useFleet.getState().route).toMatchObject({ section: "resources", resource: { group: "argoproj.io", plural: "rollouts" } });
   });
 
-  it("non-Deployment target kind renders plain text (no link)", () => {
+  it("an unresolved target renders plain text (no link)", () => {
     const cronScaling: HPAScalingDTO = { ...baseHPAScaling, targetKind: "CustomResource", targetName: "my-cr" };
     seedHPA({ detail: { ...hpaDetail, hpaScaling: cronScaling } });
     const { queryByTestId, getByText } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);

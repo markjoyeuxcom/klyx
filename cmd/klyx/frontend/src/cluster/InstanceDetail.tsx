@@ -516,9 +516,11 @@ function parsePercent(s: string): number | null {
 }
 
 // HPAScalingSection renders the scaling summary for an autoscaling HPA:
-// replica line, scale-target line (with workloads lens link for
-// Deployment/StatefulSet), per-metric table, and last-scale age.
-function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDTO }) {
+// replica line, scale-target line, per-metric table, and last-scale age.
+// The target links to the object itself when the backend resolved it
+// through discovery (coverage S9 §7) - a Deployment, a Rollout or any
+// scalable kind; an unresolved target is plain text.
+function HPAScalingSection({ scaling, target }: { cluster: string; scaling: HPAScalingDTO; target?: RelatedRefDTO }) {
   const atMax = scaling.currentReplicas >= scaling.maxReplicas && scaling.desiredReplicas >= scaling.maxReplicas;
   const replicaMismatch = scaling.desiredReplicas !== scaling.currentReplicas;
 
@@ -528,17 +530,12 @@ function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDT
     ? "var(--color-text-info)"
     : "var(--color-text-primary)";
 
-  // Cross-link: for Deployment and StatefulSet, switch to the workloads lens
-  // and expand the matching row using the live store state. The workload key
-  // is "<kind>/<namespace>/<name>" — we don't know the namespace from the HPA
-  // alone so we toggle by name lookup; `toggleWorkloadExpand` handles the key.
-  // Since we don't have the HPA's namespace here (the section is standalone),
-  // we navigate to workloads and let the user pick; the link is still more
-  // useful than plain text.
-  const isWorkloadTarget = scaling.targetKind === "Deployment" || scaling.targetKind === "StatefulSet";
+  const isWorkloadTarget = target != null;
 
   const handleTargetLink = () => {
-    useFleet.getState().setSection("workloads");
+    if (!target) return;
+    useFleet.getState().openResource({ group: target.group, version: target.version, plural: target.plural, kind: target.kind, scope: target.scope });
+    useFleet.getState().openInstance(target.namespace, target.name);
   };
 
   const targetEl = isWorkloadTarget ? (
@@ -939,7 +936,8 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
             )}
             <SummaryBlock d={d} />
             <FactsSummary facts={d.facts} />
-            {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />}
+            {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling}
+              target={(d.related ?? []).find((r) => r.relation === "scale target")} />}
             {d.serviceBacking != null && <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />}
             {d.secretKeys && d.secretKeys.length > 0 && !removed && <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />}
             {resource.kind === "ServiceAccount" && resource.group === "" && d.uid && !removed && <ServiceAccountIdentity cluster={cluster} namespace={instance.namespace} name={instance.name} uid={d.uid} active />}

@@ -36,3 +36,23 @@ describe("FieldsBlocks (implementation review 1)", () => {
     expect(container.textContent).toContain("could not be drawn");
   });
 });
+
+// Coverage S9 §7: an owner links only to the related ref of its own group,
+// kind and name.
+describe("ObjectBlock owner links (coverage S9)", () => {
+  it("links a ScaledObject owner by its group; a same-named kind elsewhere stays text", async () => {
+    const { ObjectBlock } = await import("./genericInspector");
+    const { fireEvent, screen } = await import("@testing-library/react");
+    const { useFleet } = await import("../store/fleet");
+    const d = { kind: "HorizontalPodAutoscaler", namespace: "team", name: "web-autoscaler", created: "", labels: {}, conditions: [], events: [], yaml: "",
+      owners: [{ apiVersion: "keda.sh/v1alpha1", kind: "ScaledObject", name: "web", controller: true },
+        { apiVersion: "example.com/v1", kind: "ScaledObject", name: "web" }] } as unknown as InstanceDetailDTO;
+    const related = [{ relation: "owner", kind: "ScaledObject", namespace: "team", name: "web", group: "keda.sh", version: "v1alpha1", plural: "scaledobjects", scope: "Namespaced" }];
+    useFleet.getState().openCluster("x");
+    render(<ObjectBlock cluster="x" d={d} related={related} />);
+    const links = screen.getAllByRole("button").filter((b) => b.textContent?.includes("ScaledObject"));
+    expect(links).toHaveLength(1);
+    fireEvent.click(links[0]);
+    expect(useFleet.getState().route).toMatchObject({ resource: { group: "keda.sh", plural: "scaledobjects" } });
+  });
+});
