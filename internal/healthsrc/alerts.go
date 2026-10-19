@@ -31,6 +31,9 @@ const (
 	SubjectNotFound       = "not found"       // a held kind, read live and complete
 	SubjectNotEstablished = "not established" // a held kind not read live and complete
 	SubjectNotLookedUp    = "not looked up"   // a kind the Observer does not hold
+	// SubjectLastObserved: held, but that kind's read is not live and
+	// complete now - the object as last observed, never current evidence.
+	SubjectLastObserved = "last observed"
 )
 
 // AlertsDeps are what the Alerts snapshot needs: the connection's keyed read.
@@ -69,16 +72,18 @@ func Alerts(d AlertsDeps) ([]observe.SnapshotSpec, []observe.DomainSpec) {
 type AlertRows struct {
 	Identity  string
 	Source    string
-	Note      string
 	Match     map[string]string
-	ReadAt    time.Time
 	Truncated bool
 	Alerts    []AlertRow
 }
 
 // AlertRow is one alert's display values and its subject's state.
 type AlertRow struct {
-	Alert                alertmanager.DisplayAlert
+	Key   string // opaque: source identity and fingerprint (alertmanager.AlertKey)
+	Alert alertmanager.DisplayAlert
+	// Subject is the raw subject, for in-process correlation only (Explain's
+	// name match for a kind Klyx does not hold); the rows DTO never carries it.
+	Subject              alertmanager.Subject
 	SubjectGVR           string
 	SubjectState         string
 	SubjectUID           string
@@ -126,6 +131,9 @@ func (idx subjectIndex) resolve(s alertmanager.Subject) (state, uid string, crea
 	}
 	if o, ok := idx.objects[kind][s.Namespace+"/"+s.Name]; ok {
 		t := o.created
+		if !idx.complete[kind] {
+			return SubjectLastObserved, o.uid, &t
+		}
 		return SubjectFound, o.uid, &t
 	}
 	if idx.complete[kind] {
@@ -177,13 +185,13 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 	counts.Truncated = env.Truncated
 	idx := indexSubjects(c)
 	var counted []alertmanager.Item
-	rows := AlertRows{Identity: env.Identity, Source: env.Source, Note: env.Note, Match: env.Match, ReadAt: env.ReadAt, Truncated: env.Truncated}
+	rows := AlertRows{Identity: env.Identity, Source: env.Source, Match: env.Match, Truncated: env.Truncated}
 	for _, it := range env.Alerts {
-		switch it.Display.State {
+		switch it.Display.StateClass {
 		case alertmanager.StateActive:
 			if it.Counted {
 				counts.Counted++
-				if alertmanager.SeverityOf(map[string]string{"severity": it.Display.Severity}) == alertmanager.SeverityCritical {
+				if it.Display.SeverityClass == alertmanager.SeverityCritical {
 					counts.Critical++
 				} else {
 					counts.Warning++
@@ -201,13 +209,13 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 		}
 		if c.Rows {
 			state, uid, created := idx.resolve(it.Subject)
-			rows.Alerts = append(rows.Alerts, AlertRow{Alert: it.Display, SubjectGVR: subjectGVR(it.Subject), SubjectState: state, SubjectUID: uid,
+			rows.Alerts = append(rows.Alerts, AlertRow{Key: it.Key, Alert: it.Display, Subject: it.Subject, SubjectGVR: subjectGVR(it.Subject), SubjectState: state, SubjectUID: uid,
 				SubjectCreated: created, StartedBeforeCreated: created != nil && !it.Display.StartsAt.IsZero() && it.Display.StartsAt.Before(*created)})
 		}
 	}
 	sort.SliceStable(counted, func(i, j int) bool {
 		a, b := counted[i].Display, counted[j].Display
-		if ra, rb := severityRank(string(alertmanager.SeverityOf(map[string]string{"severity": a.Severity}))), severityRank(string(alertmanager.SeverityOf(map[string]string{"severity": b.Severity}))); ra != rb {
+		if ra, rb := severityRank(string(a.SeverityClass)), severityRank(string(b.SeverityClass)); ra != rb {
 			return ra < rb
 		}
 		return a.StartsAt.Before(b.StartsAt)
@@ -218,8 +226,8 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 		}
 		_, uid, _ := idx.resolve(it.Subject)
 		ref := observe.Ref{Cluster: cluster, GVR: subjectGVR(it.Subject), Namespace: it.Display.Subject.Namespace, Name: it.Display.Subject.Name, UID: uid,
-			Role: string(alertmanager.SeverityOf(map[string]string{"severity": it.Display.Severity})), Label: it.Display.Name,
-			Reason: it.Display.Summary, Fingerprint: it.Display.Fingerprint}
+			Role: string(it.Display.SeverityClass), Label: it.Display.Name,
+			Reason: it.Display.Summary, Fingerprint: it.Key}
 		if !it.Display.StartsAt.IsZero() {
 			t := it.Display.StartsAt
 			ref.Since = &t
@@ -235,15 +243,9 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 // RowFacts are the read's own facts, beside its rows (the lens's source
 // line): display values, and the read time and truncation.
 func (r AlertRows) RowFacts() map[string]any {
-	f := map[string]any{"alertsSource": r.Source, "alertsTruncated": r.Truncated}
-	if r.Note != "" {
-		f["alertsNote"] = r.Note
-	}
+	f := map[string]any{"alertsSource": r.Source, "alertsSourceKey": alertmanager.SourceKey(r.Identity), "alertsTruncated": r.Truncated}
 	if len(r.Match) > 0 {
 		f["alertsMatch"] = r.Match
-	}
-	if !r.ReadAt.IsZero() {
-		f["alertsReadAt"] = r.ReadAt.UTC().Format(time.RFC3339)
 	}
 	return f
 }

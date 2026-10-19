@@ -10,7 +10,19 @@ const (
 	StateActive      = "active"
 	StateSuppressed  = "suppressed"
 	StateUnprocessed = "unprocessed"
+	// StateOther is the class of a state Klyx does not know.
+	StateOther = "other"
 )
+
+// StateClassOf is a state's class: one of Klyx's states, or StateOther. It
+// is read from the raw state, never from a display value.
+func StateClassOf(state string) string {
+	switch state {
+	case StateActive, StateSuppressed, StateUnprocessed:
+		return state
+	}
+	return StateOther
+}
 
 // MuteKind is what the groups established about an active alert's mutes.
 type MuteKind string

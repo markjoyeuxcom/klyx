@@ -708,8 +708,9 @@ function WorkloadInspector({
   const ai = useInspectorAI(workload.uid ? { kind: "row" as const, task: "workloads", part: "workloads", uid: workload.uid } : null, `${workload.kind}/${workload.namespace}/${workload.name}`, !gone, cluster);
   // coverage S8a: alerts naming this workload, and its current pods
   const podUIDs = workload.pods.map((p) => p.uid ?? "").filter(Boolean).join(",");
-  const alertTarget = useMemo(() => (workload.uid ? { uid: workload.uid, kind: workload.kind, namespace: workload.namespace, name: workload.name, podUIDs: podUIDs ? podUIDs.split(",") : [] } : null),
-    [workload.uid, workload.kind, workload.namespace, workload.name, podUIDs]);
+  const alertTarget = useMemo(() => (workload.uid ? { uid: workload.uid, kind: workload.kind, namespace: workload.namespace, name: workload.name,
+    podUIDs: podUIDs ? podUIDs.split(",") : [], podsComplete: podsEv === "complete" } : null),
+  [workload.uid, workload.kind, workload.namespace, workload.name, podUIDs, podsEv]);
   const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   // Describe (slice 14c): kubectl's report for this object, read-only; never
   // for a removed or unverified selection.

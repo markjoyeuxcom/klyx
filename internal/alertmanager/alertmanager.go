@@ -6,6 +6,7 @@
 package alertmanager
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,10 +104,20 @@ func parseTime(v, field string, i int) (time.Time, error) {
 	return t, nil
 }
 
+// isArray: the body is a JSON array. json.Unmarshal accepts null as a nil
+// slice, which would read as a complete empty list.
+func isArray(body []byte) bool {
+	b := bytes.TrimLeft(body, " \t\r\n")
+	return len(b) > 0 && b[0] == '['
+}
+
 // ParseAlerts parses the flat list. Every alert needs a fingerprint, labels
 // and a status state; a time that does not parse fails the read.
 func ParseAlerts(body []byte) ([]Alert, error) {
 	var wire []wireAlert
+	if !isArray(body) {
+		return nil, shape("the alert list is not a list")
+	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, shape("the alert list does not decode")
 	}
@@ -150,6 +161,9 @@ func ParseGroups(body []byte) ([]Group, error) {
 			Name string `json:"name"`
 		} `json:"receiver"`
 		Alerts []wireAlert `json:"alerts"`
+	}
+	if !isArray(body) {
+		return nil, shape("the alert groups are not a list")
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, shape("the alert groups do not decode")

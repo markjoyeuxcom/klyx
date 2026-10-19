@@ -1,6 +1,9 @@
 package alertmanager
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
 
 // Subject is the Kubernetes object an alert's labels name (S8a §5): a
 // correlation by label, never a join by UID.
@@ -75,17 +78,40 @@ func SubjectOf(labels map[string]string) Subject {
 // source line and every alert's raw subject (for joins) and display values.
 type Read struct {
 	Identity  string
-	Source    string // the source line, a display value
-	Note      string // a display value, e.g. discovery could not be re-read
-	Match     map[string]string
+	Source    string            // the source line, a display value
+	Match     map[string]string // a display value (DisplayMatch)
 	Alerts    []Item
 	Truncated bool
-	ReadAt    time.Time
+	// No read time: the snapshot's freshness (its coverage's AsOf) is the
+	// read's time, so an unchanged read is an unchanged item.
 }
 
 // Item is one alert of a read.
 type Item struct {
 	Subject Subject // raw: for the joins only
 	Counted bool
+	// Key is the alert's opaque key: its source identity and raw
+	// fingerprint, hashed. Selection and reveal use it, so an alert of
+	// another source sharing a fingerprint is never taken for this one.
+	Key     string
 	Display DisplayAlert
+}
+
+// AlertKey is an alert's opaque key within its source (Item.Key).
+func AlertKey(identity, fingerprint string) string {
+	return digest(identity + "\x00" + fingerprint)
+}
+
+// SourceKey is a source identity's opaque key: display-safe, so it can
+// travel to the lens, which clears a selection when it changes.
+func SourceKey(identity string) string {
+	if identity == "" {
+		return ""
+	}
+	return digest(identity)
+}
+
+func digest(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
 }

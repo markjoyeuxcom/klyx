@@ -47,6 +47,16 @@ describe("rows deltas (addendum §3.3)", () => {
     expect(held()).toEqual({ y: 1, z: 1 });
   });
 
+  it("an alert row is keyed by its opaque key (coverage S8a, Codex review of 71c181c)", () => {
+    type Alert = { key: string; v: number };
+    applyRows("a", full(3, [{ key: "A/fp", v: 1 }, { key: "B/fp", v: 1 }] as unknown as Row[]));
+    applyRows("a", delta(3, 4, [{ key: "B/fp", v: 2 }] as unknown as Row[], ["A/fp"]));
+    expect((sub().rows as unknown as Alert[]).map((r) => `${r.key}:${r.v}`)).toEqual(["B/fp:2"]);
+    const kept = (sub().rows as unknown as Alert[])[0];
+    applyRows("a", delta(4, 5, []));
+    expect((sub().rows as unknown as Alert[])[0]).toBe(kept); // an unchanged read sends no rows
+  });
+
   it("an empty delta carries a fact-, freshness- or coverage-only change; the rows keep their identity", () => {
     applyRows("a", full(1, [{ uid: "x", v: 1 }]));
     const rows = sub().rows;

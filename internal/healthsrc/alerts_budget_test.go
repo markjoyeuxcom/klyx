@@ -102,7 +102,7 @@ func TestAlertsBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := alertmanager.Read{Identity: "id", Source: "src", ReadAt: time.Now()}
+		r := alertmanager.Read{Identity: "id", Source: "src"}
 		for _, x := range alertmanager.Reduce(alerts, gs) {
 			r.Alerts = append(r.Alerts, alertmanager.Item{Subject: alertmanager.SubjectOf(x.Labels), Counted: x.Counted(), Display: alertmanager.Display(x, red)})
 		}

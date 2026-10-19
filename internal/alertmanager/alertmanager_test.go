@@ -40,6 +40,9 @@ func TestParseFailsWhole(t *testing.T) {
 	for name, body := range map[string]string{
 		"not json":          `<html>`,
 		"an object":         `{"alerts":[]}`,
+		"null":              `null`,
+		"null, spaced":      " \n null",
+		"empty":             ``,
 		"no fingerprint":    `[{"labels":{},"status":{"state":"active"}}]`,
 		"empty fingerprint": `[{"fingerprint":"","labels":{},"status":{"state":"active"}}]`,
 		"no labels":         `[{"fingerprint":"a","status":{"state":"active"}}]`,
@@ -54,6 +57,8 @@ func TestParseFailsWhole(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		"not json":       `nope`,
+		"null":           `null`,
+		"an object":      `{}`,
 		"no receiver":    `[{"labels":{},"alerts":[]}]`,
 		"empty receiver": `[{"labels":{},"receiver":{"name":""},"alerts":[]}]`,
 		"alert no fp":    `[{"labels":{},"receiver":{"name":"r"},"alerts":[{"status":{"state":"active"}}]}]`,

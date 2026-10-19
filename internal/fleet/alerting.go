@@ -42,6 +42,9 @@ const (
 	amMaxAlerts      = 5000
 	amMaxAppearances = 20000
 	amMaxInFlight    = 4
+	// amMaxProofEndpoints bounds the governing Service's proof: one Pod GET
+	// per endpoint, at most every amDiscoveryTTL.
+	amMaxProofEndpoints = 16
 )
 
 var errAMTooLarge = fmt.Errorf("the Alertmanager response exceeded %d MiB; Klyx stopped reading it", amMaxBytes>>20)
@@ -238,7 +241,6 @@ func serviceAt(s endpointhttp.Service) string {
 type amSource struct {
 	identity string
 	display  string
-	note     string
 	get      func(ctx context.Context, path string, q url.Values) (int, []byte, error)
 	redactor safehttp.Redactor
 	match    map[string]string
@@ -277,32 +279,35 @@ func (c *ClusterConn) resolveAlertmanagerLocked(ctx context.Context) (amSource, 
 	}
 	if cfg != nil && cfg.ServiceRef != nil {
 		svc := serviceOf(cfg.ServiceRef)
-		return c.proxySourceLocked(svc, amIdentity("service", serviceAt(svc), tenant, match), "Service "+serviceAt(svc), tenant, match, rev, "")
+		return c.proxySourceLocked(svc, amIdentity("service", serviceAt(svc), tenant, match), "Service "+serviceAt(svc), tenant, match, rev)
 	}
 	d := c.discoverAlertmanagerLocked(ctx)
-	note := ""
 	switch {
 	case d.err != nil && c.am.found == nil:
 		return amSource{identity: c.am.identity}, fmt.Errorf("Alertmanager discovery could not be read: %w", d.err)
 	case d.err != nil:
-		note = "discovery could not be re-read: " + d.err.Error()
-		d = c.am.found
+		// the installation behind the found Service is unproven now: the
+		// read fails under the found source's identity, so its last list is
+		// kept, stale, and never read again as live through that Service
+		f := c.am.found
+		return amSource{identity: amIdentity("discovered", serviceAt(f.svc)+"|"+f.resource, tenant, match)},
+			fmt.Errorf("Alertmanager discovery could not be re-read, so %s is not read through %s: %w", f.resource, f.via, d.err)
 	case d.ambiguous != "":
 		return amSource{identity: "ambiguous|" + d.ambiguous}, errors.New(d.ambiguous)
 	case d.none:
 		return amSource{identity: "none"}, ErrNoAlertmanager
 	}
 	return c.proxySourceLocked(d.svc, amIdentity("discovered", serviceAt(d.svc)+"|"+d.resource, tenant, match),
-		"discovered "+d.resource+" through "+d.via, tenant, match, rev, note)
+		"discovered "+d.resource+" through "+d.via, tenant, match, rev)
 }
 
-func (c *ClusterConn) proxySourceLocked(svc endpointhttp.Service, identity, display, tenant string, match map[string]string, rev uint64, note string) (amSource, error) {
+func (c *ClusterConn) proxySourceLocked(svc endpointhttp.Service, identity, display, tenant string, match map[string]string, rev uint64) (amSource, error) {
 	rc, err := c.amRESTLocked()
 	if err != nil {
 		return amSource{identity: identity}, fmt.Errorf("the service-proxy client could not be built: %w", err)
 	}
 	p := endpointhttp.NewProxy(rc, svc, tenant, amLimits)
-	return amSource{identity: identity, display: display, note: note, get: p.Get, match: match, rev: rev}, nil
+	return amSource{identity: identity, display: display, get: p.Get, match: match, rev: rev}, nil
 }
 
 // amRESTLocked is the guarded service-proxy client with the Alertmanager
@@ -381,7 +386,9 @@ func (c *ClusterConn) discoverAlertmanagerLocked(ctx context.Context) *amDiscove
 //  4. else the governing alertmanager-operated, only when its EndpointSlices
 //     hold pods owned by UID by one StatefulSet that the resource owns.
 func (c *ClusterConn) discoverAlertmanager(ctx context.Context) *amDiscovery {
-	rl, err := c.discovery().ServerResourcesForGroupVersion(amResourceGVR.GroupVersion().String())
+	// bounded by the read's context: a discovery request never outlives the
+	// snapshot's deadline or a re-key while am.mu and readMu are held
+	rl, err := c.probeDiscovery().ServerResourcesForGroupVersionCtx(ctx, amResourceGVR.GroupVersion().String())
 	switch {
 	case apierrors.IsNotFound(err):
 		return &amDiscovery{none: true}
@@ -447,18 +454,20 @@ func (c *ClusterConn) discoverAlertmanager(ctx context.Context) *amDiscovery {
 	return &amDiscovery{ambiguous: "no Service for " + resource + " was found; set alertmanager.serviceRef"}
 }
 
-// amRoutePrefix is the path the operator serves the instance under: its
-// routePrefix, else its externalUrl's path.
+// amRoutePrefix is the path the operator serves the instance under. The
+// Prometheus Operator (v0.94.1, pkg/alertmanager/statefulset.go) always
+// passes --web.route-prefix: spec.routePrefix, else "/". externalUrl is the
+// URL Alertmanager advertises, never where it serves.
 func amRoutePrefix(am *unstructured.Unstructured) string {
-	if p, _, _ := unstructured.NestedString(am.Object, "spec", "routePrefix"); p != "" && p != "/" {
-		return p
+	p, _, _ := unstructured.NestedString(am.Object, "spec", "routePrefix")
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		return ""
 	}
-	if raw, _, _ := unstructured.NestedString(am.Object, "spec", "externalUrl"); raw != "" {
-		if u, err := url.Parse(raw); err == nil && u.Path != "" && u.Path != "/" {
-			return u.Path
-		}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
 	}
-	return ""
+	return p
 }
 
 // proveGoverning proves the governing Service fronts only the resource's
@@ -477,19 +486,31 @@ func (c *ClusterConn) proveGoverning(ctx context.Context, ns string, amUID types
 	pods := 0
 	for _, sl := range slices.Items {
 		for _, ep := range sl.Endpoints {
-			if ep.TargetRef == nil || ep.TargetRef.Kind != "Pod" || ep.TargetRef.Name == "" {
-				return "an endpoint has no Pod targetRef"
+			ref := ep.TargetRef
+			if ref == nil || ref.Kind != "Pod" || ref.Name == "" || ref.UID == "" || (ref.Namespace != "" && ref.Namespace != ns) {
+				return "an endpoint has no Pod targetRef with a UID in " + ns
 			}
-			pod, err := c.typed.CoreV1().Pods(ns).Get(ctx, ep.TargetRef.Name, metav1.GetOptions{})
+			if pods++; pods > amMaxProofEndpoints {
+				return fmt.Sprintf("it has more than %d endpoints to prove", amMaxProofEndpoints)
+			}
+			pod, err := c.typed.CoreV1().Pods(ns).Get(ctx, ref.Name, metav1.GetOptions{})
 			if err != nil {
 				return "a Pod behind it could not be read"
+			}
+			// the endpoint's address belongs to the Pod its targetRef names:
+			// a same-name replacement proves nothing about that address
+			if pod.UID != ref.UID {
+				return "an endpoint names a Pod that has since been replaced"
 			}
 			owner := metav1.GetControllerOf(pod)
 			if owner == nil || owner.Kind != "StatefulSet" {
 				return "a Pod behind it is not owned by a StatefulSet"
 			}
-			if stsUID != "" && string(owner.UID) != stsUID {
-				return "its Pods belong to more than one StatefulSet"
+			if stsUID != "" {
+				if string(owner.UID) != stsUID {
+					return "its Pods belong to more than one StatefulSet"
+				}
+				continue // that StatefulSet is already proven
 			}
 			stsUID = string(owner.UID)
 			sts, err := c.typed.AppsV1().StatefulSets(ns).Get(ctx, owner.Name, metav1.GetOptions{})
@@ -500,7 +521,6 @@ func (c *ClusterConn) proveGoverning(ctx context.Context, ns string, amUID types
 			if amOwner == nil || amOwner.Kind != "Alertmanager" || amOwner.UID != amUID {
 				return "its StatefulSet is not owned by the Alertmanager resource"
 			}
-			pods++
 		}
 	}
 	if pods == 0 {
@@ -518,6 +538,13 @@ func (c *ClusterConn) proveGoverning(ctx context.Context, ns string, amUID types
 func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.Read, error) {
 	c.am.readMu.Lock()
 	defer c.am.readMu.Unlock()
+	// the fleet-wide slot covers the whole read, discovery's GETs included
+	select {
+	case amReads <- struct{}{}:
+		defer func() { <-amReads }()
+	case <-ctx.Done():
+		return alertmanager.Read{}, ctx.Err()
+	}
 	// the resolution, the identity it gives and any re-key are one step
 	// against configuration changes, which take the same lock
 	c.am.mu.Lock()
@@ -537,12 +564,6 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.
 	c.am.mu.Unlock()
 	if err != nil {
 		return alertmanager.Read{Identity: src.identity}, err
-	}
-	select {
-	case amReads <- struct{}{}:
-		defer func() { <-amReads }()
-	case <-ctx.Done():
-		return alertmanager.Read{Identity: src.identity}, ctx.Err()
 	}
 	filter := alertmanager.FilterParams(src.match)
 	q := url.Values{"active": {"true"}, "silenced": {"true"}, "inhibited": {"true"}, "unprocessed": {"true"}, "filter": filter}
@@ -572,13 +593,14 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.
 		}
 	}
 	reduced := alertmanager.Reduce(kept, groups)
-	out := alertmanager.Read{Identity: src.identity, Source: src.redactor.Text(src.display), Match: src.match, Note: src.redactor.Text(src.note), ReadAt: c.clk.Now()}
+	out := alertmanager.Read{Identity: src.identity, Source: src.redactor.Text(src.display), Match: alertmanager.DisplayMatch(src.match, src.redactor)}
 	if len(reduced) > amMaxAlerts {
 		reduced, out.Truncated = reduced[:amMaxAlerts], true
 	}
 	out.Alerts = make([]alertmanager.Item, 0, len(reduced))
 	for _, r := range reduced {
-		out.Alerts = append(out.Alerts, alertmanager.Item{Subject: alertmanager.SubjectOf(r.Labels), Counted: r.Counted(), Display: alertmanager.Display(r, src.redactor)})
+		out.Alerts = append(out.Alerts, alertmanager.Item{Subject: alertmanager.SubjectOf(r.Labels), Counted: r.Counted(),
+			Key: alertmanager.AlertKey(src.identity, r.Fingerprint), Display: alertmanager.Display(r, src.redactor)})
 	}
 	return out, nil
 }

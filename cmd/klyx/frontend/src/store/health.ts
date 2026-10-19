@@ -238,7 +238,8 @@ export function openFailed(handle: string, token: string, error: string, now = D
   return true;
 }
 
-const uidOf = (r: unknown) => (r as { uid?: string } | null)?.uid ?? "";
+// a delta row's identity: its object UID, or an alert row's opaque key
+const uidOf = (r: unknown) => { const x = r as { uid?: string; key?: string } | null; return x?.uid ?? x?.key ?? ""; };
 
 // withMessage moves a subscription to a full message, or a delta whose base
 // is the Ver held: rows upserted and removed by UID (a kept row keeps its

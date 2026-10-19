@@ -3,6 +3,7 @@ package healthsrc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,16 +19,17 @@ import (
 	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/healthnotify"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/safehttp"
 )
 
 var t0Alerts = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 
 func item(name, sev, state string, counted bool, labels map[string]string, startedAgo time.Duration) alertmanager.Item {
 	d := alertmanager.DisplayAlert{Fingerprint: "fp-" + name, Name: name, Severity: sev, State: state, Counted: counted, Summary: name + " summary",
-		StartsAt: t0Alerts.Add(-startedAgo)}
+		StartsAt: t0Alerts.Add(-startedAgo), StateClass: alertmanager.StateClassOf(state), SeverityClass: alertmanager.SeverityOf(map[string]string{"severity": sev})}
 	s := alertmanager.SubjectOf(labels)
 	d.Subject = alertmanager.DisplaySubject{Kind: s.Kind, Namespace: s.Namespace, Name: s.Name}
-	return alertmanager.Item{Subject: s, Counted: counted, Display: d}
+	return alertmanager.Item{Subject: s, Counted: counted, Key: "k-" + name, Display: d}
 }
 
 func capture(read alertmanager.Read, rows bool, complete map[string]bool, objs map[string][]any) observe.Capture {
@@ -73,7 +75,7 @@ func TestAlertsCountsAndTop(t *testing.T) {
 	if fmt.Sprint(labels) != "[CritOld:critical CritNew:critical Warn3:warning Warn2:warning Warn1:warning]" {
 		t.Fatalf("top: %v", labels)
 	}
-	if r := res.Top[1]; r.GVR != "v1/nodes" || r.Name != "n1" || r.Cluster != "c1" || r.Fingerprint != "fp-CritNew" || r.Since == nil || r.Reason != "CritNew summary" {
+	if r := res.Top[1]; r.GVR != "v1/nodes" || r.Name != "n1" || r.Cluster != "c1" || r.Fingerprint != "k-CritNew" || r.Since == nil || r.Reason != "CritNew summary" {
 		t.Fatalf("a ref: %+v", r)
 	}
 	if r := res.Top[0]; r.GVR != "" || r.Name != "" {
@@ -104,7 +106,9 @@ func TestAlertsSubjectStates(t *testing.T) {
 	for _, r := range rows.Alerts {
 		got[r.Alert.Name] = r
 	}
-	for name, want := range map[string]string{"PodOld": SubjectFound, "PodGone": SubjectNotFound, "DepThere": SubjectFound,
+	// a held object whose kind is not read live and complete is the object as
+	// last observed, never current evidence (Codex review of 71c181c)
+	for name, want := range map[string]string{"PodOld": SubjectFound, "PodGone": SubjectNotFound, "DepThere": SubjectLastObserved,
 		"DepGone": SubjectNotEstablished, "Job": SubjectNotLookedUp, "Cluster": ""} {
 		if got[name].SubjectState != want {
 			t.Errorf("%s: %q, want %q", name, got[name].SubjectState, want)
@@ -123,6 +127,33 @@ func TestAlertsSubjectStates(t *testing.T) {
 		if r.Label == "PodOld" && r.UID != "pod-uid" {
 			t.Fatalf("a found subject's ref carries its UID: %+v", r)
 		}
+	}
+}
+
+// Codex review of 71c181c: counts, order and roles come from the classes,
+// never the display text a credential could redact; refs and rows carry the
+// alert's opaque key; the row facts carry the source's opaque key and
+// neither the identity nor a read time.
+func TestAlertsClassesKeysAndFacts(t *testing.T) {
+	for _, secret := range []string{"active", "critical", "warning"} {
+		raw := alertmanager.Reduced{Alert: alertmanager.Alert{Fingerprint: "fp", Labels: map[string]string{"alertname": "A", "severity": "critical"}}, State: alertmanager.StateActive}
+		d := alertmanager.Display(raw, safehttp.NewRedactor(safehttp.Bearer(secret)))
+		it := alertmanager.Item{Counted: raw.Counted(), Key: alertmanager.AlertKey("id", "fp"), Display: d}
+		res := evalAlerts("c1", capture(alertmanager.Read{Identity: "id", Alerts: []alertmanager.Item{it}}, true, nil, nil))
+		if res.Alerts.Counted != 1 || res.Alerts.Critical != 1 || len(res.Top) != 1 || res.Top[0].Role != "critical" {
+			t.Errorf("a credential %q changed the verdict: %+v %+v", secret, res.Alerts, res.Top)
+		}
+		if res.Top[0].Fingerprint != it.Key || res.Rows.(AlertRows).Alerts[0].Key != it.Key {
+			t.Errorf("refs and rows carry the key: %+v", res.Top[0])
+		}
+	}
+	if alertmanager.AlertKey("A", "fp") == alertmanager.AlertKey("B", "fp") {
+		t.Fatal("two sources' alerts sharing a fingerprint share a key")
+	}
+	f := AlertRows{Identity: "endpoint|https://am.example:443|tenant", Source: "s"}.RowFacts()
+	if f["alertsSourceKey"] != alertmanager.SourceKey("endpoint|https://am.example:443|tenant") || f["alertsReadAt"] != nil || fmt.Sprint(f) == "" ||
+		strings.Contains(fmt.Sprint(f), "endpoint|") {
+		t.Fatalf("facts: %v", f)
 	}
 }
 

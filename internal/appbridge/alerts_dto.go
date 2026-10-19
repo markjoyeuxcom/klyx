@@ -40,11 +40,18 @@ type AMMuteDTO struct {
 }
 
 type AMAlertDTO struct {
-	Fingerprint     string       `json:"fingerprint"`
-	Name            string       `json:"name"`
-	Severity        string       `json:"severity,omitempty"`
+	// Key is the alert's opaque key (source identity and fingerprint,
+	// hashed): the lens selects and reveals by it.
+	Key         string `json:"key"`
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name"`
+	Severity    string `json:"severity,omitempty"`
+	// SeverityClass and StateClass are Klyx's classes from the raw alert;
+	// Severity and State are the display values as written.
+	SeverityClass   string       `json:"severityClass"` // critical | warning | other
 	Counted         bool         `json:"counted"`
 	State           string       `json:"state"`
+	StateClass      string       `json:"stateClass"` // active | suppressed | unprocessed | other
 	Summary         string       `json:"summary,omitempty"`
 	Description     string       `json:"description,omitempty"`
 	RunbookURL      string       `json:"runbookURL,omitempty"`
@@ -64,6 +71,9 @@ type AMAlertDTO struct {
 	UpdatedAt       string       `json:"updatedAt,omitempty"`
 	EndsAt          string       `json:"endsAt,omitempty"` // the end as last reported, never a state
 }
+
+// rowUID keys the alerts rows' deltas: the alert's opaque key.
+func (a AMAlertDTO) rowUID() string { return a.Key }
 
 func rfcOrEmpty(t time.Time) string {
 	if t.IsZero() {
@@ -90,7 +100,8 @@ func alertSubject(s alertmanager.DisplaySubject) AMSubjectDTO {
 
 func amAlertDTO(r healthsrc.AlertRow) AMAlertDTO {
 	a := r.Alert
-	d := AMAlertDTO{Fingerprint: a.Fingerprint, Name: a.Name, Severity: a.Severity, Counted: a.Counted, State: a.State,
+	d := AMAlertDTO{Key: r.Key, Fingerprint: a.Fingerprint, Name: a.Name, Severity: a.Severity, SeverityClass: string(a.SeverityClass),
+		Counted: a.Counted, State: a.State, StateClass: a.StateClass,
 		Summary: a.Summary, Description: a.Description, RunbookURL: a.RunbookURL, GeneratorURL: a.GeneratorURL,
 		Labels: alertPairs(a.Labels), LabelsMore: a.LabelsMore, Annotations: alertPairs(a.Annotations), AnnotationsMore: a.AnnotationsMore,
 		Receivers: a.Receivers, SilencedBy: a.SilencedBy, InhibitedBy: a.InhibitedBy, MutedBy: a.MutedBy, Disagreement: a.Disagreement,

@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { withClasses } from "../test/alertFixtures";
 import { alertsFacts, alertsFor, causeText, sortAlerts, subjectNote, subjectText, type AMAlertDTO } from "./alertsModel";
 
-const al = (name: string, over: Partial<AMAlertDTO> = {}): AMAlertDTO => ({
+const al = (name: string, over: Partial<AMAlertDTO> = {}): AMAlertDTO => withClasses({
   fingerprint: `fp-${name}`, name, severity: "critical", counted: true, state: "active", labels: [], annotations: [], subject: {}, startsAt: "2026-10-19T10:00:00Z", ...over,
 });
 
@@ -49,15 +50,22 @@ describe("alerts model (coverage S8a §7)", () => {
       al("NsOnly", { subject: { kind: "Namespace", name: "team", state: "found" } }),
       al("Elsewhere", { subject: { kind: "Pod", namespace: "other", name: "x", uid: "x-uid", state: "found" } }),
     ];
-    expect(alertsFor(xs, { uid: "dep-uid", kind: "Deployment", namespace: "team", name: "api", podUIDs: ["pod-uid"] })).toEqual({ own: [xs[1]], onPods: [xs[0]] });
-    expect(alertsFor(xs, { uid: "job-uid", kind: "Job", namespace: "team", name: "backup-1" }).own.map((a) => a.name)).toEqual(["Job"]);
+    expect(alertsFor(xs, { uid: "dep-uid", kind: "Deployment", namespace: "team", name: "api", podUIDs: ["pod-uid"] })).toEqual({ own: [xs[1]], onPods: [xs[0]], byNameOnly: new Set() });
+    const job = alertsFor(xs, { uid: "job-uid", kind: "Job", namespace: "team", name: "backup-1" });
+    expect(job.own.map((a) => a.name)).toEqual(["Job"]);
+    expect([...job.byNameOnly]).toEqual([xs[2].key]); // qualified: by name only
+    // a held kind's subject Klyx could not establish is kept, by name only
+    const unest = al("Unest", { subject: { kind: "Pod", namespace: "team", name: "api-1", state: "not established" } });
+    const pod = alertsFor([...xs, unest], { uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" });
+    expect(pod.own.map((a) => a.name).sort()).toEqual(["PodA", "Unest"]);
+    expect([...pod.byNameOnly]).toEqual([unest.key]);
     expect(alertsFor(xs, { uid: "ns-uid", kind: "Namespace", name: "team" }).own.map((a) => a.name).sort()).toEqual(["Dep", "Job", "JobGone", "NsOnly", "PodA"]);
     expect(alertsFor(xs, { uid: "other-uid", kind: "Pod", namespace: "team", name: "api-1" }).own).toEqual([]);
   });
 
   it("reads the source line from the rows' facts", () => {
     expect(alertsFacts(null)).toBeNull();
-    expect(alertsFacts({ alertsSource: "https://am.example:443", alertsTruncated: true, alertsMatch: { cluster: "prd" }, alertsReadAt: "2026-10-19T12:00:00Z" }))
-      .toEqual({ source: "https://am.example:443", truncated: true, match: { cluster: "prd" }, readAt: "2026-10-19T12:00:00Z", note: undefined });
+    expect(alertsFacts({ alertsSource: "https://am.example:443", alertsSourceKey: "a1b2", alertsTruncated: true, alertsMatch: { cluster: "prd" } }))
+      .toEqual({ source: "https://am.example:443", sourceKey: "a1b2", truncated: true, match: { cluster: "prd" } });
   });
 });

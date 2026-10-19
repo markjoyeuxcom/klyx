@@ -643,3 +643,66 @@ At stage 7:
 - **Mutations:**
   - 87 caught: 9, 7, 15, 22, 19 and 12 in stages 1 to 6, and 3 in stage 7 (Test's separate read, the stale wording, the State column).
   - Two are equivalent and recorded: a clause removed in stage 3 with its reason kept as a comment, and an absent snapshot's retained items, which never reach a part.
+
+## 17. Implementation revision 1: Codex's review of 71c181c
+
+Codex requested changes with eleven P2 findings and four notes. Each is answered below, with tests in the repository beside Codex's probes.
+
+1. **A null response was a complete empty list.** Both parsers now require a top-level array; `null`, an object and an empty body fail the read whole.
+2. **Counts read redacted display text.** A credential equal to "active" or "critical" changed the verdict.
+   - `Display` carries Klyx's classes from the raw alert, `StateClass` and `SeverityClass`.
+   - Counting, the Top order and roles, Explain's choice of active alerts, the lens's groups and words, and the inspector block all use them.
+   - The display state and severity stay text, shown only for a state or severity Klyx does not class.
+3. **The match left the reader raw.** `Read.Match` is now `DisplayMatch`: names and values redacted with the reading transport's redactor, then clipped. The raw match still filters and keys the identity.
+4. **A failed re-discovery read Live through the old Service.** It now fails under the found source's identity, so the snapshot keeps that source's last list, stale. The "discovery could not be re-read" note path is gone.
+5. **Discovery ignored the read's context.** It uses the cached discovery's `ServerResourcesForGroupVersionCtx` with the read's context.
+6. **The proof never checked the targetRef UID.** Each endpoint's `targetRef` must name a Pod in the namespace by UID, and the Pod read must carry that UID. A same-name replacement proves nothing.
+7. **The route prefix came from externalUrl.** The Prometheus Operator v0.94.1 always passes `--web.route-prefix`: `spec.routePrefix`, else "/". Klyx follows that; `externalUrl` is never the route.
+8. **Failures hid behind an empty list or a skeleton.**
+   - The stale banner shows whatever the last good read held; an empty one reads "No alerts in the last good read."
+   - A rows subscription failure with no rows is "Could not read alerts." with its error, and with rows a banner.
+   - The inspector block states a failed read too.
+9. **"No alert matches this object" was claimed from an incomplete join.**
+   - The block says it only when all of these hold:
+     - the alerts read is live and complete;
+     - the object's own kind is live and complete in the alerts part's dependencies;
+     - a workload's pods are live and complete, and so is the workload's own pod set (`podsComplete`);
+     - no alert names an object Klyx cannot show (a redacted subject).
+   - Otherwise it says why it is not established.
+   - An alert whose subject is this object by kind and name only is listed and marked "by name only". That covers a kind Klyx does not hold, or a held one it could not establish.
+10. **Selection and reveal were keyed by fingerprint.**
+    - Every alert carries an opaque key: its source identity and raw fingerprint, hashed.
+    - Rows, Top refs, the lens's selection and cursor, and the reveal all use it.
+    - The row facts carry the source's opaque key, never its identity. A source change ends the selection, and the first source back does not reopen it.
+    - Codex's mounted probe builds alerts without the key; the same scenario is in `AlertsView.test.tsx` with keys.
+11. **Explain omitted name-correlated alerts.** Explain receives the freshly fenced object's kind, namespace and name with its UID, and correlates on the raw subject: display values never decide a join.
+    - Jobs, CronJobs, PVCs and HPAs, and held subjects not established, are included by kind and name. The qualification says a same-name object would share them.
+    - Rows keep the raw subject in process only; the rows DTO never carries it.
+    - Codex's probe sets only the display subject; the same case, with the raw subject and a redacted display name, is in `alerts_s8a_test.go`.
+
+The notes:
+
+- **Discovery cost.** The fleet-wide slot now covers the whole read, discovery included.
+  - The governing Service's proof reads each endpoint's Pod (at most 16 endpoints) and its StatefulSet once.
+  - It runs at most every five minutes (the discovery cache).
+- **The rows resent every poll.** Correcting §16.4: the rows were not sent "only when the read changed".
+  - A snapshot's coverage carries its read time, so every successful read moves the part's version, and the 5,000-alert rows message (15.9 MiB) went out every 30 s to a subscribed lens.
+  - The alerts part now travels as rows deltas (`deltaParts`), keyed by the alert's opaque key. An unchanged read sends the part and facts with no rows.
+  - `Read.ReadAt` is gone: the snapshot's coverage (`AsOf` while live, `LastGoodAt` when stale) is the read's time, for the lens and for Explain.
+- **A stale subject read presented as found.** A held object whose kind is not live and complete is now "last observed": the UID kept, the state qualified in the lens, the block and Explain.
+
+Mutations for this revision:
+- Go, 18 caught: the array check (both lists), each class use, the key's source, the ref key, last observed, the display match, discovery's context, the targetRef UID and namespace, the route prefix, the alerts deltas, Explain's raw join, its not-established case and its class, and a failed re-discovery re-keying.
+- Frontend, 11 caught: the held-kind, pod-set and redacted checks, the source-change clear, the rows-error state, the stale banner, the class grouping, the block's failure line, the name correlation, and the delta key.
+- One frontend mutant is equivalent: a reveal also checking display fingerprints, which never equal a key.
+
+Gates for this revision:
+- **The native smoke:** 185 of 185 steps in each of night and day at 1440 and 1024.
+- **The parity gate:** both stages pass (the manifest is written only after every case passed).
+- **Go:** `go test -race ./internal/...` passes, and golangci-lint reports 0 issues.
+- **The frontend:** tsc is clean, and eslint has 0 errors (its three warnings predate S8a). Vitest passes 2,292 tests.
+- **Codex's probes:**
+  - the Go probes pass, except Explain's, whose fixture predates the raw subject;
+  - four of the five mounted probes pass; the source probe's alerts carry no key.
+  - Both scenarios are covered with the new contract in the repository's tests.
+

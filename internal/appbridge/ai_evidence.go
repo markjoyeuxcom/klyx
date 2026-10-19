@@ -13,6 +13,7 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // The Explain prompt contract (spec 2026-10-13 §4.2). Exactly the fields
@@ -534,9 +535,15 @@ type evidenceAlert struct {
 	MatchedBy  string `json:"matchedBy"`
 }
 
+// alertTarget is the freshly fenced object Explain asks about.
+type alertTarget struct{ uid, kind, namespace, name string }
+
 // alertEvidence is the active alerts the alerts part correlates to the
-// object uid, and the qualification that says what they are.
-func alertEvidence(ctx context.Context, conn AIConn, uid string, sc *scrubber) ([]evidenceAlert, string) {
+// object: by its UID where the subject's kind is held and was found, and by
+// kind, namespace and name where Klyx does not hold the kind (Jobs, CronJobs,
+// PVCs, HPAs) or could not establish the subject - each qualified as a label
+// match, never as carrying the object's UID.
+func alertEvidence(ctx context.Context, conn AIConn, t alertTarget, sc *scrubber) ([]evidenceAlert, string) {
 	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskAlerts, "alerts")
 	if !ok {
 		return nil, ""
@@ -545,19 +552,63 @@ func alertEvidence(ctx context.Context, conn AIConn, uid string, sc *scrubber) (
 	if !ok {
 		return nil, ""
 	}
+	seen, stale := alertsSeenAt(rows.Part)
 	var out []evidenceAlert
+	byName := false
 	for _, a := range r.Alerts {
-		if uid == "" || a.SubjectUID != uid || a.Alert.State != alertmanager.StateActive {
+		if a.Alert.StateClass != alertmanager.StateActive {
+			continue
+		}
+		matched := "label " + strings.Join(a.Alert.Subject.Basis, "/")
+		switch {
+		case t.uid != "" && a.SubjectUID == t.uid:
+			if a.SubjectState == healthsrc.SubjectLastObserved {
+				matched += " (the object as last observed: that kind's read is not current)"
+			}
+		case a.SubjectUID == "" && t.name != "" && a.Subject.Kind == t.kind && a.Subject.Namespace == t.namespace && a.Subject.Name == t.name &&
+			(a.SubjectState == healthsrc.SubjectNotLookedUp || a.SubjectState == healthsrc.SubjectNotEstablished):
+			matched += " (by name only: " + a.SubjectState + ")"
+			byName = true
+		default:
 			continue
 		}
 		if len(out) == evidenceListMax {
 			break
 		}
 		out = append(out, evidenceAlert{Name: sc.text(a.Alert.Name), Severity: sc.text(a.Alert.Severity), StartedAt: rfcOrEmpty(a.Alert.StartsAt),
-			LastSeenAt: rfcOrEmpty(r.ReadAt), Summary: sc.text(a.Alert.Summary), MatchedBy: "label " + strings.Join(a.Alert.Subject.Basis, "/")})
+			LastSeenAt: seen, Summary: sc.text(a.Alert.Summary), MatchedBy: matched})
 	}
 	if len(out) == 0 {
 		return nil, ""
 	}
-	return out, "The alerts are Alertmanager's, matched to this object by label, not by UID; each was last seen active at its read, " + rfcOrEmpty(r.ReadAt) + "."
+	q := "The alerts are Alertmanager's, matched to this object by label, not by UID"
+	if byName {
+		q += "; some only by kind, namespace and name, which a same-name object would share"
+	}
+	switch {
+	case stale:
+		q += "; the alerts reads are failing, and each was last seen active at the last good read, " + seen + "; none is called resolved."
+	case seen != "":
+		q += "; each was seen active at the alerts read of " + seen + "."
+	default:
+		q += "; each was seen active at the last alerts read."
+	}
+	return out, q
+}
+
+// alertsSeenAt is the alerts snapshot's read time from the part's coverage:
+// its last good read when stale, its latest read when live.
+func alertsSeenAt(p observe.Part) (string, bool) {
+	for _, k := range p.Kinds {
+		if k.Kind != healthsrc.SnapAlerts {
+			continue
+		}
+		if k.Coverage == observe.Stale && k.LastGoodAt != nil {
+			return rfcOrEmpty(*k.LastGoodAt), true
+		}
+		if k.AsOf != nil {
+			return rfcOrEmpty(*k.AsOf), false
+		}
+	}
+	return "", false
 }

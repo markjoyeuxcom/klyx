@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { IconBellRinging } from "@tabler/icons-react";
 import { Age, absoluteTime } from "../chrome/Age";
 import { EmptyState } from "../chrome/EmptyState";
@@ -14,14 +14,16 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useClusterKey } from "./useClusterKey";
-import { alertsFacts, causeText, groupOf, sevClass, sortAlerts, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup } from "./alertsModel";
+import { alertsFacts, causeText, groupOf, sevClass, sevWord, sortAlerts, stateWord, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup } from "./alertsModel";
 
 // The Alerts lens (coverage S8a §7): Alertmanager's alerts for this
 // cluster, read-only. Active alerts first, then unprocessed, then
 // suppressed with their cause. Every string is a display value the backend
 // redacted; a subject is a label match, never a UID join. No alert is ever
 // called resolved: an alert is listed as of its read, and a failed read
-// keeps the last good list.
+// keeps the last good list. Classes (state, severity) come from the raw
+// alert, never from display text; selection and reveal use the alert's
+// opaque key (its source and fingerprint), and a source change clears them.
 
 // The state and its cause are the reading: never dropped at a narrow width.
 export const COLUMNS: (ColumnDef & { label: string })[] = [
@@ -39,11 +41,11 @@ const unix = (iso?: string) => (iso ? Math.floor(Date.parse(iso) / 1000) : 0);
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 function SevMark({ a }: { a: AMAlertDTO }) {
-  if (a.state !== "active") return <span className="t-secondary">{a.severity || "none"}</span>;
+  if (a.stateClass !== "active") return <span className="t-secondary">{sevWord(a)}</span>;
   const sev = sevClass(a);
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center", color: sev === "critical" ? "var(--color-text-danger)" : sev === "warning" ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>
-      {sev !== "other" && <Aspect kind={sev === "critical" ? "fault" : "attention"} />}{a.severity || "none"}
+      {sev !== "other" && <Aspect kind={sev === "critical" ? "fault" : "attention"} />}{sevWord(a)}
     </span>
   );
 }
@@ -77,7 +79,18 @@ export function AlertsView({ cluster }: { cluster: string }) {
   const listRef = useRef<VirtualListHandle>(null);
 
   const all = useMemo(() => sortAlerts(lr.rows ?? []), [lr.rows]);
+  // byFp names an inhibiting alert by its (display) fingerprint; byKey is
+  // the selection's and the reveal's index
   const byFp = useMemo(() => new Map(all.map((a) => [a.fingerprint, a])), [all]);
+  const byKey = useMemo(() => new Map(all.map((a) => [a.key, a])), [all]);
+  // a source change ends the selection: an alert of the new source is never
+  // shown under the old one's
+  const sourceKey = facts?.sourceKey;
+  const lastSource = useRef(sourceKey);
+  useEffect(() => {
+    if (sourceKey && lastSource.current && sourceKey !== lastSource.current) { setSelKey(null); setCursorKey(null); }
+    if (sourceKey) lastSource.current = sourceKey;
+  }, [sourceKey, setSelKey]);
   const q = search.trim().toLowerCase();
   const visible = useMemo(() => all.filter((a) => {
     if (stateF !== "all" && groupOf(a) !== stateF) return false;
@@ -86,24 +99,24 @@ export function AlertsView({ cluster }: { cluster: string }) {
     return [a.name, a.summary, subjectText(a.subject), a.severity, ...a.labels.map((l) => `${l.name}=${l.value}`)].some((v) => (v ?? "").toLowerCase().includes(q));
   }), [all, stateF, sevF, q]);
 
-  const selected = selKey ? all.find((a) => a.fingerprint === selKey) : undefined;
+  const selected = selKey ? byKey.get(selKey) : undefined;
   const close = () => setSelKey(null);
-  const cursorIdx = cursorKey === null ? -1 : visible.findIndex((a) => a.fingerprint === cursorKey);
+  const cursorIdx = cursorKey === null ? -1 : visible.findIndex((a) => a.key === cursorKey);
   useListKeys({
     count: visible.length, selected: cursorIdx,
-    onSelect: (i) => { const a = visible[i]; if (a) { setCursorKey(a.fingerprint); listRef.current?.scrollToIndex(i); } },
-    onActivate: (i) => { const a = visible[i]; if (a) { setCursorKey(a.fingerprint); setSelKey(a.fingerprint); } },
+    onSelect: (i) => { const a = visible[i]; if (a) { setCursorKey(a.key); listRef.current?.scrollToIndex(i); } },
+    onActivate: (i) => { const a = visible[i]; if (a) { setCursorKey(a.key); setSelKey(a.key); } },
     onEscape: close, searchRef,
   });
   useNavIntent(cluster, ["reveal"], (intent) => {
     if (intent.kind !== "reveal" || intent.task !== "alerts") return "wait";
-    const fp = intent.ref.fingerprint;
-    if (!fp) return "consumed";
-    if (!byFp.has(fp)) return lr.rows === null ? "wait" : "missing";
+    const key = intent.ref.fingerprint; // an alert ref's opaque key
+    if (!key) return "consumed";
+    if (!byKey.has(key)) return lr.rows === null ? "wait" : "missing";
     setStateF("all"); setSevF("all"); setSearch("");
-    setCursorKey(fp); setSelKey(fp);
+    setCursorKey(key); setSelKey(key);
     return "consumed";
-  }, [byFp, lr.rows]);
+  }, [byKey, lr.rows]);
 
   const fitted = useMemo(() => fitColumns(COLUMNS, bodyWidth), [bodyWidth]);
   const show = (id: string) => fitted.visible.has(id);
@@ -116,22 +129,24 @@ export function AlertsView({ cluster }: { cluster: string }) {
   const plus = truncated ? "+" : "";
   let state: DatasetState = "ready";
   if (absent) state = "empty";
-  else if (lr.rows === null && unreadable) state = "unreadable";
+  else if (lr.rows === null && (unreadable || lr.error)) state = "unreadable";
   else if (lr.rows === null || (kind?.coverage === "checking" && all.length === 0)) state = "loading";
   else if (unreadable && all.length === 0) state = "unreadable";
   else if (all.length === 0) state = "empty";
   else if (visible.length === 0) state = "no-match";
   const clearFilters = () => { setStateF("all"); setSevF("all"); setSearch(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={6} label="reading alerts" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="Could not read alerts." hint={kind?.error ?? lr.error ?? undefined} />
+    : state === "unreadable" ? <EmptyState icon={icon} title="Could not read alerts." hint={lr.error ?? kind?.error ?? undefined} />
     : absent ? <EmptyState icon={icon} title="No Alertmanager is configured or found on this cluster." hint="Set alertmanager in fleet.yaml, or install the Prometheus Operator's Alertmanager. Klyx reads alerts and never manages them." />
-    : state === "empty" ? <EmptyState icon={icon} title="No alerts on this Alertmanager for this cluster." hint={facts?.readAt ? `As of ${clock(facts.readAt)}.` : undefined} />
+    : state === "empty" ? <EmptyState icon={icon} title={stale ? "No alerts in the last good read." : "No alerts on this Alertmanager for this cluster."}
+      hint={stale ? "Reads are failing since; see above. Nothing is called resolved." : undefined} />
     : <EmptyState icon={icon} title="No alert matches these filters." action={{ label: "Clear filters", onClick: clearFilters }} />;
 
   const notices: React.ReactNode[] = [];
-  if (stale && all.length > 0) notices.push(<WatchErrorBanner key="stale" tool="Alertmanager" failure={`read failed - showing the last good read${kind?.lastGoodAt ? ` from ${clock(kind.lastGoodAt)}` : ""}; nothing here is called resolved`} error={kind?.error ?? ""} />);
+  // a failure is said whatever the last good read held, an empty one included
+  if (stale) notices.push(<WatchErrorBanner key="stale" tool="Alertmanager" failure={`read failed - showing the last good read${kind?.lastGoodAt ? ` from ${clock(kind.lastGoodAt)}` : ""}; nothing here is called resolved`} error={kind?.error ?? ""} />);
+  if (lr.error && lr.rows !== null) notices.push(<WatchErrorBanner key="rows" tool="Klyx" failure="the alerts rows could not be refreshed - showing the last rows received" error={lr.error} />);
   if (truncated) notices.push(<div key="cap" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-capped">The first 5,000 alerts only: every count is at least, and an alert not listed is not established either way.</div>);
-  if (facts?.note) notices.push(<div key="note" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{facts.note}</div>);
 
   const matchText = facts?.match && Object.keys(facts.match).length > 0
     ? Object.entries(facts.match).map(([k, v]) => `${k}="${v}"`).join(", ")
@@ -148,7 +163,7 @@ export function AlertsView({ cluster }: { cluster: string }) {
           {counts && counts.suppressed > 0 ? ` · ${counts.suppressed}${plus} suppressed` : ""}
         </span>
       )}
-      headerEnd={facts ? <span className="t-secondary" data-testid="alerts-source" title={`match: ${matchText}`}>{facts.source}{facts.readAt ? ` · as of ${clock(facts.readAt)}` : ""}</span> : undefined}
+      headerEnd={facts ? <span className="t-secondary" data-testid="alerts-source" title={`match: ${matchText}`}>{facts.source}{kind?.coverage === "live" ? " · live" : stale && kind?.lastGoodAt ? ` · last good ${clock(kind.lastGoodAt)}` : ""}</span> : undefined}
       controls={
         <>
           <div role="group" aria-label="Alert state" className="l-seg">
@@ -176,18 +191,18 @@ export function AlertsView({ cluster }: { cluster: string }) {
           <div className="lens-table-head" role="row" style={gridStyle}>
             {COLUMNS.filter((c) => show(c.id)).map((c) => <span key={c.id}>{c.label}</span>)}
           </div>
-          <VirtualList ref={listRef} items={visible} rowHeight={TABLE_ROW_HEIGHT} rowKey={(a) => a.fingerprint} style={{ flex: 1, minHeight: 0 }}
+          <VirtualList ref={listRef} items={visible} rowHeight={TABLE_ROW_HEIGHT} rowKey={(a) => a.key} style={{ flex: 1, minHeight: 0 }}
             render={(a) => {
-              const k = a.fingerprint;
+              const k = a.key;
               const cause = causeText(a, byFp);
               return (
-                <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle} data-testid={`alert-row-${a.name}`} data-state={a.state}
+                <div key={k} role="button" tabIndex={0} className="lens-row" style={gridStyle} data-testid={`alert-row-${a.name}`} data-state={a.stateClass}
                   aria-selected={k === cursorKey} data-cursor={k === cursorKey ? "true" : undefined} data-selected={k === selKey ? "true" : undefined}
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("sev") && <span style={cell}><SevMark a={a} /></span>}
                   {show("alert") && <span className="lens-cell-name" title={a.name}>{a.name}</span>}
-                  {show("state") && <span style={{ ...cell, color: a.state === "active" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={cause}>{a.state}{cause ? ` · ${cause}` : ""}</span>}
+                  {show("state") && <span style={{ ...cell, color: a.stateClass === "active" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={cause}>{stateWord(a)}{cause ? ` · ${cause}` : ""}</span>}
                   {show("subject") && <span style={{ ...cell, color: a.subject.kind ? undefined : "var(--color-text-tertiary)" }} title={subjectNote(a.subject)}>{subjectText(a.subject)}</span>}
                   {show("started") && <span style={{ color: "var(--color-text-tertiary)" }}>{a.startsAt ? <Age unixSeconds={unix(a.startsAt)} /> : "-"}</span>}
                   {show("summary") && <span style={{ ...cell, color: "var(--color-text-secondary)" }}>{a.summary ?? ""}</span>}
@@ -199,7 +214,7 @@ export function AlertsView({ cluster }: { cluster: string }) {
       footer={<span className="t-legend">j k navigate · ↵ inspect · / search</span>}
       footerEnd={<span className="t-secondary">{visible.length} of {all.length}{plus} alerts · match {matchText}</span>}
       inspector={selKey && selected ? (
-        <AlertInspector key={selKey} cluster={cluster} a={selected} byFp={byFp} readAt={facts?.readAt} stale={stale} onClose={close} />
+        <AlertInspector key={selKey} cluster={cluster} a={selected} byFp={byFp} live={kind?.coverage === "live"} lastGoodAt={stale ? kind?.lastGoodAt : undefined} onClose={close} />
       ) : undefined}
       inspectorLabel="Alert details"
       onCloseInspector={close}
@@ -207,21 +222,22 @@ export function AlertsView({ cluster }: { cluster: string }) {
   );
 }
 
-function AlertInspector({ cluster, a, byFp, readAt, stale, onClose }: { cluster: string; a: AMAlertDTO; byFp: Map<string, AMAlertDTO>; readAt?: string; stale: boolean; onClose: () => void }) {
+function AlertInspector({ cluster, a, byFp, live, lastGoodAt, onClose }: { cluster: string; a: AMAlertDTO; byFp: Map<string, AMAlertDTO>; live: boolean; lastGoodAt?: string; onClose: () => void }) {
   const cause = causeText(a, byFp);
   const open = openSubject(cluster, a.subject);
   const more: MenuItem[] = [{ label: "Copy fingerprint", onSelect: () => void navigator.clipboard?.writeText(a.fingerprint) }];
   if (a.generatorURL) more.push({ label: "Copy generator URL", onSelect: () => void navigator.clipboard?.writeText(a.generatorURL!) });
   if (a.runbookURL) more.push({ label: "Copy runbook URL", onSelect: () => void navigator.clipboard?.writeText(a.runbookURL!) });
-  const seen = readAt ? `${stale ? "last seen" : "seen"} ${a.state} at ${clock(readAt)}${stale ? " (reads failing since)" : ""}` : "";
+  const stale = lastGoodAt !== undefined;
+  const seen = lastGoodAt !== undefined ? `last seen ${stateWord(a)} at ${clock(lastGoodAt)} (reads failing since)` : live ? `${stateWord(a)} in the live read` : "";
   return (
     <div data-testid="alert-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout pin={{ cluster }} kind="Alert" name={a.name} meta={subjectText(a.subject)} onClose={onClose}
         verdict={
           <div className="t-body" style={{ display: "grid", gap: 4 }}>
-            <div><SevMark a={a} /> <span className="t-secondary">· {a.state}{cause ? ` · ${cause}` : ""}</span></div>
+            <div><SevMark a={a} /> <span className="t-secondary">· {stateWord(a)}{cause ? ` · ${cause}` : ""}</span></div>
             <div className="t-secondary">{a.startsAt ? `started ${absoluteTime(Date.parse(a.startsAt))}` : "start not reported"}{seen ? ` · ${seen}` : ""}</div>
-            {!a.counted && a.state === "active" && <div className="t-secondary">Not counted in Needs you: only active critical and warning alerts are.</div>}
+            {!a.counted && a.stateClass === "active" && <div className="t-secondary">Not counted in Needs you: only active critical and warning alerts are.</div>}
           </div>
         }
         primary={open ? { label: `Open ${a.subject.kind}`, onSelect: open } : undefined}

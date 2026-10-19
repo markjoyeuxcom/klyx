@@ -121,8 +121,9 @@ type Ref struct {
 	Since     *time.Time `json:"since,omitempty"`
 	Condition *Condition `json:"condition,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
-	// Fingerprint is an alert ref's identity within its source (coverage
-	// S8a §4): an alert has no UID, and its subject is a correlation.
+	// Fingerprint is an alert ref's opaque key (coverage S8a §4): its source
+	// identity and fingerprint, hashed (alertmanager.AlertKey). An alert has
+	// no UID, and its subject is a correlation.
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 

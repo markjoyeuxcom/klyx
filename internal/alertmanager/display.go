@@ -46,11 +46,16 @@ type DisplayMute struct {
 // redactor (exact forms and quoted spellings), then the general credential
 // shapes, then URLs without userinfo, then the clip. Times are not text.
 type DisplayAlert struct {
-	Fingerprint     string
-	Name            string // the alertname label
-	Severity        string // the severity label as written ("" for none)
-	Counted         bool
-	State           string
+	Fingerprint string
+	Name        string // the alertname label
+	Severity    string // the severity label as written ("" for none)
+	Counted     bool
+	State       string // the state as written, a display value
+	// StateClass and SeverityClass are Klyx's classes, read from the raw
+	// alert: every count, order and role uses them, never the display text,
+	// which a credential equal to "active" or "critical" would redact.
+	StateClass      string
+	SeverityClass   Severity
 	Summary         string
 	Description     string
 	RunbookURL      string
@@ -87,20 +92,22 @@ func Display(r Reduced, red safehttp.Redactor) DisplayAlert {
 		return out
 	}
 	d := DisplayAlert{
-		Fingerprint:  t(r.Fingerprint, MaxLabelValue),
-		Name:         t(r.Labels["alertname"], MaxLabelValue),
-		Severity:     t(r.Labels["severity"], MaxLabelValue),
-		Counted:      r.Counted(),
-		State:        t(r.State, MaxLabelValue),
-		Summary:      t(r.Annotations["summary"], MaxSummary),
-		Description:  t(r.Annotations["description"], MaxAnnotation),
-		RunbookURL:   CleanURL(r.Annotations["runbook_url"], red),
-		GeneratorURL: CleanURL(r.GeneratorURL, red),
-		Receivers:    ts(r.Receivers),
-		SilencedBy:   ts(r.SilencedBy),
-		InhibitedBy:  ts(r.InhibitedBy),
-		MutedBy:      ts(r.MutedBy),
-		Disagreement: t(r.Disagreement, MaxLabelValue),
+		Fingerprint:   t(r.Fingerprint, MaxLabelValue),
+		Name:          t(r.Labels["alertname"], MaxLabelValue),
+		Severity:      t(r.Labels["severity"], MaxLabelValue),
+		Counted:       r.Counted(),
+		State:         t(r.State, MaxLabelValue),
+		StateClass:    StateClassOf(r.State),
+		SeverityClass: SeverityOf(r.Labels),
+		Summary:       t(r.Annotations["summary"], MaxSummary),
+		Description:   t(r.Annotations["description"], MaxAnnotation),
+		RunbookURL:    CleanURL(r.Annotations["runbook_url"], red),
+		GeneratorURL:  CleanURL(r.GeneratorURL, red),
+		Receivers:     ts(r.Receivers),
+		SilencedBy:    ts(r.SilencedBy),
+		InhibitedBy:   ts(r.InhibitedBy),
+		MutedBy:       ts(r.MutedBy),
+		Disagreement:  t(r.Disagreement, MaxLabelValue),
 		Mute: DisplayMute{Kind: r.Mute.Kind, MutedFor: ts(r.Mute.MutedFor), ActiveFor: ts(r.Mute.ActiveFor),
 			Expected: ts(r.Mute.Expected), Shown: ts(r.Mute.Shown)},
 		Subject:   displaySubject(SubjectOf(r.Labels), t),
@@ -119,6 +126,20 @@ func Display(r Reduced, red safehttp.Redactor) DisplayAlert {
 		return Pair{t(k, MaxLabelValue), t(v, MaxAnnotation)}
 	})
 	return d
+}
+
+// DisplayMatch is the configured match as it may leave the reader: names and
+// values redacted with the reading transport's redactor, then clipped. The
+// raw map stays with the reader for the filter and the identity.
+func DisplayMatch(m map[string]string, red safehttp.Redactor) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[Clip(red.Text(k), MaxLabelValue)] = Clip(red.Text(v), MaxLabelValue)
+	}
+	return out
 }
 
 func displaySubject(s Subject, t func(string, int) string) DisplaySubject {

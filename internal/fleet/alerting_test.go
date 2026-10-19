@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	typedfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/endpointhttp"
 	"github.com/moomora/klyx/internal/safehttp"
 	"github.com/moomora/klyx/internal/secretstore"
 )
@@ -54,6 +56,28 @@ type amFake struct {
 
 func newAMFake() *amFake {
 	return &amFake{alerts: `[]`, groups: `[]`, status: `{"versionInfo":{"version":"0.34.1"},"cluster":{"status":"disabled","peers":[]}}`, queries: map[string][]url.Values{}}
+}
+
+// lastFilter is the filter of the last direct /api/v2/alerts read.
+func (f *amFake) lastFilter() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	qs := f.queries["/api/v2/alerts"]
+	if len(qs) == 0 {
+		return ""
+	}
+	return strings.Join(qs[len(qs)-1]["filter"], ",")
+}
+
+// calls counts every request the fake answered.
+func (f *amFake) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, q := range f.queries {
+		n += len(q)
+	}
+	return n
 }
 
 func (f *amFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -403,9 +427,9 @@ func governed(pods ...string) []runtime.Object {
 			Spec: corev1.ServiceSpec{Selector: map[string]string{"app.kubernetes.io/name": "alertmanager"}, Ports: []corev1.ServicePort{{Name: "web", Port: 9093}, {Name: "tcp-mesh", Port: 9094}}}}}
 	slice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "alertmanager-operated-x", Labels: map[string]string{"kubernetes.io/service-name": "alertmanager-operated"}}}
 	for _, p := range pods {
-		objs = append(objs, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: p,
+		objs = append(objs, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: p, UID: types.UID("uid-" + p),
 			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "alertmanager-main", UID: stsUID, Controller: &ctl}}}})
-		slice.Endpoints = append(slice.Endpoints, discoveryv1.Endpoint{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: p}})
+		slice.Endpoints = append(slice.Endpoints, discoveryv1.Endpoint{TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "monitoring", Name: p, UID: types.UID("uid-" + p)}})
 	}
 	return append(objs, slice)
 }
@@ -477,6 +501,18 @@ func TestAlertmanagerDiscovery(t *testing.T) {
 			o[len(o)-1].(*discoveryv1.EndpointSlice).Endpoints = nil
 			return o
 		},
+		"a targetRef without a UID": func(o []runtime.Object) []runtime.Object {
+			o[len(o)-1].(*discoveryv1.EndpointSlice).Endpoints[0].TargetRef.UID = ""
+			return o
+		},
+		"a targetRef to a replaced Pod": func(o []runtime.Object) []runtime.Object {
+			o[len(o)-1].(*discoveryv1.EndpointSlice).Endpoints[0].TargetRef.UID = "the-deleted-pod"
+			return o
+		},
+		"a targetRef in another namespace": func(o []runtime.Object) []runtime.Object {
+			o[len(o)-1].(*discoveryv1.EndpointSlice).Endpoints[0].TargetRef.Namespace = "elsewhere"
+			return o
+		},
 	} {
 		typed = typedfake.NewSimpleClientset(mutate(governed("alertmanager-main-0"))...)
 		servedAM(typed)
@@ -499,6 +535,26 @@ func TestAlertmanagerDiscovery(t *testing.T) {
 	servedAM(typed)
 	if d := discover(typed, amDyn(amResource("monitoring", "main", amUID, nil))); d.svc.Name != "kps-alertmanager" {
 		t.Errorf("another instance's Service: %+v", d)
+	}
+}
+
+// The operator always serves under spec.routePrefix, else "/" (v0.94.1
+// passes --web.route-prefix); externalUrl's path is never the route.
+func TestAMRoutePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		spec map[string]any
+		want string
+	}{
+		{nil, ""},
+		{map[string]any{"routePrefix": "/"}, ""},
+		{map[string]any{"routePrefix": "/", "externalUrl": "https://am.example/am"}, ""},
+		{map[string]any{"externalUrl": "https://am.example/am"}, ""},
+		{map[string]any{"routePrefix": "/am"}, "/am"},
+		{map[string]any{"routePrefix": "am/"}, "/am"},
+	} {
+		if got := amRoutePrefix(amResource("monitoring", "main", amUID, tc.spec)); got != tc.want {
+			t.Errorf("%v: %q, want %q", tc.spec, got, tc.want)
+		}
 	}
 }
 
@@ -675,5 +731,95 @@ func TestSnapshotCarriesTheAlertingCapability(t *testing.T) {
 	e := newAMEnv(t, &config.EndpointConfig{Endpoint: "https://am.example"}, nil, nil)
 	if !e.c.Snapshot().Capabilities.Alerting.Present {
 		t.Fatal("the snapshot dropped the Alerting capability")
+	}
+}
+
+// Codex review of 71c181c: the match leaves the reader as a display value
+// (a credential equal to a match value is redacted), while the raw match
+// still filters.
+func TestReadAlertsMatchIsADisplayValue(t *testing.T) {
+	f := newAMFake()
+	f.alerts, f.groups = amAlerts, amGroups
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	e := newAMEnv(t, &config.EndpointConfig{Endpoint: srv.URL, Auth: &config.EndpointAuth{Type: "bearer"}, Match: map[string]string{"namespace": "team"}}, nil, nil)
+	storeAM(t, e.store, srv.URL, "team")
+	r := e.read(t)
+	if r.Match["namespace"] == "team" || r.Match["namespace"] != safehttp.Redacted {
+		t.Fatalf("the match carries the credential: %v", r.Match)
+	}
+	if !strings.Contains(f.lastFilter(), `namespace="team"`) {
+		t.Fatalf("the raw match no longer filters: %q", f.lastFilter())
+	}
+}
+
+// Codex review of 71c181c: an expired discovery that now fails is a failed
+// read under the found source's identity (its last list kept, stale), never
+// a fresh read through the old, now unproven Service.
+func TestFailedRediscoveryFailsTheRead(t *testing.T) {
+	f := newAMFake()
+	f.alerts, f.groups = amAlerts, amGroups
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	typed := typedfake.NewSimpleClientset()
+	servedAM(typed)
+	dyn := amDyn()
+	dyn.PrependReactor("list", "alertmanagers", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("discovery is forbidden now")
+	})
+	e := newAMEnv(t, nil, typed, dyn)
+	e.c.restConfig = &rest.Config{Host: srv.URL}
+	d := &amDiscovery{at: time.Now().Add(-2 * amDiscoveryTTL), svc: endpointhttp.Service{Namespace: "monitoring", Name: "alertmanager-operated", Port: "web"},
+		resource: "monitoring/main", via: "Service alertmanager-operated (proven by ownership)"}
+	e.c.am.disc, e.c.am.found = d, d
+	id := amIdentity("discovered", serviceAt(d.svc)+"|"+d.resource, "", nil)
+	e.c.am.identity = id
+	_, err := e.c.ReadAlerts(context.Background(), id)
+	if err == nil || !strings.Contains(err.Error(), "could not be re-read") {
+		t.Fatalf("a failed re-discovery read through the old Service: %v", err)
+	}
+	if e.c.AlertsIdentity() != id || len(e.rekeys()) != 0 {
+		t.Fatalf("the failure re-keyed: %q %v", e.c.AlertsIdentity(), e.rekeys())
+	}
+	if f.calls() != 0 {
+		t.Fatal("the unproven Service was read")
+	}
+}
+
+// Codex review of 71c181c: discovery is bounded by the read's context.
+func TestDiscoveryHonoursTheReadsContext(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"APIResourceList","groupVersion":"monitoring.coreos.com/v1","resources":[]}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+	real, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newAMEnv(t, nil, nil, amDyn())
+	e.c.typed = real
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *amDiscovery, 1)
+	go func() { done <- e.c.discoverAlertmanager(ctx) }()
+	<-entered
+	cancel()
+	select {
+	case d := <-done:
+		if d.err == nil {
+			t.Fatalf("a cancelled discovery answered: %+v", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("discovery ignored the read's cancellation")
 	}
 }
