@@ -25,6 +25,19 @@ describe("PinnedGone", () => {
     expect(r.queryByText("Open the new object")).toBeNull();
   });
 
+  it("offers the gone object's log history, pinned to its UID (coverage S8b)", () => {
+    const history = vi.fn();
+    const r = render(<PinnedGone cluster="prd" kind="Pod" name="web" uid="u1" gone="removed" onHistory={history} onClose={() => {}} />);
+    fireEvent.click(r.getByText("Log history"));
+    expect(history).toHaveBeenCalled();
+    // replaced: the new object first, the history beside it
+    r.rerender(<PinnedGone cluster="prd" kind="Pod" name="web" uid="u1" gone="replaced" onAdopt={() => {}} onHistory={history} onClose={() => {}} />);
+    expect(r.getByText("Open the new object")).toBeTruthy();
+    expect(r.getByText("Log history")).toBeTruthy();
+    r.rerender(<PinnedGone cluster="prd" kind="Pod" name="web" uid="u1" gone="removed" onClose={() => {}} />);
+    expect(r.queryByText("Log history")).toBeNull();
+  });
+
   it("expectsOther: a UID the row does not have", () => {
     expect(expectsOther(undefined, "u1")).toBe(true);
     expect(expectsOther({ uid: "u2" }, "u1")).toBe(true);

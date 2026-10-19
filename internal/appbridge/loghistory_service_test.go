@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/moomora/klyx/internal/loki"
 	"github.com/moomora/klyx/internal/safehttp"
@@ -190,8 +191,8 @@ func TestHistoryNoStreams(t *testing.T) {
 func TestHistoryCredentialBoundary(t *testing.T) {
 	f := otelFake()
 	f.secret, f.match = "prd", map[string]string{"k8s_cluster_name": "prd"} // a credential equal to the match value
-	es := lines(2, tNow.Add(-time.Minute), "", "token=prd and an email a@b.example")
-	es[1].Line = strings.Repeat("é", 40_000)
+	es := lines(2, tNow.Add(-time.Minute), "", "token=prd and an email a@b.example and password=hunter2")
+	es[1].Line = strings.Repeat("€", 30_000) // 3 bytes each: 65,536 falls mid-rune
 	f.entries[q(podBranch, loki.ModeName, "")] = es
 	s := histSvc(f)
 	p := s.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "v5", Namespace: "team", Pod: "api-1"})
@@ -203,10 +204,12 @@ func TestHistoryCredentialBoundary(t *testing.T) {
 			t.Fatalf("the credential in a selector: %s", sel)
 		}
 	}
-	if !strings.Contains(p.Lines[0].Line, "token=[redacted]") || !strings.Contains(p.Lines[0].Line, "a@b.example") {
+	// the endpoint's own credential only: a general credential shape in an
+	// honest log line (password=hunter2) stays as the application wrote it
+	if !strings.Contains(p.Lines[0].Line, "token=[redacted]") || !strings.Contains(p.Lines[0].Line, "a@b.example") || !strings.Contains(p.Lines[0].Line, "password=hunter2") {
 		t.Fatalf("log content: exact redaction only: %q", p.Lines[0].Line)
 	}
-	if !p.Lines[1].Clipped || len(p.Lines[1].Line) > historyLineMax || !strings.HasSuffix(p.Lines[1].Line, "é") {
+	if !p.Lines[1].Clipped || len(p.Lines[1].Line) > historyLineMax || !utf8.ValidString(p.Lines[1].Line) || !strings.HasSuffix(p.Lines[1].Line, "€") {
 		t.Fatalf("clip: %v %d", p.Lines[1].Clipped, len(p.Lines[1].Line))
 	}
 }

@@ -73,8 +73,9 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
     }
   }, [cluster, view, target.namespace, target.name, target.uid, target.createdUnix, target.gone, container, range, mode]);
 
-  // a new page set whenever its container, range or mode changes
-  useEffect(() => { void request(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [cluster, target.uid, container, range, mode]);
+  // a new page set whenever what request reads changes: the cluster, the
+  // pod, its container, the range or the mode
+  useEffect(() => { void request(true); }, [request]);
 
   const copy = () => { if (page?.copyable) void navigator.clipboard?.writeText(page.selectors.join("\n")); };
   const containers = target.containers.filter((c) => !c.init).concat(target.containers.filter((c) => c.init));

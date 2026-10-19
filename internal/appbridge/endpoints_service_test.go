@@ -458,3 +458,17 @@ func TestEndpointsTest(t *testing.T) {
 		t.Fatalf("loki, failure: %+v", res)
 	}
 }
+
+// Coverage S8b §6: Set for a connected cluster's Loki installs the
+// credential through the connection with the reviewed configuration, as
+// one step (C5 §7), as Alertmanager's does.
+func TestEndpointsLokiSetThroughTheConnection(t *testing.T) {
+	e := newEndpointsEnv(t)
+	l := e.row(t, "prd", "loki")
+	if res := e.svc.SetCredential("prd", "loki", l.Revision, "LOKI-PASS"); !res.OK {
+		t.Fatalf("set: %+v", res)
+	}
+	if len(e.conn.lokiSet) != 1 || e.conn.lokiSet[0].Endpoint != "https://loki.example" {
+		t.Fatalf("the connection did not take the credential with the reviewed Loki: %+v", e.conn.lokiSet)
+	}
+}

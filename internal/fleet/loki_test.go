@@ -243,3 +243,26 @@ func TestLokiSlots(t *testing.T) {
 	b()
 	c()
 }
+
+// The proxied path has no transport gate: the reader's own fence fails a
+// read across a configuration change (§6, C5 §7).
+func TestLokiFenceOnTheProxyPath(t *testing.T) {
+	f := &fakeLoki{hold: make(chan struct{}), query: lokiStreams}
+	api := httptest.NewServer(f)
+	defer api.Close()
+	cfg := &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "logs", Name: "loki", Port: "http"}, Tenant: "lab"}
+	e := newLokiEnv(t, cfg)
+	e.c.restConfig = &rest.Config{Host: api.URL}
+	r, err := e.c.Loki()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := r.Query(context.Background(), "{}", 1, 2, 10); done <- err }()
+	time.Sleep(50 * time.Millisecond)
+	e.c.SetLokiConfig(&config.EndpointConfig{ServiceRef: cfg.ServiceRef, Tenant: "other"})
+	close(f.hold)
+	if err := <-done; !errors.Is(err, ErrLokiSourceChanged) {
+		t.Fatalf("a proxied read across a configuration change: %v", err)
+	}
+}

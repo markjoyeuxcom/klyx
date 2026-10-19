@@ -921,7 +921,7 @@ function Chips({ values }: { values?: Record<string, string> }) {
 // LogsDock - full-width resizable dock at the bottom of the lens
 // ---------------------------------------------------------------------------
 
-function LogsDock({ cluster, target, onClose, onPopOut }: {
+export function LogsDock({ cluster, target, onClose, onPopOut }: {
   cluster: string;
   target: LogsTarget;
   onClose: () => void;

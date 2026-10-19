@@ -415,3 +415,79 @@ Codex confirmed the five findings addressed: its local model selects each of 45 
    - Codex's two probes are the transport's contract tests.
 2. **The overlap is removed before the newest-1,000 cut,** and exhaustion counts entries already delivered (§5).
 3. **The saturation marker says "at least N"** and that Klyx cannot establish whether more remain (§5).
+
+## 16. As built
+
+Built on `feat/coverage-s8` after the design's acceptance at b4218c1:
+- **706b1f9** - `internal/loki`, pure.
+- **d6beaad** - the transport and the connection's Loki.
+- **3aede5c** - `LogHistoryService`, Loki's Test and Set, and the history window.
+- **af2d04d** - the frontend.
+- **Stage 5** (the commit carrying this section) - the lab in `relabs.sh`, the smoke, captures, the tests the mutations asked for, and these notes.
+
+### 16.1 What it is
+
+- **`internal/loki`:**
+  - `Branches` and `Query` (§3);
+  - `ParseStreams` (§5);
+  - `PageSet` with `Apply`, `Saturated`, `Stop` and `Skip`, and `ReadPage` (§5);
+  - `UIDsOf` (§4).
+- **A model test** selects each of 21 stream shapes under one match by exactly one branch, and another pod's by none.
+- **`endpointhttp`:**
+  - `Direct.GetWith` carries protocol headers;
+  - `NewGuardedProxy` keeps the guarded `http.Client` beside the REST client;
+  - `RawProxy` builds the proxy URL with the REST client and runs it through that client, reading the body capped before the status (§9). Codex's two probes are its contract tests, with the redirect guard and header tests.
+- **`fleet`:**
+  - the connection's Loki: an endpoint, or a `serviceRef` through `RawProxy`;
+  - `LokiReader` (labels, query_range with categorize-labels, build info, Loki's words as display values, C5's fence);
+  - per-page slots: two per cluster, four fleet-wide;
+  - `LokiTest`, and the `LogHistory` capability.
+- **`appbridge`:**
+  - `LogHistoryService`: one page set per view, the mode and its lock (§4), the source move (Reset), the cancel of a read in flight, the exact-only line redaction and 64 KiB clip, and display selectors with Copy LogQL's rule;
+  - Loki's Test and Set through the connection;
+  - `OpenLogHistoryWindow`.
+- **The frontend:**
+  - the dock's Live | History, with History only for a gone pod;
+  - `LogHistoryPane`: the controls and words of §7, the view's 10,000 lines and 32 MiB with eviction from the newest end, and every line through `VirtualList`;
+  - Log history from the removed-pod inspector and `PinnedGone`;
+  - the pop-out.
+
+### 16.2 Decided while building
+
+- **The page set lives in the backend, keyed by the view's id.**
+  - Its cursor is the server's state, not a token the UI carries. A saturated boundary can hold 5,000 dedupe keys, too much to send back and forth.
+  - A view holds one page set. At most 16 views are kept, idle ones dropped after 15 minutes.
+  - A view whose page set expired starts again from the newest.
+- **`Redactor.Exact` already existed** (C5), with exactly the exact and quoted spellings and no general shapes.
+- **A first page that fails leaves no page set,** so the next request starts again rather than paging nothing.
+- **A source move between pages** (lineage, revision, or a different pod, UID or container) starts a fresh page set, marked Reset. The design's "the source changed" reads in the view as "The Loki source changed; reading the newest again."
+- **The Live | History switch is in the dock's header,** beside the pod's name: the dock already owns the pod's identity. `LogsPane` (the Live view) is unchanged.
+- **The lab's second generation logs after its creation.** The first lab pushed generation two's lines relative to the apply, before the pod existed. A "since created" History then holds none, as it should. `apply.sh` now waits a minute after recreating `history-db-0` and pushes that minute's lines.
+
+### 16.3 Verified
+
+- **The lab** (§10; `lab-s8b/FINDINGS.md`, findings 1 to 11).
+- **The captures** run against the server-mode build on the smoke fleet: History by UID, by name since creation, by name over 7 days, and a gone pod's history opened from the removed inspector. The capture deletes the lab's `history-web` pod under the running server.
+  - **By UID:** generation two only; the selector shows the UID filter; "Select by name instead".
+  - **By name since creation:** still generation two alone, bounded by its creation.
+  - **By name over 7 days:** generation one appears too, with the name-only sentence.
+  - **The gone pod:** "Pod removed" with "Log history", Live disabled, History by UID with Load older.
+
+- **The captures in other shapes:** Alloy, and mixed shippers under one match, each from its own server configuration.
+  - **Alloy** (`match: {cluster: kind-klyx-alloy}`): the name selector with the structured-metadata filter (`pod="history-db-0" or k8s_pod_name="history-db-0"`), no UID, generation two since its creation.
+  - **Mixed** (`match: {cluster: kind-klyx-mixed}`): two selectors, the indexed-pod branch and the "neither" branch. The SD and Alloy lines of one pod interleave by time, in name mode, since the SD lines carry no UID.
+- **The OTLP captures** pass in night and day at 1440 and 1024.
+
+### 16.4 Gates
+
+- **The native smoke:** 186 of 186 steps in each of night and day at 1440 and 1024, with the new History step and Loki's Test in Settings.
+  - **History:** `history-db-0` reads 62 lines, generation two alone, "selected by this pod's UID".
+  - **Loki's Test:** "Available: Loki 3.7.8 at Service klyx-s8b-lab/loki:http; this cluster's streams carry the namespace label k8s_namespace_name".
+- **The parity gate:** both stages pass (S8b adds no Observer part).
+- **Go:** `go test -race` passes for `loki`, `endpointhttp`, `fleet` and `appbridge`; golangci-lint reports 0 issues.
+- **The frontend:** tsc is clean, eslint has 0 errors (its warnings predate S8b), and vitest passes 2,308 tests.
+- **Mutations:**
+  - 15 caught in stage 1 (two after added tests: saturation at T-1, "at least N" counting both sets);
+  - 19 in the Go of stages 2 and 3, three after added tests: the proxied fence, the clip on a 3-byte rune, and Loki's Set through the connection;
+  - 11 in the frontend, three after added tests: `PinnedGone`'s history, the gone pod's disabled Live, and History without a UID.
+- **No equivalents.**
