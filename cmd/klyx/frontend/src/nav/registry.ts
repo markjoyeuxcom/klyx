@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -48,6 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
       task("overview", "Overview", section("overview")),
       task("nodes", "Nodes", section("nodes")),
       task("events", "Events", section("events"), { keywords: ["warnings"] }),
+      task("alerts", "Alerts", section("alerts"), { cap: "alerting", keywords: ["alertmanager", "firing", "silenced", "inhibited", "muted"] }),
       task("upgrade", "Upgrade check", section("upgrade"), { keywords: ["deprecated apis", "version"] }),
       res("Namespaces", r("", "v1", "namespaces", "Namespace", "Cluster")),
       res("API Services", r("apiregistration.k8s.io", "v1", "apiservices", "APIService", "Cluster")),
@@ -269,6 +270,9 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     admission: c.admissionPresent ?? false,
     loadBalancing: c.loadBalancingPresent ?? false,
     metallb: c.metallbPresent ?? false,
+    // S8a: the alerts snapshot's own evidence (an Alertmanager configured,
+    // or the last read resolved one), on its cadence - never a probe
+    alerting: c.alertsPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

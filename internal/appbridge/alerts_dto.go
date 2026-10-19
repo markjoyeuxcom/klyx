@@ -65,15 +65,6 @@ type AMAlertDTO struct {
 	EndsAt          string       `json:"endsAt,omitempty"` // the end as last reported, never a state
 }
 
-type AMAlertsRowsDTO struct {
-	Source    string            `json:"source"`
-	Note      string            `json:"note,omitempty"`
-	Match     map[string]string `json:"match,omitempty"`
-	ReadAt    string            `json:"readAt,omitempty"`
-	Truncated bool              `json:"truncated"`
-	Alerts    []AMAlertDTO      `json:"alerts"`
-}
-
 func rfcOrEmpty(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -115,17 +106,18 @@ func amAlertDTO(r healthsrc.AlertRow) AMAlertDTO {
 }
 
 // alertsRows converts the alerts part's rows; no read yet is an empty set.
+// The read's source line travels as the rows' facts (AlertRows.RowFacts).
 func alertsRows(rows any, _ time.Time) (any, error) {
 	if rows == nil {
-		return AMAlertsRowsDTO{Alerts: []AMAlertDTO{}}, nil
+		return []AMAlertDTO{}, nil
 	}
 	r, ok := rows.(healthsrc.AlertRows)
 	if !ok {
 		return nil, errRowsShape
 	}
-	out := AMAlertsRowsDTO{Source: r.Source, Note: r.Note, Match: r.Match, ReadAt: rfcOrEmpty(r.ReadAt), Truncated: r.Truncated, Alerts: make([]AMAlertDTO, 0, len(r.Alerts))}
+	out := make([]AMAlertDTO, 0, len(r.Alerts))
 	for _, a := range r.Alerts {
-		out.Alerts = append(out.Alerts, amAlertDTO(a))
+		out = append(out, amAlertDTO(a))
 	}
 	return out, nil
 }

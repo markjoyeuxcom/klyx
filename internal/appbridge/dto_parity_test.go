@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"github.com/moomora/klyx/internal/alertmanager"
 	"reflect"
 	"testing"
 
@@ -65,6 +66,9 @@ var mirrorPairs = []struct {
 	{"KarpenterClaim", reflect.TypeOf(karpenter.NodeClaim{}), reflect.TypeOf(KarpenterClaimDTO{})},
 	{"ContainerSummary", reflect.TypeOf(workloads.ContainerSummary{}), reflect.TypeOf(ContainerSummaryDTO{})},
 	{"ContainerPort", reflect.TypeOf(workloads.ContainerPort{}), reflect.TypeOf(ContainerPortDTO{})},
+	// coverage S8a: the straight mirrors among the Alerts lens's DTOs
+	{"AlertPair", reflect.TypeOf(alertmanager.Pair{}), reflect.TypeOf(AMPairDTO{})},
+	{"AlertMute", reflect.TypeOf(alertmanager.DisplayMute{}), reflect.TypeOf(AMMuteDTO{})},
 }
 
 func TestDTOFieldParity(t *testing.T) {

@@ -31,7 +31,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -377,7 +377,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
 export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
@@ -762,6 +762,7 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   velero: "Velero",
   admission: "Admission",
   loadbalancers: "Load balancers",
+  alerts: "Alerts",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
@@ -1103,7 +1104,7 @@ export type NavIntent =
   // §5.4) - selection only, never an action
   | { kind: "reveal"; cluster: string; task: string; part: string; ref: RevealRef };
 // RevealRef names one object a summary part points at (its Top ref).
-export type RevealRef = { gvr: string; namespace?: string; name: string; uid?: string; parent?: string };
+export type RevealRef = { gvr: string; namespace?: string; name: string; uid?: string; parent?: string; fingerprint?: string };
 
 type FleetState = {
   clusters: ClusterDTO[];

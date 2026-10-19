@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { IconExternalLink, IconX, IconAlertTriangle, IconTerminal2, IconCircleDot } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { PodDetailDTO, PodRowDTO, PodRowContainerDTO, ContainerSummaryDTO, ContainerUsageDTO, PodUsageResultDTO, KindCoverageDTO } from "../store/fleet";
@@ -648,6 +649,9 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
   onOpenLogs: (t: LogsTarget) => void;
 }) {
   const ai = useInspectorAI(uid ? { kind: "row" as const, task: "pods", part: "pods", uid: uid } : null, `Pod/${row.namespace}/${row.name}`, !gone, cluster);
+  // coverage S8a: Alertmanager's alerts naming this pod
+  const alertTarget = useMemo(() => (uid ? { uid, kind: "Pod", namespace: row.namespace, name: row.name } : null), [uid, row.namespace, row.name]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   const { namespace, name } = row;
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [pending, setPending] = useState<Pending | null>(null);
@@ -764,6 +768,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="pod YAML" /> : null}
       >
         {ai.block}
+        {alertsBlock}
         {forwarding && live && (
           <ForwardPopover
             cluster={cluster}

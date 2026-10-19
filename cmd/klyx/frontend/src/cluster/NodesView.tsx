@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeRowDTO, PodOnNodeDTO } from "../store/fleet";
@@ -1035,6 +1036,9 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
   onClose: () => void;
 }) {
   const ai = useInspectorAI(uid ? { kind: "row" as const, task: "nodes", part: "nodes", uid: uid } : null, `Node/${row.name}`, !gone, cluster);
+  // coverage S8a: Alertmanager's alerts naming this node
+  const alertTarget = useMemo(() => (uid ? { uid, kind: "Node", name: row.name } : null), [uid, row.name]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [describing, setDescribing] = useState(false);
   const podsRef = useRef<HTMLDivElement>(null);
@@ -1094,6 +1098,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="node YAML" /> : null}
       >
         {ai.block}
+        {alertsBlock}
         {describing && live && <DescribePane cluster={cluster} kindArg="node" kind="Node" namespace="" name={name} expectUid={uid || undefined} onClose={() => setDescribing(false)} />}
         {!shown ? (
           detailError && !loading ? (

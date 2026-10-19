@@ -33,15 +33,15 @@ func TestAlertsRowsConverter(t *testing.T) {
 	if !ok {
 		t.Fatal("no converter")
 	}
-	out := dto.Rows.(AMAlertsRowsDTO)
-	a := out.Alerts[0]
-	if out.Source != "https://am.example:443" || out.ReadAt != "2026-10-19T12:00:00Z" || a.Name != "PodCrash" || !a.Counted ||
+	out := dto.Rows.([]AMAlertDTO)
+	a := out[0]
+	if dto.Facts["alertsSource"] != "https://am.example:443" || dto.Facts["alertsReadAt"] != "2026-10-19T12:00:00Z" || a.Name != "PodCrash" || !a.Counted ||
 		a.Subject.State != "found" || a.Subject.UID != "p-uid" || !a.Subject.StartedBeforeCreated || a.Subject.CreatedAt != "2026-10-19T11:50:00Z" ||
 		a.Mute == nil || a.Mute.Kind != "partial" || a.StartsAt != "2026-10-19T11:00:00Z" || a.EndsAt != "2026-10-19T13:00:00Z" || a.Subject.GVR != "v1/pods" {
 		t.Fatalf("dto: %+v", out)
 	}
 	empty, ok := toRowsDTO(observe.Rows{Task: healthsrc.TaskAlerts, Part: observe.Part{ID: "alerts"}})
-	if !ok || empty.Rows.(AMAlertsRowsDTO).Alerts == nil {
+	if !ok || empty.Rows.([]AMAlertDTO) == nil {
 		t.Fatalf("no read: %+v", empty)
 	}
 }

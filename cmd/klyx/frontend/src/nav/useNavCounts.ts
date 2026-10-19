@@ -72,7 +72,7 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
       if (l.destinationId) {
         // the part's own count: lit, evidence, or an unlit count in the
         // tool's word (neutral, as its lens shows it; review 1/3 #2)
-        if (l.state === "attention" || l.state === "evidence" || l.state === "unlit") out.destination[l.destinationId] = badge(a, l);
+        if (l.state === "attention" || l.state === "evidence" || l.state === "unlit" || l.state === "alerts") out.destination[l.destinationId] = badge(a, l);
         if (l.state === "attention") out.attention.add(l.destinationId);
         const w = noteOf(l);
         // "checking…" is said once, on the group - not beside every view

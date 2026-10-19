@@ -231,3 +231,19 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 	}
 	return res
 }
+
+// RowFacts are the read's own facts, beside its rows (the lens's source
+// line): display values, and the read time and truncation.
+func (r AlertRows) RowFacts() map[string]any {
+	f := map[string]any{"alertsSource": r.Source, "alertsTruncated": r.Truncated}
+	if r.Note != "" {
+		f["alertsNote"] = r.Note
+	}
+	if len(r.Match) > 0 {
+		f["alertsMatch"] = r.Match
+	}
+	if !r.ReadAt.IsZero() {
+		f["alertsReadAt"] = r.ReadAt.UTC().Format(time.RFC3339)
+	}
+	return f
+}

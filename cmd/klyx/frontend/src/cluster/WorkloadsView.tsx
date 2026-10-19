@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -705,6 +706,11 @@ function WorkloadInspector({
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
   const ai = useInspectorAI(workload.uid ? { kind: "row" as const, task: "workloads", part: "workloads", uid: workload.uid } : null, `${workload.kind}/${workload.namespace}/${workload.name}`, !gone, cluster);
+  // coverage S8a: alerts naming this workload, and its current pods
+  const podUIDs = workload.pods.map((p) => p.uid ?? "").filter(Boolean).join(",");
+  const alertTarget = useMemo(() => (workload.uid ? { uid: workload.uid, kind: workload.kind, namespace: workload.namespace, name: workload.name, podUIDs: podUIDs ? podUIDs.split(",") : [] } : null),
+    [workload.uid, workload.kind, workload.namespace, workload.name, podUIDs]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   // Describe (slice 14c): kubectl's report for this object, read-only; never
   // for a removed or unverified selection.
   const describe = useDescribe(cluster, !gone ? { kind: workload.kind, namespace: workload.namespace, name: workload.name, uid: workload.uid } : null);
@@ -763,6 +769,7 @@ function WorkloadInspector({
         more={[...(live ? more : viewManifest ? [viewManifest] : []), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
+        {alertsBlock}
         {live && scaling && (
           <InspectorBlock title="Scale">
             <ScalePopover initial={w.desired} onConfirm={(n) => onScaleConfirm(w, n)} onCancel={onCancelScale} />
