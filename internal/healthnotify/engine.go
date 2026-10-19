@@ -796,4 +796,6 @@ var kinds = map[string]string{
 	"validatingadmissionpolicies": "ValidatingAdmissionPolicy", "mutatingadmissionpolicies": "MutatingAdmissionPolicy",
 	"services": "Service", "ipaddresspools": "IPAddressPool", "ciliumloadbalancerippools": "CiliumLoadBalancerIPPool",
 	"configurationstates": "ConfigurationState",
+	// coverage S9
+	"horizontalpodautoscalers": "HorizontalPodAutoscaler", "scaledobjects": "ScaledObject", "scaledjobs": "ScaledJob",
 }

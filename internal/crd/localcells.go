@@ -50,6 +50,9 @@ var payloadResources = map[string]bool{
 	"velero.io/restores":                true,
 	"velero.io/backupstoragelocations":  true,
 	"velero.io/volumesnapshotlocations": true,
+	// S9 §10: the Vault token
+	"keda.sh/triggerauthentications":        true,
+	"keda.sh/clustertriggerauthentications": true,
 	// an Event's text is its subject's, under that subject's rule (Codex's
 	// Stage 0 review, finding 1); its columns are Klyx's own
 	"/events":              true,

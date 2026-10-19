@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/keda"
 )
 
 // The chat projection (spec 2026-10-14 §2): the one contract for what an
@@ -368,6 +369,63 @@ func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Un
 				"parameterNotFoundAction": b.ParamRef.NotFoundAction}
 		}
 		p.drop(".spec (selector values)")
+		return out, nil
+	}
+	switch key {
+	case "keda.sh/scaledobjects", "keda.sh/scaledjobs":
+		// Coverage S9 §9: the trigger types, names and authentication
+		// references, never trigger metadata (it can carry addresses,
+		// queries and inline credentials) or a ScaledJob's Job template
+		var sc keda.Scaler
+		out := map[string]any{}
+		if key == "keda.sh/scaledobjects" {
+			so := keda.ProjectScaledObject(u)
+			sc = so.Scaler
+			group, kind, name := so.Target()
+			out["scaleTarget"] = map[string]any{"group": group, "kind": kind, "name": name}
+			for k, v := range map[string]*int32{"minReplicaCount": so.Min, "maxReplicaCount": so.Max, "idleReplicaCount": so.Idle} {
+				if v != nil {
+					out[k] = *v
+				}
+			}
+			if f := so.Fallback; f != nil {
+				out["fallback"] = map[string]any{"failureThreshold": f.FailureThreshold, "replicas": f.Replicas, "behavior": f.Behavior}
+			}
+			if so.HPANameSpec != "" {
+				out["hpaName"] = so.HPANameSpec
+			}
+		} else {
+			sc = keda.ProjectScaledJob(u).Scaler
+			p.drop(".spec.jobTargetRef")
+		}
+		var triggers []any
+		for _, t := range sc.Triggers {
+			tr := map[string]any{"type": t.Type}
+			if t.Name != "" {
+				tr["name"] = t.Name
+			}
+			if t.AuthName != "" {
+				tr["authenticationRef"] = map[string]any{"kind": t.AuthKind, "name": t.AuthName}
+			}
+			triggers = append(triggers, tr)
+		}
+		out["triggers"] = triggers
+		p.drop(".spec.triggers[].metadata")
+		return out, p.tree(nestedMap(obj, "status"), ".status", 0, chatCRDDepth, chatCRDStringMax, true)
+	case "keda.sh/triggerauthentications", "keda.sh/clustertriggerauthentications":
+		// Coverage S9 §9: source kinds and counts, and podIdentity's
+		// provider and owner; never a reference's name, a detail, a role
+		// or identity id, or Vault's literal token
+		a := keda.ProjectAuth(u, key == "keda.sh/clustertriggerauthentications")
+		var sources []any
+		for _, src := range a.Sources {
+			sources = append(sources, map[string]any{"kind": src.Kind, "references": src.RefN})
+		}
+		out := map[string]any{"sources": sources}
+		if pi := a.PodIdentity; pi != nil {
+			out["podIdentity"] = map[string]any{"provider": pi.Provider, "identityOwner": pi.IdentityOwner}
+		}
+		p.drop(".spec (references and credentials)")
 		return out, nil
 	}
 	if key == "image.toolkit.fluxcd.io/imageupdateautomations" {

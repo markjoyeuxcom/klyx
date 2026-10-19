@@ -1044,6 +1044,11 @@ var chatParts = map[string][2]string{
 	"metallb.io/ipaddresspools":           {healthsrc.TaskLB, "pools"},
 	"cilium.io/ciliumloadbalancerippools": {healthsrc.TaskLB, "pools"},
 	"metallb.io/configurationstates":      {healthsrc.TaskLB, "metallb"},
+	// coverage S9: a KEDA-owned HPA's row is a fact (its ScaledObject
+	// carries the verdict); the authentications are facts
+	"autoscaling/horizontalpodautoscalers": {healthsrc.TaskAutoscaling, "hpas"},
+	"keda.sh/scaledobjects":                {healthsrc.TaskKEDA, "scaledobjects"},
+	"keda.sh/scaledjobs":                   {healthsrc.TaskKEDA, "scaledjobs"},
 }
 
 // verdictsFor reads Klyx's verdicts by UID for a kind the Observer

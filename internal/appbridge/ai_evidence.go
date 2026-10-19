@@ -612,3 +612,28 @@ func alertsSeenAt(p observe.Part) (string, bool) {
 	}
 	return "", false
 }
+
+// Coverage S9 §9: names, the target, conditions, the HPA as read, pause
+// intent, trigger types and metric keys, authentication names and source
+// kinds, and Klyx's findings; never trigger metadata (never retained), an
+// authentication's reference names, details, role or identity id.
+func init() {
+	cond := allow{"type": nil, "status": nil, "reason": nil, "message": nil}
+	pause := allow{"kind": nil, "annotation": nil, "requested": nil, "malformed": nil, "directions": nil, "notApplied": nil, "unverified": nil,
+		"applied": nil, "completed": nil}
+	triggers := allow{"type": nil, "name": nil, "metricType": nil, "authName": nil, "authKind": nil, "cached": nil}
+	findings := allow{"role": nil, "label": nil, "text": nil, "note": nil}
+	aiEvidenceFields[healthsrc.TaskAutoscaling+"/hpas"] = allow{"target": allow{"apiVersion": nil, "kind": nil, "name": nil},
+		"min": nil, "max": nil, "current": nil, "desired": nil, "metrics": nil, "metricTypes": nil, "conditions": cond, "conditionsCut": nil,
+		"generation": nil, "observedGeneration": nil, "generationReported": nil, "kedaOwner": nil, "others": nil, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/scaledobjects"] = allow{"targetGroup": nil, "targetKind": nil, "targetName": nil,
+		"hpaNameSpec": nil, "hpaName": nil, "min": nil, "max": nil, "idle": nil, "fallback": allow{"failureThreshold": nil, "replicas": nil, "behavior": nil},
+		"scalingModifiers": nil, "transfer": nil, "triggers": triggers, "triggerCount": nil, "triggersCut": nil, "conditions": cond, "conditionsCut": nil,
+		"metrics": allow{"metric": nil, "failures": nil, "status": nil, "active": nil}, "metricsCut": nil, "healthTracked": nil, "pause": pause,
+		"hpa": allow{"name": nil, "min": nil, "max": nil, "current": nil, "desired": nil, "conditions": cond}, "hpaCurrent": nil, "hpaComplete": nil,
+		"others": nil, "version": nil, "authsRead": nil, "findings": findings, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/scaledjobs"] = allow{"triggers": triggers, "triggerCount": nil, "triggersCut": nil, "conditions": cond,
+		"conditionsCut": nil, "successfulLimit": nil, "failedLimit": nil, "pause": pause, "version": nil, "findings": findings, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/authentications"] = allow{"cluster": nil, "sources": allow{"kind": nil, "refCount": nil, "cut": nil, "method": nil},
+		"podIdentity": allow{"provider": nil, "identityOwner": nil}, "users": nil, "usersComplete": nil}
+}
