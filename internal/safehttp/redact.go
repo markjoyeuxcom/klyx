@@ -66,9 +66,11 @@ func (r Redactor) Empty() bool { return len(r.secrets) == 0 }
 
 // Exact removes the exact secrets only: for a response body still to be
 // parsed, where general shapes could alter real data.
-func (r Redactor) Exact(s string) string {
+func (r Redactor) Exact(s string) string { return r.replace(s, Redacted) }
+
+func (r Redactor) replace(s, with string) string {
 	for _, sec := range r.secrets {
-		s = strings.ReplaceAll(s, sec, Redacted)
+		s = strings.ReplaceAll(s, sec, with)
 	}
 	return s
 }
@@ -76,9 +78,13 @@ func (r Redactor) Exact(s string) string {
 // Text removes the exact secrets, then every general credential shape: for a
 // message about to leave the endpoint code. Clip after this, never before.
 func (r Redactor) Text(s string) string {
-	out, _ := scrub.Credentials(r.Exact(s))
-	return out
+	// the exact secrets become a placeholder the general shapes match whole,
+	// so "token=<secret>" reads "token=[redacted]", never "[redacted]]"
+	out, _ := scrub.Credentials(r.replace(s, placeholder))
+	return strings.ReplaceAll(out, placeholder, Redacted)
 }
+
+const placeholder = "\x00redacted\x00"
 
 // Err is err with its text redacted. It keeps errors.Is for the
 // cancellation and deadline sentinels, and for the caller's own (keep),

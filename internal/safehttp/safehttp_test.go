@@ -183,3 +183,12 @@ func TestRedactorCoversTheQuotedSpelling(t *testing.T) {
 		t.Fatalf("quoted spelling: %s", out)
 	}
 }
+
+// An exact secret inside a credential shape reads as one redaction, never
+// "[redacted]]" (the general shape matched what the exact pass left).
+func TestTextRedactsOnceInsideAShape(t *testing.T) {
+	r := NewRedactor(Bearer("Zx9-secret-Q"))
+	if got := r.Text("url?token=Zx9-secret-Q&x=1 and password: Zx9-secret-Q"); got != "url?token=[redacted]&x=1 and password: [redacted]" {
+		t.Fatalf("got %q", got)
+	}
+}
