@@ -10,7 +10,18 @@ import (
 const (
 	PageLimit  = 1000 // entries kept per page, across branches
 	RetryLimit = 5000 // a saturated branch's one re-read (Loki's default maximum)
+	// PageBytes bounds a page's line text, across branches (Codex's review
+	// of b2f945c): six branches may each answer 8 MiB, and the page the
+	// bridge carries stays one response's size. The cursor moves only past
+	// what is kept, so the rest is read on the next page.
+	PageBytes = 8 << 20
 )
+
+// entryBytes is an entry's share of a page's budget: what a page carries
+// for it - its line, and a bounded allowance for its timestamp and the label
+// shown beside it (clipped by the reader), never the stream's labels, which
+// its entries share.
+func entryBytes(e Entry) int { return len(e.Line) + 320 }
 
 // BranchState is one branch's place in a page set.
 type BranchState struct {
@@ -25,6 +36,7 @@ type BranchState struct {
 	// share Boundary, and whether more remain cannot be established.
 	Stopped      bool
 	StoppedCount int
+	Refused      string // the server's refusal of the re-read, when it refused
 }
 
 // Active: the branch still has entries to read.
@@ -45,6 +57,28 @@ func NewPageSet(start, end int64, n int) *PageSet {
 		ps.Branches[i] = BranchState{End: end, Delivered: map[[32]byte]struct{}{}}
 	}
 	return ps
+}
+
+// More: a branch can still be read (Load older has something to do).
+func (ps *PageSet) More() bool {
+	for _, b := range ps.Branches {
+		if b.Active() {
+			return true
+		}
+	}
+	return false
+}
+
+// Markers are every stopped branch's: an unresolved boundary stays said on
+// every page until it is skipped or the page set ends.
+func (ps *PageSet) Markers() []Marker {
+	var out []Marker
+	for i, b := range ps.Branches {
+		if b.Stopped {
+			out = append(out, Marker{Branch: i, TS: b.Boundary, Count: b.StoppedCount, Refused: b.Refused})
+		}
+	}
+	return out
 }
 
 // Done: every branch is exhausted - the start of the range is reached. A
@@ -100,7 +134,7 @@ func (ps *PageSet) Stop(r Read) {
 // choice: the entries at that timestamp not delivered are left out.
 func (ps *PageSet) Skip(branch int) {
 	b := &ps.Branches[branch]
-	b.End, b.Stopped, b.StoppedCount = b.Boundary, false, 0
+	b.End, b.Stopped, b.StoppedCount, b.Refused = b.Boundary, false, 0, ""
 	b.Delivered = map[[32]byte]struct{}{}
 }
 
@@ -119,6 +153,12 @@ type Kept struct {
 // entries was cut - exhaustion is read from the raw response, never from
 // what remained after the dedupe.
 func (ps *PageSet) Apply(reads []Read, limit int) []Kept {
+	return ps.ApplyBounded(reads, limit, 0)
+}
+
+// ApplyBounded is Apply with a byte budget for the page's entries (0: none):
+// the newest entries are kept while they fit, at least one.
+func (ps *PageSet) ApplyBounded(reads []Read, limit, maxBytes int) []Kept {
 	type cand struct {
 		Kept
 		k [32]byte
@@ -149,6 +189,15 @@ func (ps *PageSet) Apply(reads []Read, limit int) []Kept {
 	})
 	if len(all) > limit {
 		all = all[:limit]
+	}
+	if maxBytes > 0 {
+		n := 0
+		for i, c := range all {
+			if n += entryBytes(c.Entry); n > maxBytes && i > 0 {
+				all = all[:i]
+				break
+			}
+		}
 	}
 	kept := make([]Kept, 0, len(all))
 	keptOf := make([]int, len(ps.Branches))

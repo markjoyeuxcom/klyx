@@ -491,3 +491,29 @@ Built on `feat/coverage-s8` after the design's acceptance at b4218c1:
   - 19 in the Go of stages 2 and 3, three after added tests: the proxied fence, the clip on a 3-byte rune, and Loki's Set through the connection;
   - 11 in the frontend, three after added tests: `PinnedGone`'s history, the gone pod's disabled Live, and History without a UID.
 - **No equivalents.**
+
+## 17. Implementation revision 1: Codex's review of b2f945c
+
+Codex requested changes with one P1, seven P2s and one P3. Each has a repository test beside Codex's probe.
+
+1. **[P1] A shared label amplified into the reply.**
+   - The line's displayed container label is now clipped to 256 bytes, like a label value.
+   - A page keeps at most `loki.PageBytes` (8 MiB) of entries: each entry's line plus a bounded allowance, never the stream's shared labels. The cursor moves only past what is kept, so the rest arrives on later pages, none lost and none twice.
+   - **Measured on the admitted worst shape:** six branches each answering about 8 MiB of 60 KiB lines, with a 128 KiB label shared by every line. The page carries 135 lines in an 8.0 MiB reply, and the label is clipped.
+2. **[P2] View state raced across restarts.**
+   - Each view now has a persistent slot whose one mutex guards its page state across restarts.
+   - A new request cancels the slot's read in flight, then waits on that mutex. A cancelled owner that never got the mutex says it was replaced.
+   - The service lock guards only the slot's bookkeeping. Concurrent same-view requests run clean under `-race`.
+3. **[P2] No completion fence.** After the page, first or next, the source is checked again. A source that moved refuses the page (no lines, Reset, "the Loki source changed") and drops the page set.
+4. **[P2] An expired or evicted cursor restarted silently.** Any request without Restart that finds no page set to continue starts from the newest, marked Reset, so the view replaces its lines. This covers an expired, evicted or failed page set, and a moved source.
+5. **[P2] A stopped marker vanished on a later page.**
+   - Every stopped branch's marker, with the server's refusal, is returned on every page until it is skipped.
+   - The page says `more` (a branch can still be read). A view whose only branches left are stopped offers Skip past, not an endless Load older.
+6. **[P2] The view's byte cap spared the incoming page.** The cap now applies to the incoming page too, dropping from its newest end and keeping its oldest lines, where the cursor continues.
+7. **[P2] The 16-view maximum grew while every view read.** A new view is refused when 16 are held and none is idle: "16 log history views are reading; close one or try again".
+8. **[P2] A failed Refresh dropped the last good lines.**
+   - A failed Refresh of the same target keeps the held lines and what they were read by, marked "not refreshed".
+   - A changed target (range, container, mode or pod) never shows the old lines.
+9. **[P3] An empty labels list skipped the fallback.** An empty list is nothing selectable, in the reader and in the service, and the second, unscoped labels read says why.
+
+**Mutations:** 14 caught for this revision. One, keeping a failed first page's state, first survived and got its test; that test also shows a "no streams" first page cannot be paged.

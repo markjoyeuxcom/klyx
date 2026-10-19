@@ -82,4 +82,27 @@ describe("LogHistoryPane (coverage S8b §7)", () => {
     expect(screen.getByTestId("history-cap").textContent).toContain("Newer lines dropped (10,000 held)");
     expect(screen.getByTestId("history-older")).toBeTruthy();
   });
+
+  it("a failed Refresh keeps the last good lines, marked; a changed target never shows them (Codex's review of b2f945c)", async () => {
+    answer = () => page();
+    render(<LogHistoryPane cluster="c" target={target} />);
+    await waitFor(() => expect(shown().length).toBe(3));
+    answer = () => page({ lines: [], error: "read failed" });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
+    expect(shown().length).toBe(3);
+    expect(screen.getByTestId("history-error").textContent).toContain("the lines below are the last read, not refreshed");
+    expect(screen.getByTestId("history-strength").textContent).toContain("selected by this pod's UID"); // what they were read by
+    // a different range is another target: its failure shows no old lines
+    await act(async () => { fireEvent.change(screen.getByLabelText("range"), { target: { value: String(3600) } }); });
+    await waitFor(() => expect(screen.queryAllByTestId("history-line").length).toBe(0));
+  });
+
+  it("a view stopped at markers offers Skip past, not an endless Load older", async () => {
+    answer = () => page({ more: false, markers: [{ branch: 0, ts: "2026-10-19T11:50:00Z", count: 5000 }] });
+    render(<LogHistoryPane cluster="c" target={target} />);
+    await waitFor(() => expect(screen.getByTestId("history-marker")).toBeTruthy());
+    expect(screen.queryByTestId("history-older")).toBeNull();
+    expect(screen.queryByTestId("history-start")).toBeNull();
+  });
 });
+

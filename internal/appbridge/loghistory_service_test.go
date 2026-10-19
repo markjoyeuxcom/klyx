@@ -2,9 +2,13 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -250,5 +254,241 @@ func TestHistoryRange(t *testing.T) {
 		if end.Sub(start) != tc.want {
 			t.Errorf("%+v: %v", tc.req, end.Sub(start))
 		}
+	}
+}
+
+// ---- Codex's review of b2f945c ----
+
+// A next page with no page set to continue (expired, evicted, failed)
+// starts from the newest, said as Reset, so the view replaces its lines.
+func TestHistoryExpiredCursorResets(t *testing.T) {
+	f := otelFake()
+	f.entries[q(podBranch, loki.ModeName, "")] = lines(1500, tNow.Add(-time.Minute), "", "x")
+	s := histSvc(f)
+	now := tNow
+	s.now = func() time.Time { return now }
+	req := PodHistoryRequestDTO{Cluster: "c", View: "exp", Restart: true, Namespace: "team", Pod: "api-1"}
+	if p := s.ReadPodHistory(req); p.Reset || len(p.Lines) != 1000 {
+		t.Fatalf("first: reset %v, %d", p.Reset, len(p.Lines))
+	}
+	now = now.Add(historyIdle + time.Minute)
+	req.Restart = false
+	if p := s.ReadPodHistory(req); !p.Reset || p.Lines[0].Line != "x 0" {
+		t.Fatalf("an expired cursor: reset %v, first %q", p.Reset, p.Lines[0].Line)
+	}
+}
+
+// A stopped boundary's marker, with the server's refusal, stays on every
+// page until skipped; Load older has nothing to do (More false).
+func TestHistoryMarkersPersist(t *testing.T) {
+	f := otelFake()
+	es := lines(6000, tNow.Add(-time.Minute), "", "burst")
+	for i := range es {
+		es[i].TS = es[0].TS
+	}
+	f.entries[q(podBranch, loki.ModeName, "")] = es
+	s := histSvc(f)
+	req := PodHistoryRequestDTO{Cluster: "c", View: "stop", Restart: true, Namespace: "team", Pod: "api-1"}
+	s.ReadPodHistory(req)
+	req.Restart = false
+	var p LogHistoryPageDTO
+	for i := 0; i < 4; i++ {
+		p = s.ReadPodHistory(req)
+	}
+	if len(p.Markers) != 1 || p.More || p.Done || p.Markers[0].Count < 5000 {
+		t.Fatalf("after several pages: markers %+v more %v done %v", p.Markers, p.More, p.Done)
+	}
+	req.Skip = []int{p.Markers[0].Branch}
+	if p = s.ReadPodHistory(req); len(p.Markers) != 0 {
+		t.Fatalf("skip: %+v", p.Markers)
+	}
+}
+
+// slowHistory holds every Slot until released, so views stay in flight.
+type slowHistory struct {
+	*fakeHistory
+	in      chan struct{}
+	release chan struct{}
+}
+
+func (f *slowHistory) Slot(ctx context.Context) (func(), error) {
+	f.in <- struct{}{}
+	select {
+	case <-f.release:
+		return func() {}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// The service holds at most 16 views; a new one while all are reading is
+// refused, never added.
+func TestHistoryViewLimitWhileBusy(t *testing.T) {
+	f := &slowHistory{fakeHistory: otelFake(), in: make(chan struct{}, 32), release: make(chan struct{})}
+	s := NewLogHistoryService(func(string) (HistoryReader, error) { return f, nil })
+	var wg sync.WaitGroup
+	for i := 0; i < historyViewsMax; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: fmt.Sprint("v", i), Restart: true, Namespace: "team", Pod: "api-1"})
+		}(i)
+	}
+	for i := 0; i < historyViewsMax; i++ {
+		<-f.in
+	}
+	p := s.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "one-more", Restart: true, Namespace: "team", Pod: "api-1"})
+	close(f.release)
+	wg.Wait()
+	if p.Error != errHistoryViewsFull.Error() {
+		t.Fatalf("a seventeenth view: %q", p.Error)
+	}
+	s.mu.Lock()
+	n := len(s.views)
+	s.mu.Unlock()
+	if n > historyViewsMax {
+		t.Fatalf("%d views held", n)
+	}
+}
+
+// Requests for one view, concurrent: one owner at a time (run under -race).
+func TestHistoryConcurrentSameView(t *testing.T) {
+	f := otelFake()
+	f.entries[q(podBranch, loki.ModeName, "")] = lines(1500, tNow.Add(-time.Minute), "", "x")
+	s := histSvc(f)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			s.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "same", Restart: i%2 == 0, Namespace: "team", Pod: "api-1"})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+}
+
+// movingHistory moves its source after the last branch of a page answers.
+type movingHistory struct {
+	*fakeHistory
+	moved atomic.Bool
+	after string
+}
+
+func (f *movingHistory) Current() bool { return !f.moved.Load() }
+func (f *movingHistory) Query(ctx context.Context, q string, start, end int64, limit int) ([]loki.Entry, error) {
+	es, err := f.fakeHistory.Query(ctx, q, start, end, limit)
+	if strings.Contains(q, f.after) {
+		f.moved.Store(true)
+	}
+	return es, err
+}
+
+// The completion fence: a source that moves during a page - first or next -
+// refuses the page, and the next request starts again (Reset).
+func TestHistoryCompletionFence(t *testing.T) {
+	f := &movingHistory{fakeHistory: otelFake(), after: `pod="", k8s_pod_name=""`}
+	f.entries[q(podBranch, loki.ModeName, "")] = lines(1500, tNow.Add(-time.Minute), "", "OLD")
+	s := NewLogHistoryService(func(string) (HistoryReader, error) { return f, nil })
+	s.now = func() time.Time { return tNow }
+	req := PodHistoryRequestDTO{Cluster: "c", View: "fence", Restart: true, Namespace: "team", Pod: "api-1"}
+	if p := s.ReadPodHistory(req); len(p.Lines) != 0 || p.Error == "" || !p.Reset {
+		t.Fatalf("first page over a moved source: %d lines, %q", len(p.Lines), p.Error)
+	}
+	f.moved.Store(false)
+	f.after = "never"
+	if p := s.ReadPodHistory(req); len(p.Lines) != 1000 || p.Error != "" {
+		t.Fatalf("a current source: %d %q", len(p.Lines), p.Error)
+	}
+	f.after = `k8s_pod_name="api-1"` // the branch a next page still reads
+	req.Restart = false
+	if p := s.ReadPodHistory(req); len(p.Lines) != 0 || p.Error == "" || !p.Reset {
+		t.Fatalf("a next page over a moved source: %d lines, %q", len(p.Lines), p.Error)
+	}
+}
+
+// An empty label list in the match is nothing selectable: the fallback read
+// says why, never "no namespace label".
+func TestHistoryEmptyLabels(t *testing.T) {
+	f := otelFake()
+	f.labels = map[string][]string{`{k8s_cluster_name="prd"}`: {}, "": {"namespace", "pod"}}
+	p := histSvc(f).ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "empty", Restart: true, Namespace: "team", Pod: "api-1"})
+	if p.NoStreams != "match names k8s_cluster_name, which is not an index label on tenant lab in the range" {
+		t.Fatalf("empty labels: %q", p.NoStreams)
+	}
+}
+
+// §8, measured on the admitted worst shape: six branches each answering
+// about 8 MiB of 60 KiB lines, and one 128 KiB label shared by every line.
+// The page carries at most PageBytes of lines; the label is clipped.
+//
+//	go test ./internal/appbridge -run TestHistoryBudget -v
+func TestHistoryBudget(t *testing.T) {
+	f := otelFake()
+	f.labels = map[string][]string{`{k8s_cluster_name="prd"}`: {"namespace", "k8s_namespace_name", "pod", "k8s_pod_name"}}
+	bs, _ := loki.Branches(f.labels[`{k8s_cluster_name="prd"}`])
+	shared := map[string]string{"k8s_container_name": strings.Repeat("c", 128<<10)}
+	for bi, b := range bs {
+		var es []loki.Entry
+		for i := 0; i < 136; i++ { // 136 x 60 KiB ~ 8 MiB per branch
+			es = append(es, loki.Entry{Stream: shared, TS: tNow.Add(-time.Duration(bi*1000+i) * time.Millisecond).UnixNano(),
+				Line: fmt.Sprintf("b%d-%03d %s", bi, i, strings.Repeat("x", 60<<10))})
+		}
+		f.entries[loki.Query(b, loki.Target{Match: f.match, Namespace: "team", Pod: "api-1"}, loki.ModeName)] = es
+	}
+	if len(bs) != 6 {
+		t.Fatalf("branches: %d", len(bs))
+	}
+	s := histSvc(f)
+	before := heapNow()
+	p := s.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "budget", Restart: true, Namespace: "team", Pod: "api-1"})
+	enc, _ := json.Marshal(p)
+	retained := int64(heapNow()) - int64(before)
+	t.Logf("page: %d lines, DTO %.1f MiB, heap after the page %+.1f MiB", len(p.Lines), float64(len(enc))/(1<<20), float64(retained)/(1<<20))
+	if p.Error != "" || len(p.Lines) == 0 || len(enc) > loki.PageBytes+(1<<20) {
+		t.Fatalf("the page is not bounded: %d lines, %d bytes, %q", len(p.Lines), len(enc), p.Error)
+	}
+	if len(p.Lines[0].Container) > 260 {
+		t.Fatalf("the shared label repeats unclipped: %d bytes", len(p.Lines[0].Container))
+	}
+	runtime.KeepAlive(p)
+}
+
+func heapNow() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// A first page that fails - nothing selectable, or a read error - leaves no
+// page set: a next-page request starts again from the newest, said as Reset,
+// and never pages a page set that never began.
+func TestHistoryFailedFirstPageLeavesNoPageSet(t *testing.T) {
+	f := otelFake()
+	f.labels = map[string][]string{}
+	s := histSvc(f)
+	req := PodHistoryRequestDTO{Cluster: "c", View: "failed", Restart: true, Namespace: "team", Pod: "api-1"}
+	if p := s.ReadPodHistory(req); p.NoStreams == "" {
+		t.Fatalf("no streams: %+v", p)
+	}
+	f.labels = map[string][]string{`{k8s_cluster_name="prd"}`: strings.Fields(otelLabels)}
+	f.entries[q(podBranch, loki.ModeName, "")] = lines(5, tNow.Add(-time.Minute), "", "x")
+	req.Restart = false
+	if p := s.ReadPodHistory(req); !p.Reset || len(p.Lines) != 5 {
+		t.Fatalf("after nothing selectable: reset %v, %d lines, %q", p.Reset, len(p.Lines), p.Error)
+	}
+	f.err = errors.New("Loki answered HTTP 502")
+	req.Restart = true
+	if p := s.ReadPodHistory(req); p.Error == "" {
+		t.Fatal("a failed read reported no error")
+	}
+	f.err = nil
+	req.Restart = false
+	if p := s.ReadPodHistory(req); !p.Reset || len(p.Lines) != 5 {
+		t.Fatalf("after a failed first page: reset %v, %d lines", p.Reset, len(p.Lines))
 	}
 }

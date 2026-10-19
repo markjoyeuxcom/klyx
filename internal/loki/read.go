@@ -38,11 +38,12 @@ type Marker struct {
 // a saturated branch once more at RetryLimit, a branch still saturated (or
 // whose re-read the server refused with a 4xx) stopped with its marker. A
 // read failing otherwise fails the page whole: nothing is applied, and the
-// page set is where it was.
+// page set is where it was. The page keeps at most PageLimit entries and
+// PageBytes of them; the markers are every stopped branch's, not only this
+// page's.
 func ReadPage(ctx context.Context, read QueryFunc, ps *PageSet) ([]Kept, []Marker, error) {
 	var reads []Read
 	var stops []Read
-	var markers []Marker
 	refused := map[int]string{}
 	for i, b := range ps.Branches {
 		if !b.Active() {
@@ -74,8 +75,8 @@ func ReadPage(ctx context.Context, read QueryFunc, ps *PageSet) ([]Kept, []Marke
 	}
 	for _, r := range stops {
 		ps.Stop(r)
-		b := ps.Branches[r.Branch]
-		markers = append(markers, Marker{Branch: r.Branch, TS: b.Boundary, Count: b.StoppedCount, Refused: refused[r.Branch]})
+		ps.Branches[r.Branch].Refused = refused[r.Branch]
 	}
-	return ps.Apply(reads, PageLimit), markers, nil
+	kept := ps.ApplyBounded(reads, PageLimit, PageBytes)
+	return kept, ps.Markers(), nil
 }

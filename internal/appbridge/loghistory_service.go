@@ -95,16 +95,29 @@ type LogHistoryPageDTO struct {
 	Start     string                `json:"start"`
 	End       string                `json:"end"`
 	Done      bool                  `json:"done"` // the start of the range reached
+	More      bool                  `json:"more"` // a branch can still be read: Load older has something to do
 	Markers   []LogHistoryMarkerDTO `json:"markers,omitempty"`
 	NoStreams string                `json:"noStreams,omitempty"`
 	Reset     bool                  `json:"reset,omitempty"` // the page set ended: the source changed or expired
 	Error     string                `json:"error,omitempty"`
 }
 
-type historyView struct {
-	// mu serializes the view's reads: a new request cancels the old one's
-	// context, then waits for it to let go of the page set
+// historySlot is a view's place in the service. It outlives the view's page
+// sets, so one mutex guards the view's page state across restarts (Codex's
+// review of b2f945c): a new request cancels the slot's read in flight, then
+// waits on mu for it to let go. s.mu guards cancel, inFlight and used; mu
+// guards state.
+type historySlot struct {
 	mu       sync.Mutex
+	state    *historyView // nil: no page set (none yet, failed, or ended)
+	cancel   context.CancelFunc
+	inFlight int
+	used     time.Time
+}
+
+// historyView is one page set: what was locked when it started (§4) and
+// where its branches are.
+type historyView struct {
 	cluster  string
 	lineage  string
 	rev      uint64
@@ -119,9 +132,6 @@ type historyView struct {
 	start    time.Time
 	end      time.Time
 	ps       *loki.PageSet
-	used     time.Time
-	cancel   context.CancelFunc
-	inFlight int
 }
 
 // LogHistoryService serves History views.
@@ -129,12 +139,16 @@ type LogHistoryService struct {
 	readerOf func(cluster string) (HistoryReader, error)
 	now      func() time.Time
 	mu       sync.Mutex
-	views    map[string]*historyView
+	views    map[string]*historySlot
 }
+
+// errHistoryViewsFull: every view the service holds is reading; a new one
+// waits for one to finish rather than growing the set.
+var errHistoryViewsFull = fmt.Errorf("%d log history views are reading; close one or try again", historyViewsMax)
 
 // NewLogHistoryService wires the cluster's Loki reader.
 func NewLogHistoryService(readerOf func(cluster string) (HistoryReader, error)) *LogHistoryService {
-	return &LogHistoryService{readerOf: readerOf, now: time.Now, views: map[string]*historyView{}}
+	return &LogHistoryService{readerOf: readerOf, now: time.Now, views: map[string]*historySlot{}}
 }
 
 // LokiConn is a connection that can read its cluster's Loki.
@@ -162,8 +176,8 @@ func ReaderOf(lookup func(string) (LokiConn, bool)) func(string) (HistoryReader,
 func (s *LogHistoryService) CloseView(view string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if v := s.views[view]; v != nil && v.cancel != nil {
-		v.cancel()
+	if sl := s.views[view]; sl != nil && sl.cancel != nil {
+		sl.cancel()
 	}
 	delete(s.views, view)
 }
@@ -186,81 +200,106 @@ func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryP
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyPageLimit)
 	defer cancel()
-	v, fresh, reset := s.claim(req, r, cancel)
-	defer s.release(req.View, v)
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	slot, err := s.enter(req.View, cancel)
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	defer s.leave(slot)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if ctx.Err() != nil {
+		out.Error = "a newer request for this view replaced this one"
+		return out
+	}
 	release, err := r.Slot(ctx)
 	if err != nil {
 		out.Error = r.Redactor().Text(err.Error())
 		return out
 	}
 	defer release()
-	if reset {
-		out.Reset = true
-	}
+	v := slot.state
+	moved := v != nil && (v.cluster != req.Cluster || v.lineage != r.LineageKey() || v.rev != r.Revision() ||
+		v.target.UID != req.UID || v.target.Namespace != req.Namespace || v.target.Pod != req.Pod || v.target.Container != req.Container)
+	fresh := req.Restart || v == nil || moved
 	if fresh {
-		return s.firstPage(ctx, r, v, req, out)
-	}
-	for _, b := range req.Skip {
-		if b >= 0 && b < len(v.ps.Branches) && v.ps.Branches[b].Stopped {
-			v.ps.Skip(b)
+		// a next page with no page set to continue (expired, evicted, failed,
+		// or its source moved) starts from the newest, said as Reset, so the
+		// view replaces what it holds instead of appending the newest again
+		v = &historyView{cluster: req.Cluster, lineage: r.LineageKey(), rev: r.Revision()}
+		slot.state = v
+		out = s.firstPage(ctx, r, v, req, out)
+		out.Reset = out.Reset || !req.Restart
+	} else {
+		for _, b := range req.Skip {
+			if b >= 0 && b < len(v.ps.Branches) && v.ps.Branches[b].Stopped {
+				v.ps.Skip(b)
+			}
 		}
+		out = s.page(ctx, r, v, out)
 	}
-	return s.page(ctx, r, v, out)
+	// the completion fence: a source that moved during the page (its
+	// configuration or credential) ends the page set, and the page read
+	// over it is refused, never returned as current
+	if !r.Current() {
+		slot.state = nil
+		return LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}, Reset: true, Error: fleet.ErrLokiSourceChanged.Error()}
+	}
+	if fresh && (out.Error != "" || v.ps == nil) {
+		slot.state = nil // a failed first page leaves no page set
+	}
+	return out
 }
 
-// claim finds the view's page set, or starts one: on Restart, for a view
-// it does not hold, or when the source moved (said: Reset). A new request
-// cancels the view's read in flight.
-func (s *LogHistoryService) claim(req PodHistoryRequestDTO, r HistoryReader, cancel context.CancelFunc) (*historyView, bool, bool) {
+// enter finds the view's slot, or makes one (refused when the service holds
+// its maximum and none is idle), and cancels the slot's read in flight.
+func (s *LogHistoryService) enter(view string, cancel context.CancelFunc) (*historySlot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	for id, v := range s.views {
-		if v.inFlight == 0 && now.Sub(v.used) > historyIdle {
+	for id, sl := range s.views {
+		if sl.inFlight == 0 && now.Sub(sl.used) > historyIdle {
 			delete(s.views, id)
 		}
 	}
-	v := s.views[req.View]
-	if v != nil && v.cancel != nil {
-		v.cancel()
-	}
-	moved := v != nil && v.ps != nil && (v.cluster != req.Cluster || v.lineage != r.LineageKey() || v.rev != r.Revision() ||
-		v.target.UID != req.UID || v.target.Namespace != req.Namespace || v.target.Pod != req.Pod || v.target.Container != req.Container)
-	if v == nil || v.ps == nil || req.Restart || moved {
-		if len(s.views) >= historyViewsMax && v == nil {
-			s.evictLocked()
+	sl := s.views[view]
+	if sl == nil {
+		if len(s.views) >= historyViewsMax && !s.evictLocked() {
+			return nil, errHistoryViewsFull
 		}
-		v = &historyView{cluster: req.Cluster, lineage: r.LineageKey(), rev: r.Revision()}
-		s.views[req.View] = v
-		v.used, v.cancel = now, cancel
-		v.inFlight++
-		return v, true, moved && !req.Restart
+		sl = &historySlot{}
+		s.views[view] = sl
 	}
-	v.used, v.cancel = now, cancel
-	v.inFlight++
-	return v, false, false
+	if sl.cancel != nil {
+		sl.cancel()
+	}
+	sl.cancel, sl.used = cancel, now
+	sl.inFlight++
+	return sl, nil
 }
 
-func (s *LogHistoryService) evictLocked() {
+// evictLocked drops the least recently used idle slot; false when every
+// slot is reading.
+func (s *LogHistoryService) evictLocked() bool {
 	var oldest string
 	var at time.Time
-	for id, v := range s.views {
-		if v.inFlight == 0 && (oldest == "" || v.used.Before(at)) {
-			oldest, at = id, v.used
+	for id, sl := range s.views {
+		if sl.inFlight == 0 && (oldest == "" || sl.used.Before(at)) {
+			oldest, at = id, sl.used
 		}
 	}
-	if oldest != "" {
-		delete(s.views, oldest)
+	if oldest == "" {
+		return false
 	}
+	delete(s.views, oldest)
+	return true
 }
 
-func (s *LogHistoryService) release(view string, v *historyView) {
+func (s *LogHistoryService) leave(sl *historySlot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v.inFlight--
-	v.used = s.now()
+	sl.inFlight--
+	sl.used = s.now()
 }
 
 // historyRange is the request's absolute range (§5): a preset back from
@@ -313,7 +352,7 @@ func (s *LogHistoryService) firstPage(ctx context.Context, r HistoryReader, v *h
 		out.Error = red.Text(err.Error())
 		return out
 	}
-	if !data {
+	if !data || len(labels) == 0 {
 		out.NoStreams = s.noStreams(ctx, r, v)
 		return out
 	}
@@ -426,6 +465,7 @@ func (s *LogHistoryService) fill(r HistoryReader, v *historyView, kept []loki.Ke
 	out.UIDOffer = v.mode == loki.ModeName && v.evidence == loki.UIDAll && v.target.UID != ""
 	out.Strength = strength(v)
 	out.Done = v.ps.Done()
+	out.More = v.ps.More()
 	for _, k := range kept {
 		line := red.Exact(k.Line) // log content: the endpoint's own credential only (§5)
 		clipped := false
@@ -442,8 +482,10 @@ func (s *LogHistoryService) fill(r HistoryReader, v *historyView, kept []loki.Ke
 		if c == "" {
 			c = k.Meta[loki.LabelK8sContainer]
 		}
+		// a label repeats on every line of its stream: bounded like a label
+		// value, so one large label cannot multiply into the reply
 		out.Lines = append(out.Lines, LogHistoryLineDTO{TS: time.Unix(0, k.TS).UTC().Format(time.RFC3339Nano), Line: line,
-			Container: red.Exact(c), Branch: k.Branch, Clipped: clipped})
+			Container: alertmanager.Clip(red.Exact(c), alertmanager.MaxLabelValue), Branch: k.Branch, Clipped: clipped})
 	}
 	for _, m := range markers {
 		out.Markers = append(out.Markers, LogHistoryMarkerDTO{Branch: m.Branch, TS: time.Unix(0, m.TS).UTC().Format(time.RFC3339Nano), Count: m.Count,

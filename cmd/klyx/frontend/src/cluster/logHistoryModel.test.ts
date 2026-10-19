@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { emptyHeld, withOlder, HISTORY_LINES_MAX } from "./logHistoryModel";
+import { emptyHeld, withOlder, HISTORY_LINES_MAX, HISTORY_BYTES_MAX } from "./logHistoryModel";
 import type { HistoryLine } from "../bridge/logHistory";
 
 // a page of n lines, newest first, ending just before `from`
@@ -32,4 +32,13 @@ describe("what a History view holds (coverage S8b §5)", () => {
     expect(h.newerDropped).toBeGreaterThan(0);
     expect(h.lines.length).toBeLessThan(20);
   });
+
+  it("the incoming page itself is bounded, keeping its oldest lines (where the cursor continues)", () => {
+    const big = Array.from({ length: 1000 }, (_, i): HistoryLine => ({ ts: String(1000 - i), line: "x".repeat(65536), branch: 0 }));
+    const h = withOlder(emptyHeld(), big);
+    expect(h.bytes).toBeLessThanOrEqual(HISTORY_BYTES_MAX);
+    expect(h.lines[0].ts).toBe("1"); // the page's oldest line is held
+    expect(h.newerDropped).toBeGreaterThan(0);
+  });
 });
+

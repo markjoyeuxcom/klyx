@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -226,5 +227,64 @@ func TestReadPageRefusalsAndFailures(t *testing.T) {
 	}
 	if _, _, err := ReadPage(context.Background(), fail, ps); !errors.Is(err, boom) || fmt.Sprintf("%+v", ps.Branches) != before {
 		t.Fatalf("a failed read moved the page set: %v %+v", err, ps.Branches)
+	}
+}
+
+// Codex's review of b2f945c: a page keeps at most PageBytes of entries; the
+// cursor moves only past what was kept, so the rest arrives on later pages,
+// none lost and none twice.
+func TestPageBytesBoundThePage(t *testing.T) {
+	big := make(fakeBranch, 0, 400)
+	for i := 0; i < 400; i++ {
+		big = append(big, ent(int64(100_000-i), fmt.Sprintf("%03d %s", i, strings.Repeat("x", 60_000)), nil))
+	}
+	ps := NewPageSet(1, 200_000, 1)
+	seen := map[string]bool{}
+	pages := 0
+	for !ps.Done() && pages < 10 {
+		kept := page(ps, []fakeBranch{big})
+		n := 0
+		for _, k := range kept {
+			n += len(k.Line)
+			if seen[k.Line[:3]] {
+				t.Fatalf("delivered twice: %s", k.Line[:3])
+			}
+			seen[k.Line[:3]] = true
+		}
+		if n > PageBytes {
+			t.Fatalf("page %d holds %d bytes of lines", pages, n)
+		}
+		pages++
+	}
+	if len(seen) != 400 || pages < 3 {
+		t.Fatalf("delivered %d of 400 in %d pages", len(seen), pages)
+	}
+}
+
+// A stopped branch's marker stays on every page until it is skipped, with
+// the server's refusal; More says whether Load older has anything to read.
+func TestMarkersPersistUntilSkipped(t *testing.T) {
+	g := append(burst(5000, 6000, "x"), older(4999, 10, "older")...)
+	ps := NewPageSet(1, 10_000, 1)
+	var markers []Marker
+	for i := 0; i < 8 && ps.Branches[0].Active(); i++ {
+		_, markers, _ = ReadPage(context.Background(), func(_ context.Context, i int, start, end int64, limit int) ([]Entry, error) {
+			return fakeBranch(g).read(i, start, end, limit).Entries, nil
+		}, ps)
+	}
+	if len(markers) != 1 || ps.More() || ps.Done() {
+		t.Fatalf("stopped: markers %v, more %v, done %v", markers, ps.More(), ps.Done())
+	}
+	// a later page (nothing to read) still says the marker
+	_, again, _ := ReadPage(context.Background(), func(context.Context, int, int64, int64, int) ([]Entry, error) {
+		t.Fatal("a stopped branch was read")
+		return nil, nil
+	}, ps)
+	if len(again) != 1 || again[0].Count != markers[0].Count {
+		t.Fatalf("the marker went: %v", again)
+	}
+	ps.Skip(0)
+	if len(ps.Markers()) != 0 || !ps.More() {
+		t.Fatalf("after skip: %v %v", ps.Markers(), ps.More())
 	}
 }

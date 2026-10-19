@@ -261,7 +261,9 @@ func (r *LokiReader) Labels(ctx context.Context, start, end time.Time, query str
 	if err := json.Unmarshal(body, &w); err != nil || w.Status != "success" {
 		return nil, false, fmt.Errorf("%w: the labels answer does not decode", loki.ErrShape)
 	}
-	if w.Data == nil {
+	// no data, or an empty list: nothing selectable - the caller's fallback
+	// read says why (Codex's review of b2f945c)
+	if w.Data == nil || len(*w.Data) == 0 {
 		return nil, false, nil
 	}
 	return *w.Data, true, nil

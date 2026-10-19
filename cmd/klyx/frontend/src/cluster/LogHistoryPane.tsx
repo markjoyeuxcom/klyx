@@ -39,6 +39,9 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
   const [showSelectors, setShowSelectors] = useState(false);
   const listRef = useRef<VirtualListHandle>(null);
   const gen = useRef(0);
+  // what the held lines are of: a failed Refresh of the same target keeps
+  // them (not refreshed); a different target never shows them
+  const heldKey = useRef("");
 
   useEffect(() => () => closeHistoryView(view), [view]);
 
@@ -49,13 +52,21 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
       cluster, view, restart, namespace: target.namespace, pod: target.name, uid: target.uid, container: container || undefined,
       createdUnix: target.createdUnix, gone: target.gone, rangeSeconds: range || undefined, mode, skip,
     };
+    const key = `${cluster}|${target.uid}|${container}|${range}|${mode}`;
     try {
       const p = await readPodHistory(req);
       if (g !== gen.current) return; // a newer request owns the view
+      if (restart && p.error && !p.reset && key === heldKey.current) {
+        // a failed Refresh keeps the last good lines and what they were read
+        // by, marked not refreshed (§7)
+        setPage((old) => (old ? { ...old, error: p.error } : p));
+        return;
+      }
       setPage(p);
       if (p.reset) setNotice("The Loki source changed; reading the newest again.");
       else if (restart) setNotice(null);
       if (restart || p.reset) {
+        heldKey.current = key;
         setHeld(withOlder(emptyHeld(), p.lines));
         setOpen(null);
         requestAnimationFrame(() => listRef.current?.scrollToIndex(Math.max(0, p.lines.length - 1)));
@@ -123,7 +134,9 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
       <div style={{ flexShrink: 0, display: "flex", gap: 8, alignItems: "center" }}>
         {page && !page.error && !page.noStreams && (page.done
           ? <span className="t-secondary" data-testid="history-start">Start of the range reached ({clock(page.start)}).</span>
-          : <button className="l-btn" disabled={busy} onClick={() => void request(false)} data-testid="history-older">Load older</button>)}
+          : page.more !== false
+            ? <button className="l-btn" disabled={busy} onClick={() => void request(false)} data-testid="history-older">Load older</button>
+            : null /* every branch left is stopped at a marker: Skip past is the way on */)}
       </div>
       <VirtualList ref={listRef} items={held.lines} rowHeight={ROW} style={{ flex: 1, minHeight: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}
         rowKey={(l, i) => `${l.ts}-${l.branch}-${i}`}
