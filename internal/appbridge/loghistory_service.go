@@ -621,7 +621,9 @@ func strength(v *historyView) string {
 	return "selected by namespace and name only: every pod with this name in the range"
 }
 
-// clipUTF8 cuts s to at most n bytes on a rune boundary.
+// clipUTF8 cuts s to at most n bytes on a rune boundary. The cut owns its
+// bytes (Codex's review of 1230f36): a slice of s would keep all of s - a
+// line a redaction lengthened to many MiB - alive behind 64 KiB shown.
 func clipUTF8(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -629,5 +631,5 @@ func clipUTF8(s string, n int) string {
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
-	return s[:n]
+	return strings.Clone(s[:n])
 }

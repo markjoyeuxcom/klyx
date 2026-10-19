@@ -557,3 +557,16 @@ Codex's probes for revision 1 all passed. Codex requested changes with three res
 - a cursor naming another page set was continued when its page number matched;
 - the pane's cursor stuck at page 1;
 - a clone sharing its delivered keys only shows when a staged page ends at the held boundary.
+
+## 19. Implementation revision 3: Codex's re-review of 1230f36
+
+Codex confirmed the three findings fixed and requested changes with one P2.
+
+1. **[P2] A clipped line kept its whole redaction alive.**
+   - **The cause.** `clipUTF8` returned a slice of the line, so the 64 KiB shown kept the full backing array behind it.
+   - **Codex's probe.** One 6 MiB line of a 4-byte credential, which redaction lengthens to 15 MiB, retained 15 MiB behind each page.
+   - **The fix.** The clip now copies its kept bytes (`strings.Clone`).
+   - **Tests.** `TestHistoryClippedLineOwnsItsBytes` checks that the clip owns a separate array, and that the same 6 MiB line leaves 0.06 MiB of heap after the page.
+   - **The other clips already copied.** The container label and the selectors go through `alertmanager.Clip`, which builds a new string, and Loki's refusal text is clipped the same way.
+
+**Probes and mutations.** Codex's combined probes pass, including the heap probe. The mutation that restores the shared slice is caught.

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/moomora/klyx/internal/loki"
 	"github.com/moomora/klyx/internal/safehttp"
@@ -512,6 +513,31 @@ func TestHistoryBudgetShown(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A line clipped for display owns its bytes (Codex's review of 1230f36):
+// one 6 MiB line of a 4-byte credential, which redaction lengthens to 15
+// MiB, leaves the 64 KiB shown and nothing of the 15 MiB behind it.
+func TestHistoryClippedLineOwnsItsBytes(t *testing.T) {
+	s := strings.Repeat("€", 30_000)
+	if c := clipUTF8(s, historyLineMax); unsafe.StringData(c) == unsafe.StringData(s) {
+		t.Fatal("the clip shares the line's backing array")
+	}
+	f := otelFake()
+	f.secret = "pass"
+	es := lines(1, tNow.Add(-time.Minute), "", "")
+	es[0].Line = strings.Repeat("pass", (6<<20)/4)
+	f.entries[q(podBranch, loki.ModeName, "")] = es
+	svc := histSvc(f)
+	before := heapNow()
+	p := svc.ReadPodHistory(PodHistoryRequestDTO{Cluster: "c", View: "own", Restart: true, Namespace: "team", Pod: "api-1"})
+	retained := int64(heapNow()) - int64(before)
+	t.Logf("shown %d bytes, heap after the page %+.2f MiB", len(p.Lines[0].Line), float64(retained)/(1<<20))
+	if p.Error != "" || !p.Lines[0].Clipped || len(p.Lines[0].Line) != historyLineMax || retained > 2<<20 {
+		t.Fatalf("the clipped line keeps its redaction alive: %d bytes shown, %d retained, %q", len(p.Lines[0].Line), retained, p.Error)
+	}
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(f)
 }
 
 func heapNow() uint64 {
