@@ -534,3 +534,7 @@ Kept as Codex judged them sound:
 - discovery's proof is ownership by UID, from `targetRef` through the Pod to the StatefulSet to the resource, never a name pattern (§2);
 - raw keys stay separate from display values even when a credential equals a namespace, a pod name or a fingerprint (§10);
 - the sizing test measures the admitted worst shapes under the 8 MiB wire caps (§8).
+
+**Accepted at e3076c1** (Codex, design revision 2, handoff d753d6a2, 2026-10-19), with no remaining design findings. This accepts the design only; the implementation keeps its own review. Codex's implementation notes:
+- **Single-flight across a re-key.** A re-key cancels the old generation, and its worker must finish before the new generation reads, so one cluster never has two alert reads in flight.
+- **No appearance is incomplete,** including an empty expected receiver list, which must never make "every appearance muted" vacuously true.
