@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { IconCpu } from "@tabler/icons-react";
-import type { RuleDTO } from "../store/fleet";
+import type { PartCountsDTO, RuleDTO } from "../store/fleet";
 import type { DRAClaimDTO, DRAClassDTO, DRAPoolDTO, DRAViewDTO } from "../bridge/dra";
 import { allocatedIn, claimsOfClass, useDRAClaims, useDRAClasses, useDRAPools, type DRAPartRows } from "../health/useDRARows";
 import { EmptyState } from "../chrome/EmptyState";
@@ -17,6 +17,7 @@ import { InspectorBlock, InspectorLayout } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { useInspectorAI } from "../ai/AIExplain";
+import { usePinnedSubject, type Gone } from "./usePinnedSubject";
 import { useClusterKey } from "./useClusterKey";
 import { LensParts } from "../chrome/LensParts";
 import { useNavIntent } from "../chrome/useNavIntent";
@@ -71,9 +72,29 @@ const KIND: Record<Tab, string> = { claims: "ResourceClaim", pools: "ResourceSli
 
 type Item = { key: string; uid: string; rule?: RuleDTO };
 
-// joinMark qualifies a figure joined from another part's rows: "+" when that
-// read is not current and whole, so the figure is a lower bound.
-const joinMark = (p: DRAPartRows<unknown>) => (p.complete ? "" : p.loading ? "?" : "+");
+// joinMark qualifies a figure joined from another part's rows by that
+// read's own state (Codex's implementation review, finding 6): "?" not
+// established (not read, or unreadable), "*" last observed (stale, or rows
+// held behind a newer read), "+" a lower bound (a capped current read),
+// "+*" both. A stale count is not a lower bound: an old allocation may
+// since have been released.
+export function joinMark(p: DRAPartRows<unknown>): string {
+  if (p.loading || p.coverage.length === 0 || p.coverage.some((k) => k.coverage !== "live" && k.coverage !== "stale")) return "?";
+  const stale = p.held || p.coverage.some((k) => k.coverage === "stale");
+  return `${p.capped.length > 0 ? "+" : ""}${stale ? "*" : ""}`;
+}
+// joinWords says a join mark.
+export function joinWords(mark: string, p: DRAPartRows<unknown>, what: string): string {
+  if (mark === "?") return `Not established: the ${what} read is not available.`;
+  const parts: string[] = [];
+  if (mark.includes("+")) parts.push(`a lower bound: the ${what} read was capped`);
+  if (mark.includes("*")) parts.push(`as last observed${p.asOf ? ` (${new Date(p.asOf).toLocaleTimeString()})` : ""}: the ${what} read is not current`);
+  return parts.length ? `${parts.join("; ")}.` : "";
+}
+// countMark qualifies the headline count by the read that supplied it: the
+// counts' own part when they came from it, else the rows'.
+const countMark = (pc: PartCountsDTO | null, p: DRAPartRows<unknown>) =>
+  pc ? `${pc.lower ? "+" : ""}${pc.stale ? "*" : ""}` : joinMark(p);
 
 export function DRAView({ cluster }: { cluster: string }) {
   const claims = useDRAClaims(cluster);
@@ -95,6 +116,7 @@ export function DRAView({ cluster }: { cluster: string }) {
   const cur = part[tab];
   const list = items[tab];
   const ev = kindEvidence(!cur.loading, cur.coverage, KIND[tab], cur.watchError);
+  const curMark = joinMark(cur);
   // the attention count: a native part's included rows (fault and degraded)
   const faults = (t: Tab) => (t === "classes" ? 0 : part[t].counts?.included ?? 0);
 
@@ -127,8 +149,13 @@ export function DRAView({ cluster }: { cluster: string }) {
   else if (ev === "pending" && list.length === 0) state = "loading";
   else if (list.length === 0) state = "empty";
   const icon = <IconCpu size={28} stroke={1.2} />;
+  const asOfWords = cur.asOf ? new Date(cur.asOf).toLocaleTimeString() : "the last read";
+  // an empty read proves absence only when current and whole (finding 5)
   const stateView = state === "loading" ? <SkeletonRows rows={4} label={`reading ${NOUN[tab][1]}`} />
     : state === "unreadable" ? <EmptyState icon={icon} title={`Could not read the ${NOUN[tab][1]}.`} hint={cur.watchError ?? undefined} />
+    : cur.capped.length > 0 ? <EmptyState icon={icon} title={`No ${NOUN[tab][1]} kept: the read was capped.`} hint="A capped read proves no absence." />
+    : cur.held ? <EmptyState icon={icon} title={`No ${NOUN[tab][1]} as of ${asOfWords}.`} hint={cur.refreshError ? `The newer read failed: ${cur.refreshError}` : "A newer read is being fetched."} />
+    : curMark.includes("*") ? <EmptyState icon={icon} title={`No ${NOUN[tab][1]} in the last good read.`} hint={cur.watchError ?? "The read is not current."} />
     : <EmptyState icon={icon} title={`No ${NOUN[tab][1]} on this cluster.`} />;
 
   const notices: React.ReactNode[] = [];
@@ -136,6 +163,10 @@ export function DRAView({ cluster }: { cluster: string }) {
     const lg = lastGoodAt(cur.coverage, [KIND[tab]]);
     notices.push(<WatchErrorBanner key="watch" tool="DRA" failure={`read failed - showing the last good state${lg ? ` from ${clock(lg)}` : ""}`} error={cur.watchError} />);
   }
+  if (cur.capped.length > 0) notices.push(<div key="capped" role="status" data-testid="dra-capped" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>
+    The {cur.capped.map((k) => `${k.kind} read left ${k.notRetained ?? "some"} out`).join(", ")} (the budget): counts are lower bounds and an absence proves nothing.</div>);
+  if (cur.held && list.length > 0) notices.push(<div key="held" role="status" data-testid="dra-held" className="t-secondary">
+    Rows as of {asOfWords}{cur.refreshError ? ` - the newer read failed: ${cur.refreshError}` : " - a newer read is being fetched"}.</div>);
   if (tab === "pools") notices.push(<div key="avail" className="t-secondary">Allocated is per the API: the scheduler may hold allocations it has not written yet, so free devices are never shown.</div>);
   if (tab === "classes") notices.push(<div key="facts" className="t-secondary">Device classes are facts: their selectors are counted, never shown.</div>);
 
@@ -180,12 +211,19 @@ export function DRAView({ cluster }: { cluster: string }) {
     return <button className="l-chip" aria-pressed={tab === t} onClick={() => { setTab(t); setSelKey(null); setCursorKey(null); }}>{label}{n ? <span style={{ color: "var(--color-text-warning)" }}> {n}</span> : null}</button>;
   };
   const selTab: Tab | null = selKey?.startsWith("claim/") ? "claims" : selKey?.startsWith("pool/") ? "pools" : selKey?.startsWith("class/") ? "classes" : null;
-  const selected = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
+  const live = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
+  // a claim or a class is pinned to the UID it was opened with: a
+  // same-name replacement is said, never silently followed (Codex's
+  // implementation review, finding 9); a pool's identity is driver/pool
+  const pinned = selTab === "claims" || selTab === "classes";
+  const pin = usePinnedSubject(cluster, pinned ? selKey : null, pinned ? live : undefined, pinned ? part[selTab].complete : false, pinned ? `dra/${selTab}` : undefined);
+  const selected = pinned ? pin.subject ?? undefined : live;
+  const goneNote = pinned && pin.gone ? <GoneNote kind={selTab === "claims" ? "ResourceClaim" : "DeviceClass"} gone={pin.gone} onAdopt={pin.next ? pin.adopt : undefined} /> : null;
   const openPool = (key: string) => { setTab("pools"); setCursorKey(`pool/${key}`); setSelKey(`pool/${key}`); };
   const inspector = selTab && selected ? (
-    selTab === "claims" ? <ClaimInspector cluster={cluster} c={selected as unknown as DRAClaimDTO} pools={pools.rows} onOpenPool={openPool} onClose={() => setSelKey(null)} />
-      : selTab === "pools" ? <PoolInspector cluster={cluster} p={selected as unknown as DRAPoolDTO} claims={claims} onClose={() => setSelKey(null)} />
-      : <ClassInspector cluster={cluster} c={selected as unknown as DRAClassDTO} claims={claims} onClose={() => setSelKey(null)} />
+    selTab === "claims" ? <ClaimInspector cluster={cluster} c={selected as unknown as DRAClaimDTO} pools={pools.rows} gone={goneNote} onOpenPool={openPool} onClose={() => setSelKey(null)} />
+      : selTab === "pools" ? <PoolInspector cluster={cluster} p={selected as unknown as DRAPoolDTO} claims={claims} poolsRead={pools} onClose={() => setSelKey(null)} />
+      : <ClassInspector cluster={cluster} c={selected as unknown as DRAClassDTO} claims={claims} gone={goneNote} onClose={() => setSelKey(null)} />
   ) : undefined;
 
   const total = tab === "classes" ? list.length : cur.counts ? cur.counts.total : list.length;
@@ -196,9 +234,10 @@ export function DRAView({ cluster }: { cluster: string }) {
       part="dra"
       summary={(
         <>
-          <CountSentence total={total} marker={ev === "complete" ? "" : "+"} noun={NOUN[tab]} />
+          <CountSentence total={total} marker={countMark(tab === "classes" ? null : cur.counts, cur)} noun={NOUN[tab]} />
           {tab === "classes" ? <span className="t-secondary">facts, no verdict</span>
-            : faults(tab) > 0 ? <MarkedPhrase fault={false}>{`${faults(tab)} ${tab === "claims" ? "cannot be allocated or appear stuck" : "incomplete or invalid"}`}</MarkedPhrase> : <span className="t-secondary">none failing</span>}
+            : faults(tab) > 0 ? <MarkedPhrase fault={false}>{`${faults(tab)} ${tab === "claims" ? "cannot be allocated or appear stuck" : "incomplete or invalid"}`}</MarkedPhrase>
+            : <span className="t-secondary">{cur.complete ? "none failing" : "none failing among those read"}</span>}
         </>
       )}
       controls={(
@@ -257,7 +296,7 @@ function devicesWords(v: DRAViewDTO): string {
 
 export const viewName = (n: string) => (n ? n : "a node no slice names (if there is one)");
 
-function ClaimInspector({ cluster, c, pools, onOpenPool, onClose }: { cluster: string; c: DRAClaimDTO; pools: DRAPoolDTO[]; onOpenPool: (key: string) => void; onClose: () => void }) {
+function ClaimInspector({ cluster, c, pools, gone, onOpenPool, onClose }: { cluster: string; c: DRAClaimDTO; pools: DRAPoolDTO[]; gone: React.ReactNode; onOpenPool: (key: string) => void; onClose: () => void }) {
   const ro = roleKind(c.rule.role);
   const describe = useDescribe(cluster, { kind: "ResourceClaim", namespace: c.namespace, name: c.name, uid: c.uid });
   const ai = useInspectorAI(c.uid ? { kind: "row" as const, task: "dra", part: "claims", uid: c.uid } : null, `ResourceClaim/${c.namespace}/${c.name}`, true, cluster);
@@ -266,10 +305,10 @@ function ClaimInspector({ cluster, c, pools, onOpenPool, onClose }: { cluster: s
   return (
     <div data-testid="dra-claim-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout pin={{ cluster, uid: c.uid || undefined }} kind="ResourceClaim" name={c.name} meta={c.namespace} onClose={onClose}
-        verdict={<InspectorStatus tone={toneOf(ro)} kind={ro} label={c.reading.label} reason={c.reading.message || undefined} />}
-        more={[...describe.menu, ...ai.menu]}
+        verdict={gone ?? <InspectorStatus tone={toneOf(ro)} kind={ro} label={c.reading.label} reason={c.reading.message || undefined} />}
+        more={gone ? [] : [...describe.menu, ...ai.menu]}
       >
-        {ai.block}
+        {!gone && ai.block}
         <InspectorBlock title="Claim">
           <div className="insp-kv">
             <span>state</span><span>{c.reading.native || "-"}</span>
@@ -291,6 +330,8 @@ function ClaimInspector({ cluster, c, pools, onOpenPool, onClose }: { cluster: s
             {d.driver}/{d.pool}/{d.device} <span className="t-secondary">· {d.conditions.map((x) => `${x.type} ${x.status}${x.reason ? ` (${x.reason})` : ""}${x.message ? `: ${x.message}` : ""}`).join(" · ") || "no conditions"}</span></div>)}
         </InspectorBlock>}
         {c.consumers.length > 0 && <InspectorBlock title={`Waiting consumers · ${c.consumers.length + (c.consumersOmitted ?? 0)}`}>
+          {c.reading.rule === "claim.consumers-unknown" && <div className="t-secondary" data-testid="dra-consumers-unestablished" style={{ color: "var(--color-text-warning)" }}>
+            These readings come from a pods read that is not complete and current: they establish nothing about this claim now.</div>}
           {c.consumers.map((x) => <div key={x.pod} className="t-body" data-testid="dra-claim-consumer" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
             <span style={{ fontFamily: "var(--font-mono)" }}>{x.pod}</span> <span style={{ color: ROLE_TEXT[roleKind(x.kind)] }}>· {x.label}</span>
             {x.meaning && <div className="t-secondary">{x.meaning}</div>}
@@ -309,7 +350,7 @@ function ClaimInspector({ cluster, c, pools, onOpenPool, onClose }: { cluster: s
   );
 }
 
-function PoolInspector({ cluster, p, claims, onClose }: { cluster: string; p: DRAPoolDTO; claims: DRAPartRows<DRAClaimDTO>; onClose: () => void }) {
+function PoolInspector({ cluster, p, claims, poolsRead, onClose }: { cluster: string; p: DRAPoolDTO; claims: DRAPartRows<DRAClaimDTO>; poolsRead: DRAPartRows<DRAPoolDTO>; onClose: () => void }) {
   const ro = roleKind(p.rule.role);
   // a pool has no object UID (its identity is driver/pool), so Explain is
   // not offered here
@@ -332,33 +373,54 @@ function PoolInspector({ cluster, p, claims, onClose }: { cluster: string; p: DR
           {(p.viewsOmitted ?? 0) > 0 && <div className="t-secondary" data-testid="dra-pool-views-omitted">{plural(p.viewsOmitted ?? 0, "more node", "more nodes")} not listed: the {p.views.length} worst are shown, and the reading above is from every node.</div>}
           {(p.obsolete ?? []).length > 0 && <div className="t-secondary">Obsolete on {(p.obsolete ?? []).join(", ")}{p.obsoleteOmitted ? ` and ${p.obsoleteOmitted} more` : ""}: a driver updating node by node passes through this.</div>}
         </InspectorBlock>
+        <InspectorBlock title="Devices and access">
+          <div className="insp-kv" data-testid="dra-pool-facts">
+            <span>access</span><span>{(p.access ?? []).map((c) => `${c.n} ${c.n === 1 ? "slice" : "slices"} ${c.of}`).join(" · ") || "-"}</span>
+            <span>tainted</span><span>{(p.taints ?? []).length ? (p.taints ?? []).map((c) => `${plural(c.n, "device", "devices")} ${c.of}`).join(" · ") : "no device tainted"}</span>
+          </div>
+          <div className="t-secondary">From the slices at generation {p.generation}{p.unread ? "; not every slice was read, so these are lower bounds" : ""}. {joinWords(joinMark(poolsRead as DRAPartRows<unknown>), poolsRead as DRAPartRows<unknown>, "slices")} Taint keys and values are not shown.</div>
+        </InspectorBlock>
         <InspectorBlock title="Allocated">
-          <div className="t-body" data-testid="dra-pool-allocated">{a.devices}{mark} {a.devices === 1 ? "device" : "devices"} allocated per the API{a.shares ? `, ${a.shares} as shares` : ""}</div>
-          <div className="t-secondary">Admin-access allocations are not counted. {mark === "+" ? "The claims read is not current and whole: this is a lower bound." : ""}</div>
+          <div className="t-body" data-testid="dra-pool-allocated">{mark === "?" ? "Allocated devices: not established" : `${a.devices}${mark} ${a.devices === 1 ? "device" : "devices"} allocated per the API${a.shares ? `, ${a.shares} as shares` : ""}`}</div>
+          <div className="t-secondary">Admin-access allocations are not counted. {joinWords(mark, claims as DRAPartRows<unknown>, "claims")}</div>
         </InspectorBlock>
       </InspectorLayout>
     </div>
   );
 }
 
-function ClassInspector({ cluster, c, claims, onClose }: { cluster: string; c: DRAClassDTO; claims: DRAPartRows<DRAClaimDTO>; onClose: () => void }) {
+function ClassInspector({ cluster, c, claims, gone, onClose }: { cluster: string; c: DRAClassDTO; claims: DRAPartRows<DRAClaimDTO>; gone: React.ReactNode; onClose: () => void }) {
   const describe = useDescribe(cluster, { kind: "DeviceClass", namespace: "", name: c.name, uid: c.uid });
+  const mark = joinMark(claims as DRAPartRows<unknown>);
   return (
     <div data-testid="dra-class-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <InspectorLayout pin={{ cluster, uid: c.uid || undefined }} kind="DeviceClass" name={c.name} meta="cluster-scoped" onClose={onClose}
-        verdict={<div className="t-secondary">A device class is a fact in Klyx.</div>}
-        more={[...describe.menu]}
+        verdict={gone ?? <div className="t-secondary">A device class is a fact in Klyx.</div>}
+        more={gone ? [] : [...describe.menu]}
       >
         <InspectorBlock title="Class">
           <div className="insp-kv">
             <span>selectors</span><span>{c.selectors} (CEL not shown)</span>
             <span>config drivers</span><span>{c.configDrivers.join(", ") || "none"}</span>
             {c.extendedResourceName && <><span>extended resource</span><span>{c.extendedResourceName}</span></>}
-            <span>claims</span><span>{claimsOfClass(claims.rows, c.name)}{joinMark(claims as DRAPartRows<unknown>)} request it</span>
+            <span>claims</span><span>{mark === "?" ? "not established" : `${claimsOfClass(claims.rows, c.name)}${mark} request it`}</span>
           </div>
+          {mark && mark !== "?" && <div className="t-secondary">{joinWords(mark, claims as DRAPartRows<unknown>, "claims")}</div>}
         </InspectorBlock>
       </InspectorLayout>
       {describe.sheet}
+    </div>
+  );
+}
+
+// GoneNote says what became of a pinned claim or class (The Line slice 4
+// §6.3): the details below stay the opened object's.
+function GoneNote({ kind, gone, onAdopt }: { kind: string; gone: Gone; onAdopt?: () => void }) {
+  return (
+    <div role="status" className="t-body" data-testid="dra-gone">
+      <span className="t-status">{gone === "removed" ? `${kind} removed.` : gone === "replaced" ? `Replaced: another ${kind} now holds this name.` : `Not in the current ${kind} read.`}</span>{" "}
+      The details below are the opened object's last evidence.
+      {onAdopt && <button type="button" onClick={onAdopt} style={{ marginLeft: 6, background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--color-text-info)", font: "inherit" }}>Open the new object</button>}
     </div>
   );
 }

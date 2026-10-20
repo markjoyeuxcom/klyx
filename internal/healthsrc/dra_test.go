@@ -221,3 +221,21 @@ func TestDRAPoolsAndConsumersBounds(t *testing.T) {
 		t.Fatalf("the pod's own: %+v", cons)
 	}
 }
+
+// Codex's implementation review of 177bfe9, finding 1: a stale read that
+// was capped establishes no pool; a stale whole read stays a dated reading.
+func TestDRAStaleCappedSlicesEstablishNothing(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	slices := []any{sizedSlice(dra.Slice{Name: "s", UID: "u", Driver: "d", Pool: "p", Generation: 1, Count: 1, AllNodes: true, Devices: []dra.Device{{Name: "g"}}})}
+	read := func(capped bool) Row[DRAPoolRow] {
+		c := observe.Capture{Now: now, Objects: map[string][]any{KindResourceSlices: slices}, Complete: map[string]bool{}, Current: map[string]bool{},
+			AsOf: map[string]time.Time{KindResourceSlices: now.Add(-time.Minute)}, Capped: map[string]bool{KindResourceSlices: capped}, Facts: map[string]any{FactServerMinor: 37}, Rows: true}
+		return evalDRAPools("c1")(c).Rows.(RowSet[DRAPoolRow]).Rows[0]
+	}
+	if r := read(true); r.Data.Verdict.Rule != "pool.unread" || !r.Data.Unread {
+		t.Fatalf("a stale capped read: %+v", r.Data.Verdict)
+	}
+	if r := read(false); r.Data.Verdict.Kind != health.OK || r.Data.Unread {
+		t.Fatalf("a stale whole read stays dated, not unread: %+v", r.Data.Verdict)
+	}
+}

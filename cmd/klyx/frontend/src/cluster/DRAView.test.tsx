@@ -6,7 +6,7 @@ import { useFleet } from "../store/fleet";
 
 const live = (kind: string) => ({ kind, served: true, synced: true, coverage: "live" as const });
 const part = <T,>(rows: T[], kinds: string[], complete = true): DRAPartRows<T> => ({ rows, coverage: kinds.map(live), watchError: null, loading: false,
-  rowsState: { updating: false, refreshing: false, evaluatedAt: null }, counts: null, complete });
+  rowsState: { updating: false, refreshing: false, evaluatedAt: null }, counts: null, complete, held: false, asOf: null, refreshError: null, capped: [] });
 let claims: DRAPartRows<DRAClaimDTO>;
 let pools: DRAPartRows<DRAPoolDTO>;
 let classes: DRAPartRows<DRAClassDTO>;
@@ -70,6 +70,7 @@ describe("DRAView (coverage S11b)", () => {
   it("a pool shows its allocated devices joined from the claims, qualified when the claims read is not whole, and each node's view", () => {
     claims = part([claim("a", "ok", "Allocated", { allocated: true, results: [{ request: "gpu", driver: "d", pool: "p", device: "g0" }, { request: "gpu", driver: "d", pool: "p", device: "g1", adminAccess: true }] }),
       claim("b", "ok", "Allocated", { allocated: true, results: [{ request: "gpu", driver: "d", pool: "p", device: "g0", shareId: "s" }] })], ["ResourceClaim"], false);
+    claims.capped = [{ kind: "ResourceClaim", served: true, synced: true, coverage: "live", truncated: true, notRetained: 3 }];
     pools = part([pool("d/p", "unknown", "Scheduler health not established", [view("n1", "complete", 8),
       view("n2", "", 0, { agreed: false, variants: [{ minor: 34, partitionable: false, outcome: "updating", devices: 0, have: 1, want: 2 }, { minor: 35, partitionable: false, outcome: "complete", devices: 4 }] })])],
     ["ResourceSlice"]);
@@ -79,7 +80,7 @@ describe("DRAView (coverage S11b)", () => {
     fireEvent.click(screen.getByText("d / p"));
     const panel = screen.getByTestId("dra-pool-panel");
     expect(within(panel).getByTestId("dra-pool-allocated").textContent).toContain("1+ device allocated per the API, 1 as shares");
-    expect(panel.textContent).toContain("this is a lower bound");
+    expect(panel.textContent).toContain("a lower bound: the claims read was capped");
     const views = within(panel).getAllByTestId("dra-pool-view").map((v) => v.textContent);
     expect(views[0]).toContain("n1 · 8 devices");
     expect(views[1]).toContain("not established");
@@ -146,11 +147,11 @@ describe("the DRA blocks (coverage S11b §5)", () => {
   });
 
   it("the pod's claims join the claims rows; a missing claim says the scheduler waits only for an unbound pod; none-needed is never missing", () => {
-    claims = part([claim("p-gpu-x", "degraded", "the scheduler cannot allocate it", { reading: { kind: "degraded", label: "the scheduler cannot allocate it", message: "pod p: cannot allocate" } })], ["ResourceClaim"]);
+    claims = part([claim("p-gpu-x", "degraded", "the scheduler cannot allocate it", { ownerKind: "Pod", ownerName: "p", ownerUid: "uid-p", reading: { kind: "degraded", label: "the scheduler cannot allocate it", message: "pod p: cannot allocate" } })], ["ResourceClaim"]);
     const refs = [{ podClaim: "gpu", source: "template", claim: "p-gpu-x", state: "resolved" }, { podClaim: "nic", source: "claim", claim: "shared-nic", state: "resolved" },
       { podClaim: "opt", source: "template", state: "none-needed" }, { podClaim: "later", source: "template", state: "not-created" }];
     const health = [{ container: "app", name: "claim:gpu/req", devices: [{ id: "cdi/a", health: "Unhealthy" }, { id: "cdi/b", health: "Healthy" }] }];
-    const { rerender } = render(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={health} unbound />);
+    const { rerender } = render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={health} unbound />);
     const lines = screen.getAllByTestId("pod-claim").map((l) => l.textContent ?? "");
     expect(lines[0]).toContain("p-gpu-x · from a template");
     expect(lines[0]).toContain("the scheduler cannot allocate it");
@@ -161,13 +162,112 @@ describe("the DRA blocks (coverage S11b §5)", () => {
     // a claim the rows hold links to the DRA lens; one they do not is named only
     expect(screen.getAllByTestId("claim-link").map((l) => l.textContent)).toEqual(["p-gpu-x"]);
     expect(lines[1]).not.toContain("no device health reported");
-    rerender(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={health} unbound={false} />);
+    rerender(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={health} unbound={false} />);
     expect(screen.getAllByTestId("pod-claim")[1].textContent).not.toContain("waits");
     // a bound pod's claim with no report says so; an unbound pod's says nothing
     expect(screen.getAllByTestId("pod-claim")[1].textContent).toContain("no device health reported");
     expect(screen.getAllByTestId("pod-claim")[2].textContent).not.toContain("no device health reported");
     claims = part([], ["ResourceClaim"], false);
-    rerender(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={[]} unbound />);
+    rerender(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={[]} unbound />);
     expect(screen.getAllByTestId("pod-claim")[1].textContent).toContain("not established");
+  });
+});
+
+// Codex's implementation review of 177bfe9: each finding, mounted.
+describe("the DRA reads are qualified by their own state (S11b implementation revision 1)", () => {
+  beforeEach(() => {
+    claims = part([], ["ResourceClaim"]);
+    pools = part([], ["ResourceSlice"]);
+    classes = part([], ["DeviceClass"]);
+    useFleet.setState({ clusters: [{ name: "c", state: "Synced", draPresent: true } as never] });
+  });
+  const capped = (n: number) => [{ kind: "ResourceClaim", served: true, synced: true, coverage: "live" as const, truncated: true, notRetained: n }];
+
+  it("5: an empty capped claims read proves no absence, and a held one is dated", () => {
+    claims = { ...part([], ["ResourceClaim"], false), capped: capped(4) };
+    const { unmount } = render(<DRAView cluster="c" />);
+    expect(screen.getByText("No claims kept: the read was capped.")).toBeTruthy();
+    expect(screen.getByText("none failing among those read")).toBeTruthy();
+    expect(screen.queryByText("No claims on this cluster.")).toBeNull();
+    unmount();
+    claims = { ...part([], ["ResourceClaim"], false), held: true, asOf: "2026-10-20T09:00:00Z", refreshError: "boom" };
+    render(<DRAView cluster="c" />);
+    expect(screen.getByText(/^No claims as of /)).toBeTruthy();
+    expect(screen.getByText("The newer read failed: boom")).toBeTruthy();
+  });
+
+  it("6: a stale claims read's count is last observed, an unread one not established, never a lower bound", () => {
+    const pl = pool("d/p", "ok", "Complete", [view("n1", "complete", 2)]);
+    pools = part([pl], ["ResourceSlice"]);
+    claims = part([claim("a", "ok", "Allocated", { allocated: true, results: [{ request: "gpu", driver: "d", pool: "p", device: "g0" }] })], ["ResourceClaim"], false);
+    claims.coverage = [{ kind: "ResourceClaim", served: true, synced: true, coverage: "stale" }];
+    const { unmount } = render(<DRAView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    fireEvent.click(screen.getByText("d / p"));
+    expect(screen.getByTestId("dra-pool-allocated").textContent).toBe("1* device allocated per the API");
+    expect(screen.getByTestId("dra-pool-panel").textContent).toContain("as last observed");
+    expect(screen.getByTestId("dra-pool-panel").textContent).not.toContain("lower bound");
+    unmount();
+    claims = { ...part([], ["ResourceClaim"], false), coverage: [{ kind: "ResourceClaim", served: true, synced: false, coverage: "unreadable" as never }] };
+    render(<DRAView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    fireEvent.click(screen.getByText("d / p"));
+    expect(screen.getByTestId("dra-pool-allocated").textContent).toBe("Allocated devices: not established");
+  });
+
+  it("7: a node a pool's kept views leave out is not established, never 'no slices'", () => {
+    pools = part([pool("d/wide", "ok", "Complete", [view("n1", "complete", 1)], { nodes: 20, viewsOmitted: 5 })], ["ResourceSlice"]);
+    render(<NodeDRABlock cluster="c" node="n19" />);
+    expect(screen.getByTestId("node-dra").textContent).toContain("Not established: a pool lists only its worst nodes, and this node is not among them (d/wide).");
+    expect(screen.getByTestId("node-dra").textContent).not.toContain("No slices name this node");
+  });
+
+  it("8: a template's claim another pod owns is not this pod's", () => {
+    claims = part([claim("p-gpu-x", "ok", "Allocated", { ownerKind: "Pod", ownerName: "other", ownerUid: "uid-other", allocated: true })], ["ResourceClaim"]);
+    const refs = [{ podClaim: "gpu", source: "template", claim: "p-gpu-x", state: "resolved" }];
+    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={[]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toContain("not this pod's claim: it is owned by Pod other");
+    expect(screen.getByTestId("pod-claim").textContent).not.toContain("Allocated");
+  });
+
+  it("9: a selected claim replaced at its name is said, never silently followed", () => {
+    claims = part([claim("x", "ok", "Allocated", { uid: "uid-1", allocated: true })], ["ResourceClaim"]);
+    const { rerender } = render(<DRAView cluster="c" />);
+    fireEvent.click(screen.getByText("lab / x"));
+    claims = part([claim("x", "degraded", "Device not ready", { uid: "uid-2" })], ["ResourceClaim"]);
+    rerender(<DRAView cluster="c" />);
+    expect(screen.getByTestId("dra-gone").textContent).toContain("Replaced: another ResourceClaim now holds this name.");
+    expect(screen.getByTestId("dra-claim-panel").textContent).not.toContain("Device not ready");
+    fireEvent.click(screen.getByText("Open the new object"));
+    expect(screen.queryByTestId("dra-gone")).toBeNull();
+  });
+
+  it("10: a pool says its devices by taint effect and its slices by access form, at its generation", () => {
+    pools = part([pool("d/p", "ok", "Complete", [view("n1", "complete", 2)], { generation: 3, taints: [{ of: "NoExecute", n: 1 }], access: [{ of: "node-local", n: 2 }] })], ["ResourceSlice"]);
+    render(<DRAView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    fireEvent.click(screen.getByText("d / p"));
+    const facts = screen.getByTestId("dra-pool-facts").textContent ?? "";
+    expect(facts).toContain("2 slices node-local");
+    expect(facts).toContain("1 device NoExecute");
+    expect(screen.getByTestId("dra-pool-panel").textContent).toContain("From the slices at generation 3");
+  });
+
+  it("3: health counts every device the kubelet reports, the extended claim's own too, and a cut report is not established", () => {
+    claims = part([], ["ResourceClaim"]);
+    const refs = [{ podClaim: "", source: "extended", claim: "p-extended-resources-x", state: "resolved" }, { podClaim: "gpu", source: "claim", claim: "shared", state: "resolved" }];
+    const health = [{ container: "app", name: "claim:p-extended-resources-x/request-0", devices: [{ id: "cdi/a", health: "Unhealthy" }], unhealthy: 3, healthy: 13, unknown: 0, devicesOmitted: 0 }];
+    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={health} healthOmitted={2} unbound={false} />);
+    const lines = screen.getAllByTestId("pod-claim").map((l) => l.textContent ?? "");
+    expect(lines[0]).toContain("3 devices unhealthy (reported by the kubelet): cdi/a, +2 more");
+    expect(lines[1]).toContain("device health not established: Klyx kept the pod's first 1 reports, 2 more not read");
+  });
+
+  it("2: stale consumers' readings establish nothing", () => {
+    claims = part([claim("w", "unknown", "Pending", { reading: { kind: "unknown", label: "Pending", rule: "claim.consumers-unknown" },
+      consumers: [{ pod: "old", row: "b", kind: "degraded", label: "the scheduler cannot allocate it", reason: "cannot-allocate" }] })], ["ResourceClaim"]);
+    render(<DRAView cluster="c" />);
+    fireEvent.click(screen.getByText("lab / w"));
+    expect(screen.getByTestId("dra-consumers-unestablished").textContent).toContain("they establish nothing about this claim now");
   });
 });

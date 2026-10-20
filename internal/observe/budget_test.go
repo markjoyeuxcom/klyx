@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -269,4 +270,34 @@ func TestNamespaceCountIsExactPastTheBudget(t *testing.T) {
 	}, "five namespaces counted with two left out")
 	src.remove("e")
 	h.eventually(func() bool { s, ok := h.sink.last(); return ok && s.Namespaces != nil && *s.Namespaces == 4 }, "a left-out namespace's deletion is counted")
+}
+
+// Coverage S11b (Codex's implementation review, finding 1): the capture
+// names a capped kind whatever its freshness, so an evaluator never reads
+// a cut read as whole.
+func TestCaptureNamesACappedKind(t *testing.T) {
+	src := newSource()
+	for _, n := range []string{"a", "b", "c", "d"} {
+		src.put(n, nil)
+	}
+	var mu sync.Mutex
+	var capped, complete []bool
+	part := cmPart("cms", "cms")
+	inner := part.Evaluate
+	part.Evaluate = func(c Capture) PartResult {
+		mu.Lock()
+		capped, complete = append(capped, c.Capped["cms"]), append(complete, c.Complete["cms"])
+		mu.Unlock()
+		return inner(c)
+	}
+	h := start(t, Config{Kinds: []KindSpec{budgetKind("cms", src, 300)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{part}}}})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	h.eventually(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(capped) > 0 && capped[len(capped)-1] && !complete[len(complete)-1]
+	}, "a capped live read")
+	src.remove("d")
+	h.clk.Step(RefillEvery)
+	h.eventually(func() bool { mu.Lock(); defer mu.Unlock(); return !capped[len(capped)-1] && complete[len(complete)-1] }, "whole once it fits")
 }

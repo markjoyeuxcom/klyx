@@ -86,12 +86,20 @@ func ClaimVerdict(c Claim, consumers []ConsumerPod, consumersKnown bool, now tim
 		}
 		return health.Verdict{Kind: health.OK, Label: "Allocated", Reason: "NotInUse", Native: native, Rule: "claim.allocated", Message: "not in use"}, nil
 	}
+	unknown := health.Verdict{Kind: health.Unknown, Label: "Pending", Reason: "ConsumersUnknown", Native: native, Rule: "claim.consumers-unknown",
+		Message: "its consumers are not established: the pods read is not complete and current"}
 	if len(consumers) == 0 {
 		if consumersKnown {
 			return health.Verdict{Kind: health.OK, Label: "Pending", Reason: "Unused", Native: native, Rule: "claim.unused", Message: "not used by any pod"}, nil
 		}
-		return health.Verdict{Kind: health.Unknown, Label: "Pending", Reason: "ConsumersUnknown", Native: native, Rule: "claim.consumers-unknown",
-			Message: "its consumers are not established: the pods read is not complete and current"}, nil
+		return unknown, nil
+	}
+	if !consumersKnown {
+		// S11b §2.1 (Codex's implementation review, finding 2): a retained
+		// pod from a read that is not complete and current never
+		// establishes the claim's failure; its reading stays visible
+		_, rows := pendingVerdict(c, consumers, native)
+		return unknown, rows
 	}
 	return pendingVerdict(c, consumers, native)
 }
@@ -269,6 +277,74 @@ type PoolRead struct {
 	Obsolete []string
 	// ViewsOmitted and ObsoleteOmitted: what Kept left out, counted.
 	ViewsOmitted, ObsoleteOmitted int
+	// Taints count the devices with a taint of each effect, and Access the
+	// slices of each access form, among the slices at Generation (S11b
+	// §3.2, §5; Codex's implementation review, finding 10). Keys and
+	// values are never read.
+	Taints []Count
+	Access []Count
+}
+
+// Count is one fact's count.
+type Count struct {
+	Of string
+	N  int
+}
+
+// The access forms a slice can have.
+const (
+	AccessNodeLocal = "node-local"
+	AccessAllNodes  = "all nodes"
+	AccessSelector  = "a node selector"
+	AccessPerDevice = "per device"
+	AccessCounters  = "counter sets only"
+	AccessNone      = "no access form"
+)
+
+func accessOf(s Slice) string {
+	switch {
+	case s.NodeSelector:
+		return AccessSelector
+	case s.AllNodes:
+		return AccessAllNodes
+	case s.NodeName != "":
+		return AccessNodeLocal
+	case s.PerDevice:
+		return AccessPerDevice
+	case len(s.CounterSets) > 0:
+		return AccessCounters
+	}
+	return AccessNone
+}
+
+// facts counts the taint effects and access forms at the generation.
+func (p *PoolRead) facts(slices []Slice) {
+	taints, access := map[string]int{}, map[string]int{}
+	for _, s := range slices {
+		if s.Generation != p.Generation {
+			continue
+		}
+		access[accessOf(s)]++
+		for _, d := range s.Devices {
+			seen := map[string]bool{}
+			for _, ef := range d.TaintEffects {
+				if !seen[ef] {
+					seen[ef] = true
+					taints[ef]++
+				}
+			}
+		}
+	}
+	p.Taints, p.Access = counts(taints), counts(access)
+}
+
+func counts(m map[string]int) []Count {
+	out := make([]Count, 0, len(m))
+	for k, n := range m {
+		out = append(out, Count{Of: k, N: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Of < out[j].Of })
+	return out
 }
 
 // MaxViewsKept bounds the views and obsolete nodes a retained pool row
@@ -292,12 +368,22 @@ func (p PoolRead) Kept(n int) PoolRead {
 			}
 			return 3
 		}
-		views := append([]View(nil), p.Views...)
-		sort.SliceStable(views, func(i, j int) bool { return class(views[i]) < class(views[j]) })
-		p.ViewsOmitted, p.Views = len(views)-n, views[:n:n]
+		order := make([]int, len(p.Views))
+		for i := range order {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(i, j int) bool { return class(p.Views[order[i]]) < class(p.Views[order[j]]) })
+		// a fresh slice of the kept views alone: the read's array (and the
+		// omitted views' outcomes) is never retained (Codex's
+		// implementation review, finding 4)
+		kept := make([]View, n)
+		for i := range kept {
+			kept[i] = p.Views[order[i]]
+		}
+		p.ViewsOmitted, p.Views = len(p.Views)-n, kept
 	}
 	if len(p.Obsolete) > n {
-		p.ObsoleteOmitted, p.Obsolete = len(p.Obsolete)-n, p.Obsolete[:n:n]
+		p.ObsoleteOmitted, p.Obsolete = len(p.Obsolete)-n, append([]string(nil), p.Obsolete[:n]...)
 	}
 	return p
 }
@@ -358,6 +444,7 @@ func ReadPool(slices []Slice, serverMinor int) PoolRead {
 	}
 	sort.Strings(names)
 	p.Nodes = len(names)
+	p.facts(slices)
 	names = append(names, "")
 	ix := newPoolIndex(slices)
 	for _, n := range names {

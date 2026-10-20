@@ -86,15 +86,17 @@ type DRAConsumerReadingDTO struct {
 
 // DRAClaimDTO is one ResourceClaim's row.
 type DRAClaimDTO struct {
-	UID              string                  `json:"uid"`
-	Namespace        string                  `json:"namespace"`
-	Name             string                  `json:"name"`
-	Rule             RuleDTO                 `json:"rule"`
-	Reading          DRAReadingDTO           `json:"reading"`
-	Deleting         bool                    `json:"deleting,omitempty"`
-	Finalizers       []string                `json:"finalizers,omitempty"`
-	OwnerKind        string                  `json:"ownerKind,omitempty"`
-	OwnerName        string                  `json:"ownerName,omitempty"`
+	UID        string        `json:"uid"`
+	Namespace  string        `json:"namespace"`
+	Name       string        `json:"name"`
+	Rule       RuleDTO       `json:"rule"`
+	Reading    DRAReadingDTO `json:"reading"`
+	Deleting   bool          `json:"deleting,omitempty"`
+	Finalizers []string      `json:"finalizers,omitempty"`
+	OwnerKind  string        `json:"ownerKind,omitempty"`
+	OwnerName  string        `json:"ownerName,omitempty"`
+	// OwnerUID: the pod inspector proves a template's claim is this pod's
+	OwnerUID         string                  `json:"ownerUid,omitempty"`
 	PodClaimName     string                  `json:"podClaimName,omitempty"`
 	Extended         bool                    `json:"extended,omitempty"`
 	Requests         []DRARequestDTO         `json:"requests"`
@@ -145,6 +147,24 @@ type DRAPoolDTO struct {
 	// row's bound, counted (the worst views are kept)
 	ViewsOmitted    int `json:"viewsOmitted,omitempty"`
 	ObsoleteOmitted int `json:"obsoleteOmitted,omitempty"`
+	// Taints count devices by taint effect, Access slices by access form,
+	// at the pool's generation
+	Taints []DRACountDTO `json:"taints"`
+	Access []DRACountDTO `json:"access"`
+}
+
+// DRACountDTO is one fact's count.
+type DRACountDTO struct {
+	Of string `json:"of"`
+	N  int    `json:"n"`
+}
+
+func countsDTO(cs []dra.Count) []DRACountDTO {
+	out := make([]DRACountDTO, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, DRACountDTO{Of: c.Of, N: c.N})
+	}
+	return out
 }
 
 // DRAClassDTO is one DeviceClass's facts.
@@ -159,7 +179,7 @@ type DRAClassDTO struct {
 func toDRAClaimDTO(r healthsrc.Row[healthsrc.DRAClaimRow]) DRAClaimDTO {
 	c := r.Data.Claim
 	d := DRAClaimDTO{UID: c.UID, Namespace: c.Namespace, Name: c.Name, Rule: toRuleDTO(r.Eval), Reading: toDRAReading(r.Data.Verdict),
-		Deleting: c.Deleting, Finalizers: c.Finalizers, OwnerKind: c.OwnerKind, OwnerName: c.OwnerName, PodClaimName: c.PodClaimName, Extended: c.Extended,
+		Deleting: c.Deleting, Finalizers: c.Finalizers, OwnerKind: c.OwnerKind, OwnerName: c.OwnerName, OwnerUID: c.OwnerUID, PodClaimName: c.PodClaimName, Extended: c.Extended,
 		Requests: []DRARequestDTO{}, Allocated: c.Allocated, Results: []DRAResultDTO{}, ReservedCount: c.ReservedCount, Reserved: []DRAConsumerDTO{},
 		Devices: []DRADeviceStatusDTO{}, Consumers: []DRAConsumerReadingDTO{}, ConsumersOmitted: r.Data.ConsumersOmitted}
 	for _, q := range c.Requests {
@@ -189,7 +209,7 @@ func toDRAPoolDTO(r healthsrc.Row[healthsrc.DRAPoolRow]) DRAPoolDTO {
 	p := r.Data.Pool
 	d := DRAPoolDTO{Key: r.Ref.Name, Driver: p.Driver, Pool: p.Pool, Generation: p.Generation, Slices: p.Slices, Nodes: p.Nodes, Rule: toRuleDTO(r.Eval),
 		Reading: toDRAReading(r.Data.Verdict), Views: []DRAViewDTO{}, Obsolete: p.Obsolete, Assumed: p.Assumed(), Unread: r.Data.Unread,
-		ViewsOmitted: p.ViewsOmitted, ObsoleteOmitted: p.ObsoleteOmitted}
+		ViewsOmitted: p.ViewsOmitted, ObsoleteOmitted: p.ObsoleteOmitted, Taints: countsDTO(p.Taints), Access: countsDTO(p.Access)}
 	for _, v := range p.Views {
 		vd := DRAViewDTO{Node: v.Node, Agreed: v.Agreed, Kind: v.Kind, Variants: []DRAVariantDTO{}}
 		for _, o := range v.Outcomes {

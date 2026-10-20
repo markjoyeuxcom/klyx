@@ -16,7 +16,7 @@ export type DRAConsumerReadingDTO = { pod: string; row: string; kind: string; la
 export type DRAClaimDTO = {
   uid: string; namespace: string; name: string;
   rule: RuleDTO; reading: DRAReadingDTO;
-  deleting?: boolean; finalizers?: string[]; ownerKind?: string; ownerName?: string; podClaimName?: string; extended?: boolean;
+  deleting?: boolean; finalizers?: string[]; ownerKind?: string; ownerName?: string; ownerUid?: string; podClaimName?: string; extended?: boolean;
   requests: DRARequestDTO[]; allocated: boolean; results: DRAResultDTO[];
   reservedCount: number; reserved: DRAConsumerDTO[]; devices: DRADeviceStatusDTO[];
   consumers: DRAConsumerReadingDTO[]; consumersOmitted?: number;
@@ -31,6 +31,8 @@ export type DRAPoolDTO = {
   // nodes: how many nodes the slices name; the views past the row's bound
   // (the worst are kept) and obsolete nodes past it are counted
   nodes?: number; viewsOmitted?: number; obsoleteOmitted?: number;
+  // devices by taint effect and slices by access form, at the generation
+  taints?: DRACountDTO[]; access?: DRACountDTO[];
 };
 
 export type DRAClassDTO = { uid: string; name: string; selectors: number; configDrivers: string[]; extendedResourceName?: string };
@@ -39,4 +41,8 @@ export type DRAClassDTO = { uid: string; name: string; selectors: number; config
 // "none-needed" (upstream skips it on purpose) or "not-created".
 export type PodClaimRefDTO = { podClaim: string; source: string; claim?: string; state: string };
 export type DeviceHealthEntryDTO = { id: string; health: string; message?: string };
-export type DeviceHealthDTO = { container: string; init?: boolean; name: string; devices: DeviceHealthEntryDTO[] };
+export type DRACountDTO = { of: string; n: number };
+// the counts are over every device the entry reports; devices keeps the
+// unhealthy first, bounded
+export type DeviceHealthDTO = { container: string; init?: boolean; name: string; devices: DeviceHealthEntryDTO[];
+  unhealthy?: number; unknown?: number; healthy?: number; devicesOmitted?: number };

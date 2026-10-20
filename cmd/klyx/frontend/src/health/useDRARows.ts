@@ -17,16 +17,25 @@ export type DRAPartRows<T> = {
   loading: boolean;
   rowsState: RowsStateDTO;
   counts: PartCountsDTO | null;
-  // the part read is current and whole: absence in it is proof
+  // the part read is current and whole, and its rows are not held behind
+  // a newer read: absence in it is proof
   complete: boolean;
+  // held: the rows are as of their capture (asOf) while a newer read is
+  // fetched or failed (refreshError); capped: the counted kinds a budget cut
+  held: boolean;
+  asOf: string | null;
+  refreshError: string | null;
+  capped: KindCoverageDTO[];
 };
 
 function usePart<T>(cluster: string | null, part: string, kinds: string[]): DRAPartRows<T> {
   const r = useRows<T>(cluster, "dra", part);
   return useMemo(() => {
     const coverage = partCoverage(r, kinds, DRA_KIND_NAMES);
-    const complete = !!r.part && coverage.length > 0 && coverage.every((k) => k.coverage === "live" && !k.truncated);
-    return { rows: partRows(r), coverage, watchError: coverageError(coverage), loading: !answered(r), rowsState: rowsState([r]), counts: partCounts(r), complete };
+    const held = !!r.part && (!!r.counts.updating || !!r.counts.refreshing || !!r.refreshError);
+    const complete = !!r.part && !held && coverage.length > 0 && coverage.every((k) => k.coverage === "live" && !k.truncated);
+    return { rows: partRows(r), coverage, watchError: coverageError(coverage), loading: !answered(r), rowsState: rowsState([r]), counts: partCounts(r), complete,
+      held, asOf: r.evaluatedAt, refreshError: r.refreshError, capped: coverage.filter((k) => k.truncated) };
     // reference-stable picks only: the hook's result objects are rebuilt per render
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [r.rows, r.part, r.error, r.refreshError, r.evaluatedAt, r.counts.part, r.counts.updating, r.counts.refreshing]);

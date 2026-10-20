@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/moomora/klyx/internal/dra"
 	"github.com/moomora/klyx/internal/extres"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +38,9 @@ type PodDetail struct {
 	// scheduler maps them, and each device's health as the kubelet reports it.
 	Claims       []dra.PodClaimRef
 	DeviceHealth []DeviceHealth
+	// DeviceHealthOmitted counts the status entries past the bound: health
+	// is not established for a claim among them.
+	DeviceHealthOmitted int
 }
 
 // DeviceHealth is one allocatedResourcesStatus entry of one container: a
@@ -47,6 +51,10 @@ type DeviceHealth struct {
 	Init      bool
 	Name      string
 	Devices   []DeviceHealthEntry
+	// The counts are over every device the entry reports, the kept ones
+	// and the omitted alike (Codex's implementation review, finding 3);
+	// the unhealthy are kept first.
+	Unhealthy, Unknown, Healthy, DevicesOmitted int
 }
 
 // DeviceHealthEntry is one device: its ID (the device's CDI ID for DRA,
@@ -61,19 +69,35 @@ const (
 	maxDeviceHealthDevices = 16
 )
 
-// deviceHealthOf lists a pod's device health, bounded.
-func deviceHealthOf(p *corev1.Pod) []DeviceHealth {
+// deviceHealthOf lists a pod's device health, bounded: each entry's counts
+// over all its devices, the unhealthy kept first, and the entries past the
+// bound counted.
+func deviceHealthOf(p *corev1.Pod) ([]DeviceHealth, int) {
 	var out []DeviceHealth
+	omitted := 0
+	rank := map[corev1.ResourceHealthStatus]int{corev1.ResourceHealthStatusUnhealthy: 0, corev1.ResourceHealthStatusUnknown: 1, corev1.ResourceHealthStatusHealthy: 2}
 	add := func(statuses []corev1.ContainerStatus, init bool) {
 		for _, cs := range statuses {
 			for _, rs := range cs.AllocatedResourcesStatus {
 				if len(out) == maxDeviceHealth {
-					return
+					omitted++
+					continue
 				}
 				h := DeviceHealth{Container: cs.Name, Init: init, Name: string(rs.Name)}
-				for i, r := range rs.Resources {
-					if i == maxDeviceHealthDevices {
-						break
+				res := append([]corev1.ResourceHealth(nil), rs.Resources...)
+				sort.SliceStable(res, func(i, j int) bool { return rank[res[i].Health] < rank[res[j].Health] })
+				for i, r := range res {
+					switch r.Health {
+					case corev1.ResourceHealthStatusUnhealthy:
+						h.Unhealthy++
+					case corev1.ResourceHealthStatusHealthy:
+						h.Healthy++
+					default:
+						h.Unknown++
+					}
+					if i >= maxDeviceHealthDevices {
+						h.DevicesOmitted++
+						continue
 					}
 					msg := ""
 					if r.Message != nil {
@@ -87,7 +111,7 @@ func deviceHealthOf(p *corev1.Pod) []DeviceHealth {
 	}
 	add(p.Status.InitContainerStatuses, true)
 	add(p.Status.ContainerStatuses, false)
-	return out
+	return out, omitted
 }
 
 // PodDetail fetches one pod by namespace/name and assembles its detail view.
@@ -152,21 +176,23 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 	events := c.instanceEvents(ctx, string(p.GetUID()))
 	eph, more := workloads.EphemeralOf(p)
 
+	health, healthOmitted := deviceHealthOf(p)
 	return PodDetail{
-		Summary:         summary,
-		Labels:          labels,
-		Annotations:     annotations,
-		Conditions:      conds,
-		Events:          events,
-		YAML:            yamlStr,
-		QoSClass:        string(p.Status.QOSClass),
-		ServiceAccount:  p.Spec.ServiceAccountName,
-		Resources:       workloads.ResizeResourcesOf(p),
-		Extended:        extres.OfPod(p),
-		Claims:          dra.PodClaims(p),
-		DeviceHealth:    deviceHealthOf(p),
-		Ephemeral:       eph,
-		EphemeralMore:   more,
-		SchedAssumption: c.schedModel().Assumption(),
+		Summary:             summary,
+		Labels:              labels,
+		Annotations:         annotations,
+		Conditions:          conds,
+		Events:              events,
+		YAML:                yamlStr,
+		QoSClass:            string(p.Status.QOSClass),
+		ServiceAccount:      p.Spec.ServiceAccountName,
+		Resources:           workloads.ResizeResourcesOf(p),
+		Extended:            extres.OfPod(p),
+		Claims:              dra.PodClaims(p),
+		DeviceHealth:        health,
+		DeviceHealthOmitted: healthOmitted,
+		Ephemeral:           eph,
+		EphemeralMore:       more,
+		SchedAssumption:     c.schedModel().Assumption(),
 	}, nil
 }

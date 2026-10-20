@@ -135,6 +135,9 @@ type PodDetailDTO struct {
 	// claims rows in the inspector), and its device health.
 	Claims       []PodClaimRefDTO  `json:"claims"`
 	DeviceHealth []DeviceHealthDTO `json:"deviceHealth"`
+	// DeviceHealthOmitted: status entries past the bound, so a claim's
+	// health among them is not established
+	DeviceHealthOmitted int `json:"deviceHealthOmitted,omitempty"`
 }
 
 // PodClaimRefDTO is one claim a pod references. State is "resolved",
@@ -152,6 +155,11 @@ type DeviceHealthDTO struct {
 	Init      bool                   `json:"init,omitempty"`
 	Name      string                 `json:"name"`
 	Devices   []DeviceHealthEntryDTO `json:"devices"`
+	// counts over every device the entry reports, kept or omitted
+	Unhealthy      int `json:"unhealthy"`
+	Unknown        int `json:"unknown"`
+	Healthy        int `json:"healthy"`
+	DevicesOmitted int `json:"devicesOmitted,omitempty"`
 }
 
 type DeviceHealthEntryDTO struct {
@@ -171,7 +179,8 @@ func toPodClaimsDTO(refs []dra.PodClaimRef) []PodClaimRefDTO {
 func toDeviceHealthDTO(hs []fleet.DeviceHealth) []DeviceHealthDTO {
 	out := make([]DeviceHealthDTO, 0, len(hs))
 	for _, h := range hs {
-		d := DeviceHealthDTO{Container: h.Container, Init: h.Init, Name: h.Name, Devices: make([]DeviceHealthEntryDTO, 0, len(h.Devices))}
+		d := DeviceHealthDTO{Container: h.Container, Init: h.Init, Name: h.Name, Devices: make([]DeviceHealthEntryDTO, 0, len(h.Devices)),
+			Unhealthy: h.Unhealthy, Unknown: h.Unknown, Healthy: h.Healthy, DevicesOmitted: h.DevicesOmitted}
 		for _, e := range h.Devices {
 			d.Devices = append(d.Devices, DeviceHealthEntryDTO{ID: e.ID, Health: e.Health, Message: e.Message})
 		}

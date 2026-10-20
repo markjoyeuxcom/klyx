@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -191,5 +192,34 @@ func TestPodDetail_ClaimsAndDeviceHealth(t *testing.T) {
 	c = &ClusterConn{typed: typedfake.NewSimpleClientset(plain), clk: clock.NewFake(time.Unix(200_000, 0))}
 	if d, err := c.PodDetail(context.Background(), "team-a", "plain"); err != nil || len(d.Claims) != 0 || len(d.DeviceHealth) != 0 {
 		t.Fatalf("plain: %+v %v", d.Claims, err)
+	}
+}
+
+// Codex's implementation review of 177bfe9, finding 3: device health is
+// counted over every device, the unhealthy kept first, and entries past
+// the bound are counted.
+func TestPodDetail_DeviceHealthCountsEverything(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	var res []corev1.ResourceHealth
+	for i := 0; i < 16; i++ {
+		res = append(res, corev1.ResourceHealth{ResourceID: corev1.ResourceID(fmt.Sprintf("cdi/h%02d", i)), Health: corev1.ResourceHealthStatusHealthy})
+	}
+	res = append(res, corev1.ResourceHealth{ResourceID: "cdi/bad", Health: corev1.ResourceHealthStatusUnhealthy})
+	var statuses []corev1.ResourceStatus
+	for i := 0; i < maxDeviceHealth+3; i++ {
+		statuses = append(statuses, corev1.ResourceStatus{Name: corev1.ResourceName(fmt.Sprintf("claim:c%02d", i)), Resources: res})
+	}
+	pod.Status.ContainerStatuses[0].AllocatedResourcesStatus = statuses
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := d.DeviceHealth[0]
+	if h.Unhealthy != 1 || h.Healthy != 16 || h.DevicesOmitted != 1 || len(h.Devices) != maxDeviceHealthDevices || h.Devices[0].ID != "cdi/bad" {
+		t.Fatalf("counted over all, the unhealthy kept first: %+v", h)
+	}
+	if len(d.DeviceHealth) != maxDeviceHealth || d.DeviceHealthOmitted != 3 {
+		t.Fatalf("entries past the bound counted: %d, %d", len(d.DeviceHealth), d.DeviceHealthOmitted)
 	}
 }

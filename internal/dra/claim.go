@@ -92,7 +92,7 @@ func ProjectClaim(u *unstructured.Unstructured) Claim {
 	c := Claim{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())}
 	fins := u.GetFinalizers()
 	if len(fins) > MaxFinalizersKept {
-		c.FinalizersOmitted, fins = len(fins)-MaxFinalizersKept, fins[:MaxFinalizersKept]
+		c.FinalizersOmitted, fins = len(fins)-MaxFinalizersKept, append([]string(nil), fins[:MaxFinalizersKept]...)
 	}
 	c.Finalizers = fins
 	if dt := u.GetDeletionTimestamp(); dt != nil {

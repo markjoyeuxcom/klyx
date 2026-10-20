@@ -108,6 +108,10 @@ type Capture struct {
 	// AsOf holds, for a stale source, when it was last live: its retained
 	// objects are dated evidence (coverage S9 §3), never current.
 	AsOf map[string]time.Time
+	// Capped names the sources a budget or a cap left objects out of,
+	// whatever their freshness (coverage S11b, Codex's implementation
+	// review finding 1): a stale source that was cut is never whole.
+	Capped map[string]bool
 	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
 	// rank of its first left-out object: every object that ranks before it
 	// is here, so a question confined to those has a complete answer

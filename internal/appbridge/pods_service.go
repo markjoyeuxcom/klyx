@@ -75,21 +75,22 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	summary := toPodSummaryDTO(d.Summary)
 	summary.Sched.Assumption = d.SchedAssumption
 	return PodDetailDTO{
-		Summary:        summary,
-		Resources:      resources,
-		Ephemeral:      eph,
-		EphemeralMore:  d.EphemeralMore,
-		Extended:       toExtendedPodDTO(d.Extended),
-		Claims:         toPodClaimsDTO(d.Claims),
-		DeviceHealth:   toDeviceHealthDTO(d.DeviceHealth),
-		Labels:         labels,
-		Annotations:    annotations,
-		Conditions:     conds,
-		Events:         events,
-		YAML:           d.YAML,
-		QosClass:       d.QoSClass,
-		ServiceAccount: d.ServiceAccount,
-		AsOfUnix:       s.now().Unix(),
+		Summary:             summary,
+		Resources:           resources,
+		Ephemeral:           eph,
+		EphemeralMore:       d.EphemeralMore,
+		Extended:            toExtendedPodDTO(d.Extended),
+		Claims:              toPodClaimsDTO(d.Claims),
+		DeviceHealth:        toDeviceHealthDTO(d.DeviceHealth),
+		DeviceHealthOmitted: d.DeviceHealthOmitted,
+		Labels:              labels,
+		Annotations:         annotations,
+		Conditions:          conds,
+		Events:              events,
+		YAML:                d.YAML,
+		QosClass:            d.QoSClass,
+		ServiceAccount:      d.ServiceAccount,
+		AsOfUnix:            s.now().Unix(),
 	}
 }
 

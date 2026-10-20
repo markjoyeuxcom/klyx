@@ -161,7 +161,7 @@ func evalDRAClaims(cluster string) func(observe.Capture) observe.PartResult {
 			row := DRAClaimRow{Claim: cl, Verdict: v, Consumers: readings}
 			if len(row.Consumers) > dra.MaxReservedKept {
 				row.ConsumersOmitted = len(row.Consumers) - dra.MaxReservedKept
-				row.Consumers = row.Consumers[:dra.MaxReservedKept]
+				row.Consumers = append([]dra.ConsumerReading(nil), row.Consumers[:dra.MaxReservedKept]...)
 			}
 			rows = append(rows, nativeRow(it, row))
 		}
@@ -203,10 +203,11 @@ func evalDRAPools(cluster string) func(observe.Capture) observe.PartResult {
 	return func(c observe.Capture) observe.PartResult {
 		minor, _ := c.Facts[FactServerMinor].(int)
 		episodes, _ := c.Facts[FactDRAEpisodes].(map[string]time.Time)
-		// a capped read cannot show a pool whole: a missing slice may be
-		// Klyx's cut or a newer generation (S11b §2.1)
+		// a capped read cannot show a pool whole, fresh or stale: a missing
+		// slice may be Klyx's cut or a newer generation (S11b §2.1); a
+		// stale whole read stays a dated reading
 		_, stale := c.AsOf[KindResourceSlices]
-		unread := !c.Complete[KindResourceSlices] && !stale
+		unread := c.Capped[KindResourceSlices] || (!c.Complete[KindResourceSlices] && !stale)
 		order, by := slicePools(objectsOf[dra.Slice](c.Objects[KindResourceSlices]))
 		var items []nativeItem
 		var rows []Row[DRAPoolRow]

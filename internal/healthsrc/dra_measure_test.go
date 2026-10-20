@@ -92,8 +92,15 @@ func TestDRAShapesMeasured(t *testing.T) {
 		if v.Kind != health.OK || len(row.Pool.Views)+row.Pool.ViewsOmitted != len(p.Views) || len(row.Pool.Views) > dra.MaxViewsKept {
 			t.Fatalf("%s: a whole pool reads complete, its views kept bounded and the rest counted: %+v, %d kept, %d omitted", form, v, len(row.Pool.Views), row.Pool.ViewsOmitted)
 		}
-		fmt.Fprintf(&b, "  one pool of 2,000 slices (%s): %d views read, %d kept, %d counted; row %d B encoded; the read %d B retained before it is kept; read in %v; %s\n",
-			form, len(p.Views), len(row.Pool.Views), row.Pool.ViewsOmitted, measureEncoded(t, row), heap, read.Round(time.Microsecond), v.Label)
+		// what the kept row retains once the read itself is dropped (Codex's
+		// implementation review, finding 4)
+		kr, keptHeap := measureRetained(func() any { return dra.ReadPool(slices, 37).Kept(dra.MaxViewsKept) }, slices)
+		runtime.KeepAlive(kr)
+		if keptHeap > 64<<10 {
+			t.Fatalf("%s: the kept row retains %d B", form, keptHeap)
+		}
+		fmt.Fprintf(&b, "  one pool of 2,000 slices (%s): %d views read, %d kept, %d counted; row %d B encoded; the read %d B retained, the kept row %d B; read in %v; %s\n",
+			form, len(p.Views), len(row.Pool.Views), row.Pool.ViewsOmitted, measureEncoded(t, row), heap, keptHeap, read.Round(time.Microsecond), v.Label)
 	}
 
 	// 2. the same pool with one slice missing

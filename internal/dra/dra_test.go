@@ -418,3 +418,36 @@ func TestTheProjectionsBounds(t *testing.T) {
 		t.Fatalf("1.34 allows 32 counter sets: 20 are within the API's bounds: %v %d", s.Truncated, len(s.CounterSets))
 	}
 }
+
+// Codex's implementation review of 177bfe9: finding 2, a retained consumer
+// from a read that is not complete and current never establishes a
+// claim's failure; finding 4, Kept retains only what it keeps; finding
+// 10, a pool's taints by effect and its access forms.
+func TestTheRevision1Readings(t *testing.T) {
+	stale := consumer(pod("old", sched("Unschedulable", "0/1 nodes are available: 1 cannot allocate all claims."), "a"), true, map[string][]string{"ns/a": {"gpu"}})
+	v, rows := ClaimVerdict(pending("a", "gpu"), []ConsumerPod{stale}, false, now)
+	if v.Kind != health.Unknown || v.Rule != "claim.consumers-unknown" || len(rows) != 1 || rows[0].Row != "b" {
+		t.Fatalf("an unestablished consumer: %+v %+v", v, rows)
+	}
+	var views []View
+	for i := 0; i < 40; i++ {
+		views = append(views, View{Node: fmt.Sprintf("n%02d", i), Agreed: true, Kind: OutComplete, Outcomes: []VariantOutcome{{Outcome: Outcome{Kind: OutComplete}}}})
+	}
+	k := PoolRead{Views: views, Obsolete: make([]string, 40)}.Kept(MaxViewsKept)
+	if cap(k.Views) != MaxViewsKept || cap(k.Obsolete) != MaxViewsKept {
+		t.Fatalf("kept slices are their own: cap %d, %d", cap(k.Views), cap(k.Obsolete))
+	}
+	k.Views[0].Node = "changed"
+	if views[0].Node == "changed" {
+		t.Fatal("the kept views share the read's array")
+	}
+	tainted := []Slice{
+		{Name: "a", Driver: "d", Pool: "p", Generation: 2, Count: 2, NodeName: "n1", Devices: []Device{{Name: "g0", TaintEffects: []string{"NoSchedule", "NoSchedule"}}, {Name: "g1", TaintEffects: []string{"NoExecute"}}}},
+		{Name: "b", Driver: "d", Pool: "p", Generation: 2, Count: 2, AllNodes: true, Devices: []Device{{Name: "g2"}}},
+		{Name: "old", Driver: "d", Pool: "p", Generation: 1, Count: 1, NodeName: "n1", Devices: []Device{{Name: "g9", TaintEffects: []string{"NoExecute"}}}},
+	}
+	p := ReadPool(tainted, 37)
+	if fmt.Sprint(p.Taints) != "[{NoExecute 1} {NoSchedule 1}]" || fmt.Sprint(p.Access) != "[{all nodes 1} {node-local 1}]" {
+		t.Fatalf("at generation 2, a device once per effect: %v %v", p.Taints, p.Access)
+	}
+}

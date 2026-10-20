@@ -271,7 +271,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 	// evaluate at it, and its batches and rows are stamped with it - never an
 	// earlier cycle time, which a slow evaluation before it would make stale.
 	at := o.clk.Now()
-	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}, Current: map[string]bool{}, AsOf: map[string]time.Time{}}
+	c := Capture{Now: at, Objects: map[string][]any{}, Complete: map[string]bool{}, Current: map[string]bool{}, AsOf: map[string]time.Time{}, Capped: map[string]bool{}}
 	cp := captured{at: at, connEpoch: o.connEpoch, connUsable: o.connUsable}
 	if p.ledger != nil {
 		cp.ids, cp.readAt, cp.truncated = map[string]SourceIdentity{}, map[string]*time.Time{}, map[string]bool{}
@@ -308,6 +308,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 					kc.Objects = len(ks.gen.model)
 					kc.Truncated, kc.NotRetained = ks.gen.capped, ks.gen.notRetained
 					c.Complete[name] = f.cov == Live && !ks.gen.capped
+					c.Capped[name] = ks.gen.capped
 					if w, ok := ks.gen.windowLocked(); ok {
 						if c.Windows == nil {
 							c.Windows = map[string]string{}
@@ -342,6 +343,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				if f.cov == Live || f.cov == Stale {
 					c.Objects[name] = append([]any(nil), ss.gen.items...)
 					c.Complete[name] = f.cov == Live && !f.truncated
+					c.Capped[name] = f.truncated
 					kc.Objects = len(ss.gen.items)
 				}
 			}
@@ -358,6 +360,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				viewed = true
 				delete(c.Objects, name)
 				delete(c.Windows, name)
+				delete(c.Capped, name)
 				c.Complete[name] = true
 				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Absent, Consumers: kc.Consumers}
 				if cp.truncated != nil {
@@ -367,6 +370,7 @@ func (o *Observer) captureLocked(p *partState, now time.Time) (Capture, []KindCo
 				viewed = true
 				delete(c.Objects, name)
 				delete(c.Windows, name)
+				delete(c.Capped, name)
 				c.Complete[name] = false
 				kc = KindCoverage{Kind: name, Role: role, Scope: kc.Scope, Coverage: Checking, Consumers: kc.Consumers}
 				if probed {
