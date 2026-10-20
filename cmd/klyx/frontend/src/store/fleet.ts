@@ -315,7 +315,10 @@ export type RowsStateDTO = { updating: boolean; refreshing: boolean; evaluatedAt
 // fault: how many counted objects are faults, from the same reading as
 // included - a header's mark never mixes the summary's count with the
 // rows' roles (slice 11b review).
-export type PartCountsDTO = { total: number; included: number; fault: number };
+// stale / lower qualify the numbers by the read that supplied them (the
+// selected counts' own part, never the held rows'): last observed, and a
+// lower bound (capped or incomplete). Present only when true.
+export type PartCountsDTO = { total: number; included: number; fault: number; stale?: boolean; lower?: boolean };
 
 // What the cert-manager rows adapter (health/useCertManagerRows) writes.
 export type CertManagerRowsPayload = Pick<CertManagerSlice, "certificates" | "issuers" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;

@@ -3,7 +3,7 @@ import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconServerBolt } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
-import type { ClusterDTO, KarpenterClaimDTO, KarpenterClassDTO, KarpenterCondDTO, KarpenterEventDTO, KarpenterFindingDTO, KarpenterPoolDTO, KarpenterRefDTO, KarpenterSnapshotDTO, KindCoverageDTO, RuleDTO } from "../store/fleet";
+import type { ClusterDTO, KarpenterClaimDTO, KarpenterClassDTO, KarpenterCondDTO, KarpenterEventDTO, KarpenterFindingDTO, KarpenterPoolDTO, KarpenterRefDTO, KarpenterSnapshotDTO, KindCoverageDTO, PartCountsDTO, RuleDTO } from "../store/fleet";
 import { useHealth } from "../store/health";
 import { getKarpenterState } from "../bridge/karpenter";
 import { EmptyState } from "../chrome/EmptyState";
@@ -87,9 +87,18 @@ export function aksNetworkingNote(c: ClusterDTO | undefined): string | null {
   if (!c?.azureNodes || !c.ciliumPresent) return null;
   return "Cilium on AKS: BYO or Azure-managed is unverified. If this Cilium is self-installed (BYO CNI), Microsoft supports Karpenter-specific issues but excludes third-party CNI networking troubleshooting; Azure CNI powered by Cilium is managed by Microsoft.";
 }
+// qualifier keeps both of a number's qualifications: "+" a lower bound,
+// "*" last observed - a stale capped read is both, "+*": at least that many,
+// as last observed (Codex's re-review of 0758508).
+const qualifier = (stale: boolean, lower: boolean) => `${lower ? "+" : ""}${stale ? "*" : ""}`;
 // countText qualifies a join count by the kind it reads: "?" unread, "*"
-// stale, "+" a capped read (a lower bound).
-const countText = (n: number, cov: JoinCoverage, capped = false) => (cov === "unknown" ? "?" : `${n}${cov === "stale" ? "*" : capped ? "+" : ""}`);
+// stale, "+" a capped read (a lower bound), "+*" both.
+const countText = (n: number, cov: JoinCoverage, capped = false) => (cov === "unknown" ? "?" : `${n}${qualifier(cov === "stale", capped)}`);
+// countMark qualifies a count by the read that supplied it: the selected
+// counts' own part when they did (they can be a newer summary's), else the
+// held rows'. Membership and pins keep the rows' own coverage.
+const countMark = (pc: PartCountsDTO | null, ev: KindEvidence, capped: KindCoverageDTO[]) =>
+  (pc ? qualifier(!!pc.stale, !!pc.lower) : qualifier(ev === "stale", capped.length > 0 || ev === "pending" || ev === "failed"));
 // cappedText names a capped read's omissions, per kind (S10 §7): a capped
 // list proves neither whole-list health nor absence (Codex's implementation
 // review, finding 2).
@@ -200,7 +209,12 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const claimsComplete = claimsEv === "complete" && claimsCapped.length === 0;
   const poolsComplete = poolsEv === "complete" && poolsCapped.length === 0;
   const classesComplete = classesEv === "complete" && classesCapped.length === 0;
-  const markOf = (ev: KindEvidence, capped: KindCoverageDTO[]) => (ev === "stale" ? "*" : ev !== "complete" || capped.length > 0 ? "+" : "");
+  const claimsMark = countMark(rows.partCounts.nodeclaims, claimsEv, claimsCapped);
+  const poolsMark = countMark(rows.partCounts.nodepools, poolsEv, poolsCapped);
+  // the NodeClasses count is always the held rows' (the part is not counted)
+  const classesMark = countMark(null, classesEv, classesCapped);
+  // the summary's own read, when it supplies the totals and is qualified
+  const summaryQual = (q: "lower" | "stale") => [rows.partCounts.nodeclaims?.[q] && "NodeClaim", rows.partCounts.nodepools?.[q] && "NodePool"].filter(Boolean).join(" and ");
   const claims = useMemo(() => [...rows.claims].sort((a, b) => rankOf(a) - rankOf(b) || (b.createdUnix ?? 0) - (a.createdUnix ?? 0) || a.name.localeCompare(b.name)), [rows.claims]);
   const pools = useMemo(() => [...rows.pools].sort((a, b) => rankOf(a) - rankOf(b) || a.name.localeCompare(b.name)), [rows.pools]);
   const classes = useMemo(() => [...rows.classes].sort((a, b) => (CLASS_RANK[a.reading.state] ?? 2) - (CLASS_RANK[b.reading.state] ?? 2) || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind)), [rows.classes]);
@@ -244,8 +258,11 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   // that capture's own NodeClaim dependency coverage - never the NodeClaims
   // list's (Codex review of 442d42a #1).
   const claimsCov = joinCoverage(rows.poolNodesDep ? kindEvidence(true, [rows.poolNodesDep], "NodeClaim", null) : "pending");
-  // ...and a capped NodeClaim read counts a lower bound
+  // ...and a capped NodeClaim read counts a lower bound; a stale capped one
+  // is both
   const nodesCapped = !!rows.poolNodesDep?.truncated;
+  const nodesTitle = claimsCov === "unknown" ? "NodeClaim read unavailable"
+    : [claimsCov === "stale" ? "from the last observed NodeClaim list" : "", nodesCapped ? "a lower bound: the NodeClaim read was capped" : ""].filter(Boolean).join("; ") || undefined;
 
 
   const keys: string[] = view === "claims" ? claims.map((c) => c.name) : view === "pools" ? pools.map((p) => p.name) : view === "classes" ? classes.map(classKey) : events.map(eventKey);
@@ -360,10 +377,13 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   if (snap?.error) notices.push(<div key="snap" role="status" data-testid="karp-snapshot-error" className="t-body" style={{ color: "var(--color-text-tertiary)", padding: "4px 0", overflowWrap: "anywhere" }}><span className="t-status" style={{ color: "var(--color-text-secondary)" }}>Disruption activity could not be read.</span> {snap.error}</div>);
   if (controllerNotice) notices.push(<div key="ctrl">{controllerNotice}</div>);
   if (rows.watchError && (claims.length + pools.length + classes.length) > 0) notices.push(<WatchErrorBanner key="watch" tool="Karpenter" failure={`read failed - showing the last good state${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={rows.watchError} />);
-  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
+  if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.
+    {summaryQual("lower") ? ` The summary's own ${summaryQual("lower")} read is incomplete, so those totals are lower bounds (+).` : ""}
+    {summaryQual("stale") ? ` The summary's own ${summaryQual("stale")} read is last observed (*).` : ""}
+    {rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
   // an empty capped view says it in its empty state
   if (viewCapped.length > 0 && keys.length > 0) notices.push(<div key="capped" role="status" data-testid="karp-capped" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>
-    Capped: {cappedText(viewCapped)} not retained - Klyx keeps a bounded amount per cluster, so counts are lower bounds, nothing is claimed all ready, and an object left out is unverified, never removed.</div>);
+    Capped: {cappedText(viewCapped)} not retained - Klyx keeps a bounded amount per cluster, so this list is incomplete, nothing is claimed all ready, and an object left out is unverified, never removed.</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   if (activityNotice) notices.push(<div key="feed">{activityNotice}</div>);
   if (networking) notices.push(<div key="aks-net" role="note" data-testid="karp-aks-networking" className="t-secondary" style={{ padding: "4px 0", overflowWrap: "anywhere" }}>{networking}</div>);
@@ -389,8 +409,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       title="Karpenter"
       summary={rowsAbsent || claimsEv === "pending" && claims.length === 0 || claimsEv === "failed" && claims.length === 0 ? null : (
         <>
-          <CountSentence total={claimTotal} marker={markOf(claimsEv, claimsCapped)} noun={["NodeClaim", "NodeClaims"]} />
-          {rowsRefreshing && claimAttention > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }} data-testid="karp-global-attention">{claimAttention} not ready or appear stuck</span>}
+          <CountSentence total={claimTotal} marker={claimsMark} noun={["NodeClaim", "NodeClaims"]} />
+          {rowsRefreshing && claimAttention > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }} data-testid="karp-global-attention">{claimAttention}{claimsMark} not ready or appear stuck</span>}
           {failed + stuck + poolsDown + poolsDegraded > 0
             ? <MarkedPhrase fault={failed + poolsDown > 0}>{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : "",
               poolsDegraded ? `${poolsDegraded} NodePool${poolsDegraded === 1 ? "" : "s"} failing to register` : ""].filter(Boolean).join(" · ")}</MarkedPhrase>
@@ -411,10 +431,10 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       }
       controls={!rowsAbsent || feedDetected ? (
         <div role="group" aria-label="Karpenter view" className="l-seg">
-          <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {claimAttention > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{claimAttention}{claimsCapped.length > 0 ? "+" : ""}</span>}</button>
-          <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolAttention > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolAttention}{poolsCapped.length > 0 ? "+" : ""}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "claims"} onClick={() => switchView("claims")}>NodeClaims {claimAttention > 0 && <span style={{ color: failed ? "var(--color-text-danger)" : "var(--color-text-warning)" }}>{claimAttention}{claimsMark}</span>}</button>
+          <button className="l-chip" aria-pressed={view === "pools"} onClick={() => switchView("pools")}>NodePools {poolAttention > 0 && <span style={{ color: "var(--color-text-danger)" }}>{poolAttention}{poolsMark}</span>}</button>
           {/* the retained count, qualified by its read: a class is inventory, never counted as attention */}
-          {(classesServed || classes.length > 0) && <button className="l-chip" aria-pressed={view === "classes"} onClick={() => switchView("classes")}>NodeClasses {(classes.length > 0 || classesCapped.length > 0) && <span style={{ color: "var(--color-text-secondary)" }} data-testid="karp-classes-count">{classes.length}{markOf(classesEv, classesCapped)}</span>}</button>}
+          {(classesServed || classes.length > 0) && <button className="l-chip" aria-pressed={view === "classes"} onClick={() => switchView("classes")}>NodeClasses {(classes.length > 0 || classesCapped.length > 0) && <span style={{ color: "var(--color-text-secondary)" }} data-testid="karp-classes-count">{classes.length}{classesMark}</span>}</button>}
           <button className="l-chip" aria-pressed={view === "activity"} onClick={() => switchView("activity")}>Disruption activity {(events.length > 0 || feedIncomplete) && <span style={{ color: "var(--color-text-secondary)" }}>{events.length}{feedIncomplete ? "+" : ""}</span>}</button>
         </div>
       ) : undefined}
@@ -450,7 +470,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
                   {show("mark") && <VerdictMark health={role} />}
                   {show("name") && <span className="lens-cell-name">{p.name}</span>}
                   {show("status") && <span style={{ ...cellStyle, color: ROLE_TEXT[role.kind], fontFamily: "var(--font-sans)" }}>{role.label}{p.ready === "not-ready" && p.reason ? ` · ${p.reason}` : ""}</span>}
-                  {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }} title={claimsCov === "unknown" ? "NodeClaim read unavailable" : claimsCov === "stale" ? "from the last observed NodeClaim list" : nodesCapped ? "a lower bound: the NodeClaim read was capped" : undefined}>{countText(p.nodes, claimsCov, nodesCapped)}</span>}
+                  {show("nodes") && <span style={{ color: "var(--color-text-secondary)" }} title={nodesTitle}>{countText(p.nodes, claimsCov, nodesCapped)}</span>}
                   {show("cpu") && <span style={{ ...cellStyle, color: cpu.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{cpu.text}</span>}
                   {show("mem") && <span style={{ ...cellStyle, color: mem.near ? "var(--color-text-warning)" : "var(--color-text-secondary)" }}>{mem.text}</span>}
                 </>);

@@ -46,3 +46,34 @@ describe("useKarpenterRows", () => {
     expect(result.current.loading).toBe(false);
   });
 });
+
+// Codex's re-review of 0758508: the selected counts carry their own part's
+// qualification, never the held rows'.
+describe("useKarpenterRows counts", () => {
+  it("qualifies the selected counts by their own part", () => {
+    const rowsPart = lens().part!;
+    const summaryPart = { ...rowsPart, native: { total: 99, included: 5, word: "", roles: { total: 99, fault: 5, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 94 } },
+      kinds: [{ kind: "nodeclaims", role: "counted", scope: "", coverage: "live" as const, objects: 92, truncated: true, notRetained: 7 }] };
+    const claims = lens({ part: { ...rowsPart, kinds: [{ kind: "nodeclaims", role: "counted", scope: "", coverage: "live" as const, objects: 1 }] },
+      counts: { ...counts, source: "summary", refreshing: true, part: summaryPart } });
+    parts = { nodepools: lens(), nodeclaims: claims, nodeclasses: lens() };
+    const { result } = renderHook(() => useKarpenterRows("x"));
+    expect(result.current.partCounts.nodeclaims).toEqual({ total: 99, included: 5, fault: 5, lower: true });
+    expect(result.current.coverage.find((k) => k.kind === "NodeClaim")?.truncated).toBeUndefined(); // the rows' own coverage
+  });
+
+  it("says last observed for a stale counted kind, never for a dependency, and nothing when whole", () => {
+    const base = lens().part!;
+    const native = { total: 3, included: 1, word: "", roles: { total: 3, fault: 1, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 2 } };
+    const kind = (k: string, role: string, over = {}) => ({ kind: k, role, scope: "", coverage: "live" as const, objects: 1, ...over });
+    const withCounts = (kinds: ReturnType<typeof kind>[]) => lens({ counts: { ...counts, part: { ...base, native, kinds } } });
+    parts = {
+      nodepools: withCounts([kind("nodepools", "counted"), kind("nodeclaims", "dependency", { coverage: "stale", truncated: true })]),
+      nodeclaims: withCounts([kind("nodeclaims", "counted", { coverage: "stale" })]),
+      nodeclasses: lens(),
+    };
+    const { result } = renderHook(() => useKarpenterRows("x"));
+    expect(result.current.partCounts.nodepools).toEqual({ total: 3, included: 1, fault: 1 }); // its dependency qualifies no pool count
+    expect(result.current.partCounts.nodeclaims).toEqual({ total: 3, included: 1, fault: 1, stale: true });
+  });
+});

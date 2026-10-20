@@ -20,11 +20,11 @@ const liveCoverage = () => [
   { kind: "NodeClaim", served: true, synced: true, coverage: "live" as const },
 ];
 function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; classes?: KarpenterClassDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null;
-  poolNodesDep?: KarpenterRows["poolNodesDep"]; classesState?: KarpenterRows["classesState"] } = {}) {
+  poolNodesDep?: KarpenterRows["poolNodesDep"]; classesState?: KarpenterRows["classesState"]; rowsState?: KarpenterRows["rowsState"]; partCounts?: Partial<KarpenterRows["partCounts"]> } = {}) {
   rowsValue = {
     claims: r.claims ?? [], pools: r.pools ?? [], classes: r.classes ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
     poolNodesDep: r.poolNodesDep ?? { kind: "NodeClaim", served: true, synced: true, coverage: "live" },
-    rowsState: r.classesState ?? { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
+    rowsState: r.rowsState ?? r.classesState ?? { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null, ...r.partCounts },
     classesState: r.classesState ?? { updating: false, refreshing: false, evaluatedAt: null },
   };
 }
@@ -496,5 +496,66 @@ describe("KarpenterView capped and stale evidence (S10 implementation review)", 
     await openClasses();
     fireEvent.click((await screen.findByText("default")).closest(".lens-row") as HTMLElement);
     expect((await screen.findByTestId("karp-class-note")).textContent).toBe(`Earlier: ${note}.`);
+  });
+});
+
+// Codex's re-review of 0758508: a count is qualified by the read that
+// supplied it - the selected counts' own part, which can be a newer
+// summary's - and keeps both of its qualifications. The list's membership,
+// its capped notice and the pins keep the held rows' own coverage.
+describe("KarpenterView count qualifiers (S10 implementation re-review)", () => {
+  beforeEach(() => { vi.clearAllMocks(); controller(null); vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] }); setRows(); });
+  const refreshing = { updating: false, refreshing: true, evaluatedAt: "2026-10-20T11:00:00Z" };
+  const header = () => document.querySelector(".lens-count")?.textContent;
+  const bad = () => claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" });
+
+  it("a newer summary's capped count is a lower bound, though the held rows are whole", async () => {
+    setRows({ claims: [bad()], rowsState: refreshing, partCounts: { nodeclaims: { total: 99, included: 5, fault: 5, lower: true } } });
+    render(<KarpenterView cluster="x" />);
+    await screen.findAllByText("default-abcde"); // the fault opens its inspector too
+    expect(header()).toBe("99+ NodeClaims");
+    expect(screen.getByRole("button", { name: /^NodeClaims/ }).textContent).toBe("NodeClaims 5+");
+    expect(screen.getByTestId("karp-global-attention").textContent).toBe("5+ not ready or appear stuck");
+    expect(screen.getByTestId("rows-refreshing").textContent).toContain("The summary's own NodeClaim read is incomplete, so those totals are lower bounds (+).");
+    expect(screen.queryByTestId("karp-capped")).toBeNull(); // the held list is whole
+  });
+
+  it("a whole summary count drops an old cap; the capped list still says so", async () => {
+    setRows({ claims: [claim()], coverage: liveCoverage().map((k) => (k.kind === "NodeClaim" ? { ...k, truncated: true, notRetained: 2 } : k)), rowsState: refreshing,
+      partCounts: { nodeclaims: { total: 99, included: 0, fault: 0 } } });
+    render(<KarpenterView cluster="x" />);
+    await screen.findByText("default-abcde");
+    expect(header()).toBe("99 NodeClaims");
+    expect(screen.getByTestId("karp-capped").textContent).toContain("2 NodeClaims not retained - Klyx keeps a bounded amount per cluster, so this list is incomplete");
+    expect(screen.queryByText("all ready")).toBeNull();
+  });
+
+  it("a stale summary count is last observed, and a stale capped one both", async () => {
+    setRows({ claims: [bad()], rowsState: refreshing, partCounts: { nodeclaims: { total: 99, included: 5, fault: 5, stale: true }, nodepools: { total: 3, included: 1, fault: 1, stale: true, lower: true } } });
+    render(<KarpenterView cluster="x" />);
+    await screen.findAllByText("default-abcde"); // the fault opens its inspector too
+    expect(header()).toBe("99* NodeClaims");
+    expect(screen.getByRole("button", { name: /^NodePools/ }).textContent).toBe("NodePools 1+*");
+    const a4 = screen.getByTestId("rows-refreshing").textContent;
+    expect(a4).toContain("The summary's own NodePool read is incomplete, so those totals are lower bounds (+).");
+    expect(a4).toContain("The summary's own NodeClaim and NodePool read is last observed (*).");
+  });
+
+  it("without selected counts, the held rows qualify the number", async () => {
+    setRows({ claims: [claim()], coverage: liveCoverage().map((k) => (k.kind === "NodeClaim" ? { ...k, coverage: "stale" as const, lastGoodAt: "2026-10-20T11:00:00Z", truncated: true, notRetained: 1 } : k)) });
+    render(<KarpenterView cluster="x" />);
+    await screen.findByText("default-abcde");
+    expect(header()).toBe("1+* NodeClaims");
+  });
+
+  it("a pool's node count from a stale capped NodeClaim read keeps both", async () => {
+    setRows({ pools: [withRule<KarpenterPoolDTO>({ name: "workers", ready: "ready", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 2 }, poolRule)],
+      poolNodesDep: { kind: "NodeClaim", served: true, synced: true, coverage: "stale", error: "watch failed", truncated: true, notRetained: 4 } });
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
+    const cell = [...document.querySelectorAll(".lens-row span")].find((e) => e.textContent === "2+*");
+    expect(cell?.getAttribute("title")).toBe("from the last observed NodeClaim list; a lower bound: the NodeClaim read was capped");
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    expect(within(await screen.findByTestId("karp-pool-panel")).getByText(/^2\+\* nodes · weight 0$/)).toBeTruthy();
   });
 });
