@@ -946,6 +946,31 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { rows: document.querySelectorAll(".lens-row").length };
   });
 
+  // coverage S11a: a node's extended resources, from lab-s11a - the real
+  // e2e sample device plugin (example.com/resource) and the lab's NVIDIA
+  // status fixtures with per-resource GPU Feature Discovery labels
+  await step(steps, "Nodes: a node's extended resources", async () => {
+    await open("nodes");
+    await closeDrawer();
+    await within(8000, "the GPU column", () => /GPU/.test($(".lens-table-head")?.textContent ?? ""));
+    const row = await within(20_000, "the kind node", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "klyx-control-plane"));
+    const cell = row.querySelector("[data-testid='nodes-gpu-cell']")?.textContent ?? "";
+    if (cell !== "2 resources") throw new Error(`the GPU cell reads "${cell}"`);
+    row.click();
+    const block = await within(20_000, "the Extended resources block", () => {
+      const b = $("[data-testid='node-extended']");
+      return b && /example\.com\/resource · 1 requested/.test(b.textContent ?? "") ? b : null;
+    });
+    const text = block.textContent ?? "";
+    for (const want of ["nvidia.com/gpu · 3 requested · 8 allocatable · 8 capacity", "shared (time-slicing): each GPU is advertised 4 times",
+      "nvidia.com/mig-1g.5gb · 1 requested · 7 allocatable", "example.com/resource · 1 requested · 2 allocatable", "MIG strategy: mixed"]) {
+      if (!text.includes(want)) throw new Error(`missing "${want}" in ${text.slice(0, 400)}`);
+    }
+    const totals = $("[data-testid='nodes-extended-totals']")?.textContent ?? "";
+    if (!totals.includes("8 nvidia.com/gpu allocatable (3 requested)")) throw new Error(`the totals: ${totals}`);
+    return { cell, totals: totals.slice(0, 160) };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();

@@ -229,6 +229,9 @@ var parityParts = []parityPart{
 	{"keda", "scaledobjects", "native", []string{"scaledobjects"}},
 	{"keda", "scaledjobs", "native", []string{"scaledjobs"}},
 	{"keda", "authentications", "evidence", []string{"triggerauthentications", "clustertriggerauthentications"}},
+	// coverage S11a: reservations and totals are evidence over the nodes
+	{"extended", "reservations", "evidence", []string{"nodes"}},
+	{"extended", "totals", "evidence", []string{"nodes"}},
 }
 
 // parityAlertsCounted is the fixture's posted alerts that count: two
@@ -844,6 +847,7 @@ func TestParityGate(t *testing.T) {
 		{"6b", "Degraded", with("flux", "not ready")}, // the GitOps tier degrades the connection
 		{"9", "Synced", none},                         // coverage S9: a fallback ScaledObject and an HPA that cannot scale
 		{"10", "Synced", none},                        // coverage S10: a failing EC2NodeClass lights its two pools once each
+		{"11", "Synced", none},                        // coverage S11a: a stopped device plugin's node reads not allocatable
 	} {
 		l.apply(c.name)
 		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))

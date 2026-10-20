@@ -119,6 +119,61 @@ node_image() {
 	docker exec "$node" ctr -n k8s.io images tag --force "$pause" "$1" >/dev/null
 }
 
+# extended_objects: coverage S11a's real device plugin, the Kubernetes e2e
+# sample device plugin (1.8.0, pulled), registering example.com/resource
+# (2 devices) through the parity node's kubelet, and a pod requesting 1.
+# Case 11 stops it for real (its DaemonSet's nodeSelector matches nothing),
+# so the kubelet reads capacity 2, allocatable 0 for 5 minutes.
+ext_alloc() { k get node "$name-control-plane" -o 'jsonpath={.status.allocatable.example\.com/resource}'; }
+ext_wait() { # ext_wait <allocatable>: poll the node until its allocatable reads it
+	local i=0
+	until [[ $(ext_alloc) == "$1" ]]; do
+		i=$((i + 1))
+		((i > 60)) && die "example.com/resource allocatable never read $1 (now '$(ext_alloc)')"
+		sleep 2
+	done
+}
+extended_objects() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: parity-device-plugin, namespace: $ns}
+spec:
+  selector: {matchLabels: {app: parity-device-plugin}}
+  template:
+    metadata: {labels: {app: parity-device-plugin}}
+    spec:
+      tolerations: [{operator: Exists}]
+      volumes:
+      - {name: device-plugin, hostPath: {path: /var/lib/kubelet/device-plugins}}
+      - {name: plugins-registry, hostPath: {path: /var/lib/kubelet/plugins_registry}}
+      - {name: cdi-dir, hostPath: {path: /var/run/cdi}}
+      containers:
+      - name: plugin
+        image: registry.k8s.io/e2e-test-images/sample-device-plugin:1.8.0
+        env: [{name: PLUGIN_SOCK_DIR, value: /var/lib/kubelet/device-plugins}]
+        securityContext: {privileged: true}
+        volumeMounts:
+        - {name: device-plugin, mountPath: /var/lib/kubelet/device-plugins}
+        - {name: plugins-registry, mountPath: /var/lib/kubelet/plugins_registry}
+        - {name: cdi-dir, mountPath: /var/run/cdi}
+EOF
+	ext_wait 2
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: parity-device-user, namespace: $ns}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {requests: {example.com/resource: "1"}, limits: {example.com/resource: "1"}}
+EOF
+	k -n "$ns" wait --for=condition=Ready pod/parity-device-user --timeout=120s >/dev/null
+}
+
 # karpenter_controllers: an AWS and an Azure stand-in, labelled as the
 # charts label them and running pause under each provider's controller
 # image, so both are attributed (S10 §5); the parity node carries EKS Auto
@@ -1218,6 +1273,7 @@ baseline() {
 	lb_objects
 	keda_objects
 	alerts_objects
+	extended_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 
@@ -1344,6 +1400,11 @@ EOF
 			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=fault klyx.dev/parity-included=true --overwrite >/dev/null
 			pool_ready "$p" False
 		done ;;
+	11) # coverage S11a: the device plugin stops; the node reads its
+		# resource not allocatable (degraded, counted once) within the grace
+		k -n "$ns" patch daemonset parity-device-plugin --type=merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"klyx.dev/parity-plugin":"off"}}}}}' >/dev/null
+		ext_wait 0
+		k annotate node "$name-control-plane" klyx.dev/parity-role=degraded klyx.dev/parity-included=true --overwrite >/dev/null ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -1373,6 +1434,9 @@ revert_case() {
 			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null
 			pool_ready "$p" True
 		done ;;
+	11) k -n "$ns" patch daemonset parity-device-plugin --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' >/dev/null
+		ext_wait 2
+		k annotate node "$name-control-plane" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"
