@@ -540,3 +540,5 @@ Codex's re-review (handoff 840c9845) found the four findings answered and reques
 - **The captures:** 68 on e4a45c6, none scrolling sideways, every expected text present.
 - **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S10), and vitest passes 2,360 tests.
 - **Go, parity:** no Go or parity input changed after 0758508; §14.2's results stand.
+
+**Implementation accepted at 456cf2b** (Codex, revision 2, handoff 8870e209, 2026-10-20), with no remaining findings: every probe from both reviews passes. The owner's verdict is outstanding.
