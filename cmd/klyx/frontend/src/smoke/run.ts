@@ -466,7 +466,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await closeDrawer();
     (await within(4000, "the Webhooks tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Webhooks/))).click();
     const first = await within(10_000, "configuration rows", () => $<HTMLElement>(".lens-row"));
-    if (!/lab-fail-missing|lab-fail-noready/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    // lab-s3b's unreachable webhook (coverage S3b) is broken as well
+    if (!/lab-fail-missing|lab-fail-noready|klyx-s3b-deny/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
     (await within(4000, "the missing backend", () => byText<HTMLElement>(".lens-row", /lab-fail-missing/))).click();
     const panel = await within(8000, "the configuration inspector", () => $("[data-testid='admission-config-panel']"));
     if (!/matching requests may fail/.test(panel.textContent ?? "")) throw new Error(`the fault: ${(panel.textContent ?? "").slice(0, 200)}`);
@@ -912,8 +913,10 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(15_000, "its detail", () => useFleet.getState().instanceDetail.detail?.name === "lab-webhook");
     [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest")?.click();
     const area = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
-    typeIntoArea(area, area.value.replace("refused by the lab webhook", "refused by the lab webhook (smoke)"));
-    (await within(4000, "Apply", () => byText<HTMLButtonElement>("button", /^Apply$/))).click();
+    const next = area.value.replace(/^data:\n/m, "data:\n  smoke: s3b\n");
+    if (next === area.value) throw new Error(`no data block in the manifest: ${area.value.slice(0, 200)}`);
+    typeIntoArea(area, next);
+    (await within(4000, "an enabled Apply", () => { const b = byText<HTMLButtonElement>("button", /^Apply$/); return b && !b.disabled ? b : null; })).click();
     (await within(4000, "Apply changes", () => byText<HTMLButtonElement>("button", /^Apply changes$/))).click();
     const summary = await within(20_000, "the finding", () => {
       const t = $("[data-testid='admission-summary']")?.textContent ?? "";
