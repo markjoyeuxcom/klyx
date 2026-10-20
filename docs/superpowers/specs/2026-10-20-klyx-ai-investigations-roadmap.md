@@ -131,6 +131,7 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 
 - **Option 1** (the 2026-10-16 order): finish the coverage programme (S10, S11a, S11b, S3b), then A1, A2, A3, then extensions.
 - **Option 2:** A1 right after S10. It reuses chat's contract and needs the evidence S8a, S8b and S9 just added. A2 and A3 follow the coverage programme.
+- **Either way,** §6's scenario needs the Argo-parity work's hook results and any new Argo verbs before A3 can finish it.
 
 **Each phase's definition of done:**
 - its note with Codex review before and after;
@@ -140,9 +141,36 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 - captures;
 - the as-built notes.
 
-## 6. Open owner decisions
+## 6. The acceptance scenario (owner, 2026-10-20)
+
+> "Investigate this failed Argo deployment, trace the blocking hook to its pod logs, show the relevant recent changes, propose a remedy, let me approve the action, and check whether it worked."
+
+The programme is accepted when this runs end to end on the kind lab, against a real model. Each step, with what exists and what it needs:
+
+| Step | Phase | Exists today | Needed |
+|---|---|---|---|
+| The failed deployment | A1 | The Argo lens's verdict, `operationState` phase and message, sync revisions and five history entries | none |
+| The blocking hook | A1 | not read: `operationState.syncResult.resources` (each hook's kind, name, `hookType`, `hookPhase`, message) | the hook results in the Argo model (the Argo-parity work), then a dependency edge: hook to its Job to its pods, by owner UID |
+| Its pod logs | A1 | chat's finite log read (live pod, capped, scrubbed); S8b's Loki history for a gone pod by UID | a hook pod is often deleted by its hook-delete policy: the investigation reads Loki by the pod's UID when the pod is gone, and lists the logs as missing evidence when neither exists |
+| The recent changes | A1 | Git history through the system git (approved URLs); the Application's history revisions | the diff between the last healthy and the failing revision, scoped to the Application's path |
+| A remedy | A1, A2 | Suggest-fix (a Git change, as text) | a structured proposal: a day-2 action, or a Git change |
+| The approval | A3 | Argo refresh and sync (UID-armed, ConfirmDialog, typed grant, prune opt-in) | the action card. A remedy in desired state (the hook's manifest or image) stays a Git change unless §7's decision 3 admits pull requests. Argo's terminate-operation and history rollback are not Klyx verbs yet: they belong to the Argo-parity work as ordinary verbs, never added by A3 |
+| Whether it worked | A3 | the Observer's Application verdict | the verification watch: the Application's sync and health, and the hook's phase, until the bound |
+
+**The lab:**
+- an Application on kind-klyx whose PreSync hook Job fails (a bad image, or a migration that exits non-zero);
+- a Git repository the lab controls, holding the breaking commit after a healthy one;
+- Loki shipping the hook pod's logs.
+
+**What the scenario stress-tests:**
+- **Certainty:** "the hook failed" is proven by the hook's own phase and message; "the commit caused it" is proven only when the diff touches the hook's manifest or image; anything else is suspected.
+- **A gone hook pod:** the logs come from Loki, by UID.
+- **The Git boundary:** if the remedy is a commit, Klyx shows the proposed change, the human commits it, and Klyx verifies after Argo's next sync. "Approve" then approves the proposal, not a write.
+- **The verb boundary:** a retry is an Argo sync behind the existing guards; nothing new runs because a model proposed it.
+
+## 7. Open owner decisions
 
 1. **Sequencing:** §5's option 1 or 2.
 2. **Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.
-3. **A3's reach:** day-2 verbs only, or Git pull requests too (§4).
+3. **A3's reach:** day-2 verbs only, or Git pull requests too (§4, and §6's approval step).
 4. **Report retention:** how many reports, and for how long.
