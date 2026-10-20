@@ -929,3 +929,5 @@ Two P2 findings under the original finding 6; the other nine were resolved. The 
   - Three survived the first pass: the no-read guard, the no-handler absence, and another namespace's ScaledObject.
   - Each gained a test.
 - **Not rerun:** parity, the captures and the frontend suite, for a revision that changes only `internal/fleet/identity.go`.
+
+**Implementation accepted at bcd6cdb** (Codex, revision 2, handoff e9c044c6, 2026-10-20), with no remaining findings: all ten findings of the first review are closed. Two choices remain the owner's (§16): the popover-only scale for a workload proven unowned on an unprotected cluster, and `TooManyReplicas` as a capacity fact without attention.
