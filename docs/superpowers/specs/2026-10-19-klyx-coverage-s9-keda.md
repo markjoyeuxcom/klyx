@@ -907,3 +907,25 @@ Ten P2 findings, each reproduced by a probe. Every probe is kept as a test (`int
 - **Mutations:** 38 on this revision's code, all caught.
   - Two survived the first pass: a continued ReplicaSet list, whose test returned no ReplicaSet at all, and an operator in another namespace sharing the ServiceAccount's name. Each gained a test (c40004f).
   - One more was rewritten to compile.
+
+## 19. Implementation revision 2: Codex's re-review of 882e9a1
+
+Two P2 findings under the original finding 6; the other nine were resolved. The probes are kept as tests (`internal/fleet/keda_review2_test.go`). The fixes are in f613489.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | The workload half of the inverse join bypassed the forward join's proof and cut semantics | An `aws` `identityOwner: workload` link now holds only through a ScaledObject in the namespace whose handler is proven and sees the authentication (`kedaHandling.sees`, the same proof as the operator half). No handler, or an authentication the handler's selector excludes, links nothing. An unverified handler or visibility, a cut trigger list, or an operator inventory not read makes the read partial |
+| 2 | An unread operator inventory was treated as proof that no operator runs in the namespace | `kedaOperatorIn` is three-valued. An inventory the capability could not read is unknown, never "no operator here", and the read is partial |
+
+**Also:**
+- The operator candidates are read once per inverse join and shared by both halves.
+- Three edges gained tests: no operator read proves nothing, no handler is a proven absence (no link, complete), and a ScaledObject in another namespace never lends this namespace's ServiceAccount.
+
+**Gates on f613489:**
+- **Codex's probes:** all four pass through the overlay under `-race`.
+- **The native smoke:** 193 of 193 in each of night and day at 1440 and 1024.
+- **Go:** `go test -race` passes for `fleet`, `appbridge` and `identity`; golangci-lint reports 0 issues.
+- **Mutations:** 8 on this revision's code, all caught.
+  - Three survived the first pass: the no-read guard, the no-handler absence, and another namespace's ScaledObject.
+  - Each gained a test.
+- **Not rerun:** parity, the captures and the frontend suite, for a revision that changes only `internal/fleet/identity.go`.
