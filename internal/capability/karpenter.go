@@ -115,8 +115,9 @@ type NAPActivity struct {
 // KarpenterKind is one class kind's standing on the cluster.
 type KarpenterKind struct {
 	Kind karpenter.ClassKind
-	// Served at the version S10 reads.
-	Served bool
+	// Served at the version S10 reads. OtherVersion: served only at
+	// another version, a stated limit (§2).
+	Served, OtherVersion bool
 	// InUse: served, and with classes or referenced by a NodePool (or a
 	// read that could not rule either out).
 	InUse    bool
@@ -321,6 +322,8 @@ func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) 
 		if res, _ := d.groupResources(served, ck.Group, ck.Version); res[ck.Resource] {
 			kk.Served = true
 			kk.InUse, kk.InUseWhy = d.karpenterKindInUse(ctx, ck, refs, refsRead)
+		} else {
+			kk.OtherVersion = d.servedElsewhere(served, ck)
 		}
 		out.Kinds = append(out.Kinds, kk)
 		switch {
@@ -334,6 +337,22 @@ func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) 
 	}
 	out.settle()
 	return out
+}
+
+// servedElsewhere: the kind's resource is served at a version other than
+// the pinned one.
+func (d *Detector) servedElsewhere(served map[string]bool, ck karpenter.ClassKind) bool {
+	var others []string
+	for gv := range served {
+		if v, ok := strings.CutPrefix(gv, ck.Group+"/"); ok && v != ck.Version {
+			others = append(others, v)
+		}
+	}
+	if len(others) == 0 {
+		return false
+	}
+	res, _ := d.groupResources(served, ck.Group, others...)
+	return res[ck.Resource]
 }
 
 // karpenterInventory reads the candidate controllers (§5): Deployments

@@ -228,9 +228,10 @@ func TestArgoRowsCarryTheCapture(t *testing.T) {
 // The Karpenter parts (slice 3 §5.5): the captured evaluation and identity.
 func TestKarpenterRowsCarryTheCapture(t *testing.T) {
 	at := time.Now()
-	pset := healthsrc.RowSet[karpenter.NodePool]{Rows: []healthsrc.Row[karpenter.NodePool]{
+	pset := healthsrc.RowSet[healthsrc.KarpenterPoolRow]{Rows: []healthsrc.Row[healthsrc.KarpenterPoolRow]{
 		{Ref: healthsrc.RowRef{UID: "p1", GVR: "karpenter.sh/v1/nodepools", Name: "workers", Generation: 4},
-			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: karpenter.NodePool{Meta: karpenter.Meta{Name: "workers"}, Ready: "ready", Nodes: 3}},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"},
+			Data: healthsrc.KarpenterPoolRow{Pool: karpenter.NodePool{Meta: karpenter.Meta{Name: "workers"}, Ready: "ready", Nodes: 3}}},
 	}}
 	out, err := rowsConverters[healthsrc.TaskKarpenter+"/nodepools"](pset, at)
 	if err != nil {

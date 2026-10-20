@@ -10,6 +10,10 @@ import (
 const (
 	ControllerNotReady = "not ready" // the detector found the controller not ready
 	ControllerUnknown  = "unknown"   // its health could not be read
+	// ControllerManaged: the platform manages it on positive evidence and
+	// its health is not observed (coverage S10 §5, C2). A note everywhere:
+	// never attention, never a gap.
+	ControllerManaged = "managed"
 )
 
 // ControllerTasks are the tasks whose controller health the capability
@@ -53,8 +57,17 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	if caps.ExternalSecrets.Present && !caps.ExternalSecrets.Healthy {
 		out[TaskESO] = issue(stateOf(caps.ExternalSecrets.Verified), caps.ExternalSecrets.Reason)
 	}
-	if caps.Karpenter.Present && !caps.Karpenter.Healthy {
-		out[TaskKarpenter] = issue(stateOf(caps.Karpenter.Verified), caps.Karpenter.Reason)
+	// Karpenter (S10 §5): the task's own order - not ready, unknown,
+	// managed, healthy - with platform management a note
+	if caps.Karpenter.Present {
+		switch state, reason := caps.Karpenter.Task(); state {
+		case capability.KarpenterNotReady:
+			out[TaskKarpenter] = issue(ControllerNotReady, reason)
+		case capability.KarpenterUnknown:
+			out[TaskKarpenter] = issue(ControllerUnknown, reason)
+		case capability.KarpenterManaged:
+			out[TaskKarpenter] = issue(ControllerManaged, reason)
+		}
 	}
 	// Velero (S2a §3): not ready only for a server read not ready; an
 	// unreadable list, or no server found while the CRDs are served, is

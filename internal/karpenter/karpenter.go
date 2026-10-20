@@ -9,6 +9,7 @@
 package karpenter
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -262,4 +263,39 @@ func SortClaimsStuckFirst(claims []NodeClaim) {
 		}
 		return claims[i].Meta.Name < claims[j].Meta.Name
 	})
+}
+
+// The karpenter.sh resources (§2).
+const (
+	Group              = "karpenter.sh"
+	Version            = "v1"
+	ResourceNodePools  = "nodepools"
+	ResourceNodeClaims = "nodeclaims"
+)
+
+// Project is the KindSpec projection for one Karpenter resource: the core
+// kinds and the three class kinds (§7). A claim is projected unaged; the
+// evaluator ages it (NodeClaim.At).
+func Project(resource string) func(obj any) (any, error) {
+	return func(obj any) (any, error) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return nil, fmt.Errorf("karpenter: want *Unstructured, got %T", obj)
+		}
+		switch resource {
+		case ResourceNodePools:
+			p := ParseNodePool(u)
+			return &p, nil
+		case ResourceNodeClaims:
+			c := ParseNodeClaim(u, u.GetCreationTimestamp().Time)
+			return &c, nil
+		}
+		for _, k := range ClassKinds {
+			if k.Resource == resource {
+				c := ParseNodeClass(u, k.Adapter)
+				return &c, nil
+			}
+		}
+		return nil, fmt.Errorf("karpenter: no projection for %s", resource)
+	}
 }

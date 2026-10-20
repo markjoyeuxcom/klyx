@@ -143,13 +143,13 @@ var rowsConverters = map[string]rowsConverter{
 		return out, nil
 	},
 	healthsrc.TaskKarpenter + "/nodepools": func(rows any, _ time.Time) (any, error) {
-		set, err := rowSetOf[karpenter.NodePool](rows)
+		set, err := rowSetOf[healthsrc.KarpenterPoolRow](rows)
 		if err != nil {
 			return nil, err
 		}
 		out := make([]KarpenterPoolDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
-			dto := karpenterPoolFields(r.Data)
+			dto := karpenterPoolFields(r.Data.Pool)
 			dto.Rule = toRuleDTO(r.Eval)
 			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
 			out = append(out, dto)

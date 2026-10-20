@@ -938,6 +938,7 @@ func (c *ClusterConn) syncHealth() {
 	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
 	h.SetFact(healthsrc.FactLB, healthsrc.LoadBalancingFact(caps.LoadBalancing))
 	h.SetFact(healthsrc.FactKEDA, healthsrc.KEDAFactsOf(caps.KEDA))
+	h.SetFact(healthsrc.FactKarpenter, healthsrc.KarpenterFactsOf(caps.Karpenter)) // S10
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])

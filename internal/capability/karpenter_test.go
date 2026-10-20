@@ -456,3 +456,17 @@ func TestNAPRefreshExpires(t *testing.T) {
 		t.Fatalf("a successful read stands: %+v", got.NAP)
 	}
 }
+
+func TestKarpenterKindServedAtAnotherVersion(t *testing.T) {
+	groups := append(kGroups(), &metav1.APIResourceList{GroupVersion: "karpenter.azure.com/v1alpha2",
+		APIResources: []metav1.APIResource{{Name: "aksnodeclasses", Kind: "AKSNodeClass"}}})
+	cs := newFake(groups)
+	d := &Detector{cs: cs, rawList: rawAPI{pools: noPools}.list, now: func() time.Time { return s10Now }}
+	k := d.detectKarpenter(context.Background(), map[string]bool{"karpenter.sh": true, "karpenter.sh/v1": true,
+		"karpenter.azure.com": true, "karpenter.azure.com/v1alpha2": true})
+	for _, kk := range k.Kinds {
+		if want := kk.Kind.Adapter == karpenter.AdapterAKS; kk.OtherVersion != want || kk.Served || kk.InUse {
+			t.Errorf("%s: %+v", kk.Kind.Kind, kk)
+		}
+	}
+}
