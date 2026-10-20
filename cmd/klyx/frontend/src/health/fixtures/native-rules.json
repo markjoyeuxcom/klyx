@@ -3487,32 +3487,6 @@
         "role": "unknown",
         "label": "unknown"
       }
-    },
-    {
-      "case": "no state",
-      "nowUnix": 1791720000,
-      "dto": {
-        "name": "no state",
-        "ready": "",
-        "reason": "",
-        "message": "",
-        "weight": 0,
-        "cpuLimit": null,
-        "cpuUsed": null,
-        "memLimit": null,
-        "memUsed": null,
-        "nodes": 0,
-        "rule": {
-          "included": false,
-          "role": "unknown",
-          "label": "unknown"
-        }
-      },
-      "want": {
-        "included": false,
-        "role": "unknown",
-        "label": "unknown"
-      }
     }
   ],
   "routes": [

@@ -130,7 +130,7 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 
 func toKarpenterPoolDTO(p karpenter.NodePool) KarpenterPoolDTO {
 	dto := karpenterPoolFields(p)
-	dto.Rule = toRuleDTO(karpenter.PoolRule(p))
+	dto.Rule = toRuleDTO(karpenter.PoolRule(p, karpenter.PoolInputs{}).Eval)
 	return dto
 }
 
@@ -138,7 +138,7 @@ func toKarpenterPoolDTO(p karpenter.NodePool) KarpenterPoolDTO {
 // converter copies the capture's evaluation, slice 3 §2a).
 func karpenterPoolFields(p karpenter.NodePool) KarpenterPoolDTO {
 	return KarpenterPoolDTO{
-		Name: p.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
+		Name: p.Meta.Name, Ready: p.Ready, Reason: p.Reason, Message: p.Message, Weight: p.Weight,
 		CPULimit: p.CPULimit, CPUUsed: p.CPUUsed, MemLimit: p.MemLimit, MemUsed: p.MemUsed,
 		Nodes: p.Nodes, ReadySince: unixOrZero(p.ReadySince),
 	}
@@ -153,7 +153,7 @@ func toKarpenterClaimDTO(cl karpenter.NodeClaim) KarpenterClaimDTO {
 // karpenterClaimFields is the pure field conversion (no rule).
 func karpenterClaimFields(cl karpenter.NodeClaim) KarpenterClaimDTO {
 	return KarpenterClaimDTO{
-		Name: cl.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
+		Name: cl.Meta.Name, Pool: cl.Pool, NodeName: cl.NodeName, Ready: cl.Ready,
 		FailingType: cl.FailingType, FailingStatus: cl.FailingStatus, FailingReason: cl.FailingReason, FailingMessage: cl.FailingMessage,
 		Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
 		CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,

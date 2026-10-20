@@ -31,7 +31,7 @@ func nodePoolU(name string, ready string, cpuLimit, cpuUsed string) *unstructure
 
 func TestParseNodePool(t *testing.T) {
 	p := ParseNodePool(nodePoolU("workers", "True", "100", "42500m"))
-	if p.Name != "workers" || p.Ready != "ready" || p.Weight != 10 {
+	if p.Meta.Name != "workers" || p.Ready != "ready" || p.Weight != 10 {
 		t.Fatalf("pool: %+v", p)
 	}
 	if p.CPULimit == nil || *p.CPULimit != 100 || p.CPUUsed == nil || *p.CPUUsed != 42.5 {
@@ -117,18 +117,18 @@ func TestParseNodeClaim_InformationalStates(t *testing.T) {
 }
 
 func TestSorting(t *testing.T) {
-	pools := []NodePool{{Name: "b", Ready: "ready"}, {Name: "a", Ready: "not-ready"}}
+	pools := []NodePool{{Meta: Meta{Name: "b"}, Ready: "ready"}, {Meta: Meta{Name: "a"}, Ready: "not-ready"}}
 	SortPoolsBrokenFirst(pools)
-	if pools[0].Name != "a" {
+	if pools[0].Meta.Name != "a" {
 		t.Fatalf("pools: %+v", pools)
 	}
 	claims := []NodeClaim{
-		{Name: "old-stuck", Ready: "not-ready", AgeSeconds: 9000},
-		{Name: "ok", Ready: "ready", AgeSeconds: 50},
-		{Name: "new-stuck", Ready: "not-ready", AgeSeconds: 300},
+		{Meta: Meta{Name: "old-stuck"}, Ready: "not-ready", AgeSeconds: 9000},
+		{Meta: Meta{Name: "ok"}, Ready: "ready", AgeSeconds: 50},
+		{Meta: Meta{Name: "new-stuck"}, Ready: "not-ready", AgeSeconds: 300},
 	}
 	SortClaimsStuckFirst(claims)
-	if claims[0].Name != "new-stuck" || claims[2].Name != "ok" {
+	if claims[0].Meta.Name != "new-stuck" || claims[2].Meta.Name != "ok" {
 		t.Fatalf("claims: %+v", claims)
 	}
 }

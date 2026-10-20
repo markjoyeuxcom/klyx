@@ -230,7 +230,7 @@ func TestKarpenterRowsCarryTheCapture(t *testing.T) {
 	at := time.Now()
 	pset := healthsrc.RowSet[karpenter.NodePool]{Rows: []healthsrc.Row[karpenter.NodePool]{
 		{Ref: healthsrc.RowRef{UID: "p1", GVR: "karpenter.sh/v1/nodepools", Name: "workers", Generation: 4},
-			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: karpenter.NodePool{Name: "workers", Ready: "ready", Nodes: 3}},
+			Eval: health.NativeEval{Included: true, Role: health.Fault, Label: "Flagged at capture"}, Data: karpenter.NodePool{Meta: karpenter.Meta{Name: "workers"}, Ready: "ready", Nodes: 3}},
 	}}
 	out, err := rowsConverters[healthsrc.TaskKarpenter+"/nodepools"](pset, at)
 	if err != nil {
@@ -242,7 +242,7 @@ func TestKarpenterRowsCarryTheCapture(t *testing.T) {
 	}
 	cset := healthsrc.RowSet[karpenter.NodeClaim]{Rows: []healthsrc.Row[karpenter.NodeClaim]{
 		{Ref: healthsrc.RowRef{UID: "c1", GVR: "karpenter.sh/v1/nodeclaims", Name: "wk-1", Generation: 2},
-			Eval: health.NativeEval{Role: health.Progressing, Label: "Launching at capture"}, Data: karpenter.NodeClaim{Name: "wk-1", Pool: "workers", Created: time.Unix(500, 0)}},
+			Eval: health.NativeEval{Role: health.Progressing, Label: "Launching at capture"}, Data: karpenter.NodeClaim{Meta: karpenter.Meta{Name: "wk-1"}, Pool: "workers", Created: time.Unix(500, 0)}},
 	}}
 	cout, err := rowsConverters[healthsrc.TaskKarpenter+"/nodeclaims"](cset, at)
 	if err != nil {

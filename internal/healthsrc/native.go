@@ -326,8 +326,10 @@ func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
 		var rows []Row[karpenter.NodePool]
 		for _, u := range unstructuredOf(c.Objects[KindNodePools]) {
 			p := karpenter.ParseNodePool(u)
-			p.Nodes = perPool[p.Name]
-			it := nativeItem{karpenter.PoolRule(p), refOf(u, "nodepools")}
+			p.Nodes = perPool[p.Meta.Name]
+			// Stage 1 of S10: the class link is wired in stage 3; until then
+			// it is unresolved and the pool is judged on its own conditions.
+			it := nativeItem{karpenter.PoolRule(p, karpenter.PoolInputs{}).Eval, refOf(u, "nodepools")}
 			items = append(items, it)
 			rows = append(rows, nativeRow(it, p))
 		}
