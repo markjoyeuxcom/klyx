@@ -40,71 +40,124 @@ Sources: `k8s.io/apiserver` v0.34.12, v0.35.9, v0.36.5 and v0.37.1.
 - **Validating webhooks run in parallel, and only the first denial is returned** (`validating/dispatcher.go` L239-245). A denial proves that one webhook denied; it says nothing of the others.
 - **A ValidatingAdmissionPolicy denial** is `admission.NewForbidden(<resource> "<name>" is forbidden: ...)`, with:
   - the reason the policy chose (default Invalid, 422);
-  - a `details.causes[]` entry whose message is exactly "ValidatingAdmissionPolicy '<p>' [with binding '<b>'] denied request: <msg>" (L301-316).
+  - a `details.causes[]` entry, appended last, whose message is exactly "ValidatingAdmissionPolicy '<p>' [with binding '<b>'] denied request: <msg>", the same text that ends the outer message (L301-316).
+- **The generic policy dispatcher's denial** (MutatingAdmissionPolicy) is `admission.NewForbidden` with its message replaced by the first denied policy's own text ("policy '<p>' [with binding '<b>'] denied request: ..." or `policy "<p>" denied request: ...`), and every denial appended as a cause (`policy/generic/policy_dispatcher.go` L233-262).
+- **A denial message can echo submitted values.** A webhook writes its own message, and `ToStatusErr` keeps it verbatim; S0b's `cachediff.safeError` (`ssa.go` L126-157) therefore withholds free server text for Secrets and registered payload kinds (`TestDryRunErrorKeepsOnlyStructuredFacts`).
 - **A call failure** reaches the client as `InternalError` (500): "Internal error occurred: failed calling webhook "<n>": failed to call webhook: Post "<url>": <cause>". `<cause>` is Go's `url.Error` text. A webhook that answered with a status of its own (`ErrCallingWebhook.Status`) returns that status instead.
 - **The UID guards' own errors:**
-  - a UID precondition fails as Conflict, "Precondition failed: UID in precondition: <a>, UID in object meta: <b>" (`storage/interfaces.go` L159);
+  - a UID precondition fails in storage (`storage.Preconditions.Check`, `storage/interfaces.go` L159), and the registry's error interpretation wraps it as a Conflict (409) whose client-visible message is `Operation cannot be fulfilled on <resource> "<name>": StorageError: invalid object, ... AdditionalErrorMsg: Precondition failed: UID in precondition: <a>, UID in object meta: <b>` (revision 1: the inner phrase never starts the message);
   - an immutable UID fails as Invalid, with a cause on field `metadata.uid` (`objectmeta.go` L332).
 - **The rule matcher** (`webhook/predicates/rules/rules.go`) matches scope, operation, group, version and resource (with subresources: `*`, `*/*`, `pods/*`, `*/scale`). Selectors, `matchConditions`, `excludeResourceRules` and bindings only narrow a match further.
+- **`matchPolicy: Equivalent`** (the default) adds a second pass: the dispatchers ask the API server's equivalent-resource registry for the request's equivalents and rerun the matcher on each (`generic/webhook.go` L324-350, `policy/matching/matching.go` L151-175). An equivalent can be in another group (`extensions/v1beta1 deployments` for `apps/v1 deployments`), so the exact matcher alone is not the whole rule.
 
 ## 2. The classifier
 
-A pure Go package function, `admission.Classify(err error) Finding`, replaces both parsers. It reads the structured status first (code, reason, `details.causes`) and the message only at fixed, quoted anchors. The upstream wraps a message in several layers, so it is never matched by a free-standing regex.
+A pure Go function, `admission.Classify(status) Finding`, replaces both parsers. It reads the server's own status (code, reason, message, `details.causes`), never wrapper prose that Klyx or a client added around it: every write path keeps the `apierrors.APIStatus` it received, and Klyx's own context ("scale deployment x: ...") is added beside the finding, never parsed.
 
-| Finding | Recognised by | Klyx says |
-|---|---|---|
-| **webhook denied** | the message contains `admission webhook "<n>" denied the request` followed by `: ` or ` without explanation` | "denied by admission webhook <n>", with its message when there is one |
-| **webhook call failed** | `failed calling webhook "<n>": `, and the cause after the quoted URL classified by its own text: deadline (`context deadline exceeded`, `Client.Timeout exceeded`, `i/o timeout`), refused (`connection refused`), TLS (`x509:`, `tls:`), no endpoints (`no endpoints available`), or other | "admission webhook <n> could not be called: <cause>". The cause is read only after the URL, so the URL's own `timeout=` never counts |
-| **no dry run** | `admission webhook "<n>" does not support dry run` | "admission webhook <n> does not support dry run", naming it |
-| **policy denied** | a `details.causes[]` message, or the message, matching `ValidatingAdmissionPolicy '<p>'[ with binding '<b>'] denied request: ` or `policy '<p>'[ with binding '<b>'] denied request: ` or `policy "<p>" denied request: ` | "denied by ValidatingAdmissionPolicy <p> (binding <b>)", or "denied by admission policy <p>" for the generic form (Klyx does not guess its kind) |
-| **not admission** | none of the above | the existing wording |
+### 2.1 Envelopes, in precedence order (revision 1)
 
-**Bounds:** names at most 253 bytes and quoted. A denial message is shown clipped to 512 bytes, locally only (§6).
+A finding is attributed only when the **outer** status has one of these exact shapes. The first that matches wins; content nested inside a matched envelope (a webhook's own causes, a message that quotes another component) never re-attributes it.
 
-**Outcome:** every admission finding is written "nothing was written: admission refused the request", including a call failure's 500, since admission precedes storage (§1.3). The finding replaces "the outcome is unverified" for that error only.
+| # | Envelope | Recognised by | Finding |
+|---|---|---|---|
+| 1 | a webhook's denial (`ToStatusErr`) | code 400 or more, and the message **starts** with `admission webhook "<n>" denied the request` followed by `: ` or ` without explanation` | webhook denied, name `<n>` |
+| 2 | dry run unsupported | code 400, reason BadRequest, the message **is** `admission webhook "<n>" does not support dry run` | webhook does not support dry run, name `<n>` |
+| 3 | a webhook call failure | code 500, reason InternalError, the message **starts** with `Internal error occurred: failed calling webhook "<n>": ` | webhook could not be called, name `<n>`, cause read only from the text after the quoted URL (§2.2) |
+| 4 | a ValidatingAdmissionPolicy denial | the message has the `NewForbidden` form `<resource> "<name>" is forbidden: ` (or `forbidden: ` without a name) followed **exactly** by the **last** cause's message, and that cause matches `ValidatingAdmissionPolicy '<p>'[ with binding '<b>'] denied request: ` | policy denied, kind ValidatingAdmissionPolicy, `<p>`, `<b>` |
+| 5 | the generic policy dispatcher's denial | reason Forbidden or the policy's own, `details.name` and `details.kind` set by `NewForbidden`, the message **equal** to the first cause's message, and that message matching `policy '<p>'[ with binding '<b>'] denied request: ` or `policy "<p>" denied request: ` | policy denied, kind not guessed ("admission policy <p>") |
 
-**`refusedForUID`** reads the guards' own shapes (§1.3), never the substring "uid": a Conflict whose message starts "Precondition failed: UID in precondition", or an Invalid with a cause on `metadata.uid`. An admission finding is never a replacement.
+**Anything else is not attributed**, and keeps today's wording. That includes an ordinary Invalid whose field detail contains an admission phrase, a 500 that is not envelope 3 (it stays "the outcome is unverified"), and text without a status. Only an attributed finding upgrades a 500 to a definite refusal.
+
+### 2.2 A call failure's cause
+
+The cause is the text after the quoted URL in `failed to call webhook: Post "<url>": <cause>`, never the URL itself (whose `?timeout=` query defeated the old regex). Its category: deadline (`context deadline exceeded`, `Client.Timeout exceeded`, `i/o timeout`), refused (`connection refused`), TLS (`x509:`, `tls:`), no endpoints (`no endpoints available for service`), or other. A failure the dispatcher reports without that form ("could not get REST client", "received invalid webhook response") is "other", its text kept as §2.4 allows.
+
+### 2.3 Scope: one API request (revision 1)
+
+A finding is about **the API request that was refused**, never the whole action:
+- **Each write path wraps every API call's error** in `admission.RequestError{Request, Err}` (§3), so `errors.As` finds the refused request inside a composite action's error.
+- **The sentence** is "<verb> <kind> <name> was refused by admission before it was stored". Nothing of that request was written; admission precedes storage for create, update, patch and delete.
+- **Earlier steps keep their own outcome.** A composite action reports each step: `ReconcileWithSource` patches the source, then the target; when the target is denied, the result says the source was annotated (written) and the target refused. The toast and the Activity entry say both.
+- **Multi-document creates** (the ad-hoc composer) keep their per-document results, each with its own finding.
+
+### 2.4 What is shown, and kept (revision 1: the S0b boundary)
+
+The classifier runs in process on the raw status. Before anything is serialized, shown, copied or retained, the subject's protection is applied, the same predicate `cachediff.safeError` uses:
+- **A protected subject** (a Secret, or a kind registered in S0b's payload registry, such as HelmRelease): the finding keeps only structured facts (the envelope kind; the webhook or policy name; the binding; the call failure's category; code and reason). Every free text is withheld: the denial message, the causes' messages, the dispatcher's own text and the raw error string. It says "the server's message is withheld for a <kind>: it can echo submitted values". The old raw `Error` field is replaced by the same withheld form.
+- **Any other subject:** the denial message is shown clipped to 512 bytes, after the existing credential scrub.
+- **The toast, the clipboard copy and the Activity log** receive only the serialized finding, never the raw error. The Activity log's stored entry is the one-line summary and the candidates' names.
+- **A regression gate:** `TestDryRunErrorKeepsOnlyStructuredFacts` stays, and new needle tests (§8) cover the DTO, the toast text and the Activity entry.
+
+### 2.5 The UID guards (revision 1)
+
+`refusedForUID` reads the guards' wire shapes, never a substring:
+- **NotFound**, as today: the guarded object is gone.
+- **A Conflict** (409) whose message starts `Operation cannot be fulfilled on ` and carries `AdditionalErrorMsg: Precondition failed: UID in precondition: ` (§1.3's wrapped form).
+- **An Invalid** with a cause on field `metadata.uid`.
+
+An attributed admission finding is never a replacement, whatever its text.
 
 ## 3. Candidates
 
-Each write path declares its request:
-- the operation (CREATE, UPDATE, DELETE);
-- group, version, resource, subresource (`scale`, `eviction`, `status`);
-- whether it is namespaced.
+### 3.1 The request each path declares
+
+Each API-backed write path declares its request: the operation (CREATE, UPDATE, DELETE), group, version, resource, subresource, and whether it is namespaced.
 
 | Write path | The request |
 |---|---|
 | YAML apply and dry-run | UPDATE, or CREATE for the composer, on the object's resource |
 | Scale | UPDATE on `<resource>/scale` |
-| Restart, pause, Flux and Argo verbs | UPDATE (a patch) |
-| Rollout undo | UPDATE on the Deployment |
+| Restart, pause, rollout undo, Flux and Argo verbs, KEDA verbs, FluxOp | UPDATE (a patch) on the object's resource |
 | Delete pod, delete scratch | DELETE |
 | Cordon | UPDATE on `nodes` |
-| Drain | CREATE on `pods/eviction` (kubectl) |
 | Diagnostic pod | CREATE on `pods` |
-| KEDA verbs, FluxOp | UPDATE |
+| The live diff's server-side dry run | UPDATE, or CREATE when the object is absent |
 
-**Candidates are the webhooks and policies whose rules could match that request** (S3a's rows), by the upstream matcher's semantics, held to the upstream matcher by an oracle (§8):
-- **Over-inclusive by construction.** Selectors, `matchConditions`, exclusions and bindings are not evaluated: they only narrow. With `matchPolicy: Equivalent` (the default), a rule naming another version of the same group and resource is a candidate.
-- **Rules not all read.** S3a keeps 8 rules per webhook and caps each list at 8. A webhook or policy with rules or list entries past the bound is listed as "may match: not every rule was read". The S3a projection gains a flag per capped list, so Klyx knows when it cut one.
+### 3.2 The paths outside the converter (revision 1)
+
+| Path | Transport | In S3b |
+|---|---|---|
+| Drain | `kubectl drain` as a subprocess: it cordons, then evicts each pod (CREATE on `pods/eviction`), falling back to DELETE where eviction is unsupported. Errors are kubectl's text in a log stream, after the stream has started | **Deferred.** No structured status reaches Klyx. The stream keeps kubectl's own text; S3b attributes nothing there and says so in the drain panel's help |
+| Debug | `kubectl debug` in an external terminal: a PATCH on `pods/<name>/ephemeralcontainers` (UPDATE), then an attach. Klyx returns before that request is made | **Outside.** Klyx never sees the result; the request is UPDATE, not CONNECT (corrected) |
+| Exec, port-forward | CONNECT, in a terminal or a stream | **Outside.** Klyx never sees admission's answer |
+| Helm rollback | the helm CLI's text | **Outside.** No structured status |
+
+### 3.3 Matching (revision 1)
+
+Candidates are the webhooks and policies whose rules could match the request. The set is a superset by construction, and its soundness rests on exact inputs:
+- **Exact identifiers.** S3a's projection clips strings to 64 bytes for display, which changed the bytes a match compares (a long API group). The S3a projection gains exact identifiers for matching (groups, versions, resources, operations, scope) kept apart from the display copy, within S3a's budget. An identifier that cannot be kept exactly marks the rule "may match: a value could not be kept exactly", and the candidate stays.
+- **The exact pass** follows `rules.Matcher` (scope, operation, group, version, resource with its subresource forms), held to it by an oracle (§8).
+- **The Equivalent pass.** Klyx cannot read the API server's equivalent-resource registry. Under `matchPolicy: Equivalent` (the default), a rule whose resource name matches the request's (or `*`) is a candidate in any group and version, labelled "may match through an equivalent resource". Under `Exact`, only the exact pass counts. Equivalents across groups are the registry's, always the same resource served under another group or version, so this superset contains them.
+- **Not evaluated, and only narrowing:** namespace and object selectors, `matchConditions`, `excludeResourceRules`, bindings.
+- **Rules or lists S3a capped:** "may match: not every rule was read". S3a's projection gains a flag per capped list.
+- **Configurations or webhooks S3a omitted** (a capped read, a per-kind budget, an unread kind): the candidates say "and possibly webhooks or policies Klyx did not read".
+- **Bounds:** at most 16 candidates are serialized, then "N more"; the UI shows 5, then the rest on demand.
 - **Labelled always:** "Candidates: their rules could match this request. Klyx does not evaluate their namespace or object selectors, match conditions or bindings, so a candidate may not have run."
-- **The attributed webhook or policy** is marked among the candidates and linked to its S3a row:
-  - when its name is a webhook name in exactly one configuration, that configuration;
-  - when several configurations have a webhook of that name, each one, said as "a webhook named <n> in <A>, <B>".
-- **Under an unread or stale admission read**, the candidates are "not established" or "as of".
+
+### 3.4 The attributed one
+
+- **The named webhook or policy** is marked among the candidates. The error gives a webhook's name only, never its configuration's UID, so a link to configuration A is an inventory correlation: "a webhook named <n> in A", or "in A and B" when several have one, plus "and possibly others Klyx did not read" under §3.3's omissions.
+- **A finding whose name matches no inventory row** keeps its name and says so: "not in Klyx's admission inventory (it may not have been read)".
+- **No other webhook is inferred to have allowed the request.** Validating webhooks run in parallel and only the first denial returns (§1.3).
+- **Under an unread or stale admission read,** the candidates are "not established" or "as of".
 
 ## 4. Where it shows
 
-- **The YAML panel:** the finding as its headline; the candidates below, collapsed beyond 5 with a count. The inline notice replaces the regex's.
-- **Every other write path:** the toast says the finding in one line ("Scale refused: denied by admission webhook <n>"). The Activity log keeps that line and the candidates' names; its stored format gains the finding, and older entries read as before.
+- **The YAML panel:** the finding as its headline, the candidates below. The inline notice replaces the regex's.
+- **Every other API-backed write path:** the toast says the finding in one line ("Scale refused: denied by admission webhook <n>"), with earlier steps' outcomes when there are any (§2.3). The Activity log keeps that line and the candidates' names; its stored format gains the finding, and older entries read as before.
 - **The admission lens:** a candidate's link opens its S3a row.
-- **The live diff and the Flux drift surfaces** add, unconditionally: "A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it." Nothing is discounted: no wording calls a difference "not drift", or attributes it to a mutator. A server-side dry-run diff says that the dry run passed mutating admission and defaulting, so it compares what the API server would store.
+- **The live diff and the Flux drift surfaces** add, unconditionally: "A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it." No wording calls a difference "not drift", or attributes it to a mutator.
+- **A completed server-side dry-run diff** says that its result passed mutating admission and defaulting as of the dry run's time, so it shows what the API server would have stored then; a later apply's admission may differ. A skipped, unread or failed dry run says nothing of the kind.
 
 ## 5. The bridge
 
-- **The DTO:** `ActionResultDTO` and `AdhocResultDTO` gain `admission?: AdmissionFindingDTO` (kind, name, binding, cause, message clipped, `nothingWritten`) and `candidates?: CandidateDTO[]` (kind, configuration, name, `capped`, `attributed`, state). Old fields stay.
-- **The converter:** one function, `toAdmission(err, request)`, called by every write path's error conversion. A path cannot report an error without passing its request.
-- **The candidates** are computed when the error is returned, from the Observer's admission rows (`HealthRowsNow`), under its coverage. It is a read, never a new watch.
+- **The DTO:** `ActionResultDTO` and `AdhocResultDTO` gain:
+  - `admission?: AdmissionFindingDTO`: the envelope kind, name, binding, call-failure category, the refused request (verb, kind, namespace, name), the message (clipped, or withheld for a protected subject), and `nothingWritten` for that request;
+  - `steps?: StepDTO[]`: each earlier step's outcome in a composite action;
+  - `candidates?: CandidateDTO[]`: kind, configuration (as a correlation), name, `mayMatch` and its reason, `attributed`, the admission read's state, at most 16, with `candidatesOmitted`.
+
+  Old fields stay, carrying the withheld form for a protected subject.
+- **The converter:** one function, `toAdmission(err, subject)`, called by every API-backed write path's error conversion (§3.1). It finds the innermost `RequestError`, classifies its status, applies §2.4, and computes the candidates from the Observer's admission rows (`HealthRowsNow`) under their coverage: a read, never a new watch.
 
 ## 6. AI and chat
 
@@ -113,29 +166,37 @@ Write errors never cross to AI or chat, and S3b keeps that. The admission findin
 ## 7. Not in S3b
 
 - Attributing a mutation or a drift to a mutator (needs audit logs).
-- Evaluating selectors, match conditions or CEL.
+- Evaluating selectors, match conditions or CEL, or reading the API server's equivalent-resource registry.
+- Drain, debug, exec, port-forward and Helm rollback (§3.2).
 - Admission errors seen only in a controller's Events (for example Flux's apply failures): their text is the controller's; the existing event surfaces show it.
-- `kubectl exec`, debug and port-forward, whose admission (CONNECT) Klyx never sees.
 
 ## 8. Tests
 
-- **The classifier's oracle.** A generator in the scratchpad builds every error shape with the upstream code at v0.34.12, v0.35.9, v0.36.5 and v0.37.1:
-  - `ToStatusErr` with a message, a reason and neither;
-  - `NewDryRunUnsupportedErr`;
-  - an `ErrCallingWebhook` around real `url.Error`s (deadline, refused, x509, no endpoints), wrapped as the dispatchers wrap it;
-  - `admission.NewForbidden` with the policy dispatcher's message and causes;
-  - the generic dispatcher's two forms;
-  - the UID precondition Conflict and the immutable-UID Invalid.
-
-  The serialised statuses are committed as testdata. `Classify` must read each exactly, and an unrelated Invalid containing "uid" must not read as a replacement.
-- **The matcher's oracle.** The upstream `rules.Matcher` at the same versions runs on a fixture table: operations, groups, versions, resources with each subresource form, scopes, and the namespace object itself. Klyx's matcher must agree on every row.
+- **The classifier's oracle, positive and negative.** A generator in the scratchpad builds every shape with the upstream code at v0.34.12, v0.35.9, v0.36.5 and v0.37.1, serialized as the API server sends them (the status JSON a client decodes), committed as testdata:
+  - positive: `ToStatusErr` with a message, a reason and neither; `NewDryRunUnsupportedErr`; an `ErrCallingWebhook` around real `url.Error`s (deadline, refused, x509, no endpoints), wrapped by `NewInternalError` as the dispatchers do; the validating policy dispatcher's `NewForbidden` with its appended cause, with and without a binding; the generic dispatcher's form with several causes;
+  - negative and ambiguous: a webhook denial whose own causes carry a VAP-looking message naming another policy (attributed to the webhook only); `apierrors.NewInvalid` with a `field.Forbidden` detail quoting a webhook denial (not attributed); an ordinary 500 (stays unverified); a message embedding a denial phrase mid-text (not attributed);
+  - the UID guards: a precondition built through `storage.Preconditions.Check` and the registry's update and delete error interpretation, then serialized; an immutable-UID Invalid; a resourceVersion-precondition Conflict and messages merely containing "uid" (controls, not replacements).
+- **The matcher's oracle.** The upstream `rules.Matcher` at the same versions runs on a fixture table: operations, groups (one longer than 64 bytes), versions, resources with each subresource form, scopes, and the namespace object itself. Klyx's exact pass must agree on every row. The Equivalent pass is tested against an equivalent-resource registry probe (an equivalent in another group) as a superset: every true match is a candidate, with `Exact` controls.
+- **Protected subjects:** needles in a webhook's denial message, for a Secret and a HelmRelease, absent from the serialized DTO, the toast text and the Activity entry, while the webhook's name is present. `TestDryRunErrorKeepsOnlyStructuredFacts` stays as a gate.
+- **Scope:** `ReconcileWithSource` with the source patch succeeding and the target denied (the source reported written, the target refused); a multi-document create with one document denied.
 - **Write paths:** each path's request declaration (a table test), and each path returning the finding through its DTO.
-- **The frontend:** the YAML panel's headline and candidates; a toast's line; the Activity log's old and new entries; the drift sentence present on both diff surfaces, and no "not drift" wording anywhere (a source scan).
-- **The lab** (`lab-s3b`, labelled and namespaced, with a teardown):
-  - a validating webhook that denies a labelled object, backed by a real Service;
-  - one whose Service has no endpoints (a call failure: "no endpoints");
-  - a ValidatingAdmissionPolicy with a binding that denies a labelled object;
-  - each exercised by Klyx's YAML apply, scale and a Flux-suspend patch on fixture objects.
+- **The frontend:** the YAML panel's headline and candidates; a toast's line, with steps; the Activity log's old and new entries; the drift sentence on both diff surfaces, and no "not drift" wording anywhere (a source scan); the dry-run sentence only for a completed dry run.
+- **The lab** (`lab-s3b`, labelled and namespaced, with a teardown): a validating webhook that denies a labelled object, backed by a real Service; one whose Service has no endpoints (a call failure, "no endpoints"); a ValidatingAdmissionPolicy with a binding that denies a labelled object; each exercised by Klyx's YAML apply, scale and a Flux-suspend patch on fixture objects.
 - **Parity:** none. S3b changes no verdict.
 - **The smoke:** a YAML apply refused by the lab webhook shows the finding and the candidates; a scale refused by the policy shows its toast line.
 - **Mutations, captures, as-built,** as every slice.
+
+## 9. Revision 1: Codex's design review of f4b9642
+
+Codex (handoff 2a3f5249) requested changes: one P1 and five P2 findings, each with an upstream or overlay probe.
+
+| # | Finding | Where answered |
+|---|---|---|
+| P1 | The finding would carry a denial message, which can echo submitted values, past S0b's protected-kind withholding (Secrets, payload kinds) into the DTO, toasts and Activity | §2.4: classify in process, then apply `safeError`'s protection before any serialization or retention; a protected subject keeps structured facts only, its raw `Error` withheld too. §8: needle tests on the DTO, toast and Activity; the S0b test stays as a gate |
+| P2 | "Nothing was written" was said of the whole action, though `ReconcileWithSource` may have written its source before the target was denied | §2.3: the finding is one API request's (`RequestError`), earlier steps keep their outcomes in the result, toast and Activity; multi-document creates stay per document. §8: source-success/target-denied |
+| P2 | Fixed phrases and causes do not prove attribution: a webhook's own VAP-looking cause, or an Invalid quoting a denial | §2.1: five outer envelopes in precedence order, matched by code, reason and message position; nested content never re-attributes; anything else unattributed, and only an attributed finding upgrades a 500. §8: the negative and ambiguous corpus |
+| P2 | The UID guard's wire form is a wrapped `StorageError` Conflict, not a message starting with the inner phrase | §1.3 and §2.5: the wrapped Conflict, the `metadata.uid` Invalid and NotFound. §8: built through the storage check and the error interpretation, with resourceVersion and "uid" controls |
+| P2 | The candidate superset was not sound: S3a clips identifiers to 64 bytes, and Equivalent matching crosses groups | §1.3 and §3.3: exact identifiers kept apart from display, a value not kept exactly keeps the candidate; under Equivalent, a resource-name match in any group is a candidate; omitted configurations said; the attributed webhook's configuration is a correlation (§3.4). §8: the long group, cross-group equivalence, `Exact` controls |
+| P2 | Drain and debug do not fit one converter: drain is a kubectl stream, debug a PATCH in an external terminal (UPDATE, not CONNECT) | §3.2: a per-path boundary table; drain deferred, debug, exec, port-forward and Helm rollback outside, debug's request corrected |
+
+Codex's guidance, taken: a named denial keeps its name with no inventory row (§3.4); no other webhook is inferred to have allowed the request (§3.4); the dry-run sentence describes that dry run and its time, only when it completed (§4); serialized candidates are bounded with omissions counted (§3.3).
