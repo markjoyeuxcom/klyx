@@ -429,13 +429,13 @@ Built on `feat/coverage-s8` after the design's acceptance at 15652ed:
 - **A NodePool's verdict carries no `Since`.** The role is the worst of several inputs (the class, its link, the controllers), so its start is not provable (The Line §8.1). The deciding condition stays the dated evidence (`Cond`). The relocated golden case "no state" left the parity harness: the Go rule now reads it "not reported".
 - **The fixed wording is keyed by reason, across condition types.** Core copies a class's reason into `NodeClassReady`, and `NodeRegistrationHealthy` carries a claim's launch reason, so one sentence per reason serves every condition that carries it.
 - **A finding with no `observedGeneration` is flagged, not worded** (`Finding.Unversioned`): the inspector says "read as reported", and the AI text stays Klyx's sentence.
-- **A class's syncing reads Ready and its failing dependent.** Either behind the generation means neither is the current reading.
+- **A class's syncing reads Ready and its failing dependent.** Either behind the generation means neither is the current reading. *Withdrawn by §14: the reading chooses from current evidence, and an older condition is a note.*
 - **Karpenter's event messages are withheld too, stricter than §8.** The controllers' launch errors carry the same text as their conditions (an instance profile's name among it). Explain's events for a Karpenter target and chat's events for any Karpenter object send their reason only.
 - **Suggest-fix, which §8 did not list.** A class's spec holds the role, the instance profile, selector IDs and possibly user data, so Suggest-fix refuses a NodeClass before anything is read. A NodePool's or NodeClaim's manifest is sent without its status (the condition text) and with identifiers redacted.
 - **The lens's own controller probe is retired.** It read one Deployment by name and would contradict the task on EKS Auto Mode. The lens's notice says not ready, unverified or managed from the task's reading, and the snapshot carries only the disruption feed.
 - **"Managed" in the lens index is a title note,** never one of the coverage words on the row, so it neither lights nor qualifies a count.
 - **The kinds in use** are read at the capability probe: classes (a one-item list per served kind) or a NodePool's reference (one page of up to 500 pools). A pool list that fails or continues rules no kind out.
-- **NAP's window is evaluated at the probe** (every 5 minutes), so a reading can stay "managed" for up to one probe past the hour; `Refreshed` applies the failed-refresh rule at the re-probe.
+- **NAP's window is evaluated at the probe** (every 5 minutes), so a reading can stay "managed" for up to one probe past the hour; `Refreshed` applies the failed-refresh rule at the re-probe. *§14 adds the failed discovery (`Expired`) and future Event times.*
 - **The lab's pre-S10 stub pool** (`general-purpose-spot`, created by an earlier slice with no `nodeClassRef`) gains a reference to `lab-ready` in `lab-s10/apply.sh`: a v1 NodePool must have one, and S10 reads its absence as a fault. Teardown removes it.
 - **Parity's controllers are attributed stand-ins.** The pause image is tagged in the parity node's containerd under each provider's controller image (no pull), one labelled Deployment per provider, and the node carries EKS Auto Mode's label. Karpenter's controller task reads "managed" in every case.
 
@@ -492,3 +492,30 @@ Built on `feat/coverage-s8` after the design's acceptance at 15652ed:
   - 59 on the first pass. Four did not build (a mutation left a variable unused or a case duplicated) and were rewritten to compile.
   - The five survivors each gained a test: a claim's withheld reason; an Unknown dependent never read as the failure; a pool with only notes reading "ready"; NAP activity beside an unread inventory leaving the kind's handler unproven; the local finding keeping its native text.
   - No equivalents.
+
+## 14. Implementation revision 1: Codex's review of 0ff6947
+
+Codex's implementation review (handoff 632f901e) requested changes: four P2 findings, each reproduced by its probes before the fix and passing after. The answers are c75ac13 (findings 1 and 4), 2feeb14 (findings 2 and 3) and 61d85c5 (the note's wording, from the captures).
+
+| # | Finding | Answer |
+|---|---|---|
+| P2 | A historical first dependent hid a current class failure, and an old optional dependent held a current Ready at syncing | `NodeClass.Read` chooses from current evidence over the whole object, before the display cap: a current Ready True is ready; a current Ready False is named by its current failure, else by Ready itself; a current False dependent decides while Ready is behind, absent or Unknown (a condition type the adapter does not know decides only beside a current Ready False); then syncing, then unknown. A False condition reported for an older generation is kept as `Historical`, without its message, and shown as an "Earlier" note in Klyx's words: "AMIsReady False, reported for generation 2 (the NodeClass is at 3): AMINotFound: no AMI matched the selector terms, or it is not usable" (in the lens, the pool's class block and Explain). §13.2's "either behind means neither is current" is withdrawn |
+| P2 | The lens treated the newly budgeted kinds as complete when capped | A kind's read is complete only when current and uncapped. "All ready", the selection pins (removed or unverified), a reveal's "missing", the counts ("+"), the NodeClasses tab and a pool's node count from a capped NodeClaim read all follow it. Each view names its capped kinds and how many were left out; an empty capped view says "No NodeClasses kept." with what the budget left out, never "No NodeClasses." |
+| P2 | NodeClasses lost their own stale and failed-refresh evidence | The adapter carries the class part's refresh state (`classesState`), folds it into the lens's, and re-derives on each of its fields. The read-failed banner counts class rows. An empty classes view reads, in order: refreshing ("as of"), the last good empty list, capped, then none. The class inspector says "Last observed at …" on a stale read, or "As of … being re-read" with the failed re-read |
+| P2 | NAP's one-hour limit was bypassed by failed discovery and by future Event times | A failed re-probe takes no tier, but NAP activity past its window expires to "not established" (`Expired`, never none: nothing was read), and the controller task and facts are published. An Event dated more than 5 minutes past this machine's clock (`NAPSkew`) is no evidence of recent activity: alone, it makes the reading "not established"; `Refreshed` keeps last activity only inside the same window |
+
+### 14.1 Verified
+
+- **Codex's probes:** the four Go and five mounted frontend probes fail on 0ff6947 and pass on the revision.
+- **The lab:** `lab-ami-error`, an EC2NodeClass whose AMIsReady False is from the last generation (the AMI reconciler's error leaves it) beside a current Ready False. The real CRD accepts it, and Klyx reads it not ready by Ready's own reason, with the old AMIsReady as an earlier note. No pool uses it, so the NodePool counts are unchanged; the NodeClasses view has seven rows.
+- **Tests:** the reading's cases (an old first dependent beside a current one, an old optional dependent beside a current Ready, a current dependent beside an old, absent or Unknown Ready, an unknown type, two old failures), the cap product with three authoritative conditions past the cap (EC2NodeClass 16,078 bytes, within 16 KiB), the note's DTO and Explain path, NAP's future times, `Expired` and its publication through the real re-probe and Observer, and the lens's capped, stale and refreshing classes, capped claims and pools, lower-bound node counts and capped selections.
+- **Mutations:** 43, all caught. One first failed to build (an `if false` left a variable unused) and was rewritten to compile.
+
+### 14.2 Gates
+
+- **The native smoke:** 197 of 197 steps in each of night and day at 1440 and 1024 on 61d85c5 (a clean tree).
+- **The parity gate:** both stages pass on 2feeb14, every case and both recoveries; nothing in it changed after.
+- **`relabs.sh`:** every lab applies, `lab-s10` with `lab-ami-error`.
+- **The captures:** 68 (night and day at 1440 and 1024) on 61d85c5, none scrolling sideways and every expected text present, `lab-ami-error`'s inspector among them.
+- **Go:** `go test -race` passes for `karpenter`, `capability`, `healthsrc`, `fleet`, `appbridge`, `ai`, `scrub`, `observe` and `health`; golangci-lint reports 0 issues.
+- **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S10), and vitest passes 2,353 tests.
