@@ -80,3 +80,43 @@ func TestEvidenceRevFollowsTheExtendedClaimMapping(t *testing.T) {
 		t.Fatal("the mapping is part of the evidence")
 	}
 }
+
+// Coverage S11b §3.5: device health and the generated claims' names
+// change the evidence revision, so the pod inspector re-reads them.
+func TestEvidenceRevFollowsDeviceHealthAndClaims(t *testing.T) {
+	health := func(id string, h corev1.ResourceHealthStatus) []corev1.ResourceStatus {
+		return []corev1.ResourceStatus{{Name: "claim:gpu/req", Resources: []corev1.ResourceHealth{{ResourceID: corev1.ResourceID(id), Health: h}}}}
+	}
+	base := func() *corev1.Pod {
+		return &corev1.Pod{Status: corev1.PodStatus{
+			ContainerStatuses:     []corev1.ContainerStatus{{Name: "app", AllocatedResourcesStatus: health("cdi/a", corev1.ResourceHealthStatusHealthy)}},
+			InitContainerStatuses: []corev1.ContainerStatus{{Name: "side"}}}}
+	}
+	before := EvidenceRev(base())
+	p := base()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health("cdi/a", corev1.ResourceHealthStatusUnknown)
+	if EvidenceRev(p) == before {
+		t.Fatal("Healthy turning Unknown is evidence")
+	}
+	p = base()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health("cdi/b", corev1.ResourceHealthStatusHealthy)
+	if EvidenceRev(p) == before {
+		t.Fatal("another device at the same count is evidence")
+	}
+	p = base()
+	p.Status.InitContainerStatuses[0].AllocatedResourcesStatus = health("cdi/s", corev1.ResourceHealthStatusUnhealthy)
+	if EvidenceRev(p) == before {
+		t.Fatal("an init container's device health is evidence")
+	}
+	p = base()
+	name := "p-gpu-x"
+	p.Status.ResourceClaimStatuses = []corev1.PodResourceClaimStatus{{Name: "gpu", ResourceClaimName: &name}}
+	if EvidenceRev(p) == before {
+		t.Fatal("a generated claim's name is evidence")
+	}
+	p = base()
+	p.Status.Message = "unrelated"
+	if EvidenceRev(p) != before {
+		t.Fatal("an unrelated status change is not")
+	}
+}

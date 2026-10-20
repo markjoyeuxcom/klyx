@@ -17,6 +17,18 @@ var reprobeDetect = func(ctx context.Context, c *ClusterConn) (capability.Set, e
 	return c.detector.DetectErr(ctx)
 }
 
+// reprobeVersion reads the API server's GitVersion. Test seam.
+var reprobeVersion = func(ctx context.Context, c *ClusterConn) (string, error) {
+	if c.typed == nil {
+		return "", nil
+	}
+	vi, err := c.typed.Discovery().ServerVersion()
+	if err != nil || vi == nil {
+		return "", err
+	}
+	return vi.GitVersion, nil
+}
+
 // reprobeLoop re-runs capability detection on a cadence after the first
 // sync. A failed probe confirms nothing: the last tiers stand, except
 // time-bounded evidence past its bound (expireReprobe).
@@ -38,6 +50,13 @@ func (c *ClusterConn) reprobeLoop(ctx context.Context) {
 		case err != nil:
 			c.expireReprobe()
 		default:
+			// coverage S11b §2.1: the server's version is re-read too, so the
+			// pool rules follow an upgrade; a failed read keeps the last one
+			if v, verr := reprobeVersion(ctx, c); verr == nil && v != "" {
+				c.mu.Lock()
+				c.snapVersion = v
+				c.mu.Unlock()
+			}
 			c.applyReprobe(set)
 		}
 	}

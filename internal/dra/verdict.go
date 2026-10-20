@@ -490,3 +490,21 @@ func short(d time.Duration) string {
 	}
 	return strconv.Itoa(int(d.Hours())) + "h"
 }
+
+// EpisodeKey keys an incomplete pool's episode: the pool at one generation.
+func EpisodeKey(driver, pool string, generation int64) string {
+	return driver + "/" + pool + "@" + strconv.FormatInt(generation, 10)
+}
+
+// AnyUpdating: some allowed scheduler finds the pool being updated on some
+// view (the episode tracker's test).
+func (p PoolRead) AnyUpdating() bool {
+	for _, v := range p.Views {
+		for _, o := range v.Outcomes {
+			if o.Outcome.Kind == OutUpdating {
+				return true
+			}
+		}
+	}
+	return false
+}
