@@ -38,7 +38,7 @@ Sources: Kubernetes v1.34.0, v1.35.0, v1.36.0 and v1.37.0 (kubelet device manage
 
 ### 1.4 The names in the field
 
-- **NVIDIA** (k8s-device-plugin v0.20.1): `nvidia.com/gpu`. MIG "single" advertises MIG devices as `nvidia.com/gpu`; "mixed" advertises one name per profile, `nvidia.com/mig-1g.5gb` and the like (`internal/rm/rm.go` L117, L142-145). Time-slicing and MPS multiply capacity by `replicas`, per resource: sharing is configured per resource name, so a node can have an unshared `nvidia.com/gpu` beside a shared MIG profile, or different replica factors per profile. A shared resource can be renamed: `renameByDefault` advertises `<name>.shared`, and an explicit `rename` any name (`api/config/v1/replicas.go` L31-59, L83).
+- **NVIDIA** (k8s-device-plugin v0.20.1): `nvidia.com/gpu`. MIG "single" advertises MIG devices as `nvidia.com/gpu`; "mixed" advertises one name per profile, `nvidia.com/mig-1g.5gb` and the like (`internal/rm/rm.go` L117, L142-145). Time-slicing and MPS multiply capacity by `replicas`, per resource: sharing is configured per resource name, so a node can have an unshared `nvidia.com/gpu` beside a shared MIG profile, or different replica factors per profile. A shared resource can be renamed: `renameByDefault` advertises `<name>.shared`. The config types also carry an explicit `rename` (`api/config/v1/replicas.go` L83), but the v0.20.1 executable disables custom resource naming (`cmd/nvidia-device-plugin/main.go` L338 calls `spec.DisableResourceNamingInConfig`; `api/config/v1/config.go` L83-94) and normalises sharing renames to the default (`replicas.go` L36-60). Klyx still shows an unfamiliar name in `nvidia.com/` as is, with no inferred unit.
 - **GPU Feature Discovery labels are per resource:** `<resource-name>.<suffix>`, keyed by the configured (not the renamed) name, with suffixes `product`, `count`, `replicas` and `sharing-strategy` (`none`, `mps`, `time-slicing`), plus `memory` and other attributes for MIG profiles (`internal/lm/resource.go` L127-177; one labeler per mixed profile, `internal/lm/mig-strategy.go` L266-306; the fixture in `resource_test.go` L357-408 has `nvidia.com/mig-1g.1gb.replicas` and `.sharing-strategy`). The product gets a `-SHARED` suffix when shared and not renamed. `replicas` is 0 when sharing is not configured. `nvidia.com/mig.strategy` is node-wide.
 - **AMD** (ROCm k8s-device-plugin, GPU Operator): `amd.com/gpu`; with `resource_naming_strategy=mixed`, one name per partition type, `amd.com/<compute>_<memory>` (`cpx_nps4`, `spx_nps1`; compute SPX, DPX, QPX, CPX; memory NPS1, 2, 4, 8). The node labeller writes `amd.com/gpu.<kind>` and `beta.amd.com/gpu.<kind>` (`family`, `vram`, `product-name`, `device-id`, `cu-count`, `driver-version`, `compute-memory-partition` and others), as `<kind>=<value>` when every GPU agrees, else `<kind>.<value>=<count>`. The docs spell the partition label `amd.com/compute-memory-partition`; the code emits `amd.com/gpu.compute-memory-partition`.
 - **Others:** Intel `gpu.intel.com/i915` and `gpu.intel.com/xe`; Habana `habana.ai/gaudi`; AWS Neuron `aws.amazon.com/neuron` and `aws.amazon.com/neuroncore`.
@@ -67,10 +67,11 @@ The new data is derived, so it is bounded where it is derived. Every classificat
 - **Vendor facts:** at most 6 per resource, for at most 8 resources per node, values clipped to 63 bytes; an omission notice says how many resources' facts were left out. Worst case about 6 KiB per node.
 - **A reservations row:** at most 16 entries per node: first every name the node advertises, in the node's order, then the DRA-served and not-advertised names by amount, then by name. Each kept entry's figures are exact (computed over every pod before the cut); `omitted` counts the entries left out, and the inspector says "N more requested resources not shown". Worst case about 8 KiB per row.
 - **The aggregation itself** is transient (built per evaluation, then released). Names the node advertises are summed whatever their number (the node already holds them). Other names are tracked up to 256 distinct per node; past that, the node's DRA-served and not-advertised figures read "not established: more than 256 distinct names requested", and the advertised entries stay exact.
+- **Totals** (the `totals` part): one row per accelerator name, at most 32 (by allocatable, then name); `omitted` counts the names left out, and the footer says "totals for N more resources not shown". Each total is computed from the full input before any per-node or per-row cut: allocatable and capacity summed over every node, requested over every counted pair. An overflow makes that total "not established".
 - **Per cluster:** reservations rows up to 2 MiB encoded. Past it, rows are dropped (nodes advertising an accelerator kept first, then by name), the part reports how many, and the lens says "requested not shown for N nodes". The node rows' new fields grow with the node count, as node rows already do; their per-node worst cases are above.
 - **Integers stay exact.** Extended quantities are integers (validated). Klyx reads them as int64 and sums with an overflow check; an overflow makes that figure "not established", never a wrapped number. Every capacity, allocatable and requested figure crosses to the frontend as a decimal string, and the frontend compares and subtracts with BigInt.
 
-**What pods reserve on a node is a join,** so it lives in a part of its own: a new task `extended` with one evidence part `reservations` (Counted: nodes; Deps: pods). It is not added to the nodes part, for two reasons:
+**What pods reserve on a node is a join,** so it lives in parts of its own: a new task `extended` with two evidence parts, `reservations` (per node) and `totals` (per resource name, cluster-wide), each Counted: nodes; Deps: pods. It is not added to the nodes part, for two reasons:
 - the nodes part is a ledger part, and a ledger part's continuity requires every dependency to be live (`liveForLedger`): a pods read that fails or relists would interrupt the nodes' own evidence;
 - a task's coverage is the worst of its parts' (`rollup`), so a pods read that is forbidden while nodes are readable would mark Nodes unreadable.
 
@@ -87,9 +88,9 @@ The `extended` task has no area of its own: no navigation entry, no Needs you li
 - **Notification eligibility:** unchanged. The new reading is Degraded, and a health notification opens only on a fault (`healthnotify`), so it never notifies: a device-plugin rollout, during which every GPU node reads degraded until its plugin re-registers, sends nothing.
 - **No synthetic evidence:** the reading is the kubelet's own numbers.
 
-**The reservations part** (new):
+**The reservations and totals parts** (new):
 - **Acquisition:** the existing projected node and pod watches; no new watch. `ProjectPod` already keeps each container's resources, `spec.overhead`, `status.phase` and `status.extendedResourceClaimStatus`.
-- **The row:** one per node that advertises or hosts a request for an extended resource, by node UID, carrying per resource name: requested, served by DRA, and not advertised by the node (§4), within §2.0's bounds. A fact row: no verdict, never counted, never in the ledger.
+- **The rows:** `reservations` has one per node that advertises or hosts a request for an extended resource, by node UID, carrying per resource name: requested, served by DRA, and not advertised by the node (§4). `totals` has one per accelerator name, its identity the name. Both within §2.0's bounds. Fact rows: no verdict, never counted, never in the ledger.
 - **Dependencies:** the pods kind. Requested is only as good as the pods read: unreadable is unknown, stale is "as of", capped is a lower bound. Each is said where the number shows (§6).
 - **Clock, notifications:** none.
 
@@ -160,7 +161,7 @@ The caps are §2.0's.
 **The Nodes lens:**
 - **A "GPU" column**, when any node advertises an accelerator: "requested / allocatable" ("6 / 8"), with "· 2 not allocatable" when capacity is higher, and "0 advertised" for a present key at 0. A node with several accelerator names (mixed MIG, AMD partitions) reads "3 resources", each named in its tooltip.
 - **Requested carries its read's qualification** (S10's lesson): "?" when the reservations part has no current read, "*" when stale, "+" when the pods read is capped, "+*" both; "?" also for a node whose row the per-cluster bound dropped, or whose entry the per-node bound cut.
-- **The footer** adds accelerator totals per name: "16 nvidia.com/gpu allocatable (12 requested)".
+- **The footer** shows the `totals` part's rows, never a sum of the displayed rows: "16 nvidia.com/gpu allocatable (12 requested)". Each total carries the qualification of the read that supplied it, separately: allocatable and capacity from the nodes kind's coverage, requested from the pods kind's. A cut node list or a dropped reservations row does not weaken them, because they are computed before any cut; an omitted name is said ("totals for N more resources not shown"), and an overflow reads "not established".
 - **The verdict** "not allocatable" lights the node like pressure does.
 
 **The node inspector**, a block "Extended resources", one line per name, accelerators first:
@@ -169,7 +170,7 @@ The caps are §2.0's.
 - the not-yet-reported and 0-advertised wordings of §3;
 - requested's qualification, said in words ("requested as of 10:42: the pods read is failing").
 
-**The pod inspector:** each container's extended requests (request equals limit, so one figure), implicit DeviceClass names included, with "served by DRA (claim <name>)" for a mapped pair. S6's "DRA device resources are not counted" line becomes "extended resources served by DRA are listed per container; their devices are S11b's".
+**The pod inspector:** each container's extended requests (request equals limit, so one figure), implicit DeviceClass names included, with "served by DRA (claim <name>)" for a mapped pair. At most 16 entries per container and 32 per pod, then "N more extended requests not shown". S6's "DRA device resources are not counted" line becomes "extended resources served by DRA are listed per container; their devices are S11b's".
 
 **Inspector continuity.** Node status and labels change without changing the Nodes lens's detail signature, so the node inspector renders the new evidence from the current joined rows (node row plus reservations row), never from the detail fetch. The pod inspector reads its detail on demand: `workloads.EvidenceRev` gains `status.extendedResourceClaimStatus`, so a mapping written after binding re-reads the detail. UID and request fencing are unchanged.
 
@@ -195,7 +196,8 @@ The caps are §2.0's.
 - requested: regular, sidecar and init containers, overhead, terminal and terminating pods, a pod on another node, unscheduled pods, a DRA-mapped pair, a name the node does not advertise, a mapping on a container that requests nothing, and classification before the init maximum (an init container whose excluded pair would otherwise shrink the counted maximum);
 - the implicit DRA name through the whole path: a pod requesting only `deviceclass.resource.kubernetes.io/gpu` on a node with no extended resource produces its reservation entry ("served by DRA") and its pod-inspector line;
 - NVIDIA facts per resource: an unshared `nvidia.com/gpu` beside a shared MIG profile; two profiles with different replica factors; MIG single with sharing (the unit is a MIG device); a `.shared` rename with its base's labels; an explicit rename with none; a strategy without a replica count; the facts cap with its omission notice;
-- the bounds of §2.0: 16 entries, 4 names in the reading, 256 tracked names, the 2 MiB rows bound, int64 overflow, and large integers across the JSON boundary (a value above 2^53 compared exactly);
+- the bounds of §2.0: 16 entries, 4 names in the reading, 256 tracked names (said as "more than 256", never as a count of untracked names), the 2 MiB rows bound, int64 overflow, the pod inspector's 16 and 32, and large integers across the JSON boundary (a value above 2^53 compared exactly);
+- the totals: one resource cut from one node's list but kept on another's (the total stays the full-input sum, 16, not the kept rows' 8); a dropped reservations row (the requested total unchanged); a stale nodes read beside a current pods read, and the reverse (each total qualified by its own read); more than 32 accelerator names (omitted said);
 - inspector continuity: a node-row-only update re-renders the node block; a mapping written after binding re-reads the pod detail (mounted tests, with UID and request fencing);
 - the golden values (§4) across the six modules;
 - projection equality: `NodeSummary` and the reservations from raw and projected objects;
@@ -233,3 +235,11 @@ The caps are §2.0's.
 | P2 | The new derived data had no numeric bounds | §2.0: per-node entries (16), vendor facts (6 per resource, 8 resources), reservation rows (16 entries, exact kept figures, omitted counted), the transient aggregation (256 tracked names per node), 2 MiB of rows per cluster, int64 with overflow as "not established", and decimal strings with BigInt across the JSON boundary. §8 measures the worst shapes |
 
 Codex's implementation guidance, taken: the lab stops the DaemonSet (not its pod) and asserts each node transition before captures (§9); inspector continuity renders the node block from the joined rows and adds the claim mapping to `EvidenceRev` (§6); classification precedes the init maximum, with overhead pinned separately (§4, §9).
+
+## 12. Revision 2: Codex's re-review of 043a2e4
+
+| # | Finding | Where answered |
+|---|---|---|
+| P2 | The footer's per-name totals had no completeness contract after the new per-node and per-row cuts: a resource cut from one node's list but kept on another's would sum to 8 where the input says 16 | §2 and §2.0: a `totals` part computes each accelerator name's allocatable, capacity and requested from the full input before any cut, at most 32 names with the rest counted. §6: the footer reads those rows, never the displayed rows, each figure qualified by its own read (allocatable by nodes, requested by pods). §9 tests the cross-node case, a dropped row, stale beside current, and the name cap |
+
+Codex's non-blocking notes, taken: §1.4 corrects the rename claim (v0.20.1's executable normalises to the default `.shared`); §6 and §9 bound the pod inspector's list (16 per container, 32 per pod); §9 says "more than 256" without counting untracked names.
