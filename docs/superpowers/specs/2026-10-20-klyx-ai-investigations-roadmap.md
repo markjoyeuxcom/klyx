@@ -131,7 +131,7 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 
 - **Option 1** (the 2026-10-16 order): finish the coverage programme (S10, S11a, S11b, S3b), then A1, A2, A3, then extensions.
 - **Option 2:** A1 right after S10. It reuses chat's contract and needs the evidence S8a, S8b and S9 just added. A2 and A3 follow the coverage programme.
-- **Either way,** §6's scenario needs the Argo-parity work's hook results and any new Argo verbs before A3 can finish it.
+- **Either way,** §6.1's Flux scenario needs only the A1-A3 machinery and one health-check parser. §6.2's Argo scenario also needs the Argo-parity work's hook results and any new Argo verbs.
 
 **Each phase's definition of done:**
 - its note with Codex review before and after;
@@ -141,32 +141,50 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 - captures;
 - the as-built notes.
 
-## 6. The acceptance scenario (owner, 2026-10-20)
+## 6. The acceptance scenarios (owner, 2026-10-20)
 
-> "Investigate this failed Argo deployment, trace the blocking hook to its pod logs, show the relevant recent changes, propose a remedy, let me approve the action, and check whether it worked."
+The owner proposed an Argo scenario, then suggested Flux, or another scenario, instead. Flux comes first: Klyx already covers most of its chain. Argo follows once the Argo-parity work reads hook results.
 
-The programme is accepted when this runs end to end on the kind lab, against a real model. Each step, with what exists and what it needs:
+### 6.1 The first scenario: a failed Flux rollout
+
+> "Investigate this failed Kustomization, trace the health check that timed out to the Deployment and its crashing pod's logs, show the commit that changed it, propose a remedy, let me approve the mitigation, and check whether it worked."
+
+The programme is accepted when this runs end to end on the kind lab, against a real model.
 
 | Step | Phase | Exists today | Needed |
 |---|---|---|---|
-| The failed deployment | A1 | The Argo lens's verdict, `operationState` phase and message, sync revisions and five history entries | none |
-| The blocking hook | A1 | not read: `operationState.syncResult.resources` (each hook's kind, name, `hookType`, `hookPhase`, message) | the hook results in the Argo model (the Argo-parity work), then a dependency edge: hook to its Job to its pods, by owner UID |
-| Its pod logs | A1 | chat's finite log read (live pod, capped, scrubbed); S8b's Loki history for a gone pod by UID | a hook pod is often deleted by its hook-delete policy: the investigation reads Loki by the pod's UID when the pod is gone, and lists the logs as missing evidence when neither exists |
-| The recent changes | A1 | Git history through the system git (approved URLs); the Application's history revisions | the diff between the last healthy and the failing revision, scoped to the Application's path |
-| A remedy | A1, A2 | Suggest-fix (a Git change, as text) | a structured proposal: a day-2 action, or a Git change |
-| The approval | A3 | Argo refresh and sync (UID-armed, ConfirmDialog, typed grant, prune opt-in) | the action card. A remedy in desired state (the hook's manifest or image) stays a Git change unless §7's decision 3 admits pull requests. Argo's terminate-operation and history rollback are not Klyx verbs yet: they belong to the Argo-parity work as ordinary verbs, never added by A3 |
-| Whether it worked | A3 | the Observer's Application verdict | the verification watch: the Application's sync and health, and the hook's phase, until the bound |
+| The failed Kustomization | A1 | its verdict (`HealthCheckFailed`), message, `ReadySince`, and the last applied (healthy) and last attempted (failing) revisions | none |
+| The health check to the Deployment | A1 | the Kustomization's inventory linked to live objects, and the workload verdicts | a parser for the objects `HealthCheckFailed` names ("timeout waiting for: [Deployment/ns/name status: 'InProgress']"), like `DependencyNamed`, joined to the inventory by kind, namespace and name |
+| The crashing pod's logs | A1 | workload to pods, chat's finite log read (the previous container included), S8b's Loki history by UID | none |
+| The commit | A1 | Git history through the system git (approved URLs), the Flux diff from the cache | the diff between the two revisions, scoped to `spec.path`, with the change to the Deployment found in it |
+| A remedy | A1, A2 | Suggest-fix (a Git change, as text) | a structured proposal with two parts: the Git revert (the fix) and a mitigation |
+| The approval | A3 | Flux suspend and resume, rollout history and undo: each UID-armed, behind a ConfirmDialog, with the typed grant on protected clusters | an action card holding an ordered plan of existing verbs: **suspend the Kustomization, then roll the Deployment back to its previous revision.** Each step names its GitOps consequence ("Flux would reapply the failing revision unless the Kustomization is suspended"). Each step runs through its own guarded call; on a protected cluster each needs its grant, as bulk pod delete re-arms per call |
+| Whether it worked | A3 | the Observer's verdicts | the verification watch: the Deployment healthy and its pods ready, within the bound. The card then reminds that the Kustomization stays suspended until the Git fix lands and it is resumed |
 
 **The lab:**
-- an Application on kind-klyx whose PreSync hook Job fails (a bad image, or a migration that exits non-zero);
-- a Git repository the lab controls, holding the breaking commit after a healthy one;
-- Loki shipping the hook pod's logs.
+- a Kustomization on kind-klyx with a health check on its Deployment;
+- a Git repository the lab controls, holding a healthy commit, then one that changes the Deployment so it crash-loops (a bad config value, or an image that exits);
+- Loki shipping the pod's logs.
 
-**What the scenario stress-tests:**
-- **Certainty:** "the hook failed" is proven by the hook's own phase and message; "the commit caused it" is proven only when the diff touches the hook's manifest or image; anything else is suspected.
-- **A gone hook pod:** the logs come from Loki, by UID.
-- **The Git boundary:** if the remedy is a commit, Klyx shows the proposed change, the human commits it, and Klyx verifies after Argo's next sync. "Approve" then approves the proposal, not a write.
-- **The verb boundary:** a retry is an Argo sync behind the existing guards; nothing new runs because a model proposed it.
+**What it stress-tests:**
+- **Certainty:**
+  - "the health check timed out on Deployment X" is proven by the Kustomization's own message;
+  - "the pod crash-loops" is proven by the pod verdict and its logs;
+  - "the commit caused it" is proven only when the diff touches that Deployment, and is suspected otherwise.
+- **The GitOps consequence:** a rollback without the suspension would be undone by Flux. The card must show it, and the plan orders suspend first.
+- **The Git boundary:** the fix is a revert, proposed for the human to commit unless §7's decision 3 admits pull requests. The mitigation is all Klyx runs.
+- **The verb boundary:** both steps are existing verbs; nothing new runs because a model proposed it.
+
+**A variant:** the same on a HelmRelease that fails its upgrade. The mitigation is Helm's rollback, behind the HelmRelease's suspension. Klyx has both verbs.
+
+### 6.2 The second scenario: a failed Argo sync, after Argo parity
+
+> "Investigate this failed Argo deployment, trace the blocking hook to its pod logs, show the relevant recent changes, propose a remedy, let me approve the action, and check whether it worked."
+
+What it needs beyond §6.1:
+- **The hook results:** Klyx does not yet read `operationState.syncResult.resources` (each hook's kind, name, `hookType`, `hookPhase` and message). That is the Argo-parity work. A hook's Job and pods are then joined by owner UID.
+- **A gone hook pod:** a hook-delete policy often removes it. The logs come from Loki by its UID, or are listed as missing evidence.
+- **Verbs:** Argo's terminate-operation and history rollback are not Klyx verbs yet. They belong to the Argo-parity work as ordinary verbs, never added by A3. A retry is the existing sync, behind its guards.
 
 ## 7. Open owner decisions
 
