@@ -48,9 +48,10 @@ controllers() {
 	done
 	k label namespace "$ns" klyx.dev/lab=parity --overwrite >/dev/null
 	local spec
-	for spec in flux-system/kustomize-controller cert-manager/cert-manager external-secrets/external-secrets karpenter/karpenter; do
+	for spec in flux-system/kustomize-controller cert-manager/cert-manager external-secrets/external-secrets; do
 		stand_in "${spec%%/*}" "${spec##*/}" ""
 	done
+	karpenter_controllers
 	k apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: StatefulSet
@@ -105,6 +106,48 @@ EOF
 	else
 		settled_pods "$1" "$2" Pending
 	fi
+}
+
+# node_image <ref>: the pause image under another name on the parity node
+# (coverage S10: Karpenter's controllers are attributed by their pods'
+# images), tagged in the node's containerd - no pull, only on the verified
+# parity node container.
+node_image() {
+	local node=$name-control-plane
+	[[ $(docker inspect "$node" --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}' 2>/dev/null) == "$name" ]] ||
+		die "container $node is not the $name kind node"
+	docker exec "$node" ctr -n k8s.io images tag --force "$pause" "$1" >/dev/null
+}
+
+# karpenter_controllers: an AWS and an Azure stand-in, labelled as the
+# charts label them and running pause under each provider's controller
+# image, so both are attributed (S10 §5); the parity node carries EKS Auto
+# Mode's label, so the Auto Mode NodeClass is managed. The task reads
+# "managed" in every case.
+karpenter_controllers() {
+	node_image public.ecr.aws/karpenter/controller:parity
+	node_image mcr.microsoft.com/aks/karpenter/controller:parity
+	k create namespace karpenter-azure --dry-run=client -o yaml | k apply -f - >/dev/null
+	local spec
+	for spec in karpenter/public.ecr.aws/karpenter/controller:parity karpenter-azure/mcr.microsoft.com/aks/karpenter/controller:parity; do
+		k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: karpenter, namespace: ${spec%%/*}, labels: {app.kubernetes.io/name: karpenter}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: karpenter}}
+  template:
+    metadata: {labels: {app: karpenter}}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: controller, image: ${spec#*/}, imagePullPolicy: Never}]
+EOF
+		k -n "${spec%%/*}" rollout status deployment/karpenter --timeout=120s >/dev/null
+		settled_pods "${spec%%/*}" karpenter Running
+	done
+	k label nodes --all eks.amazonaws.com/compute-type=auto --overwrite >/dev/null
 }
 
 # settled_pods <ns> <app> <phase>: wait until the app has exactly one pod,
@@ -355,21 +398,82 @@ EOF
 }
 
 karpenter_objects() {
+	# coverage S10: one class per provider adapter, each Ready, and pools that
+	# use them (parity-pool and parity-pool-b share the EC2NodeClass: case
+	# 10 fails it). Every status is written; nothing reconciles.
 	k apply -f - >/dev/null <<EOF
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata: {name: parity-ec2}
+spec: {role: KarpenterNodeRole-parity, amiSelectorTerms: [{alias: al2023@latest}], subnetSelectorTerms: [{tags: {karpenter.sh/discovery: parity}}], securityGroupSelectorTerms: [{tags: {karpenter.sh/discovery: parity}}]}
+---
+apiVersion: karpenter.azure.com/v1beta1
+kind: AKSNodeClass
+metadata: {name: parity-aks}
+spec: {imageFamily: AzureLinux}
+---
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata: {name: parity-auto}
+spec: {role: AutoNodeRole-parity}
+---
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata: {name: parity-pool, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
-spec: {template: {spec: {}}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-b, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-aks, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.azure.com, kind: AKSNodeClass, name: parity-aks}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-auto, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: eks.amazonaws.com, kind: NodeClass, name: parity-auto}}}}
 ---
 apiVersion: karpenter.sh/v1
 kind: NodeClaim
 metadata: {name: parity-claim, labels: {karpenter.sh/nodepool: parity-pool}, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
-spec: {}
+spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}
 EOF
-	ready nodepools.karpenter.sh - parity-pool True Ready
+	class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 True
+	class_ready aksnodeclasses.karpenter.azure.com parity-aks True
+	class_ready nodeclasses.eks.amazonaws.com parity-auto True
+	local p
+	for p in parity-pool parity-pool-b parity-pool-aks parity-pool-auto; do pool_ready "$p" True; done
 	local g
 	g=$(gen nodeclaims.karpenter.sh - parity-claim)
 	status nodeclaims.karpenter.sh - parity-claim "{\"conditions\":[$(cond Launched True Launched "$g"),$(cond Registered True Registered "$g"),$(cond Initialized True Initialized "$g"),$(cond Ready True Ready "$g")]}"
+}
+
+# class_ready <resource> <name> <True|False>: a class's Ready, with a
+# failing SubnetsReady for False (S10: the first False dependent).
+class_ready() {
+	local g
+	g=$(gen "$1" - "$2")
+	if [[ $3 == True ]]; then
+		status "$1" - "$2" "{\"conditions\":[$(cond SubnetsReady True SubnetsReady "$g"),$(cond Ready True Ready "$g")]}"
+	else
+		status "$1" - "$2" "{\"conditions\":[$(cond SubnetsReady False SubnetsNotFound "$g"),$(cond Ready False UnhealthyDependents "$g")]}"
+	fi
+}
+
+# pool_ready <pool> <True|False>: a pool's conditions as Karpenter's
+# readiness controller writes them, NodeClassReady copying its class.
+pool_ready() {
+	local g
+	g=$(gen nodepools.karpenter.sh - "$1")
+	if [[ $2 == True ]]; then
+		status nodepools.karpenter.sh - "$1" "{\"conditions\":[$(cond ValidationSucceeded True ValidationSucceeded "$g"),$(cond NodeClassReady True NodeClassReady "$g"),$(cond Ready True Ready "$g")]}"
+	else
+		status nodepools.karpenter.sh - "$1" "{\"conditions\":[$(cond ValidationSucceeded True ValidationSucceeded "$g"),$(cond NodeClassReady False SubnetsNotFound "$g"),$(cond Ready False UnhealthyDependents "$g")]}"
+	fi
 }
 
 fluxop_objects() {
@@ -1232,6 +1336,14 @@ EOF
 			'"hpaName":"keda-hpa-parity-so-fallback","externalMetricNames":["s0-prometheus"],"health":{"s0-prometheus":{"numberOfFailures":7,"status":"Failing"}},"scaleTargetGVKR":{"group":"apps","kind":"Deployment","resource":"deployments","version":"v1"},"scaleTargetKind":"apps/v1.Deployment","triggersTypes":"prometheus"'
 		hpa_reported keda-hpa-parity-so-fallback ScalingActive ScalingDisabled
 		hpa_reported parity-hpa-gone AbleToScale FailedGetScale ;;
+	10) # coverage S10: the EC2NodeClass fails; its two pools light once each
+		# (the class's failure, never their copies twice), the class not at all
+		class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 False
+		local p
+		for p in parity-pool parity-pool-b; do
+			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=fault klyx.dev/parity-included=true --overwrite >/dev/null
+			pool_ready "$p" False
+		done ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -1255,6 +1367,12 @@ revert_case() {
 	9) k -n "$ns" delete scaledobjects.keda.sh parity-so-fallback --wait >/dev/null
 		k -n "$ns" delete horizontalpodautoscalers.autoscaling keda-hpa-parity-so-fallback parity-hpa-gone --ignore-not-found --wait >/dev/null
 		k -n "$ns" delete deployment parity-keda-fallback --wait >/dev/null ;;
+	10) class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 True
+		local p
+		for p in parity-pool parity-pool-b; do
+			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null
+			pool_ready "$p" True
+		done ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"

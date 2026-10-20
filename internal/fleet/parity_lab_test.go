@@ -209,6 +209,8 @@ var parityParts = []parityPart{
 	{"gateway", "routes", "native", []string{"httproutes", "grpcroutes", "tlsroutes", "tcproutes", "udproutes"}}, // coverage S7b
 	{"karpenter", "nodeclaims", "native", []string{"nodeclaims"}},
 	{"karpenter", "nodepools", "native", []string{"nodepools"}},
+	// coverage S10: the NodeClasses are evidence (their pools carry the verdict)
+	{"karpenter", "nodeclasses", "evidence", []string{"ec2nodeclasses", "aksnodeclasses", "nodeclasses"}},
 	{"velero", "schedules", "native", []string{"schedules"}},
 	{"velero", "locations", "native", []string{"backupstoragelocations"}},
 	{"velero", "backups", "native", []string{"backups"}},
@@ -249,6 +251,8 @@ var parityResource = map[string]string{
 	"grpcroutes":   "grpcroutes.gateway.networking.k8s.io", "tlsroutes": "tlsroutes.gateway.networking.k8s.io",
 	"tcproutes": "tcproutes.gateway.networking.k8s.io", "udproutes": "udproutes.gateway.networking.k8s.io",
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
+	"ec2nodeclasses": "ec2nodeclasses.karpenter.k8s.aws", "aksnodeclasses": "aksnodeclasses.karpenter.azure.com",
+	"nodeclasses":   "nodeclasses.eks.amazonaws.com",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
@@ -292,7 +296,7 @@ type partExpect struct {
 type caseExpect struct {
 	Case        string            `json:"case"`
 	Parts       []partExpect      `json:"parts"`
-	Controllers map[string]string `json:"controllers"` // task -> "" | not ready | unknown
+	Controllers map[string]string `json:"controllers"` // task -> "" | not ready | unknown | managed
 	State       string            `json:"state"`       // the connection: Synced | Degraded (exact)
 }
 
@@ -816,7 +820,13 @@ func TestParityGate(t *testing.T) {
 		}
 	})
 
-	none := map[string]string{}
+	// coverage S10: an attributed AWS and Azure stand-in and EKS Auto Mode's
+	// node label: Karpenter's controller task is "managed" in every case (a
+	// note, never attention or a gap)
+	none := map[string]string{"karpenter": "managed"}
+	with := func(task, state string) map[string]string {
+		return map[string]string{"karpenter": "managed", task: state}
+	}
 	var cases []string
 
 	// B and cases 1-6b: the cluster admin.
@@ -830,9 +840,10 @@ func TestParityGate(t *testing.T) {
 	}{
 		{"1", "Synced", none}, {"2", "Synced", none}, {"3", "Synced", none}, {"4", "Synced", none},
 		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none}, {"5d", "Synced", none}, {"5e", "Synced", none},
-		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
-		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
-		{"9", "Synced", none}, // coverage S9: a fallback ScaledObject and an HPA that cannot scale
+		{"6", "Synced", with("certs", "not ready")},   // cert-manager is not a connection subsystem
+		{"6b", "Degraded", with("flux", "not ready")}, // the GitOps tier degrades the connection
+		{"9", "Synced", none},                         // coverage S9: a fallback ScaledObject and an HPA that cannot scale
+		{"10", "Synced", none},                        // coverage S10: a failing EC2NodeClass lights its two pools once each
 	} {
 		l.apply(c.name)
 		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))

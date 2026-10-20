@@ -79,6 +79,7 @@ crds=(
 	grpcroutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io listenersets.gateway.networking.k8s.io
 	tlsroutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io udproutes.gateway.networking.k8s.io
 	nodepools.karpenter.sh nodeclaims.karpenter.sh
+	ec2nodeclasses.karpenter.k8s.aws aksnodeclasses.karpenter.azure.com nodeclasses.eks.amazonaws.com
 	fluxinstances.fluxcd.controlplane.io fluxreports.fluxcd.controlplane.io
 	resourcesets.fluxcd.controlplane.io resourcesetinputproviders.fluxcd.controlplane.io
 	imagerepositories.image.toolkit.fluxcd.io imagepolicies.image.toolkit.fluxcd.io imageupdateautomations.image.toolkit.fluxcd.io

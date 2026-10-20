@@ -320,6 +320,14 @@ describe("KarpenterView NodeClasses (S10)", () => {
     expect(r[1]).toContain("0+"); // an incomplete pool read is a lower bound, never "unused"
   });
 
+  it("a pool whose nodes fail to register is said in the summary", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] });
+    const reg = { ...pool, name: "reg", rule: { included: true, role: "degraded", label: "nodes fail to register" } };
+    setRows({ pools: [reg], claims: [claim()], coverage: classCoverage() });
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("1 NodePool failing to register")).toBeTruthy();
+  });
+
   it("says when no class kind is served", async () => {
     vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] });
     setRows({ pools: [pool], coverage: [...liveCoverage(), { kind: "EC2NodeClass", served: false, synced: true, coverage: "absent" as const }] });

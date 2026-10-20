@@ -76,7 +76,7 @@ const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reco
 const INVENTORY = new Set(["keda/authentications", "karpenter/nodeclasses"]);
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "10", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };

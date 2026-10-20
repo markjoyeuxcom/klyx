@@ -913,6 +913,39 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { owner: note.slice(0, 160) };
   });
 
+  // ---- coverage S10: node provisioning by provider adapter (lab-s10) ----
+  // lab-subnets-a's EC2NodeClass fails SubnetsReady: the pool's headline is
+  // the class's failure in Klyx's words, with the link and the class named
+  await step(steps, "Karpenter: a NodePool whose EC2NodeClass fails", async () => {
+    await open("karpenter");
+    await closeDrawer();
+    (await within(20_000, "the NodePools view", () => byText<HTMLElement>("button.l-chip", /^NodePools/))).click();
+    (await within(20_000, "lab-subnets-a", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /lab-subnets-a/.test(r.textContent ?? "")))).click();
+    const panel = await within(8000, "the NodePool inspector", () => $("[data-testid='karp-pool-panel']"));
+    const head = await within(8000, "the headline in Klyx's words", () => {
+      const t = $("[data-testid='karp-pool-head']")?.textContent ?? "";
+      return /^SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms$/.test(t) ? t : null;
+    });
+    const link = $("[data-testid='karp-pool-class']")?.textContent ?? "";
+    if (!/EC2NodeClass\/lab-subnets/.test(link) || !/linked/.test(link)) throw new Error(`the class link: ${link}`);
+    if (!/NodeClass lab-subnets not ready/.test(panel.textContent ?? "")) throw new Error("the headline label");
+    return { head, link: link.slice(0, 160) };
+  });
+  // the class is inventory: listed with its reading and both its pools, and
+  // counted on neither itself nor twice
+  await step(steps, "Karpenter: the NodeClasses view", async () => {
+    (await within(8000, "the NodeClasses view", () => byText<HTMLElement>("button.l-chip", /^NodeClasses/))).click();
+    // the view has switched only once its own columns show
+    await within(8000, "the NodeClasses columns", () => /Reading/.test($(".lens-table-head")?.textContent ?? ""));
+    const row = await within(20_000, "lab-subnets", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "lab-subnets"));
+    if (!/not ready/.test(row.textContent ?? "")) throw new Error(`lab-subnets reads: ${row.textContent}`);
+    row.click();
+    const panel = await within(8000, "the NodeClass inspector", () => $("[data-testid='karp-class-panel']"));
+    await within(8000, "its users", () => /lab-subnets-a, lab-subnets-b/.test(panel.textContent ?? ""));
+    if (!/counted on each NodePool that uses it/.test(panel.textContent ?? "")) throw new Error("the class is not said as configuration");
+    return { rows: document.querySelectorAll(".lens-row").length };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();

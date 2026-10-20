@@ -197,6 +197,8 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   const stuck = claims.filter((c) => roleOf(c).kind === "degraded").length;
   const launching = claims.filter((c) => roleOf(c).kind === "progressing").length;
   const poolsDown = pools.filter((p) => roleOf(p).kind === "fault").length;
+  // S10: a pool's only degraded finding is nodes failing to register
+  const poolsDegraded = pools.filter((p) => roleOf(p).kind === "degraded").length;
   const poolsUnknown = pools.filter((p) => roleOf(p).kind === "unknown").length;
   const drifted = claims.filter((c) => c.drifted).length;
   // "all ready" is a claim about the whole present (Codex review of 442d42a
@@ -342,14 +344,15 @@ export function KarpenterView({ cluster }: { cluster: string }) {
         <>
           <CountSentence total={claimTotal} marker={claimsEv === "complete" ? "" : claimsEv === "stale" ? "*" : "+"} noun={["NodeClaim", "NodeClaims"]} />
           {rowsRefreshing && claimAttention > 0 && <span className="t-status" style={{ color: "var(--color-text-warning)" }} data-testid="karp-global-attention">{claimAttention} not ready or appear stuck</span>}
-          {failed + stuck + poolsDown > 0
-            ? <MarkedPhrase fault={failed + poolsDown > 0}>{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : ""].filter(Boolean).join(" · ")}</MarkedPhrase>
+          {failed + stuck + poolsDown + poolsDegraded > 0
+            ? <MarkedPhrase fault={failed + poolsDown > 0}>{[failed ? `${failed} not ready` : "", stuck ? `${stuck} appear${stuck === 1 ? "s" : ""} stuck` : "", poolsDown ? `${poolsDown} NodePool${poolsDown === 1 ? "" : "s"} not ready` : "",
+              poolsDegraded ? `${poolsDegraded} NodePool${poolsDegraded === 1 ? "" : "s"} failing to register` : ""].filter(Boolean).join(" · ")}</MarkedPhrase>
             : launching > 0 ? <span className="t-secondary">{launching} in progress</span>
             : allReady ? <span className="t-secondary">all ready</span>
             : claims.length > 0 && poolsUnknown === 0 ? <span className="t-secondary" data-testid="karp-not-all-ready">{claimsEv === "stale" || poolsEv === "stale" ? "none known not ready (last observed)" : rowsRefreshing || rows.rowsState.updating ? "none known not ready (summary changed - re-reading)" : "none known not ready (reads incomplete)"}</span> : null}
           {poolsUnknown > 0 && <span className="t-secondary">{poolsUnknown} NodePool{poolsUnknown === 1 ? "" : "s"} unverified</span>}
           {drifted > 0 && <span className="t-secondary">{drifted} drifted (eligible for replacement)</span>}
-          {(failed + stuck + poolsDown + launching + drifted) > 0 && asOf && <span className="t-secondary" data-testid="karp-asof">{asOf.trim()}</span>}
+          {(failed + stuck + poolsDown + poolsDegraded + launching + drifted) > 0 && asOf && <span className="t-secondary" data-testid="karp-asof">{asOf.trim()}</span>}
         </>
       )}
       headerEnd={
@@ -603,14 +606,13 @@ function FindingLine({ f }: { f: KarpenterFindingDTO }) {
 function ConditionsBlock({ conds, total, cut }: { conds: KarpenterCondDTO[]; total: number; cut: boolean }) {
   return (
     <InspectorBlock title={`Conditions${cut ? ` (${conds.length} of ${total})` : ""}`}>
-      <div className="insp-kv">
-        {conds.map((c) => (
-          <Fragment key={c.type}>
-            <span>{c.type}</span>
-            <span style={{ overflowWrap: "anywhere" }}>{c.status}{c.reasonWithheld ? " · reason withheld" : c.reason ? ` · ${c.reason}` : ""}{c.message ? ` - ${c.message}` : ""}</span>
-          </Fragment>
-        ))}
-      </div>
+      {/* one line each: condition types are longer than the key column */}
+      {conds.map((c) => (
+        <div key={c.type} className="t-body" style={{ overflowWrap: "anywhere", padding: "2px 0" }} data-testid="karp-condition">
+          <span className="t-secondary">{c.type}</span> {c.status}{c.reasonWithheld ? " · reason withheld" : c.reason ? ` · ${c.reason}` : ""}
+          {c.message && <div className="t-secondary">{c.message}</div>}
+        </div>
+      ))}
     </InspectorBlock>
   );
 }

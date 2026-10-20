@@ -44,13 +44,15 @@ type loadScale struct {
 	// coverage S9: ScaledObjects (each with its HPA), half as many plain
 	// HPAs, a tenth as many ScaledJobs, a quarter as many authentications
 	scalers int
+	// coverage S10: NodePools spread over one class per provider adapter
+	pools int
 }
 
 // Coverage S7 §8: the large cluster carries about 500 routes and 50
 // ListenerSets, its Gateways and ListenerSets with listener status.
 var (
-	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50, scalers: 200}
-	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5, scalers: 20}
+	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50, scalers: 200, pools: 20}
+	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5, scalers: 20, pools: 3}
 )
 
 // chaos is an API outage switch for one cluster's list/watch: while down,
@@ -459,6 +461,10 @@ func init() {
 	add("external-secrets.io", "v1beta1", "clustersecretstores", "ClusterSecretStoreList")
 	add("karpenter.sh", "v1", "nodepools", "NodePoolList")
 	add("karpenter.sh", "v1", "nodeclaims", "NodeClaimList")
+	// coverage S10: the class kinds
+	add("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClassList")
+	add("karpenter.azure.com", "v1beta1", "aksnodeclasses", "AKSNodeClassList")
+	add("eks.amazonaws.com", "v1", "nodeclasses", "NodeClassList")
 	add("kustomize.toolkit.fluxcd.io", "v1", "kustomizations", "KustomizationList")
 	add("helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmReleaseList")
 	add("source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepositoryList")
@@ -799,7 +805,24 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 		create("keda.sh", "v1alpha1", "triggerauthentications", cr("keda.sh/v1alpha1", "TriggerAuthentication", ns(i), fmt.Sprintf("auth-%04d", i),
 			map[string]any{"secretTargetRef": []any{map[string]any{"parameter": "bearerToken", "name": "prom-token", "key": "token"}}}, nil, nil))
 	}
-	create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{}, []any{cond("Ready", "True", "Ready")}, nil))
+	// coverage S10: one class per adapter, Ready, and pools spread over
+	// them, each with its class link
+	classes := []struct{ apiVersion, kind, resource string }{
+		{"karpenter.k8s.aws/v1", "EC2NodeClass", "ec2nodeclasses"}, {"karpenter.azure.com/v1beta1", "AKSNodeClass", "aksnodeclasses"}, {"eks.amazonaws.com/v1", "NodeClass", "nodeclasses"}}
+	for _, c := range classes {
+		gv := strings.Split(c.apiVersion, "/")
+		create(gv[0], gv[1], c.resource, cr(c.apiVersion, c.kind, "", "default", map[string]any{}, []any{cond("SubnetsReady", "True", "SubnetsReady"), cond("Ready", "True", "Ready")}, nil))
+	}
+	for i := 0; i < sc.pools; i++ {
+		c := classes[i%len(classes)]
+		name := "default"
+		if i > 0 {
+			name = fmt.Sprintf("pool-%02d", i)
+		}
+		create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", name, map[string]any{"template": map[string]any{"spec": map[string]any{
+			"nodeClassRef": map[string]any{"group": strings.Split(c.apiVersion, "/")[0], "kind": c.kind, "name": "default"}}}},
+			[]any{cond("ValidationSucceeded", "True", "ValidationSucceeded"), cond("NodeClassReady", "True", "NodeClassReady"), cond("Ready", "True", "Ready")}, nil))
+	}
 	for i := 0; i < sc.claims; i++ {
 		u := cr("karpenter.sh/v1", "NodeClaim", "", fmt.Sprintf("claim-%03d", i), map[string]any{}, []any{cond("Ready", "True", "Ready"), cond("Launched", "True", "Launched")},
 			map[string]any{"nodeName": fmt.Sprintf("node-%02d", i%sc.nodes)})
