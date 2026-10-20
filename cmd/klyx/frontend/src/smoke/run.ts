@@ -1021,7 +1021,7 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     // the kubelet's report, named by its ID
     const claims = await within(30_000, "the pod's claims, its device unhealthy", () => {
       const b = $("[data-testid='pod-claims']");
-      return b && /from a template · Allocated/.test(b.textContent ?? "") && /1 device unhealthy \(reported by the kubelet\): \S+/.test(b.textContent ?? "") ? b : null;
+      return b && /from a template \(the pod's "gpu"\) · Allocated/.test(b.textContent ?? "") && /1 device unhealthy \(reported by the kubelet\): \S+/.test(b.textContent ?? "") ? b : null;
     });
     typeInto(search, "");
     return { node: block.textContent?.slice(0, 120), pod: claims.textContent?.slice(0, 160) };
