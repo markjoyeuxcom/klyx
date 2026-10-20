@@ -1,0 +1,1215 @@
+[
+ {
+  "name": "complete-one-slice",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      },
+      {
+       "name": "d1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "complete-two-slices",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "missing-one-slice",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "older-generation-beside-newer",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 2,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "older-generation-obsolete-newer-complete",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 2,
+      "resourceSliceCount": 1
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "duplicate-device-names",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "all-nodes-complete",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "allNodes": true,
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "all-nodes-missing",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "allNodes": true,
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "per-device-complete",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "perDeviceNodeSelection": true,
+     "devices": [
+      {
+       "name": "d0",
+       "nodeName": "n1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "counters-complete",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "s"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "mem": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "d"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "cs",
+         "counters": {
+          "mem": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "counters-missing-set",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "s"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "mem": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "d"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "other",
+         "counters": {
+          "mem": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "counters-duplicate-set",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "s"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 3
+     },
+     "nodeName": "n1",
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "mem": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "t"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 3
+     },
+     "nodeName": "n1",
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "mem": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "d"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 3
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "cs",
+         "counters": {
+          "mem": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "other-node-slice-counts",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "nodeName": "n2",
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "mixed-node-and-all",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeName": "n1"
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ],
+     "allNodes": true
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "selector-matching",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeSelector": {
+      "nodeSelectorTerms": [
+       {
+        "matchExpressions": [
+         {
+          "key": "kubernetes.io/hostname",
+          "operator": "In",
+          "values": [
+           "n1"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "selector-not-matching",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeSelector": {
+      "nodeSelectorTerms": [
+       {
+        "matchExpressions": [
+         {
+          "key": "kubernetes.io/hostname",
+          "operator": "In",
+          "values": [
+           "n2"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "two-selectors-one-matching",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeSelector": {
+      "nodeSelectorTerms": [
+       {
+        "matchExpressions": [
+         {
+          "key": "kubernetes.io/hostname",
+          "operator": "In",
+          "values": [
+           "n1"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d1"
+      }
+     ],
+     "nodeSelector": {
+      "nodeSelectorTerms": [
+       {
+        "matchExpressions": [
+         {
+          "key": "kubernetes.io/hostname",
+          "operator": "In",
+          "values": [
+           "n2"
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "other-node-only",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeName": "n2"
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "per-device-two-nodes",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "perDeviceNodeSelection": true,
+     "devices": [
+      {
+       "name": "d0",
+       "nodeName": "n1"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "perDeviceNodeSelection": true,
+     "devices": [
+      {
+       "name": "d1",
+       "nodeName": "n2"
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "duplicate-across-nodes",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeName": "n1"
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeName": "n2"
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "counters-in-device-slice-missing",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 1
+     },
+     "nodeName": "n1",
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "nope",
+         "counters": {
+          "mem": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "incomplete-and-duplicate",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 3
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "allNodes": true
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 3
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "allNodes": true
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "counter-missing-in-defined-set",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "s"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "defined": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "d"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "cs",
+         "counters": {
+          "missing": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ],
+     "allNodes": true
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "counter-defined-in-defined-set",
+  "features": [],
+  "slices": [
+   {
+    "metadata": {
+     "name": "s"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "sharedCounters": [
+      {
+       "name": "cs",
+       "counters": {
+        "defined": {
+         "value": "4"
+        }
+       }
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "d"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0",
+       "consumesCounters": [
+        {
+         "counterSet": "cs",
+         "counters": {
+          "defined": {
+           "value": "1"
+          }
+         }
+        }
+       ]
+      }
+     ],
+     "allNodes": true
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "gates": [
+   "PartitionableDevices"
+  ]
+ },
+ {
+  "name": "all-nodes-duplicate-with-node-local",
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "allNodes": true
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "nodeName": "n1"
+    }
+   }
+  ],
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": []
+ },
+ {
+  "name": "gate-dependent-duplicate",
+  "driver": "fixture.klyx.dev",
+  "features": [],
+  "gates": [
+   "PartitionableDevices"
+  ],
+  "slices": [
+   {
+    "metadata": {
+     "name": "a"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0"
+      }
+     ],
+     "allNodes": true
+    }
+   },
+   {
+    "metadata": {
+     "name": "b"
+    },
+    "spec": {
+     "driver": "fixture.klyx.dev",
+     "pool": {
+      "name": "p",
+      "generation": 1,
+      "resourceSliceCount": 2
+     },
+     "devices": [
+      {
+       "name": "d0",
+       "allNodes": true
+      }
+     ],
+     "perDeviceNodeSelection": true
+    }
+   }
+  ]
+ }
+]

@@ -1,0 +1,431 @@
+[
+  {
+    "name": "complete-one-slice",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0",
+      "d1"
+    ]
+  },
+  {
+    "name": "complete-one-slice",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "complete-two-slices",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0",
+      "d1"
+    ]
+  },
+  {
+    "name": "complete-two-slices",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "missing-one-slice",
+    "node": "n1",
+    "variant": "",
+    "outcome": "updating"
+  },
+  {
+    "name": "missing-one-slice",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "older-generation-beside-newer",
+    "node": "n1",
+    "variant": "",
+    "outcome": "updating"
+  },
+  {
+    "name": "older-generation-beside-newer",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "older-generation-obsolete-newer-complete",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d1"
+    ]
+  },
+  {
+    "name": "older-generation-obsolete-newer-complete",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "duplicate-device-names",
+    "node": "n1",
+    "variant": "",
+    "outcome": "invalid"
+  },
+  {
+    "name": "duplicate-device-names",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "all-nodes-complete",
+    "node": "n9",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "all-nodes-missing",
+    "node": "n9",
+    "variant": "",
+    "outcome": "updating"
+  },
+  {
+    "name": "per-device-complete",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-complete",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-complete",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "per-device-complete",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-complete",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-complete",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-complete",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "counters-complete",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-missing-set",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-missing-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-missing-set",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "counters-missing-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "counters-duplicate-set",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-duplicate-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-duplicate-set",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "counters-duplicate-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "other-node-slice-counts",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "other-node-slice-counts",
+    "node": "n2",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d1"
+    ]
+  },
+  {
+    "name": "other-node-slice-counts",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "mixed-node-and-all",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0",
+      "d1"
+    ]
+  },
+  {
+    "name": "mixed-node-and-all",
+    "node": "n9",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d1"
+    ]
+  },
+  {
+    "name": "selector-matching",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "selector-not-matching",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "two-selectors-one-matching",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "other-node-only",
+    "node": "n2",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "other-node-only",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n2",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n2",
+    "variant": "PartitionableDevices=on",
+    "outcome": "complete",
+    "devices": [
+      "d1"
+    ]
+  },
+  {
+    "name": "per-device-two-nodes",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "none"
+  },
+  {
+    "name": "duplicate-across-nodes",
+    "node": "n1",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "duplicate-across-nodes",
+    "node": "n2",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "duplicate-across-nodes",
+    "node": "n9",
+    "variant": "",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-in-device-slice-missing",
+    "node": "n1",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-in-device-slice-missing",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counters-in-device-slice-missing",
+    "node": "n1",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "counters-in-device-slice-missing",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "none"
+  },
+  {
+    "name": "incomplete-and-duplicate",
+    "node": "n9",
+    "variant": "",
+    "outcome": "updating"
+  },
+  {
+    "name": "counter-missing-in-defined-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counter-missing-in-defined-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  },
+  {
+    "name": "counter-defined-in-defined-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "none"
+  },
+  {
+    "name": "counter-defined-in-defined-set",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "all-nodes-duplicate-with-node-local",
+    "node": "n1",
+    "variant": "",
+    "outcome": "invalid"
+  },
+  {
+    "name": "all-nodes-duplicate-with-node-local",
+    "node": "n9",
+    "variant": "",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "gate-dependent-duplicate",
+    "node": "n9",
+    "variant": "PartitionableDevices=off",
+    "outcome": "complete",
+    "devices": [
+      "d0"
+    ]
+  },
+  {
+    "name": "gate-dependent-duplicate",
+    "node": "n9",
+    "variant": "PartitionableDevices=on",
+    "outcome": "invalid"
+  }
+]

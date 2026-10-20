@@ -91,6 +91,14 @@ func podVerdict(p *corev1.Pod, now time.Time) Verdict {
 		return Verdict{Kind: Fault, Label: e.label, Reason: e.reason, Message: e.message, Rule: "pod.current-failure", Rank: e.rank}
 	}
 
+	// coverage S11b §3.4: a device reported unhealthy, in a container
+	// running now, outranks the running-pod rules
+	if phase == corev1.PodRunning {
+		if v, ok := deviceHealthVerdict(p); ok {
+			return v
+		}
+	}
+
 	switch phase {
 	case corev1.PodPending: // P9/P10
 		return pendingVerdict(p, now)
@@ -328,4 +336,52 @@ func short(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+// deviceHealthVerdict reads allocatedResourcesStatus (coverage S11b §3.4):
+// a resource the kubelet reports Unhealthy in a container running now (a
+// regular container, or a restartable init container). A completed
+// regular init container's status is history. Unknown is no reading: the
+// kubelet reports it for a driver without a health service.
+func deviceHealthVerdict(p *corev1.Pod) (Verdict, bool) {
+	restartable := map[string]bool{}
+	for _, c := range p.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			restartable[c.Name] = true
+		}
+	}
+	type bad struct {
+		name string
+		n    int
+	}
+	var found []bad
+	scan := func(statuses []corev1.ContainerStatus, init bool) {
+		for _, cs := range statuses {
+			if cs.State.Running == nil || (init && !restartable[cs.Name]) {
+				continue
+			}
+			for _, rs := range cs.AllocatedResourcesStatus {
+				n := 0
+				for _, h := range rs.Resources {
+					if h.Health == corev1.ResourceHealthStatusUnhealthy {
+						n++
+					}
+				}
+				if n > 0 {
+					found = append(found, bad{name: string(rs.Name), n: n})
+				}
+			}
+		}
+	}
+	scan(p.Status.InitContainerStatuses, true)
+	scan(p.Status.ContainerStatuses, false)
+	if len(found) == 0 {
+		return Verdict{}, false
+	}
+	parts := make([]string, 0, len(found))
+	for _, b := range found {
+		parts = append(parts, fmt.Sprintf("%s: %d unhealthy", strings.TrimPrefix(b.name, "claim:"), b.n))
+	}
+	return Verdict{Kind: Degraded, Label: "Device unhealthy", Reason: "DeviceUnhealthy", Rule: "pod.device-unhealthy",
+		Message: strings.Join(parts, "; ") + " (reported by the kubelet)", Native: podNative(p)}, true
 }
