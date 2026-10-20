@@ -485,3 +485,44 @@ func TestQtyOf(t *testing.T) {
 		}
 	}
 }
+
+// Mutation follow-ups (S11a gates): sidecars sum with the containers when no
+// init container outweighs them; an overhead name the node does not
+// advertise is not advertised; a row's other names and the totals order by
+// amount.
+func TestReserveSidecarsSumWithTheContainers(t *testing.T) {
+	gpu := rl("nvidia.com/gpu", "8")
+	n := node("n", gpu, gpu.DeepCopy(), nil)
+	p := pod("p", "n", ctr("main", rl("nvidia.com/gpu", "2")))
+	p.Spec.InitContainers = []corev1.Container{sidecar("side", rl("nvidia.com/gpu", "1"))}
+	if e, _ := figuresOf(Reserve([]*corev1.Node{n}, []*corev1.Pod{p}), "n", "nvidia.com/gpu"); e.Requested != Known(3) {
+		t.Fatalf("main 2 + sidecar 1: %+v", e)
+	}
+}
+
+func TestReserveOverheadNotAdvertised(t *testing.T) {
+	gpu := rl("nvidia.com/gpu", "8")
+	n := node("n", gpu, gpu.DeepCopy(), nil)
+	p := pod("p", "n", ctr("main", rl("nvidia.com/gpu", "1")))
+	p.Spec.Overhead = rl("example.com/vm", "1")
+	r := Reserve([]*corev1.Node{n}, []*corev1.Pod{p})
+	e, ok := figuresOf(r, "n", "example.com/vm")
+	if !ok || e.Advertised || e.Requested != Known(0) || e.NotAdvertised != Known(1) {
+		t.Fatalf("overhead the node does not advertise: %+v", e)
+	}
+}
+
+func TestReserveOrdersByAmount(t *testing.T) {
+	bare := node("bare", rl("cpu", "4"), rl("cpu", "4"), nil)
+	p := pod("p", "bare", ctr("a", rl("example.com/small", "1", "example.com/large", "5")))
+	r := Reserve([]*corev1.Node{bare}, []*corev1.Pod{p})
+	if got := r.Rows[0].Entries; len(got) != 2 || got[0].Name != "example.com/large" || got[1].Name != "example.com/small" {
+		t.Fatalf("other names by amount, largest first: %+v", got)
+	}
+	a := node("a", rl("nvidia.com/gpu", "2"), rl("nvidia.com/gpu", "2"), nil)
+	b := node("b", rl("amd.com/gpu", "8"), rl("amd.com/gpu", "8"), nil)
+	tot := Reserve([]*corev1.Node{a, b}, nil).Totals
+	if len(tot) != 2 || tot[0].Name != "amd.com/gpu" || tot[1].Name != "nvidia.com/gpu" {
+		t.Fatalf("totals by allocatable, largest first: %+v", tot)
+	}
+}

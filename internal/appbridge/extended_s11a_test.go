@@ -73,11 +73,12 @@ func TestExtendedAIAllowlist(t *testing.T) {
 		_ = json.Unmarshal(out, &res)
 		return res
 	}
-	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "g", UID: "uid-g", Labels: map[string]string{"nvidia.com/gpu.product": "NVIDIA-L4", "nvidia.com/gpu.replicas": "4"}},
+	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "g", UID: "uid-g", Labels: map[string]string{"nvidia.com/gpu.product": "NVIDIA-L4", "nvidia.com/gpu.replicas": "4", "nvidia.com/mig.strategy": "single"}},
 		Status: corev1.NodeStatus{Capacity: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("8")}, Allocatable: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("8")}}}
 	got := project(healthsrc.TaskNodes+"/nodes", toNodeSummaryDTO(workloads.SummarizeNodes([]corev1.Node{*n}, time.Now())[0]))
 	b, _ := json.Marshal(got["extended"])
-	if !strings.Contains(string(b), `"name":"nvidia.com/gpu"`) || !strings.Contains(string(b), `"NVIDIA-L4"`) || !strings.Contains(string(b), "advertised 4 times") {
+	if !strings.Contains(string(b), `"name":"nvidia.com/gpu"`) || !strings.Contains(string(b), `"NVIDIA-L4"`) || !strings.Contains(string(b), "advertised 4 times") ||
+		!strings.Contains(string(b), `"migStrategy":"single"`) {
 		t.Fatalf("the node's evidence: %s", b)
 	}
 	if _, ok := aiEvidenceFields[healthsrc.TaskExtended+"/reservations"]; !ok {

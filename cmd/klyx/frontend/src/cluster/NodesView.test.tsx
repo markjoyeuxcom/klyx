@@ -969,6 +969,17 @@ describe("NodesView extended resources (S11a)", () => {
     expect(notes.some((n) => n?.startsWith("more than 256 distinct names"))).toBe(true);
   });
 
+  it("the inspector says a dropped row, and a withdrawn plugin as 0 advertised", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
+    const withdrawn: NodeSummaryDTO = { ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], capacity: "0", allocatable: "0", sharing: undefined, facts: [] }] } };
+    seedWithDetail(withdrawn, { ...fakeDetail, summary: withdrawn });
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    const line = getAllByTestId("node-extended-line")[0].textContent;
+    expect(line).toBe("nvidia.com/gpu · 0 advertisedunit: GPU"); // the unit is its own line
+    const notes = getAllByTestId("node-extended-note").map((n) => n.textContent);
+    expect(notes.some((n) => n?.startsWith("requested not shown: this node's reservations are not in the current read"))).toBe(true);
+  });
+
   it("a node-row-only update re-renders the block, from the joined rows", () => {
     extendedValue = base();
     seedWithDetail(gpuNode, { ...fakeDetail, summary: gpuNode });

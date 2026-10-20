@@ -58,5 +58,8 @@ describe("extended marks (S11a §2.1)", () => {
     expect(markOf([undefined])).toBe("?");
     expect(markOf([{ kind: "a", coverage: "live", truncated: true }])).toBe("+");
     expect(markWords("+*", "requested")).toBe("requested is a lower bound, from the last observed read");
+    expect(markWords("+", "requested")).toBe("requested is a lower bound: the pods read is capped");
+    expect(markWords("*", "requested")).toBe("requested from the last observed read");
+    expect(markWords("", "requested")).toBe("");
   });
 });

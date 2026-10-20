@@ -2,7 +2,9 @@ package healthsrc
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +151,38 @@ func TestExtendedProjectionEquality(t *testing.T) {
 	}
 	if v := health.Node(projNodes[0]); v.Kind != health.Degraded || v.Rule != "node.resources-not-allocatable" {
 		t.Fatalf("the projected node's reading: %+v", v)
+	}
+}
+
+// Each part's Evidence is its full count before the cut, so the lens knows
+// how many rows a bound left out (S11a §2.0; a mutation follow-up).
+func TestExtendedEvidenceCountsTheCut(t *testing.T) {
+	long := func(i int) string {
+		tag := fmt.Sprintf("%08d", i)
+		return strings.Repeat("a", 63) + "." + strings.Repeat("a", 63) + "." + strings.Repeat("a", 63) + "." + strings.Repeat("a", 52-len(tag)) + tag + "/" + strings.Repeat("a", 63-len(tag)) + tag
+	}
+	var objs []any
+	for n := 0; n < 400; n++ {
+		names := map[string]string{}
+		for i := 0; i < 16; i++ {
+			names[long(n*16+i)] = "1"
+		}
+		node := s11Node(fmt.Sprintf("n%03d", n), names, names, nil)
+		objs = append(objs, node)
+	}
+	c := observe.Capture{Objects: map[string][]any{KindNodes: objs}, Rows: true}
+	res := evalReservations(c)
+	set, _ := res.Rows.(RowSet[ReservationRow])
+	if res.Evidence == nil || *res.Evidence != 400 || len(set.Rows) >= 400 || len(set.Rows) == 0 {
+		t.Fatalf("reservations: evidence %v, %d rows kept", res.Evidence, len(set.Rows))
+	}
+	var accel []any
+	for i := 0; i < extres.MaxTotals+3; i++ {
+		accel = append(accel, s11Node(fmt.Sprintf("g%02d", i), map[string]string{fmt.Sprintf("nvidia.com/mig-%dg.5gb", i): "1"}, map[string]string{fmt.Sprintf("nvidia.com/mig-%dg.5gb", i): "1"}, nil))
+	}
+	res = evalExtendedTotals(observe.Capture{Objects: map[string][]any{KindNodes: accel}, Rows: true})
+	tot, _ := res.Rows.(RowSet[TotalRow])
+	if res.Evidence == nil || *res.Evidence != extres.MaxTotals+3 || len(tot.Rows) != extres.MaxTotals {
+		t.Fatalf("totals: evidence %v, %d rows kept", res.Evidence, len(tot.Rows))
 	}
 }
