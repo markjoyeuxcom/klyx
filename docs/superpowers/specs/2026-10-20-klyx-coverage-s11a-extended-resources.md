@@ -257,3 +257,82 @@ Codex's non-blocking notes, taken: §1.4 corrects the rename claim (v0.20.1's ex
 | P2 | The counted requested total depends on the nodes read as well as the pods read: §4 classifies an unmapped pair by the node's allocatable map, so a current pods read beside a stale nodes read cannot certify a current requested figure | §2.1 states each figure's dependencies: allocatable and capacity on the nodes read; requested and not advertised on both; served by DRA on the pods read alone. A stale, checking or unreadable nodes read never certifies a current zero or proves a name is not advertised. §6 qualifies the per-node figures and the footer totals by those dependencies; §9's mixed-freshness tests follow them |
 
 **Design accepted at a7d9d14** (Codex, revision 3, handoff 60c322d2, 2026-10-20), with no remaining findings. This accepts the design only; the implementation and its gates keep their own review.
+
+## 14. As built
+
+Built on `feat/coverage-s8` after the accepted design (a7d9d14):
+
+| Commit | What |
+|---|---|
+| b8e41af | Stage 1: `internal/extres` (the two name predicates, accelerator classes and units, vendor facts, the capacity gap, the reservations and totals with every §2.0 bound, exact quantities); `health.Node`'s "Resources not allocatable"; `NodeSummary.Extended`; the golden test against upstream `PodRequests` at six versions |
+| 835df8e | Stage 2: the `extended` task, its `reservations` and `totals` evidence parts (nodes counted, pods a dependency), Evidence counted before every cut |
+| 284cd84 | Stage 3: the rows converters, the pod detail's extended requests, `EvidenceRev` hashing the extended claim status, the Explain allowlists |
+| b3f8338 | Stage 4: the GPU column, the footer's totals, the node and pod inspectors' blocks; figures compared with BigInt |
+| c60f478 | The gates: parity case 11 with a real device plugin, the oracle's two parts, the smoke step |
+| 0153c53 | The parity gate's frontend stage: an inventory part of a lens-only task has no attention area at all |
+| 93bd79b | An exact byte scan for extended names; the worst shapes measured; the load fixture's GPUs |
+| 7d13406 | The mutation gate's survivors, each with a test |
+| e631cf9 | `Reserve` skips pods that request no extended resource, and aggregates only the classes a pod uses |
+| ce7cc76 | The Nodes header calls a degraded node "degraded", not "under pressure" (found by the captures) |
+
+### 14.1 Where the build departs from the note
+
+- **The longest extended name is 308 bytes, not 317** (§2.0). Kubernetes' `IsExtendedResourceName` requires `requests.` plus the name to be a qualified name, so the domain is at most 244 bytes. A node key of 309 to 317 bytes is valid in node status, but neither the scheduler nor Klyx treats it as an extended resource. Klyx's predicate already mirrored upstream; only the note's figure was wrong, and §2.0's per-node worst cases are therefore slightly conservative.
+- **`IsExtended` scans bytes** instead of calling the upstream regular expressions. The measurement of §8 found them costing about 4 us on a long name: 50 pods requesting 1,000 distinct 308-byte names each took 355 ms per evaluation. The scan, which also no longer builds the `requests.`-prefixed string, brings the same shape to about 45 ms.
+  - **Equality with upstream** is held by a differential test (`TestQualifiedEqualsUpstream`, 200,000 generated strings and 46 seeds at the limits) and a fuzz target (`FuzzQualified`, two runs of 90 s, 6.5 million executions, no difference), comparing both `qualified` and `IsExtended` with `validation.IsQualifiedName`.
+- **The fast path in `Reserve`** (e631cf9) was added after `TestLoad` measured S11a's cost (§14.3).
+- **The parity gate's frontend stage** required every inventory part to sit, undrawn, inside its task's area. The `extended` task is read by the Nodes lens alone, so it has no area at all; the stage now accepts that for a task outside the attention model's list, and only for one.
+- **The Nodes header said "N under pressure"** for every degraded node: pressure was the only Degraded node reading before S11a. The captures showed the kind node, degraded by "Resources not allocatable" with no pressure, counted as under pressure. The header now uses the verdict's own word, "degraded"; the counts come from the summary, which does not split Degraded by rule.
+
+### 14.2 The worst shapes (§8)
+
+`TestBoundsMeasured` (`KLYX_LOAD=1 go test ./internal/extres -run TestBoundsMeasured -v`), each shape at the longest countable name (308 bytes):
+
+| Shape | Encoded | Retained heap | Time | The omission, said |
+|---|---|---|---|---|
+| A node advertising 100 names, 50 with a gap | summary 7,564 B; the reading's message 1,557 B | below the probe's resolution (the names share the node's keys) | `OfNode` 0.7-1.6 ms; the reading 47-121 us | 16 entries kept, 84 omitted; the reading names 4 resources, "and 46 more" |
+| 50 pods on one node, 1,000 distinct unadvertised names each | the row 7,035 B | 19-25 KB | `Reserve` 44-57 ms | untracked (more than 256 names), 16 entries kept, 240 omitted |
+| 400 nodes, 16 requested names each | 2,154,834 B for the 307 rows kept (2,096,196 B by `RowSize`) | 547 KB | `Reserve` 12-15 ms | 93 rows dropped and counted in Evidence |
+
+`RowSize` is an estimate, 2.7% below the encoded size at this shape; the bound is a budget, not a wire limit.
+
+### 14.3 The load test
+
+`TestLoad`'s fixture now carries S11a: 8 GPUs on a quarter of the large cluster's nodes (half of those with one not allocatable) and a GPU request on a tenth of its pods, some on nodes that do not advertise one. The same fixture ran on the code before S11a (a7d9d14, in a separate worktree) and after, interleaved. The machine was shared with Codex's review probes throughout, so the absolute figures move between rounds; the pairs are what compare.
+
+| Round | Full evaluation, before / after | Steady heap, before / after |
+|---|---|---|
+| 1 | 49.3 / 54.5 ms | 62.8 / 62.9 MB |
+| 2 | 48.7 / 54.2 ms | 62.8 / 62.9 MB |
+| 3 | 72.5 / 59.9 ms | 62.8 / 62.9 MB |
+| e631cf9 lands | | |
+| 4 | 72.7 / 74.4 ms | 62.8 / 62.9 MB |
+| 5 | 72.7 / 71.6 ms | 62.8 / 62.9 MB |
+| 6 | 46.6 / 49.3 ms | 62.8 / 62.9 MB |
+
+- **Before the fast path**, S11a added about 5 ms of full evaluation: both extended parts ran the per-class aggregation over all 5,000 pods. `BenchmarkReserve` (the same shape) measured 1.9 ms and 31,258 allocations per call.
+- **After it**, 0.58 ms and 2,258 allocations per call, and the full evaluation is within the rounds' noise of the code before S11a.
+- **The first complete summary** stayed at 1.04-1.08 s, and every kind was live again 8.1-8.8 s after the API recovered, before and after alike.
+- **Two budgets miss before and after alike**, as S10 recorded: the full evaluation on a busy machine (the open owner question from S9), and the recovery peak (1.63x and 1.66x on the code before S11a, 1.53x after), whose cause S10 traced to GC timing during re-lists.
+
+### 14.4 Gates
+
+- **Parity:** the Go stage passes with case 11, the real sample device plugin stopped and restored on `kind-klyx-parity`, the node degraded once and recovered; the frontend stage passes.
+- **The native smoke:** 198 of 198 steps in each of night and day at 1440 and 1024 on 360c1eb (a clean tree), including the extended-resources step.
+- **Mutations:** 94. 79 were caught on the first pass; three did not build and were rewritten to compile; twelve survived, and eleven of them gained tests:
+  - sidecars summed with the containers;
+  - overhead the node does not advertise;
+  - a row's other names, and the totals, ordered by amount;
+  - Evidence counting dropped rows and omitted totals;
+  - the MIG strategy in Explain;
+  - three inspector words: a capped figure, a dropped row, a withdrawn plugin's "0 advertised".
+
+  The one equivalent: the per-resource fact cap, which no vendor reaches (at most five facts). Three more on the fast path are caught.
+- **Go:** `go test -race` passes for `extres`, `health`, `workloads`, `healthsrc`, `appbridge` and `fleet`; golangci-lint reports 0 issues across the module.
+- **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S11a), and vitest passes 2,377 tests.
+- **Captures** (headless, server mode, night and day at 1440 and 1024, `pw/cov-s11a.mjs`), 28 in all, every expected text present and no sideways scroll:
+  - **healthy:** the Nodes lens with the GPU column ("2 resources") and the footer's totals ("8 nvidia.com/gpu allocatable (3 requested) · 7 nvidia.com/mig-1g.5gb allocatable (1 requested)"); the node inspector's block (MIG strategy mixed, `nvidia.com/gpu` "3 requested · 8 allocatable · 8 capacity" with its time-slicing sentence, `nvidia.com/mig-1g.5gb` "1 requested · 7 allocatable", `example.com/resource` "1 requested · 2 allocatable · 2 capacity"); the pod inspector for `lab-train` ("app: nvidia.com/gpu 3");
+  - **the real plugin stopped:** the node "Resources not allocatable", `example.com/resource` "1 requested · 0 allocatable · 2 capacity · 2 not allocatable", and the cause said as an interpretation;
+  - **withdrawn** (after the kubelet's 5 minutes): `example.com/resource` "0 advertised", and the node no longer degraded.
+
+  The first runs failed on two script errors, not the product: `innerText` applies the titles' upper-case transform, and a pod's name cell reads "namespace / name". The second run, on ce7cc76, passed all three states.

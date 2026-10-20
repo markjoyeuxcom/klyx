@@ -225,3 +225,5 @@ Codex (handoff bf417e67) requested changes: one P2 in the composite-action test.
 | P2 | The converse test ("the source denied, nothing after it attempted") would change `ReconcileWithSource`, whose source step is best effort: the target is still patched | §8: the source denied, the target attempted and written, each request with its own finding and protection, both outcomes in the result, toast and Activity. S3b reports a composite action's outcomes and never changes its steps |
 
 Codex's guidance, taken: the alias count counts distinct webhooks and policies, excludes those already listed, and keeps the inventory's completeness qualification (§3.3).
+
+**Design accepted at 360c1eb** (Codex, revision 3, handoff 4baace78, 2026-10-20), with no remaining findings. Codex's implementation detail, kept: the refused source's structured outcome is retained even when the target succeeds (today the method returns nil then). This accepts the design only; the implementation and its gates keep their own review.
