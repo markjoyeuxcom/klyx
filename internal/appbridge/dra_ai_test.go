@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -155,5 +154,15 @@ func TestDRAExplainRowsCarryNoMessage(t *testing.T) {
 	if !strings.Contains(string(out), `"reason":"Failed"`) || !strings.Contains(string(out), `"meaning"`) {
 		t.Fatalf("the claim row keeps reason tokens and the fixed meaning: %s", out)
 	}
-	_ = time.Now
+}
+
+// S11b §6: a ResourceSlice's Suggest-fix is refused before anything is
+// read or sent.
+func TestDRASuggestFixRefusesASlice(t *testing.T) {
+	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"resource.k8s.io/resourceslices//s": {Kind: "ResourceSlice", Name: "s", YAML: "kind: ResourceSlice"}}}
+	cl := &fakeCompleter{reply: "ok"}
+	s := explainSvc(cl, conn)
+	if r := s.SuggestFix("c", "resource.k8s.io", "v1", "resourceslices", "", "s", "s-uid"); !strings.Contains(r.Error, "not available for a ResourceSlice") || cl.calls != 0 || conn.getCall != 0 {
+		t.Fatalf("a slice's Suggest-fix is refused unread: %+v (calls %d, gets %d)", r, cl.calls, conn.getCall)
+	}
 }

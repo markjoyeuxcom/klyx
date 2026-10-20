@@ -132,6 +132,9 @@ func TestTheDecisionTable(t *testing.T) {
 		{"f: no condition yet", pending("a", "gpu"),
 			[]ConsumerPod{consumer(pod("p", nil, "a"), true, one)},
 			health.Progressing, "claim.waiting-scheduler"},
+		{"g: the pod is scheduled, its node not yet recorded", pending("a", "gpu"),
+			[]ConsumerPod{consumer(pod("p", &corev1.PodCondition{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}, "a"), true, one)},
+			health.Unknown, "claim.scheduled-unallocated"},
 		{"g: the pod is on a node", pending("a", "gpu"),
 			[]ConsumerPod{func() ConsumerPod { p := pod("p", nil, "a"); p.Spec.NodeName = "n1"; return consumer(p, true, one) }()},
 			health.Unknown, "claim.scheduled-unallocated"},
@@ -381,5 +384,37 @@ func TestClipKeepsRunesWhole(t *testing.T) {
 	}
 	if got := Clip("short", 256); got != "short" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// The mutation gate's survivors (S11b): a cut claim, a 1.34 slice's
+// counter sets, and a clipped condition type.
+func TestTheProjectionsBounds(t *testing.T) {
+	var results []any
+	for i := 0; i < 33; i++ {
+		results = append(results, map[string]any{"request": "gpu", "driver": "d", "pool": "p", "device": fmt.Sprintf("g%d", i)})
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "c", "namespace": "ns", "uid": "u"},
+		"status": map[string]any{"allocation": map[string]any{"devices": map[string]any{"results": results}},
+			"devices": []any{map[string]any{"driver": "d", "pool": "p", "device": "g0",
+				"conditions": []any{map[string]any{"type": strings.Repeat("T", 300), "status": "True", "reason": "R"}}}}}}}
+	c := ProjectClaim(u)
+	if !c.Truncated || len(c.Results) != 32 {
+		t.Fatalf("results past the API's 32 are cut and said: %v %d", c.Truncated, len(c.Results))
+	}
+	if v, _ := ClaimVerdict(c, nil, true, now); v.Kind != health.Unknown || v.Rule != "claim.not-established" {
+		t.Fatalf("a cut claim is not established: %+v", v)
+	}
+	if typ := c.Devices[0].Conditions[0].Type; len(typ) > MaxTokenBytes+len("…") {
+		t.Fatalf("a condition type is clipped: %d bytes", len(typ))
+	}
+	var sets []any
+	for i := 0; i < 20; i++ {
+		sets = append(sets, map[string]any{"name": fmt.Sprintf("cs%d", i), "counters": map[string]any{"c": map[string]any{"value": "1"}}})
+	}
+	s := ProjectSlice(&unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "s"},
+		"spec": map[string]any{"driver": "d", "pool": map[string]any{"name": "p", "generation": int64(1), "resourceSliceCount": int64(1)}, "allNodes": true, "sharedCounters": sets}}})
+	if s.Truncated || len(s.CounterSets) != 20 {
+		t.Fatalf("1.34 allows 32 counter sets: 20 are within the API's bounds: %v %d", s.Truncated, len(s.CounterSets))
 	}
 }

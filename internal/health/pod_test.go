@@ -250,6 +250,13 @@ func TestPodDeviceHealth(t *testing.T) {
 	if v := Pod(p, at); v.Kind != OK {
 		t.Fatalf("a completed regular init container is history: %+v", v)
 	}
+	// a regular init container re-running in a Running pod (its sandbox
+	// recreated) is not one of the containers the rule reads
+	p = mk()
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "setup", State: running, AllocatedResourcesStatus: health(corev1.ResourceHealthStatusUnhealthy, "cdi/i")}}
+	if v := Pod(p, at); v.Rule == "pod.device-unhealthy" {
+		t.Fatalf("a running regular init container does not count: %+v", v)
+	}
 	p = mk()
 	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health(corev1.ResourceHealthStatusUnhealthy, "cdi/a")
 	p.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}

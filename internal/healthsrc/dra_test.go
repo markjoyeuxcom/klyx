@@ -2,6 +2,7 @@ package healthsrc
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -170,5 +171,53 @@ func TestMinorOf(t *testing.T) {
 		if got := MinorOf(in); got != want {
 			t.Errorf("MinorOf(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+func sizedSlice(s dra.Slice) any { return &dra.Sized[dra.Slice]{V: s} }
+
+// The mutation gate's survivors (S11b): a capped slices read establishes
+// no pool, a pool row keeps its 16 worst views, and a template's claim
+// is a pod's only when the pod owns it.
+func TestDRAPoolsAndConsumersBounds(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	var slices []any
+	for i := 0; i < 20; i++ {
+		slices = append(slices, sizedSlice(dra.Slice{Name: fmt.Sprintf("s%02d", i), UID: fmt.Sprintf("u%02d", i), Driver: "d", Pool: "p", Generation: 1, Count: 20,
+			NodeName: fmt.Sprintf("n%02d", i), Devices: []dra.Device{{Name: fmt.Sprintf("g%02d", i)}}}))
+	}
+	capture := func(complete bool) observe.Capture {
+		return observe.Capture{Now: now, Objects: map[string][]any{KindResourceSlices: slices}, Complete: map[string]bool{KindResourceSlices: complete},
+			Current: map[string]bool{KindResourceSlices: complete}, Facts: map[string]any{FactServerMinor: 37}, Rows: true}
+	}
+	rowOf := func(res observe.PartResult) Row[DRAPoolRow] {
+		set := res.Rows.(RowSet[DRAPoolRow])
+		if len(set.Rows) != 1 {
+			t.Fatalf("one pool: %d rows", len(set.Rows))
+		}
+		return set.Rows[0]
+	}
+	r := rowOf(evalDRAPools("c1")(capture(true)))
+	if r.Data.Verdict.Kind != health.OK || len(r.Data.Pool.Views) != dra.MaxViewsKept || r.Data.Pool.ViewsOmitted != 21-dra.MaxViewsKept || r.Data.Pool.Nodes != 20 {
+		t.Fatalf("21 views read, 16 kept, the rest counted: %+v, %d kept, %d omitted", r.Data.Verdict, len(r.Data.Pool.Views), r.Data.Pool.ViewsOmitted)
+	}
+	r = rowOf(evalDRAPools("c1")(capture(false)))
+	if r.Data.Verdict.Rule != "pool.unread" || !r.Data.Unread {
+		t.Fatalf("a capped slices read establishes no pool: %+v", r.Data.Verdict)
+	}
+
+	// a pod naming a template's claim that another pod owns
+	owner := dra.Claim{Namespace: "lab", Name: "p-gpu-x", UID: "u-x", OwnerKind: "Pod", OwnerUID: "uid-other"}
+	tmpl, gen := "t", "p-gpu-x"
+	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "lab", UID: "uid-p"},
+		Spec:   corev1.PodSpec{ResourceClaims: []corev1.PodResourceClaim{{Name: "gpu", ResourceClaimTemplateName: &tmpl}}},
+		Status: corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "gpu", ResourceClaimName: &gen}}}}
+	cons := claimConsumers([]*corev1.Pod{p}, map[string]dra.Claim{"lab/p-gpu-x": owner}, true)
+	if len(cons["lab/p-gpu-x"]) != 0 {
+		t.Fatalf("a template's claim another pod owns is not this pod's: %+v", cons)
+	}
+	owner.OwnerUID = "uid-p"
+	if cons := claimConsumers([]*corev1.Pod{p}, map[string]dra.Claim{"lab/p-gpu-x": owner}, true); len(cons["lab/p-gpu-x"]) != 1 || !cons["lab/p-gpu-x"][0].Complete {
+		t.Fatalf("the pod's own: %+v", cons)
 	}
 }
