@@ -164,6 +164,10 @@ function typeInto(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
+function typeIntoArea(area: HTMLTextAreaElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, value);
+  area.dispatchEvent(new Event("input", { bubbles: true }));
+}
 function chooseOption(select: HTMLSelectElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
   select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -897,6 +901,49 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const hpa = $("[data-testid='keda-hpa']")?.textContent ?? "";
     if (!/^keda-hpa-failing: \d+ → \d+/.test(hpa)) throw new Error(`the HPA line: ${hpa}`);
     return { failures, hpa };
+  });
+  // coverage S3b: lab-s3b's webhook and policy refuse Klyx's own writes;
+  // the YAML panel says the finding with its candidates, a scale's toast
+  // and Activity entry say who refused it
+  await step(steps, "Admission: a YAML apply refused by the lab webhook", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" });
+    useFleet.getState().openInstance("klyx-s3b-lab", "lab-webhook");
+    await within(15_000, "its detail", () => useFleet.getState().instanceDetail.detail?.name === "lab-webhook");
+    [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest")?.click();
+    const area = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
+    typeIntoArea(area, area.value.replace("refused by the lab webhook", "refused by the lab webhook (smoke)"));
+    (await within(4000, "Apply", () => byText<HTMLButtonElement>("button", /^Apply$/))).click();
+    (await within(4000, "Apply changes", () => byText<HTMLButtonElement>("button", /^Apply changes$/))).click();
+    const summary = await within(20_000, "the finding", () => {
+      const t = $("[data-testid='admission-summary']")?.textContent ?? "";
+      return /^update ConfigMap klyx-s3b-lab\/lab-webhook was refused by admission before it was stored: denied by admission webhook "deny\.s3b\.klyx\.dev"$/.test(t) ? t : null;
+    });
+    const candidates = await within(20_000, "the candidates", () => {
+      const t = $("[data-testid='admission-candidates']")?.textContent ?? "";
+      return /klyx-s3b-deny\/deny\.s3b\.klyx\.dev · ValidatingWebhook · named by the refusal/.test(t) ? t : null;
+    });
+    const message = $("[data-testid='admission-message']")?.textContent ?? "";
+    if (message !== "this webhook denies all requests") throw new Error(`the server's message: ${message}`);
+    useFleet.getState().closeResource();
+    return { summary: summary.slice(0, 160), candidates: candidates.slice(0, 240) };
+  });
+  await step(steps, "Admission: a scale refused by the lab policy", async () => {
+    await open("workloads");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "scale-workload", cluster, workloadKind: "Deployment", namespace: "klyx-s3b-lab", name: "lab-frozen" });
+    const input = await within(20_000, "the replica count", () => $<HTMLInputElement>("input[aria-label='replica count']"));
+    typeInto(input, "2");
+    (await within(4000, "apply", () => $<HTMLButtonElement>("button[aria-label='apply scale']"))).click();
+    const entry = await within(20_000, "the toast's Activity entry", () => {
+      const e = useFleet.getState().actionLog[0];
+      return e && e.message === 'Scale refused: denied by ValidatingAdmissionPolicy "klyx-s3b-freeze" (binding "klyx-s3b-freeze-binding")' ? e : null;
+    });
+    const named = entry.admission?.[0];
+    if (!named || !/^update Deployment klyx-s3b-lab\/lab-frozen was refused by admission before it was stored/.test(named.summary) || !named.candidates.includes("klyx-s3b-freeze")) {
+      throw new Error(`the Activity entry: ${JSON.stringify(entry)}`);
+    }
+    return { toast: entry.message, candidates: named.candidates };
   });
   // the scale verb names what owns the count; cancelled, never applied
   await step(steps, "Scale: the popover names the KEDA ScaledObject", async () => {
