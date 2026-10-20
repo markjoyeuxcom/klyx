@@ -874,3 +874,36 @@ Built on `feat/coverage-s8` after the design's acceptance at 279a50d:
     - Git ownership in the scale confirmation.
   - `ReplicaOwner`'s read became `autoscalersOf` over the `VisitKind` interface, so its proofs are tested without a running Observer. That added one mutation (no Observer proves nothing).
   - No equivalents.
+
+## 18. Implementation revision 1: Codex's review of aa4bddb
+
+Ten P2 findings, each reproduced by a probe. Every probe is kept as a test (`internal/{keda,fleet,appbridge,identity}/*review1*_test.go`, and the mounted AutoscalingView case). The fixes are in 493bf19.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | An incomplete operator read could establish a unique handler and permit Pause/Resume | `HandlerOf` takes `unread`: with candidates past the four read, no read candidate is the handler and none is never "none". A candidate whose ReplicaSet or Pod list was continued, or which runs more than 8 pods, is `Config.Incomplete`: no setting, ServiceAccount or version resolves. The verb refuses and names the cap. The capability's version read refuses continued lists too |
+| 2 | A negative label selector could match because the projection omitted its key | A cut label map decides only the keys it holds (their values are exact). A requirement, positive or negative, on a key it lacks is undecided. KEDA parses both selectors with `metav1.ParseToLabelSelector`, as Klyx does: `!=` is invalid there, so a negative value test is `notin` |
+| 3 | A retained HPA with unestablished health cleared KEDA's failure | A joined, current HPA's health is established as §4 establishes it (`hpa.Rule`). One the controller has not reported, or one behind its generation, reads "HPA health not established" (unknown) against `HPAActive=False`, and otherwise the HPA's own state ("HPA: Waiting for the HPA controller", "HPA: Syncing…"). Never ok |
+| 4 | A capped scaler kind stopped retained objects' episode clocks | A live kind is observed for the scalers it retains, capped or not. One that drops out of the model starts again as a lower bound when it returns |
+| 5 | An unchanged scaler resourceVersion did not prove its HPA-dependent state continuous | A state that reads the HPAs (pausing, awaiting an HPA) carries across a non-contiguous step only when the HPA kind did not change at all. Resuming reads no HPA and keeps the resourceVersion rule. The driver's updates are serialized, so each visit is compared with the one before |
+| 6 | The inverse ServiceAccount join gave every authentication to every matching operator account | Derived from actual users: each ScaledObject's and ScaledJob's references, its handler proven as the forward join proves it, and that handler's visibility of the authentication. An unverified handler or visibility, a disputed ServiceAccount, a cut trigger list or an incomplete scaler read makes the read partial |
+| 7 | Mounted authentication evidence survived a change to the scaler's references | The scaler DTOs carry `evidenceRev`: a fingerprint of the generation, namespace, labels, target and authentication references. The inspector re-reads on its change, and shows a reply only for its own object and revision |
+| 8 | The final inspector reply had no 256 KiB bound | `KEDAInspection.Fit` drops references, unverified ones before any finding, each from the longest list first, and counts every one dropped (`RefsOmitted`, `RefsCut`). `KEDAService.Inspect` tightens the fit until the serialized DTO is within 256 KiB |
+| 9 | Projection-level reference cuts disappeared from the inspector | References the projection did not keep (16 per source) are counted in `RefsOmitted` and the check reads `RefsCut`. The inspector says "N more references are not listed" |
+| 10 | Azure's requested tenant was discarded | `identityTenantId` is projected and part of the subject ("tenant …", shown only in a tenant's shape). With none, the subject says the operator's default tenant. The AI and chat allowlists are explicit, so the tenant is not sent |
+
+**Added beyond the probes:**
+- tests for a continued ReplicaSet list, more running pods than are read, the cap's own refusal message, undecidable visibility (an authentication's cut labels), and a handler whose pods disagree on the ServiceAccount;
+- `kedaAuthsFor` had no test before this revision.
+
+**Gates on c40004f:**
+- **Codex's probes:** all 11 pass through the original overlay under `-race`.
+- **The native smoke:** 193 of 193 in each of night and day at 1440 and 1024.
+- **The parity gate:** both stages pass.
+- **`relabs.sh`:** every lab applies.
+- **The captures:** all 15 screens pass in each of the four modes.
+- **Go:** `go test -race` passes for `keda`, `hpa`, `healthsrc`, `capability`, `fleet`, `appbridge`, `identity`, `observe` and `crd`; golangci-lint reports 0 issues.
+- **The frontend:** tsc is clean, eslint has 0 errors, and vitest passes 2,331 tests.
+- **Mutations:** 38 on this revision's code, all caught.
+  - Two survived the first pass: a continued ReplicaSet list, whose test returned no ReplicaSet at all, and an operator in another namespace sharing the ServiceAccount's name. Each gained a test (c40004f).
+  - One more was rewritten to compile.
