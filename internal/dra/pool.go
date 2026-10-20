@@ -127,8 +127,11 @@ const (
 // Outcome is one view's outcome under one variant.
 type Outcome struct {
 	Kind string
-	// Devices are the devices the view can allocate (complete only).
+	// Devices are the devices the view can allocate (complete only), and N
+	// their count; a read pool keeps the count alone (a pool row carries
+	// counts, never device names).
 	Devices []string
+	N       int
 	// Have and Want: the slices present and resourceSliceCount (updating).
 	Have, Want int64
 	// Rule is the failed rule (invalid) or why not established.
@@ -194,51 +197,131 @@ func devicesFor(s Slice, node string, v Variant) []string {
 // ViewOutcome is one view's outcome under one variant. slices are every
 // slice of the pool (one driver and pool name), in the capture's order.
 func ViewOutcome(slices []Slice, node string, v Variant) Outcome {
-	for _, s := range slices {
-		if s.Truncated {
-			return Outcome{Kind: OutUnestablished, Rule: "a slice's lists exceed the API's bounds"}
-		}
-		if s.usesCompat() {
-			return Outcome{Kind: OutUnestablished, Rule: "completeness depends on the scheduler's compatibility-groups support, which Klyx cannot read"}
-		}
-	}
-	f := FamilyOf(v.Minor)
-	if f != F135 {
-		for _, s := range slices {
-			if s.usesCounters() {
-				return Outcome{Kind: OutUnestablished, Rule: "counter-based partitionable devices were alpha before 1.35, in another shape"}
+	return newPoolIndex(slices).outcome(node, v)
+}
+
+// poolIndex is one pool's slices indexed for its views (S11b §8: a pool of
+// 2,000 node-local slices reads in linear time). What every view shares is
+// read once: the pool-wide reasons no view is established, each
+// generation's slices, and each generation's counter sets with the
+// consumptions they fail. A view reads only the slices its node may see,
+// in the capture's order, so every outcome and rule is the one a scan of
+// every slice gives (the pool oracle holds it to the allocator's).
+type poolIndex struct {
+	slices []Slice
+	// blocked: a pool-wide reason no view is established
+	blocked  string
+	counters bool
+	// global: the slices any node may see, or whose visibility a selector
+	// decides; local: the slices only the named node may see. Both in the
+	// capture's order.
+	global []int
+	local  map[string][]int
+	maxGen int64
+	byGen  map[int64][]int
+	gens   map[int64]*genSets
+}
+
+// genSets are one generation's counter sets (1.35+, the feature on: every
+// view sees every counter slice) and each slice's first failing
+// consumption against them.
+type genSets struct {
+	sets map[string]map[string]bool
+	rule string
+	fail map[int]string
+}
+
+func newPoolIndex(slices []Slice) *poolIndex {
+	ix := &poolIndex{slices: slices, local: map[string][]int{}, byGen: map[int64][]int{}, gens: map[int64]*genSets{}}
+	for i, s := range slices {
+		if ix.blocked == "" {
+			if s.Truncated {
+				ix.blocked = "a slice's lists exceed the API's bounds"
+			} else if s.usesCompat() {
+				ix.blocked = "completeness depends on the scheduler's compatibility-groups support, which Klyx cannot read"
 			}
 		}
+		ix.counters = ix.counters || s.usesCounters()
+		if i == 0 || s.Generation > ix.maxGen {
+			ix.maxGen = s.Generation
+		}
+		ix.byGen[s.Generation] = append(ix.byGen[s.Generation], i)
+		// the access forms as sees reads them
+		switch {
+		case len(s.CounterSets) > 0, s.AllNodes, s.NodeSelector:
+			ix.global = append(ix.global, i)
+		case s.NodeName != "":
+			ix.local[s.NodeName] = append(ix.local[s.NodeName], i)
+		case s.PerDevice:
+			anywhere := false
+			for _, d := range s.Devices {
+				anywhere = anywhere || d.AllNodes || d.NodeSelector
+			}
+			if anywhere {
+				ix.global = append(ix.global, i)
+				continue
+			}
+			seen := map[string]bool{}
+			for _, d := range s.Devices {
+				if d.NodeName != "" && !seen[d.NodeName] {
+					seen[d.NodeName] = true
+					ix.local[d.NodeName] = append(ix.local[d.NodeName], i)
+				}
+			}
+		}
+		// no access form: no node sees it
 	}
-	var visible []Slice
-	for _, s := range slices {
-		vis, unknown := sees(s, node, v)
+	return ix
+}
+
+func (ix *poolIndex) outcome(node string, v Variant) Outcome {
+	if ix.blocked != "" {
+		return Outcome{Kind: OutUnestablished, Rule: ix.blocked}
+	}
+	f := FamilyOf(v.Minor)
+	if f != F135 && ix.counters {
+		return Outcome{Kind: OutUnestablished, Rule: "counter-based partitionable devices were alpha before 1.35, in another shape"}
+	}
+	// the slices this node may see, merged back into the capture's order
+	var visible []int
+	g, l := ix.global, ix.local[node]
+	if node == "" {
+		l = nil
+	}
+	for i, j := 0, 0; i < len(g) || j < len(l); {
+		var k int
+		if j == len(l) || (i < len(g) && g[i] < l[j]) {
+			k, i = g[i], i+1
+		} else {
+			k, j = l[j], j+1
+		}
+		vis, unknown := sees(ix.slices[k], node, v)
 		if unknown {
 			return Outcome{Kind: OutUnestablished, Rule: "a node selector would have to be evaluated"}
 		}
 		if vis {
-			visible = append(visible, s)
+			visible = append(visible, k)
 		}
 	}
 	if len(visible) == 0 {
 		return Outcome{Kind: OutNone}
 	}
 	// the highest generation among the visible slices, as addSlice keeps it
-	gen := visible[0].Generation
-	for _, s := range visible[1:] {
-		if s.Generation > gen {
-			gen = s.Generation
+	gen := ix.slices[visible[0]].Generation
+	for _, k := range visible[1:] {
+		if g := ix.slices[k].Generation; g > gen {
+			gen = g
 		}
 	}
-	var atGen []Slice
-	for _, s := range visible {
-		if s.Generation == gen {
-			atGen = append(atGen, s)
+	var atGen []int
+	for _, k := range visible {
+		if ix.slices[k].Generation == gen {
+			atGen = append(atGen, k)
 		}
 	}
-	want := atGen[0].Count
-	for _, s := range atGen[1:] {
-		if s.Count != want {
+	want := ix.slices[atGen[0]].Count
+	for _, k := range atGen[1:] {
+		if ix.slices[k].Count != want {
 			return Outcome{Kind: OutUnestablished, Rule: "the pool's slices disagree on its slice count"}
 		}
 	}
@@ -246,96 +329,104 @@ func ViewOutcome(slices []Slice, node string, v Variant) Outcome {
 		if int64(len(atGen)) != want {
 			return Outcome{Kind: OutUpdating, Have: int64(len(atGen)), Want: want}
 		}
-		if dup := duplicate(atGen); dup != "" {
+		if dup := ix.duplicate(atGen); dup != "" {
 			return Outcome{Kind: OutInvalid, Rule: "duplicate device name " + dup}
 		}
-		return complete(atGen, node, v)
+		return ix.complete(atGen, node, v)
 	}
 	// 1.35+: the view falls short; look across the cluster
-	var all []Slice
+	var all []int
 	if int64(len(atGen)) != want {
-		for _, s := range slices {
-			switch {
-			case s.Generation > gen:
-				return Outcome{Kind: OutObsolete}
-			case s.Generation == gen:
-				all = append(all, s)
-			}
+		if ix.maxGen > gen {
+			return Outcome{Kind: OutObsolete}
 		}
+		all = ix.byGen[gen]
 		if int64(len(all)) != want {
 			return Outcome{Kind: OutUpdating, Have: int64(len(all)), Want: want}
 		}
 	}
-	return build(atGen, all, node, v)
+	return ix.build(atGen, all, gen, node, v)
 }
 
 // build is buildPool's validation (1.35+): device names among the view's
 // device slices, then the counter sets and every device's consumption.
-func build(view, all []Slice, node string, v Variant) Outcome {
-	var deviceSlices, counterSlices []Slice
+func (ix *poolIndex) build(view, all []int, gen int64, node string, v Variant) Outcome {
+	var deviceSlices []int
 	if v.Partitionable {
-		for _, s := range view {
-			if len(s.CounterSets) > 0 {
-				counterSlices = append(counterSlices, s)
-			} else {
-				deviceSlices = append(deviceSlices, s)
+		for _, k := range view {
+			if len(ix.slices[k].CounterSets) == 0 {
+				deviceSlices = append(deviceSlices, k)
 			}
 		}
 	} else {
 		deviceSlices = view
 	}
-	if dup := duplicate(deviceSlices); dup != "" {
+	if dup := ix.duplicate(deviceSlices); dup != "" {
 		return Outcome{Kind: OutInvalid, Rule: "duplicate device name " + dup}
 	}
 	if !v.Partitionable {
-		return complete(deviceSlices, node, v)
+		return ix.complete(deviceSlices, node, v)
 	}
-	sets := map[string]map[string]bool{}
-	for _, s := range counterSlices {
-		for _, cs := range s.CounterSets {
-			if sets[cs.Name] != nil {
-				return Outcome{Kind: OutInvalid, Rule: "duplicate counter set name " + cs.Name}
+	gs := ix.genSets(gen)
+	if gs.rule != "" {
+		return Outcome{Kind: OutInvalid, Rule: gs.rule}
+	}
+	for _, k := range view {
+		if r := gs.fail[k]; r != "" {
+			return Outcome{Kind: OutInvalid, Rule: r}
+		}
+	}
+	if all != nil && len(all) != len(view) && len(gs.fail) > 0 {
+		inView := map[string]bool{}
+		for _, k := range view {
+			inView[ix.slices[k].Name] = true
+		}
+		for _, k := range all {
+			if r := gs.fail[k]; r != "" && !inView[ix.slices[k].Name] {
+				return Outcome{Kind: OutInvalid, Rule: r}
+			}
+		}
+	}
+	return ix.complete(deviceSlices, node, v)
+}
+
+func (ix *poolIndex) genSets(gen int64) *genSets {
+	if gs, ok := ix.gens[gen]; ok {
+		return gs
+	}
+	gs := &genSets{sets: map[string]map[string]bool{}, fail: map[int]string{}}
+	ix.gens[gen] = gs
+	for _, k := range ix.byGen[gen] {
+		for _, cs := range ix.slices[k].CounterSets {
+			if gs.sets[cs.Name] != nil {
+				gs.rule = "duplicate counter set name " + cs.Name
+				return gs
 			}
 			names := map[string]bool{}
 			for _, c := range cs.Counters {
 				names[c] = true
 			}
-			sets[cs.Name] = names
+			gs.sets[cs.Name] = names
 		}
 	}
-	if rule := consumption(sets, view); rule != "" {
-		return Outcome{Kind: OutInvalid, Rule: rule}
-	}
-	if all != nil && len(all) != len(view) {
-		inView := map[string]bool{}
-		for _, s := range view {
-			inView[s.Name] = true
-		}
-		var rest []Slice
-		for _, s := range all {
-			if !inView[s.Name] {
-				rest = append(rest, s)
-			}
-		}
-		if rule := consumption(sets, rest); rule != "" {
-			return Outcome{Kind: OutInvalid, Rule: rule}
+	for _, k := range ix.byGen[gen] {
+		if r := consumption(gs.sets, ix.slices[k]); r != "" {
+			gs.fail[k] = r
 		}
 	}
-	return complete(deviceSlices, node, v)
+	return gs
 }
 
-func consumption(sets map[string]map[string]bool, slices []Slice) string {
-	for _, s := range slices {
-		for _, d := range s.Devices {
-			for _, c := range d.Consumes {
-				set, ok := sets[c.Set]
-				if !ok {
-					return "counter set " + c.Set + " not found"
-				}
-				for _, n := range c.Counters {
-					if !set[n] {
-						return "counter " + n + " not found in counter set " + c.Set
-					}
+func consumption(sets map[string]map[string]bool, s Slice) string {
+	for _, d := range s.Devices {
+		for _, c := range d.Consumes {
+			set, ok := sets[c.Set]
+			if !ok {
+				return "counter set " + c.Set + " not found"
+			}
+			for _, n := range c.Counters {
+				if !set[n] {
+					return "counter " + n + " not found in counter set " + c.Set
 				}
 			}
 		}
@@ -343,10 +434,10 @@ func consumption(sets map[string]map[string]bool, slices []Slice) string {
 	return ""
 }
 
-func duplicate(slices []Slice) string {
+func (ix *poolIndex) duplicate(ks []int) string {
 	seen := map[string]bool{}
-	for _, s := range slices {
-		for _, d := range s.Devices {
+	for _, k := range ks {
+		for _, d := range ix.slices[k].Devices {
 			if seen[d.Name] {
 				return d.Name
 			}
@@ -356,13 +447,14 @@ func duplicate(slices []Slice) string {
 	return ""
 }
 
-func complete(slices []Slice, node string, v Variant) Outcome {
+func (ix *poolIndex) complete(ks []int, node string, v Variant) Outcome {
 	out := Outcome{Kind: OutComplete}
-	for _, s := range slices {
-		out.Devices = append(out.Devices, devicesFor(s, node, v)...)
+	for _, k := range ks {
+		out.Devices = append(out.Devices, devicesFor(ix.slices[k], node, v)...)
 	}
 	sort.Strings(out.Devices)
-	if len(out.Devices) == 0 {
+	out.N = len(out.Devices)
+	if out.N == 0 {
 		out.Kind = OutNone
 	}
 	return out

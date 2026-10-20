@@ -164,7 +164,7 @@ export function DRAView({ cluster }: { cluster: string }) {
     if (tab === "pools") {
       const p = it as DRAPoolDTO & Item;
       const a = allocatedIn(claims.rows, p.driver, p.pool);
-      const named = p.views.filter((v) => v.node).length;
+      const named = p.nodes ?? p.views.filter((v) => v.node).length;
       return rowFor(it, { mark: <VerdictMark health={{ kind: roleKind(p.rule.role), label: p.rule.label }} />,
         name: <span className="lens-cell-name">{p.driver} / {p.pool}</span>, status: status(p.rule, p.reading.message),
         slices: muted(String(p.slices)), allocated: muted(`${a.devices}${cm}${a.shares ? ` (${a.shares} shared)` : ""}`),
@@ -324,12 +324,13 @@ function PoolInspector({ cluster, p, claims, onClose }: { cluster: string; p: DR
           <div className="t-secondary" data-testid="dra-pool-assumed">{p.assumed}. The scheduler judges a pool per node, so each node the slices name is read on its own.</div>
           {p.unread && <div className="t-secondary" style={{ color: "var(--color-text-warning)" }}>Not every slice was read (the slices budget): no pool is established.</div>}
         </InspectorBlock>
-        <InspectorBlock title={`Nodes · ${p.views.length}`}>
+        <InspectorBlock title={`Nodes · ${p.views.length + (p.viewsOmitted ?? 0)}`}>
           {p.views.map((v) => <div key={v.node || "*"} className="t-body" data-testid="dra-pool-view" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
             <span style={{ fontFamily: "var(--font-mono)" }}>{viewName(v.node)}</span> <span className="t-secondary">· {outcomeWords(v)}</span>
             {!v.agreed && <div className="t-secondary">{v.variants.map((x) => `1.${x.minor}${x.partitionable ? " (partitionable devices on)" : ""}: ${x.outcome}`).join(" · ")}</div>}
           </div>)}
-          {(p.obsolete ?? []).length > 0 && <div className="t-secondary">Obsolete on {(p.obsolete ?? []).join(", ")}: a driver updating node by node passes through this.</div>}
+          {(p.viewsOmitted ?? 0) > 0 && <div className="t-secondary" data-testid="dra-pool-views-omitted">{plural(p.viewsOmitted ?? 0, "more node", "more nodes")} not listed: the {p.views.length} worst are shown, and the reading above is from every node.</div>}
+          {(p.obsolete ?? []).length > 0 && <div className="t-secondary">Obsolete on {(p.obsolete ?? []).join(", ")}{p.obsoleteOmitted ? ` and ${p.obsoleteOmitted} more` : ""}: a driver updating node by node passes through this.</div>}
         </InspectorBlock>
         <InspectorBlock title="Allocated">
           <div className="t-body" data-testid="dra-pool-allocated">{a.devices}{mark} {a.devices === 1 ? "device" : "devices"} allocated per the API{a.shares ? `, ${a.shares} as shares` : ""}</div>

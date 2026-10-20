@@ -128,17 +128,23 @@ type DRAViewDTO struct {
 
 // DRAPoolDTO is one pool's row: driver and pool are its identity.
 type DRAPoolDTO struct {
-	Key        string        `json:"key"` // driver/pool
-	Driver     string        `json:"driver"`
-	Pool       string        `json:"pool"`
-	Generation int64         `json:"generation"`
-	Slices     int           `json:"slices"`
-	Rule       RuleDTO       `json:"rule"`
-	Reading    DRAReadingDTO `json:"reading"`
-	Views      []DRAViewDTO  `json:"views"`
-	Obsolete   []string      `json:"obsolete,omitempty"`
-	Assumed    string        `json:"assumed"`
-	Unread     bool          `json:"unread,omitempty"`
+	Key        string `json:"key"` // driver/pool
+	Driver     string `json:"driver"`
+	Pool       string `json:"pool"`
+	Generation int64  `json:"generation"`
+	Slices     int    `json:"slices"`
+	// Nodes: how many nodes the slices name, kept views or not
+	Nodes    int           `json:"nodes"`
+	Rule     RuleDTO       `json:"rule"`
+	Reading  DRAReadingDTO `json:"reading"`
+	Views    []DRAViewDTO  `json:"views"`
+	Obsolete []string      `json:"obsolete,omitempty"`
+	Assumed  string        `json:"assumed"`
+	Unread   bool          `json:"unread,omitempty"`
+	// ViewsOmitted and ObsoleteOmitted: views and obsolete nodes past the
+	// row's bound, counted (the worst views are kept)
+	ViewsOmitted    int `json:"viewsOmitted,omitempty"`
+	ObsoleteOmitted int `json:"obsoleteOmitted,omitempty"`
 }
 
 // DRAClassDTO is one DeviceClass's facts.
@@ -181,13 +187,14 @@ func toDRAClaimDTO(r healthsrc.Row[healthsrc.DRAClaimRow]) DRAClaimDTO {
 
 func toDRAPoolDTO(r healthsrc.Row[healthsrc.DRAPoolRow]) DRAPoolDTO {
 	p := r.Data.Pool
-	d := DRAPoolDTO{Key: r.Ref.Name, Driver: p.Driver, Pool: p.Pool, Generation: p.Generation, Slices: p.Slices, Rule: toRuleDTO(r.Eval),
-		Reading: toDRAReading(r.Data.Verdict), Views: []DRAViewDTO{}, Obsolete: p.Obsolete, Assumed: p.Assumed(), Unread: r.Data.Unread}
+	d := DRAPoolDTO{Key: r.Ref.Name, Driver: p.Driver, Pool: p.Pool, Generation: p.Generation, Slices: p.Slices, Nodes: p.Nodes, Rule: toRuleDTO(r.Eval),
+		Reading: toDRAReading(r.Data.Verdict), Views: []DRAViewDTO{}, Obsolete: p.Obsolete, Assumed: p.Assumed(), Unread: r.Data.Unread,
+		ViewsOmitted: p.ViewsOmitted, ObsoleteOmitted: p.ObsoleteOmitted}
 	for _, v := range p.Views {
 		vd := DRAViewDTO{Node: v.Node, Agreed: v.Agreed, Kind: v.Kind, Variants: []DRAVariantDTO{}}
 		for _, o := range v.Outcomes {
 			vd.Variants = append(vd.Variants, DRAVariantDTO{Minor: o.Variant.Minor, Partitionable: o.Variant.Partitionable, Outcome: o.Outcome.Kind,
-				Devices: len(o.Outcome.Devices), Have: o.Outcome.Have, Want: o.Outcome.Want, Rule: o.Outcome.Rule})
+				Devices: o.Outcome.N, Have: o.Outcome.Have, Want: o.Outcome.Want, Rule: o.Outcome.Rule})
 		}
 		d.Views = append(d.Views, vd)
 	}

@@ -28,6 +28,9 @@ export type DRAViewDTO = { node: string; agreed: boolean; kind?: string; variant
 export type DRAPoolDTO = {
   key: string; driver: string; pool: string; generation: number; slices: number;
   rule: RuleDTO; reading: DRAReadingDTO; views: DRAViewDTO[]; obsolete?: string[]; assumed: string; unread?: boolean;
+  // nodes: how many nodes the slices name; the views past the row's bound
+  // (the worst are kept) and obsolete nodes past it are counted
+  nodes?: number; viewsOmitted?: number; obsoleteOmitted?: number;
 };
 
 export type DRAClassDTO = { uid: string; name: string; selectors: number; configDrivers: string[]; extendedResourceName?: string };

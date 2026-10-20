@@ -88,6 +88,18 @@ describe("DRAView (coverage S11b)", () => {
     expect(panel.textContent).not.toMatch(/available/i);
   });
 
+  it("a pool past the row's bound counts the nodes it does not list, and its obsolete ones", () => {
+    pools = part([pool("d/wide", "ok", "Complete", [view("n1", "complete", 8)], { nodes: 2000, viewsOmitted: 1999, obsolete: ["n7"], obsoleteOmitted: 40 })], ["ResourceSlice"]);
+    render(<DRAView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    expect(rowTexts()[0]).toContain("2000 nodes");
+    fireEvent.click(screen.getByText("d / wide"));
+    const panel = screen.getByTestId("dra-pool-panel");
+    expect(panel.textContent).toContain("Nodes · 2000");
+    expect(screen.getByTestId("dra-pool-views-omitted").textContent).toBe("1999 more nodes not listed: the 1 worst are shown, and the reading above is from every node.");
+    expect(panel.textContent).toContain("Obsolete on n7 and 40 more");
+  });
+
   it("device classes are facts, their claims joined", () => {
     claims = part([claim("a", "ok", "Pending")], ["ResourceClaim"]);
     classes = part([{ uid: "c1", name: "gpu.example.com", selectors: 1, configDrivers: ["gpu.example.com"], extendedResourceName: "example.com/gpu" }], ["DeviceClass"]);
@@ -120,6 +132,14 @@ describe("the DRA blocks (coverage S11b §5)", () => {
     expect(screen.getByTestId("node-dra").textContent).toContain('never "not registered"');
   });
 
+  it("unhealthy devices are named by the kubelet's ID, at most four, the rest counted", () => {
+    const refs = [{ podClaim: "gpu", source: "template", claim: "p-gpu-x", state: "resolved" }];
+    const ids = ["cdi/0", "cdi/1", "cdi/2", "cdi/3", "cdi/4", "cdi/5"];
+    render(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} unbound={false}
+      health={[{ container: "app", name: "claim:gpu", devices: ids.map((id) => ({ id, health: "Unhealthy" })) }]} />);
+    expect(screen.getByTestId("pod-claim").textContent).toContain("6 devices unhealthy (reported by the kubelet): cdi/0, cdi/1, cdi/2, cdi/3, +2 more");
+  });
+
   it("the node block is absent where no DRA objects are read", () => {
     const { container } = render(<NodeDRABlock cluster="c" node="n1" />);
     expect(container.textContent).toBe("");
@@ -134,12 +154,16 @@ describe("the DRA blocks (coverage S11b §5)", () => {
     const lines = screen.getAllByTestId("pod-claim").map((l) => l.textContent ?? "");
     expect(lines[0]).toContain("p-gpu-x · from a template");
     expect(lines[0]).toContain("the scheduler cannot allocate it");
-    expect(lines[0]).toContain("1 device unhealthy (reported by the kubelet)");
+    expect(lines[0]).toContain("1 device unhealthy (reported by the kubelet): cdi/a");
     expect(lines[1]).toContain("does not exist: the scheduler waits for it without an event");
     expect(lines[2]).toContain("no claim was needed");
     expect(lines[3]).toContain("not created yet");
+    expect(lines[1]).not.toContain("no device health reported");
     rerender(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={health} unbound={false} />);
     expect(screen.getAllByTestId("pod-claim")[1].textContent).not.toContain("waits");
+    // a bound pod's claim with no report says so; an unbound pod's says nothing
+    expect(screen.getAllByTestId("pod-claim")[1].textContent).toContain("no device health reported");
+    expect(screen.getAllByTestId("pod-claim")[2].textContent).not.toContain("no device health reported");
     claims = part([], ["ResourceClaim"], false);
     rerender(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={[]} unbound />);
     expect(screen.getAllByTestId("pod-claim")[1].textContent).toContain("not established");

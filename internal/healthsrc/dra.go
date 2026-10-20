@@ -47,7 +47,7 @@ func DRA(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 		ks.Probe = func(ctx context.Context) (observe.Probe, error) {
 			return d.servedAmong(ctx, draGroup, resource, []string{"v1"})
 		}
-		ks.Project, ks.Budget, ks.MaxObject, ks.Size = dra.Project(resource), budget, dra.MaxObject, dra.SizeOf
+		ks.Project, ks.Budget, ks.MaxObject, ks.Size = dra.Project(resource), budget, dra.MaxObject(resource), dra.SizeOf
 		return ks
 	}
 	kinds := []observe.KindSpec{
@@ -221,7 +221,8 @@ func evalDRAPools(cluster string) func(observe.Capture) observe.PartResult {
 			}
 			it := nativeItem{nativeOf(v), refInput{name: key, source: KindResourceSlices}}
 			items = append(items, it)
-			rows = append(rows, nativeRow(it, DRAPoolRow{Pool: p, Verdict: v, Unread: unread}))
+			// read from every view, kept bounded (S11b §8)
+			rows = append(rows, nativeRow(it, DRAPoolRow{Pool: p.Kept(dra.MaxViewsKept), Verdict: v, Unread: unread}))
 		}
 		res := nativeResult(c.RoleCap, cluster, TaskDRA, "are incomplete or invalid", items)
 		if c.Rows {

@@ -67,7 +67,13 @@ func ClaimVerdict(c Claim, consumers []ConsumerPod, consumersKnown bool, now tim
 			return health.Verdict{Kind: health.Progressing, Label: "Being deleted", Reason: "Deleting", Native: native, Rule: "claim.deleting", ReclassifyAt: &at}, nil
 		}
 		return health.Verdict{Kind: health.Degraded, Label: "Deletion not finishing", Reason: "DeletionStuck", Native: native, Rule: "claim.deletion-stuck",
-			Message: "deleted " + short(now.Sub(c.DeletionTime)) + " ago with no consumer; finalizers: " + strings.Join(c.Finalizers, ", ")}, nil
+			Message: "deleted " + short(now.Sub(c.DeletionTime)) + " ago with no consumer; finalizers: " + strings.Join(c.Finalizers, ", ") + more(c.FinalizersOmitted)}, nil
+	}
+	if c.Truncated {
+		// a list past the API's bounds was cut: a device not ready, or the
+		// class that alone blocks allocation, may be in the cut
+		return health.Verdict{Kind: health.Unknown, Label: "Not established", Reason: "Truncated", Native: native, Rule: "claim.not-established",
+			Message: "the claim's lists exceed the API's bounds"}, nil
 	}
 	if d, cond, ok := notReady(c); ok {
 		return health.Verdict{Kind: health.Degraded, Label: "Device not ready", Reason: orToken(cond.Reason, "NotReady"), Native: native, Rule: "claim.device-not-ready",
@@ -255,10 +261,45 @@ type PoolRead struct {
 	Driver, Pool string
 	Generation   int64
 	Slices       int
-	Views        []View
-	Variants     []Variant
+	// Nodes is how many nodes the slices name (every view but "")
+	Nodes    int
+	Views    []View
+	Variants []Variant
 	// Obsolete names nodes on which every variant finds the pool obsolete.
 	Obsolete []string
+	// ViewsOmitted and ObsoleteOmitted: what Kept left out, counted.
+	ViewsOmitted, ObsoleteOmitted int
+}
+
+// MaxViewsKept bounds the views and obsolete nodes a retained pool row
+// keeps (S11b §8): the worst views first, the rest counted.
+const MaxViewsKept = 16
+
+// Kept is the pool with at most n views, the worst first (invalid, then
+// being updated, then not established, then OK; each in node order), and
+// at most n obsolete nodes; what it leaves out is counted. The verdict is
+// read from every view before it is kept.
+func (p PoolRead) Kept(n int) PoolRead {
+	if len(p.Views) > n {
+		class := func(v View) int {
+			switch {
+			case v.Agreed && v.Kind == OutInvalid:
+				return 0
+			case v.Agreed && v.Kind == OutUpdating:
+				return 1
+			case !v.Agreed || v.Kind == OutUnestablished:
+				return 2
+			}
+			return 3
+		}
+		views := append([]View(nil), p.Views...)
+		sort.SliceStable(views, func(i, j int) bool { return class(views[i]) < class(views[j]) })
+		p.ViewsOmitted, p.Views = len(views)-n, views[:n:n]
+	}
+	if len(p.Obsolete) > n {
+		p.ObsoleteOmitted, p.Obsolete = len(p.Obsolete)-n, p.Obsolete[:n:n]
+	}
+	return p
 }
 
 // Variants are the schedulers a server minor allows (S11b §3.2): the minor
@@ -316,12 +357,15 @@ func ReadPool(slices []Slice, serverMinor int) PoolRead {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	p.Nodes = len(names)
 	names = append(names, "")
+	ix := newPoolIndex(slices)
 	for _, n := range names {
 		v := View{Node: n}
 		obsolete := true
 		for _, va := range p.Variants {
-			o := ViewOutcome(slices, n, va)
+			o := ix.outcome(n, va)
+			o.Devices = nil // the count is kept, never the names
 			v.Outcomes = append(v.Outcomes, VariantOutcome{Variant: va, Outcome: o})
 			obsolete = obsolete && o.Kind == OutObsolete
 		}
@@ -507,4 +551,11 @@ func (p PoolRead) AnyUpdating() bool {
 		}
 	}
 	return false
+}
+
+func more(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and %d more", n)
 }

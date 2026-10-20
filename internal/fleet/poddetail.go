@@ -77,10 +77,7 @@ func deviceHealthOf(p *corev1.Pod) []DeviceHealth {
 					}
 					msg := ""
 					if r.Message != nil {
-						msg = *r.Message
-						if len(msg) > 256 {
-							msg = msg[:256]
-						}
+						msg = dra.Clip(*r.Message, dra.MaxMessageBytes)
 					}
 					h.Devices = append(h.Devices, DeviceHealthEntry{ID: string(r.ResourceID), Health: string(r.Health), Message: msg})
 				}

@@ -29,13 +29,23 @@ export function NodeDRABlock({ cluster, node }: { cluster: string; node: string 
 
 const SOURCE: Record<string, string> = { claim: "claim", template: "from a template", extended: "the scheduler's claim for DRA-backed extended resources" };
 
-function healthOf(health: DeviceHealthDTO[], podClaim: string): string {
+// The unhealthy devices a health line names by the kubelet's ID (a CDI ID,
+// never joined to driver/pool/device), so another device turning unhealthy
+// at the same count reads differently.
+const MAX_HEALTH_IDS = 4;
+
+function healthOf(health: DeviceHealthDTO[], podClaim: string, bound: boolean): string {
   const mine = health.filter((h) => h.name === `claim:${podClaim}` || h.name.startsWith(`claim:${podClaim}/`));
-  if (mine.length === 0) return "";
+  // S11b §3.4: no report is said, never read as healthy (the gate may be off)
+  if (mine.length === 0) return bound ? "no device health reported" : "";
   const devs = mine.flatMap((h) => h.devices);
-  const bad = devs.filter((d) => d.health === "Unhealthy").length;
+  const bad = devs.filter((d) => d.health === "Unhealthy");
   const unknown = devs.filter((d) => d.health === "Unknown").length;
-  if (bad) return `${bad} device${bad === 1 ? "" : "s"} unhealthy (reported by the kubelet)`;
+  if (bad.length) {
+    const ids = bad.slice(0, MAX_HEALTH_IDS).map((d) => d.id).join(", ");
+    const more = bad.length > MAX_HEALTH_IDS ? `, +${bad.length - MAX_HEALTH_IDS} more` : "";
+    return `${bad.length} device${bad.length === 1 ? "" : "s"} unhealthy (reported by the kubelet): ${ids}${more}`;
+  }
   if (unknown === devs.length) return "health Unknown (reported by the kubelet)";
   return `${devs.length - unknown} healthy${unknown ? `, ${unknown} Unknown` : ""}`;
 }
@@ -64,7 +74,7 @@ function PodClaims({ cluster, namespace, claims, health, unbound }: {
     <InspectorBlock title="Claims" count={claims.length}>
       <div data-testid="pod-claims">
         {claims.map((ref) => {
-          const h = ref.podClaim ? healthOf(health, ref.podClaim) : "";
+          const h = ref.podClaim && ref.state === "resolved" ? healthOf(health, ref.podClaim, !unbound) : "";
           return (
             <div key={`${ref.source}/${ref.podClaim}/${ref.claim ?? ""}`} className="t-body" data-testid="pod-claim" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
               <span style={{ fontFamily: "var(--font-mono)" }}>{ref.claim || ref.podClaim}</span>

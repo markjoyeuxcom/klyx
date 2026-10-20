@@ -6,11 +6,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// The API's bounds on a slice (resource.k8s.io/v1, 1.37): a list past them
-// marks the projection Truncated rather than cut silently (S11b §2.0).
+// The API's bounds on a slice (resource.k8s.io/v1, the larger of 1.34's
+// and 1.35-1.37's: 1.34 allows 32 counter sets and 16 consumptions per
+// device, 1.35+ 8 and 2): a list past them marks the projection Truncated
+// rather than cut silently (S11b §2.0).
 const (
 	maxDevices         = 128
-	maxCounterSets     = 8
+	maxCounterSets     = 32
 	maxCounters        = 32
 	maxConsumptions    = 16
 	maxTaintsPerDevice = 16

@@ -1,6 +1,7 @@
 package dra
 
 import (
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,13 +14,20 @@ const (
 	AnnotationExtended     = "resource.kubernetes.io/extended-resource-claim"
 )
 
-// The claim projection's bounds (S11b §2.0).
+// The claim projection's bounds (S11b §2.0). The lists' bounds are the
+// API's (resource.k8s.io/v1, 1.37): a list past one is cut and the claim
+// marked Truncated, which no reading takes as complete.
 const (
 	MaxReservedKept   = 8
 	MaxConditions     = 8
 	MaxMessageBytes   = 256
+	MaxFinalizersKept = 8
+	// MaxTokenBytes clips a condition's type and reason (the API allows
+	// 316 and 1024 bytes); "Ready" is never clipped
+	MaxTokenBytes     = 128
 	maxResults        = 32
 	maxRequests       = 32
+	maxSubrequests    = 8
 	maxDeviceStatuses = 32
 )
 
@@ -62,6 +70,7 @@ type Claim struct {
 	Deleting             bool
 	DeletionTime         time.Time
 	Finalizers           []string
+	FinalizersOmitted    int
 	// Owner is the controller owner reference, when there is one.
 	OwnerKind, OwnerName, OwnerUID string
 	PodClaimName                   string
@@ -80,7 +89,12 @@ type Claim struct {
 // device data and networkData are never read.
 func ProjectClaim(u *unstructured.Unstructured) Claim {
 	o := u.Object
-	c := Claim{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()), Finalizers: u.GetFinalizers()}
+	c := Claim{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())}
+	fins := u.GetFinalizers()
+	if len(fins) > MaxFinalizersKept {
+		c.FinalizersOmitted, fins = len(fins)-MaxFinalizersKept, fins[:MaxFinalizersKept]
+	}
+	c.Finalizers = fins
 	if dt := u.GetDeletionTimestamp(); dt != nil {
 		c.Deleting, c.DeletionTime = true, dt.Time
 	}
@@ -90,17 +104,21 @@ func ProjectClaim(u *unstructured.Unstructured) Claim {
 		}
 	}
 	ann := u.GetAnnotations()
-	c.PodClaimName = ann[AnnotationPodClaimName]
+	// an annotation value is unbounded; a pod claim name is a DNS label
+	c.PodClaimName = Clip(ann[AnnotationPodClaimName], 253)
 	c.Extended = ann[AnnotationExtended] == "true"
 	reqs, _, _ := unstructured.NestedSlice(o, "spec", "devices", "requests")
 	if len(reqs) > maxRequests {
-		c.Truncated = true
+		c.Truncated, reqs = true, reqs[:maxRequests]
 	}
 	for _, x := range reqs {
 		m, _ := x.(map[string]any)
 		r := Request{Name: str(m, "name"), Class: str(m, "exactly", "deviceClassName"), Mode: str(m, "exactly", "allocationMode"),
 			Count: i64(m, "exactly", "count"), AdminAccess: boolean(m, "exactly", "adminAccess")}
 		subs, _, _ := unstructured.NestedSlice(m, "firstAvailable")
+		if len(subs) > maxSubrequests {
+			c.Truncated, subs = true, subs[:maxSubrequests]
+		}
 		for _, y := range subs {
 			sm, _ := y.(map[string]any)
 			r.Subclasses = append(r.Subclasses, str(sm, "deviceClassName"))
@@ -112,7 +130,7 @@ func ProjectClaim(u *unstructured.Unstructured) Claim {
 	}
 	results, _, _ := unstructured.NestedSlice(o, "status", "allocation", "devices", "results")
 	if len(results) > maxResults {
-		c.Truncated = true
+		c.Truncated, results = true, results[:maxResults]
 	}
 	for _, x := range results {
 		m, _ := x.(map[string]any)
@@ -130,7 +148,7 @@ func ProjectClaim(u *unstructured.Unstructured) Claim {
 	}
 	devs, _, _ := unstructured.NestedSlice(o, "status", "devices")
 	if len(devs) > maxDeviceStatuses {
-		c.Truncated = true
+		c.Truncated, devs = true, devs[:maxDeviceStatuses]
 	}
 	for _, x := range devs {
 		m, _ := x.(map[string]any)
@@ -141,11 +159,9 @@ func ProjectClaim(u *unstructured.Unstructured) Claim {
 				break
 			}
 			cm, _ := y.(map[string]any)
-			msg := str(cm, "message")
-			if len(msg) > MaxMessageBytes {
-				msg = msg[:MaxMessageBytes]
-			}
-			d.Conditions = append(d.Conditions, Cond{Type: str(cm, "type"), Status: str(cm, "status"), Reason: str(cm, "reason"), Message: msg})
+			msg := Clip(Printable(str(cm, "message")), MaxMessageBytes)
+			d.Conditions = append(d.Conditions, Cond{Type: Clip(str(cm, "type"), MaxTokenBytes), Status: Clip(str(cm, "status"), MaxTokenBytes),
+				Reason: Clip(str(cm, "reason"), MaxTokenBytes), Message: msg})
 		}
 		c.Devices = append(c.Devices, d)
 	}
@@ -217,3 +233,33 @@ func PodClaims(p *corev1.Pod) []PodClaimRef {
 func (c Claim) OwnedBy(p *corev1.Pod) bool {
 	return c.OwnerKind == "Pod" && c.OwnerUID == string(p.UID)
 }
+
+// Clip keeps at most n bytes of s, cut on a rune boundary and marked with
+// "…", and copies what it keeps, so a projection never retains the object's
+// own string.
+func Clip(s string, n int) string {
+	if len(s) <= n {
+		return strings.Clone(s)
+	}
+	cut := n
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// Printable replaces control characters with spaces: a driver's message is
+// shown, never interpreted, and its JSON size stays at most twice its bytes.
+func Printable(s string) string {
+	if strings.IndexFunc(s, isControl) < 0 {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }

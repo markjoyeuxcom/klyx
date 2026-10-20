@@ -154,3 +154,42 @@ func TestPodDetail_EmptyLabelsNonNil(t *testing.T) {
 		t.Error("Annotations must be non-nil even when pod has no annotations")
 	}
 }
+
+// Coverage S11b §3.5, §7: the pod's claims as the scheduler maps them, and
+// its device health, init containers first, bounded, messages clipped.
+func TestPodDetail_ClaimsAndDeviceHealth(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	gen, direct, tmpl := "web-abc-gpu-x", "shared-nic", "gpu"
+	pod.Spec.ResourceClaims = []corev1.PodResourceClaim{{Name: "gpu", ResourceClaimTemplateName: &tmpl}, {Name: "nic", ResourceClaimName: &direct}}
+	pod.Status.ResourceClaimStatuses = []corev1.PodResourceClaimStatus{{Name: "gpu", ResourceClaimName: &gen}}
+	long := strings.Repeat("m", 300)
+	var many []corev1.ResourceHealth
+	for i := 0; i < 20; i++ {
+		many = append(many, corev1.ResourceHealth{ResourceID: corev1.ResourceID("cdi/" + string(rune('a'+i))), Health: corev1.ResourceHealthStatusHealthy})
+	}
+	many[0] = corev1.ResourceHealth{ResourceID: "cdi/a", Health: corev1.ResourceHealthStatusUnhealthy, Message: &long}
+	pod.Status.ContainerStatuses[0].AllocatedResourcesStatus = []corev1.ResourceStatus{{Name: "claim:gpu/req", Resources: many}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "side", AllocatedResourcesStatus: []corev1.ResourceStatus{{Name: "claim:nic",
+		Resources: []corev1.ResourceHealth{{ResourceID: "cdi/n", Health: corev1.ResourceHealthStatusUnknown}}}}}}
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Claims) != 2 || d.Claims[0].Claim != gen || d.Claims[0].Source != "template" || d.Claims[1].Claim != direct || d.Claims[1].Source != "claim" {
+		t.Fatalf("claims: %+v", d.Claims)
+	}
+	if len(d.DeviceHealth) != 2 || !d.DeviceHealth[0].Init || d.DeviceHealth[0].Name != "claim:nic" || d.DeviceHealth[1].Container != "web" {
+		t.Fatalf("device health, init containers first: %+v", d.DeviceHealth)
+	}
+	devs := d.DeviceHealth[1].Devices
+	if len(devs) != maxDeviceHealthDevices || devs[0].Health != "Unhealthy" || devs[0].Message != strings.Repeat("m", 256)+"…" {
+		t.Fatalf("devices bounded at %d, message clipped at 256: %d, %+v", maxDeviceHealthDevices, len(devs), devs[0])
+	}
+	// a pod with no claims and no reports carries neither
+	plain := makeFakePod("team-a", "plain")
+	c = &ClusterConn{typed: typedfake.NewSimpleClientset(plain), clk: clock.NewFake(time.Unix(200_000, 0))}
+	if d, err := c.PodDetail(context.Background(), "team-a", "plain"); err != nil || len(d.Claims) != 0 || len(d.DeviceHealth) != 0 {
+		t.Fatalf("plain: %+v %v", d.Claims, err)
+	}
+}
