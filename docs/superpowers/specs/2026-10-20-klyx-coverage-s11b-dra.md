@@ -528,3 +528,11 @@ Codex (handoff f3d5176c) requested changes: four residual P2 findings. The ten o
 | 2 | Populated node and pod lines dropped the joined read's state | A found pool view or claim says its read's "as of" and a failed refresh; a pool view from a capped slices read reads "not established: not every slice was read" |
 | 3 | Attention counts in the chips and the headline lost their counts' qualifiers | Every attention count takes its part's selected counts' "+" and "*", whatever tab is open |
 | 4 | "no device tainted" under a capped slices read | A cut read says "no tainted device in the slices read"; the unqualified absence is kept for a whole read |
+
+## 16. Implementation revision 3: Codex's re-review of 3d422e1
+
+Codex (handoff 48b96c8d) requested changes: one residual P2. The four revision-2 findings' probes pass.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A template claim's ownership mismatch returned before the joined read's state, so a stale or held read presented last-observed ownership as current | The pod block chooses the claim-derived line first (ownership not established, not this pod's claim, or the claim's reading) and appends the claims read's "as of" and failed refresh to whichever it chose; a current read's mismatch stays the definite finding it is |

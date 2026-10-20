@@ -322,4 +322,22 @@ describe("joined reads keep their state (S11b implementation revision 2)", () =>
     expect(screen.getByTestId("dra-pool-facts").textContent).toContain("no tainted device in the slices read");
     expect(screen.getByTestId("dra-pool-facts").textContent).not.toContain("no device tainted");
   });
+
+  it("5: a template claim's ownership from a dated read carries that read's state", () => {
+    const refs = [{ podClaim: "gpu", source: "template", claim: "p-gpu-x", state: "resolved" }];
+    const other = claim("p-gpu-x", "ok", "Allocated", { ownerKind: "Pod", ownerName: "old-pod", ownerUid: "uid-old", allocated: true });
+    claims = { ...part([other], ["ResourceClaim"], false), coverage: [{ kind: "ResourceClaim", served: true, synced: true, coverage: "stale" as never }], asOf: "2026-10-20T09:00:00Z" };
+    const { unmount } = render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={[]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toMatch(/not this pod's claim: it is owned by Pod old-pod \(as of /);
+    unmount();
+    claims = { ...part([other], ["ResourceClaim"], false), held: true, asOf: "2026-10-20T09:00:00Z", refreshError: "boom" };
+    const held = render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={[]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toMatch(/owned by Pod old-pod \(as of .+; the newer read failed: boom\)/);
+    held.unmount();
+    // a current read's mismatch is the definite finding it is
+    claims = part([other], ["ResourceClaim"]);
+    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={[]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toContain("not this pod's claim: it is owned by Pod old-pod");
+    expect(screen.getByTestId("pod-claim").textContent).not.toContain("(as of");
+  });
 });

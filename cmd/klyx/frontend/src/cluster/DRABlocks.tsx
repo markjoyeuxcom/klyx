@@ -95,17 +95,22 @@ function PodClaims({ cluster, namespace, podUid, claims, health, healthOmitted =
 }) {
   const rows = useDRAClaims(cluster);
   const byName = new Map<string, DRAClaimDTO>(rows.rows.filter((c) => c.namespace === namespace).map((c) => [c.name, c]));
-  const line = (ref: PodClaimRefDTO) => {
-    if (ref.state === "none-needed") return "no claim was needed";
-    if (ref.state === "not-created") return "not created yet";
-    const c = ref.claim ? byName.get(ref.claim) : undefined;
-    if (c && ref.source === "template") {
+  const claimLine = (ref: PodClaimRefDTO, c: DRAClaimDTO) => {
+    if (ref.source === "template") {
       // a name correlation is not ownership (Codex's implementation
       // review, finding 8): the claim is this pod's only when it owns it
       if (!c.ownerUid || !podUid) return "ownership not established: the claim's or the pod's identity is not read";
       if (c.ownerUid !== podUid) return `not this pod's claim: it is owned by ${c.ownerKind ?? "another object"} ${c.ownerName ?? ""}`.trimEnd();
     }
-    if (c) return `${c.reading.label}${c.reading.message ? ` · ${c.reading.message}` : ""}${joinedState(rows as DRAPartRows<unknown>)}`;
+    return `${c.reading.label}${c.reading.message ? ` · ${c.reading.message}` : ""}`;
+  };
+  const line = (ref: PodClaimRefDTO) => {
+    if (ref.state === "none-needed") return "no claim was needed";
+    if (ref.state === "not-created") return "not created yet";
+    const c = ref.claim ? byName.get(ref.claim) : undefined;
+    // every line read from the claim carries its read's state, the
+    // ownership finding as well (Codex's implementation re-review 2)
+    if (c) return `${claimLine(ref, c)}${joinedState(rows as DRAPartRows<unknown>)}`;
     if (!rows.complete) return "not established: the claims read is not current and whole";
     return unbound ? "does not exist: the scheduler waits for it without an event" : "does not exist";
   };
