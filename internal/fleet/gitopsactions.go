@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/gitops/flux"
 )
 
@@ -148,10 +148,12 @@ func armedWriteErr(verb, what string, err error) error {
 
 // refusedForUID: a UID-guarded write the server refused because the object
 // at that name is not the armed one - gone (NotFound), or another UID (the
-// immutable-field Invalid, or a UID precondition Conflict).
+// immutable metadata.uid Invalid, or the wrapped UID precondition
+// Conflict), read by their wire shapes and never a substring (coverage S3b
+// §2.5): a policy denial whose text says "uid" is not a replacement.
 func refusedForUID(err error) bool {
-	return apierrors.IsNotFound(err) ||
-		(apierrors.IsInvalid(err) || apierrors.IsConflict(err)) && strings.Contains(strings.ToLower(err.Error()), "uid")
+	var st apierrors.APIStatus
+	return errors.As(err, &st) && admission.UIDRefusal(st.Status())
 }
 
 // Reconcile stamps the Flux reconcile annotation so the controller
