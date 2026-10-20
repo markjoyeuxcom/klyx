@@ -984,9 +984,12 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     stuck.click();
     const panel = await within(8000, "the claim inspector", () => $("[data-testid='dra-claim-panel']"));
     const text = panel.textContent ?? "";
-    for (const want of ['The scheduler: "', "cannot allocate all claims", "the scheduler could not allocate the pod's claims"]) {
+    // lab-s11b's invalid fixture pool turns the scheduler's reason into
+    // "invalid resource pools were encountered" (1.35+); either is quoted
+    for (const want of ['The scheduler: "', "the scheduler could not allocate the pod's claims"]) {
       if (!text.includes(want)) throw new Error(`missing "${want}" in ${text.slice(0, 400)}`);
     }
+    if (!/invalid resource pools were encountered|cannot allocate all claims/.test(text)) throw new Error(`no DRA reason quoted in ${text.slice(0, 400)}`);
     await closeDrawer();
     (await within(8000, "the Pools tab", () => byText<HTMLButtonElement>("[aria-label='DRA objects'] button", /^Pools/))).click();
     const pools = await within(20_000, "the pools", () => {

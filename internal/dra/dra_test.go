@@ -35,6 +35,8 @@ func TestReasonsMatchTheSchedulersMessages(t *testing.T) {
 		{"resource claim ns/c allocation requires DRAOptionalNodeOperations feature on the node", "needs-optional-node-operations", NamesClaim, "ns/c", ""},
 		{"resource claim ns/c, request r: has subrequests, but the DRAPrioritizedList feature is disabled", "subrequests-disabled", NamesClaim, "ns/c", ""},
 		{"0/1 nodes are available: 1 cannot schedule extended resource claim.", "extended-claim", SetWide, "", ""},
+		// lab-s11b, live on 1.37: an invalid fixture pool of another driver
+		{"0/1 nodes are available: 1 invalid resource pools were encountered. preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.", "invalid-pools", SetWide, "", ""},
 	}
 	for _, c := range cases {
 		rs := Reasons(c.msg)

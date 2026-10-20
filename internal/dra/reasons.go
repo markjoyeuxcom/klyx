@@ -52,6 +52,14 @@ var patterns = []pattern{
 	{"class-missing", NamesClass, regexp.MustCompile(`request [^:]+: device class ([^ ]+) does not exist`)},
 	// set-wide, v1.34-v1.37 unless named
 	{"cannot-allocate", SetWide, regexp.MustCompile(`cannot allocate all claims`)},
+	// v1.35-v1.37, from the allocator (structured/internal/*/allocator_*.go
+	// at dynamic-resource-allocation v0.35.9, v0.36.5, v0.37.1): nothing
+	// could be allocated on a node, and a pool it read there is invalid -
+	// any driver's (found live in lab-s11b). It is the only allocator error
+	// wrapping ErrFailedAllocationOnNode, which the plugin passes through as
+	// unschedulable; every other allocator error is a scheduler error, and
+	// stays unmatched
+	{"invalid-pools", SetWide, regexp.MustCompile(`invalid resource pools were encountered`)},
 	{"not-available-on-node", SetWide, regexp.MustCompile(`resourceclaim not available on the node`)},
 	{"in-use", SetWide, regexp.MustCompile(`resourceclaim in use`)},
 	{"timed-out", SetWide, regexp.MustCompile(`timed out trying to allocate devices`)}, // "node <n>: " from v1.36
@@ -85,6 +93,8 @@ func Meaning(key string) string {
 	switch key {
 	case "cannot-allocate":
 		return "the scheduler could not allocate the pod's claims on any node it tried: no matching device, every matching device allocated, tainted devices, an incomplete pool, or no slices at all"
+	case "invalid-pools":
+		return "the scheduler could not allocate the pod's claims on a node, and a pool it read there is invalid (any driver's pool, not necessarily this claim's)"
 	case "not-available-on-node":
 		return "an allocated claim's devices are not available on the nodes the scheduler tried"
 	case "in-use":
