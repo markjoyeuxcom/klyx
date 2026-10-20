@@ -79,7 +79,7 @@ spec:
       secretRef:
         password: b2-review-private-password
 `
-	out, _, err := redactManifestForAI(raw, false)
+	out, _, err := redactManifestForAI(raw, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ spec:
             - secretRef:
                 name: cron-env
 `
-	out, _, err := redactManifestForAI(raw, false)
+	out, _, err := redactManifestForAI(raw, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ spec:
           name: app-secret-name
           key: token
 `
-	out, _, err := redactManifestForAI(raw, false)
+	out, _, err := redactManifestForAI(raw, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

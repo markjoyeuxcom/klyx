@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/dra"
 	"github.com/moomora/klyx/internal/extres"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +33,64 @@ type PodDetail struct {
 	SchedAssumption string
 	// Coverage S11a §6: the pod's extended requests, per container.
 	Extended extres.PodRequests
+	// Coverage S11b §3.5: the claims the pod references, mapped as the
+	// scheduler maps them, and each device's health as the kubelet reports it.
+	Claims       []dra.PodClaimRef
+	DeviceHealth []DeviceHealth
+}
+
+// DeviceHealth is one allocatedResourcesStatus entry of one container: a
+// claim ("claim:<claim>/<request>") or a device-plugin resource, and each
+// device's health. Message is the kubelet's text: local only.
+type DeviceHealth struct {
+	Container string
+	Init      bool
+	Name      string
+	Devices   []DeviceHealthEntry
+}
+
+// DeviceHealthEntry is one device: its ID (the device's CDI ID for DRA,
+// never joined to driver/pool/device), health and message.
+type DeviceHealthEntry struct {
+	ID, Health, Message string
+}
+
+// The pod detail's device-health bounds (S11b §7).
+const (
+	maxDeviceHealth        = 32
+	maxDeviceHealthDevices = 16
+)
+
+// deviceHealthOf lists a pod's device health, bounded.
+func deviceHealthOf(p *corev1.Pod) []DeviceHealth {
+	var out []DeviceHealth
+	add := func(statuses []corev1.ContainerStatus, init bool) {
+		for _, cs := range statuses {
+			for _, rs := range cs.AllocatedResourcesStatus {
+				if len(out) == maxDeviceHealth {
+					return
+				}
+				h := DeviceHealth{Container: cs.Name, Init: init, Name: string(rs.Name)}
+				for i, r := range rs.Resources {
+					if i == maxDeviceHealthDevices {
+						break
+					}
+					msg := ""
+					if r.Message != nil {
+						msg = *r.Message
+						if len(msg) > 256 {
+							msg = msg[:256]
+						}
+					}
+					h.Devices = append(h.Devices, DeviceHealthEntry{ID: string(r.ResourceID), Health: string(r.Health), Message: msg})
+				}
+				out = append(out, h)
+			}
+		}
+	}
+	add(p.Status.InitContainerStatuses, true)
+	add(p.Status.ContainerStatuses, false)
+	return out
 }
 
 // PodDetail fetches one pod by namespace/name and assembles its detail view.
@@ -107,6 +166,8 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 		ServiceAccount:  p.Spec.ServiceAccountName,
 		Resources:       workloads.ResizeResourcesOf(p),
 		Extended:        extres.OfPod(p),
+		Claims:          dra.PodClaims(p),
+		DeviceHealth:    deviceHealthOf(p),
 		Ephemeral:       eph,
 		EphemeralMore:   more,
 		SchedAssumption: c.schedModel().Assumption(),

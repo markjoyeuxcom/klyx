@@ -117,7 +117,7 @@ func TestS0b_BridgeNeedle_FixPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, _, err := redactManifestForAI(root.YAML, false)
+	manifest, _, err := redactManifestForAI(root.YAML, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

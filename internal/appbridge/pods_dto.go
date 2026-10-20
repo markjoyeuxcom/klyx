@@ -1,6 +1,10 @@
 package appbridge
 
-import "github.com/moomora/klyx/internal/extres"
+import (
+	"github.com/moomora/klyx/internal/dra"
+	"github.com/moomora/klyx/internal/extres"
+	"github.com/moomora/klyx/internal/fleet"
+)
 
 // ContainerSummaryDTO is a single container within a pod row.
 type ContainerSummaryDTO struct {
@@ -127,6 +131,53 @@ type PodDetailDTO struct {
 	EphemeralMore int                  `json:"ephemeralMore,omitempty"`
 	// Coverage S11a §6: the pod's extended requests, bounded.
 	Extended ExtendedPodDTO `json:"extended"`
+	// Coverage S11b §3.5: the claims the pod references (joined to the
+	// claims rows in the inspector), and its device health.
+	Claims       []PodClaimRefDTO  `json:"claims"`
+	DeviceHealth []DeviceHealthDTO `json:"deviceHealth"`
+}
+
+// PodClaimRefDTO is one claim a pod references. State is "resolved",
+// "none-needed" (upstream skips it on purpose) or "not-created".
+type PodClaimRefDTO struct {
+	PodClaim string `json:"podClaim"`
+	Source   string `json:"source"`
+	Claim    string `json:"claim,omitempty"`
+	State    string `json:"state"`
+}
+
+// DeviceHealthDTO is one container's allocatedResourcesStatus entry.
+type DeviceHealthDTO struct {
+	Container string                 `json:"container"`
+	Init      bool                   `json:"init,omitempty"`
+	Name      string                 `json:"name"`
+	Devices   []DeviceHealthEntryDTO `json:"devices"`
+}
+
+type DeviceHealthEntryDTO struct {
+	ID      string `json:"id"`
+	Health  string `json:"health"`
+	Message string `json:"message,omitempty"`
+}
+
+func toPodClaimsDTO(refs []dra.PodClaimRef) []PodClaimRefDTO {
+	out := make([]PodClaimRefDTO, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, PodClaimRefDTO{PodClaim: r.PodClaim, Source: r.Source, Claim: r.Claim, State: r.State})
+	}
+	return out
+}
+
+func toDeviceHealthDTO(hs []fleet.DeviceHealth) []DeviceHealthDTO {
+	out := make([]DeviceHealthDTO, 0, len(hs))
+	for _, h := range hs {
+		d := DeviceHealthDTO{Container: h.Container, Init: h.Init, Name: h.Name, Devices: make([]DeviceHealthEntryDTO, 0, len(h.Devices))}
+		for _, e := range h.Devices {
+			d.Devices = append(d.Devices, DeviceHealthEntryDTO{ID: e.ID, Health: e.Health, Message: e.Message})
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // ExtendedPodEntryDTO is one container's extended request; Quantity is a

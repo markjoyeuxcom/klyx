@@ -207,16 +207,22 @@ func chatProject(gvr schema.GroupVersionResource, u *unstructured.Unstructured) 
 	// coverage S10 §8: a Karpenter condition crosses as its type, status,
 	// reason token and Klyx's sentence, never its message
 	karp := karpenterResources[gvr.Group+"/"+gvr.Resource]
+	// coverage S11b §6: a DRA condition crosses as its type, status and
+	// reason token, never its message
+	isDRA := draResources[gvr.Group+"/"+gvr.Resource]
 	for _, c := range crd.ParseConditionsDeep(gvr.Group, gvr.Resource, u.Object) {
 		cc := chatCondition{Type: c.Type, Status: c.Status, Reason: p.str(c.Reason, chatStringMax), Message: p.str(c.Message, chatStringMax), Scope: c.Scope}
 		if karp {
 			cc.Reason = karpenterReason(c.Reason)
 			cc.Message = karpenterSentence(cc.Reason)
 		}
+		if isDRA {
+			cc.Reason, cc.Message = tokenOrWithheld(c.Reason), ""
+		}
 		o.Conditions = append(o.Conditions, cc)
 	}
 	o.Spec, o.Status = p.kindSpec(gvr, u)
-	if !karp && (gvr.Group != "" || (gvr.Resource != "secrets" && gvr.Resource != "configmaps")) {
+	if !karp && !isDRA && (gvr.Group != "" || (gvr.Resource != "secrets" && gvr.Resource != "configmaps")) {
 		// Facts come from a structurally sanitized copy: some builders copy
 		// ownership annotations into values (Codex re-review of f012dc1).
 		for _, f := range crd.BuildFacts(gvr.Group, gvr.Resource, factsInput(u)) {
@@ -263,6 +269,9 @@ func gvrString(gvr schema.GroupVersionResource) string {
 func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Unstructured) (spec, status any) {
 	obj := u.Object
 	key := gvr.Group + "/" + gvr.Resource
+	if draResources[key] {
+		return draChatSpec(p, gvr.Resource, u)
+	}
 	switch key {
 	case "/secrets":
 		out := map[string]any{"type": p.str(nestedString(obj, "type"), chatStringMax)}
