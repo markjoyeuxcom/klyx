@@ -72,7 +72,7 @@ The extract is kept with the lab (`s10-facts.md`).
 - **AKS NAP:**
   - "AKS manages node auto-provisioning on your behalf and runs it in the managed control plane" (Microsoft Learn, "Enable or disable NAP").
   - **Installation history:** the migration from self-hosted Karpenter is verified by the Karpenter CRDs' annotations `meta.helm.sh/release-name: aks-managed-karpenter-overlay-base` and `meta.helm.sh/release-namespace: kube-system`. A retained annotation proves that NAP installed the CRDs, not that NAP is active now.
-  - **Activity:** NAP's events are read with `kubectl get events --field-selector source=karpenter-events`. An event from that source is evidence of current activity. No event proves nothing (a quiet cluster).
+  - **Events:** Microsoft documents `kubectl get events --field-selector source=karpenter-events` for inspecting NAP's events. That is a monitoring view, not an enablement or health check: an Event dates an occurrence, it does not prove NAP is enabled now (§5 bounds what it may say).
   - **Networking:** NAP is documented with Azure CNI overlay and the Cilium dataplane.
 - **The owner's `aks-dev` no longer resolves** (2026-10-20). AKS evidence in this slice is fixture-only (C6).
 
@@ -124,7 +124,7 @@ The extract is kept with the lab (`s10-facts.md`).
 2. **The class, current and found:**
    - **Ready False:** Fault "NodeClass <name> not ready", in the class's words: its first failing dependent condition and reason ("SubnetsReady False: SubnetsNotFound: …"). This replaces the copy in the pool's `NodeClassReady`. Both say the same thing, and the class's own read is current. One finding per pool: the incident is the pool's inability to provision.
    - **Terminating:** Fault "NodeClass <name> is terminating".
-   - **Ready Unknown or no conditions:** Progressing "NodeClass <name> not yet reconciled", but only when §5 attributes a ready controller to that class's kind (an AWS-imaged Deployment for `EC2NodeClass`, an Azure one or NAP's activity for `AKSNodeClass`, Auto Mode evidence for `NodeClass`). Otherwise it is Unknown: "no controller attributed to <kind> is established". A ready controller for another provider certifies nothing.
+   - **Ready Unknown or no conditions:** Progressing "NodeClass <name> not yet reconciled", but only when §5 attributes an observed, ready controller to that class's kind (an AWS-imaged Deployment for `EC2NodeClass`, an Azure-imaged one for `AKSNodeClass`). Platform management (Auto Mode, NAP) is never a ready controller: a class it manages with Ready Unknown is Unknown. Otherwise it is Unknown: "no controller attributed to <kind> is established". A ready controller for another provider certifies nothing.
    - **Behind its generation** (a class condition's `observedGeneration` behind the class generation): Progressing "NodeClass <name> syncing", never its old Ready.
    - **Ready True while the pool's `NodeClassReady` is False:** Progressing "NodeClass <name> is ready; the NodePool's status has not caught up". This is not a fault from stale copy, and it has no clock: a stuck controller is the controller task's finding (§5).
 3. **The class not found** (a proven absence): Fault "NodeClass <kind>/<name> not found". Karpenter's own `NodeClassNotFound` agrees, but it is not needed.
@@ -177,7 +177,15 @@ The row's reading is display evidence (a fact row, like S9's authentications). T
 
 **Platform evidence** (positive only):
 - **EKS Auto Mode:** `nodeclasses.eks.amazonaws.com` served, and at least one node labelled `eks.amazonaws.com/compute-type: auto` (one labelled-node LIST, limit 1).
-- **AKS NAP activity:** at least one recent Event from the source `karpenter-events` (one field-selected LIST, limit 1).
+- **AKS NAP activity** (management evidence only; never a handler, never health):
+  - **The read:** core Events cluster-wide, field-selected `source=karpenter-events`, limit 100 per page, at most 3 pages. A continue token past the third page means the read is cut.
+  - **Each Event's time:** its `series.lastObservedTime`, else `lastTimestamp`, else `eventTime`, else `firstTimestamp`. An Event with none of these is undated and is no evidence. A repeated Event counts at its latest observation.
+  - **The result:** the newest time across every page read, not the first item. The window is one hour, the API server's default Event TTL.
+    - **Activity "as of <time>"** when that newest time is within the window. A cut read that already found an in-window Event still establishes it.
+    - **Not established** when nothing in the window was found and the read was cut, or the read failed or was forbidden.
+    - **No activity found** when the read was complete with nothing in the window.
+  - **Refresh:** re-read at the capability re-probe cadence (5 minutes). A failed refresh keeps the last result only until its newest time leaves the window. Then it expires to "not established".
+  - **After NAP stops,** retained Events age out within the hour: the reading may say "managed" for up to an hour after NAP is disabled. That is a stated limit, and the reading always says "activity as of <time>".
 - **AKS NAP installation:** the CRD annotation `meta.helm.sh/release-name: aks-managed-karpenter-overlay-base`. This is history, never activity on its own.
 
 **Readings, per provider kind** (each pool's class kind is attributed to them; §3 uses them):
@@ -186,8 +194,8 @@ The row's reading is display evidence (a fact row, like S9's authentications). T
 |---|---|---|
 | `EC2NodeClass` | an AWS-attributed candidate | its observed health: ready, or **not ready** (a fault) |
 | `AKSNodeClass` | an Azure-attributed candidate | its observed health |
-| `AKSNodeClass` | NAP activity evidence | **managed**: "managed by AKS node auto-provisioning; controller health not directly observed" |
-| `AKSNodeClass` | NAP installation evidence only, no attributed candidate in a complete read | unknown: "CRDs installed by AKS NAP; current activity unverified" |
+| `AKSNodeClass` | NAP activity in the window, no Azure-attributed candidate in a complete read | **managed**: "managed by AKS node auto-provisioning (activity as of <time>); controller health not directly observed" |
+| `AKSNodeClass` | NAP installation evidence, without activity in the window | unknown: "CRDs installed by AKS NAP; current activity unverified" |
 | `NodeClass` (Auto Mode) | Auto Mode evidence | **managed**: "managed by EKS Auto Mode; controller health not directly observed" |
 | any | none, with the inventory complete | unknown: "no controller for <kind> found" |
 | any | none, with the inventory incomplete or unreadable | unknown: "the Karpenter controllers could not all be read" |
@@ -269,6 +277,12 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
     - AWS resource IDs (`subnet-`, `sg-`, `ami-`, `vpc-`, `eni-`, `lt-`, `cr-`, `pg-` followed by hex) with `<aws-id>`.
 
     It joins the shared AI scrub chain (`ScrubEvidence` and the chat projection's string pass), so it covers every kind's condition and event text, not only Karpenter's. Egress becomes strictly smaller for every kind.
+  - **Karpenter's condition messages never cross,** for every Karpenter kind (the three classes, NodePools and NodeClaims). Pattern redaction cannot catch a bare name: AWS's `ValidationSucceeded` False `InstanceProfileNotFound` reads `Instance profile "<spec.instanceProfile>" not found`, any string, and core copies class text into the pools.
+    - **What crosses** to AI and chat is a condition's type, status and reason, plus Klyx's fixed sentence for that type and reason (a table per provider, "the instance profile was not found"; an unknown reason gets "see the condition in Klyx").
+    - **Reasons are tokens.** The CRDs' schema pattern (`^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$`) admits no space, slash or hyphen. Klyx re-checks the pattern and withholds any reason outside it.
+    - **The native message is a separate field,** for the local inspector only, outside every AI allowlist.
+    - **Evaluation reasons are built from the fixed wording.** The rows' `NativeEval.Reason` for these kinds (rule 2's headline, a claim's failing link) uses the type, reason and fixed sentence, so the summary's Top, the ledger, notifications and chat's attention summary carry no provider text.
+    - **This holds when the class itself is unavailable:** a pool's inherited `NodeClassReady` or Ready text is never used for AI either.
   - **The paths covered,** each pinned by literal-needle tests on the serialized document:
     - class conditions;
     - pool condition copies and the evaluation reasons built from them (rule 2's headline);
@@ -307,7 +321,20 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 - a class found in a capped kind;
 - a reference omitted by the kind budget.
 
-**The identifier boundary:** literal needles (an ARM ID, an ARN, `subnet-`, `sg-` and `ami-` IDs) planted in class conditions, a pool's copied messages and reasons, and the spec. Each is asserted absent from the serialized Explain document, chat tool results and snapshots, and instance facts, and present in the local inspector DTO.
+**The identifier boundary:**
+- **Needles:** an ARM ID, an ARN, `subnet-`, `sg-` and `ami-` IDs, and a bare, non-ARN, unprefixed instance-profile name (`Instance profile "ExamplePrivateProfileNeedle" not found`).
+- **Where they are planted:** class conditions, a pool's copied messages with its class unavailable, a NodeClaim's failing link, and the spec.
+- **Where each is asserted absent:** the serialized Explain document, related facts, chat tool results and snapshots, and chat's attention summary.
+- **Where each is asserted present:** the local inspector DTO.
+
+**NAP activity:**
+- an old first page with a recent Event on a later page;
+- an expired Event, and an undated one;
+- a repeated Event at its latest observation;
+- a cut read with and without an in-window Event;
+- a failed refresh expiring at the window;
+- retained activity after NAP stops, ageing out;
+- never a handler: a NAP-managed class with Ready Unknown stays Unknown.
 
 **The lab** (`lab-s10`, kind-klyx; teardown script):
 - CRDs: the real `EC2NodeClass` and `AKSNodeClass` from the provider releases, a stub `NodeClass` for Auto Mode (the API is closed), and the existing `karpenter.sh` stubs;
@@ -352,3 +379,10 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 - the `managed` state pinned across every consumer (§5);
 - the aggregate `UnhealthyDependents` on recovery (§3);
 - the absence of the managed-by label never proving BYO Cilium (§6).
+
+## 12. Revision 2: Codex's re-review of 33c12b4
+
+| # | Finding | Where answered |
+|---|---|---|
+| P1 | A bare instance-profile name in condition text passed every identifier pattern | §8: Karpenter's condition messages never cross to AI or chat, for every Karpenter kind. Only the type, status, reason token (pattern-checked) and Klyx's fixed sentence cross. Evaluation reasons are built from that wording, inherited pool text included. The native message stays a local inspector field. §9's needles add a bare profile name |
+| P2 | NAP's Event predicate lacked a time and acquisition contract | §5: a bounded field-selected read (3 pages of 100); the timestamp precedence; the newest time across pages; a one-hour window; cut, failed and forbidden outcomes; expiry at the window on a failed refresh; up to an hour after NAP stops, stated. It is management evidence only, said "as of <time>", and never a handler or health (§3 rule 2) |
