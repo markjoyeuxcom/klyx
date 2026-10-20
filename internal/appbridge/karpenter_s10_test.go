@@ -309,7 +309,7 @@ func TestS10ReadingNoteIsKlyxWording(t *testing.T) {
 		"status":   map[string]any{"conditions": []any{cond("AMIsReady", "False", "AMINotFound", 1), cond("Ready", "False", "UnhealthyDependents", 2)}}}}
 	class := karpenter.ParseNodeClass(u, karpenter.AdapterEC2)
 	ec2, _ := karpenter.KindFor(karpenter.AdapterEC2)
-	want := "AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2"
+	want := "AMIsReady False, reported for generation 1 (the NodeClass is at 2): AMINotFound: no AMI matched the selector terms, or it is not usable"
 	krow := healthsrc.Row[healthsrc.KarpenterClassRow]{Ref: healthsrc.RowRef{UID: "default-uid"}, Data: healthsrc.KarpenterClassRow{Class: &class, Kind: ec2, Reading: class.Read(), UsersComplete: true}}
 	dto := karpenterClassRowDTO(krow)
 	if dto.Reading.Note != want || dto.Reading.State != "not ready" {

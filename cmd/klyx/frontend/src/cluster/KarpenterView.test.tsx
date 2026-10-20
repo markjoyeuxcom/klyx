@@ -490,7 +490,7 @@ describe("KarpenterView capped and stale evidence (S10 implementation review)", 
   });
 
   it("a historical condition is shown as earlier, beside the reading", async () => {
-    const note = "AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2";
+    const note = "AMIsReady False, reported for generation 1 (the NodeClass is at 2): AMINotFound: no AMI matched the selector terms, or it is not usable";
     setRows({ classes: [cls({ reading: { state: "not ready", text: "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", note } })], coverage: cv() });
     render(<KarpenterView cluster="x" />);
     await openClasses();

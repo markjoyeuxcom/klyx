@@ -1,6 +1,8 @@
 package karpenter
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -252,7 +254,10 @@ func (c *NodeClass) Read() ClassReading {
 	}
 	r := c.read()
 	if h := c.Historical; h != nil {
-		r.Note = Phrase(h) + " was reported for generation " + itoa(h.ObservedGeneration) + "; the NodeClass is at generation " + itoa(c.Meta.Generation)
+		// "AMIsReady False, reported for generation 2 (the NodeClass is at
+		// 3): AMINotFound: no AMI matched ..."
+		ts := typeStatus(h)
+		r.Note = ts + ", reported for generation " + itoa(h.ObservedGeneration) + " (the NodeClass is at " + itoa(c.Meta.Generation) + ")" + strings.TrimPrefix(Phrase(h), ts)
 	}
 	return r
 }

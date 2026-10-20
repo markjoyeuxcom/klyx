@@ -197,7 +197,7 @@ func TestClassReadingTerminatingSyncingUnknown(t *testing.T) {
 	// Ready False is read by its own reason, the old dependent beside it.
 	if r := ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "old", 2)).Read(); r.State != ClassNotReady ||
 		r.Text != "Ready False: UnhealthyDependents: a condition it depends on is not ready" ||
-		r.Note != "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms was reported for generation 2; the NodeClass is at generation 3" {
+		r.Note != "SubnetsReady False, reported for generation 2 (the NodeClass is at 3): SubnetsNotFound: no subnets matched the selector terms" {
 		t.Fatalf("an old failing dependent is historical: %+v", r)
 	}
 	// An unreported generation is read as reported.
@@ -228,12 +228,12 @@ func TestClassReadingIsCurrentEvidence(t *testing.T) {
 		{"an old first dependent beside a current one", ec2("x", 2, c("Ready", "False", "UnhealthyDependents", "", 2),
 			c("AMIsReady", "False", "AMINotFound", "historical", 1), c("SubnetsReady", "False", "SubnetsNotFound", "current", 2)),
 			ClassNotReady, "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms",
-			"AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2"},
+			"AMIsReady False, reported for generation 1 (the NodeClass is at 2): AMINotFound: no AMI matched the selector terms, or it is not usable"},
 		// CapacityReservationsReady is a Ready dependent only with its feature
 		// gate, and the provider skips its reconciler when the gate is off
 		{"an old optional dependent beside a current Ready True", ec2("x", 2, c("Ready", "True", "", "", 2),
 			c("CapacityReservationsReady", "False", "CapacityUnavailable", "old", 1)),
-			ClassReady, "", "CapacityReservationsReady False: CapacityUnavailable: see the condition in Klyx was reported for generation 1; the NodeClass is at generation 2"},
+			ClassReady, "", "CapacityReservationsReady False, reported for generation 1 (the NodeClass is at 2): CapacityUnavailable: see the condition in Klyx"},
 		// a current dependent's failure is current while the aggregate lags,
 		// is absent or Unknown
 		{"a current dependent beside an old Ready", ec2("x", 3, c("Ready", "True", "", "", 2), c("SubnetsReady", "False", "SubnetsNotFound", "", 3)),
@@ -250,11 +250,11 @@ func TestClassReadingIsCurrentEvidence(t *testing.T) {
 		// two old failures: the first in the provider's order is the note
 		{"two old dependents", ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "", 2), c("AMIsReady", "False", "AMINotFound", "", 1)),
 			ClassNotReady, "Ready False: UnhealthyDependents: a condition it depends on is not ready",
-			"AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 3"},
+			"AMIsReady False, reported for generation 1 (the NodeClass is at 3): AMINotFound: no AMI matched the selector terms, or it is not usable"},
 		// only old evidence: syncing, the old failure as a note
 		{"everything old", ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 2), c("SubnetsReady", "False", "SubnetsNotFound", "", 2)),
 			ClassSyncing, "its Ready condition is behind generation 3",
-			"SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms was reported for generation 2; the NodeClass is at generation 3"},
+			"SubnetsReady False, reported for generation 2 (the NodeClass is at 3): SubnetsNotFound: no subnets matched the selector terms"},
 	}
 	for _, tc := range cases {
 		r := tc.class.Read()
