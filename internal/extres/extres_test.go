@@ -526,3 +526,15 @@ func TestReserveOrdersByAmount(t *testing.T) {
 		t.Fatalf("totals by allocatable, largest first: %+v", tot)
 	}
 }
+
+// The fast path skips a pod only when nothing it names is extended: an
+// extended name in the overhead alone still reserves.
+func TestReserveOverheadOnlyPod(t *testing.T) {
+	gpu := rl("nvidia.com/gpu", "8")
+	n := node("n", gpu, gpu.DeepCopy(), nil)
+	p := pod("p", "n", ctr("main", rl("cpu", "1")))
+	p.Spec.Overhead = rl("nvidia.com/gpu", "1")
+	if e, _ := figuresOf(Reserve([]*corev1.Node{n}, []*corev1.Pod{p}), "n", "nvidia.com/gpu"); e.Requested != Known(1) {
+		t.Fatalf("overhead alone: %+v", e)
+	}
+}

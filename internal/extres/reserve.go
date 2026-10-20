@@ -121,7 +121,7 @@ func Reserve(nodes []*corev1.Node, pods []*corev1.Pod) Result {
 			continue
 		}
 		s := states[p.Spec.NodeName]
-		if s == nil {
+		if s == nil || !requestsExtended(p) {
 			continue
 		}
 		reservePod(s, p)
@@ -135,6 +135,27 @@ func Reserve(nodes []*corev1.Node, pods []*corev1.Pod) Result {
 	res.Rows, res.RowsDropped = boundRows(res.Rows)
 	res.Totals, res.TotalsOmitted = totals(nodes, states)
 	return res
+}
+
+// requestsExtended reports whether any container or the overhead names an
+// extended resource: most pods request only cpu and memory, and skip the
+// per-class aggregation (S11a §8, TestLoad).
+func requestsExtended(p *corev1.Pod) bool {
+	for _, cs := range [][]corev1.Container{p.Spec.Containers, p.Spec.InitContainers} {
+		for i := range cs {
+			for name := range cs[i].Resources.Requests {
+				if IsDRAExtended(name) {
+					return true
+				}
+			}
+		}
+	}
+	for name := range p.Spec.Overhead {
+		if IsExtended(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // reservePod classifies each (container, resource) pair before aggregating
@@ -156,7 +177,21 @@ func reservePod(s *nodeState, p *corev1.Pod) {
 		}
 		return classNotAdvertised
 	}
+	// only the classes the pod's pairs fall in are aggregated
+	var present [classNotAdvertised + 1]bool
+	for _, cs := range [][]corev1.Container{p.Spec.Containers, p.Spec.InitContainers} {
+		for i := range cs {
+			for name := range cs[i].Resources.Requests {
+				if IsDRAExtended(name) {
+					present[classOf(cs[i].Name, name)] = true
+				}
+			}
+		}
+	}
 	for class := classCounted; class <= classNotAdvertised; class++ {
+		if !present[class] {
+			continue
+		}
 		pick := func(c corev1.Container) qmap {
 			m := qmap{}
 			for name, q := range c.Resources.Requests {
