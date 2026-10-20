@@ -232,6 +232,11 @@ var parityParts = []parityPart{
 	// coverage S11a: reservations and totals are evidence over the nodes
 	{"extended", "reservations", "evidence", []string{"nodes"}},
 	{"extended", "totals", "evidence", []string{"nodes"}},
+	// coverage S11b: claims by UID; pools by driver/pool (keyed from their
+	// slices, parityPoolKey); device classes are evidence
+	{"dra", "claims", "native", []string{"resourceclaims"}},
+	{"dra", "pools", "native", []string{"resourceslices"}},
+	{"dra", "classes", "evidence", []string{"deviceclasses"}},
 }
 
 // parityAlertsCounted is the fixture's posted alerts that count: two
@@ -255,7 +260,8 @@ var parityResource = map[string]string{
 	"tcproutes": "tcproutes.gateway.networking.k8s.io", "udproutes": "udproutes.gateway.networking.k8s.io",
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
 	"ec2nodeclasses": "ec2nodeclasses.karpenter.k8s.aws", "aksnodeclasses": "aksnodeclasses.karpenter.azure.com",
-	"nodeclasses":   "nodeclasses.eks.amazonaws.com",
+	"nodeclasses":    "nodeclasses.eks.amazonaws.com",
+	"resourceclaims": "resourceclaims.resource.k8s.io", "resourceslices": "resourceslices.resource.k8s.io", "deviceclasses": "deviceclasses.resource.k8s.io",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
@@ -314,9 +320,17 @@ type parityObj struct {
 		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
-		Type string `json:"type"`
+		Type   string `json:"type"`
+		Driver string `json:"driver"` // a ResourceSlice's (coverage S11b)
+		Pool   struct {
+			Name string `json:"name"`
+		} `json:"pool"`
 	} `json:"spec"`
 }
+
+// parityPoolKey is a ResourceSlice's pool member key (coverage S11b): a pool
+// has no object UID, so its rows and the oracle key it by driver/pool.
+func parityPoolKey(o parityObj) string { return "pool:" + o.Spec.Driver + "/" + o.Spec.Pool.Name }
 
 // parityMemberOf: whether a counted kind's object is a member of the part
 // (coverage S4: the lb services part counts only LoadBalancer Services;
@@ -377,6 +391,30 @@ func (l *parityLab) oracle(name, state string, coverage map[string]string, contr
 			var list struct{ Items []parityObj }
 			if err := json.Unmarshal(l.kubectl("get", parityResource[kind], "-A", "-o", "json"), &list); err != nil {
 				l.t.Fatalf("oracle %s: %v", kind, err)
+			}
+			if p.Task == "dra" && p.Part == "pools" {
+				// a pool is its slices together: its declaration is the one
+				// any of its slices carries
+				pools := map[string]parityMember{}
+				for _, o := range list.Items {
+					key := parityPoolKey(o)
+					m, seen := pools[key]
+					if r := o.Metadata.Annotations["klyx.dev/parity-role"]; r != "" || !seen {
+						m = parityMember{Role: r, Included: o.Metadata.Annotations["klyx.dev/parity-included"] == "true"}
+						if m.Role == "" {
+							m.Role = "ok"
+						}
+					}
+					pools[key] = m
+				}
+				for key, m := range pools {
+					addRole(&pe.Roles, m.Role)
+					if m.Included {
+						pe.Included++
+					}
+					pe.Members[key] = m
+				}
+				continue
 			}
 			for _, o := range list.Items {
 				if !parityMemberOf(p.Task, p.Part, o) {
@@ -442,7 +480,7 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 	}
 	var env struct {
 		Rows []struct {
-			Ref  struct{ UID string }
+			Ref  struct{ UID, Name string }
 			Eval struct {
 				Included bool
 				Role     int
@@ -491,7 +529,11 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 			}
 			m = parityMember{Role: kindRole[x.Eval.Role], Included: x.Eval.Included}
 		}
-		out[x.Ref.UID] = m
+		key := x.Ref.UID
+		if key == "" && x.Ref.Name != "" {
+			key = "pool:" + x.Ref.Name // a pool's stated identity (coverage S11b)
+		}
+		out[key] = m
 	}
 	return out, nil
 }
@@ -848,6 +890,8 @@ func TestParityGate(t *testing.T) {
 		{"9", "Synced", none},                         // coverage S9: a fallback ScaledObject and an HPA that cannot scale
 		{"10", "Synced", none},                        // coverage S10: a failing EC2NodeClass lights its two pools once each
 		{"11", "Synced", none},                        // coverage S11a: a stopped device plugin's node reads not allocatable
+		{"12", "Synced", none},                        // coverage S11b: a claim no node can satisfy, its pod unschedulable
+		{"13", "Synced", none},                        // coverage S11b: an invalid fixture pool
 	} {
 		l.apply(c.name)
 		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))

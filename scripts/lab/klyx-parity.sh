@@ -36,7 +36,11 @@ state=$dir/owner
 keda_version=2.21.0
 keda_sha256=b43c89ffeef81722d7e2dd2c079d74789767a0f89cae1336cff784994814f6d7
 keda_manifest=$dir/keda-$keda_version.yaml
-own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark" "$keda_manifest" "$keda_manifest.part")
+# coverage S11b: the upstream example DRA driver's chart, pinned by digest
+dra_chart_version=0.5.0
+dra_chart_sha256=ab5232c4f5cc7348d9c67bbcc9e0aa7a5f52a793e41dbd458bf3b2f07d32cb4a
+dra_chart=$dir/dra-example-driver-$dra_chart_version.tgz
+own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark" "$keda_manifest" "$keda_manifest.part" "$dra_chart" "$dra_chart.part")
 src=${KLYX_PARITY_CRD_SOURCE:-kind-klyx}
 here=$(cd "$(dirname "$0")" && pwd)
 fixtures=$here/parity

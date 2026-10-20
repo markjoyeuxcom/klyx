@@ -127,7 +127,7 @@ export const TITLES: Record<string, string | ((cluster: string) => string)> = {
   overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
   karpenter: "Karpenter", autoscaling: "Autoscaling", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
   flux: "Flux CD", "flux-sources": "Flux CD", "flux-operator": "Flux CD", "flux-images": "Flux CD", "flux-composition": "Flux CD", "flux-notifications": "Flux CD", argo: "Argo CD", "argo-projects": "Argo CD",
-  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", loadbalancers: "Load balancers", alerts: "Alerts", helm: "Helm",
+  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", dra: "Devices (DRA)", loadbalancers: "Load balancers", alerts: "Alerts", helm: "Helm",
   crds: "API browser", builtins: "Resources",
 };
 
@@ -969,6 +969,57 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const totals = $("[data-testid='nodes-extended-totals']")?.textContent ?? "";
     if (!totals.includes("8 nvidia.com/gpu allocatable (3 requested)")) throw new Error(`the totals: ${totals}`);
     return { cell, totals: totals.slice(0, 160) };
+  });
+
+  // coverage S11b: DRA, from lab-s11b - the upstream example driver's
+  // node-local pool, a template claim in use, a claim no node satisfies,
+  // the fixture pools, and an unhealthy device
+  await step(steps, "Devices (DRA): claims, pools and the pending ladder", async () => {
+    await open("dra");
+    await closeDrawer();
+    const stuck = await within(20_000, "the unsatisfiable claim first", () => {
+      const r = [...document.querySelectorAll<HTMLElement>(".lens-row")][0];
+      return r && /klyx-s11b-lab \/ lab-too-many-gpu-/.test(r.textContent ?? "") && /cannot allocate it/.test(r.textContent ?? "") ? r : null;
+    });
+    stuck.click();
+    const panel = await within(8000, "the claim inspector", () => $("[data-testid='dra-claim-panel']"));
+    const text = panel.textContent ?? "";
+    for (const want of ['The scheduler: "', "cannot allocate all claims", "the scheduler could not allocate the pod's claims"]) {
+      if (!text.includes(want)) throw new Error(`missing "${want}" in ${text.slice(0, 400)}`);
+    }
+    await closeDrawer();
+    (await within(8000, "the Pools tab", () => byText<HTMLButtonElement>("[aria-label='DRA objects'] button", /^Pools/))).click();
+    const pools = await within(20_000, "the pools", () => {
+      const rows = [...document.querySelectorAll<HTMLElement>(".lens-row")].map((r) => r.textContent ?? "");
+      return rows.some((t) => t.includes("fixture.klyx.dev / lab-invalid") && t.includes("Invalid")) && rows.some((t) => t.includes("gpu.example.com / klyx-control-plane")) ? rows : null;
+    });
+    const incomplete = pools.find((t) => t.includes("lab-incomplete")) ?? "";
+    if (!/Being updated|Incomplete/.test(incomplete)) throw new Error(`the incomplete fixture pool reads "${incomplete}"`);
+    return { claim: stuck.textContent?.slice(0, 120), pools: pools.length };
+  });
+
+  await step(steps, "Devices (DRA): the node's pools and the pod's claims", async () => {
+    await open("nodes");
+    await closeDrawer();
+    const row = await within(20_000, "the kind node", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "klyx-control-plane"));
+    row.click();
+    const block = await within(20_000, "the node's DRA block", () => {
+      const b = $("[data-testid='node-dra']");
+      return b && /gpu\.example\.com \/ klyx-control-plane · 8 devices/.test(b.textContent ?? "") ? b : null;
+    });
+    await closeDrawer();
+    await open("pods");
+    await closeDrawer();
+    const search = await within(8000, "the pods search", () => $<HTMLInputElement>("input[placeholder='Search pods']"));
+    typeInto(search, "lab-template");
+    const pod = await within(20_000, "lab-template", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /lab-template$/.test(r.querySelector(".lens-cell-name")?.textContent ?? "")));
+    pod.click();
+    const claims = await within(20_000, "the pod's claims", () => {
+      const b = $("[data-testid='pod-claims']");
+      return b && /from a template · Allocated/.test(b.textContent ?? "") ? b : null;
+    });
+    typeInto(search, "");
+    return { node: block.textContent?.slice(0, 120), pod: claims.textContent?.slice(0, 160) };
   });
 
   // ---- settings and the chat drawer ----

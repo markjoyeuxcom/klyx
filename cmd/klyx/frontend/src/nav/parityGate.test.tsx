@@ -64,19 +64,20 @@ type Capture = {
   rows: { cluster: string; incarnation: number; task: string; evaluatedAt: string; part: HealthPart }[];
   dtos: Record<string, RowsDTO<DtoRow>>; // the production sink's emitted messages: the lens DTOs
 };
-type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string; kedaOwner?: string };
+type DtoRow = { uid?: string; key?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string; kedaOwner?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
 const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
-  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals"];
+  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals",
+  "dra/claims", "dra/pools", "dra/classes"];
 
 // inventory parts the attention model does not carry (coverage S9 §2: KEDA's
 // authentications; S10 §2: Karpenter's NodeClasses - rows, never Needs you);
 // their kinds' gaps read on the parts that depend on them
-const INVENTORY = new Set(["keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals"]);
+const INVENTORY = new Set(["keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals", "dra/classes"]);
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "10", "11", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "10", "11", "12", "13", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };
@@ -138,7 +139,8 @@ function assertRowDTOs(c: Capture) {
       // S9: a KEDA-owned HPA) carries no evaluation and is no member of the
       // counted set
       if (native && !row.rule && (row.counted === false || row.entity === "binding" || !!row.kedaOwner)) continue;
-      const uid = row.uid ?? "";
+      // a pool has no object UID: it is keyed by driver/pool (coverage S11b)
+      const uid = row.uid ?? (row.key ? `pool:${row.key}` : "");
       const role = native ? row.rule?.role : row.health?.kind;
       expect(role, `${c.case} ${key} ${uid}: no evaluation`).toBeTruthy();
       const want = pe.members[uid];

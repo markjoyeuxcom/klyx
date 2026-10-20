@@ -174,6 +174,52 @@ EOF
 	k -n "$ns" wait --for=condition=Ready pod/parity-device-user --timeout=120s >/dev/null
 }
 
+# dra_objects: coverage S11b's upstream example DRA driver (the chart pinned
+# by digest, installed with Helm into its own namespace), its node-local
+# pool of 8 devices, one claim allocated to a running pod, and its
+# DeviceClass. Case 12 adds a claim no node can satisfy; case 13 an invalid
+# fixture pool (all-nodes slices under a driver name no plugin serves).
+dra_objects() {
+	if [[ ! -f $dra_chart || $(openssl dgst -sha256 -r "$dra_chart" | awk '{print $1}') != "$dra_chart_sha256" ]]; then
+		helm pull oci://registry.k8s.io/dra-example-driver/charts/dra-example-driver --version "$dra_chart_version" -d "$dir" >/dev/null ||
+			die "could not pull the example DRA driver's chart"
+		local got
+		got=$(openssl dgst -sha256 -r "$dra_chart" | awk '{print $1}')
+		[[ $got == "$dra_chart_sha256" ]] || { rm -f "$dra_chart"; die "the DRA chart has digest $got, pinned $dra_chart_sha256"; }
+	fi
+	helm --kubeconfig "$kubeconfig" --kube-context "$ctx" upgrade -i --create-namespace --namespace parity-dra dra-example-driver "$dra_chart" --wait --timeout 300s >/dev/null ||
+		die "the example DRA driver did not install"
+	local i=0
+	until k get resourceslices -o 'jsonpath={.items[*].spec.nodeName}' | grep -q "$name-control-plane"; do
+		i=$((i + 1))
+		((i > 90)) && die "the DRA driver published no slice for the node"
+		sleep 2
+	done
+	k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata: {name: parity-claim, namespace: $ns}
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly: {deviceClassName: gpu.example.com, allocationMode: ExactCount, count: 1}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: parity-dra-user, namespace: $ns}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {claims: [{name: gpu}]}
+  resourceClaims: [{name: gpu, resourceClaimName: parity-claim}]
+EOF
+	k -n "$ns" wait --for=condition=Ready pod/parity-dra-user --timeout=180s >/dev/null
+}
+
 # karpenter_controllers: an AWS and an Azure stand-in, labelled as the
 # charts label them and running pause under each provider's controller
 # image, so both are attributed (S10 §5); the parity node carries EKS Auto
@@ -1274,6 +1320,7 @@ baseline() {
 	keda_objects
 	alerts_objects
 	extended_objects
+	dra_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 
@@ -1405,6 +1452,59 @@ EOF
 		k -n "$ns" patch daemonset parity-device-plugin --type=merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"klyx.dev/parity-plugin":"off"}}}}}' >/dev/null
 		ext_wait 0
 		k annotate node "$name-control-plane" klyx.dev/parity-role=degraded klyx.dev/parity-included=true --overwrite >/dev/null ;;
+	12) # coverage S11b: a claim for nine devices of eight; its pod's only
+		# claim, so the scheduler's reason is claim-specific (degraded), and
+		# the pod is unschedulable (fault)
+		k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: parity-claim-nine
+  namespace: $ns
+  annotations: {klyx.dev/parity-role: degraded, klyx.dev/parity-included: "true"}
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly: {deviceClassName: gpu.example.com, allocationMode: ExactCount, count: 9}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: parity-dra-nine
+  namespace: $ns
+  annotations: {klyx.dev/parity-role: fault}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {claims: [{name: gpu}]}
+  resourceClaims: [{name: gpu, resourceClaimName: parity-claim-nine}]
+EOF
+		local i=0
+		until k -n "$ns" get pod parity-dra-nine -o 'jsonpath={.status.conditions[?(@.type=="PodScheduled")].reason}' | grep -q Unschedulable; do
+			i=$((i + 1))
+			((i > 60)) && die "parity-dra-nine never read unschedulable"
+			sleep 2
+		done ;;
+	13) # coverage S11b: an invalid fixture pool (two slices name one device)
+		local s
+		for s in a b; do
+			k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceSlice
+metadata:
+  name: parity-invalid-$s
+  annotations: {klyx.dev/parity-role: degraded, klyx.dev/parity-included: "true"}
+spec:
+  driver: fixture.klyx.dev
+  pool: {name: parity-invalid, generation: 1, resourceSliceCount: 2}
+  allNodes: true
+  devices: [{name: dev-0}]
+EOF
+		done ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -1437,6 +1537,9 @@ revert_case() {
 	11) k -n "$ns" patch daemonset parity-device-plugin --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' >/dev/null
 		ext_wait 2
 		k annotate node "$name-control-plane" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null ;;
+	12) k -n "$ns" delete pod parity-dra-nine --wait >/dev/null
+		k -n "$ns" delete resourceclaims.resource.k8s.io parity-claim-nine --wait >/dev/null ;;
+	13) k delete resourceslices.resource.k8s.io parity-invalid-a parity-invalid-b --wait >/dev/null ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"
