@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act, within, waitFor } from "@testing-library/react";
-import type { KarpenterClaimDTO, KarpenterClassDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import type { ClusterDTO, KarpenterClaimDTO, KarpenterClassDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import { useFleet } from "../store/fleet";
 import { useHealth } from "../store/health";
 import type { KarpenterRows } from "../health/useKarpenterRows";
 import { KarpenterView } from "./KarpenterView";
@@ -326,6 +327,29 @@ describe("KarpenterView NodeClasses (S10)", () => {
     setRows({ pools: [reg], claims: [claim()], coverage: classCoverage() });
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("1 NodePool failing to register")).toBeTruthy();
+  });
+
+  // §6: on an AKS cluster with Cilium, the networking note, conditional
+  it("the AKS networking note: only with azure:// nodes and Cilium, worded as unverified", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] });
+    const aks = klass({ uid: "a1", name: "aks", kind: "AKSNodeClass", group: "karpenter.azure.com", adapter: "aks", facts: { kubernetesVersion: "1.33.2", subnetSet: true } });
+    setRows({ pools: [pool], classes: [aks], coverage: classCoverage() });
+    useFleet.setState({ clusters: [{ name: "x", state: "Synced", azureNodes: true, ciliumPresent: true } as ClusterDTO] });
+    const first = render(<KarpenterView cluster="x" />);
+    const note = await screen.findByTestId("karp-aks-networking");
+    expect(note.textContent).toContain("BYO or Azure-managed is unverified");
+    fireEvent.click(screen.getByRole("button", { name: /^NodeClasses/ }));
+    fireEvent.click((await screen.findByText("aks")).closest(".lens-row") as HTMLElement);
+    expect((await screen.findByTestId("karp-class-networking")).textContent).toContain("excludes third-party CNI networking troubleshooting");
+    first.unmount();
+    for (const c of [{ azureNodes: true, ciliumPresent: false }, { azureNodes: false, ciliumPresent: true }]) {
+      useFleet.setState({ clusters: [{ name: "x", state: "Synced", ...c } as ClusterDTO] });
+      const r = render(<KarpenterView cluster="x" />);
+      await screen.findByRole("button", { name: /^NodePools/ });
+      expect(screen.queryByTestId("karp-aks-networking")).toBeNull();
+      r.unmount();
+    }
+    useFleet.setState({ clusters: [] });
   });
 
   it("says when no class kind is served", async () => {

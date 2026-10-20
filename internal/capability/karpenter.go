@@ -143,6 +143,9 @@ type KarpenterCapability struct {
 	// never activity on its own.
 	NAPInstalled bool
 	NAP          NAPActivity
+	// AzureNodes: a node's providerID is azure:// - an AKS cluster, for
+	// §6's networking note (read with the AKSNodeClass kind served).
+	AzureNodes bool
 }
 
 // Served: the adapter's class kind is served at the version Klyx reads.
@@ -343,6 +346,7 @@ func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) 
 		case ck.Adapter == karpenter.AdapterAKS:
 			out.NAPInstalled = d.napInstalled(ctx)
 			out.NAP = d.napActivity(ctx, d.clockNow())
+			out.AzureNodes = d.azureNodes(ctx)
 		}
 	}
 	out.settle()
@@ -575,6 +579,13 @@ func (d *Detector) autoModeNode(ctx context.Context) (bool, string) {
 		return false, "the nodes labelled " + autoModeLabel + " could not be read: " + err.Error()
 	}
 	return len(nodes.Items) > 0, ""
+}
+
+// azureNodes: one node read, its providerID azure:// (§6: an AKS cluster).
+// A failed read proves nothing either way: false.
+func (d *Detector) azureNodes(ctx context.Context) bool {
+	nodes, err := d.cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	return err == nil && len(nodes.Items) > 0 && strings.HasPrefix(nodes.Items[0].Spec.ProviderID, "azure://")
 }
 
 // napInstalled: the NodePool CRD carries NAP's Helm release annotation.

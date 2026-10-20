@@ -3,7 +3,7 @@ import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconServerBolt } from "@tabler/icons-react";
 import { useNavIntent } from "../chrome/useNavIntent";
 import { useFleet } from "../store/fleet";
-import type { KarpenterClaimDTO, KarpenterClassDTO, KarpenterCondDTO, KarpenterEventDTO, KarpenterFindingDTO, KarpenterPoolDTO, KarpenterRefDTO, KarpenterSnapshotDTO, RuleDTO } from "../store/fleet";
+import type { ClusterDTO, KarpenterClaimDTO, KarpenterClassDTO, KarpenterCondDTO, KarpenterEventDTO, KarpenterFindingDTO, KarpenterPoolDTO, KarpenterRefDTO, KarpenterSnapshotDTO, RuleDTO } from "../store/fleet";
 import { useHealth } from "../store/health";
 import { getKarpenterState } from "../bridge/karpenter";
 import { EmptyState } from "../chrome/EmptyState";
@@ -79,6 +79,14 @@ const LINK_TEXT: Record<string, string> = {
   unreadable: "its kind could not be read", stale: "as of the last good read", cut: "not established: the kind's read was capped", unsupported: "provider not supported by Klyx",
   "missing ref": "no nodeClassRef", "": "not read",
 };
+// aksNetworkingNote is §6's note: on an AKS cluster (an azure:// node) where
+// Cilium is detected. Whether this Cilium is Azure CNI powered by Cilium or
+// self-installed (BYO CNI) is unverified (the distinguishing label is not),
+// so the support boundary is stated as conditional - never as a finding.
+export function aksNetworkingNote(c: ClusterDTO | undefined): string | null {
+  if (!c?.azureNodes || !c.ciliumPresent) return null;
+  return "Cilium on AKS: BYO or Azure-managed is unverified. If this Cilium is self-installed (BYO CNI), Microsoft supports Karpenter-specific issues but excludes third-party CNI networking troubleshooting; Azure CNI powered by Cilium is managed by Microsoft.";
+}
 // countText qualifies a join count by the kind it reads: "?" unread, "*" stale.
 const countText = (n: number, cov: JoinCoverage) => (cov === "unknown" ? "?" : `${n}${cov === "stale" ? "*" : ""}`);
 
@@ -181,6 +189,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   // Coverage S10 §5: the controllers are the task's reading (an attributed
   // inventory and platform evidence), never a probe of one Deployment.
   const controller = useHealth((s) => s.summaries[cluster]?.tasks.find((t) => t.id === "karpenter")?.controller ?? null);
+  const networking = aksNetworkingNote(useFleet((s) => s.clusters.find((x) => x.name === cluster)));
   const events = useMemo(() => [...(ok?.events ?? [])].sort((a, b) => b.lastSeenUnix - a.lastSeenUnix), [ok]);
   // A4 (slice 3 §4) and the evidence beside the rows.
   const rowsRefreshing = rows.rowsState.refreshing;
@@ -320,6 +329,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={{ padding: "4px 0" }}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{rows.rowsState.refreshError ? ` Last re-read failed: ${rows.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ padding: "4px 0", color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   if (activityNotice) notices.push(<div key="feed">{activityNotice}</div>);
+  if (networking) notices.push(<div key="aks-net" role="note" data-testid="karp-aks-networking" className="t-secondary" style={{ padding: "4px 0", overflowWrap: "anywhere" }}>{networking}</div>);
   const selPool = poolPin.subject ?? undefined;
   const selClass = classPin.subject ?? undefined;
   const classGone: "removed" | "unverified" | null = classPin.gone === "replaced" ? "removed" : classPin.gone;
@@ -435,7 +445,7 @@ export function KarpenterView({ cluster }: { cluster: string }) {
       footerEnd={<span className="t-secondary">{view === "claims" ? `stuck first · drift and consolidation are intended behaviour, not faults${asOf}` : view === "pools" ? `broken first${asOf}` : view === "classes" ? "not ready first · a class's failure is counted on the NodePools that use it" : feedIncomplete ? "incomplete read · newest among the events read" : "newest first"}</span>}
       inspector={selClaim ? <ClaimInspector cluster={cluster} c={selClaim} nowS={nowS} gone={claimGone} replaced={claimPin.gone === "replaced" ? claimPin.adopt : undefined} onOpenClass={openClass} onClose={() => setSelKey(null)} />
         : selPool ? <PoolInspector cluster={cluster} p={selPool} gone={poolGone} replaced={poolPin.gone === "replaced" ? poolPin.adopt : undefined} claimsCov={claimsCov} onOpenClass={openClass} onClose={() => setSelKey(null)} />
-        : selClass ? <ClassInspector cluster={cluster} c={selClass} gone={classGone} replaced={classPin.gone === "replaced" ? classPin.adopt : undefined} onClose={() => setSelKey(null)} />
+        : selClass ? <ClassInspector cluster={cluster} c={selClass} gone={classGone} replaced={classPin.gone === "replaced" ? classPin.adopt : undefined} networking={selClass.adapter === "aks" ? networking : null} onClose={() => setSelKey(null)} />
         : selEvent ? <EventPanel cluster={cluster} e={selEvent} onClose={() => setSelKey(null)} />
         : selKey && view === "claims" && claimPin.expected && claimPin.gone ? <PinnedGone cluster={cluster} kind="NodeClaim" name={selKey} uid={claimPin.expected} gone={claimPin.gone} onAdopt={claimPin.next ? claimPin.adopt : undefined} onClose={() => setSelKey(null)} />
         : selKey && view === "pools" && poolPin.expected && poolPin.gone ? <PinnedGone cluster={cluster} kind="NodePool" name={selKey} uid={poolPin.expected} gone={poolPin.gone} onAdopt={poolPin.next ? poolPin.adopt : undefined} onClose={() => setSelKey(null)} />
@@ -620,7 +630,7 @@ function ConditionsBlock({ conds, total, cut }: { conds: KarpenterCondDTO[]; tot
 // ClassInspector is one NodeClass (S10 §4): its own reading, users and
 // provider facts. A fact row: no verdict of Klyx's - its NodePools carry
 // that, once each.
-function ClassInspector({ cluster, c, gone, replaced, onClose }: { cluster: string; c: KarpenterClassDTO; gone: "removed" | "unverified" | null; replaced?: () => void; onClose: () => void }) {
+function ClassInspector({ cluster, c, gone, replaced, networking, onClose }: { cluster: string; c: KarpenterClassDTO; gone: "removed" | "unverified" | null; replaced?: () => void; networking: string | null; onClose: () => void }) {
   const ai = useInspectorAI(c.uid ? { kind: "row" as const, task: "karpenter", part: "nodeclasses", uid: c.uid } : null, `${c.kind}/${c.name}`, !gone, cluster);
   const describe = useDescribe(cluster, !gone ? { kind: c.kind, namespace: "", name: c.name, uid: c.uid } : null);
   const f = c.facts;
@@ -654,6 +664,11 @@ function ClassInspector({ cluster, c, gone, replaced, onClose }: { cluster: stri
           <div className="insp-kv">{facts.map(([k, v]) => <Fragment key={k}><span>{k}</span><span>{v}</span></Fragment>)}</div>
           <div className="t-secondary" style={{ marginTop: 6 }}>Counts and names only; no subnet, security group, AMI or ARM ID is kept.</div>
         </InspectorBlock>
+        {networking && (
+          <InspectorBlock title="Networking">
+            <div className="t-body" data-testid="karp-class-networking">{networking}</div>
+          </InspectorBlock>
+        )}
         {(c.unknown.length > 0) && (
           <InspectorBlock title="Condition types Klyx does not know">
             <div className="t-body">{c.unknown.join(", ")}{(c.unknownTotal ?? 0) > c.unknown.length ? ` and ${(c.unknownTotal ?? 0) - c.unknown.length} more` : ""}</div>

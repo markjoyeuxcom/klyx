@@ -58,9 +58,11 @@ type ClusterDTO struct {
 	KarpenterHealthy         bool     `json:"karpenterHealthy"`
 	// Coverage S10: each class kind served at the version Klyx reads (the
 	// raw registry entries are gated on their own API)
-	EC2NodeClassesPresent  bool   `json:"ec2NodeClassesPresent"`
-	AKSNodeClassesPresent  bool   `json:"aksNodeClassesPresent"`
-	AutoNodeClassesPresent bool   `json:"autoNodeClassesPresent"`
+	EC2NodeClassesPresent  bool `json:"ec2NodeClassesPresent"`
+	AKSNodeClassesPresent  bool `json:"aksNodeClassesPresent"`
+	AutoNodeClassesPresent bool `json:"autoNodeClassesPresent"`
+	// AzureNodes: an azure:// node (coverage S10 §6, the AKS networking note)
+	AzureNodes             bool   `json:"azureNodes"`
 	CertManagerTier        string `json:"certManagerTier"`
 	CertManagerReason      string `json:"certManagerReason"`
 	CertManagerPresent     bool   `json:"certManagerPresent"`
@@ -138,6 +140,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		EC2NodeClassesPresent:    s.Capabilities.Karpenter.Served(karpenter.AdapterEC2),
 		AKSNodeClassesPresent:    s.Capabilities.Karpenter.Served(karpenter.AdapterAKS),
 		AutoNodeClassesPresent:   s.Capabilities.Karpenter.Served(karpenter.AdapterEKSAuto),
+		AzureNodes:               s.Capabilities.Karpenter.AzureNodes,
 		CertManagerTier:          s.Capabilities.CertManager.Tier.String(),
 		CertManagerReason:        s.Capabilities.CertManager.Reason,
 		CertManagerPresent:       s.Capabilities.CertManager.Present,

@@ -31,7 +31,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; azureNodes?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;

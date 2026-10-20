@@ -460,6 +460,22 @@ func TestNAPRefreshExpires(t *testing.T) {
 	}
 }
 
+// §6: an azure:// node marks an AKS cluster, read with the AKSNodeClass
+// kind served.
+func TestKarpenterAzureNodes(t *testing.T) {
+	azure := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "aks-1"}, Spec: corev1.NodeSpec{ProviderID: "azure:///subscriptions/x/resourceGroups/y/providers/Microsoft.Compute/virtualMachines/aks-1"}}
+	kind := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "kind-1"}, Spec: corev1.NodeSpec{ProviderID: "kind://docker/klyx/klyx-control-plane"}}
+	if k := detectKarp(kGroups(karpenter.AdapterAKS), aksInUse(), nil, azure); !k.AzureNodes {
+		t.Fatal("an azure:// node is an AKS cluster")
+	}
+	if k := detectKarp(kGroups(karpenter.AdapterAKS), aksInUse(), nil, kind); k.AzureNodes {
+		t.Fatal("a kind node is not")
+	}
+	if k := detectKarp(kGroups(karpenter.AdapterEC2), ec2InUse(), nil, azure); k.AzureNodes {
+		t.Fatal("read only with the AKSNodeClass kind served")
+	}
+}
+
 func TestKarpenterKindServedAtAnotherVersion(t *testing.T) {
 	groups := append(kGroups(), &metav1.APIResourceList{GroupVersion: "karpenter.azure.com/v1alpha2",
 		APIResources: []metav1.APIResource{{Name: "aksnodeclasses", Kind: "AKSNodeClass"}}})
