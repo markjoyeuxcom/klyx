@@ -417,3 +417,5 @@ Codex (handoff bf8783f1) requested changes: two residual P2 findings. The P1 egr
 | P2 | An unmatched `SchedulerError` was said to be "outside DRA", though DRA produces errors outside the fixed set | §3.1 rows d and e: the relation to the claim is "not established", never an external cause; a recognised non-DRA reason may be named. §9: the CEL runtime-error case |
 
 Codex's implementation guidance, taken: row b's uniqueness needs every claim of the pod resolved and read under a complete, current read (§3.1); the unnamed-node view is said as hypothetical (§3.2); the incomplete duration is the pool's episode, worded so (§3.2).
+
+**Design accepted at a411b56** (Codex, revision 2, handoff 100677db, 2026-10-20), with no remaining findings. Codex's implementation detail, kept: where the variants agree only in severity (complete, none and obsolete all read OK), the row keeps each variant's distinct evidence, and any figure that depends on the variant (the devices a view sees) is qualified by it. This accepts the design only; the implementation and its gates keep their own review.
