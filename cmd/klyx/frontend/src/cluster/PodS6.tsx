@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import type { EphemeralDTO, PodDetailDTO, ResizeConditionDTO, TripleDTO } from "../store/fleet";
 import { InspectorBlock } from "../layout/InspectorLayout";
+import { ClaimLink } from "./ClaimLink";
 import { fmtCpu, fmtMem } from "./saturation";
 import { debugPreflight, type DebugPreflightDTO } from "../bridge/exec";
 import { trapTab } from "../chrome/modalFocus";
@@ -226,9 +227,9 @@ export function debugConfirmText(ns: string, name: string, target: string, c: De
 
 // Coverage S11a §6: a pod's extended requests, per container (request
 // equals limit, so one figure), implicit DeviceClass names included, the
-// DRA-served pairs and their claim named. Bounded: 16 per container, 32 per
-// pod, the rest counted.
-export function PodExtendedBlock({ detail }: { detail: PodDetailDTO }) {
+// DRA-served pairs and their claim named, linked to the DRA lens (S11b §5).
+// Bounded: 16 per container, 32 per pod, the rest counted.
+export function PodExtendedBlock({ detail, cluster }: { detail: PodDetailDTO; cluster: string }) {
   const x = detail.extended;
   if (!x || x.containers.length === 0) return null;
   const claimed = x.containers.some((c) => c.entries.some((e) => e.servedByDra));
@@ -243,7 +244,7 @@ export function PodExtendedBlock({ detail }: { detail: PodDetailDTO }) {
           </div>
         ))}
         {(x.omitted ?? 0) > 0 && <div className="t-secondary">{x.omitted} more extended request{x.omitted === 1 ? "" : "s"} not shown</div>}
-        {claimed && x.claim && <div className="t-secondary">DRA serves the marked requests through the ResourceClaim {x.claim}.</div>}
+        {claimed && x.claim && <div className="t-secondary">DRA serves the marked requests through the ResourceClaim <ClaimLink cluster={cluster} namespace={detail.summary.namespace} name={x.claim} />.</div>}
       </div>
     </InspectorBlock>
   );

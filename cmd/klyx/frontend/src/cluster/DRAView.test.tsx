@@ -158,6 +158,8 @@ describe("the DRA blocks (coverage S11b §5)", () => {
     expect(lines[1]).toContain("does not exist: the scheduler waits for it without an event");
     expect(lines[2]).toContain("no claim was needed");
     expect(lines[3]).toContain("not created yet");
+    // a claim the rows hold links to the DRA lens; one they do not is named only
+    expect(screen.getAllByTestId("claim-link").map((l) => l.textContent)).toEqual(["p-gpu-x"]);
     expect(lines[1]).not.toContain("no device health reported");
     rerender(<PodClaimsBlock cluster="c" namespace="lab" claims={refs} health={health} unbound={false} />);
     expect(screen.getAllByTestId("pod-claim")[1].textContent).not.toContain("waits");

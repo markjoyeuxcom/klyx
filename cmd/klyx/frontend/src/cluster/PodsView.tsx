@@ -801,7 +801,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         {uid && !gone && <PodIdentity cluster={cluster} namespace={namespace} name={name} uid={uid} active />}
 
         {shown && <PodResourcesBlock detail={shown} />}
-        {shown && <PodExtendedBlock detail={shown} />}
+        {shown && <PodExtendedBlock detail={shown} cluster={cluster} />}
         {shown && <PodClaimsBlock cluster={cluster} namespace={namespace} claims={shown.claims ?? []} health={shown.deviceHealth ?? []} unbound={!shown.summary.node && shown.summary.phase === "Pending"} />}
         {shown && <DebugContainersBlock detail={shown} />}
 

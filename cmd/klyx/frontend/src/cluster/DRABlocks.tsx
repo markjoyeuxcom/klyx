@@ -2,6 +2,7 @@ import type { DRAClaimDTO, DRAPoolDTO, DeviceHealthDTO, PodClaimRefDTO } from ".
 import { useDRAClaims, useDRAPools } from "../health/useDRARows";
 import { InspectorBlock } from "../layout/InspectorLayout";
 import { outcomeWords } from "./DRAView";
+import { ClaimLink } from "./ClaimLink";
 
 // Coverage S11b §5: the node inspector's DRA devices and the pod
 // inspector's claims, joined from the live dra rows (never from a detail
@@ -77,7 +78,8 @@ function PodClaims({ cluster, namespace, claims, health, unbound }: {
           const h = ref.podClaim && ref.state === "resolved" ? healthOf(health, ref.podClaim, !unbound) : "";
           return (
             <div key={`${ref.source}/${ref.podClaim}/${ref.claim ?? ""}`} className="t-body" data-testid="pod-claim" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
-              <span style={{ fontFamily: "var(--font-mono)" }}>{ref.claim || ref.podClaim}</span>
+              {ref.claim && byName.has(ref.claim) ? <ClaimLink cluster={cluster} namespace={namespace} name={ref.claim} />
+                : <span style={{ fontFamily: "var(--font-mono)" }}>{ref.claim || ref.podClaim}</span>}
               <span className="t-secondary"> · {SOURCE[ref.source] ?? ref.source}{ref.podClaim && ref.claim && ref.claim !== ref.podClaim ? ` (the pod's "${ref.podClaim}")` : ""} · {line(ref)}</span>
               {h && <div className="t-secondary">{h}</div>}
             </div>

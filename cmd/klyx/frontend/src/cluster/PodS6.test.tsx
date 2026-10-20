@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import type { PodDetailDTO, PodSummaryDTO } from "../store/fleet";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { useFleet, type PodDetailDTO, type PodSummaryDTO } from "../store/fleet";
 import { DebugContainersBlock, PodExtendedBlock, PodResourcesBlock, debugConfirmText, podStale } from "./PodS6";
 
 const summary = (over: Partial<PodSummaryDTO> = {}): PodSummaryDTO => ({
@@ -74,7 +74,7 @@ describe("coverage S6 pod pieces", () => {
 // their claim, and the bounds' omissions.
 describe("PodExtendedBlock", () => {
   it("lists each container's extended requests, marks DRA-served pairs and names the claim", () => {
-    render(<PodExtendedBlock detail={detail({ extended: { claim: "web-extended-resources-x", omitted: 2, containers: [
+    render(<PodExtendedBlock cluster="c" detail={detail({ extended: { claim: "web-extended-resources-x", omitted: 2, containers: [
       { container: "init", init: true, entries: [{ name: "example.com/x", quantity: "1" }] },
       { container: "app", omitted: 1, entries: [{ name: "nvidia.com/gpu", quantity: "2", servedByDra: true }, { name: "deviceclass.resource.kubernetes.io/gpu.example.com", quantity: "-", servedByDra: true }] },
     ] } })} />);
@@ -83,9 +83,13 @@ describe("PodExtendedBlock", () => {
     expect(block).toContain("app: nvidia.com/gpu 2 (served by DRA) · deviceclass.resource.kubernetes.io/gpu.example.com not established (served by DRA) · 1 more not shown");
     expect(block).toContain("2 more extended requests not shown");
     expect(block).toContain("DRA serves the marked requests through the ResourceClaim web-extended-resources-x.");
+    // S11b §5: the claim links to the DRA lens, which selects it
+    useFleet.setState({ navIntent: null });
+    fireEvent.click(screen.getByTestId("claim-link"));
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "reveal", cluster: "c", task: "dra", part: "claims", ref: { namespace: "app", name: "web-extended-resources-x" } });
   });
   it("renders nothing for a pod with no extended request", () => {
-    const { container } = render(<PodExtendedBlock detail={detail({ extended: { containers: [] } })} />);
+    const { container } = render(<PodExtendedBlock cluster="c" detail={detail({ extended: { containers: [] } })} />);
     expect(container.textContent).toBe("");
   });
 });
