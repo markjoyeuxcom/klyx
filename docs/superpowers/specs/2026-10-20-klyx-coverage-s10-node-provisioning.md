@@ -386,3 +386,5 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 |---|---|---|
 | P1 | A bare instance-profile name in condition text passed every identifier pattern | §8: Karpenter's condition messages never cross to AI or chat, for every Karpenter kind. Only the type, status, reason token (pattern-checked) and Klyx's fixed sentence cross. Evaluation reasons are built from that wording, inherited pool text included. The native message stays a local inspector field. §9's needles add a bare profile name |
 | P2 | NAP's Event predicate lacked a time and acquisition contract | §5: a bounded field-selected read (3 pages of 100); the timestamp precedence; the newest time across pages; a one-hour window; cut, failed and forbidden outcomes; expiry at the window on a failed refresh; up to an hour after NAP stops, stated. It is management evidence only, said "as of <time>", and never a handler or health (§3 rule 2) |
+
+**Design accepted at 15652ed** (Codex, revision 2, handoff b937964f, 2026-10-20), with no remaining findings. This accepts the design only; the implementation and its gates keep their own review.
