@@ -419,3 +419,84 @@ Codex (handoff bf8783f1) requested changes: two residual P2 findings. The P1 egr
 Codex's implementation guidance, taken: row b's uniqueness needs every claim of the pod resolved and read under a complete, current read (§3.1); the unnamed-node view is said as hypothetical (§3.2); the incomplete duration is the pool's episode, worded so (§3.2).
 
 **Design accepted at a411b56** (Codex, revision 2, handoff 100677db, 2026-10-20), with no remaining findings. Codex's implementation detail, kept: where the variants agree only in severity (complete, none and obsolete all read OK), the row keeps each variant's distinct evidence, and any figure that depends on the variant (the devices a view sees) is qualified by it. This accepts the design only; the implementation and its gates keep their own review.
+
+## 13. As built
+
+Built on `feat/coverage-s11b`, rebased onto S11a's accepted head (123b2d1), after the accepted design (a411b56):
+
+| Commit | What |
+|---|---|
+| 251f6bb | Stage 1: `internal/dra` (pools read per node under every allowed scheduler, the claim ladder and its decision table, the pod's claim mapping, the fixed reasons); `health.Pod`'s "Device unhealthy"; the pool oracle against the scheduler's allocator at five versions |
+| eb27d49 | Stage 2: the `dra` task (claims native with the pods as a dependency, pools native with the server's minor and the incomplete-pool episodes as facts, classes as evidence); the pod's claims in its projection and `EvidenceRev` |
+| 9ffe55a | Stage 3: the rows converters, the pod detail's claims and device health, one egress policy for the five DRA kinds |
+| dc9f61e | Stage 4: the Devices (DRA) lens, the node's DRA block, the pod's Claims block, the capability that shows them |
+| 53d3348 | Parity cases 12 and 13 with the upstream example driver, the dra parts in the oracle, the smoke steps |
+| d9754f5 | The allocator's "invalid resource pools were encountered" as a fixed reason (found live) |
+| 4852d8a | What the worst shapes and §9's tests found: pools read in linear time, bounded pool rows, each kind's MaxObject from the worst object, no failed list read as absence, device health named |
+| 721ac97 | The reasons pinned to their sources, the worst shapes measured, the load fixture's DRA objects, the smoke's unhealthy device |
+| 53745cc | The pod's claims and S11a's served-by-DRA claim link to the DRA lens |
+| fd9e0a9 | The incomplete-pool episodes follow the KEDA and LoadBalancer trackers' continuity rule |
+| c13b9d2 | The smoke's claims line names the pod's claim beside a generated one |
+| 2eb1ede | The mutation gate's eleven survivors, each with a test |
+| 35e85f1 | Parity renders the example driver (no Helm release) and keys only pools by their stated identity |
+| 0d30898 | The load test's update storm changes only pods that report a container |
+| 2fc5df4 | An ineffectual assignment golangci-lint refuses, in a test |
+
+### 13.1 Where the build departs from the note
+
+- **"invalid resource pools were encountered" is a fixed reason** (§1.5 missed it). From 1.35 the allocator returns it when nothing could be allocated on a node and a pool read there is invalid, any driver's pool. It is the only allocator error that wraps `ErrFailedAllocationOnNode`, which the plugin passes through as unschedulable; every other allocator error is a `SchedulerError` and stays unmatched (row d). It was found live: lab-s11b's invalid fixture pool, under a driver nothing serves, turned the nine-GPU pod's reason from "cannot allocate all claims" into it. Its meaning says the pool may be any driver's, not necessarily this claim's.
+- **The reasons are pinned to their sources** as §9 asked, which the build first did only by message: `testdata/reasons/quotes.json` quotes each line that writes a fixed reason, with its file's sha256 and line number, and each literal, formatted, must match its key.
+- **Each kind's `MaxObject` is set from the worst object the API admits** (§2.0), projected; the build had a flat 64 KiB, under which a valid worst-case slice or claim would have been left out and the kind read capped:
+  - a slice of 64 devices, each with 16 taints and 2 x 32 counters with 63-byte names (the 1.35+ shape): 323,359 B; 1.34's 32 x 32 shared counters with 128 devices consuming 1,024: 179,610 B; 128 plain devices: 21,917 B. `MaxObject` 384 KiB;
+  - a claim of 32 requests with 8 subrequests each, 32 results and device statuses of 8 conditions whose every kept message byte escapes in JSON, 256 consumers and 64 finalizers: 325,227 B. `MaxObject` 384 KiB;
+  - a class with 32 selectors and configs and the longest extended resource name: 2,798 B. `MaxObject` 16 KiB.
+
+  To hold those figures, the only free text kept (a device condition's message) is made printable and sized without HTML escaping, so a byte encodes to at most two; condition types and reasons clip at 128 bytes, finalizers keep 8 and count the rest, and the pod-claim-name annotation clips at 253. Messages clip on a rune boundary and copy what they keep, so a projection never retains its object's string. A claim's lists are cut at the API's bounds, and a cut claim reads not established (no valid object reaches it). `TestWorstObjectsFitMaxObject` holds every kind to its bound.
+- **A slice's bounds are the larger of 1.34's and 1.35-1.37's**: 1.34 allows 32 counter sets, so the note's 8 would have read a valid 1.34 slice as past the API's bounds.
+- **The pool reading is indexed.** Every view scanned every slice: one pool of 2,000 node-local slices read in 690 ms, past the evaluation budget on its own. A per-pool index reads what every view shares once (the pool-wide reasons, each generation's slices, counter sets and failing consumptions) and each view only the slices its node may see, merged back into the capture's order: 2.2 ms. The scan it replaced is kept in the tests as the reference, and a million random views read the same outcome, rule, counts and devices; the oracle still matches the allocator on all 255 outcomes.
+- **A pool row is bounded** (§2.0, "a pool row carries counts, never device names"): a read pool keeps device counts, not names, and its row keeps the 16 worst views and obsolete nodes, the rest counted and said ("1999 more nodes not listed: the 16 worst are shown, and the reading above is from every node"). The verdict is read from every view first.
+- **The incomplete-pool episodes follow the KEDA and LoadBalancer trackers' rule** (§3.2 named it; the build followed half of it). The tracker restarted every episode on any skipped change of the slices kind, so on a busy kind a stuck pool would never reach its grace; and it ignored the kind's generation and epoch, so a relist could carry a start across changes it never saw. A read that is not complete and live, or a new generation or epoch, now restarts every episode (a lower bound); otherwise an episode continues when no change was skipped, or when its pool's slices are provably the same, by every slice's UID and resourceVersion (slices now carry their resourceVersion for this).
+- **A failed DRA list is never read as absence.** The capability first read present only when every list failed; a served API with no object found and any list failed now reads present, unverified, naming the kinds it could not list.
+- **Device health is named and its absence said** (§3.4, §3.5): the pod's Claims block names each unhealthy device by the kubelet's ID (four, then counted), so another device unhealthy at the same count reads differently, and a bound pod's claim with no report says "no device health reported". The build said nothing in both cases.
+- **Explain is offered on claims only.** A pool has no object UID (its identity is driver and pool), and Explain is UID-fenced; a class row is a fact.
+- **The server's minor is re-read on every re-probe**, so a cluster upgraded while Klyx runs reads its pools for the new schedulers.
+- **The claim links** (§5: "served by DRA" names the claim and links to it) landed last (53745cc): the pod's Claims block and S11a's extended block open the claim in the DRA lens.
+
+### 13.2 The worst objects and shapes (§7, §8)
+
+`TestWorstObjectsFitMaxObject` (every run) builds the worst object the API admits for each kind and projects it; §13.1 gives the figures and the bounds they set.
+
+`TestDRAShapesMeasured` (`KLYX_LOAD=1 go test ./internal/healthsrc -run TestDRAShapesMeasured -v`):
+
+| Shape | Encoded | Retained heap | Time | The omission, said |
+|---|---|---|---|---|
+| 2,000 one-device slices | 668,000 B projected in all, within the 2 MiB slices budget | | | none: every slice is read |
+| one pool of 2,000 slices, all nodes | the row 770 B | below the probe's resolution | 2.1 ms | none: one view |
+| one pool of 2,000 slices, a node each | the row 5,549 B (16 views kept) | the read 521 KB before it is kept | 2.0 ms (690 ms before the index) | 1,985 views counted: "1985 more nodes not listed: the 16 worst are shown, and the reading above is from every node" |
+| one pool missing one of 2,000 slices | the row 942 B | | 0.2 ms | "(1999 of 2000 slices)", Degraded past the grace |
+| 1,000 claims pending on 1,000 pods | the rows 1,113,001 B | 996 KB | 3.4 ms | none: each row names its one consumer |
+| one claim with 256 consumers | the projection 954 B | | | 8 kept, "in use by 256" |
+
+### 13.3 The load test
+
+`TestLoad`'s fixture now carries S11b (§7): 50 node-local pools of 8 devices and two all-nodes pools of 16, 400 claims (half allocated with a device status, 50 pending on Pending pods whose claims cannot be allocated, the rest unused) and 5 classes on the large cluster; a tenth of that on each small one. The same harness ran on S11a's head (123b2d1, without the DRA objects) and on S11b, interleaved, on an otherwise idle machine:
+
+| Round | Full evaluation, before / after | Retained steady heap, before / after |
+|---|---|---|
+| 1 | 71.3 / 78.6 ms | 62.9 / 63.9 MB |
+| 2 | 68.8 / 57.4 ms | 62.9 / 63.9 MB |
+| 3 | 58.9 / 62.0 ms | 62.9 / 63.9 MB |
+
+- **The full evaluation** is within the rounds' noise of the code before S11b; it misses the 50 ms budget before and after alike (the open owner question from S9).
+- **The heap** rises by 1.0 MB retained (30.1 to 30.5 MB above baseline for the large cluster alone).
+- **The first complete summary** stayed at 1.06-1.08 s, and every kind was live again 8.4-8.9 s after the API recovered, before and after alike. The recovery peak missed its 1.5x budget once, on the code before S11b (1.57x), as S10 recorded.
+- **The storm's pods:** the update storm now changes only pods that report a container (S11b's pending pods report none).
+
+### 13.4 Gates
+
+- **Parity:** the Go stage passes with cases 12 (a pod whose claim cannot be allocated: one claim degraded) and 13 (an invalid fixture pool: one pool degraded), the example driver rendered from its pinned chart on `kind-klyx-parity`; the frontend stage passes. The first run failed in the harness: a Helm-installed driver is a `helm/releases` member the oracle does not model, and its UID-less row was keyed as a pool (35e85f1).
+- **Mutations:** 43 (35 Go, 8 frontend). 32 were caught on the first pass, none failed to build, and the eleven survivors each gained a test (2eb1ede), after which all eleven are caught.
+- **Go:** `go test -race ./internal/...` passes at 0d30898; golangci-lint reports 0 issues at 2fc5df4.
+- **The frontend:** tsc is clean, eslint has 0 errors (its 4 warnings predate S11b), and vitest passes 2,396 tests.
+- **The native smoke:** 205 of 205 steps in each of night and day at 1440 and 1024 on 0d30898 (a clean tree), with lab-s11b applied and lab-template's device marked unhealthy by relabs: the DRA lens's claims and pools, the blocked claim's ladder in the scheduler's words, the node's DRA block, and the pod's claims with its device named unhealthy. Its first run failed on its own regex (c13b9d2): the claims line names the pod's claim beside a generated one.
+- **Captures** (headless, server mode, `pw/cov-s11b.mjs`), 32 in all, night and day at 1440 and 1024, every expected text present and no sideways scroll: the claims tab, the blocked claim's inspector (the scheduler's quoted reason, its meaning, the invalid pool pointed at), the pools tab, the invalid fixture pool ("duplicate device name dev-0", read for a 1.36 or 1.37 scheduler), the driver's node pool (Complete, 8 devices, the allocated count), the classes tab (`example.com/dra-gpu`), the node's DRA block and lab-template's claims (linked, "1 device unhealthy (reported by the kubelet): k8s.gpu.example.com/gpu=common"). The first run failed on two script expectations, not the product: the claims tab quotes the scheduler's "0/1 nodes are available", which the vocabulary rule leaves to the scheduler's own words, and the claims line's generated name.
