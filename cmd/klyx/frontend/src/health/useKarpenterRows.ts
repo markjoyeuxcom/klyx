@@ -23,7 +23,10 @@ export type KarpenterRows = {
   poolNodesDep: KindCoverageDTO | null;
   watchError: string | null;
   loading: boolean; // no part has answered yet
-  rowsState: RowsStateDTO;
+  rowsState: RowsStateDTO; // A4 across every part, the NodeClasses' included
+  // coverage S10: the NodeClasses part's own A4 state, so the classes view
+  // and inspector qualify themselves from their own evidence
+  classesState: RowsStateDTO;
   partCounts: { nodepools: PartCountsDTO | null; nodeclaims: PartCountsDTO | null };
 };
 
@@ -40,13 +43,14 @@ export function useKarpenterRows(cluster: string | null): KarpenterRows {
       coverage,
       poolNodesDep: partDependency(pools, "NodeClaim", KIND_NAMES),
       watchError: coverageError(coverage),
-      loading: !answered(pools) && !answered(claims),
-      rowsState: rowsState([pools, claims]),
+      loading: !answered(pools) && !answered(claims) && !answered(classes),
+      rowsState: rowsState([pools, claims, classes]),
+      classesState: rowsState([classes]),
       partCounts: { nodepools: partCounts(pools), nodeclaims: partCounts(claims) },
     };
     // reference-stable picks only: the hook's result objects are rebuilt per render
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pools.rows, pools.part, pools.error, pools.refreshError, pools.evaluatedAt, pools.counts.part, pools.counts.updating, pools.counts.refreshing,
     claims.rows, claims.part, claims.error, claims.refreshError, claims.evaluatedAt, claims.counts.part, claims.counts.updating, claims.counts.refreshing,
-    classes.rows, classes.part, classes.error]);
+    classes.rows, classes.part, classes.error, classes.refreshError, classes.evaluatedAt, classes.counts.updating, classes.counts.refreshing]);
 }

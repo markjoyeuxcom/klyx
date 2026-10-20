@@ -19,11 +19,13 @@ const liveCoverage = () => [
   { kind: "NodePool", served: true, synced: true, coverage: "live" as const },
   { kind: "NodeClaim", served: true, synced: true, coverage: "live" as const },
 ];
-function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; classes?: KarpenterClassDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null } = {}) {
+function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; classes?: KarpenterClassDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null;
+  poolNodesDep?: KarpenterRows["poolNodesDep"]; classesState?: KarpenterRows["classesState"] } = {}) {
   rowsValue = {
     claims: r.claims ?? [], pools: r.pools ?? [], classes: r.classes ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
-    poolNodesDep: { kind: "NodeClaim", served: true, synced: true, coverage: "live" },
-    rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
+    poolNodesDep: r.poolNodesDep ?? { kind: "NodeClaim", served: true, synced: true, coverage: "live" },
+    rowsState: r.classesState ?? { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
+    classesState: r.classesState ?? { updating: false, refreshing: false, evaluatedAt: null },
   };
 }
 setRows();
@@ -358,5 +360,141 @@ describe("KarpenterView NodeClasses (S10)", () => {
     render(<KarpenterView cluster="x" />);
     await screen.findByRole("button", { name: /^NodePools/ });
     expect(screen.queryByRole("button", { name: /^NodeClasses/ })).toBeNull();
+  });
+});
+
+// Codex's S10 implementation review, findings 2 and 3: every Karpenter kind
+// is budgeted, so a capped read proves neither whole-list health nor
+// absence; and the NodeClasses part qualifies itself from its own evidence.
+describe("KarpenterView capped and stale evidence (S10 implementation review)", () => {
+  beforeEach(() => { vi.clearAllMocks(); controller(null); vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] }); setRows(); });
+  const cls = (over: Partial<KarpenterClassDTO> = {}): KarpenterClassDTO => ({ uid: "c1", gvr: "karpenter.k8s.aws/v1/ec2nodeclasses", generation: 1, name: "default", group: "karpenter.k8s.aws",
+    kind: "EC2NodeClass", adapter: "ec2", reading: { state: "ready" }, conditions: [], conditionsTotal: 0, unknown: [], facts: {}, users: [], usersComplete: true, ...over });
+  const cv = (extra: Record<string, unknown> = {}) => [...liveCoverage(), { kind: "EC2NodeClass", served: true, synced: true, coverage: "live" as const, ...extra },
+    { kind: "AKSNodeClass", served: false, synced: true, coverage: "absent" as const }, { kind: "NodeClass", served: false, synced: true, coverage: "absent" as const }];
+  const capped = (kind: string, n: number) => liveCoverage().map((k) => (k.kind === kind ? { ...k, truncated: true, notRetained: n } : k));
+  const openClasses = async () => fireEvent.click(await screen.findByRole("button", { name: /^NodeClasses/ }));
+  const pool = (over: Partial<KarpenterPoolDTO> = {}) => withRule<KarpenterPoolDTO>({ name: "default", ready: "ready", reason: "", message: "", weight: 10, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1, ...over }, poolRule);
+
+  it("a capped NodeClaim read is a lower bound: never all ready, its omission named", async () => {
+    setRows({ claims: [claim()], pools: [], coverage: capped("NodeClaim", 2) });
+    render(<KarpenterView cluster="x" />);
+    await screen.findByText("default-abcde");
+    expect(screen.queryByText("all ready")).toBeNull();
+    expect(screen.getByTestId("karp-not-all-ready").textContent).toBe("none known not ready (capped read)");
+    expect(document.querySelector(".lens-header .t-number")?.textContent).toMatch(/^1\+/);
+    expect(screen.getByTestId("karp-capped").textContent).toMatch(/^Capped: 2 NodeClaims not retained - .*never removed\.$/);
+  });
+
+  it("a capped NodePool read blocks all ready too, and its view names the omission", async () => {
+    setRows({ claims: [claim()], pools: [pool()], coverage: capped("NodePool", 1) });
+    render(<KarpenterView cluster="x" />);
+    await screen.findByText("default-abcde");
+    expect(screen.queryByText("all ready")).toBeNull();
+    expect(screen.queryByTestId("karp-capped")).toBeNull(); // the claims view's own read is whole
+    fireEvent.click(screen.getByRole("button", { name: /^NodePools/ }));
+    expect(screen.getByTestId("karp-capped").textContent).toContain("1 NodePool not retained");
+  });
+
+  it("a whole, current read still says all ready", async () => {
+    setRows({ claims: [claim()], pools: [pool()] });
+    render(<KarpenterView cluster="x" />);
+    expect(await screen.findByText("all ready")).toBeTruthy();
+  });
+
+  it("a NodePool's node count from a capped NodeClaim read is a lower bound", async () => {
+    setRows({ claims: [claim()], pools: [pool({ nodes: 3 })], poolNodesDep: { kind: "NodeClaim", served: true, synced: true, coverage: "live", truncated: true, notRetained: 4 } });
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
+    expect(rows()[0]).toContain("3+");
+  });
+
+  it("a selection left out of a capped read is unverified, never removed", async () => {
+    setRows({ claims: [claim({ uid: "u1" })] });
+    const r = render(<KarpenterView cluster="x" />);
+    fireEvent.click((await screen.findByText("default-abcde")).closest(".lens-row") as HTMLElement);
+    await screen.findByTestId("karp-claim-panel");
+    setRows({ claims: [], coverage: capped("NodeClaim", 1) });
+    r.rerender(<KarpenterView cluster="x" />);
+    expect((await screen.findByTestId("selection-unverified")).textContent).toMatch(/Not in the current NodeClaim read\..*unverified/);
+    // the same absence on a whole read is a removal
+    setRows({ claims: [] });
+    r.rerender(<KarpenterView cluster="x" />);
+    await waitFor(() => expect(screen.queryByTestId("selection-unverified")).toBeNull());
+    expect(screen.getByText(/NodeClaim removed\./)).toBeTruthy();
+  });
+
+  it("a class left out of a capped read is unverified, never removed", async () => {
+    setRows({ classes: [cls()], coverage: cv() });
+    const r = render(<KarpenterView cluster="x" />);
+    await openClasses();
+    fireEvent.click((await screen.findByText("default")).closest(".lens-row") as HTMLElement);
+    await screen.findByTestId("karp-class-panel");
+    setRows({ classes: [], coverage: cv({ truncated: true, notRetained: 1 }) });
+    r.rerender(<KarpenterView cluster="x" />);
+    expect((await screen.findByTestId("selection-unverified")).textContent).toMatch(/Not in the current EC2NodeClass read\..*unverified/);
+    setRows({ classes: [], coverage: cv() });
+    r.rerender(<KarpenterView cluster="x" />);
+    expect(await screen.findByText(/EC2NodeClass removed\./)).toBeTruthy();
+  });
+
+  it("an empty capped class read keeps nothing: never no NodeClasses, the count a lower bound", async () => {
+    setRows({ coverage: cv({ truncated: true, notRetained: 3 }) });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.queryByText("No NodeClasses.")).toBeNull();
+    expect(screen.getByText("No NodeClasses kept.")).toBeTruthy();
+    expect(screen.getByText(/^3 EC2NodeClasses left out by Klyx's budget/)).toBeTruthy();
+    expect(screen.getByTestId("karp-classes-count").textContent).toBe("0+");
+  });
+
+  it("a capped class read with rows names its omission and qualifies its count", async () => {
+    setRows({ classes: [cls()], coverage: cv({ truncated: true, notRetained: 1 }) });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.getByTestId("karp-capped").textContent).toContain("1 EC2NodeClass not retained");
+    expect(screen.getByTestId("karp-classes-count").textContent).toBe("1+");
+  });
+
+  it("stale class-only rows show the failing read, and the inspector says last observed", async () => {
+    setRows({ classes: [cls()], coverage: cv({ coverage: "stale", error: "watch failed", lastGoodAt: "2026-10-20T11:00:00Z" }), watchError: "EC2NodeClass: watch failed" });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.getByRole("alert").textContent).toMatch(/showing the last good state from .*EC2NodeClass: watch failed/);
+    expect(screen.getByTestId("karp-classes-count").textContent).toBe("1*");
+    fireEvent.click((await screen.findByText("default")).closest(".lens-row") as HTMLElement);
+    expect((await screen.findByTestId("karp-class-evidence")).textContent).toMatch(/^Last observed at .* - the NodeClass read is failing now, so this reading is not current\.$/);
+  });
+
+  it("a stale empty class read is a last good empty list, not a present absence", async () => {
+    setRows({ coverage: cv({ coverage: "stale", error: "watch failed", lastGoodAt: "2026-10-20T11:00:00Z" }), watchError: "EC2NodeClass: watch failed" });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.queryByText("No NodeClasses.")).toBeNull();
+    expect(screen.getByText("No NodeClasses in the last good read.")).toBeTruthy();
+  });
+
+  it("the class part's own refresh qualifies its view and inspector", async () => {
+    const state = { updating: true, refreshing: true, evaluatedAt: "2026-10-20T11:00:00Z", refreshError: "classes bootstrap failed" };
+    setRows({ classes: [cls()], coverage: cv(), classesState: state });
+    const r = render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.getByTestId("rows-refreshing").textContent).toContain("Last re-read failed: classes bootstrap failed");
+    fireEvent.click((await screen.findByText("default")).closest(".lens-row") as HTMLElement);
+    expect((await screen.findByTestId("karp-class-evidence")).textContent).toMatch(/^As of .* - the NodeClasses are being re-read\. The last re-read failed: classes bootstrap failed$/);
+    r.unmount();
+    setRows({ coverage: cv(), classesState: state });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    expect(screen.getByText(/^No NodeClasses as of /)).toBeTruthy();
+  });
+
+  it("a historical condition is shown as earlier, beside the reading", async () => {
+    const note = "AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2";
+    setRows({ classes: [cls({ reading: { state: "not ready", text: "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", note } })], coverage: cv() });
+    render(<KarpenterView cluster="x" />);
+    await openClasses();
+    fireEvent.click((await screen.findByText("default")).closest(".lens-row") as HTMLElement);
+    expect((await screen.findByTestId("karp-class-note")).textContent).toBe(`Earlier: ${note}.`);
   });
 });
