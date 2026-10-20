@@ -91,7 +91,12 @@ The `extended` task has no area of its own: no navigation entry, no Needs you li
 **The reservations and totals parts** (new):
 - **Acquisition:** the existing projected node and pod watches; no new watch. `ProjectPod` already keeps each container's resources, `spec.overhead`, `status.phase` and `status.extendedResourceClaimStatus`.
 - **The rows:** `reservations` has one per node that advertises or hosts a request for an extended resource, by node UID, carrying per resource name: requested, served by DRA, and not advertised by the node (§4). `totals` has one per accelerator name, its identity the name. Both within §2.0's bounds. Fact rows: no verdict, never counted, never in the ledger.
-- **Dependencies:** the pods kind. Requested is only as good as the pods read: unreadable is unknown, stale is "as of", capped is a lower bound. Each is said where the number shows (§6).
+- **Dependencies:** the pods kind, beside the counted nodes. Which reads a figure depends on (§4 classifies by the node's allocatable map):
+  - allocatable and capacity: the nodes read alone;
+  - requested (counted against the node) and not advertised: **both** reads, since a pair counts only if the node advertises its name. A stale, checking or unreadable nodes read never certifies a current zero or proves a name is not advertised;
+  - served by DRA (a `requestMappings` pair or an implicit DeviceClass name): the pods read alone, since only the pod says so.
+
+  Unreadable is unknown, stale is "as of", capped is a lower bound, each from the worst of the reads the figure depends on, and each said where the number shows (§6).
 - **Clock, notifications:** none.
 
 ## 3. The node reading: resources not allocatable
@@ -160,8 +165,8 @@ The caps are §2.0's.
 
 **The Nodes lens:**
 - **A "GPU" column**, when any node advertises an accelerator: "requested / allocatable" ("6 / 8"), with "· 2 not allocatable" when capacity is higher, and "0 advertised" for a present key at 0. A node with several accelerator names (mixed MIG, AMD partitions) reads "3 resources", each named in its tooltip.
-- **Requested carries its read's qualification** (S10's lesson): "?" when the reservations part has no current read, "*" when stale, "+" when the pods read is capped, "+*" both; "?" also for a node whose row the per-cluster bound dropped, or whose entry the per-node bound cut.
-- **The footer** shows the `totals` part's rows, never a sum of the displayed rows: "16 nvidia.com/gpu allocatable (12 requested)". Each total carries the qualification of the read that supplied it, separately: allocatable and capacity from the nodes kind's coverage, requested from the pods kind's. A cut node list or a dropped reservations row does not weaken them, because they are computed before any cut; an omitted name is said ("totals for N more resources not shown"), and an overflow reads "not established".
+- **Requested carries its reads' qualification** (S10's lesson, and §2.1's dependencies: requested and not advertised from the worse of the nodes and pods reads, served by DRA from the pods read): "?" when either read is unestablished, "*" when stale, "+" when the pods read is capped, "+*" both; "?" also for a node whose row the per-cluster bound dropped, or whose entry the per-node bound cut.
+- **The footer** shows the `totals` part's rows, never a sum of the displayed rows: "16 nvidia.com/gpu allocatable (12 requested)". Each total carries the qualification of the reads it depends on (§2.1), separately: allocatable and capacity from the nodes read alone, requested from the worse of the nodes and pods reads. A cut node list or a dropped reservations row does not weaken them, because they are computed before any cut; an omitted name is said ("totals for N more resources not shown"), and an overflow reads "not established".
 - **The verdict** "not allocatable" lights the node like pressure does.
 
 **The node inspector**, a block "Extended resources", one line per name, accelerators first:
@@ -197,7 +202,8 @@ The caps are §2.0's.
 - the implicit DRA name through the whole path: a pod requesting only `deviceclass.resource.kubernetes.io/gpu` on a node with no extended resource produces its reservation entry ("served by DRA") and its pod-inspector line;
 - NVIDIA facts per resource: an unshared `nvidia.com/gpu` beside a shared MIG profile; two profiles with different replica factors; MIG single with sharing (the unit is a MIG device); a `.shared` rename with its base's labels; an explicit rename with none; a strategy without a replica count; the facts cap with its omission notice;
 - the bounds of §2.0: 16 entries, 4 names in the reading, 256 tracked names (said as "more than 256", never as a count of untracked names), the 2 MiB rows bound, int64 overflow, the pod inspector's 16 and 32, and large integers across the JSON boundary (a value above 2^53 compared exactly);
-- the totals: one resource cut from one node's list but kept on another's (the total stays the full-input sum, 16, not the kept rows' 8); a dropped reservations row (the requested total unchanged); a stale nodes read beside a current pods read, and the reverse (each total qualified by its own read); more than 32 accelerator names (omitted said);
+- the totals: one resource cut from one node's list but kept on another's (the total stays the full-input sum, 16, not the kept rows' 8); a dropped reservations row (the requested total unchanged); more than 32 accelerator names (omitted said);
+- mixed freshness, per node and in the totals: a stale nodes read beside a current pods read (allocatable stale; requested and not advertised stale too, never a current zero, the held node lacking the name; served by DRA current), a current nodes read beside a stale pods read (allocatable current; every request figure stale), and an unreadable nodes read (requested unknown, served by DRA as read);
 - inspector continuity: a node-row-only update re-renders the node block; a mapping written after binding re-reads the pod detail (mounted tests, with UID and request fencing);
 - the golden values (§4) across the six modules;
 - projection equality: `NodeSummary` and the reservations from raw and projected objects;
@@ -243,3 +249,9 @@ Codex's implementation guidance, taken: the lab stops the DaemonSet (not its pod
 | P2 | The footer's per-name totals had no completeness contract after the new per-node and per-row cuts: a resource cut from one node's list but kept on another's would sum to 8 where the input says 16 | §2 and §2.0: a `totals` part computes each accelerator name's allocatable, capacity and requested from the full input before any cut, at most 32 names with the rest counted. §6: the footer reads those rows, never the displayed rows, each figure qualified by its own read (allocatable by nodes, requested by pods). §9 tests the cross-node case, a dropped row, stale beside current, and the name cap |
 
 Codex's non-blocking notes, taken: §1.4 corrects the rename claim (v0.20.1's executable normalises to the default `.shared`); §6 and §9 bound the pod inspector's list (16 per container, 32 per pod); §9 says "more than 256" without counting untracked names.
+
+## 13. Revision 3: Codex's re-review of bcd922a
+
+| # | Finding | Where answered |
+|---|---|---|
+| P2 | The counted requested total depends on the nodes read as well as the pods read: §4 classifies an unmapped pair by the node's allocatable map, so a current pods read beside a stale nodes read cannot certify a current requested figure | §2.1 states each figure's dependencies: allocatable and capacity on the nodes read; requested and not advertised on both; served by DRA on the pods read alone. A stale, checking or unreadable nodes read never certifies a current zero or proves a name is not advertised. §6 qualifies the per-node figures and the footer totals by those dependencies; §9's mixed-freshness tests follow them |
