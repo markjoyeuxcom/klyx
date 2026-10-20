@@ -720,7 +720,7 @@ export function NodesView({ cluster }: { cluster: string }) {
               attention={{ count: counts.attention, marker: mark, phrase: "need attention", fault: tone === "danger", testid: "nodes-attention" }}
               clear={counts.unknown > 0 ? "no known attention" : current ? "none need attention" : "none known to need attention"} />
             <span className="t-secondary">
-              {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} under pressure` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
+              {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} degraded` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
             </span>
           </>
         )}

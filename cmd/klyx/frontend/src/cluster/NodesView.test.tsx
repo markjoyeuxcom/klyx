@@ -969,6 +969,14 @@ describe("NodesView extended resources (S11a)", () => {
     expect(notes.some((n) => n?.startsWith("more than 256 distinct names"))).toBe(true);
   });
 
+  it("the header calls a node degraded, never under pressure: S11a's reading is not pressure", () => {
+    extendedValue = base();
+    seed([gpuNode, healthy]);
+    const { container } = render(<NodesView cluster="homelab" />);
+    expect(container.textContent).toContain("1 degraded");
+    expect(container.textContent).not.toContain("under pressure");
+  });
+
   it("the inspector says a dropped row, and a withdrawn plugin as 0 advertised", () => {
     extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
     const withdrawn: NodeSummaryDTO = { ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], capacity: "0", allocatable: "0", sharing: undefined, facts: [] }] } };
