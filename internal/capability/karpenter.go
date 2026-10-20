@@ -145,6 +145,16 @@ type KarpenterCapability struct {
 	NAP          NAPActivity
 }
 
+// Served: the adapter's class kind is served at the version Klyx reads.
+func (k KarpenterCapability) Served(a karpenter.Adapter) bool {
+	for _, kk := range k.Kinds {
+		if kk.Kind.Adapter == a {
+			return kk.Served
+		}
+	}
+	return false
+}
+
 // Karpenter task states (§5), worst first.
 const (
 	KarpenterNotReady = "not ready"

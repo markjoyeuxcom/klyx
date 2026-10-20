@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act, within, waitFor } from "@testing-library/react";
-import type { KarpenterClaimDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import type { KarpenterClaimDTO, KarpenterClassDTO, KarpenterPoolDTO, KarpenterSnapshotDTO } from "../store/fleet";
+import { useHealth } from "../store/health";
 import type { KarpenterRows } from "../health/useKarpenterRows";
 import { KarpenterView } from "./KarpenterView";
 import { claimRule, poolRule, withRule } from "../test/backendRules";
@@ -9,16 +10,17 @@ vi.mock("../bridge/karpenter", () => ({ getKarpenterState: vi.fn(async () => ({}
 import { getKarpenterState } from "../bridge/karpenter";
 // The NodePools and NodeClaims are rows (health/useKarpenterRows): these
 // tests hand the lens a live, complete read; the snapshot carries the
-// controller probe and the disruption feed.
+// disruption feed, and the controllers are the task's reading in the health
+// summary (coverage S10 §5).
 let rowsValue: KarpenterRows;
 vi.mock("../health/useKarpenterRows", () => ({ useKarpenterRows: () => rowsValue }));
 const liveCoverage = () => [
   { kind: "NodePool", served: true, synced: true, coverage: "live" as const },
   { kind: "NodeClaim", served: true, synced: true, coverage: "live" as const },
 ];
-function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null } = {}) {
+function setRows(r: { claims?: KarpenterClaimDTO[]; pools?: KarpenterPoolDTO[]; classes?: KarpenterClassDTO[]; coverage?: KarpenterRows["coverage"]; loading?: boolean; watchError?: string | null } = {}) {
   rowsValue = {
-    claims: r.claims ?? [], pools: r.pools ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
+    claims: r.claims ?? [], pools: r.pools ?? [], classes: r.classes ?? [], coverage: r.coverage ?? liveCoverage(), watchError: r.watchError ?? null, loading: r.loading ?? false,
     poolNodesDep: { kind: "NodeClaim", served: true, synced: true, coverage: "live" },
     rowsState: { updating: false, refreshing: false, evaluatedAt: null }, partCounts: { nodepools: null, nodeclaims: null },
   };
@@ -29,8 +31,13 @@ const snap = (over: Partial<KarpenterSnapshotDTO> & { claims?: KarpenterClaimDTO
   // a fixture's claims/pools are the rows the lens reads
   const { claims, pools, ...rest } = over;
   setRows({ claims, pools });
-  return { detected: true, controllerVerified: true, controllerHealthy: true, events: [], ...rest };
+  return { detected: true, events: [], ...rest };
 };
+// controller sets the karpenter task's controller in the health summary.
+function controller(state: string | null, reason?: string) {
+  const tasks = state ? [{ id: "karpenter", parts: [], coverage: "live" as const, controller: { state, reason } }] : [];
+  useHealth.setState({ summaries: { x: { cluster: "x", incarnation: 1, seq: 1, evaluatedAt: new Date().toISOString(), connection: "connected", tasks } } });
+}
 // Fixtures carry the rule the backend computes (test/backendRules.ts, held to
 // the Go golden fixture, which also covers the rule's cases and its exact
 // launch-deadline boundary).
@@ -44,7 +51,7 @@ const deferred = <T,>(): D<T> => { let resolve!: (v: T) => void; const promise =
 const rows = () => [...document.querySelectorAll(".lens-row")].map((r) => r.textContent ?? "");
 
 describe("KarpenterView (redesign step 5)", () => {
-  beforeEach(() => { vi.clearAllMocks(); setRows(); });
+  beforeEach(() => { vi.clearAllMocks(); setRows(); controller(null); });
 
   it("reads the Go-computed rule, never its own: header counts and row labels (1c §2)", async () => {
     // A natively ready claim the backend flags, and a natively failed one it clears.
@@ -92,10 +99,23 @@ describe("KarpenterView (redesign step 5)", () => {
     expect(within(screen.getByTestId("lens-inspector")).getByText("Intended behaviour, not a fault.")).toBeTruthy();
   });
 
-  it("an unhealthy controller is the headline", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerHealthy: false, claims: [claim()] }));
+  it("an unhealthy controller is the headline, from the task's reading", async () => {
+    controller("not ready", "the karpenter controller karpenter/karpenter (AWS) is not ready");
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim()] }));
     render(<KarpenterView cluster="x" />);
-    expect((await screen.findByTestId("karp-controller-down")).textContent).toContain("The Karpenter controller is not ready.");
+    const n = await screen.findByTestId("karp-controller-down");
+    expect(n.textContent).toContain("A Karpenter controller is not ready.");
+    expect(n.textContent).toContain("karpenter/karpenter (AWS)");
+  });
+
+  // coverage S10 §5: platform management is a note, never a fault or a gap
+  it("a managed controller is a note", async () => {
+    controller("managed", "NodeClass managed by EKS Auto Mode; controller health not directly observed");
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim()] }));
+    render(<KarpenterView cluster="x" />);
+    expect((await screen.findByTestId("karp-controller-managed")).textContent).toContain("Managed by the platform. NodeClass managed by EKS Auto Mode");
+    expect(screen.queryByTestId("karp-controller-down")).toBeNull();
+    expect(screen.queryByTestId("karp-controller-unverified")).toBeNull();
   });
 
   it("pools show capacity against limits and warn near a limit", async () => {
@@ -146,16 +166,16 @@ describe("KarpenterView (redesign step 5)", () => {
     rerender(<KarpenterView cluster="b" />);
     fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity 1/ }));
     expect(await screen.findAllByText("from-b")).toBeTruthy();
-    await act(async () => { late.resolve({ detected: true, controllerVerified: true, controllerHealthy: true, events: [ev("from-a")] }); await late.promise; });
+    await act(async () => { late.resolve({ detected: true, events: [ev("from-a")] }); await late.promise; });
     expect(screen.queryAllByText("from-a")).toHaveLength(0);
   });
 });
 
 describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
-  beforeEach(() => { vi.clearAllMocks(); setRows(); });
+  beforeEach(() => { vi.clearAllMocks(); setRows(); controller(null); });
 
   it("Ready=False with an unproven link names no failure; its message is not presented as the cause", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown", failingMessage: "waiting" })] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "Unknown", failingMessage: "waiting" })] }));
     render(<KarpenterView cluster="x" />);
     await screen.findByTestId("lens-inspector"); // the first claim needing attention is auto-selected (UI review 2026-10-13)
     const p = within(screen.getByTestId("lens-inspector"));
@@ -164,7 +184,7 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
   });
 
   it("registration expiry is only mentioned for an unregistered claim; a registered one gets an initialization diagnosis", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [
       claim({ name: "unreg", ready: "unknown", nodeName: "", ageSeconds: 3600 }),
       claim({ name: "reg", ready: "unknown", nodeName: "ip-1", ageSeconds: 3600 }),
     ] }));
@@ -178,21 +198,22 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
   });
 
   it("an unreadable controller is unverified, never a confirmed outage", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: false, controllerHealthy: false, controllerError: "controller Deployment unreadable (kube-system: forbidden)", claims: [claim()] }));
+    controller("unknown", "the Karpenter controllers could not all be read (forbidden)");
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim()] }));
     render(<KarpenterView cluster="x" />);
     expect((await screen.findByTestId("karp-controller-unverified")).textContent).toContain("forbidden");
     expect(screen.queryByTestId("karp-controller-down")).toBeNull();
   });
 
   it("an unreadable activity feed is unreadable, never quiet; a capped one discloses partial coverage", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ controllerVerified: true, claims: [claim()], eventsError: "NodeClaim events: forbidden; NodePool events: forbidden" }));
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ claims: [claim()], eventsError: "NodeClaim events: forbidden; NodePool events: forbidden" }));
     const first = render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity/ }));
     expect(screen.getByText("Could not read disruption activity.")).toBeTruthy();
     expect(screen.queryByText("No recent disruption activity.")).toBeNull();
     first.unmount();
     const ev = { type: "Normal", reason: "Disrupting", message: "m", kind: "NodeClaim", name: "c", lastSeenUnix: Math.floor(Date.now() / 1000) };
-    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ controllerVerified: true, claims: [claim()], events: [ev], eventsTruncated: true }));
+    vi.mocked(getKarpenterState).mockResolvedValueOnce(snap({ claims: [claim()], events: [ev], eventsTruncated: true }));
     render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity/ }));
     expect(screen.getByText("Capped read - showing the newest among the events read.")).toBeTruthy();
@@ -201,7 +222,7 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
   });
 
   it("an Unknown NodePool is never folded into 'all ready'", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim()], pools: [withRule<KarpenterPoolDTO>({ name: "p", ready: "unknown", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1 }, poolRule)] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim()], pools: [withRule<KarpenterPoolDTO>({ name: "p", ready: "unknown", reason: "", message: "", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 1 }, poolRule)] }));
     render(<KarpenterView cluster="x" />);
     expect(await screen.findByText("1 NodePool unverified")).toBeTruthy();
     expect(screen.queryByText("all ready")).toBeNull();
@@ -209,10 +230,11 @@ describe("KarpenterView evidence corrections (Codex 271342a7)", () => {
 });
 
 describe("KarpenterView composes independent notices (Codex cfbf793c)", () => {
-  beforeEach(() => { vi.clearAllMocks(); setRows(); });
+  beforeEach(() => { vi.clearAllMocks(); setRows(); controller(null); });
   it("a down controller and a partially failed feed are both disclosed, with an incomplete count", async () => {
     const ev = { type: "Normal", reason: "Disrupting", message: "m", kind: "NodeClaim", name: "c", lastSeenUnix: Math.floor(Date.now() / 1000) };
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, controllerHealthy: false, claims: [claim()], events: [ev], eventsError: "NodePool events: forbidden" }));
+    controller("not ready", "the karpenter controller k/karpenter (AWS) is not ready");
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim()], events: [ev], eventsError: "NodePool events: forbidden" }));
     render(<KarpenterView cluster="x" />);
     fireEvent.click(await screen.findByRole("button", { name: /^Disruption activity 1\+/ }));
     expect(screen.getByTestId("karp-controller-down")).toBeTruthy();
@@ -248,11 +270,61 @@ describe("KarpenterView availability is the rows' own", () => {
 // attention opens once from the first complete read; a dismissal sticks.
 describe("KarpenterView auto-select", () => {
   it("opens the first claim needing attention once, and a dismissal is not undone", async () => {
-    vi.mocked(getKarpenterState).mockResolvedValue(snap({ controllerVerified: true, claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" })] }));
+    vi.mocked(getKarpenterState).mockResolvedValue(snap({ claims: [claim({ ready: "not-ready", failingType: "Launched", failingStatus: "False", failingReason: "InsufficientCapacity" })] }));
     render(<KarpenterView cluster="x" />);
     const insp = await screen.findByTestId("lens-inspector");
     expect(within(insp).getAllByText(/default-abcde/).length).toBeGreaterThan(0);
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("lens-inspector")).toBeNull());
+  });
+});
+
+// Coverage S10 §3, §4 and §8: the NodeClasses view, a pool's link and
+// findings, a claim's class, and the provider's words kept local.
+describe("KarpenterView NodeClasses (S10)", () => {
+  beforeEach(() => { vi.clearAllMocks(); controller(null); });
+  const klass = (over: Partial<KarpenterClassDTO> = {}): KarpenterClassDTO => ({
+    uid: "c1", gvr: "karpenter.k8s.aws/v1/ec2nodeclasses", generation: 1, name: "default", group: "karpenter.k8s.aws", kind: "EC2NodeClass", adapter: "ec2",
+    reading: { state: "not ready", text: "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", native: "SubnetsReady False: SubnetsNotFound: no subnets for subnet-0abc" },
+    conditions: [{ type: "SubnetsReady", status: "False", reason: "SubnetsNotFound", message: "no subnets for subnet-0abc" }], conditionsTotal: 1,
+    unknown: [], facts: { subnets: 0, securityGroups: 2, amis: 1, role: "KarpenterNodeRole", instanceProfile: "ProfileName" }, users: ["workers"], usersComplete: true, ...over,
+  });
+  const classCoverage = () => [...liveCoverage(), { kind: "EC2NodeClass", served: true, synced: true, coverage: "live" as const }];
+  const pool = withRule<KarpenterPoolDTO>({ name: "workers", ready: "not-ready", reason: "UnhealthyDependents", message: "native ready text", weight: 0, cpuLimit: null, cpuUsed: null, memLimit: null, memUsed: null, nodes: 0,
+    nodeClassRef: { group: "karpenter.k8s.aws", kind: "EC2NodeClass", name: "default" }, link: { state: "found", adapter: "ec2", kind: "EC2NodeClass", classUid: "c1" },
+    class: { state: "not ready", text: "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms" }, handler: "the karpenter controller karpenter/karpenter is ready",
+    findings: [{ role: "fault", label: "NodeClass default not ready", text: "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", native: "SubnetsReady False: SubnetsNotFound: no subnets for subnet-0abc" },
+      { role: "ok", label: "registration failure is historical", text: "NodeRegistrationHealthy False: RegistrationFailed: x; last reported before the pool or its NodeClass changed", note: true }] }, poolRule);
+  pool.rule = { included: true, role: "fault", label: "NodeClass default not ready" };
+
+  it("lists the classes with their reading and users, and opens a class from its pool", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] });
+    setRows({ pools: [pool], classes: [klass(), klass({ uid: "c2", name: "spare", reading: { state: "ready" }, users: [], usersComplete: false })], coverage: classCoverage() });
+    render(<KarpenterView cluster="x" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^NodePools/ }));
+    fireEvent.click(document.querySelector(".lens-row") as HTMLElement);
+    const p = within(screen.getByTestId("lens-inspector"));
+    expect(p.getByTestId("karp-pool-head").textContent).toBe("SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms");
+    expect(p.getByText(/Karpenter: SubnetsReady False: SubnetsNotFound: no subnets for subnet-0abc/)).toBeTruthy(); // the provider's words, local
+    expect(p.getByTestId("karp-pool-class").textContent).toContain("EC2NodeClass/default");
+    expect(p.getByTestId("karp-pool-class").textContent).toContain("the karpenter controller karpenter/karpenter is ready");
+    expect(p.getAllByTestId("karp-finding")[0].textContent).toContain("registration failure is historical");
+    fireEvent.click(p.getByRole("button", { name: "Open NodeClass" }));
+    const c = within(await screen.findByTestId("karp-class-panel"));
+    expect(c.getByText(/its failure is counted on each NodePool that uses it/)).toBeTruthy();
+    expect(c.getByText("workers")).toBeTruthy();
+    expect(c.getByText("ProfileName")).toBeTruthy(); // the local inspector keeps the instance profile
+    const r = rows();
+    expect(r[0]).toContain("default");
+    expect(r[1]).toContain("spare");
+    expect(r[1]).toContain("0+"); // an incomplete pool read is a lower bound, never "unused"
+  });
+
+  it("says when no class kind is served", async () => {
+    vi.mocked(getKarpenterState).mockResolvedValue({ detected: true, events: [] });
+    setRows({ pools: [pool], coverage: [...liveCoverage(), { kind: "EC2NodeClass", served: false, synced: true, coverage: "absent" as const }] });
+    render(<KarpenterView cluster="x" />);
+    await screen.findByRole("button", { name: /^NodePools/ });
+    expect(screen.queryByRole("button", { name: /^NodeClasses/ })).toBeNull();
   });
 });

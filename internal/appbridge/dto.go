@@ -3,6 +3,7 @@
 package appbridge
 
 import (
+	"github.com/moomora/klyx/internal/karpenter"
 	"time"
 
 	"github.com/moomora/klyx/internal/config"
@@ -55,22 +56,27 @@ type ClusterDTO struct {
 	LogHistoryPresent        bool     `json:"logHistoryPresent"` // S8b: a Loki configured
 	MetalLBPresent           bool     `json:"metallbPresent"`
 	KarpenterHealthy         bool     `json:"karpenterHealthy"`
-	CertManagerTier          string   `json:"certManagerTier"`
-	CertManagerReason        string   `json:"certManagerReason"`
-	CertManagerPresent       bool     `json:"certManagerPresent"`
-	CertManagerHealthy       bool     `json:"certManagerHealthy"`
-	ExternalSecretsTier      string   `json:"externalSecretsTier"`
-	ExternalSecretsReason    string   `json:"externalSecretsReason"`
-	ExternalSecretsPresent   bool     `json:"externalSecretsPresent"`
-	ExternalSecretsHealthy   bool     `json:"externalSecretsHealthy"`
-	ReloaderTier             string   `json:"reloaderTier"`
-	ReloaderReason           string   `json:"reloaderReason"`
-	ReloaderPresent          bool     `json:"reloaderPresent"`
-	ReloaderHealthy          bool     `json:"reloaderHealthy"`
-	Env                      string   `json:"env"`
-	Region                   string   `json:"region"`
-	Provider                 string   `json:"provider"`
-	Group                    string   `json:"group"`
+	// Coverage S10: each class kind served at the version Klyx reads (the
+	// raw registry entries are gated on their own API)
+	EC2NodeClassesPresent  bool   `json:"ec2NodeClassesPresent"`
+	AKSNodeClassesPresent  bool   `json:"aksNodeClassesPresent"`
+	AutoNodeClassesPresent bool   `json:"autoNodeClassesPresent"`
+	CertManagerTier        string `json:"certManagerTier"`
+	CertManagerReason      string `json:"certManagerReason"`
+	CertManagerPresent     bool   `json:"certManagerPresent"`
+	CertManagerHealthy     bool   `json:"certManagerHealthy"`
+	ExternalSecretsTier    string `json:"externalSecretsTier"`
+	ExternalSecretsReason  string `json:"externalSecretsReason"`
+	ExternalSecretsPresent bool   `json:"externalSecretsPresent"`
+	ExternalSecretsHealthy bool   `json:"externalSecretsHealthy"`
+	ReloaderTier           string `json:"reloaderTier"`
+	ReloaderReason         string `json:"reloaderReason"`
+	ReloaderPresent        bool   `json:"reloaderPresent"`
+	ReloaderHealthy        bool   `json:"reloaderHealthy"`
+	Env                    string `json:"env"`
+	Region                 string `json:"region"`
+	Provider               string `json:"provider"`
+	Group                  string `json:"group"`
 	// Protected is the EFFECTIVE protection - exactly what the backend
 	// ProtectGuard enforces (explicit flag OR a prd/prod/production token in
 	// env/name/context). The UI decides on typed arming from this field; the
@@ -129,6 +135,9 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		LogHistoryPresent:        s.Capabilities.LogHistory.Present,
 		MetalLBPresent:           s.Capabilities.LoadBalancing.MetalLB,
 		KarpenterHealthy:         s.Capabilities.Karpenter.Healthy,
+		EC2NodeClassesPresent:    s.Capabilities.Karpenter.Served(karpenter.AdapterEC2),
+		AKSNodeClassesPresent:    s.Capabilities.Karpenter.Served(karpenter.AdapterAKS),
+		AutoNodeClassesPresent:   s.Capabilities.Karpenter.Served(karpenter.AdapterEKSAuto),
 		CertManagerTier:          s.Capabilities.CertManager.Tier.String(),
 		CertManagerReason:        s.Capabilities.CertManager.Reason,
 		CertManagerPresent:       s.Capabilities.CertManager.Present,

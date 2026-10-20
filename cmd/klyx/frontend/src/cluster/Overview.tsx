@@ -151,7 +151,7 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
   const other = notes.filter((n) => !isControllerNote(n));
   const named = areas.filter((a) => notes.some((n) => isControllerNote(n) && (!a.controller?.reason || n.includes(a.controller.reason) || a.controller.reason.includes(n))));
   const notReady = named.filter((a) => a.controller?.state === "not ready").map((a) => a.label);
-  const unverified = named.filter((a) => a.controller?.state !== "not ready").map((a) => a.label);
+  const unverified = named.filter((a) => a.controller?.state === "unknown").map((a) => a.label);
   const controllerLine = [notReady.length > 0 ? `Controller not ready: ${notReady.join(", ")}` : "", unverified.length > 0 ? `Controller health unverified: ${unverified.join(", ")}` : ""].filter(Boolean).join(" · ");
   const headline = other.length > 0 ? other[0] : controllerLine || notes[0];
   // the summary names a controller that is not ready: its fault mark, where
@@ -167,6 +167,13 @@ function ConnectionNotice({ c, m, tone }: { c: ClusterDTO; m: ClusterAttention |
       <ul className="ov-notice-notes t-secondary">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
     </details>
   );
+}
+
+// controllerWords: a controller's state in an area's one line.
+function controllerWords(state: string) {
+  if (state === "not ready") return <><Aspect kind="fault" size={8} /> controller not ready</>;
+  if (state === "managed") return "controller managed by the platform";
+  return "controller health unverified";
 }
 
 // ---- attention ---------------------------------------------------------------------
@@ -225,14 +232,16 @@ function AttentionSection({ cluster, m }: { cluster: string; m: ClusterAttention
               {a.controller && (
                 // One line; the controller's reason is a click away, not a
                 // paragraph repeated in every area. An unverified controller
-                // is a gap, said quietly; one that is not ready is a fault.
-                <span className="ov-area-text ov-ctl" data-tone={a.controller.state === "not ready" ? "danger" : "gap"}>
+                // is a gap, said quietly; one that is not ready is a fault;
+                // a managed one (S10 §5) is a note, neither.
+                <span className="ov-area-text ov-ctl" data-tone={a.controller.state === "not ready" ? "danger" : a.controller.state === "managed" ? undefined : "gap"}
+                  data-testid={`ov-ctl-${a.id}`}>
                   {a.controller.reason ? (
                     <details className="ov-why">
-                      <summary>{a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}<Chevron /></summary>
+                      <summary>{controllerWords(a.controller.state)}<Chevron /></summary>
                       <span className="t-secondary">{a.controller.reason}</span>
                     </details>
-                  ) : a.controller.state === "not ready" ? <><Aspect kind="fault" size={8} /> controller not ready</> : "controller health unverified"}
+                  ) : controllerWords(a.controller.state)}
                 </span>
               )}
               {a.lines.map((l) => (
@@ -448,7 +457,7 @@ function toolFact(m: ClusterAttention | null, task: string): { text: string; tit
     const checking = checkingText(a);
     if (checking) return { text: checking };
     const lines = a.lines.map((l) => `${a.lines.length > 1 ? `${l.label.toLowerCase()} ` : ""}${lineText(l)}`);
-    const ctl = a.controller ? [`controller ${a.controller.state === "unknown" ? "unverified" : a.controller.state}`] : [];
+    const ctl = a.controller ? [`controller ${a.controller.state === "unknown" ? "unverified" : a.controller.state === "managed" ? "managed by the platform" : a.controller.state}`] : [];
     return { text: [...lines, ...ctl].join(" · "), title: a.controller?.reason ? `controller ${a.controller.state}: ${a.controller.reason}` : undefined };
   }
   return { text: "not detected" };

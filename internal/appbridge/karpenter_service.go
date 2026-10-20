@@ -81,19 +81,17 @@ type KarpenterEventDTO struct {
 	LastSeenUnix int64  `json:"lastSeenUnix"`
 }
 
-// KarpenterSnapshotDTO is GetKarpenterState's payload: the controller probe
-// and the disruption feed as of AsOfUnix. The NodePools and NodeClaims are
-// the health Observer's shared rows (1c slice 3 §5.5).
+// KarpenterSnapshotDTO is GetKarpenterState's payload: the disruption feed
+// as of AsOfUnix. The NodePools, NodeClaims and NodeClasses are the health
+// Observer's shared rows (1c slice 3 §5.5); the controllers are the task's
+// (coverage S10 §5).
 type KarpenterSnapshotDTO struct {
-	Detected           bool                `json:"detected"`
-	AsOfUnix           int64               `json:"asOfUnix,omitempty"`
-	ControllerVerified bool                `json:"controllerVerified"`
-	ControllerHealthy  bool                `json:"controllerHealthy"`
-	ControllerError    string              `json:"controllerError,omitempty"`
-	EventsError        string              `json:"eventsError,omitempty"`
-	EventsTruncated    bool                `json:"eventsTruncated,omitempty"`
-	Events             []KarpenterEventDTO `json:"events"`
-	Error              string              `json:"error,omitempty"`
+	Detected        bool                `json:"detected"`
+	AsOfUnix        int64               `json:"asOfUnix,omitempty"`
+	EventsError     string              `json:"eventsError,omitempty"`
+	EventsTruncated bool                `json:"eventsTruncated,omitempty"`
+	Events          []KarpenterEventDTO `json:"events"`
+	Error           string              `json:"error,omitempty"`
 }
 
 // KarpenterConn is the per-cluster surface the Karpenter lens needs.
@@ -110,8 +108,7 @@ func NewKarpenterService(lookup func(string) (KarpenterConn, bool)) *KarpenterSe
 	return &KarpenterService{lookup: lookup}
 }
 
-// GetKarpenterState returns one cluster's Karpenter controller probe and
-// disruption feed. Errors fold in; slices are never nil.
+// GetKarpenterState returns one cluster's Karpenter disruption feed. Errors fold in; slices are never nil.
 func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDTO {
 	out := KarpenterSnapshotDTO{Events: []KarpenterEventDTO{}}
 	conn, ok := s.lookup(cluster)
@@ -130,9 +127,6 @@ func (s *KarpenterService) GetKarpenterState(cluster string) KarpenterSnapshotDT
 	if !snap.AsOf.IsZero() {
 		out.AsOfUnix = snap.AsOf.Unix()
 	}
-	out.ControllerVerified = snap.ControllerVerified
-	out.ControllerHealthy = snap.ControllerHealthy
-	out.ControllerError = snap.ControllerError
 	out.EventsError = snap.EventsError
 	out.EventsTruncated = snap.EventsTruncated
 	for _, e := range snap.Events {

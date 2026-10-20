@@ -31,7 +31,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -439,15 +439,25 @@ export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlo
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
 
 // Karpenter lens.
-export type KarpenterPoolDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
-export type KarpenterClaimDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+// Coverage S10: a NodePool's class link, the findings behind its rule, and
+// the NodeClasses as fact rows. message and native fields carry the
+// provider's own words for this inspector only (never sent to AI).
+export type KarpenterRefDTO = { group: string; kind: string; name: string };
+export type KarpenterCondDTO = { type: string; status: string; reason?: string; reasonWithheld?: boolean; message?: string; observedGeneration?: number; at?: string };
+export type KarpenterFindingDTO = { role: string; label: string; text?: string; native?: string; note?: boolean; unversioned?: boolean };
+export type KarpenterReadingDTO = { state: string; text?: string; native?: string };
+export type KarpenterLinkDTO = { state: string; adapter?: string; group?: string; kind?: string; version?: string; asOf?: string; classUid?: string };
+export type KarpenterClassFactsDTO = { subnets?: number; securityGroups?: number; amis?: number; deprecatedAmi?: boolean; podSubnets?: boolean; kubernetesVersion?: string; images?: number; imageFamily?: string; subnetSet?: boolean; role?: string; instanceProfile?: string };
+export type KarpenterClassDTO = { uid: string; gvr: string; generation: number; name: string; group: string; kind: string; adapter: string; created?: string; deleting?: boolean; syncing?: boolean; reading: KarpenterReadingDTO; conditions: KarpenterCondDTO[]; conditionsTotal: number; conditionsCut?: boolean; unknown: string[]; unknownTotal?: number; facts: KarpenterClassFactsDTO; users: string[]; usersComplete: boolean };
+export type KarpenterPoolDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number;
+  nodeClassRef?: KarpenterRefDTO; nodeClassObservedGeneration?: number; link?: KarpenterLinkDTO; class?: KarpenterReadingDTO; handler?: string; findings?: KarpenterFindingDTO[]; conditions?: KarpenterCondDTO[]; conditionsTotal?: number; conditionsCut?: boolean };
+export type KarpenterClaimDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingReasonWithheld?: boolean; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number; nodeClassRef?: KarpenterRefDTO };
 export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
-// The controller probe and disruption feed, read on demand as of asOfUnix;
-// the NodePools and NodeClaims are the health Observer's shared rows (1c
-// slice 3 §5.5). controllerVerified: a karpenter Deployment was actually
-// read - otherwise controllerHealthy carries no claim and controllerError says
-// why. eventsError / eventsTruncated: the feed is partial or unreadable, never quiet.
-export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; controllerVerified?: boolean; controllerHealthy: boolean; controllerError?: string; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
+// The disruption feed, read on demand as of asOfUnix; the NodePools,
+// NodeClaims and NodeClasses are the health Observer's shared rows (1c
+// slice 3 §5.5) and the controllers are the task's reading (coverage S10
+// §5). eventsError / eventsTruncated: the feed is partial or unreadable, never quiet.
+export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };

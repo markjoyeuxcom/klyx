@@ -8,7 +8,8 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda"
+  | "ec2NodeClasses" | "aksNodeClasses" | "autoNodeClasses";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -92,7 +93,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "autoscaling", label: "Autoscaling", destinations: [
-      task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "provisioning"] }),
+      task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "nodeclasses", "ec2nodeclass", "aksnodeclass", "provisioning"] }),
       // coverage S9: HPAs judged as a part (the generic list stays in
       // Resources), and KEDA in its own vocabulary
       task("autoscaling", "Autoscalers", section("autoscaling"), { keywords: ["hpa", "horizontal pod autoscaler", "keda", "scaledobject", "scaledjob", "triggerauthentication", "pause"] }),
@@ -104,7 +105,10 @@ export const NAV_GROUPS: NavGroup[] = [
       res("PodDisruptionBudgets", r("policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget", "Namespaced"), { keywords: ["pdb"] }),
       res("NodePools", r("karpenter.sh", "v1", "nodepools", "NodePool", "Cluster"), { cap: "karpenter" }),
       res("NodeClaims", r("karpenter.sh", "v1", "nodeclaims", "NodeClaim", "Cluster"), { cap: "karpenter" }),
-      res("EC2NodeClasses", r("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClass", "Cluster"), { cap: "karpenter" }),
+      // coverage S10: each class kind's raw entry is gated on its own API
+      res("EC2NodeClasses", r("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClass", "Cluster"), { cap: "ec2NodeClasses" }),
+      res("AKSNodeClasses", r("karpenter.azure.com", "v1beta1", "aksnodeclasses", "AKSNodeClass", "Cluster"), { cap: "aksNodeClasses", keywords: ["node auto-provisioning", "nap"] }),
+      res("NodeClasses (EKS Auto Mode)", r("eks.amazonaws.com", "v1", "nodeclasses", "NodeClass", "Cluster"), { cap: "autoNodeClasses", keywords: ["auto mode"] }),
     ],
   },
   {
@@ -275,6 +279,9 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     karpenter: c.karpenterPresent ?? false,
     velero: c.veleroPresent ?? false,
     keda: c.kedaPresent ?? false,
+    ec2NodeClasses: c.ec2NodeClassesPresent ?? false,
+    aksNodeClasses: c.aksNodeClassesPresent ?? false,
+    autoNodeClasses: c.autoNodeClassesPresent ?? false,
     admission: c.admissionPresent ?? false,
     loadBalancing: c.loadBalancingPresent ?? false,
     metallb: c.metallbPresent ?? false,

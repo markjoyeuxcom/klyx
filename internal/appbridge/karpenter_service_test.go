@@ -23,12 +23,12 @@ func (f *fakeKarpConn) KarpenterState(context.Context) (fleet.KarpenterSnapshot,
 
 func TestGetKarpenterStateMapsSnapshot(t *testing.T) {
 	conn := &fakeKarpConn{snap: fleet.KarpenterSnapshot{
-		Detected: true, ControllerHealthy: true, AsOf: time.Unix(1000, 0),
+		Detected: true, AsOf: time.Unix(1000, 0),
 		Events: []workloads.EventSummary{{Type: "Normal", Reason: "DisruptionTerminating", Kind: "NodeClaim", Name: "wk-old", LastSeenUnix: 900}},
 	}}
 	s := NewKarpenterService(func(string) (KarpenterConn, bool) { return conn, true })
 	dto := s.GetKarpenterState("c")
-	if dto.Error != "" || !dto.Detected || !dto.ControllerHealthy || dto.AsOfUnix != 1000 {
+	if dto.Error != "" || !dto.Detected || dto.AsOfUnix != 1000 {
 		t.Fatalf("dto: %+v", dto)
 	}
 	if len(dto.Events) != 1 || dto.Events[0].Reason != "DisruptionTerminating" {

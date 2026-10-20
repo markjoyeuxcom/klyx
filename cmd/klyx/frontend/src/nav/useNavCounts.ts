@@ -88,6 +88,9 @@ export function navCounts(m: ClusterAttention | null): NavCounts {
       }
     }
     if (a.controller?.state === "not ready") notes.unshift("controller not ready");
+    // coverage S10 §5: platform management is a note - never attention,
+    // never a coverage word on the row
+    if (a.controller?.state === "managed") notes.push("controller managed by the platform");
     if (a.controller?.state === "not ready" || a.lines.some((l) => l.state === "attention" && !l.destinationId)) out.attention.add(a.destinationId);
     if (notes.length) out.destinationNote[a.destinationId] = [out.destinationNote[a.destinationId], ...notes].filter(Boolean).join(" · ");
   }

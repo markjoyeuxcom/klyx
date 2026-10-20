@@ -68,12 +68,12 @@ type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
 const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
   "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
-  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications"];
+  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications", "karpenter/nodeclasses"];
 
 // inventory parts the attention model does not carry (coverage S9 §2: KEDA's
-// authentications are rows, never Needs you); their kinds' gaps read on the
-// parts that depend on them
-const INVENTORY = new Set(["keda/authentications"]);
+// authentications; S10 §2: Karpenter's NodeClasses - rows, never Needs you);
+// their kinds' gaps read on the parts that depend on them
+const INVENTORY = new Set(["keda/authentications", "karpenter/nodeclasses"]);
 
 const OUT = process.env.KLYX_PARITY_OUT;
 const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "7", "8"];
