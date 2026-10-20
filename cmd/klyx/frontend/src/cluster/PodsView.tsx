@@ -43,6 +43,7 @@ import { LogHistoryPane } from "./LogHistoryPane";
 import { expectPin } from "../nav/inspectorPin";
 import { PodIdentity } from "./IdentityBlocks";
 import { DebugChooser, DebugContainersBlock, PodResourcesBlock, PodExtendedBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
+import { PodClaimsBlock } from "./DRABlocks";
 import { SyncingChip } from "./staleness";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
@@ -801,6 +802,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
 
         {shown && <PodResourcesBlock detail={shown} />}
         {shown && <PodExtendedBlock detail={shown} />}
+        {shown && <PodClaimsBlock cluster={cluster} namespace={namespace} claims={shown.claims ?? []} health={shown.deviceHealth ?? []} unbound={!shown.summary.node && shown.summary.phase === "Pending"} />}
         {shown && <DebugContainersBlock detail={shown} />}
 
         <InspectorBlock title="Placement">

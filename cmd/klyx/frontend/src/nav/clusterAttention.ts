@@ -47,6 +47,9 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "schedules", label: "Schedules", destinationId: "velero" }, { part: "locations", label: "Storage locations" }, { part: "backups", label: "Unscheduled backups" }] },
   { task: "admission", label: "Admission", groupId: "admission", destinationId: "admission", cap: "admission",
     parts: [{ part: "webhooks", label: "Webhook configurations", destinationId: "admission" }, { part: "policies", label: "Admission policies" }] },
+  // coverage S11b: device classes are facts, inventory only
+  { task: "dra", label: "Devices (DRA)", groupId: "dra", destinationId: "dra", cap: "dra",
+    parts: [{ part: "claims", label: "ResourceClaims", destinationId: "dra" }, { part: "pools", label: "Device pools" }] },
 ];
 
 const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence", alerts: "alerts" };

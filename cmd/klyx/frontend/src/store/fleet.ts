@@ -1,3 +1,4 @@
+import type { DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
 import { create } from "zustand";
 import type { HealthLike } from "../health/verdict";
 
@@ -31,7 +32,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; azureNodes?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; azureNodes?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; draPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -380,7 +381,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts" | "autoscaling";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts" | "autoscaling" | "dra";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
 export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
@@ -544,7 +545,9 @@ export type PodRowDTO = {
 // probe anchors a push's timing to the lens commit that shows it.
 export type RowsVer = { incarnation: number; ver: number };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
-  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number; extended?: ExtendedPodDTO };
+  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number; extended?: ExtendedPodDTO;
+  // coverage S11b §3.5: the claims the pod references and its device health
+  claims?: PodClaimRefDTO[]; deviceHealth?: DeviceHealthDTO[] };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.
@@ -752,6 +755,7 @@ export type Route =
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
   overview: "Overview",
+  dra: "Devices (DRA)",
   // "Flux" not "GitOps": design principle 8 (speak the tool's vocabulary).
   // The view is Flux-specific; an Argo provider would get its own section.
   gitops: "Flux",

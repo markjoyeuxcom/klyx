@@ -8,7 +8,7 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda"
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda" | "dra"
   | "ec2NodeClasses" | "aksNodeClasses" | "autoNodeClasses";
 
 export type NavTarget =
@@ -89,6 +89,18 @@ export const NAV_GROUPS: NavGroup[] = [
       res("ValidatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "validatingadmissionpolicybindings", "ValidatingAdmissionPolicyBinding", "Cluster")),
       res("MutatingAdmissionPolicies", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicies", "MutatingAdmissionPolicy", "Cluster")),
       res("MutatingAdmissionPolicyBindings", r("admissionregistration.k8s.io", "v1", "mutatingadmissionpolicybindings", "MutatingAdmissionPolicyBinding", "Cluster")),
+    ],
+  },
+  {
+    // coverage S11b: read-only; claims, device pools and device classes in
+    // one view. Present where resource.k8s.io/v1 is served and some DRA
+    // object exists.
+    id: "dra", label: "Devices (DRA)", cap: "dra", lens: "group", destinations: [
+      task("dra", "Devices (DRA)", section("dra"), { keywords: ["dra", "dynamic resource allocation", "resourceclaim", "resourceslice", "deviceclass", "gpu", "device pool"] }),
+      res("ResourceClaims", r("resource.k8s.io", "v1", "resourceclaims", "ResourceClaim", "Namespaced")),
+      res("ResourceClaimTemplates", r("resource.k8s.io", "v1", "resourceclaimtemplates", "ResourceClaimTemplate", "Namespaced")),
+      res("ResourceSlices", r("resource.k8s.io", "v1", "resourceslices", "ResourceSlice", "Cluster")),
+      res("DeviceClasses", r("resource.k8s.io", "v1", "deviceclasses", "DeviceClass", "Cluster")),
     ],
   },
   {
@@ -283,6 +295,7 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     aksNodeClasses: c.aksNodeClassesPresent ?? false,
     autoNodeClasses: c.autoNodeClassesPresent ?? false,
     admission: c.admissionPresent ?? false,
+    dra: c.draPresent ?? false,
     loadBalancing: c.loadBalancingPresent ?? false,
     metallb: c.metallbPresent ?? false,
     // S8a: the alerts snapshot's own evidence (an Alertmanager configured,

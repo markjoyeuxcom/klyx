@@ -47,6 +47,9 @@ const LENSES: Record<string, Lens> = {
   "admissionregistration.k8s.io/mutatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
   "admissionregistration.k8s.io/validatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
   "admissionregistration.k8s.io/mutatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  // coverage S11b
+  "resource.k8s.io/resourceclaims": { task: "dra", part: "claims", label: "Devices (DRA)" },
+  "resource.k8s.io/deviceclasses": { task: "dra", part: "classes", label: "Devices (DRA)" },
   // coverage S4: a Service opens in Resources (only a LoadBalancer has a
   // verdict, and a hit does not carry the type)
   "metallb.io/ipaddresspools": { task: "lb", part: "pools", label: "Load balancers" },

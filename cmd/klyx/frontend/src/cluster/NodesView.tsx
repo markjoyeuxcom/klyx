@@ -3,6 +3,7 @@ import { useExtendedRows, type ExtendedMarks } from "../health/useExtendedRows";
 import { acceleratorsOf, gpuCell, totalsText } from "./extended";
 import type { Mark } from "../health/useExtendedRows";
 import { NodeExtendedBlock } from "./NodeExtended";
+import { NodeDRABlock } from "./DRABlocks";
 import type { ReservationDTO } from "../store/fleet";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { Events } from "@wailsio/runtime";
@@ -1218,6 +1219,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
             </InspectorBlock>
 
             {extMarks && <NodeExtendedBlock row={row} reservation={reservation} marks={extMarks} rowMissing={!reservation} />}
+            <NodeDRABlock cluster={cluster} node={row.name} />
 
             {shown.taints.length > 0 && (
               <InspectorBlock title="Taints" count={shown.taints.length}>

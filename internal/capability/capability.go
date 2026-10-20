@@ -162,6 +162,7 @@ type Set struct {
 	Admission       AdmissionCapability
 	LoadBalancing   LoadBalancingCapability
 	KEDA            KEDACapability       // coverage S9
+	DRA             DRACapability        // coverage S11b
 	Alerting        AlertingCapability   // coverage S8a: evidence, not a probe
 	LogHistory      LogHistoryCapability // coverage S8b: the configuration
 }

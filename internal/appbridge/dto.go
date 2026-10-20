@@ -51,6 +51,7 @@ type ClusterDTO struct {
 	VeleroPresent            bool     `json:"veleroPresent"`
 	KEDAPresent              bool     `json:"kedaPresent"`
 	AdmissionPresent         bool     `json:"admissionPresent"`
+	DRAPresent               bool     `json:"draPresent"` // coverage S11b
 	LoadBalancingPresent     bool     `json:"loadBalancingPresent"`
 	AlertsPresent            bool     `json:"alertsPresent"`     // S8a: the alerts snapshot's own evidence
 	LogHistoryPresent        bool     `json:"logHistoryPresent"` // S8b: a Loki configured
@@ -132,6 +133,7 @@ func ToDTO(s fleet.Snapshot, cc config.ClusterConfig, now time.Time) ClusterDTO 
 		VeleroPresent:            s.Capabilities.Velero.Present,
 		KEDAPresent:              s.Capabilities.KEDA.Present,
 		AdmissionPresent:         s.Capabilities.Admission.Present,
+		DRAPresent:               s.Capabilities.DRA.Present,
 		LoadBalancingPresent:     s.Capabilities.LoadBalancing.Present(s.Capabilities.Network.CiliumPresent),
 		AlertsPresent:            s.Capabilities.Alerting.Present,
 		LogHistoryPresent:        s.Capabilities.LogHistory.Present,

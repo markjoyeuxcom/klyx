@@ -14,6 +14,8 @@ let extendedValue: import("../health/useExtendedRows").ExtendedRows = {
   reservations: new Map(), reservationMarks: { nodes: "", requested: "", dra: "" }, reservationsDropped: 0,
   totals: [], totalMarks: { nodes: "", requested: "", dra: "" }, totalsOmitted: 0, reservationsRead: true, totalsRead: true, reservationsState: { error: null, refreshError: null, held: false, asOf: null }, totalsState: { error: null, refreshError: null, held: false, asOf: null },
 };
+// coverage S11b: the node inspector's DRA block reads no rows here
+vi.mock("../health/useDRARows", () => ({ useDRAPools: () => ({ rows: [], coverage: [], watchError: null, loading: false, rowsState: { updating: false, refreshing: false, evaluatedAt: null }, counts: null, complete: true }) }));
 vi.mock("../health/useExtendedRows", async (orig) => ({ ...(await orig<typeof import("../health/useExtendedRows")>()), useExtendedRows: () => extendedValue }));
 
 vi.mock("../bridge/nodes", () => ({

@@ -199,6 +199,7 @@ func (d *Detector) DetectErr(ctx context.Context) (Set, error) {
 		Admission:       AdmissionCapability{Present: served["admissionregistration.k8s.io/v1"]},
 		LoadBalancing:   d.detectLoadBalancing(ctx, served),
 		KEDA:            d.detectKEDA(ctx, served),
+		DRA:             d.detectDRA(ctx, served),
 	}, nil
 }
 
