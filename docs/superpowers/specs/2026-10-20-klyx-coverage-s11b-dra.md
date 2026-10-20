@@ -41,7 +41,9 @@ The extract is kept with the lab. References are to v1.37.0 unless a version is 
   - **1.35** (v0.35.9): slices carrying only `sharedCounters` are seen by every node. A node whose slices fall short of the count looks across the cluster: if any slice of the pool has a higher generation, the node sees nothing of the pool ("obsolete"); else, if every slice at that generation is present cluster-wide, the pool is complete. Counter sets are validated: a set defined twice, a device consuming a set or a counter the pool does not define.
   - **1.36 and 1.37** (v0.36.5, v0.37.1): as 1.35. An incomplete pool is not validated further (`pools_stable.go` L163-175), so incompleteness is reported before invalidity.
   - **Duplicate device names** count among the slices one node sees, never across nodes: two node-local slices on different nodes may name the same device (L230, L295-297).
-  - **Feature gates:** without the partitionable-devices feature, per-device and counter slices are ignored; from 1.37, without the compatibility-groups alpha feature, slices using compatibility groups are too.
+  - **1.33** (v0.33.13, read through v1beta1): the 1.34 algorithm and validity rules, line for line, except that with the partitionable-devices feature off it also ignores counter slices. Counter-based partitionable devices were alpha before 1.35, in a different shape.
+  - **Feature gates, by minor:** without the partitionable-devices feature, 1.34 ignores per-device slices only; 1.33 and 1.35+ ignore per-device and counter slices. From 1.37, without the compatibility-groups alpha feature, slices using compatibility groups are ignored too.
+- **The scheduler may be one minor behind the API server.** The version-skew policy allows kube-scheduler to match the API server's minor or be one older, so a 1.35 API server may run a 1.34 scheduler. The API server also keeps partitionable-device fields already stored when its own gate is turned off (`pkg/registry/resource/resourceslice/strategy.go` L252-264), and the scheduler has its own gate. Neither the server's version nor a stored field proves the running scheduler's rules.
 - **The allocator skips incomplete and invalid pools silently** (`allocator_stable.go` L960). Only `allocationMode: All` errors, with "resource pool ... is currently being updated" or "... is currently invalid" (L493-497). §9 uses that error as an oracle, from each node a fixture names.
 - **The kubelet owns node-local slices.** The kubelet plugin makes a node-local slice owned by its Node (`kubeletplugin/draplugin.go` L1191-1195). The kubelet deletes the node's slices when it starts, and 30 seconds after a driver becomes unusable (`kubelet/cm/dra/plugin/dra_plugin_manager.go` L165-180; `manager.go` L75, L503-537).
 - **No API object records that a driver is registered**, as CSINode does for CSI. Node-local slices are the only evidence that a driver is serving a node now, or was less than 30 seconds ago.
@@ -176,7 +178,7 @@ DeviceTaintRules are not read in S11b (§10). A pool's taint figures come from i
 - **Acquisition:** the projected slice watch at v1. Nothing else: a pool's allocated count is joined in the lens from the claims rows (§2).
 - **The counted entity:** a pool by driver and pool name, across every slice, whatever node a slice targets.
 - **Dependencies:** none among the watched kinds. A pool's reading needs the slices read complete and current, or stale with its date, since only every slice shows a pool whole. Under a capped read, every pool reads Unknown, "not every slice was read (the slices budget)": a missing slice could be Klyx's cut, or a newer generation.
-- **A fact: the server's minor version** (`FactServerMinor`), from the GitVersion the connection reads at connect and on every re-probe; a distribution suffix (`-eks-...`) is ignored. §3.2's rules depend on it.
+- **A fact: the server's minor version** (`FactServerMinor`), from the GitVersion the connection reads at connect and on every re-probe; a distribution suffix (`-eks-...`) is ignored. §3.2 derives the schedulers it must allow from it (the server's minor and one older), never the running scheduler's version.
 - **The joined allocated count** is a lower bound under a capped claims read, and "not established" under an unread one. A pool's verdict never depends on it.
 - **Clock:** an incomplete pool reads Progressing for 5 minutes from when Klyx first observed it incomplete, then Degraded (§3.2). The start comes from an episode tracker (§3.2), the S4/S9 pattern: a fact set by the connection, read by a pure evaluator, with the 5-minute crossing a ReclassifyAt.
 - **Notification eligibility:** no pool reading is a Fault, so none notifies.
@@ -205,10 +207,10 @@ In this order, first match:
 | # | The evidence | Reading |
 |---|---|---|
 | a | any consumer's condition says "resource claim <this claim> is in the process of being allocated" | Progressing, "being allocated" |
-| b | a consumer's condition is False (`Unschedulable` or `SchedulerError`) with a DRA reason that is **claim-specific**: it names this claim, or names a device class only this claim's requests use among the pod's claims, or this is the pod's only DRA claim (its resolved claims and its extended claim counted) | Degraded, "the scheduler cannot allocate it", quoting the reason with its documented meaning |
+| b | a consumer's condition is False (`Unschedulable` or `SchedulerError`) with a DRA reason that is **claim-specific**: it names this claim, or names a device class only this claim's requests use among the pod's claims, or this is the pod's only DRA claim (its resolved claims and its extended claim counted). Uniqueness is proven only from complete evidence: every claim of the pod resolved and read, under a complete and current claims read; otherwise the reason is set-wide (row c) | Degraded, "the scheduler cannot allocate it", quoting the reason with its documented meaning |
 | c | a consumer's condition is False with a DRA reason that is **set-wide** (for example "cannot allocate all claims" on a pod with several claims: upstream allocates a pod's claims all or nothing, `dynamicresources.go` L1059-1092) | Degraded, "its pod <p> cannot have its claims allocated; which of its N claims is the cause is not established" |
-| d | a consumer's condition is `SchedulerError` without a DRA reason | Progressing, "waiting for its pod: the scheduler reported an error outside DRA", with the message |
-| e | a consumer's condition is `Unschedulable` without a DRA reason | Progressing, "waiting for its pod: it is unschedulable for other reasons" (the pod's own verdict carries that fault) |
+| d | a consumer's condition is `SchedulerError` whose message matches no fixed DRA reason | Progressing, "waiting for its pod: the scheduler reported an error, and its relation to this claim is not established", with the message. DRA produces errors outside the fixed set (a CEL runtime error in a class's selector, for one), so a miss never proves the cause is outside DRA |
+| e | a consumer's condition is `Unschedulable` whose message matches no fixed DRA reason | Progressing, "waiting for its pod: it is unschedulable, and the message names no DRA reason Klyx recognises", with the message (the pod's own verdict carries that fault). A reason Klyx recognises as not DRA's (insufficient cpu or memory, node affinity, taints) may be named as such |
 | f | a consumer has no `PodScheduled` condition | Progressing, "waiting for the scheduler" |
 | g | a consumer is scheduled (`PodScheduled` True or a node name) while the claim is not allocated | Unknown, "its pod is on a node, but the claim is not allocated" |
 
@@ -220,23 +222,25 @@ In this order, first match:
 
 The pool is every slice of one driver and pool name. Klyx reads it as the scheduler does, per node (§1.2, revision 1).
 
-**A pool's views.** A view is the slices one node sees, under the server's minor version's rules:
+**A pool's views.** A view is the slices one node sees:
 - **each node a slice or a device names** (`nodeName`): that node's slices, the `allNodes` slices, the per-device slices with a device for it or for all nodes, and from 1.35 the slices carrying only `sharedCounters`;
-- **any other node** (one no slice names): the `allNodes` slices, the per-device slices with an all-nodes device, and from 1.35 the counter slices. Klyx does not read Nodes, so it says "any node no slice names", never that such a node exists;
+- **a node no slice names, if there is one:** the `allNodes` slices, the per-device slices with an all-nodes device, and from 1.35 the counter slices. Klyx does not read Nodes, so this view is hypothetical configuration behaviour: said as "on a node no slice names (if there is one)", never as a node that exists;
 - **a view that needs a node selector evaluated** (a `nodeSelector` slice or device) is not established: Klyx does not evaluate node selectors (§10). The reading names the views it could not establish.
 
-**Each view's outcome**, as the scheduler's allocator reaches it at that minor (§1.2): **none** (no slice serves the view), **obsolete** (1.35+: a newer generation exists elsewhere, so the node sees nothing of the pool), **being updated** (M of N slices), **invalid** (with the rule), or **complete**. Incompleteness is decided before validity, as upstream does.
+**Each view's outcome**, as the scheduler's allocator reaches it (§1.2): **none** (no slice serves the view, or the scheduler ignores its slices), **obsolete** (1.35+: a newer generation exists elsewhere, so the node sees nothing of the pool), **being updated** (M of N slices), **invalid** (with the rule), or **complete**. Incompleteness is decided before validity within a view, as upstream does.
 
-**The rules by version** (`FactServerMinor`):
-- **1.34:** completeness counted over the view's own slices; invalid means duplicate device names in the view.
-- **1.35 to 1.37:** completeness over the view, else over every slice of the pool at that generation cluster-wide; invalid means duplicate device names in the view, a counter set defined twice, or a device consuming a set or a counter the pool does not define.
-- **A newer minor** reads with the 1.37 rules and says so.
-- **An unknown version** reads a view only where the 1.34 and 1.35 rules give the same outcome; any other view is not established, "depends on the Kubernetes version, which Klyx could not read".
+**The schedulers Klyx allows for** (revision 2). Klyx never assumes the running scheduler's version or gates. It computes each view's outcome under every scheduler the cluster may run:
+- **the scheduler's minor:** the API server's minor, or one older (the skew policy, §1.2). An unknown server version allows every minor Klyx models. A server newer than 1.37 is read with the 1.37 rules, and says so;
+- **the partitionable-devices feature, on and off,** when the pool uses per-device selection or counters;
+- **the rule families:**
+  - **1.34 and 1.33:** completeness over the view's own slices; invalid means duplicate device names in the view. A counter-using pool under a possible 1.33 or 1.34 scheduler is not established (alpha, in another shape, §1.2);
+  - **1.35 to 1.37:** completeness over the view, else over every slice of the pool at that generation cluster-wide; invalid means duplicate device names in the view, a counter set defined twice, or a device consuming a set or a counter the pool does not define.
+- **A pool using compatibility groups** (1.37 alpha) is not established, "completeness depends on the scheduler's compatibility-groups support, which Klyx cannot read".
 
-**Feature gates:** Klyx cannot read the scheduler's gates. It assumes they match the API server's, which stored the fields: an alpha field is dropped at write when its gate is off (§1.1). A slice using compatibility groups (1.37 alpha) leaves its pool not established, "completeness depends on a scheduler feature gate Klyx cannot read".
+**The variants agree** when every one reaches the same outcome, or when every one reaches an outcome that reads OK (complete, none or obsolete). Then the view reads that outcome, and the row says what it assumed: "read for a 1.35 or 1.34 scheduler, with the partitionable-devices feature on or off". Otherwise the view is not established, "scheduler health not established: it depends on the scheduler's version or feature gate, which Klyx cannot read", with each variant's outcome listed (for example "invalid with the partitionable-devices feature on; complete with it off").
 
 **Each view reads** (incompleteness is decided before validity within a view, as upstream does):
-- **being updated:** Progressing, "being updated on <node | any node no slice names> (M of N slices)"; after 5 minutes, Degraded, "incomplete for over 5 minutes: the scheduler allocates nothing from it there";
+- **being updated:** Progressing, "being updated on <node | a node no slice names> (M of N slices)"; once the pool has been incomplete for 5 minutes (the tracker's episode is the pool's, not the view's), Degraded, "the pool has been incomplete for over 5 minutes: the scheduler allocates nothing from it there";
   - **the start** is the first observation of that pool incomplete at that generation (a lower bound);
   - **the tracker** visits the slices kind when it changes and keeps each incomplete pool's first observation, keyed by pool and generation. It keeps an episode only across contiguous complete, current reads, the KEDA tracker's continuity rule; a relist, a gap or a capped read restarts it;
   - **with no episode** (the tracker has not yet seen the pool), the view reads Progressing with no deadline until the tracker's next visit;
@@ -352,12 +356,14 @@ Each records the encoded bytes, the retained heap and the evaluation time, and p
   - `resourceclaim.Name`'s three results, including the intentional "no claim needed";
   - the health rule with a running restartable init container (counts) and a completed regular init container (does not), Unknown, and no health at all;
   - raw-versus-projected equality for every rule (§2.0).
-- **The pool oracle** (revision 1). The scheduler's own allocator (`k8s.io/dynamic-resource-allocation/structured.NewAllocator`) runs at v0.34.12, v0.35.9, v0.36.5 and v0.37.1 (module hashes recorded). For each fixture, it runs from every node a slice or device names and from a node none names, with the fixture's feature options recorded (`PartitionableDevices` for per-device and counter fixtures, and a gate-off variant of each). The claim requests `allocationMode: All` from a class selecting the fixture's driver.
+- **The pool oracle** (revisions 1 and 2). The scheduler's own allocator (`k8s.io/dynamic-resource-allocation/structured.NewAllocator`) runs at v0.33.13 (through v1beta1), v0.34.12, v0.35.9, v0.36.5 and v0.37.1, module hashes recorded. For each fixture it runs from every node a slice or device names and from a node none names, and, for a fixture using per-device selection or counters, with the partitionable-devices feature on and off. The claim requests `allocationMode: All` from a class selecting the fixture's driver.
   - **An outcome is proven, never inferred from silence:** "being updated" and "invalid" are the allocator's own errors; "complete" requires an allocation whose devices are named and all from the fixture's pool; "none" (no error, no allocation) is its own outcome, never success.
-  - **Klyx's per-view reading must equal the oracle's** for every fixture, view and minor, except views Klyx states as not established (selectors), whose oracle answer is recorded beside them.
-  - **The fixtures** (27 so far, scratchpad `s11b-golden`): one and two slices; a missing slice; an older generation beside a newer, and obsolete beside complete; duplicates in one view, across two nodes, and an all-nodes slice duplicating a node-local one; incomplete and duplicate together; a missing counter set, a duplicated set, a missing counter within a defined set, and a defined one; counter slices with the gate off; per-device on one and two nodes, and with the gate off; all-nodes complete and missing; mixed node-local and all-nodes; selectors matching and not.
+  - **Klyx's per-variant outcome must equal the oracle's** for every fixture, view, minor and gate variant, except views Klyx states as not established (selectors; counters under a possible 1.33 or 1.34 scheduler), whose oracle answers are recorded beside them.
+  - **Klyx's combined reading is tested** for each server minor from 1.34 to 1.38 and an unknown one: where the allowed variants agree, and where they do not. Among them: the 1.35 server with a possibly 1.34 scheduler on a pool whose node-local slices name two nodes (not established), and the gate-dependent pair (a duplicate device name between an all-nodes slice and a per-device slice: invalid with the feature on, complete with it off; not established).
+  - **The fixtures** (26, scratchpad `s11b-golden`, 62 outcomes per minor): one and two slices; a missing slice; an older generation beside a newer, and obsolete beside complete; duplicates in one view, across two nodes, an all-nodes slice duplicating a node-local one, and the gate-dependent pair; incomplete and duplicate together; a missing counter set, a duplicated set, a missing counter within a defined set, and a defined one; per-device on one and two nodes; all-nodes complete and missing; mixed node-local and all-nodes; selectors matching and not.
 
-  The generator's output is committed as testdata, as S11a's PodRequests golden is.
+  The generators' output is committed as testdata, as S11a's PodRequests golden is.
+- **The decision table's misses:** a CEL runtime error from a class's selector (a DRA `SchedulerError` outside the fixed set) reads row d, never "outside DRA"; a genuinely non-DRA `SchedulerError` reads row d too; a recognised non-DRA `Unschedulable` reason is named as such.
 - **Egress:** §6's needle tests.
 - **The inspector's evidence:** mounted tests for Healthy turning Unknown, a different device unhealthy at the same count, and a generated claim's name recorded after creation, each refreshing the pod detail; with UID and request fencing, and an unrelated status change as the control.
 - **The scheduler's reasons:** a source test pins §1.5's strings per version, quoting the lines.
@@ -400,3 +406,14 @@ Codex (handoff c3b275ab) requested changes: one P1 and four P2 findings. My own 
 | P2 | Device-health changes did not refresh the pod inspector | §3.5: `EvidenceRev` hashes every container status list's `allocatedResourcesStatus` (names, IDs, health, messages) and the claim statuses; §9: mounted tests for each change, with fencing and a control |
 
 Codex's guidance, taken: Unknown health is said as reported, never as a proven absent service (§3.4); restartable and completed init containers are tested (§3.4, §9); sizing covers shared-counter slices, maximal conditions and the pod detail's health lists (§7).
+
+## 12. Revision 2: Codex's re-review of 4ceea16
+
+Codex (handoff bf8783f1) requested changes: two residual P2 findings. The P1 egress finding is resolved.
+
+| # | Finding | Where answered |
+|---|---|---|
+| P2 | The server's minor and the stored fields do not establish the running scheduler's rules: a 1.35 API server may run a 1.34 scheduler, and the API server keeps partitionable-device fields after its own gate is turned off. A gate-dependent pool is invalid with the feature on and allocates with it off | §1.2: the skew policy, the stored-field rule, 1.33 read from source and run, each minor's gate behaviour. §3.2: every view computed under every scheduler the cluster may run (the server's minor or one older; the feature on and off where the pool uses it), a definite reading only where the variants agree, with the assumptions on the row, and otherwise "scheduler health not established" with each variant's outcome. §9: the oracle at five minors with gate variants (62 outcomes each), the skew and gate-dependent fixtures |
+| P2 | An unmatched `SchedulerError` was said to be "outside DRA", though DRA produces errors outside the fixed set | §3.1 rows d and e: the relation to the claim is "not established", never an external cause; a recognised non-DRA reason may be named. §9: the CEL runtime-error case |
+
+Codex's implementation guidance, taken: row b's uniqueness needs every claim of the pod resolved and read under a complete, current read (§3.1); the unnamed-node view is said as hypothetical (§3.2); the incomplete duration is the pool's episode, worded so (§3.2).
