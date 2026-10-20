@@ -1,0 +1,580 @@
+[
+ {
+  "name": "regular-sum",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "regular-sum",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     },
+     {
+      "name": "b",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "init-larger",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "init-larger",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "i",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "4"
+       },
+       "limits": {
+        "nvidia.com/gpu": "4"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "init-smaller",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "init-smaller",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "3"
+       },
+       "limits": {
+        "nvidia.com/gpu": "3"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "i",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "sidecar-before-init",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "sidecar-before-init",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "s",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      },
+      "restartPolicy": "Always"
+     },
+     {
+      "name": "i",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "3"
+       },
+       "limits": {
+        "nvidia.com/gpu": "3"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "sidecar-after-init",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "sidecar-after-init",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "i",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "3"
+       },
+       "limits": {
+        "nvidia.com/gpu": "3"
+       }
+      }
+     },
+     {
+      "name": "s",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2"
+       }
+      },
+      "restartPolicy": "Always"
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "two-sidecars-two-inits",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "two-sidecars-two-inits",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1",
+        "example.com/x": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1",
+        "example.com/x": "1"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "s1",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      },
+      "restartPolicy": "Always"
+     },
+     {
+      "name": "i1",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2",
+        "example.com/x": "5"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2",
+        "example.com/x": "5"
+       }
+      }
+     },
+     {
+      "name": "s2",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      },
+      "restartPolicy": "Always"
+     },
+     {
+      "name": "i2",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "mixed-names",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "mixed-names",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2",
+        "nvidia.com/mig-1g.5gb": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2",
+        "nvidia.com/mig-1g.5gb": "1"
+       }
+      }
+     },
+     {
+      "name": "b",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/mig-1g.5gb": "2",
+        "example.com/x": "7"
+       },
+       "limits": {
+        "nvidia.com/mig-1g.5gb": "2",
+        "example.com/x": "7"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "init-only-name",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "init-only-name",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "name": "i",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/mig-1g.5gb": "3"
+       },
+       "limits": {
+        "nvidia.com/mig-1g.5gb": "3"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "overhead",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "overhead",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "1"
+       },
+       "limits": {
+        "nvidia.com/gpu": "1"
+       }
+      }
+     }
+    ],
+    "overhead": {
+     "nvidia.com/gpu": "1",
+     "cpu": "100m"
+    }
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "pod-level-cpu",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "pod-level-cpu",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "2",
+        "cpu": "100m"
+       },
+       "limits": {
+        "nvidia.com/gpu": "2",
+        "cpu": "100m"
+       }
+      }
+     }
+    ],
+    "resources": {
+     "requests": {
+      "cpu": "1"
+     },
+     "limits": {
+      "cpu": "1"
+     }
+    }
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "large",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "large",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "4611686018427387903"
+       },
+       "limits": {
+        "nvidia.com/gpu": "4611686018427387903"
+       }
+      }
+     },
+     {
+      "name": "b",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "nvidia.com/gpu": "4611686018427387903"
+       },
+       "limits": {
+        "nvidia.com/gpu": "4611686018427387903"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ },
+ {
+  "name": "none",
+  "pod": {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "none",
+    "namespace": "f",
+    "generation": 1
+   },
+   "spec": {
+    "containers": [
+     {
+      "name": "a",
+      "image": "x",
+      "resources": {
+       "requests": {
+        "cpu": "1"
+       },
+       "limits": {
+        "cpu": "1"
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running"
+   }
+  }
+ }
+]

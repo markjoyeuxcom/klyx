@@ -1,5 +1,11 @@
 package appbridge
 
+import (
+	"strconv"
+
+	"github.com/moomora/klyx/internal/extres"
+)
+
 // NodeSummaryDTO is the nodes-lens row.
 type NodeSummaryDTO struct {
 	Name           string   `json:"name"`
@@ -29,9 +35,59 @@ type NodeSummaryDTO struct {
 	// Health is the shared verdict; Ready/Problems are legacy fields kept
 	// until every consumer has migrated.
 	Health HealthDTO `json:"health"`
+	// Extended is the node's extended resources (coverage S11a §2).
+	Extended ExtendedDTO `json:"extended"`
 }
 
 func (n NodeSummaryDTO) rowUID() string { return n.UID }
+
+// A figure crosses as a decimal string (coverage S11a §2.0: exact past
+// 2^53): "" when the key is absent, "-" when not established (not a whole
+// number within int64, or a sum that overflowed), else the digits.
+func figureDTO(q *extres.Qty) string {
+	switch {
+	case q == nil:
+		return ""
+	case !q.OK:
+		return "-"
+	}
+	return strconv.FormatInt(q.V, 10)
+}
+
+// ExtendedEntryDTO is one extended resource a node advertises.
+type ExtendedEntryDTO struct {
+	Name        string        `json:"name"`
+	Capacity    string        `json:"capacity"`
+	Allocatable string        `json:"allocatable"`
+	Accelerator bool          `json:"accelerator,omitempty"`
+	Unit        string        `json:"unit,omitempty"`
+	Partition   string        `json:"partition,omitempty"`
+	RenamedFrom string        `json:"renamedFrom,omitempty"`
+	Sharing     string        `json:"sharing,omitempty"`
+	Facts       []extres.Fact `json:"facts"`
+}
+
+// ExtendedDTO is a node's extended resources within the bounds; Omitted and
+// FactsOmitted count what the bounds left out.
+type ExtendedDTO struct {
+	Entries      []ExtendedEntryDTO `json:"entries"`
+	Omitted      int                `json:"omitted,omitempty"`
+	FactsOmitted int                `json:"factsOmitted,omitempty"`
+	MIGStrategy  string             `json:"migStrategy,omitempty"`
+}
+
+func toExtendedDTO(r extres.NodeResources) ExtendedDTO {
+	out := ExtendedDTO{Entries: make([]ExtendedEntryDTO, 0, len(r.Entries)), Omitted: r.Omitted, FactsOmitted: r.FactsOmitted, MIGStrategy: r.MIGStrategy}
+	for _, e := range r.Entries {
+		facts := e.Facts
+		if facts == nil {
+			facts = []extres.Fact{}
+		}
+		out.Entries = append(out.Entries, ExtendedEntryDTO{Name: e.Name, Capacity: figureDTO(e.Capacity), Allocatable: figureDTO(e.Allocatable),
+			Accelerator: e.Accelerator, Unit: e.Unit, Partition: e.Partition, RenamedFrom: e.RenamedFrom, Sharing: e.Sharing, Facts: facts})
+	}
+	return out
+}
 
 // HeadroomPodRefDTO mirrors workloads.PodRef (an unplaced pod + its requests).
 type HeadroomPodRefDTO struct {

@@ -1,0 +1,281 @@
+{
+ "note": "Coverage S11a: extended-resource requests from the unmodified component-helpers PodRequests per minor, status resources off (the desired path). Generator: scratchpad s11a-golden (copied from S6's s6-golden).",
+ "models": {
+  "1.32": {
+   "minor": "1.32",
+   "module": "k8s.io/component-helpers@v0.32.13",
+   "options": "UseStatusResources: false, SkipPodLevelResources: true (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "31e5025027c9cda53f1bf3f16740bcdbcc0a1b1062aa34016c73917895a9088d"
+  },
+  "1.33": {
+   "minor": "1.33",
+   "module": "k8s.io/component-helpers@v0.33.13",
+   "options": "UseStatusResources: false, SkipPodLevelResources: true (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "6d4b7e67a06765bffb00bc31988d840b38826527d14658fdde1f7f39c3987dc1"
+  },
+  "1.34": {
+   "minor": "1.34",
+   "module": "k8s.io/component-helpers@v0.34.12",
+   "options": "UseStatusResources: false, SkipPodLevelResources: false (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "ddedd91c9d2f0a6b9029de9038204c800e9be350c432854b314e34e665969e95"
+  },
+  "1.35": {
+   "minor": "1.35",
+   "module": "k8s.io/component-helpers@v0.35.9",
+   "options": "UseStatusResources: false, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: false (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "c91445eb84e05a3a4e96c29e20aa4b13a6daffe2c496185c185807082da62307"
+  },
+  "1.36": {
+   "minor": "1.36",
+   "module": "k8s.io/component-helpers@v0.36.5",
+   "options": "UseStatusResources: false, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: true, UseDRANodeAllocatableResourceClaimStatus: false (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "996595bc7d6c4c12760daa5dbe0ba70b5804fa624cbfe7924f200b7a72a0b53e"
+  },
+  "1.37": {
+   "minor": "1.37",
+   "module": "k8s.io/component-helpers@v0.37.1",
+   "options": "UseStatusResources: false, SkipPodLevelResources: false, InPlacePodLevelResourcesVerticalScalingEnabled: true, UseDRANodeAllocatableResourceClaimStatus: false (S11a: the desired path)",
+   "results": {
+    "init-larger": {
+     "nvidia.com/gpu": 4
+    },
+    "init-only-name": {
+     "nvidia.com/gpu": 1,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "init-smaller": {
+     "nvidia.com/gpu": 3
+    },
+    "large": {
+     "nvidia.com/gpu": 9223372036854775806
+    },
+    "mixed-names": {
+     "example.com/x": 7,
+     "nvidia.com/gpu": 2,
+     "nvidia.com/mig-1g.5gb": 3
+    },
+    "none": {},
+    "overhead": {
+     "nvidia.com/gpu": 2
+    },
+    "pod-level-cpu": {
+     "nvidia.com/gpu": 2
+    },
+    "regular-sum": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-after-init": {
+     "nvidia.com/gpu": 3
+    },
+    "sidecar-before-init": {
+     "nvidia.com/gpu": 4
+    },
+    "two-sidecars-two-inits": {
+     "example.com/x": 5,
+     "nvidia.com/gpu": 3
+    }
+   },
+   "goSumSha256": "a51335a64554020186c17a42ffe30813f6bed495704e91fc2014b43ab8c50ce2"
+  }
+ }
+}

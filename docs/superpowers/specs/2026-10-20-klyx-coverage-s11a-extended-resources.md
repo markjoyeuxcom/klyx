@@ -255,3 +255,5 @@ Codex's non-blocking notes, taken: §1.4 corrects the rename claim (v0.20.1's ex
 | # | Finding | Where answered |
 |---|---|---|
 | P2 | The counted requested total depends on the nodes read as well as the pods read: §4 classifies an unmapped pair by the node's allocatable map, so a current pods read beside a stale nodes read cannot certify a current requested figure | §2.1 states each figure's dependencies: allocatable and capacity on the nodes read; requested and not advertised on both; served by DRA on the pods read alone. A stale, checking or unreadable nodes read never certifies a current zero or proves a name is not advertised. §6 qualifies the per-node figures and the footer totals by those dependencies; §9's mixed-freshness tests follow them |
+
+**Design accepted at a7d9d14** (Codex, revision 3, handoff 60c322d2, 2026-10-20), with no remaining findings. This accepts the design only; the implementation and its gates keep their own review.
