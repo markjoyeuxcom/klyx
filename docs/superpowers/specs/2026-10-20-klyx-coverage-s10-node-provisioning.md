@@ -24,7 +24,9 @@ The extract is kept with the lab (`s10-facts.md`).
 ### 1.1 Core (`karpenter.sh/v1`)
 
 - **NodePool Ready** aggregates `ValidationSucceeded` and `NodeClassReady`. `NodeRegistrationHealthy` is set but is not a Ready dependent.
-- **`status.nodeClassObservedGeneration`** is the class generation the pool last observed.
+- **`status.nodeClassObservedGeneration`** is written by the `nodepool.registrationhealth` controller, not the readiness controller. It is the class generation registration health last observed.
+- **`NodeRegistrationHealthy` is reset to Unknown** whenever the condition is missing, the pool's generation moves past the condition's `observedGeneration`, or the class's generation moves past `nodeClassObservedGeneration` (`controllers/nodepool/registrationhealth`). A False value is therefore evidence only for the pool generation and class generation it was written against.
+- **Aggregate reason:** when a Ready dependent is False, Ready reads False with operatorpkg's aggregate reason (`UnhealthyDependents`, as re:Post's NodeClassNotFound example shows).
 - **The `nodepool.readiness` controller** sets `NodeClassReady` from the class (`controllers/nodepool/readiness`):
   - class not found: False `NodeClassNotFound`;
   - class terminating: False `NodeClassTerminating`;
@@ -59,11 +61,19 @@ The extract is kept with the lab (`s10-facts.md`).
 
 ### 1.5 Management evidence
 
+- **Self-hosted controllers:**
+  - both providers' Helm charts label the Deployment `app.kubernetes.io/name=karpenter`;
+  - the controller images identify the provider: `public.ecr.aws/karpenter/controller` (AWS, supports `EC2NodeClass` only) and `mcr.microsoft.com/aks/karpenter/controller` (Azure, `AKSNodeClass`);
+  - a custom or mirrored image proves no provider.
 - **EKS Auto Mode:**
   - its Karpenter runs outside the cluster;
   - S5's evidence is the node label `eks.amazonaws.com/compute-type: auto` ("built into EKS Auto Mode");
   - the `eks.amazonaws.com` NodeClass API exists only with Auto Mode, but a CRD left behind is not an active feature (C2).
-- **AKS NAP:** "NAP automatically deploys, configures, and manages Karpenter on your AKS clusters." No documented in-cluster label or annotation distinguishes NAP's objects. Self-hosted Azure Karpenter uses the same APIs and runs as an in-cluster Deployment.
+- **AKS NAP:**
+  - "AKS manages node auto-provisioning on your behalf and runs it in the managed control plane" (Microsoft Learn, "Enable or disable NAP").
+  - **Installation history:** the migration from self-hosted Karpenter is verified by the Karpenter CRDs' annotations `meta.helm.sh/release-name: aks-managed-karpenter-overlay-base` and `meta.helm.sh/release-namespace: kube-system`. A retained annotation proves that NAP installed the CRDs, not that NAP is active now.
+  - **Activity:** NAP's events are read with `kubectl get events --field-selector source=karpenter-events`. An event from that source is evidence of current activity. No event proves nothing (a quiet cluster).
+  - **Networking:** NAP is documented with Azure CNI overlay and the Cilium dataplane.
 - **The owner's `aks-dev` no longer resolves** (2026-10-20). AKS evidence in this slice is fixture-only (C6).
 
 ## 2. The parts and their source contracts (C1)
@@ -80,6 +90,8 @@ The extract is kept with the lab (`s10-facts.md`).
 - Counting the class instead of the pools would hide which pools cannot provision.
 - So the class's failure is counted once per NodePool that uses it, as that pool's headline in the class's own words. The class row shows its own reading and its users.
 - An unused class that fails lights nothing: no pool can provision from it.
+
+**True fact rows.** A class row carries no `NativeEval` at all. It is not a zero-value Fault, so it is excluded from Top, the ledger, notifications, Needs you, and the Explain and chat verdict gates. Its reading is display evidence beside the row (§4), as S9's authentications and KEDA-owned HPAs are.
 
 **Served versions:**
 - Each class kind is pinned to the version this note was read from: `ServedAmong(v1)`, `ServedAmong(v1beta1)` and `ServedAmong(v1)`.
@@ -108,11 +120,11 @@ The extract is kept with the lab (`s10-facts.md`).
 - **unsupported:** as above.
 
 **The NodePool rule.** The worst of independent findings, S9's shape:
-1. **Not reconciled.** No conditions: Unknown "not reported" (today's reading of a missing Ready). When the reference is unsupported, the text adds "no running Karpenter supports <group>/<kind>, so nothing reconciles this pool" only if the controller task proves which providers run (§5); otherwise it names the reference alone.
+1. **Not reconciled.** No conditions: Unknown "not reported" (today's reading of a missing Ready). The text adds "no running Karpenter supports <group>/<kind>, so nothing reconciles this pool" only when §5's inventory is complete and every candidate is attributed to a provider. Otherwise it names the reference alone.
 2. **The class, current and found:**
    - **Ready False:** Fault "NodeClass <name> not ready", in the class's words: its first failing dependent condition and reason ("SubnetsReady False: SubnetsNotFound: …"). This replaces the copy in the pool's `NodeClassReady`. Both say the same thing, and the class's own read is current. One finding per pool: the incident is the pool's inability to provision.
    - **Terminating:** Fault "NodeClass <name> is terminating".
-   - **Ready Unknown or no conditions:** Progressing "NodeClass <name> not yet reconciled", or Unknown when the class's controller task is not ready or unverified.
+   - **Ready Unknown or no conditions:** Progressing "NodeClass <name> not yet reconciled", but only when §5 attributes a ready controller to that class's kind (an AWS-imaged Deployment for `EC2NodeClass`, an Azure one or NAP's activity for `AKSNodeClass`, Auto Mode evidence for `NodeClass`). Otherwise it is Unknown: "no controller attributed to <kind> is established". A ready controller for another provider certifies nothing.
    - **Behind its generation** (a class condition's `observedGeneration` behind the class generation): Progressing "NodeClass <name> syncing", never its old Ready.
    - **Ready True while the pool's `NodeClassReady` is False:** Progressing "NodeClass <name> is ready; the NodePool's status has not caught up". This is not a fault from stale copy, and it has no clock: a stuck controller is the controller task's finding (§5).
 3. **The class not found** (a proven absence): Fault "NodeClass <kind>/<name> not found". Karpenter's own `NodeClassNotFound` agrees, but it is not needed.
@@ -123,7 +135,18 @@ The extract is kept with the lab (`s10-facts.md`).
    - Ready False for any other reason: Fault with Ready's reason, as today.
 6. **Ready True with every finding healthy:** OK.
 
-The NodePool `Ready=False` that Karpenter derives from `NodeClassReady` is one finding with the class's, never two.
+The NodePool `Ready=False` that Karpenter derives from `NodeClassReady` is one finding with the class's, never two. Ready False with `UnhealthyDependents`, whose only False dependent is `NodeClassReady`, is that same finding. On a class's recovery, neither the aggregate nor the copy reintroduces it: rule 2's recovered-class reading stands.
+
+**Freshness, per finding:**
+- **Each pool condition counts only for the generation it reports.**
+  - A condition whose `observedGeneration` is behind the pool's generation is "syncing" for that finding (Progressing).
+  - A missing or zero `observedGeneration` reports no generation: the condition is read as reported and the inspector says so. It is never a proven lag.
+- **`NodeRegistrationHealthy` False has two fences,** both needed (core resets it when either moves):
+  - **current:** its `observedGeneration` equals the pool's generation, and `nodeClassObservedGeneration` equals the class's generation from a current class read. Then it is Degraded "nodes fail to register", with Karpenter's reason;
+  - **proven stale:** either fence differs, with both values known. It is historical, a note "last reported before the pool or its NodeClass changed", and never a finding;
+  - **not established:** an `observedGeneration` missing or zero, or the class not found, unreadable, stale, cut or unsupported. Unknown "registration health not established".
+- **Unrelated findings keep their own freshness.** A stale registration failure never hides a current `ValidationSucceeded` failure, and the reverse.
+- **`nodeClassObservedGeneration` is registration health's acknowledgement,** never read as the readiness controller's.
 
 ## 4. The NodeClass reading (inventory, not counted)
 
@@ -137,30 +160,50 @@ Each class row carries:
   - **aks:** the Kubernetes version, the image count and the image family;
   - **eks-auto:** subnet and security group counts, pod-subnet selection in use, and the role name.
 
-The row's reading is display evidence (a fact row, like S9's authentications). The pools carry the verdict.
+The row's reading is display evidence (a fact row, like S9's authentications). The pools carry the verdict. The reading comes from the whole object (§7's cut contract), never from the display list.
 
 ## 5. The controller task and management (C2)
 
-The Karpenter capability gains a management reading, per platform.
+**Acquisition: the in-cluster controller inventory.**
+- **Candidates:** Deployments labelled `app.kubernetes.io/name=karpenter` in any namespace, plus the existing `karpenter` Deployment probe in `kube-system` and `karpenter`. At most 4 candidates and 8 running pods each, as S9's operator read.
+- **Each candidate's provider** comes from its running pods' images, fenced by owner UID (Deployment, then ReplicaSets, then pods):
+  - `public.ecr.aws/karpenter/controller` is AWS (`EC2NodeClass`);
+  - `mcr.microsoft.com/aks/karpenter/controller` is Azure (`AKSNodeClass`);
+  - any other image, or pods that disagree, is unattributed.
+- **The inventory read is one of:**
+  - **complete:** every list finished, at most 4 candidates, every candidate's pods read;
+  - **incomplete:** a continued list, more candidates or pods than are read, or an unattributed candidate;
+  - **unreadable:** forbidden or failing.
 
-**The positive-evidence table** (precedence top to bottom; each row names its evidence in the UI):
+**Platform evidence** (positive only):
+- **EKS Auto Mode:** `nodeclasses.eks.amazonaws.com` served, and at least one node labelled `eks.amazonaws.com/compute-type: auto` (one labelled-node LIST, limit 1).
+- **AKS NAP activity:** at least one recent Event from the source `karpenter-events` (one field-selected LIST, limit 1).
+- **AKS NAP installation:** the CRD annotation `meta.helm.sh/release-name: aks-managed-karpenter-overlay-base`. This is history, never activity on its own.
 
-| Evidence read | manager | observed | Controller task |
-|---|---|---|---|
-| A readable `karpenter` Deployment (the existing `kube-system`/`karpenter` probe, plus Deployments labelled `app.kubernetes.io/name=karpenter` in any namespace), not ready | self-hosted | observed | **not ready** (a fault, as today) |
-| The same, ready | self-hosted | observed | healthy |
-| `nodeclasses.eks.amazonaws.com` served **and** at least one node labelled `eks.amazonaws.com/compute-type: auto` (S5's evidence; one labelled-node LIST, limit 1) | platform (EKS Auto Mode) | not-observed | **managed**: "managed by EKS Auto Mode; controller health not directly observed" |
-| The Auto Mode API served, no Auto Mode node | unknown | not-observed | unknown: "the EKS Auto Mode NodeClass API is installed but no Auto Mode node was found; a retained API is not an active feature" |
-| `aksnodeclasses.karpenter.azure.com` served, no `karpenter` Deployment found in a complete read | unknown | not-observed | unknown: "no in-cluster Karpenter found; on AKS this may be node auto-provisioning (managed), which Klyx cannot tell apart from a self-hosted controller it could not find" |
-| The Deployment read forbidden or failing | unknown | unknown | unknown (unreadable, never "managed") |
+**Readings, per provider kind** (each pool's class kind is attributed to them; §3 uses them):
 
-- **Coexistence.** A self-hosted Deployment and Auto Mode evidence together: both are named. The task reports the self-hosted Deployment's observed health (never suppressed) and adds "EKS Auto Mode also provisions (`eks.amazonaws.com` NodeClasses), managed by the platform".
-- **Per-pool provenance.** A pool's adapter says which controller kind serves it: ec2 is self-hosted AWS Karpenter; eks-auto is Auto Mode; aks is NAP or self-hosted, unverified. The pool inspector names it.
-- **Management never suppresses a fault.** A pool, claim or class fault lights whoever manages the controller. "Managed" is a task reading only.
-- **The new `managed` task state** sits beside `not ready` and `unknown` (`healthsrc/controller.go`'s issue states):
-  - it is not attention and not a coverage gap;
-  - the area shows its reading as a note;
-  - Overview, the lens index, Needs you and the fleet indicator never count it.
+| Kind | Proven handler | Reading |
+|---|---|---|
+| `EC2NodeClass` | an AWS-attributed candidate | its observed health: ready, or **not ready** (a fault) |
+| `AKSNodeClass` | an Azure-attributed candidate | its observed health |
+| `AKSNodeClass` | NAP activity evidence | **managed**: "managed by AKS node auto-provisioning; controller health not directly observed" |
+| `AKSNodeClass` | NAP installation evidence only, no attributed candidate in a complete read | unknown: "CRDs installed by AKS NAP; current activity unverified" |
+| `NodeClass` (Auto Mode) | Auto Mode evidence | **managed**: "managed by EKS Auto Mode; controller health not directly observed" |
+| any | none, with the inventory complete | unknown: "no controller for <kind> found" |
+| any | none, with the inventory incomplete or unreadable | unknown: "the Karpenter controllers could not all be read" |
+
+**The controller task aggregates the kinds in use** (served and referenced, or with classes). Its state is the worst present, in this order:
+1. **not ready:** any observed, attributed controller not ready;
+2. **unknown:** any in-use kind without a proven handler, or an inventory incomplete or unreadable (a gap);
+3. **managed:** every in-use kind proven, and at least one by platform evidence;
+4. **healthy:** every in-use kind proven by an observed, ready controller.
+
+**Precedence guarantees:**
+- **Platform evidence never clears an unread inventory.** With the Auto Mode or NAP evidence present and the Deployment read forbidden or continued, the task is unknown (the gap). The platform's management is said beside it as a note, never as the task's state.
+- **An observed failure is never hidden** by a managed kind beside it. A failing self-hosted AWS controller beside Auto Mode is **not ready**, with Auto Mode's management noted.
+- **"Managed" alone** means every in-use kind is proven and the inventory was complete: no unread controller could exist.
+
+**Consumers.** The `managed` state (beside `not ready` and `unknown` in `healthsrc/controller.go`) is a note everywhere: the area, Overview, the lens index, Needs you, the fleet indicator, chat's attention summary, and the Observer's notification batches. It is never attention and never a gap. Unknown stays a gap; not ready stays a fault.
 
 ## 6. The AKS networking note
 
@@ -168,8 +211,8 @@ Shown in the AKSNodeClass inspector, and as a Karpenter-area note on an AKS clus
 
 **Distinction by evidence:**
 - **Azure CNI powered by Cilium:** the Cilium DaemonSet in `kube-system` carries AKS's managed-by label. Microsoft manages the dataplane.
-- **BYO Cilium (BYOCNI):** Cilium is present without that label. The note: "Microsoft supports Karpenter-specific issues on BYO CNI, but excludes third-party CNI networking troubleshooting."
-- **Unknown:** Cilium's DaemonSet is unreadable, or the label is ambiguous. Nothing is said.
+- **BYO Cilium (BYOCNI):** established only by positive evidence of a self-installed Cilium (its Helm release metadata). The note: "Microsoft supports Karpenter-specific issues on BYO CNI, but excludes third-party CNI networking troubleshooting."
+- **Unknown:** anything else, including the managed-by label's absence. While that label is unverified, its absence is never proof of BYO Cilium.
 
 The label key (`kubernetes.azure.com/managedby: aks`) is unverified: no AKS cluster is reachable (§1.5). It is a fixture fact until the owner authorises a read on an AKS cluster. Until then the note shows only as "Cilium on AKS: BYO or Azure-managed is unverified", with the support boundary stated as conditional.
 
@@ -194,6 +237,20 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 | `nodeclaims` | 2 MiB | 8 KiB |
 
 - **The projections parse once,** into the structs the rules read (`karpenter.NodePool`, `NodeClaim`). Each MaxObject bounds its kind's cap product, measured by a test (as S9 found it must be).
+
+**The cut contract:**
+- **The rules classify the whole raw object, before any display cap.** Each projection computes its authoritative fields from every condition:
+  - **a class:** Ready, the first failing dependent, and the count of unknown types;
+  - **a pool:** Ready, `ValidationSucceeded`, `NodeClassReady` and `NodeRegistrationHealthy`, each with its `observedGeneration`, plus `nodeClassObservedGeneration`.
+
+  These are retained separately from the display list.
+- **The display list** keeps 8 conditions, with the total count and a cut flag. A decisive ninth condition is never lost: the reading already holds it.
+- **When the retained evidence cannot establish a reading,** for example an object whose authoritative fields themselves were cut (impossible within the caps above, and tested), the reading is Unknown, never OK.
+- **Cut flags and counts travel through the DTOs:**
+  - a class's `users` is incomplete when the pool kind is cut;
+  - a pool's class link is "cut" when the class kind is capped and the class is not retained (§3);
+  - an object omitted by its kind's budget is a lower bound on its part, never "absent".
+- **Bounded strings:** names 253, condition types and reasons 128, messages 512 (after the §8 identifier redaction for AI paths; the local display keeps the native text within the cap). The cap products are therefore measurable.
 - **The budget calibration and `TestLoad`** carry the new kinds, before and after.
 - **At most 2.6 MiB** of encoded admission per cluster where all three providers are served (in practice one or two). NodeClaims are the large set: 2 MiB is about 3,000 claims at their typical size, and past it the part reads a lower bound.
 
@@ -204,10 +261,23 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
   - The NodeClaim inspector names its class.
 - **The registry:** the raw `EC2NodeClasses` entry is gated on `karpenter.k8s.aws` being served. Raw entries are added for `AKSNodeClasses` and `NodeClasses` (Auto Mode), each gated on its own API.
 - **The controller task's `managed` state** shows as the area's note (§5).
-- **AI and chat:**
-  - classes and the new pool fields are allowlisted (names, the reference, conditions and the counts);
-  - never role ARNs, instance profiles, subnet IDs or ARM IDs;
-  - chat's GVR map gains the three class kinds.
+- **AI and chat** (the identifier boundary):
+  - **Explicit projections, never the generic one:** chat's projection gains explicit cases for the three class kinds and the changed pool fields (S9's pattern), and the GVR map gains the three class kinds. Only names, the reference, condition types, statuses and reasons, the redacted messages, the counts and the reading are sent; never spec IDs, role ARNs, instance profiles, subnet, security group or AMI IDs, or ARM IDs.
+  - **Identifier redaction, before clipping, on every AI and chat path.** Providers write identifiers into condition text (Azure's `SubnetsReady` messages carry the full subnet ARM ID), and core copies that text into every pool's `NodeClassReady` and Ready, so excluding structured fields is not enough. A redactor replaces:
+    - ARM resource IDs (`/subscriptions/<guid>/resourceGroups/…`) with `<azure-resource-id>`;
+    - ARNs (`arn:aws…:…`) with `<aws-arn>`;
+    - AWS resource IDs (`subnet-`, `sg-`, `ami-`, `vpc-`, `eni-`, `lt-`, `cr-`, `pg-` followed by hex) with `<aws-id>`.
+
+    It joins the shared AI scrub chain (`ScrubEvidence` and the chat projection's string pass), so it covers every kind's condition and event text, not only Karpenter's. Egress becomes strictly smaller for every kind.
+  - **The paths covered,** each pinned by literal-needle tests on the serialized document:
+    - class conditions;
+    - pool condition copies and the evaluation reasons built from them (rule 2's headline);
+    - Explain's evidence and related-object facts;
+    - chat tool results and snapshots;
+    - the generic detail projection, which no longer serves these kinds.
+
+    Codex's two design probes become regression tests.
+  - **The local UI keeps the native text.** The inspectors show Karpenter's own messages, IDs included: the operator's view, on their machine. The projections keep no ID in their structured fields; only the condition text carries one, and it is redacted before any egress.
 
 ## 9. Tests, lab, parity, smoke
 
@@ -218,12 +288,26 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 - the projections' equality with the raw reads for every field a rule uses;
 - the cap product and the budget calibration.
 
-**Capability:** the §5 table, row by row:
-- a self-hosted Deployment by label in a custom namespace;
+**Capability:** §5, row by row:
+- a self-hosted Deployment by label in a custom namespace, attributed by image, and a custom image (unattributed);
 - Auto Mode with and without its node;
-- AKS with and without a found Deployment;
-- coexistence;
-- forbidden reads.
+- NAP activity, NAP installation only, and neither;
+- an AWS-only controller beside an `AKSNodeClass` (never certifying it);
+- mixed providers with one failing;
+- an unattributed candidate;
+- Auto Mode plus a forbidden or continued Deployment list (unknown, Auto Mode noted);
+- a failing controller beside Auto Mode and a read gap (not ready, both said);
+- the `managed` state across every consumer, chat's attention and a notification batch included.
+
+**Freshness and cuts:**
+- `NodeRegistrationHealthy` against both generation changes, mixed-age conditions, and the unreported case;
+- a recovered class with the pool's aggregate Ready=False `UnhealthyDependents` and its copy;
+- a decisive ninth condition;
+- unknown condition types beyond the display cap;
+- a class found in a capped kind;
+- a reference omitted by the kind budget.
+
+**The identifier boundary:** literal needles (an ARM ID, an ARN, `subnet-`, `sg-` and `ami-` IDs) planted in class conditions, a pool's copied messages and reasons, and the spec. Each is asserted absent from the serialized Explain document, chat tool results and snapshots, and instance facts, and present in the local inspector DTO.
 
 **The lab** (`lab-s10`, kind-klyx; teardown script):
 - CRDs: the real `EC2NodeClass` and `AKSNodeClass` from the provider releases, a stub `NodeClass` for Auto Mode (the API is closed), and the existing `karpenter.sh` stubs;
@@ -251,3 +335,20 @@ AKS keeps no subnet ARM ID (only whether one is set); EKS keeps no subnet or sec
 - **`NodeOverlay` and `CapacityBuffer`:** later candidates.
 - **Verbs:** none (C4). Editing a class or pool is Git's.
 - **A live AKS or EKS check:** only on the owner's separate authorisation (C6).
+
+## 11. Revision 1: Codex's design review of cd00d87
+
+| # | Finding | Where answered |
+|---|---|---|
+| P1 | The AI and chat exclusion did not cover copied condition text or the complete evidence document | §8: explicit chat projections for the three class kinds; an identifier redactor (ARM IDs, ARNs, AWS resource IDs) applied before clipping on every AI and chat path, in the shared scrub chain; literal-needle tests on the serialized Explain, chat and facts documents; the local UI keeps the native text; §7's wording reconciled |
+| P2 | `NodeRegistrationHealthy` needed its pool and class generation fences | §1.1 (core's reset rule, and who writes `nodeClassObservedGeneration`); §3's freshness per finding: current with both fences, historical when proven stale, unknown when not established; unrelated findings keep their own freshness |
+| P2 | Auto Mode evidence could win over a forbidden controller read | §5: the inventory's acquisition outcomes; platform evidence never clears an unread inventory; the task's order is not ready, unknown, managed, healthy; managed alone only with a complete inventory |
+| P2 | A healthy controller needed provider attribution | §5: candidates attributed by their running pods' images (owner-UID fenced); readings per class kind; §3 rules 1 and 2 use only an attributed handler; "no controller supports this kind" only with a complete, attributed inventory |
+| P2 | Per-object projection cuts needed a verdict and completeness contract | §7: the rules classify the whole object before display caps; authoritative fields kept apart from the 8-condition display list; Unknown, never OK, when evidence cannot establish a reading; cut flags and counts through the DTOs; bounded strings |
+
+**Guidance adopted:**
+- the NAP facts (managed control plane, the CRD annotations, `karpenter-events`) in §1.5 and §5;
+- true fact rows for classes (§2);
+- the `managed` state pinned across every consumer (§5);
+- the aggregate `UnhealthyDependents` on recovery (§3);
+- the absence of the managed-by label never proving BYO Cilium (§6).
