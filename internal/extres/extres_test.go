@@ -538,3 +538,29 @@ func TestReserveOverheadOnlyPod(t *testing.T) {
 		t.Fatalf("overhead alone: %+v", e)
 	}
 }
+
+// Codex's S11a implementation review, finding 3: a node naming the
+// resource in one map but not the other never certifies an exact total.
+func TestTotalsWithAMissingField(t *testing.T) {
+	gpu := rl("nvidia.com/gpu", "8")
+	a := node("a", gpu, gpu.DeepCopy(), nil)
+	b := node("b", gpu, rl("cpu", "4"), nil) // capacity only: allocatable not yet reported
+	tot := Reserve([]*corev1.Node{a, b}, nil).Totals
+	if len(tot) != 1 || tot[0].Allocatable.OK || tot[0].Capacity != Known(16) {
+		t.Fatalf("allocatable not established, capacity 16: %+v", tot)
+	}
+	tot = Reserve([]*corev1.Node{b}, nil).Totals
+	if len(tot) != 1 || tot[0].Allocatable.OK {
+		t.Fatalf("one node, allocatable missing: %+v", tot)
+	}
+	c := node("c", rl("cpu", "4"), gpu.DeepCopy(), nil) // allocatable only
+	tot = Reserve([]*corev1.Node{a, c}, nil).Totals
+	if len(tot) != 1 || tot[0].Capacity.OK || tot[0].Allocatable != Known(16) {
+		t.Fatalf("capacity not established, allocatable 16: %+v", tot)
+	}
+	none := node("d", rl("cpu", "4"), rl("cpu", "4"), nil) // neither key: adds nothing
+	tot = Reserve([]*corev1.Node{a, none}, nil).Totals
+	if len(tot) != 1 || tot[0].Allocatable != Known(8) || tot[0].Capacity != Known(8) {
+		t.Fatalf("a node with neither key adds nothing: %+v", tot)
+	}
+}

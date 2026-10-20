@@ -68,7 +68,7 @@ The new data is derived, so it is bounded where it is derived. Every classificat
 - **A reservations row:** at most 16 entries per node: first every name the node advertises, in the node's order, then the DRA-served and not-advertised names by amount, then by name. Each kept entry's figures are exact (computed over every pod before the cut); `omitted` counts the entries left out, and the inspector says "N more requested resources not shown". Worst case about 8 KiB per row.
 - **The aggregation itself** is transient (built per evaluation, then released). Names the node advertises are summed whatever their number (the node already holds them). Other names are tracked up to 256 distinct per node; past that, the node's DRA-served and not-advertised figures read "not established: more than 256 distinct names requested", and the advertised entries stay exact.
 - **Totals** (the `totals` part): one row per accelerator name, at most 32 (by allocatable, then name); `omitted` counts the names left out, and the footer says "totals for N more resources not shown". Each total is computed from the full input before any per-node or per-row cut: allocatable and capacity summed over every node, requested over every counted pair. An overflow makes that total "not established".
-- **Per cluster:** reservations rows up to 2 MiB encoded. Past it, rows are dropped (nodes advertising an accelerator kept first, then by name), the part reports how many, and the lens says "requested not shown for N nodes". The node rows' new fields grow with the node count, as node rows already do; their per-node worst cases are above.
+- **Per cluster:** reservations rows up to 2 MiB, by `RowSize`'s estimate (a budget, not a wire limit: §14.2 measured it 2.7% below the encoded size). Past it, rows are dropped (nodes advertising an accelerator kept first, then by name), the part reports how many, and the lens says "requested not shown for N nodes". The node rows' new fields grow with the node count, as node rows already do; their per-node worst cases are above.
 - **Integers stay exact.** Extended quantities are integers (validated). Klyx reads them as int64 and sums with an overflow check; an overflow makes that figure "not established", never a wrapped number. Every capacity, allocatable and requested figure crosses to the frontend as a decimal string, and the frontend compares and subtracts with BigInt.
 
 **What pods reserve on a node is a join,** so it lives in parts of its own: a new task `extended` with two evidence parts, `reservations` (per node) and `totals` (per resource name, cluster-wide), each Counted: nodes; Deps: pods. It is not added to the nodes part, for two reasons:
@@ -336,3 +336,17 @@ Built on `feat/coverage-s8` after the accepted design (a7d9d14):
   - **withdrawn** (after the kubelet's 5 minutes): `example.com/resource` "0 advertised", and the node no longer degraded.
 
   The first runs failed on two script errors, not the product: `innerText` applies the titles' upper-case transform, and a pod's name cell reads "namespace / name". The second run, on ce7cc76, passed all three states.
+
+## 15. Implementation revision 1: Codex's review of 89423e5
+
+Codex (handoff 319a74e1) requested changes: five P2 findings, each reproduced by its probes before the fix.
+
+| # | Finding | Answer |
+|---|---|---|
+| P2 | A failed or overdue extended-rows refresh left old figures looking current | `useExtendedRows` carries each part's own state (the open's failure, a failed refresh, rows held behind a newer read, their capture time) and marks held figures "*"; the Nodes lens says "Extended requests as of HH:MM - the newer read failed: ..." or that a newer read is being fetched, and a failed first read in words |
+| P2 | A reservations row without an entry for a name read as a current zero, across independent captures | `requestedText`: a row lists every name its node advertised in its own capture, so a missing entry is another capture: "?", never 0. Only the entry itself says 0 |
+| P2 | Totals summed a missing per-node field as zero (capacity 8 without allocatable read as an exact allocatable) | `totals`: a node naming the resource in one of capacity and allocatable but not the other leaves the missing field's total not established; a node with neither key adds nothing |
+| P2 | Node figures (capacity, allocatable, the gap) were qualified by the reservations capture | The GPU cell and the inspector take the Node rows' own evidence for those figures, and the reservations capture's for requested and DRA-served; the footer keeps the totals capture's |
+| P2 | Two cuts went unsaid: a node's 16 kept accelerators read as exactly 16, and dropped reservation rows had no notice | The GPU cell reads "16+ resources" when every kept entry is an accelerator and some were cut, the tooltip counting the cut; the lens says "Requested not shown for N nodes: the per-cluster bound left their reservations out" |
+
+Codex's documentation point, taken: §2.0 calls the 2 MiB bound `RowSize`'s estimate, consistent with §14.2.

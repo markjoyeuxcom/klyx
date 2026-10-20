@@ -35,11 +35,14 @@ export const reservedOf = (r: ReservationDTO | undefined, name: string): Reserve
 
 /** requestedText is a node's requested figure with its qualification:
  * "?" when the reservations part has no current read, the node's row was
- * left out by the per-cluster bound, or its entry by the row's bound. */
+ * left out by the per-cluster bound, or the row has no entry for the name.
+ * A row lists every name its node advertised in its own capture, so a
+ * missing entry means another capture, never a zero (Codex's S11a
+ * implementation review, finding 2): only the entry itself says 0. */
 export function requestedText(r: ReservationDTO | undefined, name: string, mark: Mark, rowMissing: boolean): string {
   if (mark === "?" || rowMissing) return "?";
   const e = reservedOf(r, name);
-  if (!e) return r && (r.omitted ?? 0) > 0 ? "?" : `0${mark}`;
+  if (!e) return "?";
   return e.requested === "-" ? "?" : `${e.requested}${mark}`;
 }
 
@@ -54,8 +57,12 @@ export function gpuCell(x: ExtendedDTO | undefined, r: ReservationDTO | undefine
     const gap = gapOf(e);
     return `${e.name}: ${requestedText(r, e.name, marks.requested, rowMissing)} requested / ${figure(e.allocatable)}${marks.nodes} allocatable${gap !== null ? ` · ${gap} not allocatable` : ""}`;
   };
-  const title = acc.map(line).join("\n");
-  if (acc.length > 1) return { text: `${acc.length} resources`, title };
+  // the node's entries are cut at 16, accelerators first: when every kept
+  // entry is an accelerator and some were cut, more accelerators may exist
+  // (Codex's S11a implementation review, finding 5)
+  const cut = (x?.omitted ?? 0) > 0 && acc.length === (x?.entries ?? []).length;
+  const title = acc.map(line).join("\n") + ((x?.omitted ?? 0) > 0 ? `\n${x?.omitted} more extended resource${x?.omitted === 1 ? "" : "s"} not shown` : "");
+  if (acc.length > 1 || cut) return { text: `${acc.length}${cut ? "+" : ""} resources`, title };
   const e = acc[0];
   if (e.capacity === "0") return { text: "0 advertised", title };
   const gap = gapOf(e);

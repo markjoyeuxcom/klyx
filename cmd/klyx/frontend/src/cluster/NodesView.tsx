@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
 import { useExtendedRows, type ExtendedMarks } from "../health/useExtendedRows";
 import { acceleratorsOf, gpuCell, totalsText } from "./extended";
+import type { Mark } from "../health/useExtendedRows";
 import { NodeExtendedBlock } from "./NodeExtended";
 import type { ReservationDTO } from "../store/fleet";
 import { useInspectorAlerts } from "./AlertsBlock";
@@ -674,6 +675,11 @@ export function NodesView({ cluster }: { cluster: string }) {
   // coverage S11a: the extended task's rows, joined by node UID; nothing
   // renders on a cluster with no accelerator
   const ext = useExtendedRows(mine ? cluster : null);
+  // node-only figures (capacity, allocatable, the gap) are qualified by the
+  // Node rows' own evidence; requested and DRA-served by the reservations
+  // capture (Codex's S11a implementation review, finding 4)
+  const nodeMark: Mark = ev === "complete" ? (rowsRefreshing ? "*" : "") : ev === "stale" ? "*" : ev === "failed" ? (scopedNodes.length > 0 ? "*" : "?") : ev === "pending" ? "?" : "+";
+  const extMarks: ExtendedMarks = { ...ext.reservationMarks, nodes: nodeMark };
   const hasAccel = scopedNodes.some((n) => acceleratorsOf(n.extended).length > 0);
   const fitted = useMemo(
     () => fitColumns(NODE_COLUMNS.filter((c) => (usageAvailable || (c.id !== "cpuUsed" && c.id !== "memUsed")) && (hasAccel || c.id !== "gpu")), bodyWidth),
@@ -705,6 +711,16 @@ export function NodesView({ cluster }: { cluster: string }) {
   if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.</div>);
   if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
   if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
+  // coverage S11a: the extended parts' own state - a budget cut, a failed
+  // read, a held capture (Codex's S11a implementation review, findings 1, 5)
+  if (hasAccel) {
+    const rs = ext.reservationsState;
+    if (ext.reservationsDropped > 0) notices.push(<div key="ext-dropped" role="status" data-testid="nodes-extended-dropped" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Requested not shown for {ext.reservationsDropped} node{ext.reservationsDropped === 1 ? "" : "s"}: the per-cluster bound left their reservations out.</div>);
+    if (rs.error && !ext.reservationsRead) notices.push(<div key="ext-error" role="status" data-testid="nodes-extended-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Extended requests not read: {rs.error}</div>);
+    else if (rs.held) notices.push(<div key="ext-held" role="status" data-testid="nodes-extended-held" className="t-secondary" style={{ ...statusLine, overflowWrap: "anywhere" }}>Extended requests as of {rs.asOf ? clock(rs.asOf) : "the last read"}{rs.refreshError ? ` - the newer read failed: ${rs.refreshError}` : " - a newer read is being fetched"}.</div>);
+    const ts = ext.totalsState;
+    if (ts.error && !ext.totalsRead) notices.push(<div key="tot-error" role="status" data-testid="nodes-totals-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Accelerator totals not read: {ts.error}</div>);
+  }
 
   const tone = attentionTone(counts);
   const filterLabel = filter !== "all" ? filter[0].toUpperCase() + filter.slice(1) : roleFilter ? `role ${roleFilter}` : query ? "search" : "";
@@ -796,7 +812,7 @@ export function NodesView({ cluster }: { cluster: string }) {
                     )}
                     {show("status") && <span style={ellipsis}><VerdictLabel health={n.health} />{n.unschedulable && kindOf(n.health) !== "paused" ? <span className="t-secondary"> · cordoned</span> : null}</span>}
                     {show("gpu") && (() => {
-                      const cell = gpuCell(n.extended, ext.reservations.get(n.uid ?? ""), ext.reservationMarks, !ext.reservations.has(n.uid ?? ""));
+                      const cell = gpuCell(n.extended, ext.reservations.get(n.uid ?? ""), extMarks, !ext.reservations.has(n.uid ?? ""));
                       return <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }} title={cell.title || undefined} data-testid="nodes-gpu-cell">{cell.text || "-"}</span>;
                     })()}
                     {show("cpuUsed") && <UsageCell resource="cpu" usage={usage?.cpu ?? null} allocatable={n.cpuAllocatable} format={fmtCpu} />}
@@ -838,7 +854,7 @@ export function NodesView({ cluster }: { cluster: string }) {
             onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
             reservation={ext.reservations.get(subject.uid ?? "")}
-            extMarks={ext.reservationMarks}
+            extMarks={extMarks}
           />
         ) : sel && pin.expected && pin.gone ? (
           <PinnedGone cluster={cluster} kind="Node" name={sel.name} uid={pin.expected} gone={pin.gone}

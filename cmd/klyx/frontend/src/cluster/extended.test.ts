@@ -25,14 +25,21 @@ describe("extended figures", () => {
     const two: ExtendedDTO = { entries: [...gpu("8", "8").entries, { name: "nvidia.com/mig-1g.5gb", capacity: "7", allocatable: "7", accelerator: true, facts: [] }] };
     const cell = gpuCell(two, res("3"), live, false);
     expect(cell.text).toBe("2 resources");
-    expect(cell.title).toContain("nvidia.com/mig-1g.5gb: 0 requested / 7 allocatable");
+    // the row lists no entry for the profile: another capture, never a zero
+    expect(cell.title).toContain("nvidia.com/mig-1g.5gb: ? requested / 7 allocatable");
+    // 16 kept, all accelerators, more cut: a lower bound, the cut said
+    const sixteen: ExtendedDTO = { omitted: 1, entries: Array.from({ length: 16 }, (_, i) => ({ name: `nvidia.com/mig-${i}g`, capacity: "1", allocatable: "1", accelerator: true, facts: [] })) };
+    const capped = gpuCell(sixteen, undefined, live, true);
+    expect(capped.text).toBe("16+ resources");
+    expect(capped.title).toContain("1 more extended resource not shown");
     expect(gpuCell({ entries: [{ name: "example.com/x", capacity: "2", allocatable: "2", facts: [] }] }, undefined, live, true).text).toBe("");
   });
   it("requested is ? without a row, an entry cut by the row's bound, or an unestablished read", () => {
     expect(requestedText(undefined, "nvidia.com/gpu", "", true)).toBe("?");
     expect(requestedText(res("3"), "nvidia.com/gpu", "?", false)).toBe("?");
     expect(requestedText({ uid: "u", node: "n", entries: [], omitted: 3 }, "nvidia.com/gpu", "", false)).toBe("?");
-    expect(requestedText({ uid: "u", node: "n", entries: [] }, "nvidia.com/gpu", "*", false)).toBe("0*");
+    expect(requestedText({ uid: "u", node: "n", entries: [] }, "nvidia.com/gpu", "*", false)).toBe("?");
+    expect(requestedText(res("0"), "nvidia.com/gpu", "*", false)).toBe("0*"); // only the entry says 0
     expect(requestedText(res("-"), "nvidia.com/gpu", "", false)).toBe("?");
     expect(requestedText(res("4"), "nvidia.com/gpu", "+*", false)).toBe("4+*");
   });
@@ -52,6 +59,11 @@ describe("extended marks (S11a §2.1)", () => {
     expect(marksOf(part("unreadable", "live"))).toEqual({ nodes: "?", requested: "?", dra: "" });
     expect(marksOf(part("live", "stale", true))).toEqual({ nodes: "", requested: "+*", dra: "+*" });
     expect(marksOf(null)).toEqual({ nodes: "?", requested: "?", dra: "?" });
+  });
+  it("marksOf: held rows are as of their capture (finding 1)", () => {
+    expect(marksOf(part("live", "live"), true)).toEqual({ nodes: "*", requested: "*", dra: "*" });
+    expect(marksOf(part("live", "stale"), true)).toEqual({ nodes: "*", requested: "*", dra: "*" });
+    expect(marksOf(part("unreadable", "live"), true).requested).toBe("?");
   });
   it("markOf: unestablished beats everything; capped and stale are kept together", () => {
     expect(markOf([{ kind: "a", coverage: "checking" }, { kind: "b", coverage: "stale" }])).toBe("?");

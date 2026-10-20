@@ -358,7 +358,10 @@ func boundRows(rows []NodeRow) ([]NodeRow, int) {
 }
 
 // totals sums each accelerator name over every node and every counted pair,
-// before any cut.
+// before any cut. A node that names the resource in one of capacity and
+// allocatable but not the other leaves the missing field's total not
+// established: its quantity there is unknown, never zero (Codex's S11a
+// implementation review, finding 3). A node with neither key adds nothing.
 func totals(nodes []*corev1.Node, states map[string]*nodeState) ([]Total, int) {
 	byName := map[string]*Total{}
 	for _, n := range nodes {
@@ -368,6 +371,9 @@ func totals(nodes []*corev1.Node, states map[string]*nodeState) ([]Total, int) {
 			}
 			t := totalOf(byName, string(k))
 			t.Capacity = t.Capacity.Add(qtyOf(q))
+			if _, ok := n.Status.Allocatable[k]; !ok {
+				t.Allocatable = Qty{}
+			}
 		}
 		for k, q := range n.Status.Allocatable {
 			if !IsExtended(k) || !Accelerator(string(k)) {
@@ -375,6 +381,9 @@ func totals(nodes []*corev1.Node, states map[string]*nodeState) ([]Total, int) {
 			}
 			t := totalOf(byName, string(k))
 			t.Allocatable = t.Allocatable.Add(qtyOf(q))
+			if _, ok := n.Status.Capacity[k]; !ok {
+				t.Capacity = Qty{}
+			}
 			if f := states[n.Name].advertised[string(k)]; f != nil {
 				t.Requested = t.Requested.Add(f.Requested)
 			}

@@ -12,7 +12,7 @@ vi.mock("../health/useNodeRows", () => ({ useNodeRows: () => {} }));
 // coverage S11a: the extended task's rows (tests set extendedValue)
 let extendedValue: import("../health/useExtendedRows").ExtendedRows = {
   reservations: new Map(), reservationMarks: { nodes: "", requested: "", dra: "" }, reservationsDropped: 0,
-  totals: [], totalMarks: { nodes: "", requested: "", dra: "" }, totalsOmitted: 0, reservationsRead: true, totalsRead: true,
+  totals: [], totalMarks: { nodes: "", requested: "", dra: "" }, totalsOmitted: 0, reservationsRead: true, totalsRead: true, reservationsState: { error: null, refreshError: null, held: false, asOf: null }, totalsState: { error: null, refreshError: null, held: false, asOf: null },
 };
 vi.mock("../health/useExtendedRows", async (orig) => ({ ...(await orig<typeof import("../health/useExtendedRows")>()), useExtendedRows: () => extendedValue }));
 
@@ -924,7 +924,7 @@ describe("NodesView extended resources (S11a)", () => {
   ] };
   const live = { nodes: "" as const, requested: "" as const, dra: "" as const };
   const base = () => ({ reservations: new Map([["uid-gpu-1", reservation]]), reservationMarks: live, reservationsDropped: 0,
-    totals: [{ name: "nvidia.com/gpu", capacity: "8", allocatable: "6", requested: "3" }], totalMarks: live, totalsOmitted: 0, reservationsRead: true, totalsRead: true });
+    totals: [{ name: "nvidia.com/gpu", capacity: "8", allocatable: "6", requested: "3" }], totalMarks: live, totalsOmitted: 0, reservationsRead: true, totalsRead: true, reservationsState: { error: null, refreshError: null, held: false, asOf: null }, totalsState: { error: null, refreshError: null, held: false, asOf: null } });
 
   it("no accelerator, no GPU column and no totals", () => {
     extendedValue = { ...base(), reservations: new Map(), totals: [] };
@@ -975,6 +975,32 @@ describe("NodesView extended resources (S11a)", () => {
     const { container } = render(<NodesView cluster="homelab" />);
     expect(container.textContent).toContain("1 degraded");
     expect(container.textContent).not.toContain("under pressure");
+  });
+
+  // Codex's S11a implementation review, findings 1, 4 and 5
+  it("node figures take the node rows' own qualification, never the reservations'", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsRead: false, reservationMarks: { nodes: "?", requested: "?", dra: "?" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("? / 6 · 2 not allocatable");
+  });
+
+  it("held reservations are as of their capture, and a failed refresh is said", () => {
+    extendedValue = { ...base(), reservationMarks: { nodes: "*", requested: "*", dra: "*" },
+      reservationsState: { error: null, refreshError: "boom", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("3* / 6 · 2 not allocatable");
+    expect(screen.getByTestId("nodes-extended-held").textContent).toContain("the newer read failed: boom");
+  });
+
+  it("a failed first read is said, and dropped rows are counted", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsRead: false, reservationsDropped: 2,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-error").textContent).toContain("forbidden: pods");
+    expect(screen.getByTestId("nodes-extended-dropped").textContent).toContain("Requested not shown for 2 nodes");
   });
 
   it("the inspector says a dropped row, and a withdrawn plugin as 0 advertised", () => {
