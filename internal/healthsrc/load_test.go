@@ -312,18 +312,27 @@ func updateStorm(t *testing.T, ctx context.Context, c *loadCluster, rate int, d 
 	c.sink.mu.Unlock()
 	eval0 := c.o.Stats().EvalTime
 
+	// the pods that report a container (coverage S11b's pending pods,
+	// unschedulable, report none)
+	var storm []int
+	for i, p := range c.pods {
+		if len(p.Status.ContainerStatuses) > 0 {
+			storm = append(storm, i)
+		}
+	}
 	interval := time.Second / time.Duration(rate)
 	var sent []time.Time
 	t0 := time.Now()
 	tick := time.NewTicker(interval)
 	for i := 0; time.Since(t0) < d; i++ {
 		<-tick.C
-		p := c.pods[i%len(c.pods)].DeepCopy()
+		k := storm[i%len(storm)]
+		p := c.pods[k].DeepCopy()
 		p.Status.ContainerStatuses[0].RestartCount = int32(i + 1)
 		if _, err := c.typed.CoreV1().Pods(p.Namespace).UpdateStatus(ctx, p, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		c.pods[i%len(c.pods)] = p
+		c.pods[k] = p
 		sent = append(sent, time.Now())
 	}
 	tick.Stop()
