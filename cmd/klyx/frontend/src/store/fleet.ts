@@ -1,4 +1,4 @@
-import type { DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
+import type { ClaimHealthDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
 import { create } from "zustand";
 import type { HealthLike } from "../health/verdict";
 
@@ -547,7 +547,7 @@ export type RowsVer = { incarnation: number; ver: number };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
   resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number; extended?: ExtendedPodDTO;
   // coverage S11b §3.5: the claims the pod references and its device health
-  claims?: PodClaimRefDTO[]; deviceHealth?: DeviceHealthDTO[]; deviceHealthOmitted?: number };
+  claims?: PodClaimRefDTO[]; deviceHealth?: DeviceHealthDTO[]; deviceHealthOmitted?: number; claimHealth?: ClaimHealthDTO[] };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.

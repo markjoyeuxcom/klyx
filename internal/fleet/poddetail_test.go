@@ -223,3 +223,27 @@ func TestPodDetail_DeviceHealthCountsEverything(t *testing.T) {
 		t.Fatalf("entries past the bound counted: %d, %d", len(d.DeviceHealth), d.DeviceHealthOmitted)
 	}
 }
+
+// Codex's implementation re-review, finding 1: a claim's reports cut away
+// past 32 entries still count in its summary.
+func TestPodDetail_ClaimHealthCountsEveryReport(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	var statuses []corev1.ContainerStatus
+	for i := 0; i < maxDeviceHealth+1; i++ {
+		h, req := corev1.ResourceHealthStatusHealthy, "req0"
+		if i == maxDeviceHealth {
+			h, req = corev1.ResourceHealthStatusUnhealthy, "req1"
+		}
+		statuses = append(statuses, corev1.ContainerStatus{Name: fmt.Sprintf("c%02d", i), AllocatedResourcesStatus: []corev1.ResourceStatus{
+			{Name: corev1.ResourceName("claim:gpu/" + req), Resources: []corev1.ResourceHealth{{ResourceID: corev1.ResourceID(fmt.Sprintf("cdi/%d", i)), Health: h}}}}})
+	}
+	pod.Status.ContainerStatuses = statuses
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.DeviceHealthOmitted != 1 || len(d.ClaimHealth) != 1 || d.ClaimHealth[0] != (ClaimHealth{Claim: "gpu", Unhealthy: 1, Healthy: maxDeviceHealth}) {
+		t.Fatalf("the omitted unhealthy report counts: %d %+v", d.DeviceHealthOmitted, d.ClaimHealth)
+	}
+}

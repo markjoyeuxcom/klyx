@@ -138,6 +138,16 @@ type PodDetailDTO struct {
 	// DeviceHealthOmitted: status entries past the bound, so a claim's
 	// health among them is not established
 	DeviceHealthOmitted int `json:"deviceHealthOmitted,omitempty"`
+	// ClaimHealth: each claim's devices counted over every status entry
+	ClaimHealth []ClaimHealthDTO `json:"claimHealth"`
+}
+
+// ClaimHealthDTO is one claim's device health over all its reports.
+type ClaimHealthDTO struct {
+	Claim     string `json:"claim"`
+	Unhealthy int    `json:"unhealthy"`
+	Unknown   int    `json:"unknown"`
+	Healthy   int    `json:"healthy"`
 }
 
 // PodClaimRefDTO is one claim a pod references. State is "resolved",
@@ -222,6 +232,14 @@ func toExtendedPodDTO(r extres.PodRequests) ExtendedPodDTO {
 			ce.Entries = append(ce.Entries, ExtendedPodEntryDTO{Name: e.Name, Quantity: figureDTO(&q), ServedByDRA: e.ServedByDRA})
 		}
 		out.Containers = append(out.Containers, ce)
+	}
+	return out
+}
+
+func claimHealthDTO(hs []fleet.ClaimHealth) []ClaimHealthDTO {
+	out := make([]ClaimHealthDTO, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, ClaimHealthDTO{Claim: h.Claim, Unhealthy: h.Unhealthy, Unknown: h.Unknown, Healthy: h.Healthy})
 	}
 	return out
 }

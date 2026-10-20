@@ -42,6 +42,8 @@ export type DRAClassDTO = { uid: string; name: string; selectors: number; config
 export type PodClaimRefDTO = { podClaim: string; source: string; claim?: string; state: string };
 export type DeviceHealthEntryDTO = { id: string; health: string; message?: string };
 export type DRACountDTO = { of: string; n: number };
+// one claim's device health counted over every status entry
+export type ClaimHealthDTO = { claim: string; unhealthy: number; unknown: number; healthy: number };
 // the counts are over every device the entry reports; devices keeps the
 // unhealthy first, bounded
 export type DeviceHealthDTO = { container: string; init?: boolean; name: string; devices: DeviceHealthEntryDTO[];

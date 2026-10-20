@@ -257,7 +257,8 @@ describe("the DRA reads are qualified by their own state (S11b implementation re
     claims = part([], ["ResourceClaim"]);
     const refs = [{ podClaim: "", source: "extended", claim: "p-extended-resources-x", state: "resolved" }, { podClaim: "gpu", source: "claim", claim: "shared", state: "resolved" }];
     const health = [{ container: "app", name: "claim:p-extended-resources-x/request-0", devices: [{ id: "cdi/a", health: "Unhealthy" }], unhealthy: 3, healthy: 13, unknown: 0, devicesOmitted: 0 }];
-    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={health} healthOmitted={2} unbound={false} />);
+    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="uid-p" claims={refs} health={health} healthOmitted={2}
+      claimHealth={[{ claim: "p-extended-resources-x", unhealthy: 3, healthy: 13, unknown: 0 }]} unbound={false} />);
     const lines = screen.getAllByTestId("pod-claim").map((l) => l.textContent ?? "");
     expect(lines[0]).toContain("3 devices unhealthy (reported by the kubelet): cdi/a, +2 more");
     expect(lines[1]).toContain("device health not established: Klyx kept the pod's first 1 reports, 2 more not read");
@@ -269,5 +270,56 @@ describe("the DRA reads are qualified by their own state (S11b implementation re
     render(<DRAView cluster="c" />);
     fireEvent.click(screen.getByText("lab / w"));
     expect(screen.getByTestId("dra-consumers-unestablished").textContent).toContain("they establish nothing about this claim now");
+  });
+});
+
+// Codex's implementation re-review of f5bc6e9: the four residual findings.
+describe("joined reads keep their state (S11b implementation revision 2)", () => {
+  beforeEach(() => {
+    claims = part([], ["ResourceClaim"]);
+    pools = part([], ["ResourceSlice"]);
+    classes = part([], ["DeviceClass"]);
+    useFleet.setState({ clusters: [{ name: "c", state: "Synced", draPresent: true } as never] });
+  });
+
+  it("1: a claim's health comes from its summary over every report, and kept reports alone are never every report", () => {
+    const refs = [{ podClaim: "gpu", source: "claim", claim: "shared", state: "resolved" }];
+    const kept = [{ container: "c00", name: "claim:gpu/req0", devices: [{ id: "cdi/0", health: "Healthy" }], unhealthy: 0, healthy: 1, unknown: 0 }];
+    const { rerender } = render(<PodClaimsBlock cluster="c" namespace="lab" podUid="u" claims={refs} health={kept} healthOmitted={1}
+      claimHealth={[{ claim: "gpu", unhealthy: 1, healthy: 32, unknown: 0 }]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toContain("1 device unhealthy (reported by the kubelet)");
+    rerender(<PodClaimsBlock cluster="c" namespace="lab" podUid="u" claims={refs} health={kept} healthOmitted={1} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toContain("health not established: Klyx kept the pod's first 1 reports, 1 more not read");
+  });
+
+  it("2: populated node and pod lines carry their joined read's state, and a cut pool's view is not established", () => {
+    pools = { ...part([pool("d/p", "ok", "Complete", [view("n1", "complete", 8)])], ["ResourceSlice"], false), held: true, asOf: "2026-10-20T09:00:00Z" };
+    const { unmount } = render(<NodeDRABlock cluster="c" node="n1" />);
+    expect(screen.getByTestId("node-dra-pool").textContent).toMatch(/· 8 devices \(as of /);
+    unmount();
+    pools = part([pool("d/p", "unknown", "Not established", [view("n1", "complete", 8)], { unread: true })], ["ResourceSlice"], false);
+    const second = render(<NodeDRABlock cluster="c" node="n1" />);
+    expect(screen.getByTestId("node-dra-pool").textContent).toContain("not established: not every slice was read");
+    second.unmount();
+    claims = { ...part([claim("shared", "ok", "Allocated", { allocated: true })], ["ResourceClaim"], false), held: true, asOf: "2026-10-20T09:00:00Z", refreshError: "boom" };
+    render(<PodClaimsBlock cluster="c" namespace="lab" podUid="u" claims={[{ podClaim: "gpu", source: "claim", claim: "shared", state: "resolved" }]} health={[]} unbound={false} />);
+    expect(screen.getByTestId("pod-claim").textContent).toMatch(/Allocated \(as of .+; the newer read failed: boom\)/);
+  });
+
+  it("3: every attention count keeps its counts' qualifiers, whatever tab is open", () => {
+    claims = { ...part([claim("a", "degraded", "the scheduler cannot allocate it")], ["ResourceClaim"]), counts: { total: 2, included: 1, fault: 0, lower: true, stale: true } };
+    render(<DRAView cluster="c" />);
+    expect(screen.getByText("1+* cannot be allocated or appear stuck")).toBeTruthy();
+    fireEvent.click(tab(/^Pools/));
+    expect(tab(/^Claims/).textContent).toBe("Claims 1+*");
+  });
+
+  it("4: a cut pool read never says no device is tainted", () => {
+    pools = part([pool("d/p", "unknown", "Not established", [view("n1", "complete", 2)], { unread: true, taints: [], access: [{ of: "node-local", n: 1 }] })], ["ResourceSlice"]);
+    render(<DRAView cluster="c" />);
+    fireEvent.click(tab(/^Pools/));
+    fireEvent.click(screen.getByText("d / p"));
+    expect(screen.getByTestId("dra-pool-facts").textContent).toContain("no tainted device in the slices read");
+    expect(screen.getByTestId("dra-pool-facts").textContent).not.toContain("no device tainted");
   });
 });

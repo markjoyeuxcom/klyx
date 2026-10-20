@@ -1,5 +1,5 @@
-import type { DRAClaimDTO, DRAPoolDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
-import { useDRAClaims, useDRAPools } from "../health/useDRARows";
+import type { ClaimHealthDTO, DRAClaimDTO, DRAPoolDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
+import { useDRAClaims, useDRAPools, type DRAPartRows } from "../health/useDRARows";
 import { InspectorBlock } from "../layout/InspectorLayout";
 import { outcomeWords } from "./DRAView";
 import { ClaimLink } from "./ClaimLink";
@@ -7,6 +7,16 @@ import { ClaimLink } from "./ClaimLink";
 // Coverage S11b §5: the node inspector's DRA devices and the pod
 // inspector's claims, joined from the live dra rows (never from a detail
 // fetch alone), so a claim's or a pool's change re-renders them.
+
+// joinedState says a joined read's state beside a figure taken from it
+// (Codex's implementation re-review, finding 2): rows held behind a newer
+// read, or a stale read, are as of their capture.
+export function joinedState(p: DRAPartRows<unknown>): string {
+  const stale = p.held || p.coverage.some((k) => k.coverage === "stale");
+  if (!stale) return "";
+  const at = p.asOf ? new Date(p.asOf).toLocaleTimeString() : "the last read";
+  return ` (as of ${at}${p.refreshError ? `; the newer read failed: ${p.refreshError}` : ""})`;
+}
 
 // NodeDRABlock lists the pools that name this node: its node-local view of
 // each. Pools offered to all nodes or by a selector are in the DRA lens,
@@ -26,7 +36,7 @@ export function NodeDRABlock({ cluster, node }: { cluster: string; node: string 
       <div data-testid="node-dra">
         {here.length === 0 ? <div className="t-secondary">{absent}{asOf} Pools offered to all nodes or by a selector are in the DRA lens.</div>
           : here.map(({ p, v }) => <div key={p.key} className="t-body" data-testid="node-dra-pool" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
-            <span style={{ fontFamily: "var(--font-mono)" }}>{p.driver} / {p.pool}</span> <span className="t-secondary">· {outcomeWords(v)}</span>
+            <span style={{ fontFamily: "var(--font-mono)" }}>{p.driver} / {p.pool}</span> <span className="t-secondary">· {p.unread ? "not established: not every slice was read" : outcomeWords(v)}{joinedState(pools as DRAPartRows<unknown>)}</span>
           </div>)}
         {here.length > 0 && cut.length > 0 && <div className="t-secondary">{cut.length === 1 ? "One more pool lists" : `${cut.length} more pools list`} only its worst nodes, so whether it names this node is not established.</div>}
         <div className="t-secondary" style={{ marginTop: 4 }}>Slices are the driver's: a node without them is "no slices", never "not registered".</div>
@@ -46,15 +56,23 @@ const MAX_HEALTH_IDS = 4;
 // pod's claim name, or for the extended claim the claim's own name (Codex's
 // implementation review, finding 3). The counts are over every device the
 // kubelet reports; the IDs named are the kept ones.
-function healthOf(health: DeviceHealthDTO[], name: string, bound: boolean, omitted: number): string {
+function healthOf(health: DeviceHealthDTO[], summary: ClaimHealthDTO[] | undefined, name: string, bound: boolean, omitted: number): string {
   const mine = health.filter((h) => h.name === `claim:${name}` || h.name.startsWith(`claim:${name}/`));
+  // the counts come from the claim's summary over every report, before any
+  // cut (Codex's implementation re-review, finding 1); without one, from
+  // the kept reports
+  const sum = summary?.find((s) => s.claim === name);
   // S11b §3.4: no report is said, never read as healthy (the gate may be
   // off); a report Klyx cut is not established, never "no report"
-  if (mine.length === 0) return omitted > 0 ? `device health not established: Klyx kept the pod's first ${health.length} reports, ${omitted} more not read` : bound ? "no device health reported" : "";
+  if (!sum && mine.length === 0) return omitted > 0 ? `device health not established: Klyx kept the pod's first ${health.length} reports, ${omitted} more not read` : bound ? "no device health reported" : "";
   const count = (h: DeviceHealthDTO, k: "unhealthy" | "unknown" | "healthy", health: string) => h[k] ?? h.devices.filter((d) => d.health === health).length;
-  const bad = mine.reduce((n, h) => n + count(h, "unhealthy", "Unhealthy"), 0);
-  const unknown = mine.reduce((n, h) => n + count(h, "unknown", "Unknown"), 0);
-  const ok = mine.reduce((n, h) => n + count(h, "healthy", "Healthy"), 0);
+  const bad = sum ? sum.unhealthy : mine.reduce((n, h) => n + count(h, "unhealthy", "Unhealthy"), 0);
+  const unknown = sum ? sum.unknown : mine.reduce((n, h) => n + count(h, "unknown", "Unknown"), 0);
+  const ok = sum ? sum.healthy : mine.reduce((n, h) => n + count(h, "healthy", "Healthy"), 0);
+  if (!sum && omitted > 0) {
+    // the kept reports are not every report this claim may have
+    return `${bad ? `at least ${bad} device${bad === 1 ? "" : "s"} unhealthy` : "health not established"}: Klyx kept the pod's first ${health.length} reports, ${omitted} more not read`;
+  }
   if (bad) {
     const ids = mine.flatMap((h) => h.devices).filter((d) => d.health === "Unhealthy").map((d) => d.id);
     const shown = ids.slice(0, MAX_HEALTH_IDS);
@@ -67,13 +85,13 @@ function healthOf(health: DeviceHealthDTO[], name: string, bound: boolean, omitt
 
 // PodClaimsBlock lists the claims a pod references (S11b §3.5), each joined
 // to the live claims rows by namespace and name.
-export function PodClaimsBlock(props: { cluster: string; namespace: string; podUid?: string; claims: PodClaimRefDTO[]; health: DeviceHealthDTO[]; healthOmitted?: number; unbound: boolean }) {
+export function PodClaimsBlock(props: { cluster: string; namespace: string; podUid?: string; claims: PodClaimRefDTO[]; health: DeviceHealthDTO[]; healthOmitted?: number; claimHealth?: ClaimHealthDTO[]; unbound: boolean }) {
   // a pod without claims reads no DRA rows at all
   return props.claims.length === 0 ? null : <PodClaims {...props} />;
 }
 
-function PodClaims({ cluster, namespace, podUid, claims, health, healthOmitted = 0, unbound }: {
-  cluster: string; namespace: string; podUid?: string; claims: PodClaimRefDTO[]; health: DeviceHealthDTO[]; healthOmitted?: number; unbound: boolean;
+function PodClaims({ cluster, namespace, podUid, claims, health, healthOmitted = 0, claimHealth, unbound }: {
+  cluster: string; namespace: string; podUid?: string; claims: PodClaimRefDTO[]; health: DeviceHealthDTO[]; healthOmitted?: number; claimHealth?: ClaimHealthDTO[]; unbound: boolean;
 }) {
   const rows = useDRAClaims(cluster);
   const byName = new Map<string, DRAClaimDTO>(rows.rows.filter((c) => c.namespace === namespace).map((c) => [c.name, c]));
@@ -87,7 +105,7 @@ function PodClaims({ cluster, namespace, podUid, claims, health, healthOmitted =
       if (!c.ownerUid || !podUid) return "ownership not established: the claim's or the pod's identity is not read";
       if (c.ownerUid !== podUid) return `not this pod's claim: it is owned by ${c.ownerKind ?? "another object"} ${c.ownerName ?? ""}`.trimEnd();
     }
-    if (c) return `${c.reading.label}${c.reading.message ? ` · ${c.reading.message}` : ""}`;
+    if (c) return `${c.reading.label}${c.reading.message ? ` · ${c.reading.message}` : ""}${joinedState(rows as DRAPartRows<unknown>)}`;
     if (!rows.complete) return "not established: the claims read is not current and whole";
     return unbound ? "does not exist: the scheduler waits for it without an event" : "does not exist";
   };
@@ -96,7 +114,7 @@ function PodClaims({ cluster, namespace, podUid, claims, health, healthOmitted =
       <div data-testid="pod-claims">
         {claims.map((ref) => {
           const statusName = ref.source === "extended" ? ref.claim : ref.podClaim;
-          const h = statusName && ref.state === "resolved" ? healthOf(health, statusName, !unbound, healthOmitted) : "";
+          const h = statusName && ref.state === "resolved" ? healthOf(health, claimHealth, statusName, !unbound, healthOmitted) : "";
           return (
             <div key={`${ref.source}/${ref.podClaim}/${ref.claim ?? ""}`} className="t-body" data-testid="pod-claim" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
               {ref.claim && byName.has(ref.claim) ? <ClaimLink cluster={cluster} namespace={namespace} name={ref.claim} />

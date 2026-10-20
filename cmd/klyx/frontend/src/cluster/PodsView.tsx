@@ -803,7 +803,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         {shown && <PodResourcesBlock detail={shown} />}
         {shown && <PodExtendedBlock detail={shown} cluster={cluster} />}
         {shown && <PodClaimsBlock cluster={cluster} namespace={namespace} podUid={shown.summary.uid} claims={shown.claims ?? []} health={shown.deviceHealth ?? []}
-          healthOmitted={shown.deviceHealthOmitted ?? 0} unbound={!shown.summary.node && shown.summary.phase === "Pending"} />}
+          healthOmitted={shown.deviceHealthOmitted ?? 0} claimHealth={shown.claimHealth} unbound={!shown.summary.node && shown.summary.phase === "Pending"} />}
         {shown && <DebugContainersBlock detail={shown} />}
 
         <InspectorBlock title="Placement">

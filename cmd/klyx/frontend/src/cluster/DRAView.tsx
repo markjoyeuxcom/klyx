@@ -119,6 +119,9 @@ export function DRAView({ cluster }: { cluster: string }) {
   const curMark = joinMark(cur);
   // the attention count: a native part's included rows (fault and degraded)
   const faults = (t: Tab) => (t === "classes" ? 0 : part[t].counts?.included ?? 0);
+  // a count's qualifiers are its selected counts' own, whatever tab is open
+  // (Codex's implementation re-review, finding 3)
+  const qual = (t: Tab) => { const pc = part[t].counts; return pc ? `${pc.lower ? "+" : ""}${pc.stale ? "*" : ""}` : ""; };
 
   const keys = list.map((r) => r.key);
   const cursorIdx = cursorKey === null ? -1 : keys.indexOf(cursorKey);
@@ -208,7 +211,7 @@ export function DRAView({ cluster }: { cluster: string }) {
 
   const tabChip = (t: Tab, label: string) => {
     const n = faults(t);
-    return <button className="l-chip" aria-pressed={tab === t} onClick={() => { setTab(t); setSelKey(null); setCursorKey(null); }}>{label}{n ? <span style={{ color: "var(--color-text-warning)" }}> {n}</span> : null}</button>;
+    return <button className="l-chip" aria-pressed={tab === t} onClick={() => { setTab(t); setSelKey(null); setCursorKey(null); }}>{label}{n ? <span style={{ color: "var(--color-text-warning)" }}> {n}{qual(t)}</span> : null}</button>;
   };
   const selTab: Tab | null = selKey?.startsWith("claim/") ? "claims" : selKey?.startsWith("pool/") ? "pools" : selKey?.startsWith("class/") ? "classes" : null;
   const live = selTab ? items[selTab].find((r) => r.key === selKey) : undefined;
@@ -236,7 +239,7 @@ export function DRAView({ cluster }: { cluster: string }) {
         <>
           <CountSentence total={total} marker={countMark(tab === "classes" ? null : cur.counts, cur)} noun={NOUN[tab]} />
           {tab === "classes" ? <span className="t-secondary">facts, no verdict</span>
-            : faults(tab) > 0 ? <MarkedPhrase fault={false}>{`${faults(tab)} ${tab === "claims" ? "cannot be allocated or appear stuck" : "incomplete or invalid"}`}</MarkedPhrase>
+            : faults(tab) > 0 ? <MarkedPhrase fault={false}>{`${faults(tab)}${qual(tab)} ${tab === "claims" ? "cannot be allocated or appear stuck" : "incomplete or invalid"}`}</MarkedPhrase>
             : <span className="t-secondary">{cur.complete ? "none failing" : "none failing among those read"}</span>}
         </>
       )}
@@ -376,7 +379,8 @@ function PoolInspector({ cluster, p, claims, poolsRead, onClose }: { cluster: st
         <InspectorBlock title="Devices and access">
           <div className="insp-kv" data-testid="dra-pool-facts">
             <span>access</span><span>{(p.access ?? []).map((c) => `${c.n} ${c.n === 1 ? "slice" : "slices"} ${c.of}`).join(" · ") || "-"}</span>
-            <span>tainted</span><span>{(p.taints ?? []).length ? (p.taints ?? []).map((c) => `${plural(c.n, "device", "devices")} ${c.of}`).join(" · ") : "no device tainted"}</span>
+            <span>tainted</span><span>{(p.taints ?? []).length ? (p.taints ?? []).map((c) => `${plural(c.n, "device", "devices")} ${c.of}`).join(" · ")
+              : p.unread ? "no tainted device in the slices read" : "no device tainted"}</span>
           </div>
           <div className="t-secondary">From the slices at generation {p.generation}{p.unread ? "; not every slice was read, so these are lower bounds" : ""}. {joinWords(joinMark(poolsRead as DRAPartRows<unknown>), poolsRead as DRAPartRows<unknown>, "slices")} Taint keys and values are not shown.</div>
         </InspectorBlock>

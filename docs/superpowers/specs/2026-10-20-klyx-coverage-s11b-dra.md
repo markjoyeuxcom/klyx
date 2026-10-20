@@ -517,3 +517,14 @@ Codex (handoff a6f5af2b) requested changes: ten P2 findings, each with a probe.
 | 8 | A template's claim was the pod's by name alone | The claim row carries its owner's UID and the pod block the pod's: a template's claim another object owns reads "not this pod's claim", and a missing identity "ownership not established" |
 | 9 | A selected claim or class followed a same-name replacement | Claims and classes pin their UID (`usePinnedSubject`): a replacement is said ("Replaced: another ResourceClaim now holds this name") with "Open the new object", an unverified absence too; pools keep their stated driver/pool identity |
 | 10 | Pool rows dropped the taint and access facts | A read pool counts its devices by taint effect (once per effect per device) and its slices by access form, at its generation; the pool inspector shows them with their generation and the slices read's qualification, keys and values never read |
+
+## 15. Implementation revision 2: Codex's re-review of f5bc6e9
+
+Codex (handoff f3d5176c) requested changes: four residual P2 findings. The ten original findings' probes pass.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A claim's reports cut away past 32 entries could hide its unhealthy device behind kept healthy ones | The pod detail summarises each claim's devices over every status entry before any cut (`ClaimHealth`, bounded by distinct claims); the health line reads that summary, and without one says the kept reports are not every report ("at least N unhealthy", or not established) |
+| 2 | Populated node and pod lines dropped the joined read's state | A found pool view or claim says its read's "as of" and a failed refresh; a pool view from a capped slices read reads "not established: not every slice was read" |
+| 3 | Attention counts in the chips and the headline lost their counts' qualifiers | Every attention count takes its part's selected counts' "+" and "*", whatever tab is open |
+| 4 | "no device tainted" under a capped slices read | A cut read says "no tainted device in the slices read"; the unqualified absence is kept for a whole read |

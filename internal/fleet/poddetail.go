@@ -5,6 +5,7 @@ import (
 	"github.com/moomora/klyx/internal/dra"
 	"github.com/moomora/klyx/internal/extres"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,9 +39,60 @@ type PodDetail struct {
 	// scheduler maps them, and each device's health as the kubelet reports it.
 	Claims       []dra.PodClaimRef
 	DeviceHealth []DeviceHealth
-	// DeviceHealthOmitted counts the status entries past the bound: health
-	// is not established for a claim among them.
+	// DeviceHealthOmitted counts the status entries past the bound.
 	DeviceHealthOmitted int
+	// ClaimHealth summarises each claim's devices over every status entry,
+	// before any cut (Codex's implementation re-review, finding 1): a
+	// claim's health is never read from a subset of its reports.
+	ClaimHealth []ClaimHealth
+}
+
+// ClaimHealth is one claim's device health over all its status entries
+// ("claim:<name>[/<request>]"), counted per device report.
+type ClaimHealth struct {
+	Claim                       string
+	Unhealthy, Unknown, Healthy int
+}
+
+// maxClaimHealth bounds the summaries: a pod references far fewer claims.
+const maxClaimHealth = 64
+
+// claimHealthOf counts each claim's devices over every entry of every
+// container status, bounded by distinct claims.
+func claimHealthOf(p *corev1.Pod) []ClaimHealth {
+	idx := map[string]int{}
+	var out []ClaimHealth
+	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
+		for _, cs := range list {
+			for _, rs := range cs.AllocatedResourcesStatus {
+				name, ok := strings.CutPrefix(string(rs.Name), "claim:")
+				if !ok {
+					continue
+				}
+				name, _, _ = strings.Cut(name, "/")
+				i, seen := idx[name]
+				if !seen {
+					if len(out) == maxClaimHealth {
+						continue
+					}
+					i = len(out)
+					idx[name] = i
+					out = append(out, ClaimHealth{Claim: name})
+				}
+				for _, r := range rs.Resources {
+					switch r.Health {
+					case corev1.ResourceHealthStatusUnhealthy:
+						out[i].Unhealthy++
+					case corev1.ResourceHealthStatusHealthy:
+						out[i].Healthy++
+					default:
+						out[i].Unknown++
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // DeviceHealth is one allocatedResourcesStatus entry of one container: a
@@ -191,6 +243,7 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 		Claims:              dra.PodClaims(p),
 		DeviceHealth:        health,
 		DeviceHealthOmitted: healthOmitted,
+		ClaimHealth:         claimHealthOf(p),
 		Ephemeral:           eph,
 		EphemeralMore:       more,
 		SchedAssumption:     c.schedModel().Assumption(),
