@@ -18,7 +18,8 @@ var reprobeDetect = func(ctx context.Context, c *ClusterConn) (capability.Set, e
 }
 
 // reprobeLoop re-runs capability detection on a cadence after the first
-// sync. A failed probe confirms nothing: the last tiers stand.
+// sync. A failed probe confirms nothing: the last tiers stand, except
+// time-bounded evidence past its bound (expireReprobe).
 func (c *ClusterConn) reprobeLoop(ctx context.Context) {
 	if c.detector == nil {
 		return
@@ -32,10 +33,36 @@ func (c *ClusterConn) reprobeLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		set, err := reprobeDetect(ctx, c)
-		if err != nil || ctx.Err() != nil {
-			continue
+		switch {
+		case ctx.Err() != nil:
+		case err != nil:
+			c.expireReprobe()
+		default:
+			c.applyReprobe(set)
 		}
-		c.applyReprobe(set)
+	}
+}
+
+// reprobeNow is the re-probe's clock.
+func (c *ClusterConn) reprobeNow() time.Time {
+	if c.clk != nil {
+		return c.clk.Now()
+	}
+	return time.Now()
+}
+
+// expireReprobe is a failed re-probe: no tier is taken, but NAP activity
+// past its one-hour window expires (coverage S10 §5), and the controller
+// task and the facts are published when it does - a discovery outage never
+// keeps "managed" alive.
+func (c *ClusterConn) expireReprobe() {
+	c.mu.Lock()
+	prev := c.caps.Karpenter
+	c.caps.Karpenter = prev.Expired(c.reprobeNow())
+	changed := c.caps.Karpenter.NAP.State != prev.NAP.State
+	c.mu.Unlock()
+	if changed {
+		c.syncHealth()
 	}
 }
 
@@ -53,11 +80,7 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	c.caps.ExternalSecrets = set.ExternalSecrets
 	// coverage S10 §5: a NAP read that failed keeps the last activity
 	// until it leaves the window
-	now := time.Now()
-	if c.clk != nil {
-		now = c.clk.Now()
-	}
-	c.caps.Karpenter = set.Karpenter.Refreshed(c.caps.Karpenter, now)
+	c.caps.Karpenter = set.Karpenter.Refreshed(c.caps.Karpenter, c.reprobeNow())
 	c.caps.Reloader = set.Reloader
 	c.caps.Network = set.Network
 	c.caps.Admission = set.Admission

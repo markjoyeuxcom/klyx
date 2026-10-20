@@ -193,9 +193,12 @@ func TestClassReadingTerminatingSyncingUnknown(t *testing.T) {
 	if r := ec2("x", 3, c("Ready", "True", "", "", 2)).Read(); r.State != ClassSyncing {
 		t.Fatalf("old True is syncing: %+v", r)
 	}
-	// A failing dependent behind the generation is syncing too.
-	if r := ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "", 2)).Read(); r.State != ClassSyncing {
-		t.Fatalf("an old failing dependent is syncing: %+v", r)
+	// A failing dependent behind the generation is historical: a current
+	// Ready False is read by its own reason, the old dependent beside it.
+	if r := ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "old", 2)).Read(); r.State != ClassNotReady ||
+		r.Text != "Ready False: UnhealthyDependents: a condition it depends on is not ready" ||
+		r.Note != "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms was reported for generation 2; the NodeClass is at generation 3" {
+		t.Fatalf("an old failing dependent is historical: %+v", r)
 	}
 	// An unreported generation is read as reported.
 	if r := ec2("x", 3, c("Ready", "True", "", "", 0)).Read(); r.State != ClassReady {
@@ -206,6 +209,73 @@ func TestClassReadingTerminatingSyncingUnknown(t *testing.T) {
 	}
 	if r := ec2("x", 1, c("Ready", "Unknown", "AwaitingReconciliation", "", 1)).Read(); r.State != ClassUnknown {
 		t.Fatalf("Ready Unknown: %+v", r)
+	}
+}
+
+// Codex's implementation review, finding 1: the reading is chosen from
+// current evidence over the whole object. A condition reported for an older
+// generation never hides a current failure and never holds a current Ready.
+func TestClassReadingIsCurrentEvidence(t *testing.T) {
+	cases := []struct {
+		name  string
+		class *NodeClass
+		state string
+		text  string
+		note  string
+	}{
+		// AWS's controller runs every reconciler even when one errors: an AMI
+		// lookup error leaves AMIsReady as it was while SubnetsReady is new
+		{"an old first dependent beside a current one", ec2("x", 2, c("Ready", "False", "UnhealthyDependents", "", 2),
+			c("AMIsReady", "False", "AMINotFound", "historical", 1), c("SubnetsReady", "False", "SubnetsNotFound", "current", 2)),
+			ClassNotReady, "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms",
+			"AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2"},
+		// CapacityReservationsReady is a Ready dependent only with its feature
+		// gate, and the provider skips its reconciler when the gate is off
+		{"an old optional dependent beside a current Ready True", ec2("x", 2, c("Ready", "True", "", "", 2),
+			c("CapacityReservationsReady", "False", "CapacityUnavailable", "old", 1)),
+			ClassReady, "", "CapacityReservationsReady False: CapacityUnavailable: see the condition in Klyx was reported for generation 1; the NodeClass is at generation 2"},
+		// a current dependent's failure is current while the aggregate lags,
+		// is absent or Unknown
+		{"a current dependent beside an old Ready", ec2("x", 3, c("Ready", "True", "", "", 2), c("SubnetsReady", "False", "SubnetsNotFound", "", 3)),
+			ClassNotReady, "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", ""},
+		{"a current dependent without Ready", ec2("x", 3, c("SecurityGroupsReady", "False", "SecurityGroupsNotFound", "", 3)),
+			ClassNotReady, "SecurityGroupsReady False: SecurityGroupsNotFound: no security groups matched the selector terms", ""},
+		{"a current dependent beside Ready Unknown", ec2("x", 3, c("Ready", "Unknown", "AwaitingReconciliation", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "", 3)),
+			ClassNotReady, "SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms", ""},
+		// an unknown type decides only beside a current Ready False
+		{"a current unknown type beside an old Ready", ec2("x", 3, c("Ready", "True", "", "", 2), c("VendorThing", "False", "Nope", "", 3)),
+			ClassSyncing, "its Ready condition is behind generation 3", ""},
+		{"a current unknown type beside a current Ready False", ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("VendorThing", "False", "Nope", "", 3)),
+			ClassNotReady, "VendorThing False: Nope: see the condition in Klyx", ""},
+		// two old failures: the first in the provider's order is the note
+		{"two old dependents", ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 3), c("SubnetsReady", "False", "SubnetsNotFound", "", 2), c("AMIsReady", "False", "AMINotFound", "", 1)),
+			ClassNotReady, "Ready False: UnhealthyDependents: a condition it depends on is not ready",
+			"AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 3"},
+		// only old evidence: syncing, the old failure as a note
+		{"everything old", ec2("x", 3, c("Ready", "False", "UnhealthyDependents", "", 2), c("SubnetsReady", "False", "SubnetsNotFound", "", 2)),
+			ClassSyncing, "its Ready condition is behind generation 3",
+			"SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms was reported for generation 2; the NodeClass is at generation 3"},
+	}
+	for _, tc := range cases {
+		r := tc.class.Read()
+		if r.State != tc.state || r.Text != tc.text || r.Note != tc.note {
+			t.Errorf("%s: got %q %q note %q, want %q %q note %q", tc.name, r.State, r.Text, r.Note, tc.state, tc.text, tc.note)
+		}
+	}
+	// the historical condition keeps no message: its note is Klyx's wording
+	if h := cases[0].class.Historical; h == nil || h.Message != "" || h.Type != "AMIsReady" || h.ObservedGeneration != 1 {
+		t.Fatalf("historical: %+v", h)
+	}
+	if cl := cases[0].class; cl.Failing == nil || cl.Failing.Type != "SubnetsReady" || cl.Failing.Message != "current" {
+		t.Fatalf("the current failure keeps its message for the local inspector: %+v", cl.Failing)
+	}
+	// the pool reads the class's current failure, once (Codex's probe)
+	p := ParseNodePool(poolU(2, ec2Ref, 2, c("Ready", "False", "UnhealthyDependents", "", 2), c("NodeClassReady", "False", "UnhealthyDependents", "", 2)))
+	if v := PoolRule(p, found(cases[0].class)); v.Eval.Role != health.Fault || !strings.Contains(v.Eval.Reason, "SubnetsNotFound") || strings.Contains(v.Eval.Reason, "AMINotFound") {
+		t.Fatalf("the pool: %+v", v.Eval)
+	}
+	if v := PoolRule(p, found(cases[1].class)); v.Eval.Role == health.Fault {
+		t.Fatalf("a class ready now is not a fault from an old optional dependent: %+v (%s)", v.Eval, roles(v))
 	}
 }
 
@@ -636,9 +706,20 @@ func TestMaxObjectBoundsTheCapProduct(t *testing.T) {
 		meta["labels"] = labels
 		return u
 	}
-	class := ParseNodeClass(big(obj("karpenter.k8s.aws/v1", "EC2NodeClass", "x", 1,
+	// a class keeps three authoritative conditions: Ready, its current
+	// failure and an older one (generation 1 of 2), each past the cap
+	classConds := condsMax("AMIsReady", "SubnetsReady", "Ready")
+	for _, x := range classConds[12:] {
+		if x["type"] != "AMIsReady" {
+			x["observedGeneration"] = int64(2)
+		}
+	}
+	class := ParseNodeClass(big(obj("karpenter.k8s.aws/v1", "EC2NodeClass", "x", 2,
 		map[string]any{"role": long(400), "instanceProfile": long(400)},
-		map[string]any{"instanceProfile": long(400), "kubernetesVersion": long(400)}, condsMax("SubnetsReady", "Ready")...)), AdapterEC2)
+		map[string]any{"instanceProfile": long(400), "kubernetesVersion": long(400)}, classConds...)), AdapterEC2)
+	if class.Historical == nil || class.Failing == nil || class.Failing.Type != "SubnetsReady" {
+		t.Fatalf("the cap product's class keeps its three conditions: %+v", class)
+	}
 	aks := ParseNodeClass(big(obj("karpenter.azure.com/v1beta1", "AKSNodeClass", "x", 1,
 		map[string]any{"imageFamily": long(400)}, map[string]any{"kubernetesVersion": long(400)}, condsMax("ImagesReady", "Ready")...)), AdapterAKS)
 	ref := map[string]any{"group": long(400), "kind": long(400), "name": long(400)}

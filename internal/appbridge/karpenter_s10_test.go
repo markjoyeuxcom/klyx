@@ -296,3 +296,43 @@ func TestS10ChatAttentionAndSnapshot(t *testing.T) {
 }
 
 var _ = time.Second
+
+// Codex's implementation review, finding 1: a False condition from an older
+// generation travels as a note in Klyx's wording - to the lens, and to
+// Explain through the allowlist - and never with its message.
+func TestS10ReadingNoteIsKlyxWording(t *testing.T) {
+	cond := func(typ, status, reason string, og int64) map[string]any {
+		return map[string]any{"type": typ, "status": status, "reason": reason, "message": "for " + s10Profile, "observedGeneration": og, "lastTransitionTime": "2026-10-20T09:00:00Z"}
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "kind": "EC2NodeClass",
+		"metadata": map[string]any{"name": "default", "uid": "default-uid", "generation": int64(2)},
+		"status":   map[string]any{"conditions": []any{cond("AMIsReady", "False", "AMINotFound", 1), cond("Ready", "False", "UnhealthyDependents", 2)}}}}
+	class := karpenter.ParseNodeClass(u, karpenter.AdapterEC2)
+	ec2, _ := karpenter.KindFor(karpenter.AdapterEC2)
+	want := "AMIsReady False: AMINotFound: no AMI matched the selector terms, or it is not usable was reported for generation 1; the NodeClass is at generation 2"
+	krow := healthsrc.Row[healthsrc.KarpenterClassRow]{Ref: healthsrc.RowRef{UID: "default-uid"}, Data: healthsrc.KarpenterClassRow{Class: &class, Kind: ec2, Reading: class.Read(), UsersComplete: true}}
+	dto := karpenterClassRowDTO(krow)
+	if dto.Reading.Note != want || dto.Reading.State != "not ready" {
+		t.Fatalf("the class DTO's reading: %+v", dto.Reading)
+	}
+	r := class.Read()
+	pool := karpenter.ParseNodePool(s10Pool())
+	prow := healthsrc.Row[healthsrc.KarpenterPoolRow]{Data: healthsrc.KarpenterPoolRow{Pool: pool, Link: karpenter.Link{State: karpenter.LinkFound, Kind: ec2, Class: &class}, Class: &r}}
+	pdto := karpenterPoolRowDTO(prow)
+	if pdto.Class == nil || pdto.Class.Note != want {
+		t.Fatalf("the pool DTO's class reading: %+v", pdto.Class)
+	}
+	project := func(key string, v any) string {
+		b, _ := json.Marshal(v)
+		var m any
+		_ = json.Unmarshal(b, &m)
+		out, _ := json.Marshal((&scrubber{}).project(m, aiEvidenceFields[key]))
+		return string(out)
+	}
+	for key, v := range map[string]any{healthsrc.TaskKarpenter + "/nodeclasses": dto, healthsrc.TaskKarpenter + "/nodepools": pdto} {
+		got := project(key, v)
+		if !strings.Contains(got, `"note":"`+want+`"`) || strings.Contains(got, s10Profile) {
+			t.Errorf("%s evidence carries the note in Klyx's words, never the message: %s", key, got)
+		}
+	}
+}

@@ -334,6 +334,96 @@ func TestReprobeKeepsControllerIssuesCurrent(t *testing.T) {
 	})
 }
 
+// Codex's S10 implementation review, finding 4: a failed discovery confirms
+// nothing, but NAP's activity still expires at its window, and the
+// controller task the Observer publishes follows it - "managed" never
+// outlives its evidence through a discovery outage. Unrelated issues stand.
+func TestReprobeExpiresNAPThroughFailedDiscovery(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	typed := fake.NewClientset()
+	clk := clock.NewFake(time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC))
+	c := NewClusterConn("x", typed, metafake.NewSimpleMetadataClient(scheme), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), capability.NewDetector(typed), clk, config.MetricsConfig{})
+	s := &summarySink{}
+	c.SetHealthSink(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.startHealth(ctx)
+	h := c.Health()
+	defer func() { cancel(); <-h.Done() }()
+	c.mu.Lock()
+	c.state = Synced
+	c.mu.Unlock()
+
+	aks := []capability.KarpenterKind{{Kind: karpenter.ClassKinds[1], Served: true, InUse: true}}
+	managed := capability.Set{
+		Karpenter:   capability.KarpenterCapability{Present: true, Inventory: capability.InventoryComplete, Kinds: aks, NAP: capability.NAPActivity{State: capability.NAPActive, Newest: clk.Now().Add(-10 * time.Minute)}},
+		CertManager: capability.CertManagerCapability{Base: capability.Base{Tier: capability.Degraded, Reason: "cert-manager installed but cert-manager is not ready"}, Present: true}}
+	step, entered := make(chan struct{}), make(chan struct{}, 1)
+	var mu sync.Mutex
+	probes := 0
+	oldDetect, oldEvery := reprobeDetect, capReprobeEvery
+	reprobeDetect = func(ctx context.Context, _ *ClusterConn) (capability.Set, error) {
+		select {
+		case entered <- struct{}{}:
+		case <-ctx.Done():
+			return capability.Set{}, ctx.Err()
+		}
+		select {
+		case <-step:
+		case <-ctx.Done():
+			return capability.Set{}, ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if probes++; probes == 1 {
+			return managed, nil
+		}
+		return capability.Set{}, errors.New("discovery: the server is unavailable")
+	}
+	capReprobeEvery = time.Millisecond
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	loopDone := make(chan struct{})
+	go func() { c.reprobeLoop(loopCtx); close(loopDone) }()
+	defer func() {
+		stopLoop()
+		close(step)
+		<-loopDone
+		reprobeDetect, capReprobeEvery = oldDetect, oldEvery
+	}()
+	controller := func(task string) *observe.ControllerIssue { tk, _ := s.task(task); return tk.Controller }
+	state := func(task string) string {
+		if is := controller(task); is != nil {
+			return is.State
+		}
+		return ""
+	}
+
+	<-entered
+	step <- struct{}{}
+	waitUntil(t, "NAP's activity reads managed", func() bool { return state("karpenter") == "managed" && state("certs") != "" })
+	<-entered
+	step <- struct{}{} // a failed probe within the window
+	<-entered          // ...has been handled
+	time.Sleep(50 * time.Millisecond)
+	if state("karpenter") != "managed" {
+		t.Fatalf("within the window a failed probe changes nothing: %q", state("karpenter"))
+	}
+	clk.Advance(2 * time.Hour)
+	step <- struct{}{} // a failed probe past the window
+	waitUntil(t, "NAP's activity expires through a failed probe", func() bool { return state("karpenter") == "unknown" })
+	if state("certs") == "" {
+		t.Fatal("an unrelated issue stands through a failed probe")
+	}
+	c.mu.RLock()
+	nap := c.caps.Karpenter.NAP
+	c.mu.RUnlock()
+	if nap.State != capability.NAPNotEstablished || !strings.Contains(nap.Why, "left the one-hour window") {
+		t.Fatalf("expired, never none, and it says why: %+v", nap)
+	}
+}
+
 // ---- the capability overlay across recovery (Codex 2c review P2) -----------
 
 func overlayConn(t *testing.T) *ClusterConn {

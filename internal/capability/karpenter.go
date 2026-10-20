@@ -46,7 +46,19 @@ const (
 	// NAPWindow is the API server's default Event TTL: activity older than
 	// it is no evidence (§5).
 	NAPWindow = time.Hour
+	// NAPSkew is how far past this machine's clock an Event may be dated and
+	// still count, for clock skew between it and the API server. An Event
+	// dated further ahead is no evidence of recent activity, so a future
+	// time never extends the window (Codex's implementation review,
+	// finding 4).
+	NAPSkew = 5 * time.Minute
 )
+
+// napInWindow: t is within the last NAPWindow of now, and dated no more
+// than NAPSkew ahead of it.
+func napInWindow(t, now time.Time) bool {
+	return !t.IsZero() && !t.After(now.Add(NAPSkew)) && now.Sub(t) <= NAPWindow
+}
 
 // KarpenterProvider is the provider a controller is attributed to.
 type KarpenterProvider string
@@ -306,12 +318,26 @@ func (k KarpenterCapability) Refreshed(prev KarpenterCapability, now time.Time) 
 	if !k.Present {
 		return k
 	}
-	if k.NAP.State == NAPNotEstablished && prev.NAP.State == NAPActive && now.Sub(prev.NAP.Newest) <= NAPWindow {
+	if k.NAP.State == NAPNotEstablished && prev.NAP.State == NAPActive && napInWindow(prev.NAP.Newest, now) {
 		why := k.NAP.Why
 		k.NAP = prev.NAP
 		k.NAP.Why = "kept from the last read until it leaves the window: " + why
 		k.settle()
 	}
+	return k
+}
+
+// Expired is the capability after a re-probe that read nothing (§5): the
+// last readings stand, except NAP activity whose newest time has left the
+// window, which expires to "not established" (never to none: nothing was
+// read). Nothing else changes.
+func (k KarpenterCapability) Expired(now time.Time) KarpenterCapability {
+	if !k.Present || k.NAP.State != NAPActive || napInWindow(k.NAP.Newest, now) {
+		return k
+	}
+	k.NAP = NAPActivity{State: NAPNotEstablished, Why: "its last activity, at " + k.NAP.Newest.UTC().Format(time.RFC3339) +
+		", left the one-hour window, and the re-probe could not read its Events"}
+	k.settle()
 	return k
 }
 
@@ -624,7 +650,7 @@ func eventTime(e *corev1.Event) time.Time {
 // of 100, the newest time across every page read.
 func (d *Detector) napActivity(ctx context.Context, now time.Time) NAPActivity {
 	var newest time.Time
-	cut, failed := false, ""
+	cut, failed, ahead := false, "", false
 	cont := ""
 	for page := 0; ; page++ {
 		if page == napMaxPages {
@@ -637,7 +663,10 @@ func (d *Detector) napActivity(ctx context.Context, now time.Time) NAPActivity {
 			break
 		}
 		for i := range l.Items {
-			if t := eventTime(&l.Items[i]); t.After(newest) {
+			switch t := eventTime(&l.Items[i]); {
+			case t.After(now.Add(NAPSkew)):
+				ahead = true
+			case t.After(newest):
 				newest = t
 			}
 		}
@@ -645,7 +674,7 @@ func (d *Detector) napActivity(ctx context.Context, now time.Time) NAPActivity {
 			break
 		}
 	}
-	if !newest.IsZero() && now.Sub(newest) <= NAPWindow {
+	if napInWindow(newest, now) {
 		return NAPActivity{State: NAPActive, Newest: newest}
 	}
 	switch {
@@ -653,6 +682,8 @@ func (d *Detector) napActivity(ctx context.Context, now time.Time) NAPActivity {
 		return NAPActivity{State: NAPNotEstablished, Why: "its Events could not be read: " + failed}
 	case cut:
 		return NAPActivity{State: NAPNotEstablished, Why: "its Events past three pages were not read"}
+	case ahead:
+		return NAPActivity{State: NAPNotEstablished, Why: "its Events are dated more than 5 minutes ahead of this machine's clock, so their time is no evidence"}
 	}
 	return NAPActivity{State: NAPNone}
 }

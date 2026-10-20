@@ -122,7 +122,7 @@ func init() {
 	aiEvidenceFields[healthsrc.TaskKarpenter+"/nodepools"] = allow{"ready": nil, "reason": nil, "weight": nil, "cpuLimit": nil, "cpuUsed": nil,
 		"memLimit": nil, "memUsed": nil, "nodes": nil, "nodeClassRef": ref, "nodeClassObservedGeneration": nil,
 		"link":       allow{"state": nil, "adapter": nil, "group": nil, "kind": nil, "version": nil, "asOf": nil},
-		"class":      allow{"state": nil, "text": nil},
+		"class":      allow{"state": nil, "text": nil, "note": nil},
 		"handler":    nil,
 		"findings":   allow{"role": nil, "label": nil, "text": nil, "note": nil, "unversioned": nil},
 		"conditions": cond, "conditionsTotal": nil, "conditionsCut": nil}
@@ -130,7 +130,7 @@ func init() {
 		"failingStatus": nil, "failingReason": nil, "failingReasonWithheld": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil,
 		"instanceType": nil, "ageSeconds": nil, "nodeClassRef": ref}
 	aiEvidenceFields[healthsrc.TaskKarpenter+"/nodeclasses"] = allow{"group": nil, "kind": nil, "adapter": nil, "deleting": nil, "syncing": nil,
-		"reading": allow{"state": nil, "text": nil}, "conditions": cond, "conditionsTotal": nil, "conditionsCut": nil, "unknown": nil, "unknownTotal": nil,
+		"reading": allow{"state": nil, "text": nil, "note": nil}, "conditions": cond, "conditionsTotal": nil, "conditionsCut": nil, "unknown": nil, "unknownTotal": nil,
 		"facts": allow{"subnets": nil, "securityGroups": nil, "amis": nil, "deprecatedAmi": nil, "podSubnets": nil, "kubernetesVersion": nil,
 			"images": nil, "imageFamily": nil, "subnetSet": nil},
 		"users": nil, "usersComplete": nil}

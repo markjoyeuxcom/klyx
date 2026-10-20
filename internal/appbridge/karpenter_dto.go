@@ -43,11 +43,13 @@ type KarpenterFindingDTO struct {
 }
 
 // KarpenterReadingDTO is a class's own reading: display evidence, never a
-// verdict. Native is local only.
+// verdict. Native is local only; Note is Klyx's wording for a False
+// condition reported for an older generation.
 type KarpenterReadingDTO struct {
 	State  string `json:"state"`
 	Text   string `json:"text,omitempty"`
 	Native string `json:"native,omitempty"`
+	Note   string `json:"note,omitempty"`
 }
 
 // KarpenterLinkDTO is a NodePool's class link (§3).
@@ -121,7 +123,7 @@ func karpenterConds(c karpenter.Conds) []KarpenterCondDTO {
 }
 
 func karpenterReading(r karpenter.ClassReading) KarpenterReadingDTO {
-	return KarpenterReadingDTO{State: r.State, Text: r.Text, Native: r.Native}
+	return KarpenterReadingDTO{State: r.State, Text: r.Text, Native: r.Native, Note: r.Note}
 }
 
 // karpenterPoolRowDTO is a pool row with S10's link, findings and

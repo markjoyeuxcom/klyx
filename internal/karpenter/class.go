@@ -54,7 +54,8 @@ func KindFor(a Adapter) (ClassKind, bool) {
 }
 
 // dependents are each adapter's Ready dependents in the provider's order
-// (§1.2-1.4): the reading names the first one False.
+// (§1.2-1.4): the reading names the first one False for the current
+// generation.
 var dependents = map[Adapter][]string{
 	AdapterEC2: {"AMIsReady", "SubnetsReady", "SecurityGroupsReady", "InstanceProfileReady",
 		"ValidationSucceeded", "PlacementGroupReady", "CapacityReservationsReady"},
@@ -73,12 +74,22 @@ type NodeClass struct {
 	Adapter Adapter `json:"adapter"`
 	// Ready is the Ready condition; nil when absent.
 	Ready *Cond `json:"ready,omitempty"`
-	// Failing is the first False dependent in the provider's order, else the
-	// first other False condition; nil when none is False.
+	// Failing is the current failure: the first False dependent in the
+	// provider's order whose observedGeneration is not behind the
+	// generation, else the first other such False condition; nil when none.
+	// A condition reported for an older generation never hides it.
 	Failing *Cond `json:"failing,omitempty"`
-	// Syncing: Ready's or Failing's observedGeneration is behind the
-	// generation, so neither is the current reading (§3 rule 2).
+	// Historical is the first False condition, in the same order, reported
+	// for an older generation, without its message: context beside the
+	// reading, never the reading itself (a reconciler can leave its
+	// condition unchanged while another writes a current one, and an
+	// optional dependent can outlive its feature gate).
+	Historical *Cond `json:"historical,omitempty"`
+	// Syncing: Ready's observedGeneration is behind the generation, so the
+	// aggregate is not the current reading (§3 rule 2).
 	Syncing bool `json:"syncing,omitempty"`
+	// failingDependent: Failing is one of the adapter's Ready dependents.
+	failingDependent bool
 	// Unknown lists condition types the adapter does not know, never dropped
 	// (§4): at most 8 named, with the exact count.
 	Unknown      []string   `json:"unknown,omitempty"`
@@ -116,31 +127,42 @@ func ParseNodeClass(u *unstructured.Unstructured, a Adapter) NodeClass {
 	c := NodeClass{Meta: metaOf(u, true), Adapter: a}
 	all := condsOf(u)
 	c.Conds = display(all)
-	var idx [2]int
+	var idx [3]int
 	c.Ready, idx[0] = find(all, condReady)
+	// each False condition is the current failure or historical context,
+	// by its own generation: the whole object is read before the display cap
+	pick := func(f *Cond, i int, dependent bool) {
+		switch {
+		case f == nil || f.Status != "False":
+		case behind(f, c.Meta.Generation):
+			if c.Historical == nil {
+				// the note is Klyx's wording: the message is not kept
+				h := *f
+				h.Message = ""
+				c.Historical, idx[2] = &h, i
+			}
+		case c.Failing == nil:
+			c.Failing, idx[1], c.failingDependent = f, i, dependent
+		}
+	}
 	known := map[string]bool{condReady: true}
 	for _, t := range dependents[a] {
 		known[t] = true
-		if c.Failing == nil {
-			if f, i := find(all, t); f != nil && f.Status == "False" {
-				c.Failing, idx[1] = f, i
-			}
-		}
+		f, i := find(all, t)
+		pick(f, i, true)
 	}
 	for i := range all {
 		if known[all[i].Type] {
 			continue
 		}
-		if c.Failing == nil && all[i].Status == "False" {
-			f := all[i]
-			c.Failing, idx[1] = &f, i
-		}
+		f := all[i]
+		pick(&f, i, false)
 		c.UnknownTotal++
 		if len(c.Unknown) < maxUnknown {
 			c.Unknown = append(c.Unknown, all[i].Type)
 		}
 	}
-	c.Syncing = behind(c.Ready, c.Meta.Generation) || behind(c.Failing, c.Meta.Generation)
+	c.Syncing = behind(c.Ready, c.Meta.Generation)
 	c.Facts = factsOf(u, a)
 	c.size = classSize(&c, idx)
 	return c
@@ -205,40 +227,61 @@ const (
 )
 
 // ClassReading is a class's own reading: display evidence beside its row,
-// never a verdict (a class row carries no NativeEval, §2). Text is Klyx's
-// fixed wording; Native is the provider's, for the local inspector only.
+// never a verdict (a class row carries no NativeEval, §2). Text and Note
+// are Klyx's fixed wording; Native is the provider's, for the local
+// inspector only.
 type ClassReading struct {
 	State  string `json:"state"`
 	Text   string `json:"text,omitempty"`
 	Native string `json:"native,omitempty"`
-	cond   *Cond
+	// Note names a False condition reported for an older generation:
+	// historical context, never the reading.
+	Note string `json:"note,omitempty"`
+	cond *Cond
 }
 
-// Read is the class's reading, from the authoritative fields: terminating,
-// then syncing (never its old Ready), then Ready.
+// Read is the class's reading, from current evidence over the whole object:
+// terminating; then a current Ready True (an old False dependent cannot
+// hold it); then a current Ready False, named by its current failure, else
+// by Ready itself; then a current False dependent while the aggregate is
+// behind, absent or Unknown (a current failure is never hidden); then
+// syncing (never its old Ready); then unknown.
 func (c *NodeClass) Read() ClassReading {
-	switch {
-	case c.Meta.Deleting:
+	if c.Meta.Deleting {
 		return ClassReading{State: ClassTerminating, Text: "the NodeClass is being deleted"}
+	}
+	r := c.read()
+	if h := c.Historical; h != nil {
+		r.Note = Phrase(h) + " was reported for generation " + itoa(h.ObservedGeneration) + "; the NodeClass is at generation " + itoa(c.Meta.Generation)
+	}
+	return r
+}
+
+func (c *NodeClass) read() ClassReading {
+	current := c.Ready != nil && !c.Syncing
+	notReady := func(at *Cond) ClassReading {
+		return ClassReading{State: ClassNotReady, Text: Phrase(at), Native: Native(at), cond: at}
+	}
+	switch {
+	case current && c.Ready.Status == "True":
+		return ClassReading{State: ClassReady, cond: c.Ready}
+	case current && c.Ready.Status == "False" && c.Failing != nil:
+		return notReady(c.Failing)
+	case current && c.Ready.Status == "False":
+		return notReady(c.Ready)
+	case c.Failing != nil && c.failingDependent:
+		return notReady(c.Failing)
 	case c.Syncing:
-		return ClassReading{State: ClassSyncing, Text: "its conditions are behind generation " + itoa(c.Meta.Generation)}
+		return ClassReading{State: ClassSyncing, Text: "its Ready condition is behind generation " + itoa(c.Meta.Generation)}
 	case c.Ready == nil:
 		return ClassReading{State: ClassUnknown, Text: "Ready not reported"}
-	case c.Ready.Status == "True":
-		return ClassReading{State: ClassReady, cond: c.Ready}
-	case c.Ready.Status == "False":
-		at := c.Failing
-		if at == nil {
-			at = c.Ready
-		}
-		return ClassReading{State: ClassNotReady, Text: Phrase(at), Native: Native(at), cond: at}
 	}
 	return ClassReading{State: ClassUnknown, Text: Phrase(c.Ready), Native: Native(c.Ready), cond: c.Ready}
 }
 
-func classSize(c *NodeClass, idx [2]int) int {
-	n := metaSize(c.Meta) + 96 + len(c.Adapter) + condsSize(c.Conds)
-	for i, a := range []*Cond{c.Ready, c.Failing} {
+func classSize(c *NodeClass, idx [3]int) int {
+	n := metaSize(c.Meta) + 104 + len(c.Adapter) + condsSize(c.Conds)
+	for i, a := range []*Cond{c.Ready, c.Failing, c.Historical} {
 		n += authSize(a, idx[i])
 	}
 	for _, t := range c.Unknown {

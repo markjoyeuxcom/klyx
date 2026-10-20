@@ -460,6 +460,61 @@ func TestNAPRefreshExpires(t *testing.T) {
 	}
 }
 
+// Codex's implementation review, finding 4: an Event dated past this
+// machine's clock (beyond the skew allowance) is no evidence of recent
+// activity, so a future time never extends the window; a failed re-probe
+// still expires the activity at its window.
+func TestNAPFutureTimesAndExpiry(t *testing.T) {
+	aks := kGroups(karpenter.AdapterAKS)
+	if k := detectKarp(aks, aksInUse(), nil, napEvent("future", s10Now.Add(24*time.Hour))); k.NAP.State != NAPNotEstablished || !strings.Contains(k.NAP.Why, "ahead of this machine's clock") {
+		t.Errorf("a day ahead is not established: %+v", k.NAP)
+	}
+	if s, _ := detectKarp(aks, aksInUse(), nil, napEvent("future", s10Now.Add(24*time.Hour))).Task(); s == KarpenterManaged {
+		t.Error("a future Event is never management evidence")
+	}
+	if k := detectKarp(aks, aksInUse(), nil, napEvent("skewed", s10Now.Add(NAPSkew))); k.NAP.State != NAPActive {
+		t.Errorf("within the skew allowance it counts: %+v", k.NAP)
+	}
+	if k := detectKarp(aks, aksInUse(), nil, napEvent("skewed", s10Now.Add(NAPSkew+time.Second))); k.NAP.State == NAPActive {
+		t.Errorf("past the skew allowance it does not: %+v", k.NAP)
+	}
+	// a future Event beside an in-window one: the in-window one decides
+	recent := s10Now.Add(-5 * time.Minute)
+	if k := detectKarp(aks, aksInUse(), nil, napEvent("future", s10Now.Add(time.Hour)), napEvent("recent", recent)); k.NAP.State != NAPActive || !k.NAP.Newest.Equal(recent) {
+		t.Errorf("the newest Event not ahead of the clock: %+v", k.NAP)
+	}
+	// Refreshed never keeps activity dated ahead of the skew allowance
+	prev := KarpenterCapability{Present: true, Inventory: InventoryComplete, NAP: NAPActivity{State: NAPActive, Newest: s10Now.Add(time.Hour)},
+		Kinds: []KarpenterKind{{Kind: karpenter.ClassKinds[1], Served: true, InUse: true}}}
+	failed := prev
+	failed.NAP = NAPActivity{State: NAPNotEstablished, Why: "its Events could not be read"}
+	if got := failed.Refreshed(prev, s10Now); got.NAP.State != NAPNotEstablished {
+		t.Errorf("a future last activity is not kept: %+v", got.NAP)
+	}
+	// Expired: a failed re-probe read nothing
+	active := prev
+	active.NAP = NAPActivity{State: NAPActive, Newest: s10Now.Add(-10 * time.Minute)}
+	active.settle()
+	if got := active.Expired(s10Now); got.NAP != active.NAP || !got.Healthy {
+		t.Errorf("within the window nothing changes: %+v", got)
+	}
+	got := active.Expired(s10Now.Add(NAPWindow))
+	if s, why := got.Task(); got.NAP.State != NAPNotEstablished || s != KarpenterUnknown || got.Healthy || !strings.Contains(got.NAP.Why, "left the one-hour window") {
+		t.Errorf("past the window it expires to not established: %+v %s %s", got.NAP, s, why)
+	}
+	if got.Inventory != active.Inventory || len(got.Kinds) != 1 || !got.Kinds[0].InUse {
+		t.Errorf("nothing else changes: %+v", got)
+	}
+	none := active
+	none.NAP = NAPActivity{State: NAPNone}
+	if got := none.Expired(s10Now.Add(2 * NAPWindow)); got.NAP.State != NAPNone {
+		t.Errorf("only active evidence expires: %+v", got.NAP)
+	}
+	if got := (KarpenterCapability{}).Expired(s10Now); got.Present {
+		t.Error("absent stays absent")
+	}
+}
+
 // §6: an azure:// node marks an AKS cluster, read with the AKSNodeClass
 // kind served.
 func TestKarpenterAzureNodes(t *testing.T) {
