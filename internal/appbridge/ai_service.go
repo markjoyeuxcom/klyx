@@ -230,6 +230,11 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 	if uid == "" {
 		return AIResultDTO{Error: "the selected object has no identity yet; nothing was sent"}
 	}
+	if karpenterClassResources[group+"/"+plural] {
+		// S10 §8: a class's spec holds its role, instance profile and
+		// selector IDs; no manifest of one is sent
+		return AIResultDTO{Error: "Suggest fix is not available for a Karpenter NodeClass: its spec holds the role, the instance profile and cloud IDs, which Klyx never sends to AI; nothing was sent"}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
@@ -241,13 +246,13 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 		return AIResultDTO{Error: errReplaced.Error()}
 	}
 	sc := &scrubber{}
-	bundle = sc.bundle(bundle)
+	bundle = sc.bundle(karpenterBundle(bundle)) // S10 §8: no Karpenter message
 	bundle.Operators = sc.operators(s.operators(cluster))
 	// The manifest leaves the machine (unless the endpoint is loopback): drop the
 	// last-applied annotation and mask credential-like values first. Fail
 	// closed - a manifest that cannot be redacted is not sent (review
 	// 2026-10-03 E).
-	manifest, redacted, err := redactManifestForAI(root.YAML)
+	manifest, redacted, err := redactManifestForAI(root.YAML, karpenterResources[group+"/"+plural])
 	if err != nil {
 		return AIResultDTO{Error: "could not redact the manifest, so nothing was sent: " + err.Error()}
 	}
@@ -306,7 +311,10 @@ const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 // (helmcli.MaskManifest). Heuristic: it reduces, but cannot rule out, sensitive
 // data in the prompt, and the prompt says so. Returns the number of masked
 // values; an unparseable manifest is an error (the caller sends nothing).
-func redactManifestForAI(manifest string) (string, int, error) {
+// karpenter (coverage S10 §8): a NodePool's or NodeClaim's status holds
+// Karpenter's condition text, so it is dropped, and the identifier
+// redactor runs over the rest.
+func redactManifestForAI(manifest string, karp bool) (string, int, error) {
 	if strings.TrimSpace(manifest) == "" {
 		return "", 0, nil
 	}
@@ -322,6 +330,9 @@ func redactManifestForAI(manifest string) (string, int, error) {
 			}
 		}
 	}
+	if karp {
+		karpenterManifest(obj)
+	}
 	stripped, err := yaml.Marshal(obj)
 	if err != nil {
 		return "", 0, fmt.Errorf("re-encode manifest: %w", err)
@@ -330,5 +341,11 @@ func redactManifestForAI(manifest string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	return masked, len(paths), nil
+	n := len(paths)
+	if karp {
+		var m int
+		masked, m = karpenterText(masked)
+		n += m
+	}
+	return masked, n, nil
 }

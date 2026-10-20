@@ -149,10 +149,7 @@ var rowsConverters = map[string]rowsConverter{
 		}
 		out := make([]KarpenterPoolDTO, 0, len(set.Rows))
 		for _, r := range set.Rows {
-			dto := karpenterPoolFields(r.Data.Pool)
-			dto.Rule = toRuleDTO(r.Eval)
-			dto.UID, dto.GVR, dto.Generation = r.Ref.UID, r.Ref.GVR, r.Ref.Generation
-			out = append(out, dto)
+			out = append(out, karpenterPoolRowDTO(r)) // S10: the link and findings too
 		}
 		return out, nil
 	},

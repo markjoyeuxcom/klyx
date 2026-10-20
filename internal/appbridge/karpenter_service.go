@@ -27,6 +27,18 @@ type KarpenterPoolDTO struct {
 	ReadySince int64 `json:"readySinceUnix,omitempty"`
 	// Rule is the relocated lens rule (1c addendum §2).
 	Rule RuleDTO `json:"rule"`
+	// Coverage S10: the class link, the findings behind the rule, the
+	// handler's reading and the conditions (Message is native: Ready's
+	// message and each condition's, local only).
+	NodeClassRef                *KarpenterRefDTO      `json:"nodeClassRef,omitempty"`
+	NodeClassObservedGeneration int64                 `json:"nodeClassObservedGeneration,omitempty"`
+	Link                        *KarpenterLinkDTO     `json:"link,omitempty"`
+	Class                       *KarpenterReadingDTO  `json:"class,omitempty"`
+	Handler                     string                `json:"handler,omitempty"`
+	Findings                    []KarpenterFindingDTO `json:"findings,omitempty"`
+	Conditions                  []KarpenterCondDTO    `json:"conditions,omitempty"`
+	ConditionsTotal             int                   `json:"conditionsTotal,omitempty"`
+	ConditionsCut               bool                  `json:"conditionsCut,omitempty"`
 }
 
 // KarpenterClaimDTO mirrors karpenter.NodeClaim. AgeSeconds is relative to
@@ -53,6 +65,10 @@ type KarpenterClaimDTO struct {
 	Created int64   `json:"createdUnix"` // creation time (unix): the launch-deadline anchor
 	// ReadySince is the Ready condition's transition time (unix), 0 when absent.
 	ReadySince int64 `json:"readySinceUnix,omitempty"`
+	// Coverage S10: the claim's class, and a failing reason outside the
+	// schema's pattern withheld. FailingMessage is native, local only.
+	NodeClassRef          *KarpenterRefDTO `json:"nodeClassRef,omitempty"`
+	FailingReasonWithheld bool             `json:"failingReasonWithheld,omitempty"`
 }
 
 // KarpenterEventDTO is one row of the disruption feed.
@@ -158,5 +174,6 @@ func karpenterClaimFields(cl karpenter.NodeClaim) KarpenterClaimDTO {
 		Drifted: cl.Drifted, Consolidatable: cl.Consolidatable,
 		CapacityType: cl.CapacityType, InstanceType: cl.InstanceType, AgeSeconds: cl.AgeSeconds,
 		Created: cl.Created.Unix(), ReadySince: unixOrZero(cl.ReadySince),
+		NodeClassRef: karpenterRefDTO(cl.Ref), FailingReasonWithheld: cl.FailingReasonWithheld,
 	}
 }

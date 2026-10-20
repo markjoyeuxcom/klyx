@@ -74,17 +74,17 @@ func TestKarpenterDTOFieldLedger(t *testing.T) {
 		fields    map[string]string
 	}{
 		{reflect.TypeOf(karpenter.NodePool{}), reflect.TypeOf(KarpenterPoolDTO{}), map[string]string{
-			"Meta": "name; identity rides the row's Ref", "Ref": "the class link (S10 stage 4)",
+			"Meta": "name; identity rides the row's Ref", "Ref": "nodeClassRef",
 			"Ready": mirrored, "Reason": mirrored, "Message": mirrored, "Weight": mirrored, "CPULimit": mirrored, "CPUUsed": mirrored,
 			"MemLimit": mirrored, "MemUsed": mirrored, "Nodes": mirrored, "ReadySince": mirrored,
-			"CondReady": "the rule's evidence (S10 stage 4)", "CondValidation": "the rule's evidence (S10 stage 4)",
-			"CondNodeClassReady": "the rule's evidence (S10 stage 4)", "CondRegistration": "the rule's evidence (S10 stage 4)",
-			"NodeClassObservedGeneration": "the rule's evidence (S10 stage 4)", "Conds": "the inspector's conditions (S10 stage 4)",
+			"CondReady": "the rule's evidence, said through findings and conditions", "CondValidation": "the rule's evidence, said through findings and conditions",
+			"CondNodeClassReady": "the rule's evidence, said through findings and conditions", "CondRegistration": "the rule's evidence, said through findings and conditions",
+			"NodeClassObservedGeneration": mirrored, "Conds": "conditions, conditionsTotal and conditionsCut",
 		}},
 		{reflect.TypeOf(karpenter.NodeClaim{}), reflect.TypeOf(KarpenterClaimDTO{}), map[string]string{
-			"Meta": "name; identity rides the row's Ref", "Ref": "the class link (S10 stage 4)",
+			"Meta": "name; identity rides the row's Ref", "Ref": "nodeClassRef",
 			"Pool": mirrored, "NodeName": mirrored, "Ready": mirrored, "FailingType": mirrored, "FailingStatus": mirrored,
-			"FailingReason": mirrored, "FailingReasonWithheld": "the inspector's withheld flag (S10 stage 4)", "FailingMessage": mirrored,
+			"FailingReason": mirrored, "FailingReasonWithheld": mirrored, "FailingMessage": mirrored,
 			"Drifted": mirrored, "Consolidatable": mirrored, "CapacityType": mirrored, "InstanceType": mirrored, "AgeSeconds": mirrored,
 			"Created": mirrored, "ReadySince": mirrored,
 		}},

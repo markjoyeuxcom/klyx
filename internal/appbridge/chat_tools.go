@@ -924,6 +924,9 @@ func statusSummary(gvr schema.GroupVersionResource, u *unstructured.Unstructured
 		if m["type"] == "Ready" || m["type"] == "Available" {
 			s := fmt.Sprintf("%v=%v", m["type"], m["status"])
 			if r, ok := m["reason"].(string); ok && r != "" && m["status"] != "True" {
+				if karpenterResources[gvr.Group+"/"+gvr.Resource] {
+					r = karpenterReason(r) // S10 §8: a token, or withheld
+				}
 				s += " (" + r + ")"
 			}
 			parts = append(parts, s)
@@ -1018,6 +1021,10 @@ var chatParts = map[string][2]string{
 	"external-secrets.io/externalsecrets":        {healthsrc.TaskESO, "externalsecrets"},
 	"karpenter.sh/nodeclaims":                    {healthsrc.TaskKarpenter, "nodeclaims"},
 	"karpenter.sh/nodepools":                     {healthsrc.TaskKarpenter, "nodepools"},
+	// coverage S10: a class row is a fact (its pools carry the verdict)
+	"karpenter.k8s.aws/ec2nodeclasses":   {healthsrc.TaskKarpenter, "nodeclasses"},
+	"karpenter.azure.com/aksnodeclasses": {healthsrc.TaskKarpenter, "nodeclasses"},
+	"eks.amazonaws.com/nodeclasses":      {healthsrc.TaskKarpenter, "nodeclasses"},
 	// coverage S1b and S1c: the image, composition and Receiver parts
 	"image.toolkit.fluxcd.io/imagerepositories":      {healthsrc.TaskFlux, "images"},
 	"image.toolkit.fluxcd.io/imagepolicies":          {healthsrc.TaskFlux, "images"},
@@ -1138,6 +1145,10 @@ func (t *chatTools) eventsFor(ctx context.Context, ns, kind, name, uid string, w
 	out := make([]chatEvent, 0, len(keep))
 	for _, e := range keep {
 		ce := chatEvent{Type: e.Type, Reason: p.str(e.Reason, chatStringMax), Message: p.str(e.Message, chatStringMax), Count: e.Count, Object: e.Kind + "/" + e.Name, ObjectUID: e.UID, Namespace: e.Namespace}
+		if karpenterKinds[e.Kind] {
+			// S10 §8: a Karpenter object's event crosses as its reason
+			ce.Reason, ce.Message = karpenterReason(e.Reason), ""
+		}
 		if e.LastSeenUnix > 0 {
 			ce.LastSeen = time.Unix(e.LastSeenUnix, 0).UTC().Format(time.RFC3339)
 		}

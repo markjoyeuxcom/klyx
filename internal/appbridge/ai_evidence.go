@@ -66,10 +66,7 @@ var aiEvidenceFields = map[string]allow{
 		"resources": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil, "status": nil, "health": nil}},
 	healthsrc.TaskArgo + "/applicationsets": {"generators": nil, "templateName": nil, "project": nil, "repoURL": nil, "path": nil, "targetRevision": nil,
 		"destNamespace": nil, "generatedApps": nil, "healthy": nil, "conditions": argoCond},
-	healthsrc.TaskKarpenter + "/nodepools": {"ready": nil, "reason": nil, "message": nil, "weight": nil, "cpuLimit": nil, "cpuUsed": nil, "memLimit": nil,
-		"memUsed": nil, "nodes": nil},
-	healthsrc.TaskKarpenter + "/nodeclaims": {"pool": nil, "nodeName": nil, "ready": nil, "failingType": nil, "failingStatus": nil, "failingReason": nil,
-		"failingMessage": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil, "instanceType": nil, "ageSeconds": nil},
+	// the Karpenter parts: coverage S10 §8 (karpenter_ai.go)
 	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": listenerAllow,
 		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow,
 		"allowedListeners": nsAllowance, "attachedListenerSets": nil},

@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/keda"
 )
 
@@ -203,13 +204,19 @@ func chatProject(gvr schema.GroupVersionResource, u *unstructured.Unstructured) 
 			o.AnnotationsDropped++
 		}
 	}
+	// coverage S10 §8: a Karpenter condition crosses as its type, status,
+	// reason token and Klyx's sentence, never its message
+	karp := karpenterResources[gvr.Group+"/"+gvr.Resource]
 	for _, c := range crd.ParseConditionsDeep(gvr.Group, gvr.Resource, u.Object) {
-		o.Conditions = append(o.Conditions, chatCondition{
-			Type: c.Type, Status: c.Status, Reason: p.str(c.Reason, chatStringMax), Message: p.str(c.Message, chatStringMax), Scope: c.Scope,
-		})
+		cc := chatCondition{Type: c.Type, Status: c.Status, Reason: p.str(c.Reason, chatStringMax), Message: p.str(c.Message, chatStringMax), Scope: c.Scope}
+		if karp {
+			cc.Reason = karpenterReason(c.Reason)
+			cc.Message = karpenterSentence(cc.Reason)
+		}
+		o.Conditions = append(o.Conditions, cc)
 	}
 	o.Spec, o.Status = p.kindSpec(gvr, u)
-	if gvr.Group != "" || (gvr.Resource != "secrets" && gvr.Resource != "configmaps") {
+	if !karp && (gvr.Group != "" || (gvr.Resource != "secrets" && gvr.Resource != "configmaps")) {
 		// Facts come from a structurally sanitized copy: some builders copy
 		// ownership annotations into values (Codex re-review of f012dc1).
 		for _, f := range crd.BuildFacts(gvr.Group, gvr.Resource, factsInput(u)) {
@@ -412,6 +419,71 @@ func (p *projector) kindSpec(gvr schema.GroupVersionResource, u *unstructured.Un
 		out["triggers"] = triggers
 		p.drop(".spec.triggers[].metadata")
 		return out, p.tree(nestedMap(obj, "status"), ".status", 0, chatCRDDepth, chatCRDStringMax, true)
+	case "karpenter.sh/nodepools":
+		// Coverage S10 §8: the class reference, weight and limits; the
+		// conditions travel above, never their messages
+		out := map[string]any{}
+		if ref := nestedMap(obj, "spec", "template", "spec", "nodeClassRef"); ref != nil {
+			out["nodeClassRef"] = p.pick(ref, "group", "kind", "name")
+		}
+		if w, ok, _ := unstructured.NestedInt64(obj, "spec", "weight"); ok {
+			out["weight"] = w
+		}
+		if l := nestedMap(obj, "spec", "limits"); l != nil {
+			out["limits"] = p.pick(l, "cpu", "memory", "nodes")
+		}
+		p.drop(".spec.template (requirements, taints, labels and kubelet)")
+		status := map[string]any{}
+		if g, ok, _ := unstructured.NestedInt64(obj, "status", "nodeClassObservedGeneration"); ok {
+			status["nodeClassObservedGeneration"] = g
+		}
+		if r := nestedMap(obj, "status", "resources"); r != nil {
+			status["resources"] = p.pick(r, "cpu", "memory", "nodes", "pods")
+		}
+		p.drop(".status.conditions (sent as conditions)")
+		return out, status
+	case "karpenter.sh/nodeclaims":
+		out := map[string]any{}
+		if ref := nestedMap(obj, "spec", "nodeClassRef"); ref != nil {
+			out["nodeClassRef"] = p.pick(ref, "group", "kind", "name")
+		}
+		p.drop(".spec (requirements and resources)")
+		status := map[string]any{}
+		if n := nestedString(obj, "status", "nodeName"); n != "" {
+			status["nodeName"] = p.str(n, chatStringMax)
+		}
+		p.drop(".status (the provider ID, image ID and capacity)")
+		return out, status
+	case "karpenter.k8s.aws/ec2nodeclasses", "karpenter.azure.com/aksnodeclasses", "eks.amazonaws.com/nodeclasses":
+		// the adapter's counts and names, never the role, the instance
+		// profile, a selector term or a resolved ID
+		var a karpenter.Adapter
+		for _, k := range karpenter.ClassKinds {
+			if k.Group+"/"+k.Resource == key {
+				a = k.Adapter
+			}
+		}
+		c := karpenter.ParseNodeClass(u, a)
+		f := c.Facts
+		facts := map[string]any{}
+		for k, v := range map[string]*int{"subnets": f.Subnets, "securityGroups": f.SecurityGroups, "amis": f.AMIs, "images": f.Images} {
+			if v != nil {
+				facts[k] = *v
+			}
+		}
+		for k, v := range map[string]bool{"deprecatedAmi": f.DeprecatedAMI, "podSubnets": f.PodSubnets, "subnetSet": f.SubnetSet} {
+			if v {
+				facts[k] = true
+			}
+		}
+		for k, v := range map[string]string{"kubernetesVersion": f.KubernetesVersion, "imageFamily": f.ImageFamily} {
+			if v != "" {
+				facts[k] = p.str(v, chatStringMax)
+			}
+		}
+		p.drop(".spec (the role, the instance profile and the selector terms)")
+		p.drop(".status (resolved identifiers)")
+		return nil, map[string]any{"adapter": string(a), "facts": facts}
 	case "keda.sh/triggerauthentications", "keda.sh/clustertriggerauthentications":
 		// Coverage S9 §9: source kinds and counts, and podIdentity's
 		// provider and owner; never a reference's name, a detail, a role
