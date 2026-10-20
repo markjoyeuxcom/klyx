@@ -139,3 +139,21 @@ func TestTheInventorysStateQualifiesTheCandidates(t *testing.T) {
 		t.Fatalf("%q %+v", text, f)
 	}
 }
+
+// An ad-hoc document's refused CREATE carries its finding; its text stays
+// today's, or the withheld form for a protected subject.
+func TestAnAdhocRefusalCarriesItsFinding(t *testing.T) {
+	q := admission.Request{Operation: "CREATE", Version: "v1", Resource: "configmaps", Namespace: "lab"}
+	text, f := adhocFinding(context.Background(), admissionFixture(), "today's text", admission.Wrap(q, "ConfigMap", "lab", "c", denial("no")))
+	if text != "today's text" || f == nil || f.Request.Operation != "CREATE" {
+		t.Fatalf("%q %+v", text, f)
+	}
+	sq := admission.Request{Operation: "CREATE", Version: "v1", Resource: "secrets", Namespace: "lab"}
+	text, f = adhocFinding(context.Background(), admissionFixture(), "raw NeedleAdhoc7x", admission.Wrap(sq, "Secret", "lab", "s", denial("NeedleAdhoc7x")))
+	if strings.Contains(text, "NeedleAdhoc7x") || f == nil || f.Message != "" {
+		t.Fatalf("a protected subject: %q %+v", text, f)
+	}
+	if text, f := adhocFinding(context.Background(), admissionFixture(), "parse error", nil); text != "parse error" || f != nil {
+		t.Fatalf("no refusal: %q %+v", text, f)
+	}
+}

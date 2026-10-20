@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/config"
 )
 
 // Coverage S3b §3.1, §8: each write path declares its request, and its
@@ -157,5 +159,35 @@ func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A webhook denying with 409 is its denial, never an apply conflict; the
+// composer's refused CREATE keeps its request for the bridge.
+func TestS3bEditorAndComposerKeepTheRefusal(t *testing.T) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	live := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app", "uid": "u1"}}}
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}, live)
+	denial409 := &apierrors.StatusError{ErrStatus: metav1.Status{Code: 409, Reason: metav1.StatusReasonConflict, Message: `admission webhook "deny.lab.klyx.dev" denied the request: frozen`}}
+	dyn.PrependReactor("patch", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denial409 })
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "u1",
+		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\ndata:\n  key: v\n", false)
+	if err == nil || strings.Contains(err.Error(), "apply conflict") || strings.Contains(err.Error(), "changed since it was opened") {
+		t.Fatalf("a webhook's 409 is its denial: %v", err)
+	}
+	if q := requestOf(t, err); q != (admission.Request{Operation: "UPDATE", Version: "v1", Resource: "configmaps", Namespace: "default"}) {
+		t.Fatalf("%+v", q)
+	}
+
+	ac, adyn := adhocConn(t)
+	adyn.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, webhookDenial() })
+	res := ac.CreateResourceYAML(context.Background(), adhocPodYAML, false)
+	if len(res) != 1 || res[0].OK || res[0].Refusal() == nil {
+		t.Fatalf("the refused document keeps its refusal: %+v", res)
+	}
+	if q := requestOf(t, res[0].Refusal()); q.Operation != "CREATE" || q.Resource != "pods" {
+		t.Fatalf("%+v", q)
 	}
 }

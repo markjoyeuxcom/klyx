@@ -111,3 +111,32 @@ func TestACallFailureIsReadAfterItsURL(t *testing.T) {
 		t.Fatalf("a 503 is not the call-failure envelope: %+v", f)
 	}
 }
+
+// The envelopes' exact shapes (S3b §2.1): a policy's cause is attributed
+// only behind NewForbidden's prefix and only as the message's whole tail;
+// a webhook denying with NotFound is never the guarded object gone.
+func TestTheEnvelopesAreExact(t *testing.T) {
+	cause := "ValidatingAdmissionPolicy 'p' with binding 'b' denied request: no"
+	vap := func(msg string) metav1.Status {
+		return metav1.Status{Code: 422, Reason: metav1.StatusReasonInvalid, Message: msg, Details: &metav1.StatusDetails{Kind: "widgets", Causes: []metav1.StatusCause{{Message: cause}}}}
+	}
+	if f := Classify(vap(`widgets.lab "w" is forbidden: ` + cause)); f.Envelope != EnvVAPDenied {
+		t.Fatalf("the NewForbidden form: %+v", f)
+	}
+	for _, msg := range []string{
+		"note: " + cause,                                // not NewForbidden's prefix
+		`widgets.lab "w" is forbidden: ` + cause + " x", // not the whole tail
+		`widgets.lab is invalid: ` + cause,              // another prefix
+	} {
+		if f := Classify(vap(msg)); f.Attributed() {
+			t.Errorf("%q attributed: %+v", msg, f)
+		}
+	}
+	gone := metav1.Status{Code: 404, Reason: metav1.StatusReasonNotFound, Message: `admission webhook "h" denied the request: not found here`}
+	if Classify(gone).Envelope != EnvWebhookDenied || UIDRefusal(gone) {
+		t.Fatal("a webhook's NotFound denial is a denial, never the object gone")
+	}
+	if !UIDRefusal(metav1.Status{Code: 404, Reason: metav1.StatusReasonNotFound, Message: `deployments.apps "w" not found`}) {
+		t.Fatal("the object gone")
+	}
+}
