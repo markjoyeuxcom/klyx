@@ -124,10 +124,15 @@ Each API-backed write path declares its request: the operation (CREATE, UPDATE, 
 
 ### 3.3 Matching (revision 1)
 
-Candidates are the webhooks and policies whose rules could match the request. The set is a superset by construction, and its soundness rests on exact inputs:
+Candidates are the webhooks and policies whose rules could match the request, by the request's own resource or a same-named equivalent. The list is a superset of those, and its soundness rests on exact inputs; rules that could match only through a differently named equivalent are counted, not listed (revision 2):
 - **Exact identifiers.** S3a's projection clips strings to 64 bytes for display, which changed the bytes a match compares (a long API group). The S3a projection gains exact identifiers for matching (groups, versions, resources, operations, scope) kept apart from the display copy, within S3a's budget. An identifier that cannot be kept exactly marks the rule "may match: a value could not be kept exactly", and the candidate stays.
 - **The exact pass** follows `rules.Matcher` (scope, operation, group, version, resource with its subresource forms), held to it by an oracle (§8).
-- **The Equivalent pass.** Klyx cannot read the API server's equivalent-resource registry. Under `matchPolicy: Equivalent` (the default), a rule whose resource name matches the request's (or `*`) is a candidate in any group and version, labelled "may match through an equivalent resource". Under `Exact`, only the exact pass counts. Equivalents across groups are the registry's, always the same resource served under another group or version, so this superset contains them.
+- **The Equivalent pass.** Klyx cannot read the API server's equivalent-resource registry, which groups resources by their storage identity, not their names: a storage alias can make a differently named resource equivalent (`NewEquivalentResourceRegistryWithIdentity`, the storage factory's resource-prefix overrides). So, under `matchPolicy: Equivalent` (the default):
+  - **listed:** a rule whose resource name matches the request's (or `*`), in any group and version, labelled "may match through an equivalent resource";
+  - **counted, not listed:** a rule whose operations and scope match but whose resources name something else. It could match only through an alias Klyx cannot see. The candidates end with "N more webhooks or policies use Equivalent matching on other resources, and could match through an alias the API server registers; Klyx cannot read that registry";
+  - so the list is a superset of the rules that match by the request's own resource or a same-named equivalent, and **not** of every possible match: the count says how many it leaves out, and the note never calls the list complete.
+
+  Under `Exact`, only the exact pass counts, with no alias line. The policies' `matchPolicy` joins S3a's projection (today it keeps the webhooks' only).
 - **Not evaluated, and only narrowing:** namespace and object selectors, `matchConditions`, `excludeResourceRules`, bindings.
 - **Rules or lists S3a capped:** "may match: not every rule was read". S3a's projection gains a flag per capped list.
 - **Configurations or webhooks S3a omitted** (a capped read, a per-kind budget, an unread kind): the candidates say "and possibly webhooks or policies Klyx did not read".
@@ -176,9 +181,9 @@ Write errors never cross to AI or chat, and S3b keeps that. The admission findin
   - positive: `ToStatusErr` with a message, a reason and neither; `NewDryRunUnsupportedErr`; an `ErrCallingWebhook` around real `url.Error`s (deadline, refused, x509, no endpoints), wrapped by `NewInternalError` as the dispatchers do; the validating policy dispatcher's `NewForbidden` with its appended cause, with and without a binding; the generic dispatcher's form with several causes;
   - negative and ambiguous: a webhook denial whose own causes carry a VAP-looking message naming another policy (attributed to the webhook only); `apierrors.NewInvalid` with a `field.Forbidden` detail quoting a webhook denial (not attributed); an ordinary 500 (stays unverified); a message embedding a denial phrase mid-text (not attributed);
   - the UID guards: a precondition built through `storage.Preconditions.Check` and the registry's update and delete error interpretation, then serialized; an immutable-UID Invalid; a resourceVersion-precondition Conflict and messages merely containing "uid" (controls, not replacements).
-- **The matcher's oracle.** The upstream `rules.Matcher` at the same versions runs on a fixture table: operations, groups (one longer than 64 bytes), versions, resources with each subresource form, scopes, and the namespace object itself. Klyx's exact pass must agree on every row. The Equivalent pass is tested against an equivalent-resource registry probe (an equivalent in another group) as a superset: every true match is a candidate, with `Exact` controls.
+- **The matcher's oracle.** The upstream `rules.Matcher` at the same versions runs on a fixture table: operations, groups (one longer than 64 bytes), versions, resources with each subresource form, scopes, and the namespace object itself. Klyx's exact pass must agree on every row. The Equivalent pass is tested against an upstream equivalent-resource registry probe: a same-named equivalent in another group is listed; a differently named equivalent sharing a storage identity (`widgets` and `widgetaliases`) is not listed but is counted in the alias line; `Exact` controls list neither.
 - **Protected subjects:** needles in a webhook's denial message, for a Secret and a HelmRelease, absent from the serialized DTO, the toast text and the Activity entry, while the webhook's name is present. `TestDryRunErrorKeepsOnlyStructuredFacts` stays as a gate.
-- **Scope:** `ReconcileWithSource` with the source patch succeeding and the target denied (the source reported written, the target refused); a multi-document create with one document denied.
+- **Scope:** `ReconcileWithSource` with the source patch succeeding and the target denied (the source reported written, the target refused), and the converse (the source denied, nothing after it attempted); a multi-document create with one document denied. The protected-subject rule applies to each step's own subject.
 - **Write paths:** each path's request declaration (a table test), and each path returning the finding through its DTO.
 - **The frontend:** the YAML panel's headline and candidates; a toast's line, with steps; the Activity log's old and new entries; the drift sentence on both diff surfaces, and no "not drift" wording anywhere (a source scan); the dry-run sentence only for a completed dry run.
 - **The lab** (`lab-s3b`, labelled and namespaced, with a teardown): a validating webhook that denies a labelled object, backed by a real Service; one whose Service has no endpoints (a call failure, "no endpoints"); a ValidatingAdmissionPolicy with a binding that denies a labelled object; each exercised by Klyx's YAML apply, scale and a Flux-suspend patch on fixture objects.
@@ -200,3 +205,13 @@ Codex (handoff 2a3f5249) requested changes: one P1 and five P2 findings, each wi
 | P2 | Drain and debug do not fit one converter: drain is a kubectl stream, debug a PATCH in an external terminal (UPDATE, not CONNECT) | §3.2: a per-path boundary table; drain deferred, debug, exec, port-forward and Helm rollback outside, debug's request corrected |
 
 Codex's guidance, taken: a named denial keeps its name with no inventory row (§3.4); no other webhook is inferred to have allowed the request (§3.4); the dry-run sentence describes that dry run and its time, only when it completed (§4); serialized candidates are bounded with omissions counted (§3.3).
+
+## 10. Revision 2: Codex's re-review of ab32cff
+
+Codex (handoff 76087d53) requested changes: one residual P2. The P1 and the other four P2 findings are resolved.
+
+| # | Finding | Where answered |
+|---|---|---|
+| P2 | Equivalent matching does not keep the resource name: the registry groups resources by storage identity, so a differently named alias can match, and a same-name prefilter is not a sound superset of every possible match | §3.3: same-named equivalents are listed; rules on other resources under Equivalent are counted, not listed, in an alias line that says why; the list is described as a superset only of matches by the request's own resource or a same-named equivalent. §8: a different-plural pair sharing a storage identity, with an `Exact` control |
+
+Codex's implementation guidance, taken: the protected-subject rule applies to each step's own subject, and the converse composite case is tested (§8); the policies' `matchPolicy` joins S3a's projection (§3.3).
