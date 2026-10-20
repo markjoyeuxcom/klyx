@@ -18,14 +18,22 @@ func (c *ClusterConn) serverMinor() int {
 }
 
 // startDRAEpisodes keeps FactDRAEpisodes (coverage S11b §3.2): each
-// incomplete pool's first observation, keyed by pool and generation. An
-// episode lasts only across contiguous complete, live reads of the slices
-// (the KEDA tracker's continuity rule); a relist, a gap or a capped read
-// restarts every episode, so a start is a lower bound.
+// incomplete pool's first observation, keyed by pool and generation, on
+// the KEDA and LoadBalancer trackers' continuity rule. A read that is not
+// complete and live, or a new generation or epoch of the slices kind (a
+// relist: what happened between is not known), restarts every episode, so
+// a start is a lower bound. Otherwise an episode continues when no change
+// of the kind was skipped (deliveries are newest-wins), or when its pool's
+// slices are provably the same (every UID and resourceVersion), so a busy
+// kind does not keep restarting a stuck pool.
 func startDRAEpisodes(ctx context.Context, h lbObserver, now func() time.Time, minor func() int) {
+	type episode struct {
+		start time.Time
+		print string
+	}
 	var mu sync.Mutex
-	starts := map[string]time.Time{}
-	var lastSeq uint64
+	eps := map[string]episode{}
+	var lastSeq, lastGen, lastEpoch uint64
 	visited := false
 	h.WatchKind(healthsrc.KindResourceSlices, func(observe.KindState) {
 		if ctx.Err() != nil {
@@ -39,28 +47,23 @@ func startDRAEpisodes(ctx context.Context, h lbObserver, now func() time.Time, m
 		mu.Lock()
 		defer mu.Unlock()
 		if !ok || !complete || st.Coverage != observe.Live || st.Truncated {
-			starts, visited = map[string]time.Time{}, false
+			eps, visited = map[string]episode{}, false
 			return
 		}
-		contiguous := visited && st.Seq <= lastSeq+1
-		lastSeq, visited = st.Seq, true
-		if !contiguous {
-			starts = map[string]time.Time{}
-		}
+		gap := !visited || st.Generation != lastGen || st.Epoch != lastEpoch
+		contiguous := !gap && st.Seq <= lastSeq+1
+		lastSeq, lastGen, lastEpoch, visited = st.Seq, st.Generation, st.Epoch, true
 		t := now()
-		next := map[string]time.Time{}
-		for _, key := range healthsrc.IncompletePools(healthsrc.SlicesOf(objs), minor()) {
-			if s, ok := starts[key]; ok {
-				next[key] = s
-			} else {
-				next[key] = t
+		next := map[string]episode{}
+		out := map[string]time.Time{}
+		for key, print := range healthsrc.IncompletePools(healthsrc.SlicesOf(objs), minor()) {
+			e := episode{start: t, print: print}
+			if prev, had := eps[key]; had && !gap && (contiguous || prev.print == print) {
+				e.start = prev.start // provably the same stretch
 			}
+			next[key], out[key] = e, e.start
 		}
-		starts = next
-		out := make(map[string]time.Time, len(next))
-		for k, v := range next {
-			out[k] = v
-		}
+		eps = next
 		h.SetFact(healthsrc.FactDRAEpisodes, out)
 	})
 }

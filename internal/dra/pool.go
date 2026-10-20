@@ -42,7 +42,10 @@ type Device struct {
 
 // Slice is a projected ResourceSlice: every field a pool rule reads.
 type Slice struct {
-	Name, UID         string
+	Name, UID string
+	// RV is the slice's resourceVersion: the episode tracker's proof that
+	// a pool did not change between two reads
+	RV                string
 	Driver, Pool      string
 	Generation, Count int64
 	NodeName          string

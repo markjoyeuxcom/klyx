@@ -23,8 +23,8 @@ func MaxObject(resource string) int {
 }
 
 const (
-	// measured: 323,351 B (64 devices, each with 16 taints and 2 x 32
-	// counters, the 1.35+ shape) and 179,602 B (1.34's 32 x 32 counters)
+	// measured: 323,359 B (64 devices, each with 16 taints and 2 x 32
+	// counters, the 1.35+ shape) and 179,610 B (1.34's 32 x 32 counters)
 	maxSliceObject = 384 << 10
 	// measured: 325,227 B (32 requests of 8 subrequests, 32 results and
 	// device statuses of 8 conditions, every message 256 escaped bytes)

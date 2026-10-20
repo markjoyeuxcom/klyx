@@ -233,14 +233,21 @@ func evalDRAPools(cluster string) func(observe.Capture) observe.PartResult {
 }
 
 // IncompletePools are the pools any allowed scheduler finds being updated
-// on any view, by episode key: the episode tracker's input.
-func IncompletePools(slices []dra.Slice, minor int) []string {
+// on any view, by episode key, each with its slices' fingerprint (every
+// slice's UID and resourceVersion): the episode tracker's input. An equal
+// fingerprint proves the pool did not change between two reads.
+func IncompletePools(slices []dra.Slice, minor int) map[string]string {
 	order, by := slicePools(slices)
-	var out []string
+	out := map[string]string{}
 	for _, key := range order {
 		p := dra.ReadPool(by[key], minor)
 		if p.AnyUpdating() {
-			out = append(out, dra.EpisodeKey(p.Driver, p.Pool, p.Generation))
+			ids := make([]string, 0, len(by[key]))
+			for _, s := range by[key] {
+				ids = append(ids, s.UID+"@"+s.RV)
+			}
+			sort.Strings(ids)
+			out[dra.EpisodeKey(p.Driver, p.Pool, p.Generation)] = strings.Join(ids, ",")
 		}
 	}
 	return out

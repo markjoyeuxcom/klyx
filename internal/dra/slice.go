@@ -25,7 +25,7 @@ const (
 // quantities, selectors' content and taint keys and values are dropped.
 func ProjectSlice(u *unstructured.Unstructured) Slice {
 	o := u.Object
-	s := Slice{Name: u.GetName(), UID: string(u.GetUID()),
+	s := Slice{Name: u.GetName(), UID: string(u.GetUID()), RV: u.GetResourceVersion(),
 		Driver:       str(o, "spec", "driver"),
 		Pool:         str(o, "spec", "pool", "name"),
 		Generation:   i64(o, "spec", "pool", "generation"),
