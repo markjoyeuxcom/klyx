@@ -350,3 +350,12 @@ Codex (handoff 319a74e1) requested changes: five P2 findings, each reproduced by
 | P2 | Two cuts went unsaid: a node's 16 kept accelerators read as exactly 16, and dropped reservation rows had no notice | The GPU cell reads "16+ resources" when every kept entry is an accelerator and some were cut, the tooltip counting the cut; the lens says "Requested not shown for N nodes: the per-cluster bound left their reservations out" |
 
 Codex's documentation point, taken: §2.0 calls the 2 MiB bound `RowSize`'s estimate, consistent with §14.2.
+
+## 16. Implementation revision 2: Codex's re-review of 9d87b9a
+
+Codex (handoff 7d7c6e3b) requested changes: two residual P2 findings in the new notices. The other findings of §15 are resolved.
+
+| # | Finding | Answer |
+|---|---|---|
+| P2 | A held or failed totals refresh had no notice of its own; the reservations' notice cannot speak for an independent capture | The totals say their own state: "Accelerator totals as of HH:MM - the newer read failed: ..." (or being fetched), and a failed first read |
+| P2 | The reservations' notices sat behind the accelerator gate, silencing failures and cuts for ordinary extended resources | The reservations' notices follow any extended evidence (a node's extended entry, a reservation row, a dropped row); the totals' notices follow the accelerators they total; with no evidence the lens stays quiet |

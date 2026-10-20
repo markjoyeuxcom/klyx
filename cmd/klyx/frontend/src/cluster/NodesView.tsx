@@ -712,14 +712,24 @@ export function NodesView({ cluster }: { cluster: string }) {
   if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
   if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
   // coverage S11a: the extended parts' own state - a budget cut, a failed
-  // read, a held capture (Codex's S11a implementation review, findings 1, 5)
-  if (hasAccel) {
+  // read, a held capture - each said by the part it belongs to (Codex's S11a
+  // implementation review, findings 1, 5; re-review). The reservations'
+  // notices follow any extended evidence (an ordinary extended resource, a
+  // reservation row), the totals' notices the accelerators they total; with
+  // no such evidence the lens stays quiet.
+  const extEvidence = scopedNodes.some((n) => (n.extended?.entries?.length ?? 0) > 0) || ext.reservations.size > 0 || ext.reservationsDropped > 0;
+  const heldLine = (key: string, testid: string, what: string, st: { refreshError: string | null; asOf: string | null }) =>
+    <div key={key} role="status" data-testid={testid} className="t-secondary" style={{ ...statusLine, overflowWrap: "anywhere" }}>{what} as of {st.asOf ? clock(st.asOf) : "the last read"}{st.refreshError ? ` - the newer read failed: ${st.refreshError}` : " - a newer read is being fetched"}.</div>;
+  if (extEvidence) {
     const rs = ext.reservationsState;
     if (ext.reservationsDropped > 0) notices.push(<div key="ext-dropped" role="status" data-testid="nodes-extended-dropped" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Requested not shown for {ext.reservationsDropped} node{ext.reservationsDropped === 1 ? "" : "s"}: the per-cluster bound left their reservations out.</div>);
     if (rs.error && !ext.reservationsRead) notices.push(<div key="ext-error" role="status" data-testid="nodes-extended-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Extended requests not read: {rs.error}</div>);
-    else if (rs.held) notices.push(<div key="ext-held" role="status" data-testid="nodes-extended-held" className="t-secondary" style={{ ...statusLine, overflowWrap: "anywhere" }}>Extended requests as of {rs.asOf ? clock(rs.asOf) : "the last read"}{rs.refreshError ? ` - the newer read failed: ${rs.refreshError}` : " - a newer read is being fetched"}.</div>);
+    else if (rs.held) notices.push(heldLine("ext-held", "nodes-extended-held", "Extended requests", rs));
+  }
+  if (hasAccel || ext.totals.length > 0) {
     const ts = ext.totalsState;
     if (ts.error && !ext.totalsRead) notices.push(<div key="tot-error" role="status" data-testid="nodes-totals-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Accelerator totals not read: {ts.error}</div>);
+    else if (ts.held) notices.push(heldLine("tot-held", "nodes-totals-held", "Accelerator totals", ts));
   }
 
   const tone = attentionTone(counts);

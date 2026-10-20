@@ -1003,6 +1003,42 @@ describe("NodesView extended resources (S11a)", () => {
     expect(screen.getByTestId("nodes-extended-dropped").textContent).toContain("Requested not shown for 2 nodes");
   });
 
+  // Codex's S11a implementation re-review: each part says its own state, and
+  // non-accelerator extended resources are not silenced
+  it("a held totals refresh is said by the totals, while the reservations are current", () => {
+    extendedValue = { ...base(), totalMarks: { nodes: "*", requested: "*", dra: "*" },
+      totalsState: { error: null, refreshError: "timeout", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-totals-held").textContent).toContain("Accelerator totals as of");
+    expect(screen.getByTestId("nodes-totals-held").textContent).toContain("the newer read failed: timeout");
+    expect(screen.queryByTestId("nodes-extended-held")).toBeNull();
+  });
+
+  it("a node with only an ordinary extended resource still gets the reservations' notices", () => {
+    const plain: NodeSummaryDTO = { ...healthy, name: "plain-1", uid: "uid-plain-1", extended: { entries: [{ name: "example.com/resource", capacity: "2", allocatable: "2", facts: [] }] } };
+    extendedValue = { ...base(), totals: [], reservations: new Map(), reservationsRead: false, reservationsDropped: 3,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([plain]);
+    const { unmount } = render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-error").textContent).toContain("forbidden: pods");
+    expect(screen.getByTestId("nodes-extended-dropped").textContent).toContain("Requested not shown for 3 nodes");
+    unmount();
+    extendedValue = { ...base(), totals: [], reservationMarks: { nodes: "*", requested: "*", dra: "*" },
+      reservationsState: { error: null, refreshError: "boom", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([plain]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-held").textContent).toContain("the newer read failed: boom");
+  });
+
+  it("no extended evidence, no notices", () => {
+    extendedValue = { ...base(), totals: [], reservations: new Map(), reservationsRead: false,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([healthy]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.queryByTestId("nodes-extended-error")).toBeNull();
+  });
+
   it("the inspector says a dropped row, and a withdrawn plugin as 0 advertised", () => {
     extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
     const withdrawn: NodeSummaryDTO = { ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], capacity: "0", allocatable: "0", sharing: undefined, facts: [] }] } };
