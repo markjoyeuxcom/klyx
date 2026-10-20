@@ -183,7 +183,11 @@ function assertModel(c: Capture, m: ClusterAttention) {
   for (const pe of ex.parts) {
     const where = `${c.case} ${pe.task}/${pe.part}`;
     if (INVENTORY.has(`${pe.task}/${pe.part}`)) {
-      expect(m.areas.find((x) => x.id === pe.task)?.lines.some((x) => x.part === pe.part), where).toBe(false);
+      // an inventory part is never a line: inside its task's area when the
+      // task has one, and a lens-only task (S11a's extended) has no area
+      const area = m.areas.find((x) => x.id === pe.task);
+      if (TASKS.some((t) => t.task === pe.task)) expect(area?.lines.some((x) => x.part === pe.part), where).toBe(false);
+      else expect(area, where).toBeUndefined();
       continue;
     }
     const { a, l } = lineOf(m, pe.task, pe.part);
