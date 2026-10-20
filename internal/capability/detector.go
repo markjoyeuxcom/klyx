@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -131,6 +132,12 @@ type Detector struct {
 	// rawGet reads one API path (coverage S9: the external metrics
 	// APIService). nil selects the discovery REST client; tests inject it.
 	rawGet func(ctx context.Context, path string) ([]byte, error)
+	// rawList reads one API path with query parameters (coverage S10: the
+	// NodePools, the class kinds and the NodePool CRD). nil selects the
+	// discovery REST client; tests inject it.
+	rawList func(ctx context.Context, path string, params map[string]string) ([]byte, error)
+	// now is the clock NAP's activity window reads; nil is time.Now.
+	now func() time.Time
 }
 
 func NewDetector(cs kubernetes.Interface) *Detector { return &Detector{cs: cs} }
@@ -474,39 +481,6 @@ func (d *Detector) detectExternalSecrets(ctx context.Context, served map[string]
 	out.Healthy, out.Verified, out.Base.Reason = controllerVerdict(d.controllerProbe(ctx, deploymentWorkload, externalSecretsNamespace, externalSecretsController),
 		"External Secrets Operator installed but "+externalSecretsController+" is not ready",
 		"External Secrets Operator installed but "+externalSecretsController+" health is unverified")
-	out.Base.Tier = Classify(true, out.Healthy)
-	return out
-}
-
-// detectKarpenter classifies Karpenter: present iff the karpenter.sh CRDs
-// (NodePool/NodeClaim) are served, healthy iff the karpenter controller
-// Deployment is ready in either of its conventional namespaces (kube-system
-// for newer EKS installs, karpenter for the classic helm chart).
-func (d *Detector) detectKarpenter(ctx context.Context, served map[string]bool) KarpenterCapability {
-	out := KarpenterCapability{}
-	out.Present = served["karpenter.sh"]
-	if !out.Present {
-		out.Base = Base{Tier: Absent, Reason: "no Karpenter CRDs installed"}
-		return out
-	}
-	// The first Deployment actually read decides (as the Karpenter lens
-	// does); none read in either namespace is unverified, never an outage.
-	read := ControllerRead{Health: ControllerUnverified}
-	var gaps []string
-	for _, ns := range []string{"kube-system", "karpenter"} {
-		r := d.controllerProbe(ctx, deploymentWorkload, ns, "karpenter")
-		if r.Health != ControllerUnverified {
-			read = r
-			break
-		}
-		gaps = append(gaps, r.Why)
-	}
-	if read.Health == ControllerUnverified {
-		read.Why = strings.Join(gaps, "; ")
-	}
-	out.Healthy, out.Verified, out.Base.Reason = controllerVerdict(read,
-		"Karpenter CRDs installed but the karpenter controller is not ready",
-		"Karpenter CRDs installed but the karpenter controller's health is unverified")
 	out.Base.Tier = Classify(true, out.Healthy)
 	return out
 }

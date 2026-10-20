@@ -51,7 +51,13 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	defer c.mu.Unlock()
 	c.caps.CertManager = set.CertManager
 	c.caps.ExternalSecrets = set.ExternalSecrets
-	c.caps.Karpenter = set.Karpenter
+	// coverage S10 §5: a NAP read that failed keeps the last activity
+	// until it leaves the window
+	now := time.Now()
+	if c.clk != nil {
+		now = c.clk.Now()
+	}
+	c.caps.Karpenter = set.Karpenter.Refreshed(c.caps.Karpenter, now)
 	c.caps.Reloader = set.Reloader
 	c.caps.Network = set.Network
 	c.caps.Admission = set.Admission
