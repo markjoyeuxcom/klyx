@@ -12,7 +12,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // The bounds (S11a §2.0).
@@ -49,8 +48,67 @@ func IsExtended(name corev1.ResourceName) bool {
 		strings.HasPrefix(s, corev1.DefaultResourceRequestsPrefix) {
 		return false
 	}
-	return len(validation.IsQualifiedName(corev1.DefaultResourceRequestsPrefix+s)) == 0
+	// qualified("requests." + s) without building it: s has a slash, and
+	// "requests" is a valid DNS label, so the prefixed domain is valid when
+	// the domain is and the prefix leaves it within 253 bytes
+	domain, local, _ := strings.Cut(s, "/")
+	return len(corev1.DefaultResourceRequestsPrefix)+len(domain) <= 253 && !strings.Contains(local, "/") && dnsSubdomain(domain) && labelName(local)
 }
+
+// qualified is Kubernetes' IsQualifiedName (content.IsLabelKey) reporting no
+// error, as a byte scan: its regular expressions cost about 4us on a long
+// name, which a pod naming thousands of resources multiplies on every
+// evaluation (S11a §8). A fuzz test holds it equal to the upstream function.
+func qualified(s string) bool {
+	prefix, name, slash := strings.Cut(s, "/")
+	if !slash {
+		return labelName(prefix)
+	}
+	return !strings.Contains(name, "/") && dnsSubdomain(prefix) && labelName(name)
+}
+
+// labelName is the name part: 1 to 63 bytes of [-A-Za-z0-9_.], starting and
+// ending with [A-Za-z0-9].
+func labelName(s string) bool {
+	if len(s) == 0 || len(s) > 63 || !alnum(s[0]) || !alnum(s[len(s)-1]) {
+		return false
+	}
+	for i := 1; i < len(s)-1; i++ {
+		if c := s[i]; !alnum(c) && c != '-' && c != '_' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// dnsSubdomain is an RFC 1123 subdomain of at most 253 bytes: dot-separated
+// labels of [-a-z0-9], each starting and ending with [a-z0-9].
+func dnsSubdomain(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) && s[i] != '.' {
+			continue
+		}
+		label := s[start:i]
+		if len(label) == 0 || !lowerAlnum(label[0]) || !lowerAlnum(label[len(label)-1]) {
+			return false
+		}
+		for j := 1; j < len(label)-1; j++ {
+			if c := label[j]; !lowerAlnum(c) && c != '-' {
+				return false
+			}
+		}
+		start = i + 1
+	}
+	return true
+}
+
+func lowerAlnum(c byte) bool { return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' }
+
+func alnum(c byte) bool { return lowerAlnum(c) || c >= 'A' && c <= 'Z' }
 
 // IsDRAExtended is the scheduler's IsDRAExtendedResourceName: an extended
 // name or a DeviceClass's implicit name. A pod's requests (S11a §2).

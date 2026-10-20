@@ -18,6 +18,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	krt "k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,9 @@ type loadScale struct {
 	scalers int
 	// coverage S10: NodePools spread over one class per provider adapter
 	pools int
+	// coverage S11a (no field): a quarter of the nodes advertise 8 GPUs,
+	// half of them with one not allocatable, and a tenth of the pods
+	// request one, some on nodes that do not advertise it
 }
 
 // Coverage S7 §8: the large cluster carries about 500 routes and 50
@@ -585,12 +589,29 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 				Containers: []corev1.Container{{Name: "main", Image: "shop/" + app + ":1.0", Env: []corev1.EnvVar{{Name: "A", Value: long}}}}},
 			Status: status,
 		}
+		if i%10 == 0 { // coverage S11a: a tenth of the pods request a GPU
+			gpu := corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+			p.Spec.Containers[0].Resources = corev1.ResourceRequirements{Requests: gpu, Limits: gpu}
+		}
 		pods = append(pods, p)
 		typedObjs = append(typedObjs, p)
 	}
 	for i := 0; i < sc.nodes; i++ {
-		typedObjs = append(typedObjs, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%02d", i), UID: types.UID(fmt.Sprintf("node-%02d", i)), Labels: labels("node", i)},
-			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}})
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%02d", i), UID: types.UID(fmt.Sprintf("node-%02d", i)), Labels: labels("node", i)},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}}
+		if i%4 == 0 { // coverage S11a: a quarter of the nodes advertise GPUs, half of those with one not allocatable
+			alloc := "8"
+			if i%8 == 4 {
+				alloc = "7"
+			}
+			n.Status.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("32"), corev1.ResourceMemory: resource.MustParse("256Gi"), "nvidia.com/gpu": resource.MustParse("8")}
+			n.Status.Allocatable = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("31"), corev1.ResourceMemory: resource.MustParse("250Gi"), "nvidia.com/gpu": resource.MustParse(alloc)}
+			for k, v := range map[string]string{"nvidia.com/gpu.product": "NVIDIA-H100-80GB-HBM3", "nvidia.com/gpu.memory": "81559", "nvidia.com/gpu.count": "8",
+				"nvidia.com/gpu.family": "hopper", "nvidia.com/cuda.driver-version.full": "550.54.15", "nvidia.com/mig.strategy": "none"} {
+				n.Labels[k] = v
+			}
+		}
+		typedObjs = append(typedObjs, n)
 	}
 	for i := 0; i < 50; i++ {
 		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i)),
