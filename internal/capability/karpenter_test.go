@@ -300,6 +300,9 @@ func TestKarpenterReadingsAndTask(t *testing.T) {
 	})
 	t.Run("NAP activity never clears an unread inventory", func(t *testing.T) {
 		k := detectKarp(aks, aksInUse(), forbidList, napEvent("e1", s10Now.Add(-10*time.Minute)))
+		if h, _ := k.Reading(karpenter.ClassKinds[1]); h.State != karpenter.HandlerUnproven {
+			t.Fatalf("the kind's handler is unproven beside an unread inventory: %+v", h)
+		}
 		if s, r := k.Task(); s != KarpenterUnknown || !strings.Contains(r, "activity as of") || !strings.Contains(r, "could not all be read") {
 			t.Fatalf("%s %s", s, r)
 		}

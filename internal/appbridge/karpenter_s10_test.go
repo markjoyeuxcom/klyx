@@ -165,9 +165,10 @@ func TestS10ExplainCarriesNoProviderText(t *testing.T) {
 			t.Errorf("a class row is a fact: no verdict: %v", ev["klyxVerdict"])
 		}
 	}
-	// The local inspector keeps the native text.
-	b, _ := json.Marshal(karpenterPoolRowDTO(prow))
-	if !strings.Contains(string(b), s10Profile) {
+	// The local inspector keeps the native text, the headline finding's own.
+	dto := karpenterPoolRowDTO(prow)
+	b, _ := json.Marshal(dto)
+	if !strings.Contains(string(b), s10Profile) || len(dto.Findings) < 2 || !strings.Contains(dto.Findings[1].Native, s10Profile) {
 		t.Fatalf("the pool DTO keeps the native text locally: %s", b)
 	}
 	b, _ = json.Marshal(karpenterClassRowDTO(conn.rows["karpenter/nodeclasses"].Rows.(healthsrc.RowSet[healthsrc.KarpenterClassRow]).Rows[0]))

@@ -683,3 +683,31 @@ func TestPoolFoundWithoutAClassIsUnresolved(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// Mutation survivors (S10 stage 6).
+func TestClaimWithheldReason(t *testing.T) {
+	cl := ParseNodeClaim(obj("karpenter.sh/v1", "NodeClaim", "c1", 1, nil, nil,
+		c("Launched", "False", "launch failed for "+needleProfile, "m", 1), c("Ready", "False", "UnhealthyDependents", "", 1)), time.Now())
+	if !cl.FailingReasonWithheld || cl.FailingReason != "" {
+		t.Fatalf("a non-token launch reason is withheld: %+v", cl)
+	}
+	if e := ClaimRule(cl); e.Reason != "Launched False: reason withheld: "+Unworded {
+		t.Fatalf("the claim's reason says so: %q", e.Reason)
+	}
+}
+
+func TestClassFailingIsAFalseDependentOnly(t *testing.T) {
+	cl := ec2("x", 1, c("AMIsReady", "True", "", "", 1), c("SubnetsReady", "Unknown", "AwaitingSubnets", "", 1),
+		c("SecurityGroupsReady", "False", "SecurityGroupsNotFound", "", 1), c("Ready", "False", "UnhealthyDependents", "", 1))
+	if cl.Failing == nil || cl.Failing.Type != "SecurityGroupsReady" {
+		t.Fatalf("an Unknown dependent is not the failure: %+v", cl.Failing)
+	}
+}
+
+func TestPoolNotesNeverHeadline(t *testing.T) {
+	k, _ := KindFor(AdapterEC2)
+	ok := ParseNodePool(poolU(1, ec2Ref, 0, c("NodeClassReady", "True", "", "", 1), c("Ready", "True", "", "", 1)))
+	if v := PoolRule(ok, PoolInputs{Link: Link{State: LinkUnreadable, Kind: k}}); v.Eval.Label != "ready" || v.Eval.Reason != "" {
+		t.Fatalf("a pool with only a note is ready: %+v", v.Eval)
+	}
+}
