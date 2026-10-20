@@ -42,7 +42,7 @@ import { PinnedGone, expectsOther } from "./PinnedGone";
 import { LogHistoryPane } from "./LogHistoryPane";
 import { expectPin } from "../nav/inspectorPin";
 import { PodIdentity } from "./IdentityBlocks";
-import { DebugChooser, DebugContainersBlock, PodResourcesBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
+import { DebugChooser, DebugContainersBlock, PodResourcesBlock, PodExtendedBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
 import { SyncingChip } from "./staleness";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
@@ -800,6 +800,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         {uid && !gone && <PodIdentity cluster={cluster} namespace={namespace} name={name} uid={uid} active />}
 
         {shown && <PodResourcesBlock detail={shown} />}
+        {shown && <PodExtendedBlock detail={shown} />}
         {shown && <DebugContainersBlock detail={shown} />}
 
         <InspectorBlock title="Placement">

@@ -1,4 +1,8 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useExtendedRows, type ExtendedMarks } from "../health/useExtendedRows";
+import { acceleratorsOf, gpuCell, totalsText } from "./extended";
+import { NodeExtendedBlock } from "./NodeExtended";
+import type { ReservationDTO } from "../store/fleet";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
@@ -444,6 +448,9 @@ const NODE_COLUMNS: ColumnDef[] = [
   ROW_MARK,
   { id: "name", width: 240, priority: 0, flex: true },
   { id: "status", width: 140, priority: 1 },
+  // coverage S11a: requested / allocatable for an accelerator, shown only
+  // when some node advertises one
+  { id: "gpu", width: 130, priority: 2 },
   { id: "cpuUsed", width: 104, priority: 2 },
   { id: "memUsed", width: 120, priority: 2 },
   { id: "roles", width: 110, priority: 3 },
@@ -454,7 +461,7 @@ const NODE_COLUMNS: ColumnDef[] = [
   { id: "age", width: 44, priority: 7 },
 ];
 const COLUMN_LABEL: Record<string, string> = {
-  lamp: "", name: "Node", status: "Status", cpuUsed: "CPU used", memUsed: "Memory used", roles: "Roles",
+  lamp: "", name: "Node", status: "Status", gpu: "GPU", cpuUsed: "CPU used", memUsed: "Memory used", roles: "Roles",
   version: "Version", taints: "Taints", cpuAlloc: "CPU alloc / cap", memAlloc: "Mem alloc / cap", age: "Age",
 };
 
@@ -664,10 +671,15 @@ export function NodesView({ cluster }: { cluster: string }) {
   };
 
   const usageAvailable = util?.available !== false;
+  // coverage S11a: the extended task's rows, joined by node UID; nothing
+  // renders on a cluster with no accelerator
+  const ext = useExtendedRows(mine ? cluster : null);
+  const hasAccel = scopedNodes.some((n) => acceleratorsOf(n.extended).length > 0);
   const fitted = useMemo(
-    () => fitColumns(NODE_COLUMNS.filter((c) => usageAvailable || (c.id !== "cpuUsed" && c.id !== "memUsed")), bodyWidth),
-    [bodyWidth, usageAvailable],
+    () => fitColumns(NODE_COLUMNS.filter((c) => (usageAvailable || (c.id !== "cpuUsed" && c.id !== "memUsed")) && (hasAccel || c.id !== "gpu")), bodyWidth),
+    [bodyWidth, usageAvailable, hasAccel],
   );
+  const totals = totalsText(ext.totals, ext.totalMarks, ext.totalsOmitted);
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
@@ -783,6 +795,10 @@ export function NodesView({ cluster }: { cluster: string }) {
                       </span>
                     )}
                     {show("status") && <span style={ellipsis}><VerdictLabel health={n.health} />{n.unschedulable && kindOf(n.health) !== "paused" ? <span className="t-secondary"> · cordoned</span> : null}</span>}
+                    {show("gpu") && (() => {
+                      const cell = gpuCell(n.extended, ext.reservations.get(n.uid ?? ""), ext.reservationMarks, !ext.reservations.has(n.uid ?? ""));
+                      return <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }} title={cell.title || undefined} data-testid="nodes-gpu-cell">{cell.text || "-"}</span>;
+                    })()}
                     {show("cpuUsed") && <UsageCell resource="cpu" usage={usage?.cpu ?? null} allocatable={n.cpuAllocatable} format={fmtCpu} />}
                     {show("memUsed") && <UsageCell resource="mem" usage={usage?.mem ?? null} allocatable={n.memAllocatable} format={fmtMem} />}
                     {show("roles") && <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }}>{n.roles.length > 0 ? n.roles.join(", ") : "-"}</span>}
@@ -802,6 +818,7 @@ export function NodesView({ cluster }: { cluster: string }) {
           <>
             <span className="t-secondary">
               {visibleNodes.length} of {scopedNodes.length}{mark} nodes{filterLabel ? ` · filter: ${filterLabel}` : ""}{asOf} · allocatable {cpuAlloc.toFixed(1)} CPU · {fmtMem(memAlloc)} · {podCap} pod slots
+              {totals.text && <span title={totals.title || undefined} data-testid="nodes-extended-totals"> · {totals.text}</span>}
             </span>
             {filterLabel && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedNodes.length} nodes</button>}
           </>
@@ -820,6 +837,8 @@ export function NodesView({ cluster }: { cluster: string }) {
             onCordon={(cordon) => setCordonPending({ cluster, node: subject.name, uid: subject.uid ?? "", cordon })}
             onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
+            reservation={ext.reservations.get(subject.uid ?? "")}
+            extMarks={ext.reservationMarks}
           />
         ) : sel && pin.expected && pin.gone ? (
           <PinnedGone cluster={cluster} kind="Node" name={sel.name} uid={pin.expected} gone={pin.gone}
@@ -1022,7 +1041,9 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 // then taints and collapsed metadata. The row (live, or the selection's last)
 // is the verdict and the facts; the detail is shown only for the row's UID
 // (design §5b) - a same-name replacement's detail never becomes this one's.
-function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replaced, onCordon, onDrain, onClose }: {
+function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replaced, onCordon, onDrain, onClose, reservation, extMarks }: {
+  reservation?: ReservationDTO;
+  extMarks?: ExtendedMarks;
   cluster: string;
   row: NodeRowDTO;
   uid: string;
@@ -1169,6 +1190,8 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
                 <span>OS / arch</span><span>{row.os || "-"} / {row.arch || "-"}</span>
               </div>
             </InspectorBlock>
+
+            {extMarks && <NodeExtendedBlock row={row} reservation={reservation} marks={extMarks} rowMissing={!reservation} />}
 
             {shown.taints.length > 0 && (
               <InspectorBlock title="Taints" count={shown.taints.length}>

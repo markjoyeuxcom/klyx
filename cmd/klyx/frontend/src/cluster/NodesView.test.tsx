@@ -9,6 +9,12 @@ import type { NodeSummaryDTO, NodeDetailDTO } from "../store/fleet";
 // The rows adapter is mocked: these tests seed the nodes slice directly
 // (NodesRows.test.tsx mounts the real adapter over the health store).
 vi.mock("../health/useNodeRows", () => ({ useNodeRows: () => {} }));
+// coverage S11a: the extended task's rows (tests set extendedValue)
+let extendedValue: import("../health/useExtendedRows").ExtendedRows = {
+  reservations: new Map(), reservationMarks: { nodes: "", requested: "", dra: "" }, reservationsDropped: 0,
+  totals: [], totalMarks: { nodes: "", requested: "", dra: "" }, totalsOmitted: 0, reservationsRead: true, totalsRead: true,
+};
+vi.mock("../health/useExtendedRows", async (orig) => ({ ...(await orig<typeof import("../health/useExtendedRows")>()), useExtendedRows: () => extendedValue }));
 
 vi.mock("../bridge/nodes", () => ({
   openNodeDetail: vi.fn().mockResolvedValue(undefined),
@@ -896,5 +902,82 @@ describe("NodesView condition polarity (Codex re-review)", () => {
       expect(colored).toBeNull();
     }
     expect(getByText(/task hung/)).toBeTruthy();
+  });
+});
+
+// Coverage S11a §6: the GPU column, the footer's totals and the node
+// inspector's extended resources.
+describe("NodesView extended resources (S11a)", () => {
+  const gpuNode: NodeSummaryDTO = {
+    ...healthy, name: "gpu-1", uid: "uid-gpu-1",
+    health: { kind: "degraded", label: "Resources not allocatable", reason: "NotAllocatable", rule: "node.resources-not-allocatable" },
+    extended: { migStrategy: "mixed", omitted: 1, factsOmitted: 2, entries: [
+      { name: "nvidia.com/gpu", capacity: "8", allocatable: "6", accelerator: true, unit: "GPU", sharing: "shared (time-slicing): each GPU is advertised 4 times, so these count shares of a GPU",
+        facts: [{ key: "product", value: "NVIDIA-A100" }, { key: "replicas", value: "4" }] },
+      { name: "example.com/resource", capacity: "2", allocatable: "2", facts: [] },
+    ] },
+  };
+  const reservation = { uid: "uid-gpu-1", node: "gpu-1", untracked: true, omitted: 2, entries: [
+    { name: "nvidia.com/gpu", advertised: true, requested: "3", servedByDra: "1", notAdvertised: "0" },
+    { name: "example.com/resource", advertised: true, requested: "1", servedByDra: "0", notAdvertised: "0" },
+    { name: "example.com/license", requested: "0", servedByDra: "0", notAdvertised: "2" },
+  ] };
+  const live = { nodes: "" as const, requested: "" as const, dra: "" as const };
+  const base = () => ({ reservations: new Map([["uid-gpu-1", reservation]]), reservationMarks: live, reservationsDropped: 0,
+    totals: [{ name: "nvidia.com/gpu", capacity: "8", allocatable: "6", requested: "3" }], totalMarks: live, totalsOmitted: 0, reservationsRead: true, totalsRead: true });
+
+  it("no accelerator, no GPU column and no totals", () => {
+    extendedValue = { ...base(), reservations: new Map(), totals: [] };
+    seed([healthy]);
+    const { container, queryByText } = render(<NodesView cluster="homelab" />);
+    expect(queryByText("GPU")).toBeNull();
+    expect(container.querySelector("[data-testid='nodes-extended-totals']")).toBeNull();
+  });
+
+  it("the column reads requested / allocatable with the gap, and the footer its totals", () => {
+    extendedValue = base();
+    seed([gpuNode, healthy]);
+    const { getAllByTestId, getByTestId, getByText } = render(<NodesView cluster="homelab" />);
+    expect(getByText("GPU")).toBeTruthy();
+    const cells = getAllByTestId("nodes-gpu-cell").map((c) => c.textContent);
+    expect(cells).toContain("3 / 6 · 2 not allocatable");
+    expect(cells).toContain("-");
+    expect(getByTestId("nodes-extended-totals").textContent).toBe(" · 6 nvidia.com/gpu allocatable (3 requested)");
+  });
+
+  it("a requested figure without its row, or from an unestablished read, is ?", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
+    seed([gpuNode]);
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    expect(getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("? / 6 · 2 not allocatable");
+  });
+
+  it("the inspector names each resource, its sharing and facts, the other requests and every omission", () => {
+    extendedValue = { ...base(), reservationMarks: { nodes: "", requested: "*", dra: "" } };
+    seedWithDetail(gpuNode, { ...fakeDetail, summary: gpuNode });
+    const { getByTestId, getAllByTestId } = render(<NodesView cluster="homelab" />);
+    const block = getByTestId("node-extended");
+    expect(block.textContent).toContain("MIG strategy: mixed (each profile is its own resource)");
+    const lines = getAllByTestId("node-extended-line").map((l) => l.textContent);
+    expect(lines[0]).toContain("nvidia.com/gpu · 3* requested · 6 allocatable · 8 capacity · 2 not allocatable · 1 served by DRA");
+    expect(lines[0]).toContain("each GPU is advertised 4 times");
+    expect(lines[0]).toContain("product NVIDIA-A100");
+    expect(lines[2]).toContain("example.com/license · 2* requested, not advertised by this node");
+    const notes = getAllByTestId("node-extended-note").map((n) => n.textContent);
+    expect(notes).toEqual(expect.arrayContaining(["1 more extended resource not shown", "vendor facts for 2 more resources not shown", "2 more requested resources not shown",
+      "requested from the last observed read"]));
+    expect(notes.some((n) => n?.startsWith("more than 256 distinct names"))).toBe(true);
+  });
+
+  it("a node-row-only update re-renders the block, from the joined rows", () => {
+    extendedValue = base();
+    seedWithDetail(gpuNode, { ...fakeDetail, summary: gpuNode });
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    expect(getAllByTestId("node-extended-line")[0].textContent).toContain("6 allocatable");
+    act(() => {
+      useFleet.setState((s) => ({ nodes: { ...s.nodes, items: [{ ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], allocatable: "8" }] } }] } }));
+    });
+    expect(getAllByTestId("node-extended-line")[0].textContent).toContain("8 allocatable");
+    expect(getAllByTestId("node-extended-line")[0].textContent).not.toContain("not allocatable");
   });
 });

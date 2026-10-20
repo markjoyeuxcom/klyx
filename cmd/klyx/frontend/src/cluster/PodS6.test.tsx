@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { PodDetailDTO, PodSummaryDTO } from "../store/fleet";
-import { DebugContainersBlock, PodResourcesBlock, debugConfirmText, podStale } from "./PodS6";
+import { DebugContainersBlock, PodExtendedBlock, PodResourcesBlock, debugConfirmText, podStale } from "./PodS6";
 
 const summary = (over: Partial<PodSummaryDTO> = {}): PodSummaryDTO => ({
   namespace: "app", name: "web", uid: "u", ready: true, phase: "Running", reason: "", rank: "healthy", restarts: 0, node: "n1", ip: "", ownerKind: "", ownerName: "",
@@ -67,5 +67,25 @@ describe("coverage S6 pod pieces", () => {
     expect(t).toContain("image busybox:1.36, profile netadmin: adds NET_ADMIN and NET_RAW.");
     expect(t).toContain("verified for kubectl 1.30-1.37");
     expect(t).toContain("increments the pod's generation");
+  });
+});
+
+// Coverage S11a §6: the pod's extended requests, the DRA-served pairs and
+// their claim, and the bounds' omissions.
+describe("PodExtendedBlock", () => {
+  it("lists each container's extended requests, marks DRA-served pairs and names the claim", () => {
+    render(<PodExtendedBlock detail={detail({ extended: { claim: "web-extended-resources-x", omitted: 2, containers: [
+      { container: "init", init: true, entries: [{ name: "example.com/x", quantity: "1" }] },
+      { container: "app", omitted: 1, entries: [{ name: "nvidia.com/gpu", quantity: "2", servedByDra: true }, { name: "deviceclass.resource.kubernetes.io/gpu.example.com", quantity: "-", servedByDra: true }] },
+    ] } })} />);
+    const block = screen.getByTestId("pod-extended").textContent ?? "";
+    expect(block).toContain("init init: example.com/x 1");
+    expect(block).toContain("app: nvidia.com/gpu 2 (served by DRA) · deviceclass.resource.kubernetes.io/gpu.example.com not established (served by DRA) · 1 more not shown");
+    expect(block).toContain("2 more extended requests not shown");
+    expect(block).toContain("DRA serves the marked requests through the ResourceClaim web-extended-resources-x.");
+  });
+  it("renders nothing for a pod with no extended request", () => {
+    const { container } = render(<PodExtendedBlock detail={detail({ extended: { containers: [] } })} />);
+    expect(container.textContent).toBe("");
   });
 });

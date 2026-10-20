@@ -544,7 +544,7 @@ export type PodRowDTO = {
 // probe anchors a push's timing to the lens commit that shows it.
 export type RowsVer = { incarnation: number; ver: number };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
-  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number };
+  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number; extended?: ExtendedPodDTO };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.
@@ -928,7 +928,7 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike };
+export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike; extended?: ExtendedDTO };
 // A node on the rows transport: time-stable, so never a relative age (the
 // lens ticks it from createdUnix; addendum §3.1).
 export type NodeRowDTO = Omit<NodeSummaryDTO, "ageSeconds">;
@@ -1665,3 +1665,15 @@ export function podsText(c: Pick<ClusterDTO, "pods" | "podsKnown" | "podsStale">
   if (c.podsKnown === false) return "—";
   return c.podsStale ? `${c.pods} (last good)` : String(c.pods);
 }
+
+// Coverage S11a: extended resources. Every figure is a decimal string
+// (exact past 2^53): "" when the key is absent, "-" when not established.
+export type ExtendedFactDTO = { key: string; value: string };
+export type ExtendedEntryDTO = { name: string; capacity: string; allocatable: string; accelerator?: boolean; unit?: string; partition?: string; renamedFrom?: string; sharing?: string; facts: ExtendedFactDTO[] };
+export type ExtendedDTO = { entries: ExtendedEntryDTO[]; omitted?: number; factsOmitted?: number; migStrategy?: string };
+export type ReservedDTO = { name: string; advertised?: boolean; requested: string; servedByDra: string; notAdvertised: string };
+export type ReservationDTO = { uid: string; node: string; entries: ReservedDTO[]; omitted?: number; untracked?: boolean };
+export type ExtendedTotalDTO = { name: string; capacity: string; allocatable: string; requested: string };
+export type ExtendedPodEntryDTO = { name: string; quantity: string; servedByDra?: boolean };
+export type ExtendedContainerDTO = { container: string; init?: boolean; entries: ExtendedPodEntryDTO[]; omitted?: number };
+export type ExtendedPodDTO = { containers: ExtendedContainerDTO[]; omitted?: number; claim?: string };
