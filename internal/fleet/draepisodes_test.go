@@ -70,7 +70,6 @@ func TestDRAEpisodesDriver(t *testing.T) {
 	start = now
 	step("a contiguous change of the pool keeps it", func() { o.st.Seq++; o.objs = []any{draEpisodeSlice("a", "12", 2)} }, start)
 	step("a new epoch (a relist) restarts it, the pool unchanged", func() { o.st.Seq++; o.st.Epoch++ }, now.Add(time.Minute))
-	start = now
 	step("a new generation restarts it", func() { o.st.Seq++; o.st.Generation++ }, now.Add(time.Minute))
 	n := len(o.facts)
 	now = now.Add(time.Minute)
