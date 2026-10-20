@@ -529,11 +529,11 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 			}
 			m = parityMember{Role: kindRole[x.Eval.Role], Included: x.Eval.Included}
 		}
-		key := x.Ref.UID
-		if key == "" && x.Ref.Name != "" {
-			key = "pool:" + x.Ref.Name // a pool's stated identity (coverage S11b)
+		id := x.Ref.UID
+		if key == "dra/pools" {
+			id = "pool:" + x.Ref.Name // a pool's stated identity (coverage S11b): pools alone have no UID
 		}
-		out[key] = m
+		out[id] = m
 	}
 	return out, nil
 }

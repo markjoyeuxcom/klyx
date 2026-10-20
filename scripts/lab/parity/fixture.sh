@@ -175,7 +175,9 @@ EOF
 }
 
 # dra_objects: coverage S11b's upstream example DRA driver (the chart pinned
-# by digest, installed with Helm into its own namespace), its node-local
+# by digest, rendered for the cluster's version and applied into its own
+# namespace: never installed as a Helm release, which would be a
+# helm/releases member the oracle does not model), its node-local
 # pool of 8 devices, one claim allocated to a running pod, and its
 # DeviceClass. Case 12 adds a claim no node can satisfy; case 13 an invalid
 # fixture pool (all-nodes slices under a driver name no plugin serves).
@@ -187,8 +189,14 @@ dra_objects() {
 		got=$(openssl dgst -sha256 -r "$dra_chart" | awk '{print $1}')
 		[[ $got == "$dra_chart_sha256" ]] || { rm -f "$dra_chart"; die "the DRA chart has digest $got, pinned $dra_chart_sha256"; }
 	fi
-	helm --kubeconfig "$kubeconfig" --kube-context "$ctx" upgrade -i --create-namespace --namespace parity-dra dra-example-driver "$dra_chart" --wait --timeout 300s >/dev/null ||
-		die "the example DRA driver did not install"
+	local server
+	server=$(k version -o json | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["serverVersion"]["gitVersion"])') ||
+		die "could not read the server's version"
+	k create namespace parity-dra --dry-run=client -o yaml | k apply -f - >/dev/null
+	helm template dra-example-driver "$dra_chart" --namespace parity-dra --kube-version "$server" --api-versions resource.k8s.io/v1 |
+		k -n parity-dra apply -f - >/dev/null || die "the example DRA driver did not apply"
+	k -n parity-dra rollout status daemonset/dra-example-driver-kubeletplugin --timeout=300s >/dev/null ||
+		die "the example DRA driver's kubelet plugin did not roll out"
 	local i=0
 	until k get resourceslices -o 'jsonpath={.items[*].spec.nodeName}' | grep -q "$name-control-plane"; do
 		i=$((i + 1))
