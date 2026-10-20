@@ -265,7 +265,9 @@ func TestReview1IncompleteOperatorReads(t *testing.T) {
 	c.typed.(interface {
 		PrependReactor(string, string, k8stesting.ReactionFunc)
 	}).PrependReactor("list", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &appsv1.ReplicaSetList{ListMeta: metav1.ListMeta{Continue: "more"}}, nil
+		// the operator's own ReplicaSet, and more not returned
+		return true, &appsv1.ReplicaSetList{ListMeta: metav1.ListMeta{Continue: "more"}, Items: []appsv1.ReplicaSet{{ObjectMeta: metav1.ObjectMeta{Namespace: "keda", Name: "keda-operator-1", UID: "rs-1",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "keda-operator", UID: "dep-1", Controller: kyes()}}}}}}, nil
 	})
 	if in, err := c.KEDAInspect(context.Background(), "scaledobjects", "team", "web", "so-1"); err != nil || in.Handler != "" || in.Version != "" {
 		t.Fatalf("a continued ReplicaSet list: %+v %v", in, err)
@@ -343,5 +345,35 @@ func TestReview1InverseIdentityUnproven(t *testing.T) {
 	f = obsWith(map[string][]any{healthsrc.KindTriggerAuths: {plain}, healthsrc.KindScaledObjects: {user}})
 	if got, read := c.kedaAuthsFor(context.Background(), f, "keda", "keda-operator"); read != identity.ReadPartial || len(got) != 0 {
 		t.Fatalf("a disputed ServiceAccount: %+v (%s)", got, read)
+	}
+}
+
+// The inverse join is per namespace: an operator in another namespace
+// whose ServiceAccount has the same name is not the handler's.
+func TestReview1InverseIdentityOtherNamespace(t *testing.T) {
+	c := kedaFixture(t, "ghcr.io/kedacore/keda:2.21.0", nil, nil)
+	c.caps.KEDA.Operators = append(c.caps.KEDA.Operators, capability.KEDAOperator{Namespace: "keda2", Name: "keda-operator", UID: "dep-2"})
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "keda2", Name: "rs", UID: "rs-2", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", UID: "dep-2", Controller: kyes()}}}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "keda2", Name: "pod", OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", UID: "rs-2", Controller: kyes()}}},
+		Spec: corev1.PodSpec{ServiceAccountName: "keda-operator", Containers: []corev1.Container{{Name: "keda-operator", Image: "ghcr.io/kedacore/keda:2.21.0",
+			Env: []corev1.EnvVar{{Name: keda.EnvWatchNamespace, Value: "elsewhere"}}}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	if _, err := c.typed.AppsV1().ReplicaSets("keda2").Create(context.Background(), rs, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.typed.CoreV1().Pods("keda2").Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeKEDAObs()
+	for _, kind := range []string{healthsrc.KindTriggerAuths, healthsrc.KindClusterTriggerAuths} {
+		f.states[kind] = f.states[healthsrc.KindScaledObjects]
+		f.complete[kind] = true
+	}
+	f.objs[healthsrc.KindTriggerAuths] = []any{keda.ProjectAuth(kedaObj("TriggerAuthentication", "team", "aws-auth", "ta-1", map[string]any{"podIdentity": map[string]any{"provider": "aws"}}, nil), false)}
+	f.objs[healthsrc.KindScaledObjects] = []any{keda.ProjectScaledObject(kedaObj("ScaledObject", "team", "web", "so-1", map[string]any{"scaleTargetRef": map[string]any{"name": "web"}, "triggers": []any{authRef("aws-auth", "")}}, nil))}
+	if got, read := c.kedaAuthsFor(context.Background(), f, "keda", "keda-operator"); read != identity.ReadComplete || len(got) != 1 {
+		t.Fatalf("the handler's own account: %+v (%s)", got, read)
+	}
+	if got, read := c.kedaAuthsFor(context.Background(), f, "keda2", "keda-operator"); read != identity.ReadComplete || len(got) != 0 {
+		t.Fatalf("another namespace's operator: %+v (%s)", got, read)
 	}
 }
