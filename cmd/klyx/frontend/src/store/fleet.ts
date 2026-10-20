@@ -1,3 +1,4 @@
+import { validActivityAdmission, type ActivityAdmission, type AdmissionFindingDTO } from "../admission/finding";
 import type { ClaimHealthDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
 import { create } from "zustand";
 import type { HealthLike } from "../health/verdict";
@@ -649,6 +650,8 @@ export type FactDTO = { group: string; label: string; value: string; tone: strin
 // the unit manages and could delete the namespace itself.
 export type AdhocResultDTO = {
   kind: string; namespace: string; name: string; ok: boolean; error: string;
+  // coverage S3b: the document's refused request's admission finding
+  admission?: AdmissionFindingDTO;
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
   namespaceManaged: boolean;
   argoTracking: "" | "tracked" | "possible"; argoTrackingApp: string; argoTrackingPrunes: boolean;
@@ -1053,7 +1056,9 @@ const ARGO_EMPTY_ROWS = {
 
 // info: a fact to note, neither an outcome nor a failure (faults listed at
 // connect, The Line slice 10).
-export type ActionStatus = { kind: "success" | "error" | "info"; message: string };
+// admission: a refused request's finding, its line and its candidates'
+// names (coverage S3b §4); never its message.
+export type ActionStatus = { kind: "success" | "error" | "info"; message: string; admission?: ActivityAdmission[] };
 // One toast on screen / one row in the activity log. `at` is epoch ms.
 export type ActionEvent = ActionStatus & { id: number; at: number };
 
@@ -1076,7 +1081,12 @@ function loadActionLog(): ActionEvent[] {
         e && typeof e.message === "string" && typeof e.at === "number" && typeof e.id === "number" && Number.isFinite(e.id),
     );
     nextActionId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
-    return entries.slice(0, ACTION_LOG_MAX);
+    // older entries, and malformed findings, read as before
+    return entries.slice(0, ACTION_LOG_MAX).map((e) => {
+      const admission = validActivityAdmission(e.admission);
+      const rest: ActionEvent = { kind: e.kind, message: e.message, id: e.id, at: e.at };
+      return admission ? { ...rest, admission } : rest;
+    });
   } catch {
     return [];
   }

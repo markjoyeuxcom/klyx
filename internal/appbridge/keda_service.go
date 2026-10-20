@@ -232,7 +232,7 @@ func (s *KEDAService) SetPaused(cluster, resource, namespace, name, uid string, 
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.KEDASetPaused(ctx, resource, namespace, name, uid, pause); err != nil {
-		return ActionResultDTO{Error: urlscrub.Text(err.Error()).Text}
+		return failedScrubbed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

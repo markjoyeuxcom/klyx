@@ -268,7 +268,7 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, expectedUID, yaml, dryRun); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -293,8 +293,9 @@ func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []Adh
 	rs := conn.CreateResourceYAML(ctx, yaml, dryRun)
 	out := make([]AdhocResultDTO, 0, len(rs))
 	for _, r := range rs {
+		text, f := adhocFinding(ctx, conn, r.Error, r.Refusal())
 		out = append(out, AdhocResultDTO{
-			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error,
+			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: text, Admission: f,
 			NamespaceOwnerKind: r.NamespaceOwnerKind, NamespaceOwnerName: r.NamespaceOwnerName,
 			NamespaceOwnerNamespace: r.NamespaceOwnerNamespace, NamespacePrunes: r.NamespacePrunes,
 			NamespaceManaged: r.NamespaceManaged, ArgoTracking: r.ArgoTracking, ArgoTrackingApp: r.ArgoTrackingApp,
@@ -343,7 +344,7 @@ func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespac
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	if err := conn.DeleteAdhocObject(ctx, group, version, plural, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

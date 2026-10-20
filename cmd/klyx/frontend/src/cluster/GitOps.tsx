@@ -1077,13 +1077,18 @@ function InventoryList({ entries }: { entries: InventoryEntryDTO[] }) {
   );
 }
 
+// Coverage S3b §4: a difference is never attributed to a mutator, and never
+// discounted - the live diff and the drift events say so unconditionally.
+export const DRIFT_SENTENCE = "A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it.";
+
 function DiffSection({ cluster, namespace, name }: { cluster: string; namespace: string; name: string }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<FluxDiffDTO | null>(null);
+  const [at, setAt] = useState<number | null>(null);
   const run = () => {
     setRunning(true);
     fluxDiff(cluster, namespace, name, "")
-      .then((r) => setResult(r))
+      .then((r) => { setResult(r); setAt(Date.now()); })
       .catch((e) => setResult({ available: true, hasChanges: false, output: "", error: String(e) }))
       .finally(() => setRunning(false));
   };
@@ -1113,6 +1118,13 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>
       )}
+      {result && !result.error && result.via === "cache" && at !== null && (
+        // only a completed server-side dry run says what admission passed
+        <div data-testid="diff-dry-run-admission" style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginTop: 4 }}>
+          This dry run passed mutating admission and defaulting as of {new Date(at).toLocaleTimeString()}, so it shows what the API server would have stored then; a later apply&apos;s admission may differ.
+        </div>
+      )}
+      <div data-testid="drift-sentence" style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginTop: 4 }}>{DRIFT_SENTENCE}</div>
     </InspectorBlock>
   );
 }
@@ -1176,6 +1188,7 @@ function EventsSection({ events }: { events: EventRowDTO[] }) {
   const nowSec = Math.floor(Date.now() / 1000);
   return (
     <InspectorBlock title="Drift / events">
+      {events.some(isDriftEvent) && <div data-testid="drift-sentence" style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 2 }}>{DRIFT_SENTENCE}</div>}
       {events.length === 0 ? <Muted>no recent events</Muted> : events.map((e, i) => {
         const warn = e.type === "Warning";
         const drift = isDriftEvent(e);

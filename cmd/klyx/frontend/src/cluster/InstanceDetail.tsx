@@ -1,3 +1,4 @@
+import { AdmissionFinding } from "../admission/AdmissionFinding";
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
@@ -218,15 +219,9 @@ export function formatKubernetesActionError(raw: string): string {
   const error = raw.trim().replace(/\s+/g, " ");
   if (!error) return "Kubernetes rejected the request.";
 
-  const webhookTimeout = /failed calling webhook "([^"]+)": .*?(context deadline exceeded|timeout|timed out)/i.exec(error);
-  if (webhookTimeout) {
-    return `Admission webhook timed out: ${webhookTimeout[1]}. This is usually transient; retry after the webhook/controller recovers.`;
-  }
-
-  const admission = /admission webhook "([^"]+)" denied the request: (.+)$/i.exec(error);
-  if (admission) {
-    return `Admission denied by ${admission[1]}: ${admission[2]}`;
-  }
+  // An admission refusal is read by the backend's classifier from the
+  // server's own status (coverage S3b §2), never from this text: its finding
+  // is the panel's headline.
 
   const forbidden = /User "([^"]+)" cannot ([a-z]+) resource "([^"]+)"(?: in API group "([^"]*)")?(?: in the namespace "([^"]+)")?/i.exec(error);
   if (forbidden) {
@@ -244,7 +239,7 @@ export function formatKubernetesActionError(raw: string): string {
     return `Immutable field: Kubernetes rejected this because one or more fields cannot be changed after creation. ${extractInvalidDetail(error)}`;
   }
 
-  if (/dry run is not supported|does not support dry run/i.test(error)) {
+  if (/dry run is not supported/i.test(error)) {
     return "Server dry-run is not supported for this resource or API path. Apply is still blocked until the server can validate it another way.";
   }
 
@@ -1146,7 +1141,9 @@ function YamlPanel({
     setStatus(null);
     setConfirmApply(false);
     const r = await dryRunInstanceYAML(cluster, resource, instance, detail?.uid ?? "", draft);
-    setStatus(r.ok ? { ok: true, error: "Server dry-run passed" } : { ok: false, error: formatKubernetesActionError(r.error) });
+    // S3b §4: a completed dry run passed admission as of its time
+    setStatus(r.ok ? { ok: true, error: `Server dry-run passed admission and defaulting as of ${new Date().toLocaleTimeString()}; a later apply's admission may differ` }
+      : { ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
     setBusy(null);
   };
 
@@ -1159,7 +1156,7 @@ function YamlPanel({
     const r = await applyInstanceYAML(cluster, resource, instance, detail?.uid ?? "", submittedYaml);
     setConfirmApply(false);
     if (!r.ok) {
-      setStatus({ ok: false, error: formatKubernetesActionError(r.error) });
+      setStatus({ ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
       setBusy(null);
       return;
     }
@@ -1228,7 +1225,7 @@ function YamlPanel({
       )}
       {status && (
         <div style={noticeStyle(status.ok ? "success" : "danger")}>
-          {status.error}
+          {status.admission ? <AdmissionFinding cluster={cluster} f={status.admission} /> : status.error}
         </div>
       )}
       {confirmApply && (

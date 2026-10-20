@@ -1,3 +1,4 @@
+import { resultStatus, type ActionResultLike } from "../admission/finding";
 import { useFleet, ResourceDetailDTO } from "../store/fleet";
 import { Browser, Clipboard } from "@wailsio/runtime";
 import { GitOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
@@ -35,32 +36,23 @@ export async function getResourceDetail(cluster: string, kind: string, namespace
   }
 }
 
-type ActionResultDTO = { ok: boolean; error: string };
+type ActionResultDTO = ActionResultLike;
 
 // The verbs carry the UID of the row they were armed against: the backend
 // writes only that object - a same-name replacement is refused (design §5b).
 export async function reconcile(cluster: string, kind: string, namespace: string, name: string, uid: string): Promise<void> {
   const r = (await GitOpsService.Reconcile(cluster, kind, namespace, name, uid)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok ? { kind: "success", message: `Reconcile requested for ${namespace}/${name}` }
-         : { kind: "error", message: r.error || "Reconcile failed" },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `Reconcile requested for ${namespace}/${name}`, "Reconcile failed"));
 }
 
 export async function reconcileWithSource(cluster: string, kind: string, namespace: string, name: string, uid: string): Promise<void> {
   const r = (await GitOpsService.ReconcileWithSource(cluster, kind, namespace, name, uid)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok ? { kind: "success", message: `Reconcile (with source) requested for ${namespace}/${name}` }
-         : { kind: "error", message: r.error || "Reconcile failed" },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `Reconcile (with source) requested for ${namespace}/${name}`, "Reconcile failed"));
 }
 
 export async function setSuspend(cluster: string, kind: string, namespace: string, name: string, uid: string, suspend: boolean): Promise<void> {
   const r = (await GitOpsService.SetSuspend(cluster, kind, namespace, name, uid, suspend)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok ? { kind: "success", message: `${suspend ? "Suspended" : "Resumed"} ${namespace}/${name}` }
-         : { kind: "error", message: r.error || "Action failed" },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `${suspend ? "Suspended" : "Resumed"} ${namespace}/${name}`, `${suspend ? "Suspend" : "Resume"} failed`));
 }
 
 // via: "cache" - built from the Git cache at revision, dry-run on the

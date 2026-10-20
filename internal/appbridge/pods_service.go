@@ -109,7 +109,8 @@ func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSecond
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	r := conn.LaunchDiagnosticPod(ctx, name, image, ttlSeconds)
-	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error}
+	text, f := adhocFinding(ctx, conn, r.Error, r.Refusal())
+	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: text, Admission: f}
 }
 
 // DeletePod deletes the pod OBJECT the verb was armed against (uid, design
@@ -126,7 +127,7 @@ func (s *PodsService) DeletePod(cluster, namespace, name, uid string) ActionResu
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.DeletePod(ctx, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

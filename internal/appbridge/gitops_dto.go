@@ -13,6 +13,11 @@ import (
 type ActionResultDTO struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error"`
+	// Admission is the refused request's admission finding (coverage
+	// S3b §5), when the server attributes the refusal.
+	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
+	// Steps are a composite action's requests and their outcomes.
+	Steps []StepDTO `json:"steps,omitempty"`
 }
 
 // FluxResourceDTO is the JSON projection of a Flux reconciliation resource.

@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/composition"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
@@ -36,7 +37,7 @@ type GitOpsConn interface {
 	// The verbs write only the armed object (uid): a same-name replacement
 	// is refused (fleet.ErrReplaced), never written (design §5b).
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
-	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
+	ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]fleet.Step, error)
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	// DependencyGraph walks the GitOps dependency graph (The Line slice 8b).
 	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
@@ -99,7 +100,7 @@ func (s *GitOpsService) Reconcile(cluster, kind, namespace, name, uid string) Ac
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.Reconcile(ctx, kind, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -114,10 +115,21 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.ReconcileWithSource(ctx, kind, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+	// coverage S3b §2.3: each step's outcome, the refused source's kept
+	// even when the target is written
+	steps, err := conn.ReconcileWithSourceSteps(ctx, kind, namespace, name, uid)
+	var outs []stepOutcome
+	for _, st := range steps {
+		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, err: st.Err})
 	}
-	return ActionResultDTO{OK: true}
+	r := ActionResultDTO{OK: err == nil}
+	if err != nil {
+		r = failed(ctx, conn, err)
+	}
+	if len(outs) > 1 {
+		r.Steps = stepsDTO(ctx, conn, outs)
+	}
+	return r
 }
 
 // FluxDiff runs an on-demand `flux diff` for a Kustomization (M10-f). Bound to
@@ -157,7 +169,7 @@ func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, s
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.SetSuspend(ctx, kind, namespace, name, uid, suspend); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -306,7 +318,7 @@ func (s *GitOpsService) FluxOpAct(cluster, kind, namespace, name, uid, verb stri
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.FluxOpAct(ctx, kind, namespace, name, uid, verb); err != nil {
-		return ActionResultDTO{Error: urlscrub.Text(err.Error()).Text}
+		return failedScrubbed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

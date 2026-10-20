@@ -1,3 +1,4 @@
+import type { ActionResultLike } from "../admission/finding";
 import { GitOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import type { EventRowDTO, RuleDTO } from "../store/fleet";
 
@@ -79,9 +80,9 @@ export type FluxOpDetailDTO = {
 
 export type FluxOpVerb = "reconcile" | "fetch" | "suspend" | "resume" | "refresh";
 
-export async function fluxOpAct(cluster: string, kind: string, namespace: string, name: string, uid: string, verb: FluxOpVerb): Promise<{ ok: boolean; error: string }> {
+export async function fluxOpAct(cluster: string, kind: string, namespace: string, name: string, uid: string, verb: FluxOpVerb): Promise<ActionResultLike> {
   try {
-    return (await GitOpsService.FluxOpAct(cluster, kind, namespace, name, uid, verb)) as { ok: boolean; error: string };
+    return (await GitOpsService.FluxOpAct(cluster, kind, namespace, name, uid, verb)) as ActionResultLike;
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

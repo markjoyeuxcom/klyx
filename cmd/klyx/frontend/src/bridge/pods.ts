@@ -1,18 +1,15 @@
+import { resultStatus, type ActionResultLike } from "../admission/finding";
 import { useFleet, PodDetailDTO, AdhocResultDTO } from "../store/fleet";
 import { PodsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-type ActionResultDTO = { ok: boolean; error: string };
+type ActionResultDTO = ActionResultLike;
 
 // deletePod deletes the pod OBJECT the verb was armed against (uid, design
 // §5b): the API server's UID precondition refuses a same-name replacement.
 // The list is the Observer's live rows - no re-read follows.
 export async function deletePod(cluster: string, namespace: string, name: string, uid: string): Promise<void> {
   const r = (await PodsService.DeletePod(cluster, namespace, name, uid)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok
-      ? { kind: "success", message: `pod ${namespace}/${name} deleted` }
-      : { kind: "error", message: r.error || "Delete failed" },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `pod ${namespace}/${name} deleted`, "Delete failed"));
 }
 
 // openPodDetail selects the pod OBJECT (namespace, name and uid) and reads its

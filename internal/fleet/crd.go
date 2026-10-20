@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/keda"
 	"github.com/moomora/klyx/internal/urlscrub"
@@ -237,11 +238,15 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 	} else {
 		_, err = resource.Apply(ctx, name, u, opts)
 	}
+	// coverage S3b §3.1: the editor never creates, so an apply is an UPDATE
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: group, Version: version, Resource: plural, Namespace: ns}, kind, ns, name, err)
 	if err != nil {
-		if apierrors.IsConflict(err) && strings.Contains(err.Error(), "has been modified") {
+		// an admission finding is never an apply conflict, whatever its code
+		conflict := apierrors.IsConflict(err) && !admission.Classify(statusOf(err)).Attributed()
+		if conflict && strings.Contains(err.Error(), "has been modified") {
 			return fmt.Errorf("%s %s changed since it was opened; reopen it and try again", kind, name)
 		}
-		if apierrors.IsConflict(err) {
+		if conflict {
 			// The SSA conflict message already lists the conflicting fields +
 			// managers; prefix it so the cause is unmistakable.
 			return fmt.Errorf("apply conflict - another controller (e.g. Flux/Argo) owns fields you changed; forcing would be reverted on the next reconcile: %w", err)

@@ -32,7 +32,7 @@ func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name, uid str
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.ScaleWorkload(ctx, kind, namespace, name, uid, int32(replicas)); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -80,7 +80,7 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid strin
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.RolloutUndo(ctx, kind, namespace, name, uid, int64(revision)); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -99,7 +99,7 @@ func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pa
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.RolloutPause(ctx, namespace, name, uid, pause); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -118,7 +118,7 @@ func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name, uid st
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.RolloutRestart(ctx, kind, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

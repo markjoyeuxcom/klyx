@@ -1,3 +1,4 @@
+import type { ActionResultLike } from "../admission/finding";
 import { KEDAService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import type { RuleDTO } from "../store/fleet";
 import type { FluxOpOwnerDTO } from "./fluxop";
@@ -106,9 +107,9 @@ export async function replicaOwner(cluster: string, kind: string, namespace: str
   }
 }
 
-export async function setScalerPaused(cluster: string, resource: "scaledobjects" | "scaledjobs", namespace: string, name: string, uid: string, pause: boolean): Promise<{ ok: boolean; error: string }> {
+export async function setScalerPaused(cluster: string, resource: "scaledobjects" | "scaledjobs", namespace: string, name: string, uid: string, pause: boolean): Promise<ActionResultLike> {
   try {
-    return (await KEDAService.SetPaused(cluster, resource, namespace, name, uid, pause)) as { ok: boolean; error: string };
+    return (await KEDAService.SetPaused(cluster, resource, namespace, name, uid, pause)) as ActionResultLike;
   } catch (e) {
     return { ok: false, error: errText(e) };
   }

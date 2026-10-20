@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -19,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/crd"
 )
 
@@ -120,16 +120,15 @@ func ServerSideDiff(ctx context.Context, cfg *rest.Config, objs []*unstructured.
 	return out, nil
 }
 
-// webhookDenied names the admission webhook in an apiserver denial.
-var webhookDenied = regexp.MustCompile(`admission webhook "([^"]{1,253})" denied`)
-
 // safeError is the text kept for one object's failed read or dry-run (Codex's
 // S0b implementation review, finding 3). The API's and an admission
 // webhook's free text can echo the submitted value, so for a kind whose
 // values are protected - a registered payload kind, or a core Secret - only
 // structured facts are kept: the status reason and code, each cause's type
-// and field path (paths, never values), and a denying webhook's name.
-// Other kinds keep the message; the URL rule runs downstream.
+// and field path (paths, never values), and what refused it when the
+// classifier attributes the refusal (coverage S3b §2: an outer envelope,
+// never a phrase found in the text). Other kinds keep the message; the URL
+// rule runs downstream.
 func safeError(obj *unstructured.Unstructured, err error) string {
 	gvk := obj.GroupVersionKind()
 	if !crd.IsPayloadKind(gvk.Group, gvk.Kind) && !(gvk.Group == "" && gvk.Kind == "Secret") {
@@ -151,8 +150,8 @@ func safeError(obj *unstructured.Unstructured, err error) string {
 			parts = append(parts, fmt.Sprintf("%s at %s", c.Type, c.Field))
 		}
 	}
-	if m := webhookDenied.FindStringSubmatch(s.Message); m != nil {
-		parts = append(parts, fmt.Sprintf("denied by admission webhook %q", m[1]))
+	if f := admission.Classify(s); f.Attributed() {
+		parts = append(parts, f.What())
 	}
 	return strings.Join(parts, "; ") + "; " + withheld
 }

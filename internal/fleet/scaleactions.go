@@ -7,6 +7,8 @@ import (
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/moomora/klyx/internal/admission"
 )
 
 // ScaleWorkload sets the replica count on the ARMED Deployment or StatefulSet
@@ -35,5 +37,21 @@ func (c *ClusterConn) ScaleWorkload(ctx context.Context, kind, namespace, name, 
 	} else {
 		_, err = c.typed.AppsV1().StatefulSets(namespace).UpdateScale(ctx, name, scale, metav1.UpdateOptions{})
 	}
+	// coverage S3b §3.1: an UPDATE on the scale subresource
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: workloadResource(kind), Subresource: "scale", Namespace: namespace},
+		kind, namespace, name, err)
 	return armedWriteErr("scale", what, err)
+}
+
+// workloadResource is a workload kind's resource (coverage S3b §3.1).
+func workloadResource(kind string) string {
+	switch kind {
+	case "Deployment":
+		return "deployments"
+	case "StatefulSet":
+		return "statefulsets"
+	case "DaemonSet":
+		return "daemonsets"
+	}
+	return ""
 }

@@ -5,6 +5,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/gitops/notify"
 	"os"
 	"os/exec"
@@ -94,6 +95,10 @@ func (d *diffConn) ServerSideDiff(_ context.Context, objs []*unstructured.Unstru
 	return d.changes, nil
 }
 func (d *diffConn) Reconcile(context.Context, string, string, string, string) error { return nil }
+func (d *diffConn) ReconcileWithSourceSteps(context.Context, string, string, string, string) ([]fleet.Step, error) {
+	return nil, nil
+}
+
 func (d *diffConn) ReconcileWithSource(context.Context, string, string, string, string) error {
 	return nil
 }

@@ -1,7 +1,8 @@
+import { resultStatus, type ActionResultLike } from "../admission/finding";
 import { useFleet, NodeDetailDTO, HeadroomReportDTO } from "../store/fleet";
 import { NodesService, NodeOpsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-type ActionResultDTO = { ok: boolean; error: string };
+type ActionResultDTO = ActionResultLike;
 type OpenLogStreamResultDTO = { streamId: string; error?: string };
 
 // cordonNode cordons or uncordons the node OBJECT the verb was armed against
@@ -10,11 +11,7 @@ type OpenLogStreamResultDTO = { streamId: string; error?: string };
 // rows - no re-read follows.
 export async function cordonNode(cluster: string, node: string, uid: string, cordon: boolean): Promise<void> {
   const r = (await NodeOpsService.Cordon(cluster, node, uid, cordon)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok
-      ? { kind: "success", message: `node ${node} ${cordon ? "cordoned" : "uncordoned"}` }
-      : { kind: "error", message: r.error || (cordon ? "Cordon failed" : "Uncordon failed") },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `node ${node} ${cordon ? "cordoned" : "uncordoned"}`, cordon ? "Cordon failed" : "Uncordon failed"));
 }
 
 // DrainOptions are the user-composed kubectl drain flags from the drain

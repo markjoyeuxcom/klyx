@@ -1,3 +1,4 @@
+import { failureStatus } from "../admission/finding";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconArrowsMaximize } from "@tabler/icons-react";
 import { useFleet, type RuleDTO } from "../store/fleet";
@@ -260,7 +261,7 @@ export function AutoscalingView({ cluster, initialTab }: { cluster: string; init
     void setScalerPaused(cluster, p.resource, p.ns, p.name, p.uid, p.pause).then((r) => {
       useFleet.getState().setActionStatus(r.ok
         ? { kind: "success", message: `${p.pause ? "Pause" : "Resume"} requested for ${kind} ${p.ns}/${p.name}` }
-        : { kind: "error", message: r.error });
+        : failureStatus(r, `${p.pause ? "Pause" : "Resume"} failed`));
     });
   };
 

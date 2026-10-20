@@ -39,6 +39,7 @@ type fakeGitOpsConn struct {
 	suspendErr     error
 	lastSuspend    bool
 	withSource     bool
+	steps          []fleet.Step
 	reconcileCalls int // Reconcile + ReconcileWithSource invocations, for gate tests
 	suspendCalls   int
 	armedUID       string                                // the uid the last verb was armed against
@@ -111,6 +112,12 @@ func (f *fakeGitOpsConn) ReconcileWithSource(ctx context.Context, kind, ns, name
 	f.reconcileCalls++
 	f.mu.Unlock()
 	return f.reconcileErr
+}
+func (f *fakeGitOpsConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]fleet.Step, error) {
+	if err := f.ReconcileWithSource(ctx, kind, ns, name, uid); err != nil {
+		return f.steps, err
+	}
+	return f.steps, nil
 }
 func (f *fakeGitOpsConn) DependencyGraph(context.Context, string, string, string, string) depgraph.Graph {
 	return depgraph.Graph{}

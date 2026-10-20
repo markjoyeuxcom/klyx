@@ -79,6 +79,7 @@ type Conn interface {
 	ObjectWrites(ctx context.Context, refs []ObjectRef) ([]WriteResult, error)
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
+	ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]Step, error)
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
 	ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, error)

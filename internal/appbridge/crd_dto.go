@@ -126,6 +126,8 @@ type AdhocResultDTO struct {
 	Name      string `json:"name"`
 	OK        bool   `json:"ok"`
 	Error     string `json:"error"`
+	// Admission is the document's refused request's finding (coverage S3b).
+	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
 
 	NamespaceOwnerKind      string `json:"namespaceOwnerKind"`
 	NamespaceOwnerName      string `json:"namespaceOwnerName"`

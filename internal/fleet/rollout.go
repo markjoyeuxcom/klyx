@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -213,6 +214,7 @@ func (c *ClusterConn) undoDeployment(ctx context.Context, namespace, name, uid s
 		return fmt.Errorf("rollout undo marshal: %w", err)
 	}
 	_, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.JSONPatchType, body, metav1.PatchOptions{})
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: namespace}, "Deployment", namespace, name, err)
 	if apierrors.IsInvalid(err) {
 		// A failed JSON-patch op is a 422 that does not say which op failed:
 		// name a replacement only when one is confirmed (the uid test op).
@@ -296,6 +298,7 @@ func (c *ClusterConn) undoFromControllerRevision(ctx context.Context, kind, name
 			default:
 				_, perr = c.typed.AppsV1().DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
 			}
+			perr = admission.Wrap(admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: workloadResource(kind), Namespace: namespace}, kind, namespace, name, perr)
 			return armedWriteErr("rollout undo", fmt.Sprintf("%s %s/%s to revision %d", kind, namespace, name, revision), perr)
 		}
 	}
@@ -319,6 +322,7 @@ func (c *ClusterConn) RolloutPause(ctx context.Context, namespace, name, uid str
 		return fmt.Errorf("%s marshal: %w", verb, err)
 	}
 	_, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: namespace}, "Deployment", namespace, name, err)
 	return armedWriteErr(verb, fmt.Sprintf("Deployment %s/%s", namespace, name), err)
 }
 

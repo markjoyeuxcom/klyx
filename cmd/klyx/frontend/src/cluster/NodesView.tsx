@@ -432,6 +432,10 @@ function DrainComposerDialog({ cluster, node, isProtected, onCancel, onConfirm }
       </label>
 
       <div data-testid="drain-command-preview" style={commandPreview}>{preview}</div>
+      {/* coverage S3b §3.2: drain is kubectl's own stream, so no structured refusal reaches Klyx */}
+      <div data-testid="drain-admission-note" className="t-secondary" style={{ fontSize: 11 }}>
+        An eviction or delete that admission refuses appears in kubectl&apos;s own output below; Klyx does not attribute it to a webhook or policy.
+      </div>
     </OperationDialog>
   );
 }

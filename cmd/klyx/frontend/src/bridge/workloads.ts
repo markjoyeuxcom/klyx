@@ -1,7 +1,8 @@
+import { resultStatus, type ActionResultLike } from "../admission/finding";
 import { useFleet, WorkloadCompareDTO, RolloutHistoryResultDTO } from "../store/fleet";
 import { WorkloadsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-type ActionResultDTO = { ok: boolean; error: string };
+type ActionResultDTO = ActionResultLike;
 
 // The workload verbs are armed against one workload OBJECT (its uid, design
 // §5b): the backend confirms it and the write carries it, so a same-name
@@ -9,7 +10,7 @@ type ActionResultDTO = { ok: boolean; error: string };
 // re-read follows a verb.
 
 function report(r: ActionResultDTO, ok: string, failed: string): void {
-  useFleet.getState().setActionStatus(r.ok ? { kind: "success", message: ok } : { kind: "error", message: r.error || failed });
+  useFleet.getState().setActionStatus(resultStatus(r, ok, failed));
 }
 
 export async function scaleWorkload(cluster: string, kind: string, namespace: string, name: string, uid: string, replicas: number): Promise<void> {

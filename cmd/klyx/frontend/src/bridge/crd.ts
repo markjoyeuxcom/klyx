@@ -1,3 +1,4 @@
+import type { ActionResultLike, AdmissionFindingDTO } from "../admission/finding";
 import { useFleet, sameResource, CRDGroupDTO, CRDCountDTO, crdCountKey, ResourceRef, InstanceDTO, InstanceRef, InstanceDetailDTO, GitOpsOwnershipDTO, AdhocResultDTO, AdhocObjectDTO, AdhocInventoryDTO , InstanceColumnDTO , CRDDefinitionDTO } from "../store/fleet";
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { Clipboard } from "@wailsio/runtime";
@@ -67,7 +68,8 @@ export async function countKind(cluster: string, group: string, version: string,
 }
 
 type InstancePageDTO = { items: InstanceDTO[]; nextToken: string; error?: string; notServed?: boolean; columns?: InstanceColumnDTO[] | null };
-export type ActionResult = { ok: boolean; error: string };
+// admission: coverage S3b's finding for a refused request
+export type ActionResult = { ok: boolean; error: string; admission?: AdmissionFindingDTO };
 
 // listInstancePage REJECTS on a failed read: the backend returns an empty page
 // WITH error, and every caller (fleet-scope list, Overview risks, the list
@@ -167,7 +169,7 @@ export async function dryRunInstanceYAML(cluster: string, resource: ResourceRef,
     yaml,
     true,
   )) as ActionResult;
-  return { ok: !!r.ok, error: r.error ?? "" };
+  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}) };
 }
 
 export async function applyInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, uid: string, yaml: string): Promise<ActionResult> {
@@ -184,7 +186,7 @@ export async function applyInstanceYAML(cluster: string, resource: ResourceRef, 
     yaml,
     false,
   )) as ActionResult;
-  return { ok: !!r.ok, error: r.error ?? "" };
+  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}) };
 }
 
 // gitOpsOwnership fetches the authoritative pre-write verdict for a target
@@ -219,7 +221,7 @@ export async function listAdhocObjects(cluster: string): Promise<AdhocInventoryD
 // deleteAdhocObject deletes one Klyx-created scratch object (label-guarded and
 // UID-pinned in the backend: never deletes anything Klyx did not create, nor a
 // replacement under the same name).
-export async function deleteAdhocObject(cluster: string, o: AdhocObjectDTO): Promise<{ ok: boolean; error: string }> {
+export async function deleteAdhocObject(cluster: string, o: AdhocObjectDTO): Promise<ActionResultLike> {
   const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name, o.uid)) as { ok: boolean; error: string };
   return { ok: !!r.ok, error: r.error ?? "" };
 }

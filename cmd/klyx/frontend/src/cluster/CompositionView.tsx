@@ -1,3 +1,4 @@
+import { failureStatus } from "../admission/finding";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconStack2 } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -216,7 +217,7 @@ export function CompositionView({ cluster }: { cluster: string }) {
     void fluxOpAct(cluster, p.item.kind, p.item.c.namespace, p.item.c.name, p.item.uid, p.verb).then((r) => {
       useFleet.getState().setActionStatus(r.ok
         ? { kind: "success", message: `${verbWord(p.verb)} requested for ${p.item.kind} ${p.item.c.namespace}/${p.item.c.name}` }
-        : { kind: "error", message: r.error });
+        : failureStatus(r, `${verbWord(p.verb)} failed`));
     });
   };
 

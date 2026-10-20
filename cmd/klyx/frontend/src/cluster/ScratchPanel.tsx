@@ -1,3 +1,4 @@
+import { activityOf, failureStatus, type AdmissionFindingDTO } from "../admission/finding";
 import { useEffect, useRef, useState } from "react";
 import { useFleet, AdhocObjectDTO, AdhocInventoryDTO } from "../store/fleet";
 import { listAdhocObjects, deleteAdhocObject } from "../bridge/crd";
@@ -79,7 +80,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
       if (!(await arm())) return;
       const r = await launchDiagnosticPod(cluster, podName.trim(), image, ttl);
       if (r.error) {
-        useFleet.getState().setActionStatus({ kind: "error", message: `Debug pod: ${r.error}` });
+        useFleet.getState().setActionStatus(failureStatus(r, "Debug pod failed"));
       } else {
         useFleet.getState().setActionStatus({ kind: "success", message: `Debug pod ${r.namespace}/${r.name} launched (dies in ${ago(ttl)})` });
         onLaunched?.(r.namespace);
@@ -99,7 +100,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
       const r = await deleteAdhocObject(from, o);
       useFleet.getState().setActionStatus(r.ok
         ? { kind: "success", message: `Deleted scratch ${o.kind} ${o.namespace ? `${o.namespace}/` : ""}${o.name}` }
-        : { kind: "error", message: `Delete failed: ${r.error}` });
+        : failureStatus(r, "Delete failed"));
       await refresh();
     } finally {
       setBusy(false);
@@ -112,6 +113,7 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
     setBusy(true);
     try {
       let failed = 0;
+      const refusals: AdmissionFindingDTO[] = [];
       // Namespaces last: deleting klyx-scratch first would cascade its pods and
       // then per-object deletes hit honest not-found errors.
       const ordered = [...objects.filter((o) => o.kind !== "Namespace"), ...objects.filter((o) => o.kind === "Namespace")];
@@ -119,10 +121,12 @@ export function ScratchPanel({ cluster, onClose, onLaunched }: { cluster: string
         if (!(await arm())) return; // protected: the one-shot grant re-arms per call
         const r = await deleteAdhocObject(from, o);
         if (!r.ok) failed++;
+        if (r.admission) refusals.push(r.admission);
       }
       useFleet.getState().setActionStatus(failed === 0
         ? { kind: "success", message: `Scratch cleanup - ${ordered.length} object${ordered.length === 1 ? "" : "s"} deleted` }
-        : { kind: "error", message: `Scratch cleanup - ${failed} of ${ordered.length} deletes failed` });
+        : { kind: "error", message: `Scratch cleanup - ${failed} of ${ordered.length} deletes failed${refusals.length ? `, ${refusals.length} refused by admission` : ""}`,
+          ...(refusals.length ? { admission: refusals.map(activityOf) } : {}) });
       await refresh();
     } finally {
       setBusy(false);

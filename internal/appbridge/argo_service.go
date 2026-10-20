@@ -285,7 +285,7 @@ func (s *ArgoService) RefreshApp(cluster, namespace, name, uid string) ActionRes
 	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
 	defer cancel()
 	if err := conn.RefreshArgoApp(ctx, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -310,7 +310,7 @@ func (s *ArgoService) SyncApp(cluster, namespace, name, uid string, opts ArgoSyn
 	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
 	defer cancel()
 	if err := conn.SyncArgoApp(ctx, namespace, name, uid, toArgoSyncOptions(opts)); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

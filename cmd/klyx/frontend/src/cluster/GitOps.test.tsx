@@ -406,9 +406,19 @@ describe("GitOps view", () => {
     expect(screen.getByText("variables shown unsubstituted: postBuild substitution is not applied")).toBeTruthy();
     expect(screen.getByText("► Deployment shop/web configured")).toBeTruthy();
 
+    // coverage S3b §4: a completed server-side dry run says what admission
+    // passed and when; the drift sentence is always there
+    expect(screen.getByTestId("diff-dry-run-admission").textContent).toMatch(/^This dry run passed mutating admission and defaulting as of .+, so it shows what the API server would have stored then; a later apply's admission may differ\.$/);
+    expect(screen.getAllByTestId("drift-sentence")[0].textContent).toBe("A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it.");
+
     vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "", output: "", via: "flux CLI" });
     await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
     expect(screen.getByTestId("diff-via").textContent).toBe("computed by flux diff with your local credentials");
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "the server-side dry-run: refused", output: "", via: "cache" });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    expect(screen.getAllByTestId("drift-sentence").length).toBeGreaterThan(0);
   });
 
   it("lists sources under the sources filter", () => {
