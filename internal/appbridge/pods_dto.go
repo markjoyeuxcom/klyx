@@ -1,5 +1,7 @@
 package appbridge
 
+import "github.com/moomora/klyx/internal/extres"
+
 // ContainerSummaryDTO is a single container within a pod row.
 type ContainerSummaryDTO struct {
 	Name     string             `json:"name"`
@@ -123,4 +125,43 @@ type PodDetailDTO struct {
 	Resources     []ResizeResourcesDTO `json:"resources"`
 	Ephemeral     []EphemeralDTO       `json:"ephemeral"`
 	EphemeralMore int                  `json:"ephemeralMore,omitempty"`
+	// Coverage S11a §6: the pod's extended requests, bounded.
+	Extended ExtendedPodDTO `json:"extended"`
+}
+
+// ExtendedPodEntryDTO is one container's extended request; Quantity is a
+// decimal string ("-" when not established).
+type ExtendedPodEntryDTO struct {
+	Name        string `json:"name"`
+	Quantity    string `json:"quantity"`
+	ServedByDRA bool   `json:"servedByDra,omitempty"`
+}
+
+// ExtendedContainerDTO is one container's extended requests.
+type ExtendedContainerDTO struct {
+	Container string                `json:"container"`
+	Init      bool                  `json:"init,omitempty"`
+	Entries   []ExtendedPodEntryDTO `json:"entries"`
+	Omitted   int                   `json:"omitted,omitempty"`
+}
+
+// ExtendedPodDTO is a pod's extended requests; Claim names the special
+// ResourceClaim serving its DRA-mapped pairs.
+type ExtendedPodDTO struct {
+	Containers []ExtendedContainerDTO `json:"containers"`
+	Omitted    int                    `json:"omitted,omitempty"`
+	Claim      string                 `json:"claim,omitempty"`
+}
+
+func toExtendedPodDTO(r extres.PodRequests) ExtendedPodDTO {
+	out := ExtendedPodDTO{Containers: make([]ExtendedContainerDTO, 0, len(r.Containers)), Omitted: r.Omitted, Claim: r.Claim}
+	for _, c := range r.Containers {
+		ce := ExtendedContainerDTO{Container: c.Container, Init: c.Init, Entries: make([]ExtendedPodEntryDTO, 0, len(c.Entries)), Omitted: c.Omitted}
+		for _, e := range c.Entries {
+			q := e.Quantity
+			ce.Entries = append(ce.Entries, ExtendedPodEntryDTO{Name: e.Name, Quantity: figureDTO(&q), ServedByDRA: e.ServedByDRA})
+		}
+		out.Containers = append(out.Containers, ce)
+	}
+	return out
 }

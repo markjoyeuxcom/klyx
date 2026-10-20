@@ -247,6 +247,9 @@ func EvidenceRev(p *corev1.Pod) string {
 		PodResources *corev1.ResourceRequirements
 		Legacy       string
 		Ephemeral    []eph
+		// coverage S11a: a DRA mapping written after binding re-reads the
+		// pod inspector's extended requests
+		Extended *corev1.PodExtendedResourceClaimStatus
 	}
 	e.Observed = p.Status.ObservedGeneration
 	for _, c := range p.Status.Conditions {
@@ -260,6 +263,7 @@ func EvidenceRev(p *corev1.Pod) string {
 		}
 	}
 	e.PodAllocated, e.PodResources = p.Status.AllocatedResources, p.Status.Resources
+	e.Extended = p.Status.ExtendedResourceClaimStatus
 	e.Legacy = string(p.Status.Resize) //nolint:staticcheck // the deprecated field is shown, so it is part of the evidence
 	for _, c := range p.Status.EphemeralContainerStatuses {
 		x := eph{Name: c.Name}

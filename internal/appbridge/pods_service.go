@@ -39,6 +39,7 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 		Annotations: map[string]string{},
 		Conditions:  []ConditionDTO{},
 		Events:      []EventDTO{},
+		Extended:    ExtendedPodDTO{Containers: []ExtendedContainerDTO{}},
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -77,6 +78,7 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 		Resources:      resources,
 		Ephemeral:      eph,
 		EphemeralMore:  d.EphemeralMore,
+		Extended:       toExtendedPodDTO(d.Extended),
 		Labels:         labels,
 		Annotations:    annotations,
 		Conditions:     conds,

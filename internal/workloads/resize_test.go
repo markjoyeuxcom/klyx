@@ -68,3 +68,15 @@ func TestEvidenceRev(t *testing.T) {
 		}
 	}
 }
+
+// Coverage S11a §6: a DRA mapping written after binding changes the
+// evidence revision, so the pod inspector re-reads its extended requests.
+func TestEvidenceRevFollowsTheExtendedClaimMapping(t *testing.T) {
+	p := &corev1.Pod{}
+	before := EvidenceRev(p)
+	p.Status.ExtendedResourceClaimStatus = &corev1.PodExtendedResourceClaimStatus{ResourceClaimName: "p-extended-resources-x",
+		RequestMappings: []corev1.ContainerExtendedResourceRequest{{ContainerName: "a", ResourceName: "nvidia.com/gpu", RequestName: "r"}}}
+	if EvidenceRev(p) == before {
+		t.Fatal("the mapping is part of the evidence")
+	}
+}

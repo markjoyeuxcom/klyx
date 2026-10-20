@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/extres"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,6 +30,8 @@ type PodDetail struct {
 	Ephemeral       []workloads.EphemeralContainer
 	EphemeralMore   int
 	SchedAssumption string
+	// Coverage S11a §6: the pod's extended requests, per container.
+	Extended extres.PodRequests
 }
 
 // PodDetail fetches one pod by namespace/name and assembles its detail view.
@@ -103,6 +106,7 @@ func (c *ClusterConn) PodDetail(ctx context.Context, namespace, name string) (Po
 		QoSClass:        string(p.Status.QOSClass),
 		ServiceAccount:  p.Spec.ServiceAccountName,
 		Resources:       workloads.ResizeResourcesOf(p),
+		Extended:        extres.OfPod(p),
 		Ephemeral:       eph,
 		EphemeralMore:   more,
 		SchedAssumption: c.schedModel().Assumption(),
