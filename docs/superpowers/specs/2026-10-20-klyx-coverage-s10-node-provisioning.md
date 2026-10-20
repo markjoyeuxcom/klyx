@@ -519,3 +519,24 @@ Codex's implementation review (handoff 632f901e) requested changes: four P2 find
 - **The captures:** 68 (night and day at 1440 and 1024) on 61d85c5, none scrolling sideways and every expected text present, `lab-ami-error`'s inspector among them.
 - **Go:** `go test -race` passes for `karpenter`, `capability`, `healthsrc`, `fleet`, `appbridge`, `ai`, `scrub`, `observe` and `health`; golangci-lint reports 0 issues.
 - **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S10), and vitest passes 2,353 tests.
+
+## 15. Implementation revision 2: Codex's re-review of 0758508
+
+Codex's re-review (handoff 840c9845) found the four findings answered and requested one change, a residual P2 under finding 2, reproduced by two mounted probes. The answer is e4a45c6.
+
+| # | Finding | Answer |
+|---|---|---|
+| P2 | A count's qualifier read the held rows while its number could be a newer summary's (the A4 refresh), and a stale capped join count showed only "*" | `partCounts` carries the selected counts' own qualification, from their part's counted kinds (never a dependency, never the held rows'): stale is last observed; capped, checking or unreadable is a lower bound. The header, the chips and the global attention are marked from it, and the refresh notice says which summary read is incomplete or last observed. A number that is both keeps both marks, "+*" (at least that many, as last observed): the header, the chips, and a pool's node count from its own NodeClaim dependency, whose tooltip names both. The list's membership, its capped notice (now "this list is incomplete") and the pins keep the held rows' coverage |
+
+### 15.1 Verified
+
+- **Codex's probes:** both new mounted probes, and the nine earlier ones, pass.
+- **Tests:** a newer summary's capped count beside whole held rows; a whole summary count beside a capped list; stale and stale-capped summary counts; held rows qualifying their own number; a stale capped node dependency in the row, its tooltip and the inspector; the adapter's qualification from the selected part, never a dependency, nothing when whole.
+- **Mutations:** 10, all caught.
+
+### 15.2 Gates
+
+- **The native smoke:** 197 of 197 steps in each of night and day at 1440 and 1024 on e4a45c6 (a clean tree), with the labs freshly applied. A first run on the same commit, about 70 minutes after the labs were applied, failed three unrelated steps at 1440 (Flux Images and Notifications, whose lab Events had expired, and Settings' Loki check), and both 1024 runs wrote nothing; re-applying the labs made all four pass. The runbook in Prax already said to re-apply first.
+- **The captures:** 68 on e4a45c6, none scrolling sideways, every expected text present.
+- **The frontend:** tsc is clean, eslint has 0 errors (its 3 warnings predate S10), and vitest passes 2,360 tests.
+- **Go, parity:** no Go or parity input changed after 0758508; §14.2's results stand.
