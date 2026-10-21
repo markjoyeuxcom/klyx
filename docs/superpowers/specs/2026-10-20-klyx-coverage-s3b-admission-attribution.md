@@ -227,3 +227,65 @@ Codex (handoff bf417e67) requested changes: one P2 in the composite-action test.
 Codex's guidance, taken: the alias count counts distinct webhooks and policies, excludes those already listed, and keeps the inventory's completeness qualification (§3.3).
 
 **Design accepted at 360c1eb** (Codex, revision 3, handoff 4baace78, 2026-10-20), with no remaining findings. Codex's implementation detail, kept: the refused source's structured outcome is retained even when the target succeeds (today the method returns nil then). This accepts the design only; the implementation and its gates keep their own review.
+
+## 12. As built
+
+Built on `feat/coverage-s3b`, rebased onto S11b's accepted head (3fa15cb), after the accepted design (360c1eb):
+
+| Commit | What |
+|---|---|
+| 398b916 | Stage 1: `admission.Classify` (five outer envelopes in precedence order, a call failure's cause read after its quoted URL), `UIDRefusal` by the guards' wire shapes, the status corpus built with the upstream code at four versions; the GitOps verbs' UID guard (`refusedForUID`) reads `UIDRefusal`, never a substring |
+| 558fede | Stage 2: candidates. S3a's rules keep exact identifiers apart from the display copy (`RuleIDs`, inexact and cut flags) and the policies' `matchPolicy`; `admission.Match` (the exact pass held to `rules.Matcher` at four versions, the Equivalent pass listed or counted) |
+| 22b18b4 | Stage 3: every API-backed write path wraps each request's error (`admission.RequestError`); the bridge's `writeError` classifies it, applies the protected-subject rule, adds the candidates from the Observer's admission rows; the YAML panel's finding, the toasts' line with each step, the Activity entry's finding; the drift and dry-run sentences; the formatter's admission regexes removed |
+| 5b6dbe9 | The smoke: a YAML apply refused by lab-s3b's webhook, a scale refused by its policy |
+| 28399bb | The envelopes' exact shapes, a webhook's 404 and 409 denials, the ad-hoc refusal's finding |
+| fdceb12 | The smoke edits the ConfigMap's data; lab-s3b's unreachable webhook is broken first too |
+| 0419425 | The smoke watchdog allows 15 minutes and names the step the runner last began (§12.2) |
+| 441ce8c, 1c83552, f1b8aad, b98e6e4 | The smoke: the YAML step types into the mounted editor and reports its footer when Apply stays disabled; a Flux resume refused by the unreachable webhook, confirmed through the confirm dialog's own button; only a new Activity entry counts |
+| 0203a5e | The YAML editor's validator reads metadata's own keys only (§12.1, found by the smoke) |
+| 9d420e5, edfe128 | gofmt; the watchdog's comment |
+| bda2396 | The mutation gate's four survivors, each with a test (§12.3) |
+| 8c4ffd9 | staticcheck S1016 in the matcher's oracle |
+
+### 12.1 Where the build departs from the note
+
+- **An attributed refusal is a definite refusal** (§2.1 said "only an attributed finding upgrades a 500"; the build applies it to every guard). `definiteRefusal` treats any attributed finding as a refusal, so a fail-closed webhook's call failure (500) reads "nothing was written"; any other 500 stays unverified.
+- **A webhook's 409 is its denial, never an apply conflict.** The YAML editor's conflict branches (`crd.go`) read a Conflict as "the object changed since it was opened" or "apply conflict" only when it is not attributed; a webhook denying with 409 shows its finding.
+- **The live diff names a refusal, without candidates.** `cachediff`'s `safeError` (S0b) now says `Finding.What()` for an attributed refusal ("denied by admission webhook <n>") and nothing for an unattributed one; its `webhookDenied` regex is gone. The live diff has no write result to carry candidates, so it lists none. S0b's test changed with it: its fixture was an Invalid whose message quotes a webhook denial mid-text, which the S3b negative rule no longer attributes; a real denial fixture (a HelmRelease) now carries the name.
+- **The matcher says each rule's reason.** A rule whose value was not kept exactly reads "may match: a value could not be kept exactly" per rule, before the Equivalent reason, so the reason a candidate is listed is its own.
+- **The alias count excludes what is listed** by name (`Candidates.Aliased`), so a webhook listed as a candidate is never also counted as an alias.
+- **Requests on the admission configuration kinds are exempt.** No webhook or policy sees a request on `validatingwebhookconfigurations`, `mutatingwebhookconfigurations` or the policy and binding kinds (upstream's exemption); the finding says so and lists no candidates.
+- **"No endpoints" reads "refused" on kind.** The lab's endpoint-less Service is refused at connect on kind (`connect: connection refused`), not "no endpoints available"; the classifier reads what the server sends, so the lab's call failure is category `refused`. The no-endpoints form stays in the corpus.
+- **`ReconcileWithSourceSteps`** returns each step's outcome (`Step{Verb, Subject, Written, Err}`); `ReconcileWithSource` keeps its signature and wraps it. The source's refusal is kept even when the target is written.
+- **An ad-hoc document keeps its refusal unexported** (`AdhocResult.refusal`, read through `Refusal()`), so the result's JSON shape is unchanged and the bridge converts it.
+- **The YAML editor's dry run** says "passed admission and defaulting as of <time>; a later apply's admission may differ", the dry-run sentence of §4 on the editor as well as the diff.
+- **The formatter's admission regexes are removed** (`formatKubernetesActionError`): an admission refusal's headline is the backend's finding.
+- **No parity or load run.** S3b changes no verdict and adds no watch; the candidates read `HealthRowsNow`.
+- **AI unchanged**, as §6 says: write errors never cross.
+- **The YAML editor refused nearly every real object, and S3b fixes it** (outside the note; found by the smoke). Its local pre-check (`validateResourceYAML`, on `main` since 2026-06-30) matched every indented line under `metadata` against a key pattern without `/`, so a prefixed label or annotation (`app.kubernetes.io/name`, `klyx.dev/lab`), a finalizer or owner-reference item, and any top-level sequence (a Role's `rules`) read "YAML parse error" and kept Dry-run and Apply disabled. The YAML panel's finding, S3b's headline surface, could not be reached for a real object. Identity is now read from metadata's own keys only; nested lines are the server dry run's to validate, and an owner reference's `name:` no longer reads as the object's. A separate commit (0203a5e) with its test.
+
+### 12.2 The lab and the smoke
+
+lab-s3b (namespace `klyx-s3b-lab`, labelled `klyx.dev/lab=s3b`, with a teardown): agnhost's admission webhook (`/always-deny`) behind a real Service, a second Service with no endpoints, a ValidatingWebhookConfiguration with a denying webhook (ConfigMaps labelled `klyx.dev/s3b=webhook`, UPDATE) and an unreachable one (Kustomizations labelled `klyx.dev/s3b=unreachable`, UPDATE, `failurePolicy: Fail`), and a ValidatingAdmissionPolicy with a binding on `deployments/scale` in the lab's namespace. The smoke drives Klyx's own writes through each:
+
+| Step | Klyx's write | Refused by | What Klyx says |
+|---|---|---|---|
+| A YAML apply | UPDATE ConfigMap `klyx-s3b-lab/lab-webhook` (server-side apply) | `deny.s3b.klyx.dev` (webhook-denied) | the panel's headline "update ConfigMap klyx-s3b-lab/lab-webhook was refused by admission before it was stored: denied by admission webhook "deny.s3b.klyx.dev"", the server's message, and the candidates with the named one marked |
+| A scale | UPDATE `deployments/scale` `lab-frozen` | `klyx-s3b-freeze` with its binding (vap-denied) | the toast "Scale refused: denied by ValidatingAdmissionPolicy "klyx-s3b-freeze" (binding "klyx-s3b-freeze-binding")"; the Activity entry keeps the line and the candidates' names |
+| A Flux resume | UPDATE Kustomization `lab-unreachable` (a merge patch) | `unreachable.s3b.klyx.dev`, whose Service has no endpoints (webhook-call-failed) | the toast "Resume refused: admission webhook "unreachable.s3b.klyx.dev" could not be called (its connection was refused)" |
+
+At b98e6e4, after `relabs.sh` and `lab-s3b/apply.sh`: **208/208 in all four modes** (night and day, 1440 and 1024). The steps that had failed on the way told what was wrong: the editor's footer named its validator (§12.1); at 1024 the inspector is a drawer that is itself a `role="dialog"`, so the resume step clicks the button inside the confirm dialog (the one holding `confirm-detail`). The step records `typed: 1`: the editor never needed a second edit.
+
+**Captures** (headless Chrome on the server-mode build, kind-klyx, night and day at 1440 and 1024; `pw/cov-s3b.mjs` in the session scratchpad): the YAML panel's finding, the scale's toast, the resume's toast and the Activity log, 16 of 16 with every expected text present and no horizontal overflow. The ConfigMap list is paged (100 loaded, "No ConfigMap instances match in the 100 loaded so far", Load more), so the capture opens the object through ⌘K's index.
+
+**The watchdog.** The walk outgrew the smoke watchdog's five minutes. With nobody at the machine (`UserIsActive 0`) a step took about 1.4 s on average, consistent with throttled timers in an unwatched window, and a mode about five minutes at either width (S11b's run at 3fa15cb, about 5 minutes a mode, earlier runs under 2). S3b's added steps pushed it over: "incomplete 0/0", no step named. `ReportWithin` now allows 15 minutes: it bounds a runner that never reports, never the walk's pace. `SmokeService.Progress` records each step the runner begins (and logs it with its time), and an incomplete result names that step.
+
+### 12.3 Mutations
+
+45 mutations (35 Go, 10 frontend; `mut-s3b.py` in the session scratchpad), one at a time, each against its package's tests: the classifier's envelopes, causes and UID shapes; the matcher's scope, subresources, exemption, lost values, unread and alias counts, and the default policy; the exact identifiers; the bridge's protection, scrub, clip, inventory state, alias exclusion and the named candidate; the write paths' definite refusal, the 409 guard, scale's subresource, the source step and the composer's refusal; the live diff's name; the watchdog's step; and the frontend's toast line, refused steps, stored findings, five shown, unread inventory, drift and dry-run sentences, the YAML panel's finding and the editor's validator.
+
+At b98e6e4, 38 were caught. Four survived, each closed by a test (bda2396): a message whose tail is one character off the policy's cause, a generic denial whose message is not its first cause, an Invalid on `metadata.name` (not the UID guard), and the clip, whose test compared against the constant it mutated. Three did not build, a fault of the harness (each removed an import's only use); rewritten, they are caught. At bda2396, **45 of 45 caught**.
+
+### 12.4 Gates
+
+At bda2396 (8c4ffd9 changes one test line for golangci-lint): bindings regenerate; `go vet ./internal/...` clean; `go test -race ./internal/...` passes; golangci-lint 0 issues at 8c4ffd9; `tsc --noEmit` clean; eslint 0 errors (the 4 warnings `main` has); vitest 2,416 passed (2 skipped). The native smoke (208/208, four modes) ran at b98e6e4 and the captures on that build; what follows changes tests and comments only. No parity or load run (§12.1).
