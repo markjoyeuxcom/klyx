@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -37,7 +38,10 @@ var chatMetricWindows = map[string]time.Duration{"15m": 15 * time.Minute, "1h": 
 
 var chatMetricTemplates = map[string]string{
 	"pod_cpu": "cores", "pod_memory": "bytes", "workload_cpu": "cores", "workload_memory": "bytes", "restarts": "restarts",
+	"route_requests": "requests per second", "route_5xx_ratio": "share of coded responses",
 }
+
+func timeOf(p metrics.Point) time.Time { return time.Unix(p.Unix, 0).UTC() }
 
 // chatMetricWorkloads are the kinds a workload template or restarts takes.
 var chatMetricWorkloads = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true}
@@ -133,6 +137,12 @@ func containerLimits(pod *unstructured.Unstructured, res string) map[string]reso
 }
 
 func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, window string) ChatToolResult {
+	if strings.HasPrefix(template, "route_") {
+		if kind != "" && kind != "HTTPRoute" {
+			return t.refuse(toolMetrics, template, fmt.Errorf("%s reads an HTTPRoute: kind must be HTTPRoute or omitted", template))
+		}
+		return t.routeSeries(ctx, template, ns, name, window)
+	}
 	target := template + " " + ns + "/" + name
 	unit := chatMetricTemplates[template]
 	w := chatMetricWindows[window]

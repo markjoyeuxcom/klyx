@@ -26,6 +26,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -47,6 +48,8 @@ type ChatConn interface {
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 	// ChatMetricsRange runs a range query Klyx built from a template (§3.4).
 	ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
+	// RuleMetrics reads one Gateway's per-rule Envoy metrics (The Line 7c).
+	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
 }
 
 // The cluster connection is chat's read surface (main.go asserts it at run
@@ -152,9 +155,9 @@ func ChatToolDefs() []ChatToolDef {
 			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h"}, "description": "How far back (default 1h)."},
 			"tail":      intProp("Lines, 1-200 (default 100).", 1, 200),
 		}, "namespace", "pod")},
-		{toolMetrics, "Prometheus series from one of Klyx's templates, summarised (min, max, last, gaps, counter resets, a limit crossed): pod_cpu and pod_memory per container of a pod, against its limit; workload_cpu and workload_memory summed over a workload's current pods; restarts per pod (kube-state-metrics). Series are by pod name.", obj(map[string]any{
-			"template":  map[string]any{"type": "string", "enum": []string{"pod_cpu", "pod_memory", "workload_cpu", "workload_memory", "restarts"}, "description": "The template."},
-			"kind":      map[string]any{"type": "string", "enum": []string{"Pod", "Deployment", "StatefulSet", "DaemonSet"}, "description": "Pod for pod templates (default); a workload kind for workload templates, and for restarts of a workload's pods."},
+		{toolMetrics, "Prometheus series from one of Klyx's templates, summarised (min, max, last, gaps, counter resets, a threshold crossed): pod_cpu and pod_memory per container of a pod, against its limit; workload_cpu and workload_memory summed over a workload's current pods; restarts per pod (kube-state-metrics); route_requests and route_5xx_ratio per rule of an HTTPRoute, through each Gateway it names (Envoy Gateway, its last 30 minutes). Series are by pod or Envoy cluster name.", obj(map[string]any{
+			"template":  map[string]any{"type": "string", "enum": []string{"pod_cpu", "pod_memory", "workload_cpu", "workload_memory", "restarts", "route_requests", "route_5xx_ratio"}, "description": "The template."},
+			"kind":      map[string]any{"type": "string", "enum": []string{"Pod", "Deployment", "StatefulSet", "DaemonSet", "HTTPRoute"}, "description": "Pod for pod templates (default); a workload kind for workload templates, and for restarts of a workload's pods; HTTPRoute for route templates."},
 			"namespace": strProp("Namespace."),
 			"name":      strProp("Exact pod or workload name."),
 			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h", "24h"}, "description": "How far back (default 1h)."},
@@ -455,13 +458,13 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			a.Window = "1h"
 		}
 		if _, ok := chatMetricTemplates[a.Template]; !ok {
-			return t.refuse(name, label(a.Template), errors.New("template must be one of pod_cpu, pod_memory, workload_cpu, workload_memory or restarts; Klyx runs no other query"))
+			return t.refuse(name, label(a.Template), errors.New("template must be one of pod_cpu, pod_memory, workload_cpu, workload_memory, restarts, route_requests or route_5xx_ratio; Klyx runs no other query"))
 		}
 		if _, ok := chatMetricWindows[a.Window]; !ok {
 			return t.refuse(name, a.Template, errors.New("window must be 15m, 1h, 6h or 24h"))
 		}
-		if a.Kind != "" && a.Kind != "Pod" && !chatMetricWorkloads[a.Kind] {
-			return t.refuse(name, a.Template, errors.New("kind must be Pod, Deployment, StatefulSet or DaemonSet"))
+		if a.Kind != "" && a.Kind != "Pod" && a.Kind != "HTTPRoute" && !chatMetricWorkloads[a.Kind] {
+			return t.refuse(name, a.Template, errors.New("kind must be Pod, Deployment, StatefulSet, DaemonSet or HTTPRoute"))
 		}
 		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
 			return t.refuse(name, a.Template, err)

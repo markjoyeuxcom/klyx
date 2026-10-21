@@ -18,6 +18,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -38,11 +39,22 @@ type fakeChatConn struct {
 	flux       map[string]*unstructured.Unstructured // Kind|ns|name
 	fluxErr    error
 	fluxCalls  int
-	fluxHook   func(kind string)                  // runs after each Flux read
+	fluxHook   func(kind string)                    // runs after each Flux read
+	rules      map[string]routemetrics.GatewayRules // by Gateway ns/name
+	ruleCalls  []string
 	series     map[string][]metrics.LabeledSeries // by query
 	seriesErr  error
 	queries    []string
 	steps      []time.Duration
+}
+
+func (f *fakeChatConn) RuleMetrics(_ context.Context, ns, name string) (routemetrics.GatewayRules, error) {
+	f.ruleCalls = append(f.ruleCalls, ns+"/"+name)
+	r, ok := f.rules[ns+"/"+name]
+	if !ok {
+		return routemetrics.GatewayRules{}, apierrors.NewNotFound(schema.GroupResource{Resource: "gateways"}, name)
+	}
+	return r, nil
 }
 
 func (f *fakeChatConn) ChatMetricsRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {

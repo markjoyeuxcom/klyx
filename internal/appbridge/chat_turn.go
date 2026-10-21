@@ -18,6 +18,7 @@ import (
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -844,6 +845,13 @@ func (g guardedConn) PodLogSnapshot(ctx context.Context, ns, pod, container stri
 		return fleet.LogSnapshot{}, err
 	}
 	return g.r.c.conn.PodLogSnapshot(ctx, ns, pod, container, previous, tail)
+}
+
+func (g guardedConn) RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error) {
+	if err := g.r.check(); err != nil {
+		return routemetrics.GatewayRules{}, err
+	}
+	return g.r.c.conn.RuleMetrics(ctx, namespace, name)
 }
 
 func (g guardedConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
