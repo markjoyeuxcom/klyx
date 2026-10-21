@@ -76,7 +76,7 @@ A provider without tools (the Claude Code CLI, `openaiCompatible` without tools)
 - a class, one of those below;
 - a subject: kind, namespace and name, and its **identity strength** (revision 1):
   - **by UID:** the subject's UID comes from a read Klyx pinned by UID in this investigation (the anchor, an Observer row found by UID, an owner reference, a pod listed by its workload's controller UIDs);
-  - **by name:** the evidence names the object without a UID. Health-check messages, Flux inventory entries, rendered Git objects, Prometheus series and name-mode Loki streams are all by name.
+  - **by name:** the evidence names the object without a UID. Health-check messages, Flux inventory entries, rendered Git objects, Prometheus series, name-mode Loki streams and Alertmanager alerts are all by name. An alert's `SubjectUID` from S8a is the current object found at its labels' names, kept even when the alert started before that object was created: a navigation fact, never the alert's own identity (revision 2).
 
   A by-name subject is never given today's UID for an object of that name. Klyx may add a separate fact, "Deployment shop/web is currently UID B, created at T", and says "possibly a replacement" when it was created after the evidence;
 - Klyx's statement, which names the identity it holds: "Kustomization flux-system/app (by UID) reports a failed health check naming Deployment shop/web", never "Deployment UID B failed its health check";
@@ -94,7 +94,7 @@ A provider without tools (the Claude Code CLI, `openaiCompatible` without tools)
 | `event` | a Warning event about the object, by UID | "BackOff: Back-off restarting failed container web (14 times)" |
 | `rollout` | rollout history and the pods' owners | "the failing pods belong to ReplicaSet web-7d9, created from revision 4" |
 | `diff` | two source renders under the current spec (§3.2) | "the source render of revision a1b2c3d changed Deployment shop/web (by name): spec.template.spec.containers[web].env[LOG_LEVEL], changed (not shown)" |
-| `alert` | an active alert whose subject Klyx resolved to the object's UID | "alert KubePodCrashLooping firing for pod shop/web-7d9 since 12:05" |
+| `alert` | an active alert in the current Alertmanager read, by its labels | "the current Alertmanager read holds alert KubePodCrashLooping, firing since 12:05, naming pod shop/web-7d9 (by label)" |
 | `metric` | a template's series past its stated threshold (§3.4) | "restarts of the pods currently named web-7d9-x and web-7d9-y (by name) rose by 6 in the last 15 minutes" |
 
 A check that cannot be evaluated is not made: a stale read, an ambiguous parse, a by-name subject asked to stand for a UID. The read stays evidence the model may read.
@@ -133,7 +133,7 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
   - the commits between the two revisions, scoped to `spec.path`: `LogPath`, at most 20, with authors and subjects scrubbed;
   - the changed files: `DiffNames`, at most 200.
 - **What is rendered, said exactly** (revision 1). Both revisions are built with the cache diff's confined build (`cachediff`; 60 s and 64 MiB each, behind the fleet-wide admission of §1) under **today's Kustomization spec**: its `targetNamespace`, `images`, patches and path. The result is named a **source render under the current spec**, never the applied objects:
-  - the spec in force at the healthy revision is not known. When the spec's own generation changed after the healthy revision was applied, the render says so;
+  - the spec in force at the healthy revision is not known, and today's status cannot show whether it changed since (it records no last successful generation). Every render says "the historical spec is unknown" (revision 2);
   - `postBuild` substitution is not applied, so variables stay unsubstituted, and the render is **partial** when the Kustomization declares it;
   - SOPS is not decrypted. An encrypted field that changed reads "changed (encrypted)", and the render is partial;
   - a build that fails, or passes its bound, falls back to the file list and the commits: **not established**.
@@ -145,7 +145,7 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
 
   Each difference becomes a path marker, "spec.template.spec.containers[web].env[LOG_LEVEL]: changed (not shown)". The hidden values, and any digest of them, are never serialized.
 - **The comparison:** the rendered objects are matched by group, kind, namespace and name. Visible fields are compared after projection, hidden ones as markers. An object that appears or disappears is said by its identity only. A comparison that is capped or unsupported says "change not established", never "unchanged".
-- **Checks:** one `diff` check per changed object, by name, naming its visible and hidden changed paths. At most 20 paths per object and 20 objects, each counted beyond, with the render's qualification: partial, current spec, or not established.
+- **Checks:** one `diff` check per changed object, by name, naming its visible and hidden changed paths. At most 20 paths per object and 20 objects, each counted beyond, with the render's qualification: partial, current spec with the historical spec unknown, or not established.
 - **Never sent:** raw file content. A YAML file can hold a Secret, values or a payload.
 - **Returns** at most 32 KiB.
 
@@ -181,15 +181,15 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
 ### 3.5 `get_alerts` (new)
 
 - **Arguments:** `kind`, `namespace`, `name`.
-- **Reads:** the Observer's alerts snapshot, matched like `alertEvidence`: by the subject's UID, or by name when the subject is not established, said as such. It also reads alerts on the object's pods and on its namespace.
+- **Reads:** the Observer's alerts snapshot, matched like `alertEvidence`: by label, "matched to this object by label, not by UID". It also reads alerts on the object's pods and on its namespace. S8a's `StartedBeforeCreated` (the alert began before the current object of that name existed) and the snapshot's own freshness are kept with each alert (revision 2).
 - **Returns:** active, suppressed and unprocessed alerts, at most 20, with their state, severity and start time.
   - Labels are allowlisted: alertname, severity, namespace, pod, container, job, service and cluster. Values are scrubbed.
   - The summary and description annotations are scrubbed and capped.
-- **Checks:** `alert` checks only for alerts whose subject resolved to a UID.
+- **Checks:** an `alert` check for each active alert, by label: it says the current read holds the alert naming that object. The current object's UID is a separate navigation fact, with "the alert began before this object was created" when S8a says so. No alert check is ever about a UID (revision 2).
 
 ### 3.6 `get_log_history` (new, the AI-safe Loki adapter)
 
-- **Arguments:** `namespace`, `pod`, `container?`, `window` (15m, 1h or 6h), `tail` (1 to 200).
+- **Arguments:** `namespace`, `pod`, `uid?`, `container?`, `window` (15m, 1h or 6h), `tail` (1 to 200).
 - **The target's identity comes from Klyx, never the model** (revision 1). A pod's UID is used only when this investigation's ledger holds it from a UID-pinned read, which covers a pod that is gone but that an earlier read listed. When the ledger holds several UIDs for that name, the model must pass one of them, as `uid`, and nothing else is accepted. With no UID held, the read is by namespace and name.
 - **Reads:** Loki through the existing reader (`LokiReader.Query`): by the UID where the shipper records it, otherwise by namespace and name.
 - **Says which, every time:** "by the pod's UID", or "by namespace and name: every pod of that name in the window".
@@ -233,7 +233,7 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 2. **Subject identity:** at least one cited read or check must be about the finding's subject. **By UID** means the subject's own UID, or a UID join Klyx holds: the owner chain, a dependency edge read by UID. **By name** means a name correlation: the inventory, a health-check entry, a rendered Git object, a metric or log stream by name. A finding supported only by name correlations is shown as such ("by name: the object at that name may have been replaced"), never as about a UID. Otherwise the finding is **unsupported**.
 3. **Time** (revision 1, observation apart from onset):
    - **The failure's window** starts at the anchor's Ready=False transition, or its verdict's "since". It is an upper bound: the failure may have begun earlier, and a reason that changed while Ready stayed False makes the current episode's start uncertain, which is said.
-   - **Evidence observed before that window** (a metric interval or log lines ending before it, a commit long before, an event last seen before) does not establish the current failure. It is shown as "observed before the failure was reported".
+   - **Evidence observed before that window** (a metric interval or log lines ending before it, a commit long before, an event last seen before) does not establish the current failure. It is shown as "observed before the failure was reported", and stays checked as what it is: a breaking commit and its last crash log normally precede Flux's timeout, and remain context for a suspected cause (revision 2).
    - **Evidence observed during it is current,** whatever its onset. A pod crash-looping since 12:00, read at 12:06 while the Kustomization failed at 12:05, is a current, checked state, and its earlier onset is stated as a relation ("began before the Kustomization reported the failure").
    - An anchor that is not failing has no window: the rule does not apply, and the findings say there was no failure to date.
 4. **Coverage:** a citation to a stale or partial read is shown with that qualification.
@@ -296,6 +296,7 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 - **The health-check parser** against Flux's own message builder: every prefix, a namespaced and a cluster-scoped entry, an error containing commas, an error containing a whole entry-shaped substring (the upstream `status.Compute` example), an entry not in the inventory, and a kind present in two groups.
 - **Identity** (revision 1):
   - a Deployment replaced between its health check and the investigation: the check names it by name, and the current UID carries the replacement caveat;
+  - an alert whose S8a `SubjectUID` is populated and `StartedBeforeCreated` is true (the existing PodOld shape) stays by-label evidence, never a checked UID assertion; and an ordinary current label match, the control, does not change its provenance either (revision 2);
   - a pod gone from the API and the Observer: its logs by the UID the ledger held, or by name when none;
   - a same-name pod recreated inside a metric window;
   - name-only evidence never yields a checked assertion about a UID.
@@ -366,3 +367,13 @@ Codex (handoff aa240b9d) requested changes: six P2 findings, each with a probe o
 | 6 | Snapshot mode had an output block but no way to acquire the new evidence | §1.1: a fixed acquisition plan from the anchor and Klyx's links, its bounds and its scope stated |
 
 Codex's guidance, taken: read fan-out counted within the 6 concurrent reads and a fleet-wide admission for Git renders (§1); empty metric results, gaps, counter resets and the inclusive end (§3.4); a model finding is never itself "checked" (§5); the member fences cover retained history (§3.7, as the roadmap's A-C2).
+
+## 12. Revision 2: Codex's re-review of d39153d
+
+Codex (handoff 5baa7419) requested changes: one residual P2. The other revisions were accepted.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Alert checks still counted S8a's `SubjectUID` as identity, though it is the current object found at the alert's label names, kept even when the alert began before that object existed | §2 and §3.5: alerts are by-label evidence; the current object's UID is a separate navigation fact, with `StartedBeforeCreated` and the snapshot's freshness kept; §8 adds the PodOld regression and a control |
+
+Codex's guidance, taken: evidence observed before the failure was reported stays checked as context for a suspected cause (§4); every render says the historical spec is unknown, never inferred from today's generation (§3.2); `uid` joins `get_log_history`'s arguments (§3.6).
