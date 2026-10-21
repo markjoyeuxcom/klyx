@@ -974,7 +974,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await closeDrawer();
     const before = useFleet.getState().actionLog[0]?.id ?? 0;
     useFleet.getState().requestNavIntent({ kind: "suspend-flux", cluster, fluxKind: "Kustomization", namespace: "klyx-s3b-lab", name: "lab-unreachable", suspend: false });
-    (await within(20_000, "the Resume confirm", () => byText<HTMLButtonElement>("button", /^Resume$/))).click();
+    // the dialog's own button: the inspector offers "Resume" as well
+    (await within(20_000, "the Resume confirm", () => [...document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button")].find((x) => x.textContent === "Resume" && !x.disabled))).click();
     const entry = await within(30_000, "the toast's Activity entry", () => {
       const e = useFleet.getState().actionLog[0];
       return e && e.id > before && /^Resume (refused|failed)/.test(e.message) ? e : null;
