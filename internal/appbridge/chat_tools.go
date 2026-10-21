@@ -141,6 +141,14 @@ func ChatToolDefs() []ChatToolDef {
 			"namespace": strProp("Namespace, for namespaced kinds."),
 			"name":      strProp("Exact object name."),
 		}, "kind", "name")},
+		{toolLogHistory, "A pod's log history from Loki, newest first, scrubbed: for a pod that is gone, or history beyond its previous container. By the pod's UID when this conversation's reads hold it and the log shipper records it, otherwise by namespace and name (every pod of that name in the window); the result says which.", obj(map[string]any{
+			"namespace": strProp("Pod namespace."),
+			"pod":       strProp("Exact pod name."),
+			"uid":       strProp("Optional: one of the pod UIDs this conversation's reads returned; needed only when they hold several pods of that name."),
+			"container": strProp("Optional container name."),
+			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h"}, "description": "How far back (default 1h)."},
+			"tail":      intProp("Lines, 1-200 (default 100).", 1, 200),
+		}, "namespace", "pod")},
 	}
 }
 
@@ -217,6 +225,10 @@ type chatTools struct {
 	readID string
 	// git reads Git history for git_changes; nil when it is not available
 	git chatGit
+	// history reads Loki for get_log_history; nil when not available
+	history chatHistory
+	// ledgerUIDs are the pod UIDs the conversation's own reads hold
+	ledgerUIDs func(ns, name string) []string
 }
 
 // as is a copy of t that runs one read under its citation ID.
@@ -391,6 +403,33 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Kind+" "+a.Name, err)
 		}
 		return t.alerts(ctx, a.Kind, a.NS, a.Name)
+	case toolLogHistory:
+		var a struct {
+			NS        string `json:"namespace"`
+			Pod       string `json:"pod"`
+			UID       string `json:"uid"`
+			Container string `json:"container"`
+			Window    string `json:"window"`
+			Tail      *int   `json:"tail"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		tail := 100
+		if a.Tail != nil {
+			tail = *a.Tail
+		}
+		if a.Window == "" {
+			a.Window = "1h"
+		}
+		if _, ok := chatHistoryWindows[a.Window]; !ok {
+			return t.refuse(name, a.NS+"/"+a.Pod, errors.New("window must be 15m, 1h or 6h"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("pod", a.Pod, true), checkName("uid", a.UID, false),
+			checkName("container", a.Container, false), checkRange("tail", tail, 1, chatHistoryLinesMax)); err != nil {
+			return t.refuse(name, a.NS+"/"+a.Pod, err)
+		}
+		return t.logHistory(ctx, a.NS, a.Pod, a.UID, a.Container, a.Window, tail)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -717,6 +756,12 @@ func shrink(d any) any {
 		default:
 			return nil
 		}
+		return v
+	case chatLogHistoryData:
+		// the newest half stays (the lines are newest first)
+		lines := strings.Split(v.Text, "\n")
+		v.Text = strings.Join(lines[:len(lines)/2], "\n")
+		v.Lines = len(lines) / 2
 		return v
 	case chatAlertsData:
 		v.Alerts = v.Alerts[:len(v.Alerts)/2]

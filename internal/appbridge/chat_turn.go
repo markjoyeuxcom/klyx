@@ -263,7 +263,7 @@ func chatAITools() []ai.Tool {
 // drops one more whole old exchange and is built again, nothing sent.
 func (r *turnRunner) tools(ctx context.Context) (string, error) {
 	exec := newChatTools(guardedConn{r}, r.s.now)
-	exec.git = r.chatGit()
+	r.equip(exec)
 	tools := chatAITools()
 	used := 0
 	for call := 0; call < chatMaxModelCalls; call++ {
@@ -463,7 +463,7 @@ func (r *turnRunner) snapshot(ctx context.Context) (string, error) {
 	}
 	gc := guardedConn{r}
 	exec := newChatTools(gc, r.s.now)
-	exec.git = r.chatGit()
+	r.equip(exec)
 	var sections []string
 	var included []string
 	add := func(name, args, label string) error {
@@ -851,12 +851,16 @@ func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*un
 	return g.r.c.conn.FluxObject(ctx, kind, ns, name)
 }
 
-// chatGit is the service's Git read behind the turn's guard; nil without Git.
-func (r *turnRunner) chatGit() chatGit {
-	if r.s.git == nil {
-		return nil
+// equip gives a turn's tools the service's Git and Loki reads, each behind
+// the turn's guard, and the conversation's ledger.
+func (r *turnRunner) equip(t *chatTools) {
+	if r.s.git != nil {
+		t.git = guardedGit{r: r, g: r.s.git}
 	}
-	return guardedGit{r: r, g: r.s.git}
+	if r.s.logs != nil {
+		t.history = guardedHistory{r: r, h: r.s.logs}
+	}
+	t.ledgerUIDs = r.ledgerPodUIDs
 }
 
 // guardedGit runs the turn's guard before Git is read: once the pinned conn

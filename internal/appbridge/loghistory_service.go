@@ -156,6 +156,7 @@ type LogHistoryService struct {
 	mu       sync.Mutex
 	views    map[string]*historySlot
 	sets     atomic.Uint64
+	chats    atomic.Uint64 // chat's private views (AI A1 §3.6)
 }
 
 // errHistoryViewsFull: every view the service holds is reading; a new one
@@ -200,6 +201,12 @@ func (s *LogHistoryService) CloseView(view string) {
 
 // ReadPodHistory reads one page: the first of a new page set, or the next.
 func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryPageDTO {
+	return s.readPodHistory(context.Background(), req)
+}
+
+// readPodHistory is ReadPodHistory under a parent context: chat's read ends
+// with its turn (AI A1 §3.6).
+func (s *LogHistoryService) readPodHistory(parent context.Context, req PodHistoryRequestDTO) LogHistoryPageDTO {
 	out := LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}}
 	if err := validStreamID(req.View); err != nil {
 		out.Error = err.Error()
@@ -214,7 +221,7 @@ func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryP
 		out.Error = err.Error()
 		return out
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), historyPageLimit)
+	ctx, cancel := context.WithTimeout(parent, historyPageLimit)
 	defer cancel()
 	slot, err := s.enter(req.View, cancel)
 	if err != nil {
