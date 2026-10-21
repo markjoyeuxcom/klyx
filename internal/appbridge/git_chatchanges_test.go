@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/moomora/klyx/internal/gitcli"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/moomora/klyx/internal/readfence"
 )
 
@@ -97,18 +99,19 @@ func TestGitChangesStopsAtItsFence(t *testing.T) {
 	if _, err := svc.changes(ctx, req); !errors.Is(err, changed) || len(store.ensured) != 1 {
 		t.Fatalf("the second fetch is not made: %v %v", err, store.ensured)
 	}
-	builds := 0
+	// the two renders build at once: the counts are atomic
+	var builds atomic.Int32
 	exe := childExe
-	childExe = func() (string, error) { builds++; return exe() }
+	childExe = func() (string, error) { builds.Add(1); return exe() }
 	t.Cleanup(func() { childExe = exe })
 	ctx = readfence.With(context.Background(), func() error {
-		if builds >= 2 {
+		if builds.Load() >= 2 {
 			return changed
 		}
 		return nil
 	})
-	if out, err := svc.changes(ctx, req); !errors.Is(err, changed) || builds != 2 || out.RenderErr != "" || out.New != nil {
-		t.Fatalf("the second build is not run, and no render failure is claimed: %v %d %+v", err, builds, out)
+	if out, err := svc.changes(ctx, req); !errors.Is(err, changed) || builds.Load() != 2 || out.RenderErr != "" || out.New != nil {
+		t.Fatalf("a build is not run once the fence changes, and no render failure is claimed: %v %d %+v", err, builds.Load(), out)
 	}
 	if out, err := svc.changes(context.Background(), req); err != nil || len(out.Old) != 1 || len(out.New) != 1 {
 		t.Fatalf("the control: %v %+v", err, out)
@@ -116,15 +119,15 @@ func TestGitChangesStopsAtItsFence(t *testing.T) {
 	// every step is fenced: two fetches, four history reads, and each
 	// render's inputs, files and build; a fence failing at any one of them
 	// stops the comparison there
-	calls := 0
-	count := readfence.With(context.Background(), func() error { calls++; return nil })
-	if _, err := svc.changes(count, req); err != nil || calls != 12 {
-		t.Fatalf("12 fenced steps: %d %v", calls, err)
+	var calls atomic.Int32
+	count := readfence.With(context.Background(), func() error { calls.Add(1); return nil })
+	if _, err := svc.changes(count, req); err != nil || calls.Load() != 12 {
+		t.Fatalf("12 fenced steps: %d %v", calls.Load(), err)
 	}
-	for n := 1; n <= 12; n++ {
-		calls := 0
+	for n := int32(1); n <= 12; n++ {
+		var calls atomic.Int32
 		ctx := readfence.With(context.Background(), func() error {
-			if calls++; calls == n {
+			if calls.Add(1) == n {
 				return changed
 			}
 			return nil
@@ -167,20 +170,51 @@ func TestAFailedRenderSendsOnlyItsClass(t *testing.T) {
 	}
 }
 
-func TestChatRendersWaitForTheAdmission(t *testing.T) {
-	for i := 0; i < chatRendersAtOnce; i++ {
-		chatRenderAdmission <- struct{}{}
+// The comparison runs inside the admission, on both renders, and the
+// renders are not returned: what it keeps is all that outlives them (the
+// §8 load test). Through the tool, the comparison is the result's.
+func TestAComparisonRunsInsideTheAdmission(t *testing.T) {
+	store, shas := newHistoryFixture(t,
+		map[string]string{"clusters/prd/kustomization.yaml": "resources: [deployment.yaml]\n", "clusters/prd/deployment.yaml": fmt.Sprintf(historyBase, "1.0", "a")},
+		map[string]string{"clusters/prd/deployment.yaml": fmt.Sprintf(historyBase, "1.1", "b")},
+	)
+	svc := newDiffService(t, store)
+	held, olds, news := -1, 0, 0
+	out, err := svc.changes(context.Background(), gitChangesReq{RepoURL: "https://github.com/acme/fleet.git", Applied: shas[0], Attempted: shas[1],
+		Spec: map[string]any{"path": "./clusters/prd"}, Compare: func(old, new []*unstructured.Unstructured) {
+			held, olds, news = len(chatRenderAdmission), len(old), len(new)
+		}})
+	if err != nil || held != 1 || olds != 1 || news != 1 || out.Old != nil || out.New != nil || len(chatRenderAdmission) != 0 {
+		t.Fatalf("compared inside the admission, the renders not returned: %v %d %d %d %+v", err, held, olds, news, out)
 	}
-	defer func() {
-		for i := 0; i < chatRendersAtOnce; i++ {
-			<-chatRenderAdmission
-		}
-	}()
+	f, _ := changesChat(func(ks map[string]any) {
+		st := ks["status"].(map[string]any)
+		st["lastAppliedRevision"], st["lastAttemptedRevision"] = "main@sha1:"+shas[0], "main@sha1:"+shas[1]
+	})
+	env, _, _ := runChanges(t, f, svc, changesArgs)
+	b, _ := json.Marshal(env.Data)
+	var d chatChangesData
+	_ = json.Unmarshal(b, &d)
+	if d.Render.State != "compared" || d.ObjectsTotal != 1 || len(d.Objects) != 1 || d.Objects[0].Name != "web" {
+		t.Fatalf("the tool's comparison is its result: %s", b)
+	}
+}
+
+// One comparison at a time, fleet-wide: its two renders build at once, and
+// another comparison waits within its deadline.
+func TestChatComparisonsWaitForTheAdmission(t *testing.T) {
+	if cap(chatRenderAdmission) != 1 || chatRendersAtOnce != 2 {
+		t.Fatalf("one comparison of two renders: %d %d", cap(chatRenderAdmission), chatRendersAtOnce)
+	}
+	release, err := admitComparison(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, _, err := (&GitService{}).chatRender(ctx, nil, "", gitcli.Rev{}, "", map[string]any{})
-	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) < 40*time.Millisecond {
-		t.Fatalf("a third render waits for a slot within its deadline: %v", err)
+	if _, err := admitComparison(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) < 40*time.Millisecond {
+		t.Fatalf("a second comparison waits within its deadline: %v", err)
 	}
 }

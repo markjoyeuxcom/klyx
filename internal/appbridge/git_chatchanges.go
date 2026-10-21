@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	ssautil "github.com/fluxcd/pkg/ssa/utils"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,19 +21,37 @@ import (
 // to an approved repository as the cache diff maps it; both revisions are
 // ensured in the history cache; the commits and changed files between them
 // are listed under spec.path; and each revision is built with the cache
-// diff's confined build under today's Kustomization spec, behind a
-// fleet-wide admission of two renders at once (A1 §1). Nothing here reaches
-// a model: the tool projects what it returns.
+// diff's confined build under today's Kustomization spec. A fleet-wide
+// admission takes one comparison at a time: its two renders build at once,
+// and the comparison runs before the admission is released, so at most two
+// renders are building or held fleet-wide (A1 §1; the §8 load test found
+// that admitting renders one by one let each waiting investigation hold
+// its first render). Nothing here reaches a model: the tool projects what
+// it returns.
 
 const (
 	chatChangesCommitsMax = gitcli.MaxLogCommits // 20
 	chatChangesFilesMax   = 200
-	chatRendersAtOnce     = 2
+	chatRendersAtOnce     = 2 // one comparison's two revisions
 )
 
-// chatRenderAdmission admits investigation renders, fleet-wide; the rest
-// wait within their turn's deadline.
-var chatRenderAdmission = make(chan struct{}, chatRendersAtOnce)
+// chatRenderAdmission admits one investigation comparison at a time,
+// fleet-wide; the rest wait within their turn's deadline.
+var chatRenderAdmission = make(chan struct{}, chatRendersAtOnce/2)
+
+// chatBuilding counts the confined builds running for investigations (the
+// §8 load test reads it).
+var chatBuilding atomic.Int32
+
+// admitComparison waits for the comparison admission within ctx.
+func admitComparison(ctx context.Context) (release func(), err error) {
+	select {
+	case chatRenderAdmission <- struct{}{}:
+		return func() { <-chatRenderAdmission }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 var errChatGitNotApproved = errors.New("the source's repository is not approved in Settings > Git, so Klyx reads no history for it")
 
@@ -41,6 +61,10 @@ type gitChangesReq struct {
 	RepoURL            string
 	Applied, Attempted string // full commit SHAs
 	Spec               map[string]any
+	// Compare, when set, runs with both renders inside the admission, and
+	// the renders are not returned: what the comparison keeps is all that
+	// outlives it
+	Compare func(old, new []*unstructured.Unstructured)
 }
 
 type gitChangesOut struct {
@@ -151,26 +175,48 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 	if err != nil {
 		return out, err
 	}
-	for _, r := range []struct {
-		rev  gitcli.Rev
-		sha  string
-		into *[]*unstructured.Unstructured
-	}{{applied, req.Applied, &out.Old}, {attempted, req.Attempted, &out.New}} {
-		objs, generated, err := s.chatRender(ctx, cs, url, r.rev, specPath, req.Spec)
-		var failed renderFailure
-		switch {
-		case err != nil && ctx.Err() != nil:
-			return out, ctx.Err()
-		case errors.As(err, &failed):
-			out.Old, out.New = nil, nil
-			out.RenderErr = fmt.Sprintf("the render of %s: %s", r.sha[:7], failed.class)
-			return out, nil
-		case err != nil:
-			return out, err // the read fence, never a render's failure
-		}
-		*r.into = objs
-		out.Generated = out.Generated || generated
+	release, err := admitComparison(ctx)
+	if err != nil {
+		return out, err
 	}
+	defer release()
+	type render struct {
+		objs      []*unstructured.Unstructured
+		generated bool
+		err       error
+	}
+	var renders [2]render
+	var wg sync.WaitGroup
+	for i, rev := range []gitcli.Rev{applied, attempted} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := &renders[i]
+			r.objs, r.generated, r.err = s.chatRender(ctx, cs, url, rev, specPath, req.Spec)
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	var failed renderFailure
+	for _, r := range renders {
+		if r.err != nil && !errors.As(r.err, &failed) {
+			return out, r.err // the read fence, never a render's failure
+		}
+	}
+	for i, r := range renders {
+		if errors.As(r.err, &failed) {
+			out.RenderErr = fmt.Sprintf("the render of %s: %s", []string{req.Applied, req.Attempted}[i][:7], failed.class)
+			return out, nil
+		}
+	}
+	out.Generated = renders[0].generated || renders[1].generated
+	if req.Compare != nil {
+		req.Compare(renders[0].objs, renders[1].objs)
+		return out, nil
+	}
+	out.Old, out.New = renders[0].objs, renders[1].objs
 	return out, nil
 }
 
@@ -178,12 +224,6 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 // blobs, the confined build with the spec's overlay, then commonMetadata as
 // the controller applies it.
 func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, rev gitcli.Rev, specPath string, spec map[string]any) ([]*unstructured.Unstructured, bool, error) {
-	select {
-	case chatRenderAdmission <- struct{}{}:
-	case <-ctx.Done():
-		return nil, false, ctx.Err()
-	}
-	defer func() { <-chatRenderAdmission }()
 	if err := readfence.Check(ctx); err != nil {
 		return nil, false, err
 	}
@@ -210,7 +250,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	if err := readfence.Check(ctx); err != nil {
 		return nil, false, err
 	}
+	chatBuilding.Add(1)
 	objs, err := cachediff.Build(ctx, exe, set, contents, spec)
+	chatBuilding.Add(-1)
 	if err != nil {
 		return nil, false, renderFailure{buildFailure(err), err}
 	}

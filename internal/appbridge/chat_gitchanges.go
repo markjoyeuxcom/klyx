@@ -124,7 +124,14 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 	}
 	repoURL, _, _ := unstructured.NestedString(src.Object, "spec", "url")
 	spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
-	out, err := t.git.changes(ctx, gitChangesReq{RepoURL: repoURL, Applied: applied.SHA, Attempted: attempted.SHA, Spec: spec})
+	// the comparison runs inside the render admission; only what it keeps
+	// outlives the renders
+	var objects []chatRenderChange
+	objectsTotal := 0
+	out, err := t.git.changes(ctx, gitChangesReq{RepoURL: repoURL, Applied: applied.SHA, Attempted: attempted.SHA, Spec: spec,
+		Compare: func(old, new []*unstructured.Unstructured) {
+			objects, objectsTotal = compareRenders(old, new, t.resolver(ctx), p)
+		}})
 	if err != nil {
 		if errors.Is(err, errChatGitNotApproved) {
 			return t.refuse(toolChanges, target, err)
@@ -173,7 +180,7 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 		return t.finishWithin(env, read, chatChangesResultMax)
 	}
 	data.Render = chatRenderInfo{State: "compared", Qualifications: quals}
-	data.Objects, data.ObjectsTotal = compareRenders(out.Old, out.New, t.resolver(ctx), p)
+	data.Objects, data.ObjectsTotal = objects, objectsTotal
 	if data.ObjectsTotal > len(data.Objects) {
 		env.Complete = false
 	}

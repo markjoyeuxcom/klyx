@@ -31,7 +31,14 @@ type fakeGit struct {
 
 func (g *fakeGit) changes(_ context.Context, req gitChangesReq) (gitChangesOut, error) {
 	g.reqs = append(g.reqs, req)
-	return g.out, g.err
+	out := g.out
+	// as GitService does: a comparison runs on the renders, which are not
+	// returned
+	if g.err == nil && out.RenderErr == "" && req.Compare != nil {
+		req.Compare(out.Old, out.New)
+		out.Old, out.New = nil, nil
+	}
+	return out, g.err
 }
 
 func changesChat(mod func(ks map[string]any)) (*fakeChatConn, *fakeGit) {
