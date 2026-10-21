@@ -91,6 +91,8 @@ function listenErrors(): void {
 
 async function step(steps: Step[], name: string, run: () => Promise<Record<string, unknown> | void>): Promise<void> {
   errors.length = 0;
+  // the watchdog names the step a runner that never reports was in
+  void Call.ByName(`${SVC}.Progress`, name).catch(() => undefined);
   try {
     const facts = (await run()) ?? {};
     if (document.documentElement.scrollWidth > document.documentElement.clientWidth) throw new Error("horizontal overflow");
@@ -912,11 +914,26 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     useFleet.getState().openInstance("klyx-s3b-lab", "lab-webhook");
     await within(15_000, "its detail", () => useFleet.getState().instanceDetail.detail?.name === "lab-webhook");
     [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest")?.click();
-    const area = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
-    const next = area.value.replace(/^data:\n/m, "data:\n  smoke: s3b\n");
-    if (next === area.value) throw new Error(`no data block in the manifest: ${area.value.slice(0, 200)}`);
-    typeIntoArea(area, next);
-    (await within(4000, "an enabled Apply", () => { const b = byText<HTMLButtonElement>("button", /^Apply$/); return b && !b.disabled ? b : null; })).click();
+    const first = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
+    if (!/^data:\n/m.test(first.value)) throw new Error(`no data block in the manifest: ${first.value.slice(0, 200)}`);
+    // the panel can remount while its detail settles: the edit goes into
+    // whichever editor is mounted, until that editor's own Apply is enabled
+    let footer = "";
+    let typed = 0;
+    const apply = await within(10_000, "an enabled Apply", () => {
+      const area = $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']");
+      if (!area) return null;
+      if (!area.value.includes("\n  smoke: s3b\n")) {
+        typeIntoArea(area, area.value.replace(/^data:\n/m, "data:\n  smoke: s3b\n"));
+        typed++;
+        return null;
+      }
+      const shell = area.parentElement;
+      footer = (shell?.lastElementChild?.textContent ?? "").slice(0, 200);
+      const b = [...(shell?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((x) => x.textContent?.trim() === "Apply");
+      return b && !b.disabled ? b : null;
+    }).catch((e: Error) => { throw new Error(`${e.message} (typed ${typed}x); the editor's footer: ${footer || "(none)"}`); });
+    apply.click();
     (await within(4000, "Apply changes", () => byText<HTMLButtonElement>("button", /^Apply changes$/))).click();
     const summary = await within(20_000, "the finding", () => {
       const t = $("[data-testid='admission-summary']")?.textContent ?? "";
@@ -929,21 +946,45 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const message = $("[data-testid='admission-message']")?.textContent ?? "";
     if (message !== "this webhook denies all requests") throw new Error(`the server's message: ${message}`);
     useFleet.getState().closeResource();
-    return { summary: summary.slice(0, 160), candidates: candidates.slice(0, 240) };
+    return { summary: summary.slice(0, 160), candidates: candidates.slice(0, 240), typed };
   });
   await step(steps, "Admission: a scale refused by the lab policy", async () => {
     await open("workloads");
     await closeDrawer();
+    // the Activity log persists across runs: only an entry after this one counts
+    const before = useFleet.getState().actionLog[0]?.id ?? 0;
     useFleet.getState().requestNavIntent({ kind: "scale-workload", cluster, workloadKind: "Deployment", namespace: "klyx-s3b-lab", name: "lab-frozen" });
     const input = await within(20_000, "the replica count", () => $<HTMLInputElement>("input[aria-label='replica count']"));
     typeInto(input, "2");
     (await within(4000, "apply", () => $<HTMLButtonElement>("button[aria-label='apply scale']"))).click();
     const entry = await within(20_000, "the toast's Activity entry", () => {
       const e = useFleet.getState().actionLog[0];
-      return e && e.message === 'Scale refused: denied by ValidatingAdmissionPolicy "klyx-s3b-freeze" (binding "klyx-s3b-freeze-binding")' ? e : null;
+      return e && e.id > before && e.message === 'Scale refused: denied by ValidatingAdmissionPolicy "klyx-s3b-freeze" (binding "klyx-s3b-freeze-binding")' ? e : null;
     });
     const named = entry.admission?.[0];
     if (!named || !/^update Deployment klyx-s3b-lab\/lab-frozen was refused by admission before it was stored/.test(named.summary) || !named.candidates.includes("klyx-s3b-freeze")) {
+      throw new Error(`the Activity entry: ${JSON.stringify(entry)}`);
+    }
+    return { toast: entry.message, candidates: named.candidates };
+  });
+  // a webhook that cannot be called refuses a Flux resume: the toast names
+  // it and the call failure's cause, read after its URL
+  await step(steps, "Admission: a Flux resume refused by a webhook that cannot be called", async () => {
+    await open("flux");
+    await closeDrawer();
+    const before = useFleet.getState().actionLog[0]?.id ?? 0;
+    useFleet.getState().requestNavIntent({ kind: "suspend-flux", cluster, fluxKind: "Kustomization", namespace: "klyx-s3b-lab", name: "lab-unreachable", suspend: false });
+    (await within(20_000, "the Resume confirm", () => byText<HTMLButtonElement>("button", /^Resume$/))).click();
+    const entry = await within(30_000, "the toast's Activity entry", () => {
+      const e = useFleet.getState().actionLog[0];
+      return e && e.id > before && /^Resume (refused|failed)/.test(e.message) ? e : null;
+    });
+    if (entry.message !== 'Resume refused: admission webhook "unreachable.s3b.klyx.dev" could not be called (its connection was refused)') {
+      throw new Error(`the toast: ${entry.message}`);
+    }
+    const named = entry.admission?.[0];
+    if (!named || !/^update Kustomization klyx-s3b-lab\/lab-unreachable was refused by admission before it was stored/.test(named.summary) ||
+      !named.candidates.includes("klyx-s3b-deny/unreachable.s3b.klyx.dev")) {
       throw new Error(`the Activity entry: ${JSON.stringify(entry)}`);
     }
     return { toast: entry.message, candidates: named.candidates };
