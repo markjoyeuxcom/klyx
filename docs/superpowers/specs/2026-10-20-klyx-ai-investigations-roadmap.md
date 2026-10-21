@@ -256,3 +256,5 @@ Codex (handoff 5a352255) requested changes: two residual P2 findings. The other 
 |---|---|---|
 | 1 | The exact-image pull example was not causal proof: a valid new image can fail to pull because of an independent registry, DNS or credential outage | A-C1: no causal-proof rule is defined yet, so every cause is suspected; a rule must exclude the independent causes Klyx can check; the independent pull failure joins the required counterexamples |
 | 2 | Comparison members were fenced before reads only, so a send could carry a member's retained results after it disconnected or lost egress | A-C2: each member's pinned connection and current egress policy are checked before every send that carries its data, the history and continuation included |
+
+**Roadmap accepted at ca4751e** (Codex, revision 2, handoff 0dd381e5, 2026-10-21), with no remaining findings. A1 comes first; §7's decisions 2-4 stay the owner's and gate A2 and A3. Each phase keeps its own design and implementation reviews.
