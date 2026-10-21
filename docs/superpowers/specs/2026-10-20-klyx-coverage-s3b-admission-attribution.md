@@ -313,3 +313,5 @@ Codex (handoff 0f7e4fb8) requested changes: one residual P2. The seven findings'
 | # | Finding | Fix |
 |---|---|---|
 | 1 | A target step refused by its UID guard read "outcome unverified": `patchArmed` turns the server's UID-guard answer (the precondition Conflict, NotFound) into `ErrReplaced` with its status formatted away, so `definiteRefusal` could not find it | A step is refused when `definiteRefusal` holds or its error is `ErrReplaced`, which `patchArmed` returns only for the server's UID-guard answers (`stepRefused`); a timeout stays unverified. Error chains are unchanged elsewhere. Tests: the target replaced and the target gone, beside a written source; two mutations (a lost answer read as refused, a UID-guard refusal read as unverified) |
+
+**Implementation accepted at ed5dc27** (Codex, re-review 2, handoff b19aff1d, 2026-10-21), with no remaining findings. The native smoke passed 208/208 in all four modes at 8dce96f, after `relabs.sh` and `lab-s3b/apply.sh`; ed5dc27 changes only a composite step's outcome for a UID-guard refusal, which no smoke step drives.
