@@ -86,6 +86,44 @@ func TestSnapshotInvestigationRunsKlyxsPlanFromItsOwnLinks(t *testing.T) {
 	}
 }
 
+// AI A1 implementation review, finding 9: a provider that rejects tools on
+// the first call gets the investigation's own snapshot - its plan, its
+// system text and its findings block - not the chat's.
+func TestARejectionOfToolsRunsTheInvestigationsPlan(t *testing.T) {
+	reply := "The web pods crash.\n\n```findings\n" + `{"findings":[{"type":"cause","statement":"the pod crash loops","subject":{"kind":"Pod","namespace":"shop","name":"web-1-a"},"cites":["r4"]}]}` + "\n```\n"
+	rejected := func(ai.ConvRequest) (ai.Turn, error) { return ai.Turn{}, ai.ErrToolsUnsupported }
+	f := newToolsFixture(t, rejected)
+	f.prov.complete = func(ai.Request) (ai.Result, error) { return ai.Result{Text: reply, ModelUsed: "m"}, nil }
+	planCluster(f)
+	inv := f.svc.StartInvestigation("x", ksAnchor)
+	st := f.svc.Ask("x", inv.ConversationID, "", nil)
+	ex := st.Exchanges[0]
+	var steps []string
+	for _, r := range ex.Reads {
+		steps = append(steps, r.Tool)
+	}
+	p := f.prov
+	if st.Mode != "snapshot" || !contains(steps, "mode") || !contains(steps, toolUnit) || !contains(steps, toolChanges) || contains(steps, "snapshot_index") ||
+		len(p.creqs) != 1 || !strings.Contains(p.creqs[0].System, invSnapshotAddendum) {
+		t.Fatalf("the investigation's plan after the rejection: %v %+v", steps, st)
+	}
+	if ex.Findings == nil || ex.Findings.Scope != invSnapshotNote || len(ex.Findings.Findings) != 1 {
+		t.Fatalf("its findings block is read: %+v", ex.Findings)
+	}
+
+	// the control: a chat that is refused tools gets the chat's snapshot
+	c := newToolsFixture(t, rejected)
+	cs := c.svc.Start("x")
+	st = c.svc.Ask("x", cs.ConversationID, "how is the cluster?", nil)
+	steps = nil
+	for _, r := range st.Exchanges[0].Reads {
+		steps = append(steps, r.Tool)
+	}
+	if cp := c.prov; !contains(steps, "snapshot_index") || len(cp.creqs) != 1 || strings.Contains(cp.creqs[0].System, invSnapshotAddendum) {
+		t.Fatalf("%v", steps)
+	}
+}
+
 func TestSnapshotInvestigationFindingsBlock(t *testing.T) {
 	for _, tc := range []struct{ reply, note string }{
 		{"no block here", "the answer carried no findings block"},
@@ -162,6 +200,15 @@ func TestSnapshotInvestigationFollowUpRevisesFindings(t *testing.T) {
 	if ex.Answer != "revised" || ex.Findings == nil || len(ex.Findings.Findings) != 1 || ex.Findings.Findings[0].Label != labelReading ||
 		!strings.Contains(p.creqs[1].System, "fixed set of evidence") {
 		t.Fatalf("%+v", ex)
+	}
+	// a follow-up reads the chat's snapshot; the plan ran once, on the
+	// first turn
+	var steps []string
+	for _, r := range ex.Reads {
+		steps = append(steps, r.Tool)
+	}
+	if !contains(steps, "snapshot_index") {
+		t.Fatalf("a follow-up does not run the plan again: %v", steps)
 	}
 }
 

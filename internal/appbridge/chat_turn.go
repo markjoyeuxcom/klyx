@@ -99,12 +99,18 @@ func (r *turnRunner) run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if r.c.mode == "snapshot" {
-		if r.c.kind == kindInvestigation && r.ex.seed == r.c.anchor {
-			return r.investigationSnapshot(ctx) // the fixed plan (A1 §1.1)
-		}
-		return r.snapshot(ctx)
+		return r.snapshotTurn(ctx)
 	}
 	return r.tools(ctx)
+}
+
+// snapshotTurn is a turn in snapshot mode: an investigation's first turn
+// runs its fixed plan (A1 §1.1), anything else the chat's snapshot.
+func (r *turnRunner) snapshotTurn(ctx context.Context) (string, error) {
+	if r.c.kind == kindInvestigation && r.ex.seed == r.c.anchor {
+		return r.investigationSnapshot(ctx)
+	}
+	return r.snapshot(ctx)
 }
 
 // seedRead resolves and reads a follow-up's object before any model call
@@ -345,7 +351,9 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 					r.c.mode = "snapshot"
 					r.s.mu.Unlock()
 					r.addRead(ChatRead{Tool: "mode", Outcome: "completed", Detail: "this server does not support tools; switched to snapshot mode"})
-					return r.snapshot(ctx)
+					// an investigation keeps its own plan and findings (A1
+					// implementation review, finding 9)
+					return r.snapshotTurn(ctx)
 				}
 				return "", err
 			}
