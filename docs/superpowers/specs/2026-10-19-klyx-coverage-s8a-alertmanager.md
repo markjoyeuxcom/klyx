@@ -751,3 +751,5 @@ The fix:
 Codex's fifteen mounted probes pass as written (its new one drives the real health store's bootstrap failure). One mutation was caught: absence from the rows' part.
 
 **Implementation accepted by Codex at 09395f8** (handoff f1fb3b3f), with no remaining findings.
+
+**The evaluation budget is a calibration** (2026-10-21, PR #51's CI). The 50 ms evaluation bound is asserted only with `KLYX_LOAD=1` and without `-race`, as the 1c load test's budgets are: CI runs the suite under the race detector, where one evaluation took 85 to 104 ms, and on a loaded machine the same commit measured anywhere from 41 to 361 ms. The memory bounds are asserted on every run.
