@@ -55,16 +55,16 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 - **Observations and causes are kept apart.**
   - **An observation** states what a read shows: a verdict, a condition or event, an alert, a threshold crossing, what a diff changed. It is **checked** when Klyx evaluates it itself on the cited read (the Kustomization's own `HealthCheckFailed` naming the Deployment; the pod's CrashLoopBackOff verdict; the diff's changed fields). Otherwise it is the model's reading of the cited text, shown as such.
   - **A cause** ("this commit caused the crash") is an inference. It is **suspected** whatever its citations and whatever the model calls it: a diff proves what changed, a crash-loop proves the crash, and neither proves that one caused the other. Timing, correlation and absence never raise it.
-  - A cause becomes **proven** only through a named causal-proof rule that Klyx evaluates deterministically on the cited reads, defined and tested per phase. For example: the failing container's image equals the image the diff introduced, and its failure is an image pull of that exact reference.
+  - A cause becomes **proven** only through a named causal-proof rule that Klyx evaluates deterministically on the cited reads, defined and tested in a phase note. No such rule is defined yet, so every cause is suspected. A rule must exclude the independent causes Klyx can check, not only match the change to the failure: a new image that fails to pull may fail because of a registry, DNS or credential outage that the change did not cause (revision 2).
 - **Missing evidence is listed:** reads that failed, kinds that were unreadable or stale, and budgets that ran out.
-- **Each phase's tests include the counterexamples:** a diff that touches the object but not the failing field (an annotation-only change) beside an independent failure; a real ledger ID cited for an unrelated object; evidence read before the failure began.
+- **Each phase's tests include the counterexamples:** a diff that touches the object but not the failing field (an annotation-only change) beside an independent failure; a diff that introduces the failing image while the pull fails for an independent reason (a registry outage); a real ledger ID cited for an unrelated object; evidence read before the failure began.
 
 **A-C2. Boundaries.**
 - **One cluster per investigation,** as chat: the home cluster, pinned at the start.
 - **Fleet difference is the one exception, and it is bounded by the operator** (revision 1):
   - the comparison set is chosen by the operator when the investigation starts (its clusters named in the UI, or a fleet compare the operator opened), and fixed outside any model or cluster text;
   - a tool call naming a cluster outside the set is refused before any read or send, whatever the model's reason;
-  - each member's connection and egress policy are re-checked before every read, as the runner checks the home cluster's;
+  - each member's pinned connection and current egress policy are checked before every read, and before every model send that carries anything read from it: its results, the history, answers or continuation that hold them (revision 2). A member that disconnected or lost its egress refuses the send, as the home cluster's does today, even when no further read of it is asked;
   - actions (A3) stay on the home cluster.
 - **Every per-kind exclusion is unchanged** and applies to every new read: diffs, graphs, comparisons, snapshots and reports. That is the structural never-send list (Secret data, ConfigMap values, Helm values, env values, `command` and `args`), the annotation allowlist, S0b's embedded payloads and S10's and DRA's special projections. A new tool builds its own projection through those rules; reusing an inspector DTO or raw Git or Loki output would bypass them. `ScrubEvidence`'s credential and identifier scrub is heuristic for free text, not proof of secret absence.
 - **The structural never-send list is unchanged** (Secret data, ConfigMap values, Helm values, env values).
@@ -247,3 +247,12 @@ Codex (handoff 5d5bd443) requested changes: four P2 findings on the programme's 
 - every per-kind exclusion applies to the new reads;
 - A2's local reports are an intentional new scope, with stated content, private storage, deletion and bounds;
 - ProtectGuard is a guard against mistakes.
+
+## 9. Revision 2: Codex's re-review of 6ab427c
+
+Codex (handoff 5a352255) requested changes: two residual P2 findings. The other revisions were accepted.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | The exact-image pull example was not causal proof: a valid new image can fail to pull because of an independent registry, DNS or credential outage | A-C1: no causal-proof rule is defined yet, so every cause is suspected; a rule must exclude the independent causes Klyx can check; the independent pull failure joins the required counterexamples |
+| 2 | Comparison members were fenced before reads only, so a send could carry a member's retained results after it disconnected or lost egress | A-C2: each member's pinned connection and current egress policy are checked before every send that carries its data, the history and continuation included |
