@@ -1,6 +1,7 @@
 import { Call } from "@wailsio/runtime";
 import { NAV_GROUPS, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useFleet } from "../store/fleet";
+import { useChat, invSlot } from "../ai/chatStore";
 import { setThemeChoice } from "../theme/ThemeProvider";
 import { describeResource } from "../bridge/exec";
 import { describeArg } from "../chrome/describe/targets";
@@ -1173,15 +1174,22 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     }
     (await within(10_000, "Investigate", () => button(/^Investigate$/))).click();
     const findings = await within(120_000, "the findings", () => $("[data-testid='inv-findings']"));
+    // each read's outcome, so a report says what the investigation read
+    const ledger = (useChat.getState().states[invSlot(cluster)]?.exchanges[0]?.reads ?? []).map((r) => `${r.id} ${r.tool} ${r.outcome}${r.detail ? `: ${r.detail}` : ""}`);
     const labels = [...findings.querySelectorAll(".inv-finding > .inv-head > .inv-label")].map((l) => l.textContent?.trim() ?? "");
     if (labels.length === 0 || labels.some((l) => !["reading", "suspected", "unsupported"].includes(l))) throw new Error(`labels: ${labels.join(", ") || "none"}`);
     const text = findings.textContent ?? "";
     for (const want of ["Klyx's checks", "reports a failed health check", "Missing evidence", "proposed, not run"]) if (!text.includes(want)) throw new Error(`no "${want}"`);
+    // the lab's two revisions were fetched and rendered: the scripted
+    // model's cause cites the diff, so it is suspected, not unsupported
+    const changes = ledger.find((l) => / git_changes /.test(l)) ?? "";
+    if (!/ completed: \d+ commits/.test(changes)) throw new Error(`git_changes did not compare the renders: ${changes || "not read"}`);
+    if (!labels.includes("suspected")) throw new Error(`no suspected cause: ${labels.join(", ")}`);
     const reads = drawer.querySelectorAll("[data-testid='chat-reads'] .chat-read-id").length;
     button(/^Clear$/)?.click();
     key(drawer, { key: "Escape" });
     await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
-    return { labels, reads };
+    return { labels, reads, ledger };
   });
 
   // ---- the inspector at this width ----
