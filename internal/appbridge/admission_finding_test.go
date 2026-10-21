@@ -131,7 +131,7 @@ func TestTheInventorysStateQualifiesTheCandidates(t *testing.T) {
 	}
 	// a long message is clipped after the scrub
 	long := strings.Repeat("x", 600) + " password=hunter2"
-	if _, f := writeError(context.Background(), admissionFixture(), admission.Wrap(q, "Deployment", "lab", "api", denial("password=hunter2 "+long))); strings.Contains(f.Message, "hunter2") || len(f.Message) > maxFindingMessage+len("…") {
+	if _, f := writeError(context.Background(), admissionFixture(), admission.Wrap(q, "Deployment", "lab", "api", denial("password=hunter2 "+long))); strings.Contains(f.Message, "hunter2") || len(f.Message) > 512+len("…") || !strings.HasSuffix(f.Message, "…") {
 		t.Fatalf("the message is scrubbed and clipped: %q", f.Message)
 	}
 	// a refusal that is not attributed keeps today's text and no finding

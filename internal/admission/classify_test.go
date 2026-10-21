@@ -132,6 +132,22 @@ func TestTheEnvelopesAreExact(t *testing.T) {
 			t.Errorf("%q attributed: %+v", msg, f)
 		}
 	}
+	// the message's tail is exactly the cause, not one of its length
+	if f := Classify(vap(`widgets.lab "w" is forbidden: ` + cause[:len(cause)-1] + "x")); f.Attributed() {
+		t.Errorf("a tail that differs from the cause attributed: %+v", f)
+	}
+	// the generic denial's message is its first cause
+	generic := metav1.Status{Code: 403, Reason: metav1.StatusReasonForbidden, Message: "policy 'set-owner' denied request: owner label missing",
+		Details: &metav1.StatusDetails{Kind: "widgets", Causes: []metav1.StatusCause{{Message: "something else"}}}}
+	if f := Classify(generic); f.Attributed() {
+		t.Errorf("a generic denial that is not its first cause attributed: %+v", f)
+	}
+	// an Invalid on another metadata field is not the UID guard
+	invalid := metav1.Status{Code: 422, Reason: metav1.StatusReasonInvalid, Message: `widgets.lab "w" is invalid: metadata.name: Invalid value`,
+		Details: &metav1.StatusDetails{Causes: []metav1.StatusCause{{Field: "metadata.name", Message: "Invalid value"}}}}
+	if UIDRefusal(invalid) {
+		t.Error("an Invalid on metadata.name read as a UID refusal")
+	}
 	gone := metav1.Status{Code: 404, Reason: metav1.StatusReasonNotFound, Message: `admission webhook "h" denied the request: not found here`}
 	if Classify(gone).Envelope != EnvWebhookDenied || UIDRefusal(gone) {
 		t.Fatal("a webhook's NotFound denial is a denial, never the object gone")
