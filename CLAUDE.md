@@ -48,7 +48,7 @@ Recorded crossings (the 2026-06-17 directive requires noting the rule a feature 
 
 ## Tech stack (locked decisions)
 
-- **Language**: Go 1.27.2 (the `go.mod` floor since the 2026-10-11 security bump - the net/http and http2 standard-library fixes - alongside golang.org/x/net v0.60.0; CI and releases build with it via `go-version-file: go.mod`)
+- **Language**: Go 1.27.3 (the `go.mod` floor since 2026-10-21, for crypto/x509's GO-2026-6809; 1.27.2 since the 2026-10-11 security bump for the net/http and http2 standard-library fixes, alongside golang.org/x/net v0.60.0; CI and releases build with it via `go-version-file: go.mod`)
 - **Native shell**: Wails v3 (https://wails.io)
 - **K8s client**: client-go (informer-based for live state, never direct API calls per render)
 - **Frontend**: TypeScript + React with Tabler outline icons
