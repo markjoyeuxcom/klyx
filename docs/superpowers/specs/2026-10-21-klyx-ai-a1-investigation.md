@@ -38,12 +38,34 @@ It builds on cluster chat (`2026-10-14-klyx-cluster-chat.md`): the pinned connec
 - **The first turn is the investigation.** The model is asked to investigate the anchor's failure and to end with findings (§4). Later turns are questions about it, and may revise the findings.
 - **Budgets for an investigation's turn,** larger than chat's because it reads more:
   - 12 model calls and 24 tool calls per turn;
-  - 6 reads at once;
+  - 6 reads at once, counting each read's own API and query fan-out, not only tool calls;
+  - a fleet-wide admission for Git renders (§3.2): at most 2 at once across all investigations, the rest queued within the turn's deadline;
   - 300 s;
   - each tool result 16 KiB, as chat, with `git_changes` at 32 KiB;
   - what one model call carries, at most 384 KiB, as chat.
 
   A budget that runs out stops the turn, and the findings say what was not read (A-C3).
+
+### 1.1 Snapshot investigations: Klyx acquires the evidence (revision 1)
+
+A provider without tools (the Claude Code CLI, `openaiCompatible` without tools) cannot ask for reads. Its first turn therefore gets a **fixed acquisition plan** that Klyx runs from the anchor and the links it establishes, never from model or cluster text.
+
+**The plan, by the anchor's kind:**
+- **A Flux Kustomization:**
+  - `gitops_unit`;
+  - for at most 3 health-check entries that parsed and joined, their current object (by name, with the replacement caveat) and its failing pods, at most 3 per object chosen by Klyx's verdict;
+  - each failing pod's previous-container log (kube API, tail 50, then `get_log_history` when the pod is gone and its UID is held);
+  - the warning events about the anchor and those objects;
+  - `git_changes`;
+  - `get_alerts` for the objects;
+  - `get_dependencies`.
+- **A workload:** the workload, its failing pods (at most 3), their logs and events, its rollout history, its alerts, its Flux owner by labels and that owner's `git_changes`.
+- **Anything else:** the object, its events, its dependencies and its alerts.
+- **Comparison reads:** with a comparison set, `fleet_difference` for the anchor, or for the joined workload, under the member fences (A-C2).
+
+**Its bounds:** the plan runs within the investigation's read and time budgets. Its snapshot document is at most 96 KiB, filled in the plan's order. Whatever does not fit, or failed, is listed in the document and in missing evidence, with its read ID.
+
+**Its scope, said:** a snapshot investigation reads only what its plan reads. The findings panel says "Snapshot: Klyx read a fixed set of evidence", and follow-up questions use chat's snapshot rules.
 
 ## 2. Read IDs and checks
 
@@ -52,24 +74,30 @@ It builds on cluster chat (`2026-10-14-klyx-cluster-chat.md`): the pinned connec
 **A check is an observation Klyx evaluated itself** on a read's data, deterministically. Klyx writes the text, never the model. Each check has:
 - an ID within its read (`r4.c1`);
 - a class, one of those below;
-- a subject: kind, namespace, name and UID;
-- Klyx's statement;
-- the evidence's own time: when the condition last changed, the alert started, or the metric window ended;
+- a subject: kind, namespace and name, and its **identity strength** (revision 1):
+  - **by UID:** the subject's UID comes from a read Klyx pinned by UID in this investigation (the anchor, an Observer row found by UID, an owner reference, a pod listed by its workload's controller UIDs);
+  - **by name:** the evidence names the object without a UID. Health-check messages, Flux inventory entries, rendered Git objects, Prometheus series and name-mode Loki streams are all by name.
+
+  A by-name subject is never given today's UID for an object of that name. Klyx may add a separate fact, "Deployment shop/web is currently UID B, created at T", and says "possibly a replacement" when it was created after the evidence;
+- Klyx's statement, which names the identity it holds: "Kustomization flux-system/app (by UID) reports a failed health check naming Deployment shop/web", never "Deployment UID B failed its health check";
+- **two times, kept apart** (revision 1):
+  - **observed:** when the evidence describes the world. For a live read that is the read's time; for history it is its own time or interval (a metric's window, a log line's timestamp, an event's last occurrence, a commit's time);
+  - **onset:** when the evidence says its condition began (a condition's last transition, an alert's start, a restart count's first increase), if it says;
 - the read's coverage: live, stale or partial.
 
 | Class | Evaluated on | Example statement |
 |---|---|---|
 | `verdict` | the Observer row, by UID (`anchorVerdict`) | "Klyx's verdict for Deployment shop/web: Degraded - CrashLoopBackOff" |
 | `condition` | a condition with status False or a failing reason | "Kustomization flux-system/app Ready=False, reason HealthCheckFailed, since 12:04" |
-| `healthcheck` | a `HealthCheckFailed` message, parsed (§3.1) and joined to the inventory and to live UIDs | "the health check timed out on Deployment shop/web (status InProgress)" |
+| `healthcheck` | a `HealthCheckFailed` message, parsed strictly (§3.1) and joined to the inventory by name | "Kustomization flux-system/app (by UID) reports a failed health check naming Deployment shop/web (by name), status InProgress" |
 | `status` | a pod's container status | "container web of pod shop/web-7d9 restarted 6 times; last terminated with exit code 1 (Error)" |
 | `event` | a Warning event about the object, by UID | "BackOff: Back-off restarting failed container web (14 times)" |
 | `rollout` | rollout history and the pods' owners | "the failing pods belong to ReplicaSet web-7d9, created from revision 4" |
-| `diff` | two rendered revisions (§3.2) | "revision a1b2c3d changed Deployment shop/web: spec.template.spec.containers[web].env[LOG_LEVEL] (value not shown)" |
+| `diff` | two source renders under the current spec (§3.2) | "the source render of revision a1b2c3d changed Deployment shop/web (by name): spec.template.spec.containers[web].env[LOG_LEVEL], changed (not shown)" |
 | `alert` | an active alert whose subject Klyx resolved to the object's UID | "alert KubePodCrashLooping firing for pod shop/web-7d9 since 12:05" |
-| `metric` | a template's series past its stated threshold (§3.4) | "restarts of shop/web rose by 6 in the last 15 minutes" |
+| `metric` | a template's series past its stated threshold (§3.4) | "restarts of the pods currently named web-7d9-x and web-7d9-y (by name) rose by 6 in the last 15 minutes" |
 
-A check that cannot be evaluated is not made: a stale read, a subject not resolved by UID, an unparsed message. The read stays evidence the model may read.
+A check that cannot be evaluated is not made: a stale read, an ambiguous parse, a by-name subject asked to stand for a UID. The read stays evidence the model may read.
 
 ## 3. New and extended tools
 
@@ -83,9 +111,10 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
   - the Observer's verdict for it.
 - **The health-check parser** (new, `flux.HealthCheckFailed`):
   - Flux writes `<prefix>: [<Kind>/<namespace>/<name> status: '<Status>'[: <error>], ...]`, where the prefix ends in `timeout waiting for` or `failed early due to stalled resources` (`fluxcd/pkg/ssa`, `manager_wait.go`), and a cluster-scoped object has no namespace segment.
-  - The parser finds each entry by its ` status: '...'` marker, not by splitting on commas, because an entry's error text may contain commas.
-  - The kind has no group. An entry joins the inventory by kind, namespace and name. Two inventory entries of the same kind name in different groups make the join ambiguous: no check, and the entry is said as unjoined.
-  - A joined entry is read live for its UID, then its verdict.
+  - **Flux does not escape an entry's error text** (revision 1). An error can contain a comma, a closing bracket, or a whole entry-shaped substring: a real `status.Compute` error reads `Widget/shop/real status: 'Unknown': looking up ... accessor error: bad, Deployment/shop/other status: 'Failed' is of the type string, expected int64`, one resource with two markers. No regex makes that unambiguous.
+  - **The parse is strict and stops at ambiguity.** Entries are read from the opening bracket, one at a time: `<Kind>/[<namespace>/]<name> status: '<Status>'`, then exactly `, ` (the next entry) or `]` (the end). An entry followed by `: ` carries an error. That entry is kept, because its own text precedes the error, but its error and everything after it are **unparsed**: they stay text the model may read, and create no check and no join.
+  - The kind has no group. An entry joins the inventory by kind, namespace and name, **by name**. Two inventory entries of the same kind name in different groups make the join ambiguous: no join, and the entry is said as unjoined.
+  - **The check speaks of the Kustomization,** whose UID Klyx holds: "Kustomization flux-system/app reports a failed health check naming Deployment shop/web (status InProgress)". The named object's current UID and verdict are read as a separate fact, by name, with the replacement caveat (§2).
 - **Returns:**
   - the unit's facts;
   - the inventory, at most 100 entries, counted beyond;
@@ -103,13 +132,21 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
 - **Reads:**
   - the commits between the two revisions, scoped to `spec.path`: `LogPath`, at most 20, with authors and subjects scrubbed;
   - the changed files: `DiffNames`, at most 200.
-- **The rendered diff:**
-  - both revisions are built with the cache diff's confined build (`cachediff`; 60 s and 64 MiB each);
-  - the rendered objects are compared by group, kind, namespace and name, each projected through chat's rules before comparing;
-  - a change inside a dropped or masked subtree is reported as "changed (not shown)", with its path;
-  - an object that appears or disappears is said by its identity only;
-  - one `diff` check per changed object, naming its changed paths, at most 20 paths per object and 20 objects, each counted beyond.
-- **When a build fails** (SOPS, remote bases, the size bound), the tool falls back to the file list and the commits, and says the rendered diff is not established. It never sends raw file content: a YAML file can hold a Secret, values or a payload.
+- **What is rendered, said exactly** (revision 1). Both revisions are built with the cache diff's confined build (`cachediff`; 60 s and 64 MiB each, behind the fleet-wide admission of §1) under **today's Kustomization spec**: its `targetNamespace`, `images`, patches and path. The result is named a **source render under the current spec**, never the applied objects:
+  - the spec in force at the healthy revision is not known. When the spec's own generation changed after the healthy revision was applied, the render says so;
+  - `postBuild` substitution is not applied, so variables stay unsubstituted, and the render is **partial** when the Kustomization declares it;
+  - SOPS is not decrypted. An encrypted field that changed reads "changed (encrypted)", and the render is partial;
+  - a build that fails, or passes its bound, falls back to the file list and the commits: **not established**.
+- **Hidden changes are found before the projection** (revision 1). Chat's projection drops env values, keeps Secret key names and ConfigMap value sizes, and masks other subtrees. Two projections can therefore be equal while the objects differ. So Klyx compares the raw old and new objects in process, for every field chat's rules exclude, before anything is projected:
+  - the env values, `command` and `args`;
+  - Secret data, ConfigMap and Helm values;
+  - annotations outside the allowlist;
+  - S0b payloads, and S10's and DRA's withheld fields.
+
+  Each difference becomes a path marker, "spec.template.spec.containers[web].env[LOG_LEVEL]: changed (not shown)". The hidden values, and any digest of them, are never serialized.
+- **The comparison:** the rendered objects are matched by group, kind, namespace and name. Visible fields are compared after projection, hidden ones as markers. An object that appears or disappears is said by its identity only. A comparison that is capped or unsupported says "change not established", never "unchanged".
+- **Checks:** one `diff` check per changed object, by name, naming its visible and hidden changed paths. At most 20 paths per object and 20 objects, each counted beyond, with the render's qualification: partial, current spec, or not established.
+- **Never sent:** raw file content. A YAML file can hold a Secret, values or a payload.
 - **Returns** at most 32 KiB.
 
 ### 3.3 `get_dependencies` (new)
@@ -134,9 +171,11 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
   - `route_requests`, `route_5xx_ratio` and `route_p99`: the existing Envoy rule metrics for a route.
 - **Construction:**
   - label values are escaped with `metrics.Equals` and `MatchAnyOf`;
-  - the window's step keeps every series under 60 points;
-  - each series is summarised: min, max, last and the threshold crossing;
+  - the window's step keeps every series at most 60 points, the inclusive end counted;
+  - each series is summarised: min, max, last, gaps, counter resets and the threshold crossing;
   - at most 8 series, each counted beyond.
+- **Identity, by name** (revision 1). Series are labelled by pod name. A workload's series are selected by its current pods' names, from the Observer by UID. That is not historical ownership: a pod of the same name recreated inside the window is included, and a pod gone before the read is not. The check says so: "pods currently named web-7d9-x and web-7d9-y, in the last hour".
+- **An empty result** is "no data for this selection and window", never proof that a source such as kube-state-metrics is absent.
 - **Never written by the model:** the model never writes PromQL. An unknown template is refused.
 
 ### 3.5 `get_alerts` (new)
@@ -151,7 +190,8 @@ Every tool follows chat's §3: strict arguments, server-side validation, the 16 
 ### 3.6 `get_log_history` (new, the AI-safe Loki adapter)
 
 - **Arguments:** `namespace`, `pod`, `container?`, `window` (15m, 1h or 6h), `tail` (1 to 200).
-- **Reads:** Loki through the existing reader (`LokiReader.Query`), by the pod's UID where the shipper records it, otherwise by namespace and name.
+- **The target's identity comes from Klyx, never the model** (revision 1). A pod's UID is used only when this investigation's ledger holds it from a UID-pinned read, which covers a pod that is gone but that an earlier read listed. When the ledger holds several UIDs for that name, the model must pass one of them, as `uid`, and nothing else is accepted. With no UID held, the read is by namespace and name.
+- **Reads:** Loki through the existing reader (`LokiReader.Query`): by the UID where the shipper records it, otherwise by namespace and name.
 - **Says which, every time:** "by the pod's UID", or "by namespace and name: every pod of that name in the window".
 - **Bounds:** at most 200 lines and 16 KiB. The whole text is scrubbed with `ScrubEvidence` before each line is capped at 2,000 characters.
 - **Purpose:** the pod that is gone, and history beyond the previous container. The kube-API read (`get_pod_logs`) is unchanged.
@@ -190,8 +230,12 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 
 **What Klyx decides, for every finding** (A-C1):
 1. **Provenance:** every cited ID must be in this investigation's ledger. Otherwise the finding is **unsupported**.
-2. **Subject identity:** at least one cited read or check must be about the finding's subject, by UID, or about an object Klyx links to it through a join it holds. Those joins are the owner chain, the inventory, a health-check join or a dependency edge read in this investigation. Otherwise the finding is **unsupported**.
-3. **Time:** a check whose evidence time is before the failure began does not support a finding about the failure. The start is the anchor's Ready-false transition, or its verdict's "since". The check is shown as "earlier than the failure". An anchor that is not failing has no start: the rule does not apply, and the findings say there was no failure to date.
+2. **Subject identity:** at least one cited read or check must be about the finding's subject. **By UID** means the subject's own UID, or a UID join Klyx holds: the owner chain, a dependency edge read by UID. **By name** means a name correlation: the inventory, a health-check entry, a rendered Git object, a metric or log stream by name. A finding supported only by name correlations is shown as such ("by name: the object at that name may have been replaced"), never as about a UID. Otherwise the finding is **unsupported**.
+3. **Time** (revision 1, observation apart from onset):
+   - **The failure's window** starts at the anchor's Ready=False transition, or its verdict's "since". It is an upper bound: the failure may have begun earlier, and a reason that changed while Ready stayed False makes the current episode's start uncertain, which is said.
+   - **Evidence observed before that window** (a metric interval or log lines ending before it, a commit long before, an event last seen before) does not establish the current failure. It is shown as "observed before the failure was reported".
+   - **Evidence observed during it is current,** whatever its onset. A pod crash-looping since 12:00, read at 12:06 while the Kustomization failed at 12:05, is a current, checked state, and its earlier onset is stated as a relation ("began before the Kustomization reported the failure").
+   - An anchor that is not failing has no window: the rule does not apply, and the findings say there was no failure to date.
 4. **Coverage:** a citation to a stale or partial read is shown with that qualification.
 5. **The label:**
    - a Klyx check cited by a finding is shown beside it in Klyx's own words, as **checked**;
@@ -212,7 +256,7 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
   - **The ledger:** each read shows its ID and its checks.
   - **The findings panel:**
     - Klyx's checks first, grouped by subject;
-    - then the model's findings, each labelled checked, reading, suspected or unsupported, with chips for its citations;
+    - then the model's findings, each labelled reading, suspected or unsupported, with the Klyx checks it cites shown beside it as checked. A model finding is never itself "checked";
     - then missing evidence;
     - then the proposed remedy, "proposed, not run".
 
@@ -249,8 +293,27 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 
 ## 8. Tests
 
-- **The health-check parser** against Flux's own message builder: every prefix, a namespaced and a cluster-scoped entry, an error containing commas, an entry not in the inventory, and a kind present in two groups.
-- **The rendered diff:** a changed image, an env value, a value inside a Secret, a moved object, a failed build's fallback, and the bounds.
+- **The health-check parser** against Flux's own message builder: every prefix, a namespaced and a cluster-scoped entry, an error containing commas, an error containing a whole entry-shaped substring (the upstream `status.Compute` example), an entry not in the inventory, and a kind present in two groups.
+- **Identity** (revision 1):
+  - a Deployment replaced between its health check and the investigation: the check names it by name, and the current UID carries the replacement caveat;
+  - a pod gone from the API and the Observer: its logs by the UID the ledger held, or by name when none;
+  - a same-name pod recreated inside a metric window;
+  - name-only evidence never yields a checked assertion about a UID.
+- **Time** (revision 1):
+  - a continuing failure read after the timeout stays a current, checked state;
+  - evidence observed before the failure was reported does not establish it;
+  - a reason that changed while Ready stayed False;
+  - a metric window keeps its interval.
+- **The rendered diff:**
+  - a changed image;
+  - an env value, a same-key Secret value and a same-length ConfigMap value, each found as a hidden-change marker, its value absent from the output;
+  - a moved object;
+  - `postBuild` and SOPS renders labelled partial;
+  - a spec changed since the healthy revision;
+  - a failed build's fallback;
+  - the bounds.
+- **Metrics:** gaps, counter resets, a changed limit, the inclusive end within 60 points, and an empty result never read as an absent source.
+- **Snapshot investigations:** the scripted Flux scenario's first turn includes the planned evidence with its IDs, or lists what its plan could not read; it honours the 96 KiB and read bounds; and a comparison member's retained data is refused after its egress is revoked.
 - **A-C1's counterexamples**, each a scripted investigation whose findings Klyx must label correctly:
   - an annotation-only diff beside an independent failure: the cause stays suspected, and the diff check names the annotation only;
   - a new image failing to pull because the registry is down: suspected;
@@ -266,7 +329,7 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 - **The native smoke:** an investigation on the lab with the fake converser, the findings panel rendered.
 - **Captures:** night and day at 1440 and 1024.
 - **Parity:** none, since A1 changes no verdict.
-- **Load:** an investigation's reads at their bounds, against the 2 GiB cache and the Observer.
+- **Load:** simultaneous investigations at their bounds: read fan-out, the Git render admission (two 64 MiB renders at once), retained ledgers and checks, against the 2 GiB cache and the Observer.
 
 ## 9. Stages
 
@@ -288,3 +351,18 @@ The input is validated strictly, as tool arguments are. In tools mode an invalid
 - A causal-proof rule.
 - Argo's hook results, which belong to the Argo-parity work.
 - HelmRelease upgrade diffs. Values never cross; A1 reads a HelmRelease's status and history only.
+
+## 11. Revision 1: Codex's design review of bf78038
+
+Codex (handoff aa240b9d) requested changes: six P2 findings, each with a probe or a primary source.
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | Flux does not escape an entry's error, so a marker inside it can read as another resource | §3.1: a strict entry-by-entry parse; an entry's error and everything after it are unparsed, with no check and no join. §8: the upstream `status.Compute` example |
+| 2 | Looking up today's UID for a name gives historical, name-only evidence a stand-in's identity | §2: identity strength by UID or by name, never upgraded, with the replacement caveat; §3.1, §3.4 and §3.6 say which; §4's subject rule shows name correlations as such; logs use a UID only from the ledger |
+| 3 | Observation time was conflated with onset, rejecting a continuing failure that began earlier | §2: observed and onset times apart; §4: the failure's window as an upper bound, evidence observed during it current, earlier onset stated as a relation |
+| 4 | Comparing projections hides changes to env values, Secret values and same-length ConfigMap values | §3.2: hidden changes found on the raw objects in process, before projection, for every chat exclusion, emitted as path markers only; capped comparisons say "change not established" |
+| 5 | A successful build is not a complete render: postBuild and SOPS are not applied, and today's spec renders both revisions | §3.2: named a source render under the current spec, partial for postBuild and SOPS, the spec's change since the healthy revision said |
+| 6 | Snapshot mode had an output block but no way to acquire the new evidence | §1.1: a fixed acquisition plan from the anchor and Klyx's links, its bounds and its scope stated |
+
+Codex's guidance, taken: read fan-out counted within the 6 concurrent reads and a fleet-wide admission for Git renders (§1); empty metric results, gaps, counter resets and the inclusive end (§3.4); a model finding is never itself "checked" (§5); the member fences cover retained history (§3.7, as the roadmap's A-C2).
