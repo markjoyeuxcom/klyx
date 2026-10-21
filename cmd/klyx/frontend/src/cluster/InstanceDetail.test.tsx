@@ -171,6 +171,27 @@ describe("InstanceDetail", () => {
     expect(incomplete.issues.some((issue) => issue.message === "Missing required field: metadata.name")).toBe(true);
   });
 
+  it("reads metadata's own keys only: prefixed labels, annotations, lists and block scalars are not YAML errors", () => {
+    const yaml = [
+      "apiVersion: cert-manager.io/v1", "kind: Certificate", "metadata:",
+      "  annotations:", "    kubectl.kubernetes.io/restartedAt: \"2026-10-21T00:00:00Z\"", "    note: |", "      a block scalar's line",
+      "  finalizers:", "  - cert-manager.io/finalizer",
+      "  labels:", "    app.kubernetes.io/name: web", "    name: not-the-object",
+      "  name: web-tls", "  namespace: default",
+      "  ownerReferences:", "  - apiVersion: apps/v1", "    kind: Deployment", "    name: web-owner", "    uid: u1",
+      "  resourceVersion: \"10\"",
+      "rules:", "- apiGroups: [\"\"]", "  resources: [pods]",
+      "spec:", "  secretName: web-tls", "",
+    ].join("\n");
+    const result = validateResourceYAML(yaml, resource, instance);
+    expect(result.issues).toEqual([]);
+    expect(result.blocking).toBe(false);
+    expect(result.identity).toMatchObject({ metadataName: "web-tls", metadataNamespace: "default", metadataResourceVersion: "10" });
+    // metadata's own malformed key still blocks
+    const bad = validateResourceYAML("apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name web-tls\n", resource, instance);
+    expect(bad.blocking).toBe(true);
+  });
+
   it("warns when edited YAML changes object identity", () => {
     const result = validateResourceYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: other\n  namespace: kube-system\n", resource, instance);
     expect(result.blocking).toBe(false);

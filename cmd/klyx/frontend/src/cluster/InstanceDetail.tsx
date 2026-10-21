@@ -286,6 +286,9 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
   const identity: YAMLIdentity = {};
   const lines = yaml.split("\n");
   let inMetadata = false;
+  // metadata's own keys sit at one indent; identity is read there only
+  let metadataIndent = -1;
+  const sequenceItem = (t: string) => t === "-" || t.startsWith("- ");
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
@@ -301,6 +304,9 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
     const trimmed = raw.trim();
     if (indent === 0) {
       inMetadata = false;
+      metadataIndent = -1;
+      // a top-level key's sequence (a Role's rules) may sit at its own indent
+      if (sequenceItem(trimmed)) continue;
       const topMatch = /^([A-Za-z0-9_.-]+):(.*)$/.exec(trimmed);
       if (!topMatch) {
         issues.push({ tone: "danger", line: lineNo, column: 1, message: "YAML parse error: expected key: value" });
@@ -315,6 +321,11 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
     }
 
     if (inMetadata) {
+      if (metadataIndent < 0) metadataIndent = indent;
+      // labels' and annotations' keys (app.kubernetes.io/name), a block
+      // scalar's lines and list items (finalizers, ownerReferences) are not
+      // metadata's own keys: the server's dry run validates them
+      if (indent !== metadataIndent || sequenceItem(trimmed)) continue;
       const metadataMatch = /^([A-Za-z0-9_.-]+):(.*)$/.exec(trimmed);
       if (!metadataMatch) {
         issues.push({ tone: "danger", line: lineNo, column: indent + 1, message: "YAML parse error in metadata: expected key: value" });
