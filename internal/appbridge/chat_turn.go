@@ -1045,13 +1045,13 @@ func (r *turnRunner) memberCompare(m member) func(ctx context.Context, kind, ns,
 			r.amu.Unlock()
 			return fleet.WorkloadCompareInfo{}, err
 		}
-		info, err := m.conn.WorkloadCompare(ctx, kind, ns, name)
-		if err == nil {
-			r.s.mu.Lock()
-			r.c.membersRead = true
-			r.s.mu.Unlock()
-		}
-		return info, err
+		// marked before the read: a failure's text is the member's too, so
+		// every later send is fenced whatever the read returns (A1
+		// implementation review, finding 2)
+		r.s.mu.Lock()
+		r.c.membersRead = true
+		r.s.mu.Unlock()
+		return m.conn.WorkloadCompare(ctx, kind, ns, name)
 	}
 }
 

@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +132,21 @@ func TestAMemberLostAfterItsReadEndsTheInvestigation(t *testing.T) {
 	st := f.svc.Ask("x", inv.ConversationID, "", nil)
 	if len(f.prov.reqs) != 1 || !strings.Contains(st.Ended, "the comparison cluster stg disconnected") || st.Exchanges[0].Outcome != "failed" {
 		t.Fatalf("the next send is refused and the investigation ends: %d sends, %+v", len(f.prov.reqs), st)
+	}
+}
+
+// AI A1 implementation review, finding 2: a member's failed read carries
+// its text too, so it fences the next send as a successful read does.
+func TestAMemberLostAfterAFailedReadEndsTheInvestigation(t *testing.T) {
+	f := newFleetFixture(t, calls(ai.ToolCall{ID: "d", Name: toolFleetDiff, Args: json.RawMessage(diffArgs)}), answer("never sent"))
+	f.conns["stg"].compareErr = errors.New("MemberPrivateDiagnosticNeedle")
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.SetComparison("x", inv.ConversationID, []string{"stg"})
+	f.conns["stg"].compareHook = func() { f.setUsable("stg", false) }
+	st := f.svc.Ask("x", inv.ConversationID, "", nil)
+	b, _ := json.Marshal(f.prov.reqs)
+	if len(f.prov.reqs) != 1 || strings.Contains(string(b), "MemberPrivateDiagnosticNeedle") || !strings.Contains(st.Ended, "the comparison cluster stg disconnected") {
+		t.Fatalf("the failed read's text is never sent after its member is lost: %d sends, %+v", len(f.prov.reqs), st)
 	}
 }
 
