@@ -380,9 +380,9 @@ Codex's guidance, taken: evidence observed before the failure was reported stays
 
 **Design accepted at e1c9e31** (Codex, revision 2, handoff ae35d4b8, 2026-10-21), with no remaining findings. This accepts the design; the implementation and its gates keep their own review.
 
-## 13. As built: stages 1 to 7 (2026-10-21)
+## 13. As built: stages 1 to 8 (2026-10-21)
 
-Stages 1 to 7 are built on `feat/ai-a1`, each gated (gofmt, vet, race tests, golangci-lint on CI scope, tsc, vitest, eslint) with a mutation pass over its key lines. Stage 8 waits on the owner's decision about the lab's Git server. Nothing is pushed.
+Stages 1 to 8 are built on `feat/ai-a1`. Each is gated (gofmt, vet, race tests, golangci-lint on CI scope, tsc, vitest, eslint), with a mutation pass over its key lines. Nothing is pushed.
 
 | Stage | Commit | What |
 |---|---|---|
@@ -398,6 +398,10 @@ Stages 1 to 7 are built on `feat/ai-a1`, each gated (gofmt, vet, race tests, gol
 | 5c | 0d26322 | Snapshot investigations: the fixed plan and the findings block |
 | 6 | b0ccaeb | `fleet_difference` and the comparison set |
 | 7 | 9b86e83 | Investigate, the drawer's investigation mode, the findings panel |
+| 8 | b5586d5 | `git_changes`: Flux's history when applied equals attempted (found on the lab) |
+| 8 | 9b92c65 | A retrying unit's failure from its event and history; whole GVRs in drawing references (found on the lab) |
+| 8 | 365f7e6 | The native smoke investigates the lab; what Investigate does, said before the first turn |
+| 8 | c2d4909 | The smoke hook stands aside in the confined build's child (found on the lab) |
 
 **How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders. None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time.
 
@@ -414,11 +418,51 @@ Stages 1 to 7 are built on `feat/ai-a1`, each gated (gofmt, vet, race tests, gol
 9. **Revisions are read from the raw status (§3.1, §3.2).** S0b's scp-form URL rule turns `main@sha1:<sha>` into `sha1:<sha>` in every sanitised copy, `get_resource` included. That rule is a known issue to fix in `urlscrub` on its own, not in A1.
 10. **A member failing its fence ends the investigation (A-C2, §3.7)**, rather than only the turn: the conversation's history carries its data into every later send. `fleet_difference` takes an optional `clusters` subset.
 11. **`report_findings` is not a read.** It has no ledger ID and no tool budget. One valid report per turn, one retry after an invalid call.
-12. **The failure's window (§4)** is the earliest Ready=False condition onset among the anchor's checks by UID. It is "no failure to date" when the anchor has no failing condition or status check, and "unknown" when it is failing without an onset. A verdict's "since" is not used.
+12. **The failure's window (§4)** is the earliest onset among the anchor's checks by UID: a Ready=False condition, or a health-check check, which carries when the revision first failed. It is "no failure to date" when the anchor has no failing condition, status or health-check check, and "unknown" when it is failing without an onset. A verdict's "since" is not used.
+13. **`git_changes` compares from Flux's history when applied equals attempted (§3.2; found on the lab).** `lastAppliedRevision` is not always the last healthy revision: a revision whose first reconcile passed its health check stays recorded as applied after it fails. It then compares from the newest other revision `status.history` records as `ReconciliationSucceeded`, and says so in `baseFrom`.
+14. **`gitops_unit` reads a retrying unit's failure from Flux's event (§3.1; found on the lab).** While Flux retries, Ready and Healthy read Unknown and the message is gone. It reads Ready=False, else Healthy=False, else the unit's newest `HealthCheckFailed` event by UID, and says which. When the revision first failed comes from `status.history`.
 
-### 13.2 Not yet done
+### 13.2 Stage 8: the lab, captures and the native smoke (2026-10-21)
 
-- **Stage 8:** the lab and its Git server (the owner's decision: it touches the ssh configuration), the native smoke with a fake converser, captures at night and day at 1440 and 1024, and the real-LLM smoke (the owner's key).
+**The lab (the owner chose a public repository over an in-cluster ssh server).**
+- The repository is [`markjoyeuxcom/klyx-lab-a1`](https://github.com/markjoyeuxcom/klyx-lab-a1): synthetic manifests, commits authored with the owner's GitHub no-reply address. It holds four commits on `apps/web`:
+  1. healthy;
+  2. crash;
+  3. healthy, with `minReadySeconds: 15`;
+  4. crash, plus a `release` label.
+- On `kind-klyx`, Flux's source and kustomize controllers (v1.9.6) run in their own namespace, `klyx-a1-flux`, with `--watch-all-namespaces=false`. The lab's existing Flux fixtures are untouched (checked before and after), and the lab's CRDs were not replaced.
+- The scripts live in the scratchpad as the other labs' do: `lab-a1/apply.sh`, `lab-a1/teardown.sh`, and `lab-a1/fake-model.mjs`, the scripted OpenAI-compatible model on loopback.
+- The lab configs approve the repository and point AI at that model. They are the scratchpad's `ui-review/cfg-a1` and `smoke/cfg`, never the owner's `fleet.yaml`.
+
+**What the lab found, now fixed.**
+1. **`lastAppliedRevision` is not the last healthy revision** (fixed in b5586d5). A revision whose first reconcile passes its health check is recorded as applied, and a later failure does not undo that. A container that crashes after starting, without a readiness gate, can look Current long enough to pass, which happened with commit 2. A failed health check does not advance it, as commits 3 and 4 show. Applied and attempted then name the same commit. `git_changes` now compares from the newest other revision that `status.history` records as `ReconciliationSucceeded`, and says so in `baseFrom`. Before the fix it claimed "Flux has nothing newer that failed".
+2. **A retrying unit hides its failure** (fixed in 9b92c65).
+   - While Flux runs a health check again, Ready and Healthy read Unknown, Progressing, and each failure resets the transition time. That was 90 s of each 2-minute cycle in the lab, and is most of a cycle with Flux's 5-minute default.
+   - `gitops_unit` now reads the failure from Ready=False, else Healthy=False, else Flux's newest `HealthCheckFailed` event about the unit by UID, and says which.
+   - When the attempted revision first failed comes from `status.history`.
+   - A health-check check dates the anchor's failure window. A retrying unit no longer reads "no failure to date".
+3. **References from `get_dependencies` read `apps//deployments`** (fixed in 9b92c65). The kind table had no versions, so a chip appeared twice and its navigation would break.
+4. **A smoke build could not run the confined build** (fixed in c2d4909, before A1 and outside it). `smoke.go`'s `init()` exited on the missing `KLYX_SMOKE_OUT` in the confined build's child, whose environment is empty by design. So every render in a native smoke died at start, the Flux lens's Compute diff included; shipped builds were never affected. The smoke hook now stands aside in the child. The A1 step reports each read's outcome, and fails unless `git_changes` compared the renders and the scripted cause is labelled suspected.
+
+**Captures.** Server mode, with the scripted model, at night and day, 1440 and 1024:
+- Start: the anchor, "read-only", what Investigate does.
+- The findings panel: the window, labels reading and suspected, the cited checks as checked, the commit diff marked "observed before the failure was reported", Klyx's missing evidence (no Prometheus in the lab) apart from the model's note, and the remedy "proposed, not run".
+- Klyx's checks grouped by subject, including the health check read from Flux's event while the unit retried.
+- The ledger.
+
+All four runs pass every text check, with no sideways scroll and every label one of Klyx's. They are in the scratchpad's `cap-a1/`.
+
+**The native smoke.** The WKWebView walk gains "Investigate from the Flux inspector". It opens `a1-web`, runs an investigation with the scripted model, and requires:
+- every label to be reading, suspected or unsupported;
+- Klyx's checks, a parsed health check, missing evidence and the remedy to be shown;
+- `git_changes` to have compared the renders;
+- the cause to be suspected.
+
+All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, on a clean tree, with every lab re-applied.
+
+### 13.3 Not yet done
+
+- **The real-LLM smoke:** the owner's key, the owner's step.
 - **The load test of §8:** simultaneous investigations at their bounds.
 - **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
 - **Codex's implementation review.**
