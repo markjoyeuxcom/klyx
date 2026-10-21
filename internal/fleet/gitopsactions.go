@@ -118,6 +118,15 @@ func definiteRefusal(err error) bool {
 	return code >= 400 && code < 500 && code != http.StatusRequestTimeout
 }
 
+// stepRefused: a step's request was refused, so nothing of it was written -
+// a definite refusal, or patchArmed's ErrReplaced, which it returns only for
+// the server's UID-guard answers (NotFound, the UID precondition Conflict,
+// the metadata.uid Invalid) with their status formatted away (Codex's
+// implementation re-review 1). A lost answer is neither.
+func stepRefused(err error) bool {
+	return err != nil && (errors.Is(err, ErrReplaced) || definiteRefusal(err))
+}
+
 // patchArmed writes a UID-guarded merge patch to the armed object. A write
 // the server refuses for the UID (a replacement after checkArmed) is
 // ErrReplaced; a replacement that is gone again is too. The error speaks
@@ -244,7 +253,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 			err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: sgvr.Group, Version: sgvr.Version, Resource: sgvr.Resource, Namespace: ref.Namespace},
 				ref.Kind, ref.Namespace, ref.Name, err)
-			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: err != nil && definiteRefusal(err), Err: err})
+			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: stepRefused(err), Err: err})
 			switch {
 			case err == nil:
 				source = what + " was already asked to reconcile"
@@ -256,7 +265,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		}
 	}
 	err = c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
-	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: err != nil && definiteRefusal(err), Err: err})
+	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: stepRefused(err), Err: err})
 	if err != nil {
 		if source != "" {
 			return steps, fmt.Errorf("reconcile %w; %s", err, source)

@@ -148,6 +148,11 @@ func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
 		{"the source denied, the target written", webhookDenial(), nil},
 		// a lost answer is unverified, never refused (Codex's implementation review, finding 5)
 		{"the source's answer lost, the target written", context.DeadlineExceeded, nil},
+		// the target's UID guard refused it: definite, though patchArmed
+		// formats its status away (re-review 1)
+		{"the source written, the target replaced", nil, apierrors.NewConflict(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "app",
+			errors.New("StorageError: invalid object, Code: 4, Key: /registry/kustomize.toolkit.fluxcd.io/kustomizations/flux-system/app, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-app, UID in object meta: uid-new"))},
+		{"the source written, the target gone", nil, apierrors.NewNotFound(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "app")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"},
@@ -176,7 +181,12 @@ func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
 				t.Fatalf("subjects: %+v", steps)
 			}
 			for _, s := range steps {
-				if s.Err != nil {
+				switch {
+				case s.Err == nil:
+				case errors.Is(s.Err, ErrReplaced):
+					// a UID refusal is never an admission finding: its
+					// request is not needed, its outcome is definite
+				default:
 					if q := requestOf(t, s.Err); q.Operation != "UPDATE" {
 						t.Fatalf("%+v", q)
 					}

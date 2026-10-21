@@ -305,3 +305,11 @@ Codex (handoff 1743d05b) requested changes: seven P2 findings, each with a probe
 | 7 | DeletePod read a webhook's NotFound denial as "it is already gone" | An attributed NotFound is the denial; the server's own NotFound is still the pod gone |
 
 Each fix has a test that fails without it, and ten mutations join the gate, one or two per finding: 55 mutations (40 Go, 15 frontend), all caught at 830b827. Gates at 830b827: bindings regenerate, `go vet` clean, `go test -race ./internal/...` passes, golangci-lint 0 issues, `tsc` clean, eslint 0 errors (the 4 warnings `main` has), vitest 2,419 passed.
+
+## 14. Implementation revision 2: Codex's re-review of 8dce96f
+
+Codex (handoff 0f7e4fb8) requested changes: one residual P2. The seven findings' probes pass.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A target step refused by its UID guard read "outcome unverified": `patchArmed` turns the server's UID-guard answer (the precondition Conflict, NotFound) into `ErrReplaced` with its status formatted away, so `definiteRefusal` could not find it | A step is refused when `definiteRefusal` holds or its error is `ErrReplaced`, which `patchArmed` returns only for the server's UID-guard answers (`stepRefused`); a timeout stays unverified. Error chains are unchanged elsewhere. Tests: the target replaced and the target gone, beside a written source; two mutations (a lost answer read as refused, a UID-guard refusal read as unverified) |
