@@ -99,6 +99,9 @@ func (r *turnRunner) run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if r.c.mode == "snapshot" {
+		if r.c.kind == kindInvestigation && r.ex.seed == r.c.anchor {
+			return r.investigationSnapshot(ctx) // the fixed plan (A1 §1.1)
+		}
 		return r.snapshot(ctx)
 	}
 	return r.tools(ctx)
@@ -609,6 +612,10 @@ func (r *turnRunner) snapshot(ctx context.Context) (string, error) {
 	r.s.mu.Lock()
 	r.ex.snapshot = included
 	r.s.mu.Unlock()
+	if r.c.kind == kindInvestigation {
+		// a follow-up in a snapshot investigation may revise the findings
+		return r.completeInvestigation(ctx, doc)
+	}
 	idx := r.startCall(st)
 	res, err := st.Provider.Complete(ctx, ai.Request{System: fmt.Sprintf(chatSnapshotSystem, r.c.cluster), User: doc, Purpose: ai.PurposeChat})
 	if err != nil {

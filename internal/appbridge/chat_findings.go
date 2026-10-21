@@ -150,6 +150,9 @@ type FindingsDTO struct {
 	Missing  []MissingDTO `json:"missing"`
 	Remedy   *RemedyDTO   `json:"remedy,omitempty"`
 	Note     string       `json:"note,omitempty"`
+	// Scope is "Snapshot: Klyx read a fixed set of evidence" for a
+	// snapshot investigation (§1.1).
+	Scope string `json:"scope,omitempty"`
 }
 
 // anchorFacts are what Klyx reads off the anchor's read: its identity and

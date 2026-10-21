@@ -121,6 +121,10 @@ type exchange struct {
 	// findings are an investigation turn's, as Klyx labels them (AI A1 §4)
 	findings     *FindingsDTO
 	findingCalls int
+	// a snapshot investigation's sections left out to fit (read IDs) and
+	// the plan steps its budget stopped
+	snapshotDropped []string
+	snapshotSkipped []string
 }
 
 // ChatModelCallDTO is one attempted model call, for the Activity log: never
