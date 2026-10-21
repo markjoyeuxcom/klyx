@@ -207,8 +207,8 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
         )}
         {st && !st.conversationId && !failure && cleared && (
           <div className="chat-notice" role="status">
-            The conversation was cleared.
-            <div><button type="button" className="l-btn" onClick={() => void start()}>Start a conversation</button></div>
+            {isInv ? "The investigation was cleared." : "The conversation was cleared."}
+            <div><button type="button" className="l-btn" onClick={() => void start()}>{isInv ? `Investigate ${anchor?.label ?? "again"}` : "Start a conversation"}</button></div>
           </div>
         )}
         {st && st.removed > 0 && <div className="chat-small">{st.removed} earlier exchange{st.removed === 1 ? " was" : "s were"} removed.</div>}

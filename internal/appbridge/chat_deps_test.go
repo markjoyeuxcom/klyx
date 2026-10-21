@@ -97,8 +97,8 @@ func TestDepsFluxGraph(t *testing.T) {
 		infra.State != "Ready=False, reason HealthCheckFailed; suspended" || sum.UID != "" || sum.Identity != identityName || sum.State != "evidence stops: read limit (2 more)" {
 		t.Fatalf("%+v %+v %+v", app, infra, sum)
 	}
-	if len(read.Refs) != 2 {
-		t.Fatalf("references for the nodes held by UID of a kind Klyx classifies: %+v", read.Refs)
+	if len(read.Refs) != 2 || read.Refs[0].GVR != "kustomize.toolkit.fluxcd.io/v1/kustomizations" {
+		t.Fatalf("references for the nodes held by UID of a kind Klyx classifies, each a whole GVR: %+v", read.Refs)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -118,7 +119,7 @@ func TestUnitParsesTheHealthCheckAndJoinsByName(t *testing.T) {
 		t.Fatalf("%v", classes)
 	}
 	h := env.Checks[1]
-	if h.Statement != "Kustomization flux-system/app reports a failed health check (timed out) naming Deployment shop/web (by name), status InProgress" ||
+	if h.Statement != "Kustomization flux-system/app reports a failed health check (timed out) naming Deployment shop/web (by name), status InProgress (from its Ready condition)" ||
 		h.Subject.UID != "uid-ks" || h.Subject.Identity != identityUID || h.Onset != unitSince || h.ID != ".c2" {
 		t.Fatalf("the check speaks of the unit, by its UID: %+v", h)
 	}
@@ -221,7 +222,7 @@ func TestUnitJoinsDeclaredHealthChecksAndSaysWhatIsMissing(t *testing.T) {
 	if e[1].Join != joinHealthChecks || e[1].Current == nil || e[1].Current.Error != "no object of that name now" || e[1].Current.UID != "" {
 		t.Fatalf("an object gone now says so, with no UID: %+v %+v", e[1], e[1].Current)
 	}
-	if e[2].Join != joinMissing || e[2].Current != nil || !strings.HasSuffix(env.Checks[3].Statement, "status InProgress; "+joinMissing) {
+	if e[2].Join != joinMissing || e[2].Current != nil || !strings.HasSuffix(env.Checks[3].Statement, "status InProgress; "+joinMissing+" (from its Ready condition)") {
 		t.Fatalf("%+v %+v", e[2], env.Checks[3])
 	}
 	if e[3].Current == nil || e[3].Current.Error != "the entry's scope does not match the served kind: not read" {
@@ -346,5 +347,61 @@ func TestUnitShrinksItsInventoryFirst(t *testing.T) {
 	if !env.Truncated || read.Outcome != "truncated" || d.InventoryTotal != 141 || len(d.Inventory) >= chatUnitInventoryMax ||
 		d.HealthCheck == nil || len(d.HealthCheck.Entries) != 1 || d.Ready == nil || len(env.Checks) == 0 {
 		t.Fatalf("the inventory goes first; the health check and checks stay: %d shown of %d, %+v", len(d.Inventory), d.InventoryTotal, d.HealthCheck)
+	}
+}
+
+// The A1 lab's retry: while Flux runs a health check again, Ready and
+// Healthy read Unknown, Progressing and the message is gone; the unit's own
+// HealthCheckFailed event (by its UID) still holds it, and status.history
+// says when this revision first failed.
+func TestUnitReadsARetryingUnitsFailureFromItsEvent(t *testing.T) {
+	msg := "health check failed after 1m30s: timeout waiting for: [Deployment/shop/web status: 'InProgress']"
+	u := unitObj("ignored")
+	st := u.Object["status"].(map[string]any)
+	st["conditions"] = []any{
+		map[string]any{"type": "Ready", "status": "Unknown", "reason": "Progressing", "message": "Running health checks", "lastTransitionTime": "2026-10-21T12:43:13Z"},
+		map[string]any{"type": "Healthy", "status": "Unknown", "reason": "Progressing", "lastTransitionTime": "2026-10-21T12:43:13Z"},
+	}
+	st["history"] = []any{
+		map[string]any{"lastReconciledStatus": "HealthCheckFailed", "firstReconciled": "2026-10-21T12:37:43Z", "metadata": map[string]any{"revision": "main@sha1:bbb"}},
+		map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "firstReconciled": "2026-10-21T12:30:00Z", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+	}
+	f := unitChat(u)
+	f.events = []workloads.EventSummary{
+		{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-other", Message: "health check failed: timeout waiting for: [Deployment/shop/elsewhere status: 'Failed']", LastSeenUnix: 1950000000},
+		{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: "health check failed: timeout waiting for: [Deployment/shop/older status: 'InProgress']", LastSeenUnix: 1792586000},
+		{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: msg, LastSeenUnix: 1792586683, FirstSeenUnix: 1792586683},
+	}
+	env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`)
+	d := unitData(t, env)
+	if d.HealthCheck == nil || len(d.HealthCheck.Entries) != 1 || d.HealthCheck.Entries[0].Name != "web" || d.HealthCheck.FirstFailed != "2026-10-21T12:37:43Z" ||
+		!strings.HasPrefix(d.HealthCheck.From, "Flux's HealthCheckFailed event at 2026-10-21T12:44:43Z, while the unit retries") {
+		t.Fatalf("the newest event of this unit, never another's; first failed from history: %+v", d.HealthCheck)
+	}
+	var hc *ChatCheck
+	for i := range env.Checks {
+		if env.Checks[i].Class == checkHealthCheck {
+			hc = &env.Checks[i]
+		}
+	}
+	if hc == nil || hc.Onset != "2026-10-21T12:37:43Z" || hc.Observed != rfcOrEmpty(time.Unix(1792586683, 0)) || !strings.Contains(hc.Statement, "while the unit retries") {
+		t.Fatalf("an event's check is observed at the event's time: %+v", hc)
+	}
+	// the failure's window: when this revision first failed, though Ready
+	// reads Unknown
+	a := anchorOf(&ChatSeedDTO{Kind: "object", Name: "app", Namespace: "flux-system", UID: "uid-ks"}, []ChatRead{{ID: "r1", Checks: env.Checks}})
+	if !a.failing || a.start != "2026-10-21T12:37:43Z" {
+		t.Fatalf("%+v", a)
+	}
+	f.events = nil
+	if env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`); unitData(t, env).HealthCheck != nil {
+		t.Fatal("no condition and no event: nothing is parsed")
+	}
+	// read from its Ready condition, the revision still first failed when
+	// history says, not at the condition's latest transition
+	st["conditions"] = []any{map[string]any{"type": "Ready", "status": "False", "reason": "HealthCheckFailed", "message": msg, "lastTransitionTime": "2026-10-21T12:44:43Z"}}
+	env, _ = run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`)
+	if d := unitData(t, env); d.HealthCheck == nil || d.HealthCheck.FirstFailed != "2026-10-21T12:37:43Z" || d.HealthCheck.From != "its Ready condition" {
+		t.Fatalf("%+v", d.HealthCheck)
 	}
 }

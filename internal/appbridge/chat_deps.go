@@ -101,22 +101,23 @@ func (b *depBuilder) incomplete(s string) {
 	b.data.Incomplete = append(b.data.Incomplete, b.p.str(s, chatStringMax))
 }
 
-// depParts names the Observer part that classifies a drawing's kind.
+// depParts names the Observer part that classifies a drawing's kind, at the
+// version a reference to it names (the kinds' stable versions).
 var depParts = map[string]schema.GroupVersionResource{
-	"Kustomization":           {Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"},
-	"HelmRelease":             {Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"},
-	"ExternalArtifact":        {Group: "source.toolkit.fluxcd.io", Resource: "externalartifacts"},
-	"ArtifactGenerator":       {Group: "source.extensions.fluxcd.io", Resource: "artifactgenerators"},
-	"Deployment":              {Group: "apps", Resource: "deployments"},
-	"StatefulSet":             {Group: "apps", Resource: "statefulsets"},
-	"DaemonSet":               {Group: "apps", Resource: "daemonsets"},
-	"Pod":                     {Resource: "pods"},
-	"Certificate":             {Group: "cert-manager.io", Resource: "certificates"},
-	"Issuer":                  {Group: "cert-manager.io", Resource: "issuers"},
-	"ClusterIssuer":           {Group: "cert-manager.io", Resource: "clusterissuers"},
-	"Gateway":                 {Group: "gateway.networking.k8s.io", Resource: "gateways"},
-	"ScaledObject":            {Group: "keda.sh", Resource: "scaledobjects"},
-	"HorizontalPodAutoscaler": {Group: "autoscaling", Resource: "horizontalpodautoscalers"},
+	"Kustomization":           {Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"},
+	"HelmRelease":             {Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"},
+	"ExternalArtifact":        {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"},
+	"ArtifactGenerator":       {Group: "source.extensions.fluxcd.io", Version: "v1beta1", Resource: "artifactgenerators"},
+	"Deployment":              {Group: "apps", Version: "v1", Resource: "deployments"},
+	"StatefulSet":             {Group: "apps", Version: "v1", Resource: "statefulsets"},
+	"DaemonSet":               {Group: "apps", Version: "v1", Resource: "daemonsets"},
+	"Pod":                     {Version: "v1", Resource: "pods"},
+	"Certificate":             {Group: "cert-manager.io", Version: "v1", Resource: "certificates"},
+	"Issuer":                  {Group: "cert-manager.io", Version: "v1", Resource: "issuers"},
+	"ClusterIssuer":           {Group: "cert-manager.io", Version: "v1", Resource: "clusterissuers"},
+	"Gateway":                 {Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"},
+	"ScaledObject":            {Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"},
+	"HorizontalPodAutoscaler": {Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
 }
 
 // verdicts attaches Klyx's verdicts to the nodes that hold a UID.

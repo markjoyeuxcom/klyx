@@ -174,13 +174,16 @@ func anchorOf(anchor *ChatSeedDTO, ledger []ChatRead) anchorFacts {
 			if a.subject.Kind == "" {
 				a.subject.Kind = c.Subject.Kind
 			}
-			if c.Class != checkCondition && c.Class != checkStatus {
+			if c.Class != checkCondition && c.Class != checkStatus && c.Class != checkHealthCheck {
 				continue
 			}
 			a.failing = true
-			// the failure's window starts at its Ready=False transition, an
-			// upper bound on when it began
-			if c.Class == checkCondition && strings.Contains(c.Statement, "Ready=False") && c.Onset != "" && (a.start == "" || c.Onset < a.start) {
+			// the failure's window starts at its Ready=False transition, or
+			// - a Flux unit, which reads Unknown while it retries - when its
+			// revision first failed its health check: an upper bound on when
+			// it began
+			ready := c.Class == checkCondition && strings.Contains(c.Statement, "Ready=False")
+			if (ready || c.Class == checkHealthCheck) && c.Onset != "" && (a.start == "" || c.Onset < a.start) {
 				a.start = c.Onset
 			}
 		}

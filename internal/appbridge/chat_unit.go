@@ -13,6 +13,7 @@ import (
 
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 // AI A1 §3.1: gitops_unit reads one Flux Kustomization or HelmRelease live,
@@ -64,11 +65,15 @@ type chatUnitEntry struct {
 }
 
 type chatUnitHealth struct {
-	Failure  string          `json:"failure"` // timeout | stalled
-	Entries  []chatUnitEntry `json:"entries"`
-	Total    int             `json:"total"`
-	Unparsed bool            `json:"unparsed,omitempty"`
-	Note     string          `json:"note"`
+	Failure string `json:"failure"` // timeout | stalled
+	// From is where the failure was read; FirstFailed, when this revision
+	// first failed its health check, when the evidence says
+	From        string          `json:"from"`
+	FirstFailed string          `json:"firstFailed,omitempty"`
+	Entries     []chatUnitEntry `json:"entries"`
+	Total       int             `json:"total"`
+	Unparsed    bool            `json:"unparsed,omitempty"`
+	Note        string          `json:"note"`
 }
 
 type chatUnitReady struct {
@@ -143,24 +148,20 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	subj := ChatCheckSubject{Kind: kind, Namespace: ns, Name: name, UID: uid, Identity: identityUID}
 	checks := conditionChecks(u, subj, env.ReadAt, p)
 
-	// the raw Ready condition, read in process: its message is parsed here
+	// the raw conditions, read in process: a failure message is parsed here
 	// and crosses only as the kind's message rule passes it, scrubbed
-	var onset time.Time
-	var rawMsg string
 	for _, c := range d.Conditions {
-		if c.Type != "Ready" {
-			continue
+		if c.Type == "Ready" {
+			data.Ready = &chatUnitReady{Status: c.Status, Reason: p.str(c.Reason, chatCheckReasonMax), Message: p.str(c.Message, chatStringMax)}
+			data.Ready.Since, _, _, _ = conditionRaw(u, "Ready")
 		}
-		data.Ready = &chatUnitReady{Status: c.Status, Reason: p.str(c.Reason, chatCheckReasonMax), Message: p.str(c.Message, chatStringMax)}
-		data.Ready.Since, rawMsg = readyRaw(u)
-		onset, _ = time.Parse(time.RFC3339, data.Ready.Since)
 	}
 	refs := []ChatRef{{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: uid}}
 	var current []ChatCheck
-	if data.Ready != nil && data.Ready.Status == "False" && data.Ready.Reason == "HealthCheckFailed" {
-		if hc, ok := flux.ParseHealthCheck(rawMsg); ok {
+	if src, ok := t.healthFailure(ctx, u, ns, uid); ok {
+		if hc, ok := flux.ParseHealthCheck(src.msg); ok {
 			var hcChecks []ChatCheck
-			data.HealthCheck, hcChecks, current, refs = t.healthCheck(ctx, u, d, hc, subj, onset, env.ReadAt, p, refs)
+			data.HealthCheck, hcChecks, current, refs = t.healthCheck(ctx, u, d, hc, subj, src, p, refs)
 			checks = append(checks, hcChecks...)
 		}
 	}
@@ -182,17 +183,98 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	return t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
 }
 
-// readyRaw is the Ready condition's last transition and raw message.
-func readyRaw(u *unstructured.Unstructured) (since, msg string) {
+// conditionRaw is one condition's last transition, status, reason and raw
+// message.
+func conditionRaw(u *unstructured.Unstructured, typ string) (since, status, reason, msg string) {
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	for _, c := range conds {
-		if m, ok := c.(map[string]any); ok && m["type"] == "Ready" {
+		if m, ok := c.(map[string]any); ok && m["type"] == typ {
 			since, _ = m["lastTransitionTime"].(string)
+			status, _ = m["status"].(string)
+			reason, _ = m["reason"].(string)
 			msg, _ = m["message"].(string)
-			return since, msg
+			return since, status, reason, msg
 		}
 	}
-	return "", ""
+	return "", "", "", ""
+}
+
+// healthSource is where a unit's failed health check was read, and when.
+type healthSource struct {
+	msg string
+	// from is said with the result: a condition, or Flux's event while the
+	// unit retries
+	from string
+	// observed is when the evidence describes the world: the read for a
+	// condition, the event's time for an event
+	observed string
+	// onset is when this revision first failed its health check, when the
+	// evidence says
+	onset time.Time
+}
+
+// healthFailure finds a unit's failed health check. While Flux retries, its
+// Ready and Healthy conditions read Unknown, Progressing for the whole
+// health-check run and the message is gone; Flux's own HealthCheckFailed
+// event about this unit, by its UID, still holds it (AI A1 lab, kustomize-
+// controller v1.9.6). When this revision first failed comes from
+// status.history, else the condition's transition, else the event.
+func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructured, ns, uid string) (healthSource, bool) {
+	var src healthSource
+	first := firstFailedReconcile(u)
+	for _, typ := range []string{"Ready", "Healthy"} {
+		since, status, reason, msg := conditionRaw(u, typ)
+		if status == "False" && reason == "HealthCheckFailed" && msg != "" {
+			src = healthSource{msg: msg, from: "its " + typ + " condition", observed: t.stamp()}
+			src.onset, _ = time.Parse(time.RFC3339, since)
+			if !first.IsZero() {
+				src.onset = first
+			}
+			return src, true
+		}
+	}
+	evs, _, err := t.conn.ListEvents(ctx, ns)
+	if err != nil {
+		return src, false
+	}
+	var newest *workloads.EventSummary
+	for i := range evs {
+		e := &evs[i]
+		if e.Type == "Warning" && e.Reason == "HealthCheckFailed" && e.UID == uid && uid != "" && (newest == nil || e.LastSeenUnix > newest.LastSeenUnix) {
+			newest = e
+		}
+	}
+	if newest == nil {
+		return src, false
+	}
+	at := time.Unix(newest.LastSeenUnix, 0).UTC()
+	src = healthSource{msg: newest.Message, from: fmt.Sprintf("Flux's HealthCheckFailed event at %s, while the unit retries", rfcOrEmpty(at)), observed: rfcOrEmpty(at), onset: first}
+	if src.onset.IsZero() && newest.FirstSeenUnix > 0 {
+		src.onset = time.Unix(newest.FirstSeenUnix, 0).UTC()
+	}
+	return src, true
+}
+
+// firstFailedReconcile is when the attempted revision first failed its
+// health check, from status.history; zero when it does not say.
+func firstFailedReconcile(u *unstructured.Unstructured) time.Time {
+	attempted, _, _ := unstructured.NestedString(u.Object, "status", "lastAttemptedRevision")
+	hist, _, _ := unstructured.NestedSlice(u.Object, "status", "history")
+	var first time.Time
+	for _, h := range hist {
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		rev, _, _ := unstructured.NestedString(m, "metadata", "revision")
+		status, _ := m["lastReconciledStatus"].(string)
+		at, _ := m["firstReconciled"].(string)
+		tm, err := time.Parse(time.RFC3339, at)
+		if rev == attempted && attempted != "" && status == "HealthCheckFailed" && err == nil && (first.IsZero() || tm.Before(first)) {
+			first = tm
+		}
+	}
+	return first
 }
 
 func inventoryText(e flux.InventoryEntry) string {
@@ -206,8 +288,9 @@ func inventoryText(e flux.InventoryEntry) string {
 // healthCheck builds the parsed entries, each joined by name, with their
 // healthcheck checks about the unit and the current-object facts.
 func (t *chatTools) healthCheck(ctx context.Context, u *unstructured.Unstructured, d flux.Detail, hc flux.HealthCheck, subj ChatCheckSubject,
-	onset time.Time, readAt string, p *projector, refs []ChatRef) (*chatUnitHealth, []ChatCheck, []ChatCheck, []ChatRef) {
-	out := &chatUnitHealth{Failure: "timeout", Total: len(hc.Entries), Unparsed: hc.Unparsed,
+	src healthSource, p *projector, refs []ChatRef) (*chatUnitHealth, []ChatCheck, []ChatCheck, []ChatRef) {
+	onset := src.onset
+	out := &chatUnitHealth{Failure: "timeout", Total: len(hc.Entries), Unparsed: hc.Unparsed, From: src.from, FirstFailed: rfcOrEmpty(onset),
 		Note: "Each entry names an object by kind, namespace and name: by name. current is the object of that name now, a separate fact."}
 	failure := "timed out"
 	if hc.Stalled {
@@ -239,7 +322,8 @@ func (t *chatTools) healthCheck(ctx context.Context, u *unstructured.Unstructure
 		if !known {
 			st += "; " + ce.Join
 		}
-		checks = append(checks, ChatCheck{Class: checkHealthCheck, Subject: subj, Statement: st, Observed: readAt, Onset: rfcOrEmpty(onset), Coverage: "live"})
+		st += " (from " + src.from + ")"
+		checks = append(checks, ChatCheck{Class: checkHealthCheck, Subject: subj, Statement: st, Observed: src.observed, Onset: rfcOrEmpty(onset), Coverage: "live"})
 		if known && e.Status != "Current" && read < chatUnitCurrentMax {
 			read++
 			cur, c, ref := t.currentOf(ctx, e, ce.Group, onset, verdicts, p)
