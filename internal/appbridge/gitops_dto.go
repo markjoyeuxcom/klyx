@@ -18,6 +18,35 @@ type ActionResultDTO struct {
 	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
 	// Steps are a composite action's requests and their outcomes.
 	Steps []StepDTO `json:"steps,omitempty"`
+	// Conflict is a refused apply's fields and their managers (v0.15.1).
+	Conflict *ApplyConflictDTO `json:"conflict,omitempty"`
+}
+
+// ApplyConflictDTO is a server-side apply refused for fields other managers
+// own: each field and its manager, and, when a Kubernetes controller owns
+// one, the object's controller and that controller's own.
+type ApplyConflictDTO struct {
+	Fields        []ConflictFieldDTO `json:"fields"`
+	FieldsOmitted int                `json:"fieldsOmitted,omitempty"`
+	Owner         *ConflictOwnerDTO  `json:"owner,omitempty"`
+}
+
+// ConflictFieldDTO is one refused field. Class is gitops, kubernetes or
+// other.
+type ConflictFieldDTO struct {
+	Manager string `json:"manager"`
+	Class   string `json:"class"`
+	Path    string `json:"path"`
+}
+
+// ConflictOwnerDTO is an owner by group, kind and name.
+type ConflictOwnerDTO struct {
+	Group     string            `json:"group"`
+	Version   string            `json:"version"`
+	Kind      string            `json:"kind"`
+	Namespace string            `json:"namespace"`
+	Name      string            `json:"name"`
+	Up        *ConflictOwnerDTO `json:"up,omitempty"`
 }
 
 // FluxResourceDTO is the JSON projection of a Flux reconciliation resource.

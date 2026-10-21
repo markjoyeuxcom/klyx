@@ -69,7 +69,11 @@ export async function countKind(cluster: string, group: string, version: string,
 
 type InstancePageDTO = { items: InstanceDTO[]; nextToken: string; error?: string; notServed?: boolean; columns?: InstanceColumnDTO[] | null };
 // admission: coverage S3b's finding for a refused request
-export type ActionResult = { ok: boolean; error: string; admission?: AdmissionFindingDTO };
+// v0.15.1: a refused apply's fields and their managers, and the owner an
+// edit belongs in when a Kubernetes controller owns a field
+export type ConflictOwnerDTO = { group: string; version: string; kind: string; namespace: string; name: string; up?: ConflictOwnerDTO };
+export type ApplyConflictDTO = { fields: { manager: string; class: string; path: string }[]; fieldsOmitted?: number; owner?: ConflictOwnerDTO };
+export type ActionResult = { ok: boolean; error: string; admission?: AdmissionFindingDTO; conflict?: ApplyConflictDTO };
 
 // listInstancePage REJECTS on a failed read: the backend returns an empty page
 // WITH error, and every caller (fleet-scope list, Overview risks, the list
@@ -169,7 +173,7 @@ export async function dryRunInstanceYAML(cluster: string, resource: ResourceRef,
     yaml,
     true,
   )) as ActionResult;
-  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}) };
+  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}), ...(r.conflict ? { conflict: r.conflict } : {}) };
 }
 
 export async function applyInstanceYAML(cluster: string, resource: ResourceRef, instance: InstanceRef, uid: string, yaml: string): Promise<ActionResult> {
@@ -186,7 +190,7 @@ export async function applyInstanceYAML(cluster: string, resource: ResourceRef, 
     yaml,
     false,
   )) as ActionResult;
-  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}) };
+  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}), ...(r.conflict ? { conflict: r.conflict } : {}) };
 }
 
 // gitOpsOwnership fetches the authoritative pre-write verdict for a target

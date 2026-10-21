@@ -247,9 +247,10 @@ func (c *ClusterConn) ApplyResourceYAML(ctx context.Context, group, version, plu
 			return fmt.Errorf("%s %s changed since it was opened; reopen it and try again", kind, name)
 		}
 		if conflict {
-			// The SSA conflict message already lists the conflicting fields +
-			// managers; prefix it so the cause is unmistakable.
-			return fmt.Errorf("apply conflict - another controller (e.g. Flux/Argo) owns fields you changed; forcing would be reverted on the next reconcile: %w", err)
+			// each field names its manager, and the advice follows the kind
+			// of manager (v0.15.1): never "Flux/Argo" for a field
+			// kube-controller-manager set
+			return c.newApplyConflict(ctx, kind, ns, name, live, err)
 		}
 		return err
 	}

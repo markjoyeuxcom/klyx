@@ -1,4 +1,5 @@
 import { AdmissionFinding } from "../admission/AdmissionFinding";
+import { ApplyConflictNote } from "./ApplyConflictNote";
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
@@ -1154,7 +1155,7 @@ function YamlPanel({
     const r = await dryRunInstanceYAML(cluster, resource, instance, detail?.uid ?? "", draft);
     // S3b §4: a completed dry run passed admission as of its time
     setStatus(r.ok ? { ok: true, error: `Server dry-run passed admission and defaulting as of ${new Date().toLocaleTimeString()}; a later apply's admission may differ` }
-      : { ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
+      : { ok: false, error: formatKubernetesActionError(r.error), admission: r.admission, conflict: r.conflict });
     setBusy(null);
   };
 
@@ -1167,7 +1168,7 @@ function YamlPanel({
     const r = await applyInstanceYAML(cluster, resource, instance, detail?.uid ?? "", submittedYaml);
     setConfirmApply(false);
     if (!r.ok) {
-      setStatus({ ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
+      setStatus({ ok: false, error: formatKubernetesActionError(r.error), admission: r.admission, conflict: r.conflict });
       setBusy(null);
       return;
     }
@@ -1220,6 +1221,12 @@ function YamlPanel({
           Masked Secret YAML cannot be applied because it would replace real values with placeholders.
         </div>
       )}
+      {resource.group === "" && resource.kind === "Pod" && (
+        // v0.15.1: say it before an edit the server refuses
+        <div className="t-secondary" data-testid="pod-immutable-note" style={{ marginBottom: 8 }}>
+          A Pod&apos;s spec cannot change after it is created, except its containers&apos; images, activeDeadlineSeconds and added tolerations; its labels and annotations can. To change anything else, change the workload that owns it.
+        </div>
+      )}
       {versionConflict && (
         <div style={conflictBand}>
           <span>
@@ -1236,7 +1243,8 @@ function YamlPanel({
       )}
       {status && (
         <div style={noticeStyle(status.ok ? "success" : "danger")}>
-          {status.admission ? <AdmissionFinding cluster={cluster} f={status.admission} /> : status.error}
+          {status.admission ? <AdmissionFinding cluster={cluster} f={status.admission} />
+            : status.conflict ? <ApplyConflictNote cluster={cluster} text={status.error} conflict={status.conflict} /> : status.error}
         </div>
       )}
       {confirmApply && (
