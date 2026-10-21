@@ -147,8 +147,8 @@ func TestFindingsAWholeReadKeepsItsQualifications(t *testing.T) {
 	}
 	whole := label("r1")
 	notes := strings.Join(whole.Notes, ";")
-	if whole.Label != labelReading || !strings.Contains(notes, "cites r1, which holds r1.c4, whose coverage is stale") ||
-		!strings.Contains(notes, "cites r1, whose r1.c3 was observed before the failure was reported") ||
+	if whole.Label != labelReading || !strings.Contains(notes, "cites r1, which holds evidence whose coverage is stale (r1.c4)") ||
+		!strings.Contains(notes, "cites r1, which holds evidence observed before the failure was reported (r1.c3)") ||
 		!strings.Contains(notes, "cites r1, part of which could not be read") || len(whole.Checked) != 4 || !whole.Checked[2].Before {
 		t.Fatalf("citing the read keeps what citing its checks would: %+v", whole)
 	}
@@ -215,6 +215,57 @@ func TestFindingsAByNameReadSupportsAByNameReading(t *testing.T) {
 		if !tc.ok && f.Label != labelUnsupported {
 			t.Fatalf("%s %s/%s citing %s is unsupported: %+v", tc.kind, tc.ns, tc.name, tc.cite, f)
 		}
+	}
+}
+
+// A finding's notes are bounded: one per read and kind of qualification,
+// at most findingCiteNotesMax on its citations after the label's own
+// reasons, and the report's result to the model stays within a result's
+// bound however many qualified checks the cited reads hold.
+func TestFindingsNotesAreBounded(t *testing.T) {
+	pod := ChatCheckSubject{Kind: "Pod", Namespace: "shop", Name: "web", UID: "uid-p", Identity: identityUID}
+	var ledger []ChatRead
+	var cites []string
+	for i := 1; i <= findingCitesMax; i++ {
+		r := ChatRead{ID: fmt.Sprintf("r%d", i), Tool: toolGet, Target: "Pod shop/web", Outcome: "truncated", Gaps: []string{"a gap"}}
+		for j := 1; j <= chatChecksMax; j++ {
+			r.Checks = append(r.Checks, ChatCheck{ID: fmt.Sprintf("r%d.c%d", i, j), Class: checkVerdict, Subject: pod, Statement: strings.Repeat("s", chatCheckStatementMax),
+				Observed: "2026-10-21T11:00:00Z", Coverage: []string{"stale", "checking", "unreadable"}[j%3]})
+		}
+		ledger = append(ledger, r)
+		cites = append(cites, r.ID)
+	}
+	var fs []string
+	for i := 0; i < findingsMax; i++ {
+		fs = append(fs, finding("cause", "Pod", "shop", "web", "s", cites...))
+	}
+	raw := `{"findings":[` + strings.Join(fs, ",") + `]}`
+	in, err := parseFindings(json.RawMessage(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := anchorFacts{subject: pod, failing: true, start: "2026-10-21T12:00:00Z"}
+	d := labelFindings(in, ledger, a)
+	for _, f := range d.Findings {
+		if len(f.Checked) != findingCheckedMax || len(f.Notes) > findingCiteNotesMax+2 || !strings.HasPrefix(f.Notes[len(f.Notes)-1], "+") {
+			t.Fatalf("%d checked, %d notes: %v", len(f.Checked), len(f.Notes), f.Notes)
+		}
+	}
+	// the label's own reason comes before the citations' notes
+	odd, _ := parseFindings(json.RawMessage(`{"findings":[` + finding("cause", "Pod", "shop", "web", "s", append([]string{"r99"}, cites[:9]...)...) + `]}`))
+	if n := labelFindings(odd, ledger, a).Findings[0].Notes; n[0] != "cites r99, not in this investigation's reads" {
+		t.Fatalf("%v", n)
+	}
+	// through the turn: the report's result to the model is a result
+	f := anchoredFixture(t, calls(ai.ToolCall{ID: "f", Name: toolFindings, Args: json.RawMessage(raw)}), answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.mu.Lock()
+	f.svc.convs[invKey("x")].exchanges = []*exchange{{id: "e0", outcome: "answered", reads: ledger}}
+	f.svc.mu.Unlock()
+	f.svc.Ask("x", inv.ConversationID, "and now?", nil)
+	res := f.prov.reqs[1].Messages[len(f.prov.reqs[1].Messages)-1].Results[0].Content
+	if len(res) > chatResultMax/2 || !strings.Contains(res, `"recorded":20`) || !strings.Contains(res, `"moreNotes":`) {
+		t.Fatalf("%d bytes: %.300s", len(res), res)
 	}
 }
 

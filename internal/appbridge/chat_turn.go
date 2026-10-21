@@ -431,14 +431,21 @@ func (r *turnRunner) reportFindings(call ai.ToolCall) ai.ToolResult {
 	r.ex.findings, r.ex.reported = &dto, &in
 	r.s.version++
 	r.s.mu.Unlock()
+	// the model is told each label and its first reasons, within a
+	// result's bound; the panel shows them all
 	type label struct {
-		Finding int      `json:"finding"`
-		Label   string   `json:"label"`
-		Notes   []string `json:"notes,omitempty"`
+		Finding   int      `json:"finding"`
+		Label     string   `json:"label"`
+		Notes     []string `json:"notes,omitempty"`
+		MoreNotes int      `json:"moreNotes,omitempty"`
 	}
 	var labels []label
 	for i, f := range dto.Findings {
-		labels = append(labels, label{i + 1, f.Label, f.Notes})
+		l := label{Finding: i + 1, Label: f.Label, Notes: f.Notes}
+		if len(l.Notes) > findingResultNotesMax {
+			l.Notes, l.MoreNotes = l.Notes[:findingResultNotesMax], len(l.Notes)-findingResultNotesMax
+		}
+		labels = append(labels, l)
 	}
 	b, _ := json.Marshal(map[string]any{"recorded": len(dto.Findings), "labels": labels,
 		"note": "Klyx shows these labels with your findings; nothing is shown as proven. Answer the operator briefly now."})

@@ -21,6 +21,8 @@ const (
 	toolFindings          = "report_findings"
 	findingsMax           = 20
 	findingCheckedMax     = 12 // checks shown beside one finding
+	findingCiteNotesMax   = 8  // notes on one finding's citations
+	findingResultNotesMax = 3  // notes per finding in report_findings' result
 	findingStatementMax   = 500
 	findingCitesMax       = 10
 	findingsMissingMax    = 10
@@ -223,41 +225,36 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 	for _, f := range in.Findings {
 		subj := ChatCheckSubject{Kind: f.Subject.Kind, Namespace: f.Subject.Namespace, Name: f.Subject.Name}
 		fd := FindingDTO{Type: f.Type, Statement: chatScrub(f.Statement, &n), Subject: subj, Cites: append([]string{}, f.Cites...)}
-		var unknown []string
+		var unknown, citeNotes []string
 		about, byUID, before, cited := false, false, 0, 0
-		shown := map[string]bool{}
+		shown := map[string]bool{} // check ID -> observed before the failure
 		// check is one check the finding rests on, cited directly or held
-		// by a read it cites: its time and coverage qualify the finding
-		// either way (A1 implementation review, finding 6)
-		check := func(c ChatCheck, via string) bool {
-			if shown[c.ID] || len(fd.Checked) == findingCheckedMax {
-				return false
+		// by a read it cites: shown once, at most findingCheckedMax, with
+		// whether it was observed before the failure (A1 implementation
+		// review, finding 6)
+		check := func(c ChatCheck) bool {
+			if b, ok := shown[c.ID]; ok {
+				return b
 			}
-			shown[c.ID] = true
-			fc := FindingCheckDTO{ID: c.ID, Class: c.Class, Statement: c.Statement, Observed: c.Observed}
-			fc.Before = a.failing && a.start != "" && c.Observed != "" && c.Observed < a.start
-			fd.Checked = append(fd.Checked, fc)
-			if qualifiedCoverage(c.Coverage) {
-				if via == "" {
-					fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, whose coverage is %s", c.ID, c.Coverage))
-				} else {
-					fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, which holds %s, whose coverage is %s", via, c.ID, c.Coverage))
-				}
+			b := a.failing && a.start != "" && c.Observed != "" && c.Observed < a.start
+			shown[c.ID] = b
+			if len(fd.Checked) < findingCheckedMax {
+				fd.Checked = append(fd.Checked, FindingCheckDTO{ID: c.ID, Class: c.Class, Statement: c.Statement, Observed: c.Observed, Before: b})
 			}
-			if fc.Before && via != "" {
-				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, whose %s was observed before the failure was reported", via, c.ID))
-			}
-			return fc.Before
+			return b
 		}
 		for _, id := range f.Cites {
 			if c, ok := checks[id]; ok {
 				cited++
-				if check(c, "") {
+				if check(c) {
 					before++
 				}
 				if sameSubject(c.Subject, subj) {
 					about = true
 					byUID = byUID || c.Subject.Identity == identityUID
+				}
+				if qualifiedCoverage(c.Coverage) {
+					citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose coverage is %s", c.ID, c.Coverage))
 				}
 				continue
 			}
@@ -269,10 +266,10 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 			// a read is evidence read now, never wholly before the failure
 			cited++
 			if r.Outcome != "completed" {
-				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, a read that %s", id, map[string]string{"failed": "failed", "truncated": "was truncated", "cancelled": "was cancelled"}[r.Outcome]))
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, a read that %s", id, map[string]string{"failed": "failed", "truncated": "was truncated", "cancelled": "was cancelled"}[r.Outcome]))
 			}
 			if len(r.Gaps) > 0 {
-				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, part of which could not be read", id))
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, part of which could not be read", id))
 			}
 			for _, ref := range r.Refs {
 				if ref.Namespace == subj.Namespace && ref.Name == subj.Name && refIsKind(ref.GVR, subj.Kind) {
@@ -280,12 +277,32 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 					byUID = byUID || ref.UID != ""
 				}
 			}
+			// the read's checks about the subject qualify it as they would
+			// cited directly: once per read and kind of qualification
+			var earlier []string
+			coverage := map[string][]string{}
+			var kinds []string
 			for _, c := range r.Checks {
-				if sameSubject(c.Subject, subj) {
-					about = true
-					byUID = byUID || c.Subject.Identity == identityUID
-					check(c, id)
+				if !sameSubject(c.Subject, subj) {
+					continue
 				}
+				about = true
+				byUID = byUID || c.Subject.Identity == identityUID
+				if check(c) {
+					earlier = append(earlier, c.ID)
+				}
+				if qualifiedCoverage(c.Coverage) {
+					if coverage[c.Coverage] == nil {
+						kinds = append(kinds, c.Coverage)
+					}
+					coverage[c.Coverage] = append(coverage[c.Coverage], c.ID)
+				}
+			}
+			for _, k := range kinds {
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, which holds evidence whose coverage is %s (%s)", id, k, strings.Join(coverage[k], ", ")))
+			}
+			if len(earlier) > 0 {
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, which holds evidence observed before the failure was reported (%s)", id, strings.Join(earlier, ", ")))
 			}
 			// a by-name read supports a by-name reading, never one by UID
 			// (A1 implementation review, finding 7)
@@ -319,6 +336,12 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 				fd.Notes = append(fd.Notes, "its evidence was observed before the failure was reported, so it does not establish the failure")
 			}
 		}
+		// the label's own reasons first, then the citations' notes, bounded
+		if len(citeNotes) > findingCiteNotesMax {
+			more := len(citeNotes) - (findingCiteNotesMax - 1)
+			citeNotes = append(citeNotes[:findingCiteNotesMax-1:findingCiteNotesMax-1], fmt.Sprintf("+%d more notes on its citations", more))
+		}
+		fd.Notes = append(fd.Notes, citeNotes...)
 		out.Findings = append(out.Findings, fd)
 	}
 	for _, m := range in.Missing {
