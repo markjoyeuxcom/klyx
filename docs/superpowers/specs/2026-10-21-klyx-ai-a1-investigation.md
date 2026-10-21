@@ -379,3 +379,46 @@ Codex (handoff 5baa7419) requested changes: one residual P2. The other revisions
 Codex's guidance, taken: evidence observed before the failure was reported stays checked as context for a suspected cause (§4); every render says the historical spec is unknown, never inferred from today's generation (§3.2); `uid` joins `get_log_history`'s arguments (§3.6).
 
 **Design accepted at e1c9e31** (Codex, revision 2, handoff ae35d4b8, 2026-10-21), with no remaining findings. This accepts the design; the implementation and its gates keep their own review.
+
+## 13. As built: stages 1 to 7 (2026-10-21)
+
+Stages 1 to 7 are built on `feat/ai-a1`, each gated (gofmt, vet, race tests, golangci-lint on CI scope, tsc, vitest, eslint) with a mutation pass over its key lines. Stage 8 waits on the owner's decision about the lab's Git server. Nothing is pushed.
+
+| Stage | Commit | What |
+|---|---|---|
+| 1 | 970920d | Read IDs, checks on the existing tools, citation chips |
+| 2 | c2b5635 | `gitops_unit`: the strict health-check parser and the joins |
+| 3 | dfa8d54 | `git_changes`: two source renders compared through the projection, hidden changes as path markers |
+| 4a | 3e8f91c | `get_alerts`, and the workload-to-pods join by controller UID |
+| 4b | 9588a9d | `get_log_history` |
+| 4c | b5e8da6 | `get_metrics`: pod, workload and restart templates |
+| 4c-ii | 5be6a52 | `get_metrics`: route templates |
+| 4d | 5967cb7 | `get_dependencies` |
+| 5a-b | d3847d5 | The investigation kind, `report_findings` and Klyx's labelling |
+| 5c | 0d26322 | Snapshot investigations: the fixed plan and the findings block |
+| 6 | b0ccaeb | `fleet_difference` and the comparison set |
+| 7 | 9b86e83 | Investigate, the drawer's investigation mode, the findings panel |
+
+**How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders. None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time.
+
+### 13.1 Deviations from this design, for review
+
+1. **The guard runs before each drawing, not between its reads (§3).** `get_dependencies` calls the cluster layer's drawings, which read inside `fleet`; the guard runs before each drawing. Each drawing's own read budget bounds the window.
+2. **`route_p99` is not offered (§3.4).** The per-rule source reads no latency, and the per-route latency read is instant only. `route_requests` and `route_5xx_ratio` use that source's fixed 30-minute window whatever window is asked, and say so.
+3. **`get_metrics` takes a `kind` argument (§3.4).** Workload templates need Deployment, StatefulSet or DaemonSet; route templates take HTTPRoute. A container's limit is the pod's as read now, said in the result.
+4. **Rollout history is not read in the workload plan (§1.1).** No A1 tool reads it; the plan says so in missing evidence.
+5. **`gitops_unit` also joins `spec.healthChecks` (§3.1)**, whose apiVersion gives the group, and reads at most 5 named objects now.
+6. **Hidden changes are found generically (§3.2).** Rather than a per-kind list, every raw difference that no projected difference explains becomes a marker. It is named down the path while chat's projection holds it, then through hidden-subtree names: values, data, command, env, an annotation's key, a Secret's or ConfigMap's data key, a pod template's metadata. Nothing nested inside another hidden subtree is named. A payload's keys appear only where S0b's free-form rule already sends them. Visible changes are shown at manifest paths.
+7. **Commits and files are scoped to `spec.path` (§3.2).** A change in a base outside it shows only in the render, which the result says.
+8. **The render admission covers AI renders only (§1).** The Flux lens's Compute diff is not queued behind it.
+9. **Revisions are read from the raw status (§3.1, §3.2).** S0b's scp-form URL rule turns `main@sha1:<sha>` into `sha1:<sha>` in every sanitised copy, `get_resource` included. That rule is a known issue to fix in `urlscrub` on its own, not in A1.
+10. **A member failing its fence ends the investigation (A-C2, §3.7)**, rather than only the turn: the conversation's history carries its data into every later send. `fleet_difference` takes an optional `clusters` subset.
+11. **`report_findings` is not a read.** It has no ledger ID and no tool budget. One valid report per turn, one retry after an invalid call.
+12. **The failure's window (§4)** is the earliest Ready=False condition onset among the anchor's checks by UID. It is "no failure to date" when the anchor has no failing condition or status check, and "unknown" when it is failing without an onset. A verdict's "since" is not used.
+
+### 13.2 Not yet done
+
+- **Stage 8:** the lab and its Git server (the owner's decision: it touches the ssh configuration), the native smoke with a fake converser, captures at night and day at 1440 and 1024, and the real-LLM smoke (the owner's key).
+- **The load test of §8:** simultaneous investigations at their bounds.
+- **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
+- **Codex's implementation review.**
