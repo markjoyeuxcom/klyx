@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -617,5 +618,37 @@ func TestGetCRDDefinition_DTO(t *testing.T) {
 	}
 	if r.Schema == nil || r.ShortNames == nil || r.StoredVersions == nil {
 		t.Error("empty lists cross the bridge as [], never null")
+	}
+}
+
+// v0.15.1: a refused apply's fields and owner cross as structure, bounded;
+// a protected subject keeps its withheld form.
+func TestARefusedApplyCarriesItsConflict(t *testing.T) {
+	var fields []fleet.ConflictField
+	for i := 0; i < 40; i++ {
+		fields = append(fields, fleet.ConflictField{Manager: "kube-controller-manager", Class: fleet.ManagerKubernetes, Path: fmt.Sprintf(".spec.f%d", i)})
+	}
+	fields[0].Path = strings.Repeat("p", 400)
+	ce := &fleet.ApplyConflictError{Kind: "Pod", Namespace: "monitoring", Name: "g", Pod: true, Fields: fields,
+		Owner: &fleet.ConflictOwner{Group: "apps", Version: "v1", Kind: "ReplicaSet", Namespace: "monitoring", Name: "g-98d", Up: &fleet.ConflictOwner{Group: "apps", Version: "v1", Kind: "Deployment", Namespace: "monitoring", Name: "g"}},
+		Err:   errors.New("Apply failed")}
+	conn := &fakeCRDConn{applyErr: ce}
+	svc := NewCRDService(func(string) (CRDConn, bool) { return conn, true })
+	r := svc.ApplyResourceYAML("x", "", "v1", "pods", "Pod", "Namespaced", "monitoring", "g", "u1", "kind: Pod\n", true)
+	if r.OK || r.Conflict == nil || len(r.Conflict.Fields) != maxConflictFields || r.Conflict.FieldsOmitted != 8 || r.Error != ce.Error() {
+		t.Fatalf("%+v", r)
+	}
+	if len(r.Conflict.Fields[0].Path) > maxConflictPath+len("…") || r.Conflict.Owner.Up.Kind != "Deployment" || r.Conflict.Owner.Up.Name != "g" {
+		t.Fatalf("%+v", r.Conflict)
+	}
+	// a Secret's refused apply carries no conflict structure
+	r = svc.ApplyResourceYAML("x", "", "v1", "secrets", "Secret", "Namespaced", "monitoring", "s", "u1", "kind: Secret\n", true)
+	if r.Conflict != nil {
+		t.Fatalf("a protected subject's conflict crossed: %+v", r.Conflict)
+	}
+	// any other error carries none
+	conn.applyErr = errors.New("boom")
+	if r = svc.ApplyResourceYAML("x", "", "v1", "pods", "Pod", "Namespaced", "monitoring", "g", "u1", "kind: Pod\n", true); r.Conflict != nil {
+		t.Fatalf("%+v", r)
 	}
 }

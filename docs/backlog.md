@@ -250,6 +250,16 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-21 - v0.15.1 (notes `docs/release-notes-0.15.1.md`), from the
+owner's first checks of v0.15.0 on their own clusters:**
+- An apply conflict names each field's manager from the server's causes and
+  advises by kind of manager (Git for Flux and Argo, the owner for a
+  Kubernetes controller, UID-fenced one step up, with "Open Deployment"); a
+  Pod's editor says its spec is mostly immutable
+- Same-name alerts are told apart by the labels that differ; several
+  cluster values with no match point at `alertmanager.match`
+- Two timing-dependent frontend tests fixed; Codex-reviewed (one revision)
+
 **2026-10-21 - First-class coverage (v0.15.0, roadmap
 `docs/superpowers/specs/2026-10-16-klyx-coverage-roadmap.md` and its slice
 notes, notes `docs/release-notes-0.15.0.md`; PRs #50 and #51):**

@@ -50,8 +50,10 @@ describe("LogHistoryPane (coverage S8b §7)", () => {
   it("Copy LogQL is unavailable when the query shown differs from the one sent", async () => {
     answer = () => page({ copyable: false, selectors: ["{cluster=\"[redacted]\"}"] });
     render(<LogHistoryPane cluster="c" target={target} />);
-    await waitFor(() => expect((screen.getByLabelText("Copy LogQL") as HTMLButtonElement).disabled).toBe(true));
-    expect(screen.getByLabelText("Copy LogQL").getAttribute("title")).toContain("does not copy it");
+    // the button is disabled while the page loads too: wait for the page's
+    // own reason, then the disabled state it gives
+    await waitFor(() => expect(screen.getByLabelText("Copy LogQL").getAttribute("title")).toContain("does not copy it"), { timeout: 3000 });
+    expect((screen.getByLabelText("Copy LogQL") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("says a source change, a saturated boundary with Skip past, and nothing to select", async () => {

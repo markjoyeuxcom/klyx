@@ -14,7 +14,7 @@ import { LensLayout, LensTable, TABLE_ROW_HEIGHT, type DatasetState } from "../l
 import { InspectorBlock, InspectorLayout, type MenuItem } from "../layout/InspectorLayout";
 import { fitColumns, type ColumnDef } from "../layout/columns";
 import { useClusterKey } from "./useClusterKey";
-import { alertsFacts, causeText, groupOf, rowsOutdated, sevClass, sevWord, sortAlerts, stateWord, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup } from "./alertsModel";
+import { alertsFacts, causeText, groupOf, rowsOutdated, sevClass, sevWord, sortAlerts, stateWord, subjectNote, subjectText, type AMAlertDTO, type AMSubjectDTO, type AlertGroup, distinguishingLabels, clusterLabelSpread } from "./alertsModel";
 
 // The Alerts lens (coverage S8a §7): Alertmanager's alerts for this
 // cluster, read-only. Active alerts first, then unprocessed, then
@@ -127,6 +127,9 @@ export function AlertsView({ cluster }: { cluster: string }) {
   }, [byKey, lr.rows]);
 
   const fitted = useMemo(() => fitColumns(COLUMNS, bodyWidth), [bodyWidth]);
+  // same-name alerts told apart by the labels that differ (v0.15.1)
+  const distinct = useMemo(() => distinguishingLabels(all), [all]);
+  const spread = useMemo(() => clusterLabelSpread(all, facts?.match), [all, facts?.match]);
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
   const icon = <IconBellRinging size={28} stroke={1.2} />;
@@ -169,6 +172,15 @@ export function AlertsView({ cluster }: { cluster: string }) {
     </div>);
   }
   if (truncated) notices.push(<div key="cap" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-capped">The first 5,000 alerts only: every count is at least, and an alert not listed is not established either way.</div>);
+
+  // several values of a cluster label with no match set: the Alertmanager
+  // may serve several clusters (v0.15.1)
+  if (spread) {
+    const shownValues = spread.values.slice(0, 4).join(", ") + (spread.values.length > 4 ? `, +${spread.values.length - 4} more` : "");
+    notices.push(<div key="shared" role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }} data-testid="alerts-shared">
+      These alerts carry {spread.values.length} values of the {spread.label} label ({shownValues}). With no match set, every alert on this Alertmanager is read as this cluster&apos;s, and its critical and warning alerts count in Needs you. If it serves several clusters, set this cluster&apos;s match in fleet.yaml: alertmanager.match, for example {spread.label}: &quot;this cluster&apos;s value&quot;.
+    </div>);
+  }
 
   const matchText = facts?.match && Object.keys(facts.match).length > 0
     ? Object.entries(facts.match).map(([k, v]) => `${k}="${v}"`).join(", ")
@@ -223,7 +235,11 @@ export function AlertsView({ cluster }: { cluster: string }) {
                   onClick={() => { setCursorKey(k); setSelKey(k === selKey ? null : k); }}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setSelKey(k); } }}>
                   {show("sev") && <span style={cell}><SevMark a={a} /></span>}
-                  {show("alert") && <span className="lens-cell-name" title={a.name}>{a.name}</span>}
+                  {show("alert") && (
+                    <span className="lens-cell-name" title={distinct.get(k) ? `${a.name} · ${distinct.get(k)}` : a.name}>
+                      {a.name}{distinct.get(k) && <span className="t-secondary" data-testid="alert-distinct" style={{ fontWeight: 400 }}> · {distinct.get(k)}</span>}
+                    </span>
+                  )}
                   {show("state") && <span style={{ ...cell, color: a.stateClass === "active" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }} title={cause}>{stateWord(a)}{cause ? ` · ${cause}` : ""}</span>}
                   {show("subject") && <span style={{ ...cell, color: a.subject.kind ? undefined : "var(--color-text-tertiary)" }} title={subjectNote(a.subject)}>{subjectText(a.subject)}</span>}
                   {show("started") && <span style={{ color: "var(--color-text-tertiary)" }}>{a.startsAt ? <Age unixSeconds={unix(a.startsAt)} /> : "-"}</span>}

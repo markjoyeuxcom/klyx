@@ -304,3 +304,22 @@ describe("the inspector's Alerts block (S8a §7)", () => {
     expect(screen.getByTestId("insp-alerts-none").textContent).toContain("not established");
   });
 });
+
+// v0.15.1: four Watchdogs from a shared Alertmanager read as four, told apart
+describe("same-name alerts on a shared Alertmanager (v0.15.1)", () => {
+  const wd = (cl: string) => al("Watchdog", { fingerprint: `fp-${cl}`, key: `k-${cl}`, severity: "none", counted: false, subject: {},
+    labels: [{ name: "alertname", value: "Watchdog" }, { name: "cluster", value: cl }, { name: "severity", value: "none" }] });
+  it("each row says the label that tells it apart, and no match is pointed at fleet.yaml", () => {
+    set([wd("k8s-b1"), wd("k8s-b2"), wd("k8s-b3"), wd("k8s-b4")], part(), { alertsSource: "monitoring/am", alertsTruncated: false, alertsReadAt: "2026-10-21T12:00:00Z" });
+    render(<AlertsView cluster="c" />);
+    expect(screen.getAllByTestId("alert-distinct").map((e) => e.textContent).sort()).toEqual([" · cluster=k8s-b1", " · cluster=k8s-b2", " · cluster=k8s-b3", " · cluster=k8s-b4"]);
+    expect(screen.getByTestId("alerts-shared").textContent).toContain("These alerts carry 4 values of the cluster label (k8s-b1, k8s-b2, k8s-b3, k8s-b4)");
+    expect(screen.getByTestId("alerts-shared").textContent).toContain("alertmanager.match");
+  });
+  it("with this cluster's match set, nothing is suggested", () => {
+    set([wd("k8s-b1"), wd("k8s-b3")]);
+    render(<AlertsView cluster="c" />);
+    expect(screen.queryByTestId("alerts-shared")).toBeNull();
+    expect(screen.getAllByTestId("alert-distinct").length).toBe(2);
+  });
+});

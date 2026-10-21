@@ -268,7 +268,12 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
 	defer cancel()
 	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, expectedUID, yaml, dryRun); err != nil {
-		return failed(ctx, conn, err)
+		r := failed(ctx, conn, err)
+		// a protected subject keeps its withheld form, its paths included
+		if !protectedSubject(group, kind) {
+			r.Conflict = conflictDTO(err)
+		}
+		return r
 	}
 	return ActionResultDTO{OK: true}
 }

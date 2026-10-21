@@ -505,6 +505,37 @@ describe("InstanceDetail", () => {
     expect(screen.getByTestId("admission-candidates").textContent).toContain("Klyx does not evaluate their namespace or object selectors");
   });
 
+  it("shows a refused apply's managers and opens the owner the edit belongs in (v0.15.1)", async () => {
+    const text = "apply conflict: kube-controller-manager sets .spec.x, as the Kubernetes controller that maintains this Certificate; its controller is ReplicaSet default/web-98d, owned by Deployment default/web: change the Deployment instead. Klyx never forces another manager's fields.";
+    vi.mocked(applyInstanceYAML).mockResolvedValueOnce({ ok: false, error: text, conflict: {
+      fields: [{ manager: "kube-controller-manager", class: "kubernetes", path: ".spec.x" }],
+      owner: { group: "apps", version: "v1", kind: "ReplicaSet", namespace: "default", name: "web-98d", up: { group: "apps", version: "v1", kind: "Deployment", namespace: "default", name: "web" } } } });
+    const next = `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`;
+    const { getByText, getByLabelText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
+    fireEvent.change(getByLabelText("resource yaml"), { target: { value: next } });
+    fireEvent.click(getByText("Apply"));
+    fireEvent.click(getByText("Apply changes"));
+    expect((await screen.findByTestId("apply-conflict")).textContent).toContain(text);
+    expect(screen.queryByText(/e\.g\. Flux\/Argo/)).toBeNull();
+    expect(screen.getByTestId("apply-conflict-owner").textContent).toBe("Open Deployment default/web");
+    fireEvent.click(screen.getByTestId("apply-conflict-owner"));
+    expect(useFleet.getState().navIntent).toMatchObject({ kind: "select-workload", cluster: "x", workloadKind: "Deployment", namespace: "default", name: "web" });
+  });
+
+  it("says a Pod's spec is mostly immutable before an edit (v0.15.1)", () => {
+    const pod = { group: "", version: "v1", plural: "pods", kind: "Pod", scope: "Namespaced" };
+    const podRef = { namespace: "monitoring", name: "grafana-0" };
+    useFleet.setState({ instanceDetail: { cluster: "x", resource: pod, ref: podRef, detail: { ...detail, kind: "Pod", name: "grafana-0", namespace: "monitoring", yaml: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: grafana-0\n" }, loading: false } });
+    const { unmount } = render(<InstanceDetail cluster="x" resource={pod} instance={podRef} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
+    expect(screen.getByTestId("pod-immutable-note").textContent).toContain("To change anything else, change the workload that owns it.");
+    unmount();
+    render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Manifest" }));
+    expect(screen.queryByTestId("pod-immutable-note")).toBeNull();
+  });
+
   it("shows post-apply refresh state and refreshed resourceVersion", async () => {
     const baseline = "apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: web-tls\n  namespace: default\n  resourceVersion: \"10\"\nspec:\n  secretName: web-tls\n";
     const draft = baseline.replace("secretName: web-tls", "secretName: web-tls-next");
