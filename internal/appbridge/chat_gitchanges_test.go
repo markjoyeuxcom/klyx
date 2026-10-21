@@ -75,11 +75,18 @@ func TestChangesSaysWhatItCannotCompareAndReadsNothingMore(t *testing.T) {
 		name, want string
 		mod        func(ks map[string]any)
 	}{
-		{"no attempted revision", "does not record both", func(ks map[string]any) {
+		{"no attempted revision", "records no attempted Git revision", func(ks map[string]any) {
 			delete(ks["status"].(map[string]any), "lastAttemptedRevision")
 		}},
-		{"the same commit", "are the same commit (1111111)", func(ks map[string]any) {
+		{"the same commit, no history", "are the same commit (1111111), and Flux's history records no other revision", func(ks map[string]any) {
 			ks["status"].(map[string]any)["lastAttemptedRevision"] = "main@sha1:" + shaApplied
+		}},
+		{"the same commit, history of it only", "are the same commit (2222222)", func(ks map[string]any) {
+			ks["status"].(map[string]any)["lastAppliedRevision"] = "main@sha1:" + shaAttempted
+			ks["status"].(map[string]any)["history"] = []any{
+				map[string]any{"lastReconciledStatus": "HealthCheckFailed", "metadata": map[string]any{"revision": "main@sha1:" + shaAttempted}},
+				map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:" + shaAttempted}},
+			}
 		}},
 		{"not a Git source", "is a OCIRepository, not a GitRepository", func(ks map[string]any) {
 			ks["spec"].(map[string]any)["sourceRef"] = map[string]any{"kind": "OCIRepository", "name": "fleet"}
@@ -225,5 +232,33 @@ func TestChangesReadsGitOnlyBehindTheTurnsGuard(t *testing.T) {
 	_ = f.svc.Ask("x", st.ConversationID, "and now?", nil)
 	if len(g.reqs) != 1 {
 		t.Fatalf("Git was read after the guard failed: %d", len(g.reqs))
+	}
+}
+
+// The A1 lab's case: a crashing revision whose first reconcile passed its
+// health check is recorded as applied, so applied equals attempted; Flux's
+// history names the revision before it that reconciled successfully.
+func TestChangesFallsBackToFluxsHistoryWhenAppliedEqualsAttempted(t *testing.T) {
+	const older = "3333333333333333333333333333333333333333"
+	f, g := changesChat(func(ks map[string]any) {
+		st := ks["status"].(map[string]any)
+		st["lastAppliedRevision"] = "main@sha1:" + shaAttempted
+		st["history"] = []any{
+			map[string]any{"lastReconciledStatus": "HealthCheckFailed", "metadata": map[string]any{"revision": "main@sha1:" + shaAttempted}},
+			map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:" + shaAttempted}},
+			map[string]any{"lastReconciledStatus": "HealthCheckFailed", "metadata": map[string]any{"revision": "main@sha1:" + shaApplied}},
+			map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:" + older}},
+		}
+	})
+	g.out = gitChangesOut{Old: []*unstructured.Unstructured{deploy("web", "x:1", "a")}, New: []*unstructured.Unstructured{deploy("web", "x:1", "b")}}
+	env, _, _ := runChanges(t, f, g, changesArgs)
+	if len(g.reqs) != 1 || g.reqs[0].Applied != older || g.reqs[0].Attempted != shaAttempted {
+		t.Fatalf("the newest other revision that reconciled successfully, never a failed one: %+v", g.reqs)
+	}
+	b, _ := json.Marshal(env.Data)
+	var d chatChangesData
+	_ = json.Unmarshal(b, &d)
+	if d.BaseFrom != "status.history: the newest other revision Flux reconciled successfully" || d.Applied != older {
+		t.Fatalf("%s", b)
 	}
 }

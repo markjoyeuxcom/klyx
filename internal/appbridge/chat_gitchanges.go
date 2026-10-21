@@ -47,6 +47,7 @@ type chatRenderInfo struct {
 
 type chatChangesData struct {
 	Applied      string             `json:"appliedRevision"`
+	BaseFrom     string             `json:"baseFrom"` // where the compared-from revision came from
 	Attempted    string             `json:"attemptedRevision"`
 	Path         string             `json:"path,omitempty"`
 	Ancestor     bool               `json:"appliedIsAncestor"`
@@ -88,11 +89,22 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 	attemptedRaw, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
 	applied, okA := line.ParseGitRevision(appliedRaw)
 	attempted, okB := line.ParseGitRevision(attemptedRaw)
+	baseFrom := "lastAppliedRevision"
+	if okB && (!okA || applied.SHA == attempted.SHA) {
+		// Flux records a revision as applied once a reconcile of it succeeds,
+		// health check included; a later failure does not undo that. Its
+		// history says which other revision last reconciled successfully.
+		if prev, ok := lastOtherSucceeded(ks, attempted.SHA); ok {
+			applied, okA, baseFrom = prev, true, "status.history: the newest other revision Flux reconciled successfully"
+		}
+	}
 	switch {
-	case !okA || !okB:
-		return stop("The unit does not record both an applied and an attempted Git revision, so there is nothing to compare; nothing more was read.")
+	case !okB:
+		return stop("The unit records no attempted Git revision, so there is nothing to compare; nothing more was read.")
+	case !okA:
+		return stop("The unit records no other revision it applied or reconciled successfully, so there is nothing to compare; nothing more was read.")
 	case applied.SHA == attempted.SHA:
-		return stop(fmt.Sprintf("The applied and attempted revisions are the same commit (%s): Flux has nothing newer that failed; nothing more was read.", applied.SHA[:7]))
+		return stop(fmt.Sprintf("The applied and attempted revisions are the same commit (%s), and Flux's history records no other revision reconciled successfully: there is no pair to compare. Flux records a revision as applied once a reconcile of it succeeds; a later failure does not undo that. Nothing more was read.", applied.SHA[:7]))
 	}
 	srcKind, _, _ := unstructured.NestedString(ks.Object, "spec", "sourceRef", "kind")
 	srcName, _, _ := unstructured.NestedString(ks.Object, "spec", "sourceRef", "name")
@@ -121,7 +133,7 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 	}
 
 	specPath, _ := spec["path"].(string)
-	data := chatChangesData{Applied: applied.SHA, Attempted: attempted.SHA, Path: p.str(specPath, chatStringMax), Ancestor: out.Ancestor,
+	data := chatChangesData{Applied: applied.SHA, BaseFrom: baseFrom, Attempted: attempted.SHA, Path: p.str(specPath, chatStringMax), Ancestor: out.Ancestor,
 		CommitsTotal: out.CommitsTotal, FilesTotal: out.FilesTotal,
 		Note: "Commits and files are those under the unit's path; a change in a base outside it shows in the render, not here."}
 	commitTime := ""
@@ -186,6 +198,25 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 	read.Redacted = p.redacted
 	read.Detail = fmt.Sprintf("%d commits, %d files, %d objects changed", out.CommitsTotal, out.FilesTotal, data.ObjectsTotal)
 	return t.finishWithin(env, read, chatChangesResultMax)
+}
+
+// lastOtherSucceeded is the newest revision in a Kustomization's
+// status.history, other than sha, whose reconcile succeeded.
+func lastOtherSucceeded(ks *unstructured.Unstructured, sha string) (line.GitRev, bool) {
+	hist, _, _ := unstructured.NestedSlice(ks.Object, "status", "history")
+	for _, h := range hist { // newest first
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		status, _ := m["lastReconciledStatus"].(string)
+		raw, _, _ := unstructured.NestedString(m, "metadata", "revision")
+		rev, ok := line.ParseGitRevision(raw)
+		if ok && status == "ReconciliationSucceeded" && rev.SHA != sha {
+			return rev, true
+		}
+	}
+	return line.GitRev{}, false
 }
 
 // changedPaths names an object's first changed paths, visible then hidden.
