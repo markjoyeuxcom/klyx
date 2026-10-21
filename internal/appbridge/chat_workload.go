@@ -24,18 +24,21 @@ const (
 
 var replicaSetsGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}
 
-// chatPodRef is one pod of a workload, by its UID.
+// chatPodRef is one pod (or ReplicaSet) of a workload, by its UID, with its
+// controller.
 type chatPodRef struct {
-	Name string `json:"name"`
-	UID  string `json:"uid"`
+	Name     string `json:"name"`
+	UID      string `json:"uid"`
+	OwnerUID string `json:"-"`
 }
 
 // workloadKinds are the kinds whose pods are found by controller UID.
 var workloadKinds = map[string]bool{"apps/Deployment": true, "apps/StatefulSet": true, "apps/DaemonSet": true, "apps/ReplicaSet": true, "batch/Job": true}
 
 type chatWorkload struct {
-	Object *unstructured.Unstructured
-	Pods   []chatPodRef
+	Object      *unstructured.Unstructured
+	ReplicaSets []chatPodRef // a Deployment's, by controller UID
+	Pods        []chatPodRef
 	// Partial: a list was capped, so pods may be missing
 	Partial bool
 }
@@ -79,6 +82,7 @@ func (t *chatTools) workloadPods(ctx context.Context, k fleet.ChatKind, ns, name
 		for i := range rss.Items {
 			if controllerUID(&rss.Items[i]) == string(obj.GetUID()) {
 				owners[string(rss.Items[i].GetUID())] = true
+				w.ReplicaSets = append(w.ReplicaSets, chatPodRef{Name: rss.Items[i].GetName(), UID: string(rss.Items[i].GetUID()), OwnerUID: string(obj.GetUID())})
 			}
 		}
 	}
@@ -90,8 +94,8 @@ func (t *chatTools) workloadPods(ctx context.Context, k fleet.ChatKind, ns, name
 		w.Partial = true
 	}
 	for i := range pods.Items {
-		if owners[controllerUID(&pods.Items[i])] {
-			w.Pods = append(w.Pods, chatPodRef{Name: pods.Items[i].GetName(), UID: string(pods.Items[i].GetUID())})
+		if ou := controllerUID(&pods.Items[i]); owners[ou] {
+			w.Pods = append(w.Pods, chatPodRef{Name: pods.Items[i].GetName(), UID: string(pods.Items[i].GetUID()), OwnerUID: ou})
 		}
 	}
 	return w, nil

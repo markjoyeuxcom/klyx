@@ -15,7 +15,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/routemetrics"
@@ -845,6 +848,27 @@ func (g guardedConn) PodLogSnapshot(ctx context.Context, ns, pod, container stri
 		return fleet.LogSnapshot{}, err
 	}
 	return g.r.c.conn.PodLogSnapshot(ctx, ns, pod, container, previous, tail)
+}
+
+func (g guardedConn) DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph {
+	if err := g.r.check(); err != nil {
+		return depgraph.Graph{Incomplete: []string{readError(err)}}
+	}
+	return g.r.c.conn.DependencyGraph(ctx, kind, ns, name, uid)
+}
+
+func (g guardedConn) GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error) {
+	if err := g.r.check(); err != nil {
+		return certmanager.Chain{}, err
+	}
+	return g.r.c.conn.GetCertificateChain(ctx, ns, name)
+}
+
+func (g guardedConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
+	if err := g.r.check(); err != nil {
+		return gwapi.Topology{}, err
+	}
+	return g.r.c.conn.GetGatewayTopology(ctx, namespace, name)
 }
 
 func (g guardedConn) RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error) {

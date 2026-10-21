@@ -21,7 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/metrics"
@@ -50,6 +53,10 @@ type ChatConn interface {
 	ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
 	// RuleMetrics reads one Gateway's per-rule Envoy metrics (The Line 7c).
 	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
+	// The drawings get_dependencies reads (A1 §3.3).
+	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
+	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
+	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
 }
 
 // The cluster connection is chat's read surface (main.go asserts it at run
@@ -162,6 +169,11 @@ func ChatToolDefs() []ChatToolDef {
 			"name":      strProp("Exact pod or workload name."),
 			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h", "24h"}, "description": "How far back (default 1h)."},
 		}, "template", "namespace", "name")},
+		{toolDeps, "The dependencies Klyx draws for one object, as typed nodes and edges with Klyx's verdict by UID: a Flux unit's dependency graph, a workload's owner chain and pods, a Certificate's issuance chain, a Gateway's topology or an HTTPRoute's parents and backends, a ScaledObject's or HPA's target and owner. A node without a UID is by name.", obj(map[string]any{
+			"kind":      strProp("Kind, e.g. Kustomization, Deployment, Certificate, Gateway, HTTPRoute, ScaledObject."),
+			"namespace": strProp("Namespace, for namespaced kinds."),
+			"name":      strProp("Exact object name."),
+		}, "kind", "name")},
 	}
 }
 
@@ -470,6 +482,19 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Template, err)
 		}
 		return t.metricSeries(ctx, a.Template, a.Kind, a.NS, a.Name, a.Window)
+	case toolDeps:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if err := firstErr(checkKind(a.Kind), checkName("namespace", a.NS, false), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.Name, err)
+		}
+		return t.deps(ctx, a.Kind, a.NS, a.Name)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -796,6 +821,21 @@ func shrink(d any) any {
 		default:
 			return nil
 		}
+		return v
+	case chatDepsData:
+		// half the nodes, and only the edges between those kept
+		v.Nodes = v.Nodes[:len(v.Nodes)/2]
+		kept := map[string]bool{}
+		for _, n := range v.Nodes {
+			kept[n.ID] = true
+		}
+		var es []chatDepEdge
+		for _, e := range v.Edges {
+			if kept[e.From] && kept[e.To] {
+				es = append(es, e)
+			}
+		}
+		v.Edges = es
 		return v
 	case chatMetricsData:
 		if len(v.Pods) > 0 {

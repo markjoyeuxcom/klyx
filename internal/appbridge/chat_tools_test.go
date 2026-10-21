@@ -13,7 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/metrics"
@@ -39,13 +42,36 @@ type fakeChatConn struct {
 	flux       map[string]*unstructured.Unstructured // Kind|ns|name
 	fluxErr    error
 	fluxCalls  int
-	fluxHook   func(kind string)                    // runs after each Flux read
+	fluxHook   func(kind string) // runs after each Flux read
+	graph      depgraph.Graph
+	graphUIDs  []string
+	chain      *certmanager.Chain
+	topo       *gwapi.Topology
 	rules      map[string]routemetrics.GatewayRules // by Gateway ns/name
 	ruleCalls  []string
 	series     map[string][]metrics.LabeledSeries // by query
 	seriesErr  error
 	queries    []string
 	steps      []time.Duration
+}
+
+func (f *fakeChatConn) DependencyGraph(_ context.Context, _, _, _, uid string) depgraph.Graph {
+	f.graphUIDs = append(f.graphUIDs, uid)
+	return f.graph
+}
+
+func (f *fakeChatConn) GetCertificateChain(_ context.Context, ns, name string) (certmanager.Chain, error) {
+	if f.chain == nil {
+		return certmanager.Chain{}, apierrors.NewNotFound(schema.GroupResource{Resource: "certificates"}, name)
+	}
+	return *f.chain, nil
+}
+
+func (f *fakeChatConn) GetGatewayTopology(_ context.Context, ns, name string) (gwapi.Topology, error) {
+	if f.topo == nil {
+		return gwapi.Topology{}, apierrors.NewNotFound(schema.GroupResource{Resource: "gateways"}, name)
+	}
+	return *f.topo, nil
 }
 
 func (f *fakeChatConn) RuleMetrics(_ context.Context, ns, name string) (routemetrics.GatewayRules, error) {
