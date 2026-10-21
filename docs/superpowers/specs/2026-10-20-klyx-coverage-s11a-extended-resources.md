@@ -359,3 +359,5 @@ Codex (handoff 7d7c6e3b) requested changes: two residual P2 findings in the new 
 |---|---|---|
 | P2 | A held or failed totals refresh had no notice of its own; the reservations' notice cannot speak for an independent capture | The totals say their own state: "Accelerator totals as of HH:MM - the newer read failed: ..." (or being fetched), and a failed first read |
 | P2 | The reservations' notices sat behind the accelerator gate, silencing failures and cuts for ordinary extended resources | The reservations' notices follow any extended evidence (a node's extended entry, a reservation row, a dropped row); the totals' notices follow the accelerators they total; with no evidence the lens stays quiet |
+
+**Implementation accepted at 123b2d1** (Codex, re-review 2, handoff 52056359, 2026-10-20), with no remaining findings. The native smoke passed 198/198 in all four modes at 123b2d1.

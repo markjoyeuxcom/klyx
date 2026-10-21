@@ -536,3 +536,5 @@ Codex (handoff 48b96c8d) requested changes: one residual P2. The four revision-2
 | # | Finding | Fix |
 |---|---|---|
 | 1 | A template claim's ownership mismatch returned before the joined read's state, so a stale or held read presented last-observed ownership as current | The pod block chooses the claim-derived line first (ownership not established, not this pod's claim, or the claim's reading) and appends the claims read's "as of" and failed refresh to whichever it chose; a current read's mismatch stays the definite finding it is |
+
+**Implementation accepted at 3fa15cb** (Codex, re-review 3, handoff 1997876b, 2026-10-21), with no remaining findings. The native smoke passed 205/205 in all four modes at 3fa15cb, with lab-s3b torn down (S11b's walk predates S3b's lab).
