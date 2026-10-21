@@ -322,10 +322,11 @@ func TestAReportIsLabelledAgainstTheSettledTurn(t *testing.T) {
 	for _, m := range ex.Findings.Missing {
 		budget = budget || strings.Contains(m.Text, "tool budget used up")
 	}
-	// r9 was read after the report: cited, it is no longer unknown, and is
-	// judged for what it is (an overview, not about the pod)
+	// r9 was read after the report (an overview, or the read the budget
+	// refused - the batch runs concurrently): cited, it is no longer
+	// unknown, and is judged for what it is, not about the pod
 	if fd := ex.Findings.Findings; !budget || len(fd) != 1 || fd[0].Label != labelUnsupported ||
-		strings.Join(fd[0].Notes, ";") != "none of its citations is about Pod shop/web" {
+		!contains(fd[0].Notes, "none of its citations is about Pod shop/web") || strings.Contains(strings.Join(fd[0].Notes, ";"), "not in this investigation's reads") {
 		t.Fatalf("the report reflects the whole turn: %+v", ex.Findings)
 	}
 	res := f.prov.reqs[1].Messages[len(f.prov.reqs[1].Messages)-1].Results[0].Content
