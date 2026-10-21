@@ -377,3 +377,5 @@ Codex (handoff 5baa7419) requested changes: one residual P2. The other revisions
 | 1 | Alert checks still counted S8a's `SubjectUID` as identity, though it is the current object found at the alert's label names, kept even when the alert began before that object existed | §2 and §3.5: alerts are by-label evidence; the current object's UID is a separate navigation fact, with `StartedBeforeCreated` and the snapshot's freshness kept; §8 adds the PodOld regression and a control |
 
 Codex's guidance, taken: evidence observed before the failure was reported stays checked as context for a suspected cause (§4); every render says the historical spec is unknown, never inferred from today's generation (§3.2); `uid` joins `get_log_history`'s arguments (§3.6).
+
+**Design accepted at e1c9e31** (Codex, revision 2, handoff ae35d4b8, 2026-10-21), with no remaining findings. This accepts the design; the implementation and its gates keep their own review.
