@@ -120,7 +120,7 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid 
 	steps, err := conn.ReconcileWithSourceSteps(ctx, kind, namespace, name, uid)
 	var outs []stepOutcome
 	for _, st := range steps {
-		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, err: st.Err})
+		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, refused: st.Refused, err: st.Err})
 	}
 	r := ActionResultDTO{OK: err == nil}
 	if err != nil {

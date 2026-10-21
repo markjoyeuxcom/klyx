@@ -32,6 +32,22 @@ describe("the toast and the Activity entry", () => {
     expect(s.admission?.length).toBe(1);
     expect(successStatus({ ok: true, error: "" }, "ok")).toEqual({ kind: "success", message: "ok" });
   });
+  it("both steps refused: the Activity entry keeps each request's finding once (Codex's implementation review, finding 4)", () => {
+    const src = finding({ what: 'denied by admission webhook "src"', summary: "update GitRepository config-source/source was refused" });
+    const tgt = finding({ summary: "update Kustomization config-target/target was refused" });
+    const steps = [{ verb: "reconcile", subject: "GitRepository config-source/source", written: false, refused: true, error: "x", admission: src },
+      { verb: "reconcile", subject: "Kustomization config-target/target", written: false, refused: true, error: "y", admission: tgt }];
+    const s = failureStatus({ ok: false, error: "reconcile ...", admission: tgt, steps }, "Reconcile failed");
+    expect(s.admission?.map((a) => a.summary)).toEqual([src.summary, tgt.summary]);
+  });
+  it("a lost answer is unverified, never 'not written' (finding 5)", () => {
+    const steps = [{ verb: "reconcile", subject: "GitRepository flux-system/flux-system", written: false, error: "context deadline exceeded" },
+      { verb: "reconcile", subject: "Kustomization flux-system/app", written: true }];
+    const s = successStatus({ ok: true, error: "", steps }, "Reconcile (with source) requested for flux-system/app");
+    expect(s.message).toBe("Reconcile (with source) requested for flux-system/app; not every step was confirmed (GitRepository flux-system/flux-system: outcome unverified - context deadline exceeded; Kustomization flux-system/app: written)");
+    const refused = successStatus({ ok: true, error: "", steps: [{ ...steps[0], refused: true, error: "forbidden" }, steps[1]] }, "ok");
+    expect(refused.message).toBe("ok; not every step was written (GitRepository flux-system/flux-system: not written - forbidden; Kustomization flux-system/app: written)");
+  });
   it("stored entries: older ones and malformed findings read as before", () => {
     expect(validActivityAdmission(undefined)).toBeUndefined();
     expect(validActivityAdmission([{ summary: 1 }])).toBeUndefined();

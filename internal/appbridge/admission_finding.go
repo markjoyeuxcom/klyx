@@ -79,9 +79,12 @@ type AdmissionFindingDTO struct {
 
 // StepDTO is one request of a composite action and its outcome.
 type StepDTO struct {
-	Verb      string               `json:"verb"`
-	Subject   string               `json:"subject"`
-	Written   bool                 `json:"written"`
+	Verb    string `json:"verb"`
+	Subject string `json:"subject"`
+	Written bool   `json:"written"`
+	// Refused: the server refused this request, so nothing of it was
+	// written; neither written nor refused is unverified (a lost answer)
+	Refused   bool                 `json:"refused,omitempty"`
 	Error     string               `json:"error,omitempty"`
 	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
 }
@@ -89,6 +92,10 @@ type StepDTO struct {
 const (
 	maxCandidates     = 16
 	maxFindingMessage = 512
+	// maxErrorText bounds a refused request's legacy error text: the
+	// server's message with the wrappers around it (Codex's implementation
+	// review, finding 1)
+	maxErrorText = 1024
 )
 
 // admissionRows reads the Observer's admission rows: a read, never a new
@@ -119,6 +126,11 @@ func writeError(ctx context.Context, conn any, err error) (string, *AdmissionFin
 	if !ok || !f.Attributed() {
 		return text, nil
 	}
+	if !protected {
+		// the old field carries the server's text as the finding does:
+		// scrubbed and bounded, never whole
+		text = boundedText(text, maxErrorText)
+	}
 	return text, findingDTO(ctx, conn, req, f, protected)
 }
 
@@ -141,13 +153,17 @@ func withheldSentence(kind string) string {
 
 // findingMessage is the server's text for a subject that is not protected:
 // scrubbed of credentials and URL secrets, then clipped.
-func findingMessage(s string) string {
+func findingMessage(s string) string { return boundedText(s, maxFindingMessage) }
+
+// boundedText scrubs credentials and URL secrets from s, then clips it to
+// max bytes on a rune boundary.
+func boundedText(s string, max int) string {
 	s, _ = scrub.Credentials(s)
 	s = urlscrub.Text(s).Text
-	if len(s) <= maxFindingMessage {
+	if len(s) <= max {
 		return s
 	}
-	cut := maxFindingMessage
+	cut := max
 	for cut > 0 && s[cut]&0xC0 == 0x80 {
 		cut--
 	}
@@ -265,7 +281,21 @@ func correlation(f admission.Finding, named []admission.Candidate, unread bool) 
 		more = ", and possibly others Klyx did not read"
 	}
 	if named[0].Config == "" {
-		return fmt.Sprintf("the %s %s%s", named[0].Kind, named[0].Name, more)
+		if f.Envelope != admission.EnvPolicyDenied {
+			return fmt.Sprintf("the %s %s%s", named[0].Kind, named[0].Name, more)
+		}
+		// the generic envelope does not say the policy's kind (S3b §2.1):
+		// every policy of that name is said, never the first one's kind
+		var rows []string
+		for _, n := range named {
+			rows = append(rows, "the "+n.Kind+" "+n.Name)
+		}
+		sort.Strings(rows)
+		s := fmt.Sprintf("a policy named %s: %s in Klyx's inventory", f.Name, strings.Join(rows, " and "))
+		if len(rows) > 1 {
+			s += "; the refusal does not say which"
+		}
+		return s + more
 	}
 	var configs []string
 	for _, n := range named {
@@ -326,7 +356,7 @@ func admissionInventory(ctx context.Context, r admissionRows) (configs []*admiss
 func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO {
 	out := make([]StepDTO, 0, len(verbSteps))
 	for _, s := range verbSteps {
-		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written}
+		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written, Refused: s.refused}
 		if s.err != nil {
 			d.Error, d.Admission = writeError(ctx, conn, s.err)
 		}
@@ -337,9 +367,9 @@ func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO 
 
 // stepOutcome is a fleet step, decoupled from fleet's type.
 type stepOutcome struct {
-	verb, subject string
-	written       bool
-	err           error
+	verb, subject    string
+	written, refused bool
+	err              error
 }
 
 // failed is a write path's failed result (coverage S3b §5).
@@ -364,6 +394,10 @@ func adhocFinding(ctx context.Context, conn any, text string, refusal error) (st
 	t, f := writeError(ctx, conn, refusal)
 	if req, _, _ := admission.Refused(refusal); req != nil && protectedSubject(req.Request.Group, req.Kind) {
 		return t, f
+	}
+	if f != nil {
+		// an attributed refusal's text is scrubbed and bounded (finding 1)
+		return boundedText(text, maxErrorText), f
 	}
 	return text, f
 }

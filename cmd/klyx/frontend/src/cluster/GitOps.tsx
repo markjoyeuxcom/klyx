@@ -1081,6 +1081,34 @@ function InventoryList({ entries }: { entries: InventoryEntryDTO[] }) {
 // discounted - the live diff and the drift events say so unconditionally.
 export const DRIFT_SENTENCE = "A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it.";
 
+// The cache diff's objects whose server-side dry run completed, and those
+// whose dry run did not (Codex's implementation review, finding 3): only a
+// completed dry run says anything of admission or of the live objects.
+const DRY_RUN_COMPLETED = new Set(["created", "configured", "unchanged"]);
+function dryRunCounts(r: FluxDiffDTO): { ran: number; notRun: number; skipped: number } {
+  const changes = r.changes ?? [];
+  const ran = changes.filter((c) => DRY_RUN_COMPLETED.has(c.action) && !c.error).length;
+  const skipped = changes.filter((c) => c.action === "skipped").length;
+  const notRun = changes.filter((c) => c.action === "skipped" || c.action === "unread" || c.action === "failed" || (c.error ?? "") !== "").length;
+  return { ran, notRun, skipped };
+}
+
+export function dryRunAdmissionWords(r: FluxDiffDTO, at: number): string {
+  const { ran, notRun } = dryRunCounts(r);
+  if (ran === 0) return "";
+  const when = new Date(at).toLocaleTimeString();
+  if (notRun === 0) {
+    return `This dry run passed mutating admission and defaulting as of ${when}, so it shows what the API server would have stored then; a later apply's admission may differ.`;
+  }
+  return `The ${ran} object${ran === 1 ? "" : "s"} whose dry run completed passed mutating admission and defaulting as of ${when}; ${notRun} failed, ${notRun === 1 ? "was" : "were"} skipped or ${notRun === 1 ? "was" : "were"} not read, and say${notRun === 1 ? "s" : ""} nothing of admission. A later apply's admission may differ.`;
+}
+
+export function noChangesWords(r: FluxDiffDTO): string {
+  const { ran, skipped } = dryRunCounts(r);
+  if (ran === 0) return skipped > 0 ? `nothing was dry-run: ${skipped} object${skipped === 1 ? " was" : "s were"} skipped` : "no changes - the build has no objects";
+  return skipped > 0 ? `no changes in the ${ran} object${ran === 1 ? "" : "s"} dry-run; ${skipped} skipped` : "no changes - the dry-run matches the live objects";
+}
+
 function DiffSection({ cluster, namespace, name }: { cluster: string; namespace: string; name: string }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<FluxDiffDTO | null>(null);
@@ -1113,15 +1141,15 @@ function DiffSection({ cluster, namespace, name }: { cluster: string; namespace:
         <div style={{ color: "var(--color-text-danger)", marginTop: 6, overflowWrap: "anywhere" }} title={result.error}>{result.error}</div>
       )}
       {result && !result.error && !result.hasChanges && (
-        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>{result.via === "cache" ? "no changes - the dry-run matches the live objects" : "no changes - live matches Git"}</div>
+        <div style={{ color: "var(--color-text-success)", marginTop: 6 }}>{result.via === "cache" ? noChangesWords(result) : "no changes - live matches Git"}</div>
       )}
       {result && result.hasChanges && (
         <pre style={{ marginTop: 6, padding: 8, maxHeight: 280, overflow: "auto", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre", lineHeight: 1.4 }}>{result.output}</pre>
       )}
-      {result && !result.error && result.via === "cache" && at !== null && (
+      {result && !result.error && result.via === "cache" && at !== null && dryRunAdmissionWords(result, at) && (
         // only a completed server-side dry run says what admission passed
         <div data-testid="diff-dry-run-admission" style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginTop: 4 }}>
-          This dry run passed mutating admission and defaulting as of {new Date(at).toLocaleTimeString()}, so it shows what the API server would have stored then; a later apply&apos;s admission may differ.
+          {dryRunAdmissionWords(result, at)}
         </div>
       )}
       <div data-testid="drift-sentence" style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginTop: 4 }}>{DRIFT_SENTENCE}</div>

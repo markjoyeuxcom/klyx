@@ -13,7 +13,9 @@ export type AdmissionFindingDTO = {
   candidates: AdmissionCandidateDTO[]; candidatesOmitted?: number; aliases?: number; maybeUnread?: boolean;
   inventory: string; inventoryAsOf?: number; exempt?: boolean;
 };
-export type StepDTO = { verb: string; subject: string; written: boolean; error?: string; admission?: AdmissionFindingDTO };
+// refused: the server refused the step, so nothing of it was written; a
+// step neither written nor refused is unverified (its answer was lost)
+export type StepDTO = { verb: string; subject: string; written: boolean; refused?: boolean; error?: string; admission?: AdmissionFindingDTO };
 export type ActionResultLike = { ok: boolean; error: string; admission?: AdmissionFindingDTO; steps?: StepDTO[] };
 
 // The Activity log keeps the finding's line and its candidates' names,
@@ -33,7 +35,8 @@ export function activityOf(f: AdmissionFindingDTO): ActivityAdmission {
 function stepWords(s: StepDTO): string {
   if (s.written) return `${s.subject}: written`;
   if (s.admission) return `${s.subject}: refused - ${s.admission.what}`;
-  return `${s.subject}: ${s.error || "not written"}`;
+  if (s.refused) return `${s.subject}: not written - ${s.error || "refused"}`;
+  return `${s.subject}: outcome unverified - ${s.error || "no answer"}`;
 }
 
 // stepsLine says a composite action's every step (S3b §2.3).
@@ -45,6 +48,14 @@ function stepFindings(steps: StepDTO[] | undefined): ActivityAdmission[] {
   return (steps ?? []).filter((s) => s.admission).map((s) => activityOf(s.admission!));
 }
 
+// findingsOf keeps every step's finding and the result's own, each request
+// once (Codex's implementation review, finding 4: a refused source beside
+// a refused target)
+function findingsOf(r: ActionResultLike): ActivityAdmission[] {
+  const all = [...stepFindings(r.steps), ...(r.admission ? [activityOf(r.admission)] : [])];
+  return all.filter((a, i) => all.findIndex((b) => b.summary === a.summary) === i);
+}
+
 /** failureStatus is a failed result's toast and Activity entry: "<what>
  * refused: <who refused it>" for an attributed refusal, today's text
  * otherwise, and each step of a composite action. `failed` reads like
@@ -52,17 +63,19 @@ function stepFindings(steps: StepDTO[] | undefined): ActivityAdmission[] {
 export function failureStatus(r: ActionResultLike, failed: string, prefix = ""): ActionStatus {
   const steps = stepsLine(r.steps);
   const head = r.admission ? `${failed.replace(/ failed$/, "")} refused: ${r.admission.what}` : r.error || failed;
-  const admissions = r.admission ? [activityOf(r.admission)] : stepFindings(r.steps);
+  const admissions = findingsOf(r);
   return { kind: "error", message: `${prefix}${head}${steps ? ` (${steps})` : ""}`, ...(admissions.length ? { admission: admissions } : {}) };
 }
 
 /** successStatus: a written result, saying any step that was refused (a
  * composite action's source, refused beside a written target). */
 export function successStatus(r: ActionResultLike, ok: string): ActionStatus {
-  const refused = (r.steps ?? []).filter((s) => !s.written);
-  if (refused.length === 0) return { kind: "success", message: ok };
+  const notWritten = (r.steps ?? []).filter((s) => !s.written);
+  if (notWritten.length === 0) return { kind: "success", message: ok };
   const findings = stepFindings(r.steps);
-  return { kind: "info", message: `${ok}; not every step was written (${stepsLine(r.steps)})`, ...(findings.length ? { admission: findings } : {}) };
+  // a lost answer is not a refusal: the write may have landed (finding 5)
+  const said = notWritten.every((s) => s.refused || s.admission) ? "not every step was written" : "not every step was confirmed";
+  return { kind: "info", message: `${ok}; ${said} (${stepsLine(r.steps)})`, ...(findings.length ? { admission: findings } : {}) };
 }
 
 /** resultStatus is either. */

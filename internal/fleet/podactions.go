@@ -27,7 +27,9 @@ func (c *ClusterConn) DeletePod(ctx context.Context, namespace, name, uid string
 	u := types.UID(uid)
 	err := c.typed.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &u}})
 	err = admission.Wrap(admission.Request{Operation: "DELETE", Version: "v1", Resource: "pods", Namespace: namespace}, "Pod", namespace, name, err)
-	if apierrors.IsNotFound(err) {
+	// a webhook denying with NotFound is its denial, never the pod gone
+	// (Codex's implementation review, finding 7)
+	if apierrors.IsNotFound(err) && !admission.Classify(statusOf(err)).Attributed() {
 		return fmt.Errorf("delete %s: it is already gone - nothing was deleted: %w", what, err)
 	}
 	return armedWriteErr("delete", what, err)

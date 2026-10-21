@@ -222,8 +222,9 @@ export async function listAdhocObjects(cluster: string): Promise<AdhocInventoryD
 // UID-pinned in the backend: never deletes anything Klyx did not create, nor a
 // replacement under the same name).
 export async function deleteAdhocObject(cluster: string, o: AdhocObjectDTO): Promise<ActionResultLike> {
-  const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name, o.uid)) as { ok: boolean; error: string };
-  return { ok: !!r.ok, error: r.error ?? "" };
+  const r = (await CRDService.DeleteAdhocObject(cluster, o.group, o.version, o.plural, o.namespace, o.name, o.uid)) as ActionResultLike;
+  // the refused DELETE's finding crosses with it (Codex's implementation review, finding 2)
+  return { ok: !!r.ok, error: r.error ?? "", ...(r.admission ? { admission: r.admission } : {}) };
 }
 
 export async function copyText(text: string): Promise<void> {

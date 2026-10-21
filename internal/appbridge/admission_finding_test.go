@@ -157,3 +157,58 @@ func TestAnAdhocRefusalCarriesItsFinding(t *testing.T) {
 		t.Fatalf("no refusal: %q %+v", text, f)
 	}
 }
+
+// Codex's implementation review, finding 1: the legacy error text of an
+// attributed refusal is scrubbed and bounded as the finding's message is.
+func TestTheLegacyErrorTextIsScrubbedAndBounded(t *testing.T) {
+	q := admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "lab"}
+	long := "password=ReviewPasswordNeedle9x " + strings.Repeat("y", 2000)
+	err := fmt.Errorf("scale Deployment lab/api: %w - nothing was written", admission.Wrap(q, "Deployment", "lab", "api", denial(long)))
+	r := failed(context.Background(), admissionFixture(), err)
+	if r.Admission == nil || strings.Contains(r.Error, "ReviewPasswordNeedle9x") || len(r.Error) > maxErrorText+len("…") || !strings.HasPrefix(r.Error, "scale Deployment lab/api: ") {
+		t.Fatalf("the legacy text: %d bytes %q", len(r.Error), r.Error[:min(len(r.Error), 120)])
+	}
+	steps := stepsDTO(context.Background(), admissionFixture(), []stepOutcome{{verb: "reconcile", subject: "Deployment lab/api", refused: true, err: err}})
+	if strings.Contains(steps[0].Error, "ReviewPasswordNeedle9x") || len(steps[0].Error) > maxErrorText+len("…") || !steps[0].Refused {
+		t.Fatalf("a step's text: %+v", steps[0])
+	}
+	cq := admission.Request{Operation: "CREATE", Version: "v1", Resource: "configmaps", Namespace: "lab"}
+	text, f := adhocFinding(context.Background(), admissionFixture(), "create ConfigMap lab/c: "+long, admission.Wrap(cq, "ConfigMap", "lab", "c", denial(long)))
+	if f == nil || strings.Contains(text, "ReviewPasswordNeedle9x") || len(text) > maxErrorText+len("…") {
+		t.Fatalf("an ad-hoc document's text: %d bytes", len(text))
+	}
+	// an unattributed refusal keeps today's text
+	if text, f := adhocFinding(context.Background(), admissionFixture(), "parse error", nil); text != "parse error" || f != nil {
+		t.Fatalf("%q %+v", text, f)
+	}
+}
+
+// Finding 6: the generic policy envelope does not say the policy's kind, so
+// a name both kinds carry is said as both.
+func TestAGenericPolicyDenialNamesEveryPolicyOfItsName(t *testing.T) {
+	fx := admissionFixture()
+	pol := func(kind string) *admission.Policy {
+		return admission.ProjectPolicy(&unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "same-name", "uid": "u-" + kind}}}, kind)
+	}
+	set := fx.rows["policies"].Rows.(healthsrc.RowSet[healthsrc.AdmissionPolicyRow])
+	set.Rows = append(set.Rows, healthsrc.Row[healthsrc.AdmissionPolicyRow]{Data: healthsrc.AdmissionPolicyRow{Policy: pol(admission.Validating)}},
+		healthsrc.Row[healthsrc.AdmissionPolicyRow]{Data: healthsrc.AdmissionPolicyRow{Policy: pol(admission.Mutating)}})
+	rows := fx.rows["policies"]
+	rows.Rows = set
+	fx.rows["policies"] = rows
+	msg := "policy 'same-name' denied request: owner label missing"
+	st := &apierrors.StatusError{ErrStatus: metav1.Status{Code: 403, Reason: metav1.StatusReasonForbidden, Message: msg,
+		Details: &metav1.StatusDetails{Kind: "deployments", Causes: []metav1.StatusCause{{Message: msg}}}}}
+	q := admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "lab"}
+	_, f := writeError(context.Background(), fx, admission.Wrap(q, "Deployment", "lab", "api", st))
+	if f == nil || f.Correlation != "a policy named same-name: the MutatingAdmissionPolicy same-name and the ValidatingAdmissionPolicy same-name in Klyx's inventory; the refusal does not say which" {
+		t.Fatalf("%+v", f)
+	}
+	// a ValidatingAdmissionPolicy's own envelope names its kind
+	vap := "ValidatingAdmissionPolicy 'same-name' denied request: no"
+	vst := &apierrors.StatusError{ErrStatus: metav1.Status{Code: 422, Reason: metav1.StatusReasonInvalid, Message: `deployments.apps "api" is forbidden: ` + vap,
+		Details: &metav1.StatusDetails{Kind: "deployments", Causes: []metav1.StatusCause{{Message: vap}}}}}
+	if _, f := writeError(context.Background(), fx, admission.Wrap(q, "Deployment", "lab", "api", vst)); f == nil || f.Correlation != "the ValidatingAdmissionPolicy same-name" {
+		t.Fatalf("%+v", f)
+	}
+}

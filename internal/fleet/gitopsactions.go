@@ -203,6 +203,11 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 type Step struct {
 	Verb, Subject string
 	Written       bool
+	// Refused: the server refused the request (definiteRefusal), so nothing
+	// of it was written. A step neither written nor refused is unverified:
+	// its answer was lost and the write may have landed (Codex's
+	// implementation review, finding 5).
+	Refused bool
 	// Err is the step's error, wrapped as its request's (admission.Wrap).
 	Err error
 }
@@ -239,7 +244,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 			err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: sgvr.Group, Version: sgvr.Version, Resource: sgvr.Resource, Namespace: ref.Namespace},
 				ref.Kind, ref.Namespace, ref.Name, err)
-			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Err: err})
+			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: err != nil && definiteRefusal(err), Err: err})
 			switch {
 			case err == nil:
 				source = what + " was already asked to reconcile"
@@ -251,7 +256,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		}
 	}
 	err = c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
-	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Err: err})
+	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: err != nil && definiteRefusal(err), Err: err})
 	if err != nil {
 		if source != "" {
 			return steps, fmt.Errorf("reconcile %w; %s", err, source)

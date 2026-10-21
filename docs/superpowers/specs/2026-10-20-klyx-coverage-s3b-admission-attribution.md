@@ -289,3 +289,17 @@ At b98e6e4, 38 were caught. Four survived, each closed by a test (bda2396): a me
 ### 12.4 Gates
 
 At bda2396 (8c4ffd9 changes one test line for golangci-lint): bindings regenerate; `go vet ./internal/...` clean; `go test -race ./internal/...` passes; golangci-lint 0 issues at 8c4ffd9; `tsc --noEmit` clean; eslint 0 errors (the 4 warnings `main` has); vitest 2,416 passed (2 skipped). The native smoke (208/208, four modes) ran at b98e6e4 and the captures on that build; what follows changes tests and comments only. No parity or load run (§12.1).
+
+## 13. Implementation revision 1: Codex's review of 8140c8c
+
+Codex (handoff 1743d05b) requested changes: seven P2 findings, each with a probe. It found the YAML validator repair and the watchdog change justified and in scope.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | The legacy `Error` field kept the server's whole text for an unprotected subject: a credential and an unbounded denial crossed beside the scrubbed, clipped finding | An attributed refusal's legacy text (a result's, a step's and an ad-hoc document's) passes the finding's scrub and is bounded at 1,024 bytes (`boundedText`, `maxErrorText`); a protected subject keeps its withheld form, and an unattributed refusal keeps today's text |
+| 2 | The scratch-delete bridge cast the reply to `{ok, error}`, dropping the finding | `deleteAdhocObject` passes `admission` through; a test drives the real bridge |
+| 3 | The live diff said its dry run passed admission when objects failed or were skipped, and a skipped-only result "matches the live objects" | Only objects whose dry run completed (created, configured, unchanged, without an error) count: all completed keeps the sentence; a partial result says how many completed and that the rest say nothing of admission; none completed says nothing. A result with no completed dry run says "nothing was dry-run" or names the skipped objects |
+| 4 | When both steps were refused, the Activity entry kept the target's finding only | The entry keeps every step's finding and the result's own, each request once |
+| 5 | A step whose answer was lost (a timeout) read "not written" | `Step.Refused` (`definiteRefusal`) separates refused from unverified; the toast says "outcome unverified" for such a step and "not every step was confirmed" when any step is unverified |
+| 6 | The generic policy envelope's correlation took the first same-name row's kind | Under the generic envelope every policy of the name is said, with "the refusal does not say which" when there are several; the kind is named only under the ValidatingAdmissionPolicy envelope |
+| 7 | DeletePod read a webhook's NotFound denial as "it is already gone" | An attributed NotFound is the denial; the server's own NotFound is still the pod gone |

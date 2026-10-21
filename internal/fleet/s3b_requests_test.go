@@ -105,6 +105,24 @@ func TestS3bNodePodAndFluxDeclareTheirRequests(t *testing.T) {
 	if got := requestOf(t, err); got != (admission.Request{Operation: "DELETE", Version: "v1", Resource: "pods", Namespace: "x"}) {
 		t.Fatalf("delete pod: %+v", got)
 	}
+	// a webhook denying with NotFound is its denial, never the pod gone (finding 7)
+	typed404 := typedfake.NewClientset(pod.DeepCopy())
+	typed404.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 404, Reason: metav1.StatusReasonNotFound,
+			Message: `admission webhook "deny.lab.klyx.dev" denied the request: not here`}}
+	})
+	err = newPodActionsConn(typed404, clock.Real{}).DeletePod(context.Background(), "x", "web-0", "uid-web")
+	if err == nil || strings.Contains(err.Error(), "already gone") {
+		t.Fatalf("a webhook's 404 read as the pod gone: %v", err)
+	}
+	if got := requestOf(t, err); got.Operation != "DELETE" {
+		t.Fatalf("%+v", got)
+	}
+	// the server's own NotFound is the pod gone
+	typedGone := typedfake.NewClientset()
+	if err := newPodActionsConn(typedGone, clock.Real{}).DeletePod(context.Background(), "x", "web-0", "uid-web"); err == nil || !strings.Contains(err.Error(), "already gone") {
+		t.Fatalf("the pod gone: %v", err)
+	}
 
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"},
 		seedKustomizationWithSource("app", "GitRepository", "flux-system"))
@@ -128,6 +146,8 @@ func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
 	}{
 		{"the source written, the target denied", nil, webhookDenial()},
 		{"the source denied, the target written", webhookDenial(), nil},
+		// a lost answer is unverified, never refused (Codex's implementation review, finding 5)
+		{"the source's answer lost, the target written", context.DeadlineExceeded, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"},
@@ -147,6 +167,10 @@ func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
 			steps, err := newActionConn(dyn).ReconcileWithSourceSteps(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
 			if len(steps) != 2 || steps[0].Written != (tc.sourceErr == nil) || steps[1].Written != (tc.targetErr == nil) || (err != nil) != (tc.targetErr != nil) {
 				t.Fatalf("steps %+v, err %v", steps, err)
+			}
+			refused := func(e error) bool { return e != nil && !errors.Is(e, context.DeadlineExceeded) }
+			if steps[0].Refused != refused(tc.sourceErr) || steps[1].Refused != refused(tc.targetErr) {
+				t.Fatalf("refused: %+v", steps)
 			}
 			if !strings.HasPrefix(steps[0].Subject, "GitRepository flux-system/flux-system") || !strings.HasPrefix(steps[1].Subject, "Kustomization flux-system/app") {
 				t.Fatalf("subjects: %+v", steps)
