@@ -1151,6 +1151,39 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(2000, "the chat drawer closed", () => !$("[data-testid='chat-drawer']"));
   });
 
+  // ---- AI A1: an investigation (scratchpad lab-a1) ----
+  // The smoke fleet points AI at the lab's scripted model on loopback.
+  // Investigate from the Flux inspector's More runs to findings Klyx labels:
+  // every label reading, suspected or unsupported, never a model finding
+  // checked or proven, with Klyx's own checks and missing evidence.
+  await step(steps, "Investigate from the Flux inspector", async () => {
+    await open("flux");
+    (await within(10_000, "the a1-web row", () => byText<HTMLElement>(".lens-row", /a1-web/))).click();
+    const panel = await within(10_000, "the Flux inspector", () => $("[data-testid='lens-inspector']"));
+    await within(10_000, "a1-web selected", () => (useFleet.getState().gitops.expandedKey ?? "").endsWith("/a1-web"));
+    (await within(4000, "More", () => [...panel.querySelectorAll<HTMLElement>("button[aria-haspopup='menu']")].find((b) => /^More/.test(b.textContent ?? "")))).click();
+    (await within(8000, "Investigate in More", () => byText<HTMLElement>("[role='menuitem']", /^Investigate with AI/))).click();
+    const drawer = await within(8000, "the investigation", () => $("[data-testid='chat-drawer']"));
+    sized(drawer, "the investigation");
+    const button = (re: RegExp) => byText<HTMLButtonElement>("[data-testid='chat-drawer'] button", re);
+    if (drawer.querySelector("[data-testid='chat-exchange']")) {
+      // an investigation an earlier run left open: cleared, then started again
+      button(/^Clear$/)?.click();
+      (await within(8000, "Investigate again", () => button(/^Investigate Kustomization/))).click();
+    }
+    (await within(10_000, "Investigate", () => button(/^Investigate$/))).click();
+    const findings = await within(120_000, "the findings", () => $("[data-testid='inv-findings']"));
+    const labels = [...findings.querySelectorAll(".inv-finding > .inv-head > .inv-label")].map((l) => l.textContent?.trim() ?? "");
+    if (labels.length === 0 || labels.some((l) => !["reading", "suspected", "unsupported"].includes(l))) throw new Error(`labels: ${labels.join(", ") || "none"}`);
+    const text = findings.textContent ?? "";
+    for (const want of ["Klyx's checks", "reports a failed health check", "Missing evidence", "proposed, not run"]) if (!text.includes(want)) throw new Error(`no "${want}"`);
+    const reads = drawer.querySelectorAll("[data-testid='chat-reads'] .chat-read-id").length;
+    button(/^Clear$/)?.click();
+    key(drawer, { key: "Escape" });
+    await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
+    return { labels, reads };
+  });
+
   // ---- the inspector at this width ----
   await step(steps, "inspector layout at this width", async () => {
     const pods = dest("pods")!;

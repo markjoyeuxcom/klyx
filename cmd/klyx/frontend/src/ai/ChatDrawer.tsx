@@ -224,6 +224,11 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
             ? "This provider answers from a fixed set of evidence Klyx reads for the object; you cannot ask it to read more."
             : "This provider answers from a snapshot Klyx assembles per question. Name objects as kind/name or namespace/name to bring them in."}</div>
         )}
+        {firstInv && st?.mode !== "snapshot" && !asking && !otherAnchor && (
+          <div className="chat-small" data-testid="inv-intro">
+            Investigate reads {anchor?.label ?? "the object"} first, then lets the model read more of {cluster} through Klyx's read-only tools, and ends with findings that Klyx checks and labels.
+          </div>
+        )}
         {isInv && st && conversationId && (
           <Comparison cluster={cluster} slot={slot} st={st} editable={firstInv && !busy && !otherAnchor} />
         )}
