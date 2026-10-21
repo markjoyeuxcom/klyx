@@ -424,7 +424,7 @@ func (r *turnRunner) reportFindings(call ai.ToolCall) ai.ToolResult {
 	ledger := r.ledger()
 	dto := labelFindings(in, ledger, anchorOf(r.c.anchor, ledger))
 	r.s.mu.Lock()
-	r.ex.findings = &dto
+	r.ex.findings, r.ex.reported = &dto, &in
 	r.s.version++
 	r.s.mu.Unlock()
 	type label struct {

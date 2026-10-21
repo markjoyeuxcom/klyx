@@ -123,8 +123,11 @@ type exchange struct {
 	note      string
 	seed      *ChatSeedDTO
 	seedData  string // the seeded object's envelope, sent as data with the question
-	// findings are an investigation turn's, as Klyx labels them (AI A1 §4)
+	// findings are an investigation turn's, as Klyx labels them (AI A1 §4);
+	// reported holds the model's report until the turn ends, when it is
+	// labelled again against the turn's settled ledger
 	findings     *FindingsDTO
+	reported     *findingsInput
 	findingCalls int
 	// a snapshot investigation's sections left out to fit (read IDs) and
 	// the plan steps its budget stopped
@@ -542,6 +545,14 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	var ended *endError
 	if errors.As(err, &ended) {
 		c.ended = ended.reason
+	}
+	if c.kind == kindInvestigation && ex.reported != nil {
+		// reads in the report's batch, and any after it, settle first:
+		// Klyx's labels and missing evidence never depend on when the
+		// model chose to report (A1 implementation review, finding 8)
+		ledger := ledgerLocked(c)
+		f := labelFindings(*ex.reported, ledger, anchorOf(c.anchor, ledger))
+		ex.findings, ex.reported = &f, nil
 	}
 	if c.kind == kindInvestigation && ex.findings == nil && ex.outcome == "answered" {
 		// the model reported nothing: Klyx's own missing evidence still shows

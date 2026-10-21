@@ -296,6 +296,44 @@ func TestReportFindingsInATurn(t *testing.T) {
 	}
 }
 
+// AI A1 implementation review, finding 8: a report is labelled against the
+// turn's settled ledger, so a budget failure later in its batch, or a read
+// after it, still shows.
+func TestAReportIsLabelledAgainstTheSettledTurn(t *testing.T) {
+	report := ai.ToolCall{ID: "findings", Name: toolFindings, Args: json.RawMessage(`{"findings":[` + finding("observation", "Pod", "shop", "web", "web is running", "r9") + `]}`)}
+	batch := []ai.ToolCall{report}
+	for n := 0; n < invMaxToolCalls+1; n++ {
+		batch = append(batch, ai.ToolCall{ID: fmt.Sprintf("q%d", n), Name: toolOverview, Args: json.RawMessage(`{}`)})
+	}
+	f := anchoredFixture(t, calls(batch...), answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	st := f.svc.Ask("x", inv.ConversationID, "", nil)
+	ex := st.Exchanges[0]
+	failed := 0
+	for _, r := range ex.Reads {
+		if r.Detail == "tool budget used up" {
+			failed++
+		}
+	}
+	if len(ex.Reads) != invMaxToolCalls+2 || failed != 1 {
+		t.Fatalf("the control: one read of the batch failed on the budget: %+v", ex.Reads)
+	}
+	budget := false
+	for _, m := range ex.Findings.Missing {
+		budget = budget || strings.Contains(m.Text, "tool budget used up")
+	}
+	// r9 was read after the report: cited, it is no longer unknown, and is
+	// judged for what it is (an overview, not about the pod)
+	if fd := ex.Findings.Findings; !budget || len(fd) != 1 || fd[0].Label != labelUnsupported ||
+		strings.Join(fd[0].Notes, ";") != "none of its citations is about Pod shop/web" {
+		t.Fatalf("the report reflects the whole turn: %+v", ex.Findings)
+	}
+	res := f.prov.reqs[1].Messages[len(f.prov.reqs[1].Messages)-1].Results[0].Content
+	if !strings.Contains(res, "not in this investigation's reads") {
+		t.Fatalf("the control: at report time r9 was not yet read: %s", res)
+	}
+}
+
 func TestAnInvestigationWithoutReportedFindingsStillShowsKlyxsMissingEvidence(t *testing.T) {
 	f := anchoredFixture(t, calls(ai.ToolCall{ID: "m", Name: toolMetrics, Args: json.RawMessage(`{"template":"pod_cpu","namespace":"shop","name":"web"}`)}), answer("no findings"))
 	f.conn.seriesErr = errMetricsDown
