@@ -64,6 +64,31 @@ func TestInvestigationSitsBesideChatAndReadsItsAnchorFirst(t *testing.T) {
 	}
 }
 
+// AI A1 implementation review, finding 11: a request for an investigation
+// that is gone is answered from the investigation's slot, never with the
+// cluster's chat.
+func TestAGoneInvestigationIsNeverAnsweredWithTheChat(t *testing.T) {
+	f := anchoredFixture(t, answer("chat answer"))
+	chat := f.svc.Start("x")
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.Clear("x", inv.ConversationID)
+	st := f.svc.Ask("x", inv.ConversationID, "late", nil)
+	if st.Kind != kindInvestigation || st.ConversationID != "" || st.ConversationID == chat.ConversationID || !strings.Contains(st.Notice, "start a new one") {
+		t.Fatalf("the investigation's slot answers, empty: %+v", st)
+	}
+	again := f.svc.StartInvestigation("x", podAnchor)
+	if st := f.svc.Ask("x", inv.ConversationID, "late", nil); st.Kind != kindInvestigation || st.ConversationID != again.ConversationID {
+		t.Fatalf("or the investigation now current there: %+v", st)
+	}
+	f.svc.Clear("x", chat.ConversationID)
+	if st := f.svc.Ask("x", chat.ConversationID, "late", nil); st.Kind != kindChat || st.ConversationID != "" {
+		t.Fatalf("a gone chat is answered from the chat's slot: %+v", st)
+	}
+	if len(f.prov.reqs) != 0 {
+		t.Fatal("nothing is sent for a gone conversation")
+	}
+}
+
 func TestInvestigationRefusals(t *testing.T) {
 	f := anchoredFixture(t)
 	for _, a := range []ChatSeedDTO{

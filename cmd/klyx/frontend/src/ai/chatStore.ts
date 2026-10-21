@@ -19,6 +19,7 @@ export type ChatAnchor = { seed: ChatSeed; label: string };
 // The drawer shows one slot: a cluster's chat (its slot is the cluster's
 // name) or its investigation. Every map below is keyed by slot.
 export const invSlot = (cluster: string) => `investigation\u0000${cluster}`;
+const slotKind = (slot: string) => (slot.startsWith("investigation\u0000") ? "investigation" : "chat");
 
 type ChatUI = {
   open: boolean;
@@ -76,10 +77,14 @@ export const useChat = create<ChatUI>((set, get) => ({
   // apply keeps the newest state per cluster: an older reply (a lower
   // version) is dropped whatever order replies arrive in. A reply with an
   // error is a refusal, not a conversation: it is never applied, whatever
-  // its version, so it cannot replace the conversation on screen.
+  // its version, so it cannot replace the conversation on screen. Nor is a
+  // reply for another kind of conversation: a late investigation reply
+  // never turns the slot into the chat (AI A1 implementation review,
+  // finding 11).
   apply: (cluster, st) => {
     const cur = get().states[cluster];
     if (st.error) return false;
+    if (st.kind && st.kind !== slotKind(cluster)) return false;
     if (cur && (st.version ?? 0) < (cur.version ?? 0)) return false;
     set((s) => ({ states: { ...s.states, [cluster]: st } }));
     return true;

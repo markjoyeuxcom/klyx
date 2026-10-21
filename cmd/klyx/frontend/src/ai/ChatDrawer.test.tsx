@@ -303,6 +303,17 @@ describe("ChatDrawer", () => {
     expect(queryByTestId("chat-failure")).toBeNull();
   });
 
+  // AI A1 implementation review, finding 11: a slot keeps its kind.
+  it("a reply of another kind of conversation is never applied to a slot", () => {
+    act(() => {
+      useChat.getState().apply(invSlot("x"), state({ version: 9500, conversationId: "inv-1", kind: "investigation" }));
+      useChat.getState().apply(invSlot("x"), state({ version: 9501, conversationId: "c-chat", kind: "chat" }));
+      useChat.getState().apply("x", state({ version: 9502, conversationId: "inv-2", kind: "investigation" }));
+    });
+    expect(useChat.getState().states[invSlot("x")].conversationId).toBe("inv-1");
+    expect(useChat.getState().states.x?.conversationId).not.toBe("inv-2");
+  });
+
   it("a background read keeps the latest request's notice", async () => {
     const bg = deferred<ChatState>();
     bridge.chatState.mockResolvedValueOnce(state({ version: 9400, active: true })).mockReturnValueOnce(bg.promise);

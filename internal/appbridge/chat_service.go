@@ -213,6 +213,19 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
+// invIDPrefix marks an investigation's conversation ID, so a request for
+// one that is gone is answered from its own slot, never with the cluster's
+// chat (A1 implementation review, finding 11).
+const invIDPrefix = "inv-"
+
+// slotOf is the slot a conversation ID was made for.
+func slotOf(cluster, id string) string {
+	if strings.HasPrefix(id, invIDPrefix) {
+		return invKey(cluster)
+	}
+	return cluster
+}
+
 const (
 	kindChat          = "chat"
 	kindInvestigation = "investigation"
@@ -310,7 +323,11 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if _, ok := st.Provider.(ai.Converser); ok {
 		mode = "tools"
 	}
-	c := &conversation{id: newID(), cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
+	id := newID()
+	if kind == kindInvestigation {
+		id = invIDPrefix + id
+	}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -458,7 +475,7 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	}
 	switch {
 	case c == nil:
-		st := s.obsoleteLocked(cluster, cluster, "that conversation has ended")
+		st := s.obsoleteLocked(cluster, slotOf(cluster, conversationID), "that conversation has ended")
 		s.mu.Unlock()
 		return st
 	case first && seed != nil:
