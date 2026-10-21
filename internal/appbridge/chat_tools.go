@@ -24,6 +24,7 @@ import (
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -44,6 +45,8 @@ type ChatConn interface {
 	PodLogSnapshot(ctx context.Context, ns, pod, container string, previous bool, tail int64) (fleet.LogSnapshot, error)
 	// FluxObject reads one Flux object live at its served version (AI A1 §3.1).
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
+	// ChatMetricsRange runs a range query Klyx built from a template (§3.4).
+	ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
 }
 
 // The cluster connection is chat's read surface (main.go asserts it at run
@@ -149,6 +152,13 @@ func ChatToolDefs() []ChatToolDef {
 			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h"}, "description": "How far back (default 1h)."},
 			"tail":      intProp("Lines, 1-200 (default 100).", 1, 200),
 		}, "namespace", "pod")},
+		{toolMetrics, "Prometheus series from one of Klyx's templates, summarised (min, max, last, gaps, counter resets, a limit crossed): pod_cpu and pod_memory per container of a pod, against its limit; workload_cpu and workload_memory summed over a workload's current pods; restarts per pod (kube-state-metrics). Series are by pod name.", obj(map[string]any{
+			"template":  map[string]any{"type": "string", "enum": []string{"pod_cpu", "pod_memory", "workload_cpu", "workload_memory", "restarts"}, "description": "The template."},
+			"kind":      map[string]any{"type": "string", "enum": []string{"Pod", "Deployment", "StatefulSet", "DaemonSet"}, "description": "Pod for pod templates (default); a workload kind for workload templates, and for restarts of a workload's pods."},
+			"namespace": strProp("Namespace."),
+			"name":      strProp("Exact pod or workload name."),
+			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h", "24h"}, "description": "How far back (default 1h)."},
+		}, "template", "namespace", "name")},
 	}
 }
 
@@ -430,6 +440,33 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.NS+"/"+a.Pod, err)
 		}
 		return t.logHistory(ctx, a.NS, a.Pod, a.UID, a.Container, a.Window, tail)
+	case toolMetrics:
+		var a struct {
+			Template string `json:"template"`
+			Kind     string `json:"kind"`
+			NS       string `json:"namespace"`
+			Name     string `json:"name"`
+			Window   string `json:"window"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if a.Window == "" {
+			a.Window = "1h"
+		}
+		if _, ok := chatMetricTemplates[a.Template]; !ok {
+			return t.refuse(name, label(a.Template), errors.New("template must be one of pod_cpu, pod_memory, workload_cpu, workload_memory or restarts; Klyx runs no other query"))
+		}
+		if _, ok := chatMetricWindows[a.Window]; !ok {
+			return t.refuse(name, a.Template, errors.New("window must be 15m, 1h, 6h or 24h"))
+		}
+		if a.Kind != "" && a.Kind != "Pod" && !chatMetricWorkloads[a.Kind] {
+			return t.refuse(name, a.Template, errors.New("kind must be Pod, Deployment, StatefulSet or DaemonSet"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Template, err)
+		}
+		return t.metricSeries(ctx, a.Template, a.Kind, a.NS, a.Name, a.Window)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -755,6 +792,13 @@ func shrink(d any) any {
 			v.Ready = &r
 		default:
 			return nil
+		}
+		return v
+	case chatMetricsData:
+		if len(v.Pods) > 0 {
+			v.Pods = v.Pods[:len(v.Pods)/2]
+		} else {
+			v.Series = v.Series[:len(v.Series)/2]
 		}
 		return v
 	case chatLogHistoryData:

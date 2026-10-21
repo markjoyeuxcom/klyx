@@ -16,6 +16,7 @@ import (
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -37,7 +38,19 @@ type fakeChatConn struct {
 	flux       map[string]*unstructured.Unstructured // Kind|ns|name
 	fluxErr    error
 	fluxCalls  int
-	fluxHook   func(kind string) // runs after each Flux read
+	fluxHook   func(kind string)                  // runs after each Flux read
+	series     map[string][]metrics.LabeledSeries // by query
+	seriesErr  error
+	queries    []string
+	steps      []time.Duration
+}
+
+func (f *fakeChatConn) ChatMetricsRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+	f.queries, f.steps = append(f.queries, promql), append(f.steps, step)
+	if f.seriesErr != nil {
+		return nil, f.seriesErr
+	}
+	return f.series[promql], nil
 }
 
 func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {

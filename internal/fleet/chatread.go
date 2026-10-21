@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -246,4 +247,31 @@ func restarted(p *corev1.Pod, name string) bool {
 		}
 	}
 	return false
+}
+
+// ErrChatMetricsUnavailable: the cluster has no usable metrics source. It
+// says nothing about whether a series exists.
+var ErrChatMetricsUnavailable = errors.New("metrics unavailable on this cluster")
+
+// ChatMetricsRange runs one range query Klyx built from its own template (AI
+// A1 §3.4; the model never writes PromQL) through the cluster's metrics
+// transport: the same lazy probe and cache as every metrics read, and a
+// result read across a credential change is dropped (C5 §7).
+func (c *ClusterConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+	clk := c.clk
+	if clk == nil {
+		clk = clock.Real{}
+	}
+	mr := c.readMetrics(ctx, clk.Now())
+	if !mr.cap.Available {
+		if mr.cap.Reason != "" {
+			return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, mr.cap.Reason)
+		}
+		return nil, ErrChatMetricsUnavailable
+	}
+	res, err := metrics.NewClient(mr.transport).RangeMatrix(ctx, promql, start, end, step)
+	if err == nil && c.credentialMoved(mr.rev) {
+		return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, reasonCredentialChanged)
+	}
+	return res, err
 }

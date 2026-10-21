@@ -9,12 +9,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -842,6 +844,13 @@ func (g guardedConn) PodLogSnapshot(ctx context.Context, ns, pod, container stri
 		return fleet.LogSnapshot{}, err
 	}
 	return g.r.c.conn.PodLogSnapshot(ctx, ns, pod, container, previous, tail)
+}
+
+func (g guardedConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+	if err := g.r.check(); err != nil {
+		return nil, err
+	}
+	return g.r.c.conn.ChatMetricsRange(ctx, promql, start, end, step)
 }
 
 func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {

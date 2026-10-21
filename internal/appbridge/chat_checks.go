@@ -15,13 +15,14 @@ import (
 // its condition began (onset), when the evidence says. A check that cannot be
 // evaluated is not made; the read stays evidence the model may read.
 
-// Check classes. Later stages add rollout and metric.
+// Check classes. A later stage adds rollout.
 const (
 	checkVerdict     = "verdict"
 	checkCondition   = "condition"
 	checkHealthCheck = "healthcheck"
 	checkDiff        = "diff"
 	checkAlert       = "alert"
+	checkMetric      = "metric"
 	checkStatus      = "status"
 	checkEvent       = "event"
 )
@@ -212,9 +213,10 @@ func eventChecks(evs []chatEvent) []ChatCheck {
 }
 
 // capChecks keeps the first chatChecksMax, failures before facts: status,
-// condition, health-check, diff, alert and event checks first, then verdicts.
+// condition, health-check, diff, alert, metric and event checks first, then
+// verdicts.
 func capChecks(cs []ChatCheck) []ChatCheck {
-	rank := map[string]int{checkStatus: 0, checkCondition: 1, checkHealthCheck: 2, checkDiff: 3, checkAlert: 4, checkEvent: 5, checkVerdict: 6}
+	rank := map[string]int{checkStatus: 0, checkCondition: 1, checkHealthCheck: 2, checkDiff: 3, checkAlert: 4, checkMetric: 5, checkEvent: 6, checkVerdict: 7}
 	sort.SliceStable(cs, func(i, j int) bool { return rank[cs[i].Class] < rank[cs[j].Class] })
 	if len(cs) > chatChecksMax {
 		cs = cs[:chatChecksMax]
