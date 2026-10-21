@@ -20,10 +20,12 @@ import (
 )
 
 // Deadlines (note §3.3): the runner must start within StartWithin of the
-// window opening, and report within ReportWithin.
+// window opening, and report within ReportWithin. ReportWithin bounds a
+// runner that never reports, not the walk's pace: the walk grew past five
+// minutes when macOS throttles an unwatched window's timers (coverage S3b).
 const (
 	StartWithin  = 30 * time.Second
-	ReportWithin = 5 * time.Minute
+	ReportWithin = 15 * time.Minute
 )
 
 // Results.
@@ -63,6 +65,7 @@ type Watchdog struct {
 	mu      sync.Mutex
 	started chan struct{}
 	done    bool
+	step    string // the step the runner last began
 }
 
 // Arm starts the watchdog; call once, when the window opens.
@@ -82,8 +85,25 @@ func (w *Watchdog) Arm() {
 			return
 		}
 		<-report
-		w.fail("the runner did not report within " + ReportWithin.String())
+		why := "the runner did not report within " + ReportWithin.String()
+		w.mu.Lock()
+		if w.step != "" {
+			why += fmt.Sprintf(" (the last step it began: %q)", w.step)
+		}
+		w.mu.Unlock()
+		w.fail(why)
 	}()
+}
+
+// Progress records the step the runner begins, so a runner that never
+// reports names where it was.
+func (w *Watchdog) Progress(step string) {
+	if len(step) > 200 {
+		step = step[:200]
+	}
+	w.mu.Lock()
+	w.step = step
+	w.mu.Unlock()
 }
 
 // Started records that the runner began.

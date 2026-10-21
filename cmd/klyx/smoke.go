@@ -74,5 +74,11 @@ func (s *SmokeService) Settings() smokepkg.Settings { return s.w.Settings }
 // Started tells the watchdog the runner began.
 func (s *SmokeService) Started() { s.w.Started() }
 
+// Progress records (and logs, with its time) the step the runner begins.
+func (s *SmokeService) Progress(name string) {
+	log.Printf("smoke step: %s", name)
+	s.w.Progress(name)
+}
+
 // Report writes the runner's result and quits.
 func (s *SmokeService) Report(report string) error { return s.w.Report(report) }
