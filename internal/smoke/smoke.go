@@ -22,7 +22,7 @@ import (
 // Deadlines (note §3.3): the runner must start within StartWithin of the
 // window opening, and report within ReportWithin. ReportWithin bounds a
 // runner that never reports, not the walk's pace: the walk grew past five
-// minutes when macOS throttles an unwatched window's timers (coverage S3b).
+// minutes (coverage S3b), its steps slowest with nobody at the machine.
 const (
 	StartWithin  = 30 * time.Second
 	ReportWithin = 15 * time.Minute
