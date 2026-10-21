@@ -5,6 +5,7 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/gitops/notify"
 	"os"
@@ -117,6 +118,20 @@ git:
 // into a Klyx cache, and the commit it is at.
 func newDiffFixture(t *testing.T) (*cacheFake, string) {
 	t.Helper()
+	store, shas := newHistoryFixture(t, map[string]string{
+		"clusters/prd/kustomization.yaml": "resources: [../../apps/base]\nconfigMapGenerator:\n  - name: settings\n    files: [../../config/app.ini]\n",
+		"apps/base/kustomization.yaml":    "resources: [deployment.yaml]\n",
+		"apps/base/deployment.yaml":       "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  template:\n    spec:\n      containers:\n        - name: web\n          image: ghcr.io/acme/web:1.0\n",
+		"config/app.ini":                  "a=1\n",
+		"other/never.yaml":                "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: never\n",
+	})
+	return store, shas[0]
+}
+
+// newHistoryFixture commits each map of files in turn (later maps write over
+// earlier files), publishes main into a Klyx cache, and returns the commits.
+func newHistoryFixture(t *testing.T, commits ...map[string]string) (*cacheFake, []string) {
+	t.Helper()
 	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
@@ -136,24 +151,21 @@ func newDiffFixture(t *testing.T) (*cacheFake, string) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	for p, c := range map[string]string{
-		"clusters/prd/kustomization.yaml": "resources: [../../apps/base]\nconfigMapGenerator:\n  - name: settings\n    files: [../../config/app.ini]\n",
-		"apps/base/kustomization.yaml":    "resources: [deployment.yaml]\n",
-		"apps/base/deployment.yaml":       "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  template:\n    spec:\n      containers:\n        - name: web\n          image: ghcr.io/acme/web:1.0\n",
-		"config/app.ini":                  "a=1\n",
-		"other/never.yaml":                "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: never\n",
-	} {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, p)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(work, p), []byte(c), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	run("init", "-q", "-b", "main")
-	run("add", "-A")
-	run("commit", "-qm", "fleet")
-	sha := run("rev-parse", "HEAD")
+	var shas []string
+	for i, files := range commits {
+		for p, c := range files {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(work, p)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(work, p), []byte(c), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run("add", "-A")
+		run("commit", "-qm", fmt.Sprintf("fleet %d", i))
+		shas = append(shas, run("rev-parse", "HEAD"))
+	}
 	base := gitcli.CacheBase(t.TempDir())
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
@@ -168,7 +180,7 @@ func newDiffFixture(t *testing.T) (*cacheFake, string) {
 		t.Fatal(err)
 	}
 	run("push", "-q", dir, "main:refs/klyx/tracked/refs/heads/main")
-	return &cacheFake{runner: runner, dir: dir}, sha
+	return &cacheFake{runner: runner, dir: dir}, shas
 }
 
 func newDiffService(t *testing.T, store *cacheFake) *GitService {

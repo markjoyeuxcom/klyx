@@ -45,6 +45,7 @@ type ChatService struct {
 	ai    *AIService
 	em    Emitter
 	now   func() time.Time
+	git   chatGit // set once at startup (SetChatGit); nil without Git
 
 	mu      sync.Mutex
 	convs   map[string]*conversation // by cluster

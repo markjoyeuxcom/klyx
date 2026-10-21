@@ -1,0 +1,192 @@
+package appbridge
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	ssautil "github.com/fluxcd/pkg/ssa/utils"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/gitcli"
+	"github.com/moomora/klyx/internal/line"
+)
+
+// AI A1 §3.2: the Git half of git_changes. The unit's GitRepository URL maps
+// to an approved repository as the cache diff maps it; both revisions are
+// ensured in the history cache; the commits and changed files between them
+// are listed under spec.path; and each revision is built with the cache
+// diff's confined build under today's Kustomization spec, behind a
+// fleet-wide admission of two renders at once (A1 §1). Nothing here reaches
+// a model: the tool projects what it returns.
+
+const (
+	chatChangesCommitsMax = gitcli.MaxLogCommits // 20
+	chatChangesFilesMax   = 200
+	chatRendersAtOnce     = 2
+)
+
+// chatRenderAdmission admits investigation renders, fleet-wide; the rest
+// wait within their turn's deadline.
+var chatRenderAdmission = make(chan struct{}, chatRendersAtOnce)
+
+var errChatGitNotApproved = errors.New("the source's repository is not approved in Settings > Git, so Klyx reads no history for it")
+
+// gitChangesReq is what git_changes asks of Git, read in process from the
+// live Kustomization and its GitRepository.
+type gitChangesReq struct {
+	RepoURL            string
+	Applied, Attempted string // full commit SHAs
+	Spec               map[string]any
+}
+
+type gitChangesOut struct {
+	Commits      []gitcli.Commit
+	CommitsTotal int
+	Ancestor     bool // the applied revision is an ancestor of the attempted one
+	Files        []gitcli.NameStatus
+	FilesTotal   int
+	Old, New     []*unstructured.Unstructured
+	Generated    bool   // a revision had no kustomization file at the path
+	RenderErr    string // the renders were not compared: why
+}
+
+// chatGit is what git_changes asks of Git.
+type chatGit interface {
+	changes(ctx context.Context, req gitChangesReq) (gitChangesOut, error)
+}
+
+// SetChatGit gives chat its read of Git history (AI A1 §3.2).
+func SetChatGit(c *ChatService, g *GitService) {
+	if g != nil {
+		c.git = g
+	}
+}
+
+func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChangesOut, error) {
+	var out gitChangesOut
+	cfg, err := s.d.Load(s.d.ConfigPath)
+	if err != nil {
+		return out, fmt.Errorf("reading the Git settings: %w", err)
+	}
+	repos, _ := cfg.ApprovedGitRepos()
+	owner, _ := keyOwners(repos)
+	url := owner[line.NormalizeRepo(req.RepoURL)]
+	if url == "" {
+		return out, errChatGitNotApproved
+	}
+	store, err := s.gitOn()
+	if err != nil {
+		return out, err
+	}
+	cs, ok := store.(cacheStore)
+	if !ok {
+		return out, errors.New("the Git cache cannot fetch commits")
+	}
+	applied, err := gitcli.SHA(req.Applied)
+	if err != nil {
+		return out, err
+	}
+	attempted, err := gitcli.SHA(req.Attempted)
+	if err != nil {
+		return out, err
+	}
+	for _, sha := range []string{req.Applied, req.Attempted} {
+		if err := cs.EnsureCommit(ctx, url, sha); err != nil {
+			return out, fmt.Errorf("fetching %s: %w", sha[:7], err)
+		}
+	}
+	specPath, _ := req.Spec["path"].(string)
+	clean, err := gitcli.CleanPath(specPath)
+	if err != nil {
+		return out, err
+	}
+	var paths []string
+	if clean != "" {
+		paths = []string{clean}
+	}
+	err = cs.Read(url, func(repo gitcli.Repo) error {
+		var err error
+		inc, exc := []gitcli.Rev{attempted}, []gitcli.Rev{applied}
+		if out.Commits, err = repo.LogPath(ctx, inc, exc, chatChangesCommitsMax, paths); err != nil {
+			return err
+		}
+		if out.CommitsTotal, err = repo.CountPath(ctx, inc, exc, paths); err != nil {
+			return err
+		}
+		if out.Ancestor, err = repo.IsAncestor(ctx, applied, attempted); err != nil {
+			return err
+		}
+		files, err := repo.DiffNames(ctx, applied, attempted, paths)
+		if err != nil {
+			return err
+		}
+		out.FilesTotal = len(files)
+		if len(files) > chatChangesFilesMax {
+			files = files[:chatChangesFilesMax]
+		}
+		out.Files = files
+		return nil
+	})
+	if err != nil {
+		return out, err
+	}
+	for _, r := range []struct {
+		rev  gitcli.Rev
+		sha  string
+		into *[]*unstructured.Unstructured
+	}{{applied, req.Applied, &out.Old}, {attempted, req.Attempted, &out.New}} {
+		objs, generated, err := s.chatRender(ctx, cs, url, r.rev, specPath, req.Spec)
+		if err != nil {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			out.Old, out.New = nil, nil
+			out.RenderErr = gitcli.Scrub(fmt.Sprintf("the render of %s: %v", r.sha[:7], err))
+			return out, nil
+		}
+		*r.into = objs
+		out.Generated = out.Generated || generated
+	}
+	return out, nil
+}
+
+// chatRender builds one revision as the cache diff does: the input set, its
+// blobs, the confined build with the spec's overlay, then commonMetadata as
+// the controller applies it.
+func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, rev gitcli.Rev, specPath string, spec map[string]any) ([]*unstructured.Unstructured, bool, error) {
+	select {
+	case chatRenderAdmission <- struct{}{}:
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
+	defer func() { <-chatRenderAdmission }()
+	source := cachediff.CacheSource{Store: cs, URL: url, Rev: rev}
+	set, err := cachediff.Compute(ctx, source, specPath)
+	if err != nil {
+		return nil, false, err
+	}
+	var entries []gitcli.TreeEntry
+	for _, e := range set.Files {
+		entries = append(entries, e)
+	}
+	contents, err := source.Read(ctx, entries)
+	if err != nil {
+		return nil, false, err
+	}
+	exe, err := childExe()
+	if err != nil {
+		return nil, false, fmt.Errorf("the confined build: %w", err)
+	}
+	objs, err := cachediff.Build(ctx, exe, set, contents, spec)
+	if err != nil {
+		return nil, false, err
+	}
+	labels, _, _ := unstructured.NestedStringMap(spec, "commonMetadata", "labels")
+	annotations, _, _ := unstructured.NestedStringMap(spec, "commonMetadata", "annotations")
+	if len(labels) > 0 || len(annotations) > 0 {
+		ssautil.SetCommonMetadata(objs, labels, annotations)
+	}
+	return objs, set.Generated, nil
+}

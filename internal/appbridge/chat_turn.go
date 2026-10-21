@@ -263,6 +263,7 @@ func chatAITools() []ai.Tool {
 // drops one more whole old exchange and is built again, nothing sent.
 func (r *turnRunner) tools(ctx context.Context) (string, error) {
 	exec := newChatTools(guardedConn{r}, r.s.now)
+	exec.git = r.chatGit()
 	tools := chatAITools()
 	used := 0
 	for call := 0; call < chatMaxModelCalls; call++ {
@@ -462,6 +463,7 @@ func (r *turnRunner) snapshot(ctx context.Context) (string, error) {
 	}
 	gc := guardedConn{r}
 	exec := newChatTools(gc, r.s.now)
+	exec.git = r.chatGit()
 	var sections []string
 	var included []string
 	add := func(name, args, label string) error {
@@ -847,6 +849,28 @@ func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*un
 		return nil, err
 	}
 	return g.r.c.conn.FluxObject(ctx, kind, ns, name)
+}
+
+// chatGit is the service's Git read behind the turn's guard; nil without Git.
+func (r *turnRunner) chatGit() chatGit {
+	if r.s.git == nil {
+		return nil
+	}
+	return guardedGit{r: r, g: r.s.git}
+}
+
+// guardedGit runs the turn's guard before Git is read: once the pinned conn
+// or settings no longer hold, nothing more is fetched, built or sent.
+type guardedGit struct {
+	r *turnRunner
+	g chatGit
+}
+
+func (g guardedGit) changes(ctx context.Context, req gitChangesReq) (gitChangesOut, error) {
+	if err := g.r.check(); err != nil {
+		return gitChangesOut{}, err
+	}
+	return g.g.changes(ctx, req)
 }
 
 // parseGVR reads "v1/pods" or "apps/v1/deployments".

@@ -46,6 +46,10 @@ type ChatConn interface {
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 }
 
+// The cluster connection is chat's read surface (main.go asserts it at run
+// time; this fails the build instead).
+var _ ChatConn = (*fleet.ClusterConn)(nil)
+
 const (
 	toolOverview  = "cluster_overview"
 	toolAttention = "list_attention"
@@ -127,6 +131,11 @@ func ChatToolDefs() []ChatToolDef {
 			"namespace": strProp("The unit's namespace."),
 			"name":      strProp("The unit's exact name."),
 		}, "kind", "namespace", "name")},
+		{toolChanges, "What changed in Git between a Flux Kustomization's last applied revision and its last attempted one: the commits and files under its path, and both revisions rendered and compared object by object. A render is a source render under the current spec (the spec in force at the applied revision is unknown); hidden values are named by path only. Needs the source's repository approved in Klyx's Git settings.", obj(map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"Kustomization"}, "description": "Kustomization."},
+			"namespace": strProp("The Kustomization's namespace."),
+			"name":      strProp("The Kustomization's exact name."),
+		}, "kind", "namespace", "name")},
 	}
 }
 
@@ -201,6 +210,8 @@ type chatTools struct {
 	now  func() time.Time
 	// readID is the citation ID of the one read this copy runs (AI A1 §2)
 	readID string
+	// git reads Git history for git_changes; nil when it is not available
+	git chatGit
 }
 
 // as is a copy of t that runs one read under its citation ID.
@@ -346,6 +357,22 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
 		}
 		return t.unit(ctx, a.Kind, a.NS, a.Name)
+	case toolChanges:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if a.Kind != "Kustomization" {
+			return t.refuse(name, label(a.Kind), errors.New("kind must be Kustomization"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.changes(ctx, a.NS, a.Name)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -580,6 +607,11 @@ func readError(err error) string {
 // finish serializes an envelope within chatResultMax, shrinking its data
 // (and marking it truncated) when it does not fit.
 func (t *chatTools) finish(env chatEnvelope, read ChatRead) ChatToolResult {
+	return t.finishWithin(env, read, chatResultMax)
+}
+
+// finishWithin is finish under another cap (git_changes' 32 KiB).
+func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatToolResult {
 	// the read's citation ID, and its checks' (AI A1 §2): the envelope the
 	// model reads and the ledger entry carry the same IDs
 	env.ReadID, read.ID = t.readID, t.readID
@@ -593,7 +625,7 @@ func (t *chatTools) finish(env chatEnvelope, read ChatRead) ChatToolResult {
 			env.Data, env.Errors = nil, append(env.Errors, "the result could not be encoded")
 			continue
 		}
-		if len(b) <= chatResultMax {
+		if len(b) <= max {
 			if env.Truncated && read.Outcome == "completed" {
 				read.Outcome = "truncated"
 			}
@@ -664,6 +696,19 @@ func shrink(d any) any {
 			r := *v.Ready
 			r.Message = ""
 			v.Ready = &r
+		default:
+			return nil
+		}
+		return v
+	case chatChangesData:
+		// the file list first, then the commits, then the objects
+		switch {
+		case len(v.Files) > 0:
+			v.Files = v.Files[:len(v.Files)/2]
+		case len(v.Commits) > 0:
+			v.Commits = v.Commits[:len(v.Commits)/2]
+		case len(v.Objects) > 0:
+			v.Objects = v.Objects[:len(v.Objects)/2]
 		default:
 			return nil
 		}

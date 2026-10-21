@@ -37,6 +37,7 @@ type fakeChatConn struct {
 	flux       map[string]*unstructured.Unstructured // Kind|ns|name
 	fluxErr    error
 	fluxCalls  int
+	fluxHook   func(kind string) // runs after each Flux read
 }
 
 func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {
@@ -88,6 +89,9 @@ func (f *fakeChatConn) ListEvents(context.Context, string) ([]workloads.EventSum
 
 func (f *fakeChatConn) FluxObject(_ context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
 	f.fluxCalls++
+	if f.fluxHook != nil {
+		defer f.fluxHook(kind)
+	}
 	if f.fluxErr != nil {
 		return nil, f.fluxErr
 	}
