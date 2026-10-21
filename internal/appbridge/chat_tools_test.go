@@ -204,6 +204,28 @@ func run(t *testing.T, f *fakeChatConn, tool, args string) (chatEnvelope, ChatRe
 	return env, res.Read
 }
 
+// AI A1 implementation review, finding 10: the last resort keeps the
+// envelope and as many checks as fit, failures first, and says how many it
+// left out; the ledger holds the checks sent.
+func TestFinishFallsBackWithinItsBound(t *testing.T) {
+	tools := newChatTools(newFakeChat(), fixedNow).as("r7")
+	var checks []ChatCheck
+	for i := 0; i < chatChecksMax; i++ {
+		checks = append(checks, ChatCheck{Class: checkEvent, Subject: ChatCheckSubject{Kind: "Pod", Namespace: "shop", Name: fmt.Sprintf("p%d", i), Identity: identityName},
+			Statement: strings.Repeat("s", 4000)})
+	}
+	env := chatEnvelope{Tool: toolEvents, Source: "api", Checks: checks, Data: strings.Repeat("d", 9000)}
+	res := tools.finishWithin(env, ChatRead{Tool: toolEvents, Outcome: "completed"}, 4096)
+	var got chatEnvelope
+	if err := json.Unmarshal(res.JSON, &got); err != nil || len(res.JSON) > 4096 {
+		t.Fatalf("%d bytes: %v", len(res.JSON), err)
+	}
+	if len(got.Checks) == 0 || len(got.Checks) == chatChecksMax || len(res.Read.Checks) != len(got.Checks) || got.Checks[0].ID != "r7.c1" ||
+		!strings.Contains(got.Errors[0], fmt.Sprintf("of its %d checks were left out", chatChecksMax)) || res.Read.Outcome != "truncated" {
+		t.Fatalf("%+v %+v", got, res.Read)
+	}
+}
+
 func TestChatToolsRefuseBadArguments(t *testing.T) {
 	f := newFakeChat()
 	cases := []struct{ tool, args, want string }{

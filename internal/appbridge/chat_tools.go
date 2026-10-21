@@ -82,6 +82,8 @@ const (
 	chatReadGapsMax  = 3
 	chatReadGapMax   = 200
 	chatReadAboutMax = 20
+	// chatCheckStatementMax caps one check's statement (bytes)
+	chatCheckStatementMax = 1024
 )
 
 // ChatToolDef is one tool as offered to a provider: a name, what it does, and
@@ -778,8 +780,11 @@ func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatT
 	env.ReadID, read.ID = t.readID, t.readID
 	for i := range env.Checks {
 		env.Checks[i].ID = fmt.Sprintf("%s.c%d", t.readID, i+1)
+		if s := env.Checks[i].Statement; len(s) > chatCheckStatementMax {
+			env.Checks[i].Statement = clipUTF8(s, chatCheckStatementMax) + "…"
+		}
 	}
-	read.Checks = append([]ChatCheck(nil), env.Checks...)
+	read.Gaps = gapsOf(env.Errors)
 	for i := 0; i < 12; i++ {
 		b, err := json.Marshal(env)
 		if err != nil {
@@ -790,15 +795,25 @@ func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatT
 			if env.Truncated && read.Outcome == "completed" {
 				read.Outcome = "truncated"
 			}
-			read.Gaps = gapsOf(env.Errors)
+			read.Checks = append([]ChatCheck(nil), env.Checks...)
 			return ChatToolResult{JSON: b, Read: read}
 		}
 		env.Truncated = true
 		env.Data = shrink(env.Data)
 	}
-	b, _ := json.Marshal(chatEnvelope{Tool: env.Tool, ReadID: env.ReadID, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Checks: env.Checks, Errors: []string{"the result was too large to send"}})
+	// The data does not fit: the envelope alone, with as many of its
+	// checks as fit, failures first (capChecks' order). The ledger holds
+	// the checks the model was sent (A1 implementation review, finding 10).
+	fb := chatEnvelope{Tool: env.Tool, ReadID: env.ReadID, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Checks: env.Checks,
+		Errors: []string{"the result was too large to send"}}
+	b, _ := json.Marshal(fb)
+	for len(b) > max && len(fb.Checks) > 0 {
+		fb.Checks = fb.Checks[:len(fb.Checks)-1]
+		fb.Errors = []string{fmt.Sprintf("the result was too large to send; %d of its %d checks were left out", len(env.Checks)-len(fb.Checks), len(env.Checks))}
+		b, _ = json.Marshal(fb)
+	}
 	read.Outcome = "truncated"
-	read.Gaps = gapsOf(env.Errors)
+	read.Checks = append([]ChatCheck(nil), fb.Checks...)
 	return ChatToolResult{JSON: b, Read: read}
 }
 

@@ -665,9 +665,23 @@ func exchangeBytes(e *exchange) int {
 	for _, s := range e.snapshot {
 		n += len(s)
 	}
+	for _, s := range append(append([]string{}, e.snapshotDropped...), e.snapshotSkipped...) {
+		n += len(s)
+	}
 	reads, _ := json.Marshal(e.reads)
 	calls, _ := json.Marshal(e.calls)
-	return n + len(reads) + len(calls)
+	n += len(reads) + len(calls)
+	// an investigation's findings and the report they come from are
+	// retained too (A1 implementation review, finding 10)
+	if e.findings != nil {
+		b, _ := json.Marshal(e.findings)
+		n += len(b)
+	}
+	if e.reported != nil {
+		b, _ := json.Marshal(e.reported)
+		n += len(b)
+	}
+	return n
 }
 
 func msgBytes(m ai.ConvMessage) int {

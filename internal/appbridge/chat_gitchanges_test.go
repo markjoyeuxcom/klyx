@@ -182,6 +182,54 @@ func TestChangesFallsBackWhenTheRenderIsNotEstablished(t *testing.T) {
 	}
 }
 
+// AI A1 implementation review, finding 10: checks count toward the
+// result's bound. Long legal field names and annotation keys on many
+// objects make long diff checks; the result stays within 32 KiB, and the
+// ledger holds the checks the model was sent.
+func TestChangesBoundsItsChecks(t *testing.T) {
+	for name, build := range map[string]func(n int) (*unstructured.Unstructured, *unstructured.Unstructured){
+		"custom resources with long field names": func(n int) (*unstructured.Unstructured, *unstructured.Unstructured) {
+			a, b := map[string]any{}, map[string]any{}
+			for j := 0; j < 8; j++ {
+				k := fmt.Sprintf("field%d", j) + strings.Repeat("x", 490)
+				a[k], b[k] = "old", "new"
+			}
+			old := object("example.test/v1", "Widget", strings.Repeat("n", 63), fmt.Sprintf("obj%02d", n)+strings.Repeat("a", 240), map[string]any{"spec": a})
+			return old, object("example.test/v1", "Widget", strings.Repeat("n", 63), old.GetName(), map[string]any{"spec": b})
+		},
+		"deployments with long annotation keys": func(n int) (*unstructured.Unstructured, *unstructured.Unstructured) {
+			name := fmt.Sprintf("obj-%02d-", n) + strings.Repeat("a", 240)
+			old, next := deploy(name, "web:v1", "old"), deploy(name, "web:v1", "new")
+			annA, annB := map[string]string{}, map[string]string{}
+			for j := 0; j < 5; j++ {
+				k := fmt.Sprintf("example.com/k%d-", j) + strings.Repeat("z", 240)
+				annA[k], annB[k] = "old", "new"
+			}
+			old.SetAnnotations(annA)
+			next.SetAnnotations(annB)
+			return old, next
+		},
+	} {
+		f, g := changesChat(nil)
+		for n := 0; n < 12; n++ {
+			old, next := build(n)
+			g.out.Old, g.out.New = append(g.out.Old, old), append(g.out.New, next)
+		}
+		env, read, raw := runChanges(t, f, g, changesArgs) // fails over 32 KiB
+		if len(env.Checks) == 0 || len(read.Checks) != len(env.Checks) || read.Checks[0].ID != env.Checks[0].ID {
+			t.Fatalf("%s: the ledger holds the checks sent: %d %d", name, len(read.Checks), len(env.Checks))
+		}
+		for _, c := range env.Checks {
+			if len(c.Statement) > chatCheckStatementMax+len("…") {
+				t.Fatalf("%s: %d bytes", name, len(c.Statement))
+			}
+		}
+		if len(raw) > chatChangesResultMax {
+			t.Fatalf("%s: %d bytes", name, len(raw))
+		}
+	}
+}
+
 func TestChangesStaysWithinItsBound(t *testing.T) {
 	f, g := changesChat(nil)
 	for i := 0; i < 200; i++ {
