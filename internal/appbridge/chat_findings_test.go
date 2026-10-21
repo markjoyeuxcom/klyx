@@ -156,8 +156,8 @@ func TestReportFindingsInATurn(t *testing.T) {
 	if !strings.Contains(res(1), "correct it and call once more") || !strings.Contains(res(2), `"label":"reading"`) || !strings.Contains(res(3), "already reported") {
 		t.Fatalf("%s | %s | %s", res(1), res(2), res(3))
 	}
-	if !hasTool(f.prov.reqs[0].Tools, toolFindings) {
-		t.Fatal("an investigation offers report_findings")
+	if !hasTool(f.prov.reqs[0].Tools, toolFindings) || hasTool(f.prov.reqs[0].Tools, toolFleetDiff) {
+		t.Fatal("an investigation offers report_findings, and fleet_difference only with a comparison set")
 	}
 
 	c := anchoredFixture(t, answer("chat"))

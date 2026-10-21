@@ -182,6 +182,17 @@ func (r *turnRunner) guard() (*AIState, error) {
 	if refusal := r.s.refusal(st, r.c.cluster); refusal != "" {
 		return nil, &endError{reason: refusal}
 	}
+	// A-C2: once a member's data was read, every send carries it
+	r.s.mu.Lock()
+	members, read := r.c.members, r.c.membersRead
+	r.s.mu.Unlock()
+	if read {
+		for _, m := range members {
+			if p := r.s.memberProblem(st, m); p != "" {
+				return nil, &endError{reason: p}
+			}
+		}
+	}
 	return st, nil
 }
 
@@ -285,8 +296,13 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 	r.equip(exec)
 	tools := chatAITools()
 	if r.c.kind == kindInvestigation {
-		d := findingsToolDef()
-		tools = append(tools, ai.Tool{Name: d.Name, Description: d.Description, Schema: d.Schema})
+		defs := []ChatToolDef{findingsToolDef()}
+		if len(r.c.members) > 0 {
+			defs = append(defs, fleetDiffToolDef())
+		}
+		for _, d := range defs {
+			tools = append(tools, ai.Tool{Name: d.Name, Description: d.Description, Schema: d.Schema})
+		}
 	}
 	used := 0
 	lim := r.c.limits()
@@ -945,6 +961,13 @@ func (g guardedConn) PodLogSnapshot(ctx context.Context, ns, pod, container stri
 	return g.r.c.conn.PodLogSnapshot(ctx, ns, pod, container, previous, tail)
 }
 
+func (g guardedConn) WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
+	if err := g.r.check(); err != nil {
+		return fleet.WorkloadCompareInfo{}, err
+	}
+	return g.r.c.conn.WorkloadCompare(ctx, kind, ns, name)
+}
+
 func (g guardedConn) DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph {
 	if err := g.r.check(); err != nil {
 		return depgraph.Graph{Incomplete: []string{readError(err)}}
@@ -997,6 +1020,39 @@ func (r *turnRunner) equip(t *chatTools) {
 		t.history = guardedHistory{r: r, h: r.s.logs}
 	}
 	t.ledgerUIDs = r.ledgerPodUIDs
+	t.cluster = r.c.cluster
+	r.s.mu.Lock()
+	members := append([]member(nil), r.c.members...)
+	r.s.mu.Unlock()
+	for _, m := range members {
+		t.members = append(t.members, chatMember{cluster: m.cluster, compare: r.memberCompare(m)})
+	}
+}
+
+// memberCompare reads one member's workload behind the turn's guard and the
+// member's own fence (A-C2); a member that fails its fence stops the turn.
+func (r *turnRunner) memberCompare(m member) func(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
+	return func(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
+		if err := r.check(); err != nil {
+			return fleet.WorkloadCompareInfo{}, err
+		}
+		if p := r.s.memberProblem(r.s.ai.load(), m); p != "" {
+			err := &endError{reason: p}
+			r.amu.Lock()
+			if r.abort == nil {
+				r.abort = err
+			}
+			r.amu.Unlock()
+			return fleet.WorkloadCompareInfo{}, err
+		}
+		info, err := m.conn.WorkloadCompare(ctx, kind, ns, name)
+		if err == nil {
+			r.s.mu.Lock()
+			r.c.membersRead = true
+			r.s.mu.Unlock()
+		}
+		return info, err
+	}
 }
 
 // guardedGit runs the turn's guard before Git is read: once the pinned conn

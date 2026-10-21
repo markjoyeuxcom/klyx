@@ -72,17 +72,22 @@ type conversation struct {
 	key string
 	// kind is chat or investigation; anchor is an investigation's object,
 	// fenced by UID like an Explain seed.
-	kind     string
-	anchor   *ChatSeedDTO
-	conn     ChatConn
-	rev      uint64
-	provider ai.ProviderID
-	model    string
-	origin   string
-	mode     string // tools | snapshot
-	ended    string
-	trimmed  bool
-	removed  int
+	kind   string
+	anchor *ChatSeedDTO
+	// members are an investigation's comparison set, fixed before its first
+	// question (A-C2); membersRead, once a member's data was read: every
+	// later send carries it and is fenced by every member
+	members     []member
+	membersRead bool
+	conn        ChatConn
+	rev         uint64
+	provider    ai.ProviderID
+	model       string
+	origin      string
+	mode        string // tools | snapshot
+	ended       string
+	trimmed     bool
+	removed     int
 
 	exchanges []*exchange
 	active    *activeTurn
@@ -159,6 +164,7 @@ type ChatStateDTO struct {
 	Cluster        string            `json:"cluster"`
 	Kind           string            `json:"kind"`             // chat | investigation
 	Anchor         *ChatSeedDTO      `json:"anchor,omitempty"` // an investigation's object
+	Comparison     []string          `json:"comparison,omitempty"`
 	Mode           string            `json:"mode,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
 	Model          string            `json:"model,omitempty"`
@@ -375,6 +381,9 @@ func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 		Version: s.version}
 	for _, e := range c.exchanges {
 		out.Exchanges = append(out.Exchanges, e.dto())
+	}
+	for _, m := range c.members {
+		out.Comparison = append(out.Comparison, m.cluster)
 	}
 	return out
 }

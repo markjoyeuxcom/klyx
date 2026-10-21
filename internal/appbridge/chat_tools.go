@@ -57,6 +57,8 @@ type ChatConn interface {
 	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
 	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
 	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
+	// WorkloadCompare reads one workload's fleet-compare facts (§3.7).
+	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 }
 
 // The cluster connection is chat's read surface (main.go asserts it at run
@@ -254,6 +256,9 @@ type chatTools struct {
 	history chatHistory
 	// ledgerUIDs are the pod UIDs the conversation's own reads hold
 	ledgerUIDs func(ns, name string) []string
+	// cluster is the conversation's; members its comparison set (A-C2)
+	cluster string
+	members []chatMember
 }
 
 // as is a copy of t that runs one read under its citation ID.
@@ -495,6 +500,23 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Kind+" "+a.Name, err)
 		}
 		return t.deps(ctx, a.Kind, a.NS, a.Name)
+	case toolFleetDiff:
+		var a struct {
+			Kind     string   `json:"kind"`
+			NS       string   `json:"namespace"`
+			Name     string   `json:"name"`
+			Clusters []string `json:"clusters"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if !chatMetricWorkloads[a.Kind] {
+			return t.refuse(name, label(a.Kind), errors.New("kind must be Deployment, StatefulSet or DaemonSet"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.fleetDiff(ctx, a.Kind, a.NS, a.Name, a.Clusters)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -821,6 +843,12 @@ func shrink(d any) any {
 		default:
 			return nil
 		}
+		return v
+	case chatFleetDiffData:
+		for i := range v.Clusters {
+			v.Clusters[i].Containers = nil
+		}
+		v.Note += " Containers left out to fit."
 		return v
 	case chatDepsData:
 		// half the nodes, and only the edges between those kept

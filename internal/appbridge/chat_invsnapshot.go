@@ -52,6 +52,9 @@ func takeFindings(answer string) (string, string, bool) {
 
 // invPlan runs one acquisition plan within the investigation's read budget.
 type invPlan struct {
+	// compare is the workload a comparison set reads (A1 §1.1): the anchor,
+	// or the first joined health-check object that is a workload
+	compare  *[3]string
 	r        *turnRunner
 	ctx      context.Context
 	exec     *chatTools
@@ -170,6 +173,9 @@ func (p *invPlan) run(kind, ns, name string, seed json.RawMessage) error {
 		}
 		for _, o := range objects {
 			if res, ok := workloadKindOf(o.kind); ok {
+				if p.compare == nil {
+					p.compare = &[3]string{res, o.ns, o.name}
+				}
 				for _, pod := range p.failingPods(res, o.ns, o.name) {
 					if err := p.podEvidence(o.ns, pod); err != nil {
 						return err
@@ -196,6 +202,7 @@ func (p *invPlan) run(kind, ns, name string, seed json.RawMessage) error {
 		_, _, err = p.step(toolDeps, mustJSON(map[string]any{"kind": "Kustomization", "namespace": ns, "name": name}), "dependencies")
 		return err
 	case isWorkloadKind(kind):
+		p.compare = &[3]string{kind, ns, name}
 		for _, pod := range p.failingPods(kind, ns, name) {
 			if err := p.podEvidence(ns, pod); err != nil {
 				return err
@@ -251,6 +258,14 @@ func (r *turnRunner) investigationSnapshot(ctx context.Context) (string, error) 
 	kind, _, _ := strings.Cut(ledger[0].Target, " ")
 	if err := p.run(kind, r.c.anchor.Namespace, r.c.anchor.Name, json.RawMessage(r.ex.seedData)); err != nil {
 		return "", err
+	}
+	if len(exec.members) > 0 {
+		if p.compare == nil {
+			p.skipped = append(p.skipped, "the fleet comparison: no workload to compare")
+		} else if _, _, err := p.step(toolFleetDiff, mustJSON(map[string]any{"kind": p.compare[0], "namespace": p.compare[1], "name": p.compare[2]}),
+			"the fleet comparison of "+p.compare[0]+" "+p.compare[1]+"/"+p.compare[2]); err != nil {
+			return "", err
+		}
 	}
 	sections := append([]string{r.ex.seedData}, p.sections...)
 	doc, dropped := invSnapshotDoc(sections, r.ex.question)

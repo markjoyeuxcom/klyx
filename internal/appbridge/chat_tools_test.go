@@ -26,33 +26,48 @@ import (
 )
 
 type fakeChatConn struct {
-	kinds      map[string][]fleet.ChatKind
-	incomplete []string
-	rows       map[string]observe.Rows               // task/part
-	objects    map[string]*unstructured.Unstructured // gvr|ns|name
-	lists      map[string]*unstructured.UnstructuredList
-	listErr    error
-	summary    *observe.Summary
-	events     []workloads.EventSummary
-	eventsCap  bool
-	eventsErr  error
-	logs       fleet.LogSnapshot
-	logsErr    error
-	logCalls   int
-	flux       map[string]*unstructured.Unstructured // Kind|ns|name
-	fluxErr    error
-	fluxCalls  int
-	fluxHook   func(kind string) // runs after each Flux read
-	graph      depgraph.Graph
-	graphUIDs  []string
-	chain      *certmanager.Chain
-	topo       *gwapi.Topology
-	rules      map[string]routemetrics.GatewayRules // by Gateway ns/name
-	ruleCalls  []string
-	series     map[string][]metrics.LabeledSeries // by query
-	seriesErr  error
-	queries    []string
-	steps      []time.Duration
+	kinds        map[string][]fleet.ChatKind
+	incomplete   []string
+	rows         map[string]observe.Rows               // task/part
+	objects      map[string]*unstructured.Unstructured // gvr|ns|name
+	lists        map[string]*unstructured.UnstructuredList
+	listErr      error
+	summary      *observe.Summary
+	events       []workloads.EventSummary
+	eventsCap    bool
+	eventsErr    error
+	logs         fleet.LogSnapshot
+	logsErr      error
+	logCalls     int
+	flux         map[string]*unstructured.Unstructured // Kind|ns|name
+	fluxErr      error
+	fluxCalls    int
+	fluxHook     func(kind string) // runs after each Flux read
+	compare      fleet.WorkloadCompareInfo
+	compareErr   error
+	compareCalls int
+	compareHook  func() // runs after each compare read
+	graph        depgraph.Graph
+	graphUIDs    []string
+	chain        *certmanager.Chain
+	topo         *gwapi.Topology
+	rules        map[string]routemetrics.GatewayRules // by Gateway ns/name
+	ruleCalls    []string
+	series       map[string][]metrics.LabeledSeries // by query
+	seriesErr    error
+	queries      []string
+	steps        []time.Duration
+}
+
+func (f *fakeChatConn) WorkloadCompare(_ context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
+	f.compareCalls++
+	if f.compareHook != nil {
+		defer f.compareHook()
+	}
+	if f.compareErr != nil {
+		return fleet.WorkloadCompareInfo{}, f.compareErr
+	}
+	return f.compare, nil
 }
 
 func (f *fakeChatConn) DependencyGraph(_ context.Context, _, _, _, uid string) depgraph.Graph {
