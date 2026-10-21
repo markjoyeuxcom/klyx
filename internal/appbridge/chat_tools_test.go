@@ -34,6 +34,9 @@ type fakeChatConn struct {
 	logs       fleet.LogSnapshot
 	logsErr    error
 	logCalls   int
+	flux       map[string]*unstructured.Unstructured // Kind|ns|name
+	fluxErr    error
+	fluxCalls  int
 }
 
 func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {
@@ -81,6 +84,17 @@ func (f *fakeChatConn) HealthRowsNow(_ context.Context, task, part string) (obse
 
 func (f *fakeChatConn) ListEvents(context.Context, string) ([]workloads.EventSummary, bool, error) {
 	return f.events, f.eventsCap, f.eventsErr
+}
+
+func (f *fakeChatConn) FluxObject(_ context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
+	f.fluxCalls++
+	if f.fluxErr != nil {
+		return nil, f.fluxErr
+	}
+	if u, ok := f.flux[kind+"|"+ns+"|"+name]; ok {
+		return u, nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: kind}, name)
 }
 
 func (f *fakeChatConn) PodLogSnapshot(context.Context, string, string, string, bool, int64) (fleet.LogSnapshot, error) {

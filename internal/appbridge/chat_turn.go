@@ -842,6 +842,13 @@ func (g guardedConn) PodLogSnapshot(ctx context.Context, ns, pod, container stri
 	return g.r.c.conn.PodLogSnapshot(ctx, ns, pod, container, previous, tail)
 }
 
+func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
+	if err := g.r.check(); err != nil {
+		return nil, err
+	}
+	return g.r.c.conn.FluxObject(ctx, kind, ns, name)
+}
+
 // parseGVR reads "v1/pods" or "apps/v1/deployments".
 func parseGVR(s string) (schema.GroupVersionResource, bool) {
 	parts := strings.Split(s, "/")

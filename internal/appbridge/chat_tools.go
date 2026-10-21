@@ -42,6 +42,8 @@ type ChatConn interface {
 	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
 	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, bool, error)
 	PodLogSnapshot(ctx context.Context, ns, pod, container string, previous bool, tail int64) (fleet.LogSnapshot, error)
+	// FluxObject reads one Flux object live at its served version (AI A1 §3.1).
+	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
 }
 
 const (
@@ -120,6 +122,11 @@ func ChatToolDefs() []ChatToolDef {
 			"namespace": strProp("Optional namespace filter."),
 			"name":      strProp("Optional exact unit name."),
 		})},
+		{toolUnit, "One Flux Kustomization or HelmRelease read live: its Ready condition, applied and attempted revisions, source, dependencies, inventory and Klyx's verdict. A failed health check is parsed into the objects it names, by name, each joined to the unit's inventory, with the object of that name now as a separate fact.", obj(map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"Kustomization", "HelmRelease"}, "description": "Kustomization or HelmRelease."},
+			"namespace": strProp("The unit's namespace."),
+			"name":      strProp("The unit's exact name."),
+		}, "kind", "namespace", "name")},
 	}
 }
 
@@ -323,6 +330,22 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, "", err)
 		}
 		return t.gitops(ctx, a.NS, a.Name)
+	case toolUnit:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if _, ok := unitResources[a.Kind]; !ok {
+			return t.refuse(name, label(a.Kind), errUnitKind)
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.unit(ctx, a.Kind, a.NS, a.Name)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -623,6 +646,27 @@ func shrink(d any) any {
 			return v
 		}
 		v.Object = shrink(v.Object).(ChatObject)
+		return v
+	case chatUnitData:
+		// the inventory first, then the parts' kinds, then the entries
+		switch {
+		case len(v.Inventory) > 0:
+			v.Inventory = v.Inventory[:len(v.Inventory)/2]
+		case v.Verdict != nil && len(v.Verdict.Kinds) > 0:
+			vv := *v.Verdict
+			vv.Kinds = nil
+			v.Verdict = &vv
+		case v.HealthCheck != nil && len(v.HealthCheck.Entries) > 0:
+			hc := *v.HealthCheck
+			hc.Entries = hc.Entries[:len(hc.Entries)/2]
+			v.HealthCheck = &hc
+		case v.Ready != nil && v.Ready.Message != "":
+			r := *v.Ready
+			r.Message = ""
+			v.Ready = &r
+		default:
+			return nil
+		}
 		return v
 	case chatLogData:
 		lines := strings.Split(v.Text, "\n")
