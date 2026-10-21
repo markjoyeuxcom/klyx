@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { withClasses } from "../test/alertFixtures";
-import { alertsFacts, alertsFor, causeText, sortAlerts, subjectNote, subjectText, type AMAlertDTO } from "./alertsModel";
+import { alertsFacts, alertsFor, causeText, clusterLabelSpread, distinguishingLabels, sortAlerts, subjectNote, subjectText, type AMAlertDTO } from "./alertsModel";
 
 const al = (name: string, over: Partial<AMAlertDTO> = {}): AMAlertDTO => withClasses({
   fingerprint: `fp-${name}`, name, severity: "critical", counted: true, state: "active", labels: [], annotations: [], subject: {}, startsAt: "2026-10-19T10:00:00Z", ...over,
@@ -67,5 +67,31 @@ describe("alerts model (coverage S8a §7)", () => {
     expect(alertsFacts(null)).toBeNull();
     expect(alertsFacts({ alertsSource: "https://am.example:443", alertsSourceKey: "a1b2", alertsTruncated: true, alertsMatch: { cluster: "prd" } }))
       .toEqual({ source: "https://am.example:443", sourceKey: "a1b2", truncated: true, match: { cluster: "prd" } });
+  });
+});
+
+// v0.15.1: same-name alerts told apart; a shared Alertmanager suggested
+describe("alerts that share a name (v0.15.1)", () => {
+  const wd = (fp: string, labels: Record<string, string>, more = 0): AMAlertDTO => withClasses({ fingerprint: fp, name: "Watchdog", severity: "none", counted: false, state: "active",
+    labels: Object.entries({ alertname: "Watchdog", ...labels }).map(([name, value]) => ({ name, value })), labelsMore: more, annotations: [], subject: {} });
+  it("names the labels that differ, where-from labels first, at most two", () => {
+    const xs = [wd("a", { cluster: "k8s-b1", prometheus: "mon/p", zz: "1" }), wd("b", { cluster: "k8s-b3", prometheus: "mon/p", zz: "2" }), wd("c", { cluster: "k8s-b3", prometheus: "mon/q", zz: "3" }),
+      withClasses({ fingerprint: "d", name: "Alone", state: "active", counted: true, labels: [{ name: "alertname", value: "Alone" }], annotations: [], subject: {} })];
+    const d = distinguishingLabels(xs);
+    expect(d.get("k-a")).toBe("cluster=k8s-b1, prometheus=mon/p");
+    expect(d.get("k-c")).toBe("cluster=k8s-b3, prometheus=mon/q");
+    expect(d.has("k-d")).toBe(false);
+    // a label one alert lacks reads (none)
+    expect(distinguishingLabels([wd("e", { cluster: "x" }), wd("f", {})]).get("k-f")).toBe("cluster=(none)");
+    // nothing kept differs, a label was cut: said as such
+    expect(distinguishingLabels([wd("g", { cluster: "x" }, 2), wd("h", { cluster: "x" })]).get("k-g")).toBe("differs in a label not shown");
+  });
+  it("several values of a cluster label with no match suggest a shared Alertmanager", () => {
+    const xs = [wd("a", { cluster: "k8s-b1" }), wd("b", { cluster: "k8s-b3" })];
+    expect(clusterLabelSpread(xs)).toEqual({ label: "cluster", values: ["k8s-b1", "k8s-b3"] });
+    expect(clusterLabelSpread(xs, {})).toEqual({ label: "cluster", values: ["k8s-b1", "k8s-b3"] });
+    expect(clusterLabelSpread(xs, { cluster: "k8s-b3" })).toBeNull();
+    expect(clusterLabelSpread([wd("a", { cluster: "k8s-b1" }), wd("b", { cluster: "k8s-b1" })])).toBeNull();
+    expect(clusterLabelSpread([wd("a", { tenant: "t1" }), wd("b", { tenant: "t2" })])).toEqual({ label: "tenant", values: ["t1", "t2"] });
   });
 });

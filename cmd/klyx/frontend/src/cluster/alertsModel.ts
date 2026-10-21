@@ -165,3 +165,49 @@ export function noAlertEstablished(xs: AMAlertDTO[] | null, part: { kinds: { kin
   if (xs.some((a) => inexactFor(a.subject, t))) return "an alert names an object Klyx cannot show exactly (redacted or clipped)";
   return null;
 }
+
+// v0.15.1, from the owner's first check of v0.15.0: four "Watchdog" rows on
+// a shared Alertmanager read as duplicates. Alerts that share a name are told
+// apart by the labels whose values differ among them: at most two, the
+// labels that usually say where an alert comes from first.
+const WHERE_LABELS = ["cluster", "cluster_name", "k8s_cluster", "tenant", "namespace", "job", "instance", "pod", "service", "prometheus"];
+const whereRank = (n: string) => {
+  const i = WHERE_LABELS.indexOf(n);
+  return i < 0 ? WHERE_LABELS.length : i;
+};
+
+export function distinguishingLabels(xs: AMAlertDTO[]): Map<string, string> {
+  const byName = new Map<string, AMAlertDTO[]>();
+  for (const a of xs) byName.set(a.name, [...(byName.get(a.name) ?? []), a]);
+  const out = new Map<string, string>();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const values = group.map((a) => new Map(a.labels.map((l) => [l.name, l.value])));
+    const names = new Set(group.flatMap((a) => a.labels.map((l) => l.name)));
+    names.delete("alertname");
+    const differ = [...names].filter((n) => new Set(values.map((v) => v.get(n) ?? "")).size > 1)
+      .sort((a, b) => whereRank(a) - whereRank(b) || a.localeCompare(b));
+    const shown = differ.slice(0, 2);
+    // a label Klyx did not keep may be the one that differs
+    const cut = group.some((a) => (a.labelsMore ?? 0) > 0);
+    group.forEach((a, i) => {
+      if (shown.length > 0) out.set(a.key, shown.map((n) => `${n}=${values[i].get(n) ?? "(none)"}`).join(", "));
+      else if (cut) out.set(a.key, "differs in a label not shown");
+    });
+  }
+  return out;
+}
+
+// With no match, every alert on the Alertmanager is read as this cluster's.
+// Alerts that carry several values of a cluster-identifying label suggest it
+// serves several clusters (v0.15.1).
+const CLUSTER_LABELS = ["cluster", "cluster_name", "k8s_cluster", "tenant"];
+
+export function clusterLabelSpread(xs: AMAlertDTO[], match?: Record<string, string>): { label: string; values: string[] } | null {
+  if (match && Object.keys(match).length > 0) return null;
+  for (const label of CLUSTER_LABELS) {
+    const values = [...new Set(xs.flatMap((a) => a.labels.filter((l) => l.name === label).map((l) => l.value)))].sort();
+    if (values.length > 1) return { label, values };
+  }
+  return null;
+}
