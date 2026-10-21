@@ -6,7 +6,12 @@ import { ChatService } from "../../bindings/github.com/moomora/klyx/internal/app
 // the conversation back. Failures fold into the state's error.
 
 export type ChatRef = { gvr: string; namespace?: string; name: string; uid?: string };
-export type ChatRead = { tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[] };
+// AI A1 §2: a check is an observation Klyx evaluated itself on a read, by
+// UID or by name only; id is its citation ("r4.c1").
+export type ChatCheckSubject = { kind: string; namespace?: string; name: string; uid?: string; identity: "uid" | "name" };
+export type ChatCheck = { id: string; class: string; subject: ChatCheckSubject; statement: string; observed?: string; onset?: string; coverage?: string };
+// id is the read's citation ("r4") within its conversation.
+export type ChatRead = { id?: string; tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[]; checks?: ChatCheck[] };
 export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[]; outcome: string };
 export type ChatExchange = {
   id: string;

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { IconX, IconMessageChatbot } from "@tabler/icons-react";
 import { useFleet, type ResourceRef } from "../store/fleet";
-import { chatAsk, chatClear, chatStart, chatState, chatStop, onChatRead, type ChatExchange, type ChatRead, type ChatRef, type ChatState } from "../bridge/chat";
+import { chatAsk, chatClear, chatStart, chatState, chatStop, onChatRead, type ChatCheck, type ChatExchange, type ChatRead, type ChatRef, type ChatState } from "../bridge/chat";
 import { providerLabel } from "../app/AISettingsPanel";
 import { WELL_KNOWN_RESOURCE_REFS } from "../cluster/resourceRefs";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { SafeMarkdown, type Cite } from "./SafeMarkdown";
 import { useChat } from "./chatStore";
 import { Rail, type RailSegment, type RailStep } from "../chrome/primitives";
 
@@ -99,6 +99,10 @@ function ChatPanel({ cluster }: { cluster: string }) {
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [st?.exchanges.length, asking]);
 
+  // the conversation's citations resolve against its whole ledger (AI A1 §4)
+  const exchanges = st?.exchanges;
+  const cite = useMemo(() => citeFrom(ledgerOf(exchanges ?? [])), [exchanges]);
+
   const bytes = utf8Bytes(draft);
   const tooLong = bytes > QUESTION_MAX_BYTES;
 
@@ -185,7 +189,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
         {st?.mode === "snapshot" && st.exchanges.length === 0 && !asking && (
           <div className="chat-small">This provider answers from a snapshot Klyx assembles per question. Name objects as kind/name or namespace/name to bring them in.</div>
         )}
-        {st?.exchanges.map((ex) => <Exchange key={ex.id} cluster={cluster} ex={ex} />)}
+        {st?.exchanges.map((ex) => <Exchange key={ex.id} cluster={cluster} ex={ex} cite={cite} />)}
         {asking && asking.conversationId === conversationId && !inFlight && !st?.exchanges.some((e) => e.question === asking.question) && (
           <div className="chat-exchange" aria-busy="true">
             <div className="chat-q">{asking.question}</div>
@@ -239,7 +243,40 @@ function ChatPanel({ cluster }: { cluster: string }) {
   );
 }
 
-function Exchange({ cluster, ex }: { cluster: string; ex: ChatExchange }) {
+// AI A1 §4: the conversation's ledger by citation ID, and a citation's chip
+// - only for an ID the ledger holds; anything else stays the answer's text.
+export function ledgerOf(exchanges: ChatExchange[]): Map<string, { read: ChatRead; check?: ChatCheck }> {
+  const m = new Map<string, { read: ChatRead; check?: ChatCheck }>();
+  for (const ex of exchanges) {
+    for (const read of ex.reads) {
+      if (!read.id) continue;
+      m.set(read.id, { read });
+      for (const check of read.checks ?? []) m.set(check.id, { read, check });
+    }
+  }
+  return m;
+}
+
+function openRead(id: string) {
+  const el = document.getElementById(`chat-read-${id.split(".")[0]}`);
+  if (!el) return;
+  const details = el.closest("details");
+  if (details) details.open = true;
+  el.scrollIntoView?.({ block: "nearest" });
+  el.classList.add("chat-read-hit");
+  window.setTimeout(() => el.classList.remove("chat-read-hit"), 1600);
+}
+
+export function citeFrom(ledger: Map<string, { read: ChatRead; check?: ChatCheck }>): Cite {
+  return (id, key) => {
+    const e = ledger.get(id);
+    if (!e) return null;
+    const title = e.check ? e.check.statement : `${e.read.tool}${e.read.target ? ` ${e.read.target}` : ""}`;
+    return <button key={key} type="button" className="chat-cite" data-testid="chat-cite" title={title} onClick={() => openRead(id)}>{id}</button>;
+  };
+}
+
+function Exchange({ cluster, ex, cite }: { cluster: string; ex: ChatExchange; cite?: Cite }) {
   const last = ex.calls[ex.calls.length - 1];
   return (
     <div className="chat-exchange" data-testid="chat-exchange">
@@ -253,7 +290,7 @@ function Exchange({ cluster, ex }: { cluster: string; ex: ChatExchange }) {
       <Reads reads={ex.reads} />
       {ex.outcome === "answered" && ex.answer && (
         <>
-          <SafeMarkdown text={ex.answer} />
+          <SafeMarkdown text={ex.answer} cite={cite} />
           <RefChips cluster={cluster} answer={ex.answer} reads={ex.reads} />
           <div className="chat-small" style={{ color: "var(--color-text-tertiary)" }}>
             {last ? `${providerLabel(last.provider)}${last.model ? ` · ${last.model}` : ""} · ` : ""}AI-generated from Klyx's reads - verify before acting.
@@ -286,10 +323,16 @@ function Reads({ reads, open }: { reads: ChatRead[]; open?: boolean }) {
       name: `${r.tool}${r.target ? ` ${r.target}` : ""}`,
       tags,
       label: (
-        <span className="chat-small">
-          <code>{r.tool}</code>{r.target ? ` ${r.target}` : ""}{r.detail ? ` (${r.detail})` : ""}{r.redacted ? ` · ${r.redacted} redacted` : ""}
+        <span className="chat-small" id={r.id ? `chat-read-${r.id}` : undefined}>
+          {r.id && <span className="chat-read-id">{r.id}</span>}<code>{r.tool}</code>{r.target ? ` ${r.target}` : ""}{r.detail ? ` (${r.detail})` : ""}{r.redacted ? ` · ${r.redacted} redacted` : ""}
         </span>
       ),
+      // the observations Klyx evaluated on the read, in its own words
+      body: r.checks && r.checks.length > 0 ? (
+        <ul className="chat-checks" data-testid="chat-checks">
+          {r.checks.map((c) => <li key={c.id}><span className="chat-read-id">{c.id}</span>{c.statement}</li>)}
+        </ul>
+      ) : undefined,
     };
   });
   return (

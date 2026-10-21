@@ -315,3 +315,35 @@ describe("ChatDrawer", () => {
     expect(getByTestId("chat-input-notice").textContent).toContain("already being answered");
   });
 });
+
+// AI A1 stage 1: each read's citation ID and Klyx's checks in the ledger, and
+// an answer's [r1] or [r1.c1] a chip only when the ledger holds it.
+describe("citations (AI A1 §4)", () => {
+  beforeEach(() => {
+    for (const f of Object.values(bridge)) f.mockReset?.();
+    bridge.onChatRead.mockImplementation(() => () => {});
+    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
+  });
+
+  it("shows read IDs and checks, and chips only the IDs the ledger holds", async () => {
+    bridge.chatState.mockResolvedValue(state({ exchanges: [exchange({
+      answer: "web crash-loops [r1.c1] after its last change [r1]; see also [r9] and [r1](https://example.com).",
+      reads: [{ id: "r1", tool: "get_resource", target: "Pod shop/web", outcome: "completed",
+        checks: [{ id: "r1.c1", class: "status", subject: { kind: "Pod", namespace: "shop", name: "web", uid: "u1", identity: "uid" }, statement: "container web of Pod shop/web: waiting CrashLoopBackOff" }] }],
+    })] }));
+    act(() => openChat("x"));
+    const { findAllByTestId, getByTestId, getByText } = render(<ChatDrawer />);
+    const chips = await findAllByTestId("chat-cite");
+    expect(chips.map((c) => c.textContent)).toEqual(["r1.c1", "r1"]);
+    expect(chips[0].getAttribute("title")).toBe("container web of Pod shop/web: waiting CrashLoopBackOff");
+    // an ID the ledger does not hold stays text; a link stays a link
+    expect(getByTestId("safe-markdown").textContent).toContain("[r9]");
+    expect(getByText("r1", { selector: "button.md-link" })).toBeTruthy();
+    expect(getByTestId("chat-checks").textContent).toContain("r1.c1container web of Pod shop/web: waiting CrashLoopBackOff");
+    // a chip opens its read in the ledger
+    const reads = getByTestId("chat-reads") as HTMLDetailsElement;
+    expect(reads.open).toBe(false);
+    fireEvent.click(chips[0]);
+    expect(reads.open).toBe(true);
+  });
+});

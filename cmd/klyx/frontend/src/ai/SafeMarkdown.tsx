@@ -45,10 +45,15 @@ function ExternalLink({ label, href }: { label: string; href: string }) {
   );
 }
 
-// Inline tokens, earliest match wins: code, image, link, bold, italic, bare URL.
-const INLINE = /(`[^`\n]+`)|(!\[([^\]\n]*)\]\(([^)\s]+)\))|(\[([^\]\n]+)\]\(([^)\s]+)\))|(\*\*([^*\n]+)\*\*)|(\*([^*\n]+)\*|_([^_\n]+)_)|(https?:\/\/[^\s)<>"']+)/;
+// Inline tokens, earliest match wins: code, image, link, bold, italic, bare
+// URL, and a citation of a read or check ([r4], [r4.c1], AI A1 §4).
+const INLINE = /(`[^`\n]+`)|(!\[([^\]\n]*)\]\(([^)\s]+)\))|(\[([^\]\n]+)\]\(([^)\s]+)\))|(\*\*([^*\n]+)\*\*)|(\*([^*\n]+)\*|_([^_\n]+)_)|(https?:\/\/[^\s)<>"']+)|(\[(r\d{1,5}(?:\.c\d{1,3})?)\])/;
 
-export function inline(text: string, keyPrefix = "i"): ReactNode[] {
+// Cite renders a citation as a chip when its ID is in the conversation's
+// ledger; null keeps the text as written.
+export type Cite = (id: string, key: string) => ReactNode | null;
+
+export function inline(text: string, keyPrefix = "i", cite?: Cite): ReactNode[] {
   const out: ReactNode[] = [];
   let rest = text;
   let k = 0;
@@ -63,9 +68,10 @@ export function inline(text: string, keyPrefix = "i"): ReactNode[] {
     if (m[1]) out.push(<code key={key} className="md-code">{m[1].slice(1, -1)}</code>);
     else if (m[2]) out.push(<span key={key} data-testid="md-image">[image: {m[3] || "no description"}] ({m[4]})</span>);
     else if (m[5]) out.push(<ExternalLink key={key} label={m[6]} href={m[7]} />);
-    else if (m[8]) out.push(<strong key={key}>{inline(m[9], key)}</strong>);
-    else if (m[10]) out.push(<em key={key}>{inline(m[11] ?? m[12] ?? "", key)}</em>);
+    else if (m[8]) out.push(<strong key={key}>{inline(m[9], key, cite)}</strong>);
+    else if (m[10]) out.push(<em key={key}>{inline(m[11] ?? m[12] ?? "", key, cite)}</em>);
     else if (m[13]) out.push(<ExternalLink key={key} label={m[13]} href={m[13]} />);
+    else if (m[14]) out.push(cite?.(m[15], key) ?? m[14]);
     rest = rest.slice(m.index + m[0].length);
   }
   return out;
@@ -129,7 +135,7 @@ export function blocks(src: string): Block[] {
   return out;
 }
 
-export function SafeMarkdown({ text }: { text: string }) {
+export function SafeMarkdown({ text, cite }: { text: string; cite?: Cite }) {
   return (
     <div className="md" data-testid="safe-markdown">
       {blocks(text).map((b, i) => {
@@ -138,15 +144,15 @@ export function SafeMarkdown({ text }: { text: string }) {
           case "code":
             return <pre key={key} className="md-pre"><code>{b.text}</code></pre>;
           case "heading":
-            return <div key={key} role="heading" aria-level={b.level + 2} className="md-heading">{inline(b.text, key)}</div>;
+            return <div key={key} role="heading" aria-level={b.level + 2} className="md-heading">{inline(b.text, key, cite)}</div>;
           case "list":
             return b.ordered
-              ? <ol key={key} className="md-list">{b.items.map((it, j) => <li key={j}>{inline(it, `${key}-${j}`)}</li>)}</ol>
-              : <ul key={key} className="md-list">{b.items.map((it, j) => <li key={j}>{inline(it, `${key}-${j}`)}</li>)}</ul>;
+              ? <ol key={key} className="md-list">{b.items.map((it, j) => <li key={j}>{inline(it, `${key}-${j}`, cite)}</li>)}</ol>
+              : <ul key={key} className="md-list">{b.items.map((it, j) => <li key={j}>{inline(it, `${key}-${j}`, cite)}</li>)}</ul>;
           case "quote":
-            return <blockquote key={key} className="md-quote">{inline(b.text, key)}</blockquote>;
+            return <blockquote key={key} className="md-quote">{inline(b.text, key, cite)}</blockquote>;
           default:
-            return <p key={key} className="md-para">{inline(b.text, key)}</p>;
+            return <p key={key} className="md-para">{inline(b.text, key, cite)}</p>;
         }
       })}
     </div>

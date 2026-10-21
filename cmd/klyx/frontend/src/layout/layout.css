@@ -821,3 +821,9 @@ details[open] > summary > .ov-chev { transform: rotate(90deg); }
 .ov-num { font: 500 12px/18px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text-tertiary); }
 .ov-mono { font-family: var(--font-mono); font-size: 12px; }
 .ov-marked { display: inline-flex; align-items: center; gap: 6px; }
+
+/* AI A1 §2, §4: read IDs, Klyx's checks and citation chips in the chat */
+.chat-read-id { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-tertiary); margin-right: 6px; }
+.chat-checks { margin: 2px 0 0; padding-left: 14px; font-size: 11px; color: var(--color-text-secondary); }
+.chat-cite { font-family: var(--font-mono); font-size: 10px; padding: 0 4px; margin: 0 1px; border: 0.5px solid var(--color-border-secondary); border-radius: 3px; background: var(--color-background-secondary); color: var(--color-text-info); cursor: pointer; vertical-align: baseline; }
+.chat-read-hit { outline: 1px solid var(--color-border-info); outline-offset: 2px; border-radius: 2px; }

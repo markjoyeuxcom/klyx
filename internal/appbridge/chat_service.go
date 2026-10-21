@@ -71,6 +71,9 @@ type conversation struct {
 
 	exchanges []*exchange
 	active    *activeTurn
+	// reads numbers the conversation's ledger for citation (AI A1 §2):
+	// never reset, so an ID removed by retention is never reused
+	reads int
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock

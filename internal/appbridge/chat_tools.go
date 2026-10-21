@@ -132,14 +132,18 @@ type ChatRef struct {
 	UID       string `json:"uid,omitempty"`
 }
 
-// ChatRead is one ledger entry (spec §5.4): names only, never content.
+// ChatRead is one ledger entry (spec §5.4): names only, never content. ID is
+// the read's citation ID within its conversation (AI A1 §2); Checks are the
+// observations Klyx evaluated on it.
 type ChatRead struct {
-	Tool     string    `json:"tool"`
-	Target   string    `json:"target,omitempty"`
-	Outcome  string    `json:"outcome"` // completed | failed | truncated | cancelled
-	Detail   string    `json:"detail,omitempty"`
-	Redacted int       `json:"redacted,omitempty"`
-	Refs     []ChatRef `json:"refs,omitempty"`
+	ID       string      `json:"id,omitempty"`
+	Tool     string      `json:"tool"`
+	Target   string      `json:"target,omitempty"`
+	Outcome  string      `json:"outcome"` // completed | failed | truncated | cancelled
+	Detail   string      `json:"detail,omitempty"`
+	Redacted int         `json:"redacted,omitempty"`
+	Refs     []ChatRef   `json:"refs,omitempty"`
+	Checks   []ChatCheck `json:"checks,omitempty"`
 }
 
 // ChatToolResult is one executed call: the envelope the model sees and the
@@ -170,6 +174,7 @@ type chatTotal struct {
 // chatEnvelope is every tool result's shape (spec §3.3).
 type chatEnvelope struct {
 	Tool      string        `json:"tool"`
+	ReadID    string        `json:"readId,omitempty"`
 	Source    string        `json:"source"`
 	ReadAt    string        `json:"readAt"`
 	Identity  *chatIdentity `json:"identity,omitempty"`
@@ -179,6 +184,7 @@ type chatEnvelope struct {
 	Truncated bool          `json:"truncated"`
 	Errors    []string      `json:"errors,omitempty"`
 	Note      string        `json:"note,omitempty"`
+	Checks    []ChatCheck   `json:"checks,omitempty"`
 	Data      any           `json:"data,omitempty"`
 }
 
@@ -186,6 +192,15 @@ type chatEnvelope struct {
 type chatTools struct {
 	conn ChatConn
 	now  func() time.Time
+	// readID is the citation ID of the one read this copy runs (AI A1 §2)
+	readID string
+}
+
+// as is a copy of t that runs one read under its citation ID.
+func (t *chatTools) as(id string) *chatTools {
+	c := *t
+	c.readID = id
+	return &c
 }
 
 func newChatTools(conn ChatConn, now func() time.Time) *chatTools {
@@ -542,6 +557,13 @@ func readError(err error) string {
 // finish serializes an envelope within chatResultMax, shrinking its data
 // (and marking it truncated) when it does not fit.
 func (t *chatTools) finish(env chatEnvelope, read ChatRead) ChatToolResult {
+	// the read's citation ID, and its checks' (AI A1 §2): the envelope the
+	// model reads and the ledger entry carry the same IDs
+	env.ReadID, read.ID = t.readID, t.readID
+	for i := range env.Checks {
+		env.Checks[i].ID = fmt.Sprintf("%s.c%d", t.readID, i+1)
+	}
+	read.Checks = append([]ChatCheck(nil), env.Checks...)
 	for i := 0; i < 12; i++ {
 		b, err := json.Marshal(env)
 		if err != nil {
@@ -557,7 +579,7 @@ func (t *chatTools) finish(env chatEnvelope, read ChatRead) ChatToolResult {
 		env.Truncated = true
 		env.Data = shrink(env.Data)
 	}
-	b, _ := json.Marshal(chatEnvelope{Tool: env.Tool, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Errors: []string{"the result was too large to send"}})
+	b, _ := json.Marshal(chatEnvelope{Tool: env.Tool, ReadID: env.ReadID, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Checks: env.Checks, Errors: []string{"the result was too large to send"}})
 	read.Outcome = "truncated"
 	return ChatToolResult{JSON: b, Read: read}
 }
@@ -1163,7 +1185,7 @@ func (t *chatTools) events(ctx context.Context, ns, kind, name string, warnings 
 	if err != nil {
 		return t.failed(toolEvents, "api", ns, err)
 	}
-	env := chatEnvelope{Tool: toolEvents, Source: "api", ReadAt: t.stamp(), Complete: complete, Total: &chatTotal{Count: total, Exact: complete}, Data: evs}
+	env := chatEnvelope{Tool: toolEvents, Source: "api", ReadAt: t.stamp(), Complete: complete, Total: &chatTotal{Count: total, Exact: complete}, Data: evs, Checks: capChecks(eventChecks(evs))}
 	if !complete {
 		env.Note = "the event read was capped: this is a sample, newest first among what was read"
 	}
@@ -1242,6 +1264,21 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 		}
 	}
 	env.Data = data
+	// AI A1 §2: what Klyx itself reads off the object, its verdict and its
+	// warning events, all by the object's UID
+	subj := ChatCheckSubject{Kind: o.Kind, Namespace: ns, Name: name, UID: o.UID, Identity: identityUID}
+	var checks []ChatCheck
+	if data.Verdict != nil {
+		if c := verdictCheck(subj, *data.Verdict, p); c != nil {
+			checks = append(checks, *c)
+		}
+	}
+	checks = append(checks, conditionChecks(u, subj, env.ReadAt, p)...)
+	if gvr.Group == "" && gvr.Resource == "pods" {
+		checks = append(checks, podStatusChecks(u, subj, env.ReadAt, p)...)
+	}
+	checks = append(checks, eventChecks(data.Events)...)
+	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
 	return t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
 }
