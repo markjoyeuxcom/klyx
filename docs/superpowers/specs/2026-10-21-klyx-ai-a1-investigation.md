@@ -380,9 +380,9 @@ Codex's guidance, taken: evidence observed before the failure was reported stays
 
 **Design accepted at e1c9e31** (Codex, revision 2, handoff ae35d4b8, 2026-10-21), with no remaining findings. This accepts the design; the implementation and its gates keep their own review.
 
-## 13. As built: stages 1 to 8 (2026-10-21)
+## 13. As built: stages 1 to 8, and review 1 (2026-10-21)
 
-Stages 1 to 8 are built on `feat/ai-a1`. Each is gated (gofmt, vet, race tests, golangci-lint on CI scope, tsc, vitest, eslint), with a mutation pass over its key lines. Nothing is pushed.
+Stages 1 to 8 are built on `feat/ai-a1`, with the fixes from Codex's implementation review 1 (§13.4). Each is gated (gofmt, vet, race tests, golangci-lint on CI scope, tsc, vitest, eslint), with a mutation pass over its key lines. Nothing is pushed.
 
 | Stage | Commit | What |
 |---|---|---|
@@ -402,25 +402,37 @@ Stages 1 to 8 are built on `feat/ai-a1`. Each is gated (gofmt, vet, race tests, 
 | 8 | 9b92c65 | A retrying unit's failure from its event and history; whole GVRs in drawing references (found on the lab) |
 | 8 | 365f7e6 | The native smoke investigates the lab; what Investigate does, said before the first turn |
 | 8 | c2d4909 | The smoke hook stands aside in the confined build's child (found on the lab) |
+| R1 | 0a0bbb3 | A failed render tells the model its fixed class, never the builder's text (P1) |
+| R1 | 999a0af | Findings rest on current failures, keep a read's qualifications and accept by-name reads (4 to 7) |
+| R1 | 4e4ebc4 | A comparison member is fenced from its first read attempt (2) |
+| R1 | 287898e | A gone investigation is answered from its own slot (11) |
+| R1 | 9ab6e96 | An investigation refused tools runs its own snapshot plan (9) |
+| R1 | 8db031d, e24111d | A report is labelled again against the turn's settled ledger (8) |
+| R1 | 2ee1521 | Checks count toward a result's bound, and findings toward retention (10) |
+| R1 | d42d55d | Every component read of a composite checks the turn's fence (3) |
+| R1 | 8b962da, 5b71d8f | The load test of §8; one comparison at a time, its renders one after the other |
+| R1 | 665b751 | A finding's notes are bounded, once per read and qualification (found reviewing 999a0af) |
 
-**How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders. None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time.
+**How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders (a comparison's two revisions render one after the other, 5b71d8f). None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time. The load test (§13.4) measured at most 48 reads in flight across eight investigations, their bound.
 
 ### 13.1 Deviations from this design, for review
 
-1. **The guard runs before each drawing, not between its reads (§3).** `get_dependencies` calls the cluster layer's drawings, which read inside `fleet`; the guard runs before each drawing. Each drawing's own read budget bounds the window.
+Codex ruled on each in review 1 (§13.4): accepted, except 1, 12 and 14, which its findings 3, 5 and 4 replaced, and 4, accepted as a scope reduction. Each item below describes the code as it now stands.
+
+1. **The guard runs before every component read (§3; review 1, finding 3).** It first ran once before each drawing; Codex ruled that a drawing-level guard is not a before-every-read guard, and that Git and Loki composites had the same gap. The turn's context now carries its fence (`internal/readfence`): every client built from a cluster's REST config and every direct endpoint client checks it before each request, discovery inside the chat-reachable composites is bound to the context, and `git_changes` checks it at each of its twelve steps.
 2. **`route_p99` is not offered (§3.4).** The per-rule source reads no latency, and the per-route latency read is instant only. `route_requests` and `route_5xx_ratio` use that source's fixed 30-minute window whatever window is asked, and say so.
 3. **`get_metrics` takes a `kind` argument (§3.4).** Workload templates need Deployment, StatefulSet or DaemonSet; route templates take HTTPRoute. A container's limit is the pod's as read now, said in the result.
-4. **Rollout history is not read in the workload plan (§1.1).** No A1 tool reads it; the plan says so in missing evidence.
+4. **Rollout history is not read (§1.1): a scope reduction.** A1 does not deliver the design's rollout observation. No A1 tool reads rollout history, no rollout check is made, and the workload plan says so in missing evidence.
 5. **`gitops_unit` also joins `spec.healthChecks` (§3.1)**, whose apiVersion gives the group, and reads at most 5 named objects now.
 6. **Hidden changes are found generically (§3.2).** Rather than a per-kind list, every raw difference that no projected difference explains becomes a marker. It is named down the path while chat's projection holds it, then through hidden-subtree names: values, data, command, env, an annotation's key, a Secret's or ConfigMap's data key, a pod template's metadata. Nothing nested inside another hidden subtree is named. A payload's keys appear only where S0b's free-form rule already sends them. Visible changes are shown at manifest paths.
 7. **Commits and files are scoped to `spec.path` (§3.2).** A change in a base outside it shows only in the render, which the result says.
-8. **The render admission covers AI renders only (§1).** The Flux lens's Compute diff is not queued behind it.
+8. **The render admission covers AI renders only, one comparison at a time (§1; the load test).** It is stricter than §1's two renders at once: one comparison fleet-wide, its two revisions rendered one after the other and compared inside the admission, so one confined build runs and two renders are held. The load test found that admitting renders one by one let every waiting investigation hold its first render. The Flux lens's Compute diff is not queued behind it.
 9. **Revisions are read from the raw status (§3.1, §3.2).** S0b's scp-form URL rule turns `main@sha1:<sha>` into `sha1:<sha>` in every sanitised copy, `get_resource` included. That rule is a known issue to fix in `urlscrub` on its own, not in A1.
 10. **A member failing its fence ends the investigation (A-C2, §3.7)**, rather than only the turn: the conversation's history carries its data into every later send. `fleet_difference` takes an optional `clusters` subset.
 11. **`report_findings` is not a read.** It has no ledger ID and no tool budget. One valid report per turn, one retry after an invalid call.
-12. **The failure's window (§4)** is the earliest onset among the anchor's checks by UID: a Ready=False condition, or a health-check check, which carries when the revision first failed. It is "no failure to date" when the anchor has no failing condition, status or health-check check, and "unknown" when it is failing without an onset. A verdict's "since" is not used.
+12. **The failure's window (§4; review 1, finding 5)** is the earliest onset among the anchor's checks by UID that read a failure in force (a check's `failing`): a failing condition, of which Ready=False dates it; a container that cannot run; a health check Flux is failing now, which carries when the revision first failed. A past restart or termination stays a status fact and does not make the anchor failing. The window is "no failure to date" without such a check, and "unknown" when the anchor is failing without an onset. A verdict's "since" is not used.
 13. **`git_changes` compares from Flux's history when applied equals attempted (§3.2; found on the lab).** `lastAppliedRevision` is not always the last healthy revision: a revision whose first reconcile passed its health check stays recorded as applied after it fails. It then compares from the newest other revision `status.history` records as `ReconciliationSucceeded`, and says so in `baseFrom`.
-14. **`gitops_unit` reads a retrying unit's failure from Flux's event (§3.1; found on the lab).** While Flux retries, Ready and Healthy read Unknown and the message is gone. It reads Ready=False, else Healthy=False, else the unit's newest `HealthCheckFailed` event by UID, and says which. When the revision first failed comes from `status.history`.
+14. **`gitops_unit` reads a retrying unit's failure from Flux's event (§3.1; found on the lab; review 1, finding 4).** While Flux retries, Ready and Healthy read Unknown and the message is gone. A Ready unit has no current failure, whatever older condition or event holds. Otherwise it reads Ready=False, else Healthy=False, else the unit's newest `HealthCheckFailed` event by UID, but only during a retry `status.history` establishes (the attempted revision's newest entry records `HealthCheckFailed`) and only for an event seen within that retry; it says which, and the retry it relied on. When the revision first failed comes from `status.history`.
 
 ### 13.2 Stage 8: the lab, captures and the native smoke (2026-10-21)
 
@@ -463,6 +475,43 @@ All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, o
 ### 13.3 Not yet done
 
 - **The real-LLM smoke:** the owner's key, the owner's step.
-- **The load test of §8:** simultaneous investigations at their bounds.
 - **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
-- **Codex's implementation review.**
+- **Codex's re-review of the fixes in §13.4.**
+
+### 13.4 Codex's implementation review 1 and the fixes (2026-10-21)
+
+Codex reviewed 3d81e0e (handoff 6e5c34e2) and requested changes: one P1 and ten P2, with the rulings on §13.1 above. Its probes are adapted as regression tests, and each fix had a mutation pass.
+
+1. **P1: a failed render's error reached the model.** kustomize quotes an invalid patch whole in its error, an ordinary Helm value included, and neither scrubber recognises a value with no credential shape. Compute and Build now class each failure in fixed words: a missing path, an unsupported input, an unreadable kustomization, a bound, a start, deadline, output or decode failure, or a kustomize error. `git_changes` sends the stage and the class; the error's own text stays for the operator's local cache diff (0a0bbb3).
+2. **A failed comparison read bypassed the member fence.** The conversation is marked as holding member data before the read, so a failure's text is fenced as data is (4e4ebc4).
+3. **The guard stopped at composite boundaries:** §13.1 item 1 (d42d55d).
+4. **A healthy unit revived an old event:** §13.1 item 14 (999a0af).
+5. **Past restarts made a healthy pod a failing anchor:** §13.1 item 12 (999a0af).
+6. **Citing a whole read dropped its qualifications.** A read citation now carries what citing its checks about the subject would: each is shown as checked with its time, "observed before the failure" where so; their stale, partial, checking or unreadable coverage is noted; so are the read's gaps, the first errors of its result, which its ledger entry now keeps. A read is evidence read now, never wholly before the failure. Klyx's missing evidence names such coverage and gaps whether or not anything cites them (999a0af).
+7. **Name-only evidence could not support a finding.** A read records what it is about by name when no reference or check does: Loki by name, metrics (the target and the pods its series are selected by), and alerts (the target and each alert's subject). It supports a reading by name, never by UID (999a0af).
+8. **A report omitted what followed it in its turn.** The exchange keeps the model's report until the turn ends, whatever its outcome, and labels it again against the settled ledger; the model's tool result keeps the labels as of its call (8db031d, e24111d).
+9. **A tools refusal fell back to chat's snapshot.** An investigation's first turn now runs its own plan, system text and findings block (9ab6e96).
+10. **Checks and findings bypassed byte caps.** A check's statement is capped at 1 KiB. The last resort keeps the envelope and as many checks as fit, failures first, and says how many it left out; the ledger holds exactly the checks sent. Retention counts findings, the report and a snapshot's bookkeeping (2ee1521).
+Reviewing the fix for 6 found a bound of its own (665b751): a finding citing ten reads took one note per check they held, all sent back to the model in `report_findings`' result, which no result cap covered. A read's checks now qualify a finding once per read and kind of qualification. The label's own reasons come first, and at most eight notes on its citations follow, the last saying how many more. The model is told each label and its first three notes; the panel shows them all.
+
+11. **A stale investigation request returned the chat.** An investigation's conversation ID names its slot (an "inv-" prefix), an obsolete answer comes from that slot, and the drawer refuses a reply of another kind for a slot (287898e).
+
+**The load test of §8** (8b962da, 5b71d8f; `TestInvestigationsAtTheirBoundsAtOnce`). Eight investigations, chat's limit, run at once, each at its bounds:
+- 24 reads in two batches of 12, whose results reach their caps;
+- a `git_changes` rendering both revisions through the confined build;
+- the worst-shape report under the 4 KiB argument bound: twenty findings, each citing ten reads, which Klyx expands into the checks they hold.
+
+It measures the reads in flight, the comparisons and builds admitted, every result's size, the bytes retained and the heap. The suite runs it with small renders; `KLYX_A1_LOAD=1` makes each render about 56 MiB, under the 64 MiB output bound.
+
+| Heavy run | Renders admitted one by one (before 8b962da) | One comparison, both builds at once (8b962da) | One comparison, renders in turn (5b71d8f) |
+|---|---|---|---|
+| Heap in use, at most | 1314 MiB | 613 MiB | 375 MiB |
+| Builds at once, at most | 2 | 2 | 1 |
+| Wall time | 25 s | 24 s | 48 s |
+
+The first column is what the load test found: the admission bounded the builds, not the renders held, so every waiting investigation kept its first render. Building a comparison's two revisions at once (8b962da) would have let one investigation exceed §1's 6 reads at once, so they render in turn (5b71d8f). Every run kept the other bounds:
+- 48 reads in flight at most, the bound of 8 × 6;
+- each result within its cap: the largest 12.1 KiB of 16, and 9.6 KiB of 32 for `git_changes`;
+- about 2 MiB retained across the eight conversations.
+
+The test does not exercise the Git cache's 2 GiB eviction (its repository is local) or the Observer itself (the fake connection serves its rows).
