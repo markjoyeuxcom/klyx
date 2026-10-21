@@ -10,12 +10,16 @@ import (
 const (
 	ControllerNotReady = "not ready" // the detector found the controller not ready
 	ControllerUnknown  = "unknown"   // its health could not be read
+	// ControllerManaged: the platform manages it on positive evidence and
+	// its health is not observed (coverage S10 §5, C2). A note everywhere:
+	// never attention, never a gap.
+	ControllerManaged = "managed"
 )
 
 // ControllerTasks are the tasks whose controller health the capability
 // detector reports. Each always has an entry in ControllerIssues, so a
 // recovery clears a previous issue.
-var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway, TaskVelero, TaskLB}
+var ControllerTasks = []string{TaskFlux, TaskArgo, TaskCerts, TaskESO, TaskKarpenter, TaskGateway, TaskVelero, TaskLB, TaskKEDA}
 
 // ControllerIssues maps the capability tiers onto per-task controller
 // issues (nil when healthy or not installed), in the detector's own words.
@@ -53,8 +57,17 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	if caps.ExternalSecrets.Present && !caps.ExternalSecrets.Healthy {
 		out[TaskESO] = issue(stateOf(caps.ExternalSecrets.Verified), caps.ExternalSecrets.Reason)
 	}
-	if caps.Karpenter.Present && !caps.Karpenter.Healthy {
-		out[TaskKarpenter] = issue(stateOf(caps.Karpenter.Verified), caps.Karpenter.Reason)
+	// Karpenter (S10 §5): the task's own order - not ready, unknown,
+	// managed, healthy - with platform management a note
+	if caps.Karpenter.Present {
+		switch state, reason := caps.Karpenter.Task(); state {
+		case capability.KarpenterNotReady:
+			out[TaskKarpenter] = issue(ControllerNotReady, reason)
+		case capability.KarpenterUnknown:
+			out[TaskKarpenter] = issue(ControllerUnknown, reason)
+		case capability.KarpenterManaged:
+			out[TaskKarpenter] = issue(ControllerManaged, reason)
+		}
 	}
 	// Velero (S2a §3): not ready only for a server read not ready; an
 	// unreadable list, or no server found while the CRDs are served, is
@@ -73,6 +86,13 @@ func ControllerIssues(caps capability.Set) map[string]*observe.ControllerIssue {
 	// is unknown. Its ConfigurationStates are their own part, never this.
 	if lbc := caps.LoadBalancing; lbc.MetalLB && !lbc.Healthy {
 		out[TaskLB] = issue(stateOf(lbc.Verified), lbc.Reason)
+	}
+	// KEDA (S9 §2): the operators, the external metrics APIService and the
+	// webhooks; not ready only on a proven failure (an operator read not
+	// ready, the APIService absent, unavailable or proven foreign), unknown
+	// otherwise
+	if caps.KEDA.Present && !caps.KEDA.Healthy {
+		out[TaskKEDA] = issue(stateOf(caps.KEDA.Verified), caps.KEDA.Reason)
 	}
 	return out
 }

@@ -61,7 +61,7 @@ This Wails version runs `WebviewWindowOptions.JS` after `WebViewDidFinishNavigat
 
 - **A Go-side watchdog**, independent of the page, writes a failure result (`{"result":"incomplete","why":…}`) and quits:
   - if the runner has not called `SmokeService.Started` within 30 seconds of the window opening;
-  - if `Report` has not arrived within 5 minutes.
+  - if `Report` has not arrived within 15 minutes (5 until coverage S3b, when the walk outgrew them; the incomplete result names the step the runner last began).
 - **Every runner step is bounded:** each wait (readiness, a lens's header, a drawing) has its own timeout, and a timeout fails the step with its name.
 - **Every check is an assertion with an expected value,** never a recorded value alone:
   - **Pages:** the location bar names the expected lens; the header is present; no console error; no horizontal overflow.
@@ -134,7 +134,7 @@ Review findings answered: the single-instance lock (§3.1), bounded progress and
 ## 7. As built: 12b
 
 - **`internal/smoke`:**
-  - `Watchdog`: `Arm`, `Started`, `Report`. A clock seam stands behind the deadlines, `StartWithin` (30s) and `ReportWithin` (5m).
+  - `Watchdog`: `Arm`, `Started`, `Progress`, `Report`. A clock seam stands behind the deadlines, `StartWithin` (30s) and `ReportWithin` (15m since coverage S3b).
   - The first result is the only one, written with the settings and provenance, then the app quits.
   - A report that is not JSON or names no result is written as incomplete.
   - `BuildProvenance` takes the commit and modified flag from the build's VCS stamp, and a SHA-256 of the embedded `frontend/dist`, by path and content.

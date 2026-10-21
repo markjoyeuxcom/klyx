@@ -21,7 +21,7 @@ beforeEach(() => resetHealthStore());
 describe("lifecycle (§1)", () => {
   it("no summary: every expected part checking; the mast says checking", () => {
     const m = model();
-    expect(m.areas.map((a) => a.id)).toEqual(["workloads", "pods", "nodes", "events", "helm"]);
+    expect(m.areas.map((a) => a.id)).toEqual(["workloads", "pods", "nodes", "events", "helm", "autoscaling"]);
     expect(m.areas.every((a) => a.state === "checking")).toBe(true);
     expect(mastReading(m).state).toBe("checking");
   });
@@ -259,7 +259,7 @@ describe("a part the summary does not carry is checking, never quiet (slice 6 §
 
   it("the mast counts areas and gaps apart, and is never an unqualified all-clear", () => {
     applySummary(summary(replace(core(), task("nodes", [verdict("nodes", { unknown: 1, ok: 2 }, [kind("nodes")])]))));
-    expect(mastReading(model())).toEqual({ state: "quiet", areas: 0, tone: undefined, gaps: 1, read: 5 });
+    expect(mastReading(model())).toEqual({ state: "quiet", areas: 0, tone: undefined, gaps: 1, read: 6 });
   });
 
   it("checkingText speaks only for an area nothing has answered", () => {

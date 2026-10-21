@@ -1,3 +1,4 @@
+import { failureStatus } from "../admission/finding";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconTopologyStar3 } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -223,7 +224,7 @@ export function FluxOperatorView({ cluster }: { cluster: string }) {
     void fluxOpAct(cluster, p.item.kind, p.item.c.namespace, p.item.c.name, p.item.c.uid, p.verb).then((r) => {
       useFleet.getState().setActionStatus(r.ok
         ? { kind: "success", message: `${verbWord(p.verb)} requested for ${p.item.kind} ${p.item.c.namespace}/${p.item.c.name}${p.item.c.suspended && p.verb !== "resume" ? " - the object is suspended" : ""}` }
-        : { kind: "error", message: r.error });
+        : failureStatus(r, `${verbWord(p.verb)} failed`));
     });
   };
 

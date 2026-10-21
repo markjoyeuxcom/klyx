@@ -65,6 +65,11 @@ type Conn interface {
 	ServiceAccountIdentity(ctx context.Context, ns, name, uid string) (identity.SAReport, error)
 	PodIdentity(ctx context.Context, ns, name, uid string) (identity.PodInspectorReport, error)
 	StoreIdentity(ctx context.Context, kind, ns, name, uid string) (identity.StoreReport, error)
+	// coverage S9: KEDA's on-demand reads and verb
+	KEDAInspect(ctx context.Context, resource, ns, name, uid string) (KEDAInspection, error)
+	KEDAJobsOf(ctx context.Context, ns, name, uid string) (KEDAJobs, error)
+	ReplicaOwner(ctx context.Context, kind, ns, name string) ReplicaOwnership
+	KEDASetPaused(ctx context.Context, resource, ns, name, uid string, pause bool) error
 	FluxEvents(ctx context.Context, kind, ns, name string) ([]workloads.EventSummary, error)
 	FluxAvailable() bool
 	FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error)
@@ -74,6 +79,7 @@ type Conn interface {
 	ObjectWrites(ctx context.Context, refs []ObjectRef) ([]WriteResult, error)
 	Reconcile(ctx context.Context, kind, ns, name, uid string) error
 	ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error
+	ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]Step, error)
 	SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error
 	ListCRDs(ctx context.Context) ([]crd.Info, error)
 	ListCRDsFromDiscovery(ctx context.Context) ([]crd.Info, error)
@@ -225,6 +231,11 @@ type ClusterConn struct {
 	metricsMu    sync.Mutex
 	metricsState metricsCache
 	metricsTF    metrics.TransportFactory // nil in production; tests inject a fake
+
+	// am is the Alertmanager endpoint (coverage S8a).
+	am alertmanagerState
+	// loki is the Loki endpoint (coverage S8b).
+	loki lokiState
 }
 
 func NewClusterConn(name string, typed kubernetes.Interface, meta metadata.Interface,
@@ -807,6 +818,8 @@ func (c *ClusterConn) Snapshot() Snapshot {
 func (c *ClusterConn) capsLocked() capability.Set {
 	caps := c.caps
 	caps.LoadBalancing.ServicesSeen = c.lbServicesSeen
+	caps.Alerting.Present = c.alertsPresent() // lock-free: never c.am.mu under c.mu
+	caps.LogHistory.Present = c.logHistoryPresent()
 	return caps
 }
 
@@ -863,15 +876,25 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 		vk, vd := healthsrc.Velero(nd)
 		ak, ad := healthsrc.Admission(nd)
 		lk, ld := healthsrc.LoadBalancing(nd)
+		kk, kd := healthsrc.KEDA(nd) // S9
+		rk, rd := healthsrc.DRA(nd)  // S11b
 		// the shared network kinds (C3), once, gated by their consumers
 		kinds = append(append(append(append(append(append(append(kinds, healthsrc.SharedNetworkKinds(nd)...), gk...), wk...), nk...), vk...), ak...), lk...)
 		domains = append(append(append(append(append(append(domains, gd...), wd...), ndoms...), vd...), ad...), ld...)
+		// S9: the shared HPA kind (C3: the standalone part and KEDA), KEDA's
+		// kinds, and their tasks
+		kinds = append(append(kinds, healthsrc.SharedHPAKind(nd)), kk...)
+		domains = append(append(domains, healthsrc.Autoscaling(nd)...), kd...)
+		kinds, domains = append(kinds, rk...), append(domains, rd...)
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
-	snaps = append(snaps, es...)
-	domains = append(append(domains, hd...), ed...)
+	as, ad := healthsrc.Alerts(healthsrc.AlertsDeps{Cluster: c.name, Read: c.ReadAlerts}) // S8a
+	snaps = append(append(snaps, es...), as...)
+	domains = append(append(append(domains, hd...), ed...), ad...)
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
+	// a change of the alert source re-keys this Observer's alerts snapshot
+	c.setAlertsRekey(func(key string) { o.RekeySnapshot(healthsrc.SnapAlerts, key) })
 	c.mu.Lock()
 	c.health = o
 	c.mu.Unlock()
@@ -879,6 +902,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	if c.dyn != nil {
 		c.startParamKinds(ctx, o)                               // S3a: FactParamKinds
 		startLBEpisodes(ctx, o, c.clk.Now, c.setLBServicesSeen) // S4: FactLBEpisodes
+		startKEDAEpisodes(ctx, o, c.clk.Now, c.kedaVersion)     // S9: FactKEDAEpisodes
+		startDRAEpisodes(ctx, o, c.clk.Now, c.serverMinor)      // S11b: FactDRAEpisodes
 	}
 	c.attachIndex()
 	c.syncHealth()
@@ -916,6 +941,9 @@ func (c *ClusterConn) syncHealth() {
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)
 	h.SetFact(healthsrc.FactVelero, healthsrc.VeleroServers(caps.Velero))
 	h.SetFact(healthsrc.FactLB, healthsrc.LoadBalancingFact(caps.LoadBalancing))
+	h.SetFact(healthsrc.FactKEDA, healthsrc.KEDAFactsOf(caps.KEDA))
+	h.SetFact(healthsrc.FactKarpenter, healthsrc.KarpenterFactsOf(caps.Karpenter)) // S10
+	h.SetFact(healthsrc.FactServerMinor, c.serverMinor())                          // S11b
 	issues := healthsrc.ControllerIssues(caps)
 	for _, task := range healthsrc.ControllerTasks {
 		h.SetController(task, issues[task])

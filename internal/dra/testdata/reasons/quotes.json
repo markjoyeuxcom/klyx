@@ -1,0 +1,386 @@
+[
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 586,
+  "key": "in-use",
+  "code": "return nil, statusUnschedulable(logger, \"resourceclaim in use\", \"pod\", klog.KObj(pod), \"resourceclaim\", klog.KObj(claim))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 604,
+  "key": "in-progress",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s is in the process of being allocated\", klog.KObj(claim)))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 632,
+  "key": "subrequests-disabled",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: has subrequests, but the DRAPrioritizedList feature is disabled\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 641,
+  "key": "unknown-request-type",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: unknown request type\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 714,
+  "key": "unsupported-request-type",
+  "code": "return statusError(logger, fmt.Errorf(\"request %s: unsupported request type\", requestName))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 723,
+  "key": "class-missing",
+  "code": "return statusUnschedulable(logger, fmt.Sprintf(\"request %s: device class %s does not exist\", requestName, deviceClassName))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 763,
+  "key": "extended-claim",
+  "code": "return nil, statusUnschedulable(logger, \"cannot schedule extended resource claim\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(nodeInfo.Node()), \"claim\", klog.KObj(extendedResourceClaim))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 791,
+  "key": "extended-fit",
+  "code": "return nil, statusUnschedulable(logger, \"cannot fit resource\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(nodeInfo.Node()), \"resource\", rName)"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 981,
+  "key": "timed-out",
+  "code": "return statusUnschedulable(logger, \"timed out trying to allocate devices\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 999,
+  "key": "cannot-allocate",
+  "code": "return statusUnschedulable(logger, \"cannot allocate all claims\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.34.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90fe8241feb5fc9976e74d1ef6935c03ded1bf0b0544db7e15b2192d575689c1",
+  "line": 1022,
+  "key": "not-available-on-node",
+  "code": "return statusUnschedulable(logger, \"resourceclaim not available on the node\", \"pod\", klog.KObj(pod))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 439,
+  "key": "in-use",
+  "code": "return nil, statusUnschedulable(logger, \"resourceclaim in use\", \"pod\", klog.KObj(pod), \"resourceclaim\", klog.KObj(claim))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 457,
+  "key": "in-progress",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s is in the process of being allocated\", klog.KObj(claim)))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 485,
+  "key": "subrequests-disabled",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: has subrequests, but the DRAPrioritizedList feature is disabled\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 494,
+  "key": "unknown-request-type",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: unknown request type\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 570,
+  "key": "unsupported-request-type",
+  "code": "return statusError(logger, fmt.Errorf(\"request %s: unsupported request type\", requestName))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 579,
+  "key": "class-missing",
+  "code": "return statusUnschedulable(logger, fmt.Sprintf(\"request %s: device class %s does not exist\", requestName, deviceClassName))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 694,
+  "key": "timed-out",
+  "code": "return statusUnschedulable(logger, \"timed out trying to allocate devices\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 716,
+  "key": "cannot-allocate",
+  "code": "return statusUnschedulable(logger, \"cannot allocate all claims\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "52611e4cbdaf4bbd9356245a32b1fbdd4b673dd79399910b6e0e588e7321b203",
+  "line": 739,
+  "key": "not-available-on-node",
+  "code": "return statusUnschedulable(logger, \"resourceclaim not available on the node\", \"pod\", klog.KObj(pod))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 505,
+  "key": "in-use",
+  "code": "return nil, statusUnschedulable(logger, \"resourceclaim in use\", \"pod\", klog.KObj(pod), \"resourceclaim\", klog.KObj(claim))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 551,
+  "key": "in-progress",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s is in the process of being allocated\", klog.KObj(claim)))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 579,
+  "key": "subrequests-disabled",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: has subrequests, but the DRAPrioritizedList feature is disabled\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 588,
+  "key": "unknown-request-type",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: unknown request type\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 684,
+  "key": "unsupported-request-type",
+  "code": "return statusError(logger, fmt.Errorf(\"request %s: unsupported request type\", requestName))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 693,
+  "key": "class-missing",
+  "code": "return statusUnschedulable(logger, fmt.Sprintf(\"request %s: device class %s does not exist\", requestName, deviceClassName))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 857,
+  "key": "timed-out",
+  "code": "return statusError(logger, fmt.Errorf(\"node %s: timed out trying to allocate devices\", node.Name), \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 879,
+  "key": "cannot-allocate",
+  "code": "return statusUnschedulable(logger, \"cannot allocate all claims\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "90662bb0f87595482681336a84da8ae3a393e3f05c3e22ca252fa962d0867b80",
+  "line": 918,
+  "key": "not-available-on-node",
+  "code": "return statusUnschedulable(logger, \"resourceclaim not available on the node\", \"pod\", klog.KObj(pod))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 630,
+  "key": "in-use",
+  "code": "return nil, statusUnschedulable(logger, \"resourceclaim in use\", \"pod\", klog.KObj(pod), \"resourceclaim\", klog.KObj(claim))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 679,
+  "key": "in-progress",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s is in the process of being allocated\", klog.KObj(claim)))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 707,
+  "key": "subrequests-disabled",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: has subrequests, but the DRAPrioritizedList feature is disabled\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 716,
+  "key": "unknown-request-type",
+  "code": "return nil, statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s, request %s: unknown request type\", klog.KObj(claim), request.Name))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 850,
+  "key": "unsupported-request-type",
+  "code": "return statusError(logger, fmt.Errorf(\"request %s: unsupported request type\", requestName))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 859,
+  "key": "class-missing",
+  "code": "return statusUnschedulable(logger, fmt.Sprintf(\"request %s: device class %s does not exist\", requestName, deviceClassName))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 1053,
+  "key": "needs-optional-node-operations",
+  "code": "return statusUnschedulable(logger, fmt.Sprintf(\"resource claim %s allocation requires DRAOptionalNodeOperations feature on the node\", klog.KObj(claim)), \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaim\", klog.KObj(claim))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 1070,
+  "key": "timed-out",
+  "code": "return statusError(logger, fmt.Errorf(\"node %s: timed out trying to allocate devices\", node.Name), \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 1092,
+  "key": "cannot-allocate",
+  "code": "return statusUnschedulable(logger, \"cannot allocate all claims\", \"pod\", klog.KObj(pod), \"node\", klog.KObj(node), \"resourceclaims\", klog.KObjSlice(claimsToAllocate))"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "pkg/scheduler/framework/plugins/dynamicresources/dynamicresources.go",
+  "sha256": "9b339905346c54ee19222f90db2d01260ed35065becce18601062aff29f51347",
+  "line": 1131,
+  "key": "not-available-on-node",
+  "code": "return statusUnschedulable(logger, \"resourceclaim not available on the node\", \"pod\", klog.KObj(pod))"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.35.9/structured/internal/stable/allocator_stable.go",
+  "sha256": "a8ddc84af64b0dfb58fd778993976361a70c97c4e7e2327bfb6c5460516670f4",
+  "line": 273,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.35.9/structured/internal/incubating/allocator_incubating.go",
+  "sha256": "a1e62da869dc703d5630a6b6ac1bec071b9558bb7fb738bcd55baf8ad0d603fd",
+  "line": 282,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.35.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.35.9/structured/internal/experimental/allocator_experimental.go",
+  "sha256": "943ad08e73debb3d0a052c5141641e283c79fe4051a6b37928ede1000fe38bbd",
+  "line": 342,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.36.5/structured/internal/stable/allocator_stable.go",
+  "sha256": "a2d8c3871e53311498875a4e7b30513be745982b12db41063f88740d52e97194",
+  "line": 282,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.36.5/structured/internal/incubating/allocator_incubating.go",
+  "sha256": "5d5a884bab159a394ba5f83983730c68c409d8a67cf3f3dbafa860a0f82e96c5",
+  "line": 355,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.36.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.36.5/structured/internal/experimental/allocator_experimental.go",
+  "sha256": "3e07a25561d8147be534434e06dcb337ff07e1bd1c67b61ea8fa5751b0a80f22",
+  "line": 358,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.37.1/structured/internal/stable/allocator_stable.go",
+  "sha256": "bfd18a4f8fda988733f734236c5de634044275831227413b544fb1b5318fbea5",
+  "line": 283,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.37.1/structured/internal/incubating/allocator_incubating.go",
+  "sha256": "eb6ee9a966c53073ee67b699d1eaaebd728f5b7b42689d101859785c63c4a3f1",
+  "line": 355,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ },
+ {
+  "version": "v1.37.0",
+  "file": "k8s.io/dynamic-resource-allocation@v0.37.1/structured/internal/experimental/allocator_experimental.go",
+  "sha256": "2116fb27b96f719fcb22539a5e19b8d29753b4e0fe74951edb9c8d10f2516dcf",
+  "line": 378,
+  "key": "invalid-pools",
+  "code": "return nil, fmt.Errorf(\"invalid resource pools were encountered%w\", internal.ErrFailedAllocationOnNode)"
+ }
+]

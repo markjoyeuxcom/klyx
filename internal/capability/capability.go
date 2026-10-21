@@ -142,17 +142,6 @@ type ReloaderCapability struct {
 	Healthy bool
 }
 
-// KarpenterCapability models Karpenter: presence of the karpenter.sh CRDs
-// (NodePool/NodeClaim) plus controller health. The controller Deployment's
-// namespace varies by install (kube-system on newer EKS defaults, karpenter
-// on the classic helm chart), so health probes both.
-type KarpenterCapability struct {
-	Base
-	Present  bool
-	Healthy  bool
-	Verified bool // as CertManagerCapability
-}
-
 // AdmissionCapability is the admission API (coverage S3a): served on every
 // supported cluster, detected rather than assumed. Present when
 // admissionregistration.k8s.io/v1 is served.
@@ -172,4 +161,8 @@ type Set struct {
 	Velero          VeleroCapability
 	Admission       AdmissionCapability
 	LoadBalancing   LoadBalancingCapability
+	KEDA            KEDACapability       // coverage S9
+	DRA             DRACapability        // coverage S11b
+	Alerting        AlertingCapability   // coverage S8a: evidence, not a probe
+	LogHistory      LogHistoryCapability // coverage S8b: the configuration
 }

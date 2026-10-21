@@ -129,12 +129,12 @@ describe("InstanceDetail", () => {
     expect(formatKubernetesActionError('certificates.cert-manager.io "web-tls" is forbidden: User "alice@example.com" cannot patch resource "certificates" in API group "cert-manager.io" in the namespace "default"')).toBe(
       "Permission denied: alice@example.com cannot patch certificates.cert-manager.io in namespace default. Check RBAC for this cluster context.",
     );
-    expect(formatKubernetesActionError('admission webhook "validate.nginx.ingress.kubernetes.io" denied the request: host is already defined')).toBe(
-      "Admission denied by validate.nginx.ingress.kubernetes.io: host is already defined",
-    );
-    expect(formatKubernetesActionError('failed calling webhook "validate.cert-manager.io": Post "https://webhook": context deadline exceeded')).toBe(
-      "Admission webhook timed out: validate.cert-manager.io. This is usually transient; retry after the webhook/controller recovers.",
-    );
+    // coverage S3b §1.2: admission text is never read here - the backend
+    // classifies the server's status; a refused connection behind the
+    // ?timeout= query no longer reads as a timeout
+    const refused = 'Internal error occurred: failed calling webhook "validate.cert-manager.io": failed to call webhook: Post "https://webhook?timeout=10s": dial tcp: connect: connection refused';
+    expect(formatKubernetesActionError(refused)).toBe(refused);
+    expect(formatKubernetesActionError(refused)).not.toMatch(/timed out/);
     expect(formatKubernetesActionError('Deployment.apps "web" is invalid: spec.selector: Invalid value: field is immutable')).toBe(
       "Immutable field: Kubernetes rejected this because one or more fields cannot be changed after creation. spec.selector: Invalid value: field is immutable",
     );
@@ -169,6 +169,27 @@ describe("InstanceDetail", () => {
     const incomplete = validateResourceYAML("apiVersion: cert-manager.io/v1\nkind: Certificate\n", resource, instance);
     expect(incomplete.blocking).toBe(true);
     expect(incomplete.issues.some((issue) => issue.message === "Missing required field: metadata.name")).toBe(true);
+  });
+
+  it("reads metadata's own keys only: prefixed labels, annotations, lists and block scalars are not YAML errors", () => {
+    const yaml = [
+      "apiVersion: cert-manager.io/v1", "kind: Certificate", "metadata:",
+      "  annotations:", "    kubectl.kubernetes.io/restartedAt: \"2026-10-21T00:00:00Z\"", "    note: |", "      a block scalar's line",
+      "  finalizers:", "  - cert-manager.io/finalizer",
+      "  labels:", "    app.kubernetes.io/name: web", "    name: not-the-object",
+      "  name: web-tls", "  namespace: default",
+      "  ownerReferences:", "  - apiVersion: apps/v1", "    kind: Deployment", "    name: web-owner", "    uid: u1",
+      "  resourceVersion: \"10\"",
+      "rules:", "- apiGroups: [\"\"]", "  resources: [pods]",
+      "spec:", "  secretName: web-tls", "",
+    ].join("\n");
+    const result = validateResourceYAML(yaml, resource, instance);
+    expect(result.issues).toEqual([]);
+    expect(result.blocking).toBe(false);
+    expect(result.identity).toMatchObject({ metadataName: "web-tls", metadataNamespace: "default", metadataResourceVersion: "10" });
+    // metadata's own malformed key still blocks
+    const bad = validateResourceYAML("apiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name web-tls\n", resource, instance);
+    expect(bad.blocking).toBe(true);
   });
 
   it("warns when edited YAML changes object identity", () => {
@@ -364,7 +385,8 @@ describe("InstanceDetail", () => {
     fireEvent.change(getByLabelText("resource yaml"), { target: { value: `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n` } });
     fireEvent.click(getByText("Dry-run"));
 
-    expect(await findByText("Server dry-run passed")).toBeTruthy();
+    // coverage S3b §4: a completed dry run says what admission passed, and when
+    expect(await findByText(/^Server dry-run passed admission and defaulting as of .+; a later apply's admission may differ$/)).toBeTruthy();
     expect(dryRunInstanceYAML).toHaveBeenCalledWith("x", resource, instance, "web-tls-uid", `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`);
   });
 
@@ -461,10 +483,14 @@ describe("InstanceDetail", () => {
     await waitFor(() => expect(applyInstanceYAML).toHaveBeenCalledWith("x", resource, instance, "web-tls-uid", next));
   });
 
-  it("shows formatted server apply errors", async () => {
+  it("shows an apply refused by admission as its finding, with the candidates", async () => {
     vi.mocked(applyInstanceYAML).mockResolvedValueOnce({
       ok: false,
       error: 'admission webhook "validate.cert-manager.io" denied the request: spec.secretName is required',
+      admission: { envelope: "webhook-denied", name: "validate.cert-manager.io", code: 400, request: { operation: "UPDATE", kind: "Certificate", namespace: "default", name: "web-tls" },
+        what: 'denied by admission webhook "validate.cert-manager.io"', summary: 'update Certificate default/web-tls was refused by admission before it was stored: denied by admission webhook "validate.cert-manager.io"',
+        message: "spec.secretName is required", nothingWritten: true, correlation: "a webhook named validate.cert-manager.io in cert-manager-webhook",
+        candidates: [{ kind: "ValidatingWebhook", config: "cert-manager-webhook", name: "validate.cert-manager.io", attributed: true }], inventory: "live" },
     });
     const next = `${detail.yaml}metadata:\n  name: web-tls\n  namespace: default\n`;
     const { getByText, getByLabelText, findByText } = render(<InstanceDetail cluster="x" resource={resource} instance={instance} />);
@@ -473,7 +499,10 @@ describe("InstanceDetail", () => {
     fireEvent.click(getByText("Apply"));
     fireEvent.click(getByText("Apply changes"));
 
-    expect(await findByText("Admission denied by validate.cert-manager.io: spec.secretName is required")).toBeTruthy();
+    expect(await findByText(/^update Certificate default\/web-tls was refused by admission before it was stored/)).toBeTruthy();
+    expect(screen.getByTestId("admission-message").textContent).toBe("spec.secretName is required");
+    expect(screen.getByTestId("admission-candidate").textContent).toContain("cert-manager-webhook/validate.cert-manager.io · ValidatingWebhook · named by the refusal");
+    expect(screen.getByTestId("admission-candidates").textContent).toContain("Klyx does not evaluate their namespace or object selectors");
   });
 
   it("shows post-apply refresh state and refreshed resourceVersion", async () => {
@@ -800,20 +829,25 @@ describe("InstanceDetail — HPA scaling", () => {
     expect(getByText("—")).toBeTruthy();
   });
 
-  it("Deployment target renders workloads link", () => {
+  // coverage S9 §7: the target resolved through discovery opens the object
+  // itself; an unresolved target is plain text
+  const scaleTarget = { relation: "scale target", kind: "Rollout", namespace: "default", name: "web", group: "argoproj.io", version: "v1alpha1", plural: "rollouts", scope: "Namespaced" };
+
+  it("a resolved target renders a link", () => {
+    seedHPA({ detail: { ...hpaDetail, related: [scaleTarget] } });
     const { getByTestId } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);
     expect(getByTestId("hpa-target-link")).toBeTruthy();
   });
 
-  it("clicking Deployment target link sets section to workloads", () => {
+  it("clicking the target link opens the target object itself", () => {
     useFleet.getState().openCluster("x");
-    seedHPA();
+    seedHPA({ detail: { ...hpaDetail, related: [scaleTarget] } });
     const { getByTestId } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);
     fireEvent.click(getByTestId("hpa-target-link"));
-    expect(useFleet.getState().route).toMatchObject({ section: "workloads" });
+    expect(useFleet.getState().route).toMatchObject({ section: "resources", resource: { group: "argoproj.io", plural: "rollouts" } });
   });
 
-  it("non-Deployment target kind renders plain text (no link)", () => {
+  it("an unresolved target renders plain text (no link)", () => {
     const cronScaling: HPAScalingDTO = { ...baseHPAScaling, targetKind: "CustomResource", targetName: "my-cr" };
     seedHPA({ detail: { ...hpaDetail, hpaScaling: cronScaling } });
     const { queryByTestId, getByText } = render(<InstanceDetail cluster="x" resource={hpaResource} instance={hpaInstance} />);

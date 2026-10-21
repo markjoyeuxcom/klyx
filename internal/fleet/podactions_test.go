@@ -99,7 +99,7 @@ func TestDeletePod_IsArmedByUID(t *testing.T) {
 	typed.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		pre = a.(k8stesting.DeleteAction).GetDeleteOptions().Preconditions
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-0",
-			errors.New("Precondition failed: UID in precondition: uid-old, UID in object meta: uid-new"))
+			errors.New("StorageError: invalid object, Code: 4, Key: /registry/pods/x/web-0, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-old, UID in object meta: uid-new"))
 	})
 	c := newPodActionsConn(typed, clock.Real{})
 	err := c.DeletePod(context.Background(), "default", "web-0", "uid-old")

@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/safehttp"
 	"github.com/moomora/klyx/internal/secretstore"
@@ -31,6 +33,42 @@ type EndpointConn interface {
 	SetMetricsConfig(config.MetricsConfig)
 	MetricsConfig() config.MetricsConfig
 	ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error
+	// Alertmanager (coverage S8a): the same guarantees for its endpoint.
+	AlertmanagerConfig() *config.EndpointConfig
+	SetAlertmanagerConfig(*config.EndpointConfig)
+	ChangeAlertmanagerCredential(cfg *config.EndpointConfig, install func() error) error
+	AlertmanagerStatus(ctx context.Context) (alertmanager.Status, string, error)
+	RefreshAlerts()
+	// Loki (coverage S8b): the same guarantees for its endpoint.
+	LokiConfig() *config.EndpointConfig
+	SetLokiConfig(*config.EndpointConfig)
+	ChangeLokiCredential(cfg *config.EndpointConfig, install func() error) error
+	LokiTest(ctx context.Context) (fleet.LokiTestResult, error)
+}
+
+// syncLoki is syncMetrics for the Loki endpoint (S8b §6). Caller holds s.mu.
+func (s *EndpointsService) syncLoki(cluster string, cl *config.ClusterConfig) {
+	if cl == nil || cl.Loki == nil {
+		return
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok || reflect.DeepEqual(conn.LokiConfig(), cl.Loki) {
+		return
+	}
+	conn.SetLokiConfig(cl.Loki)
+}
+
+// syncAlertmanager is syncMetrics for the Alertmanager endpoint (S8a §4).
+// Caller holds s.mu.
+func (s *EndpointsService) syncAlertmanager(cluster string, cl *config.ClusterConfig) {
+	if cl == nil || cl.Alertmanager == nil {
+		return
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok || reflect.DeepEqual(conn.AlertmanagerConfig(), cl.Alertmanager) {
+		return
+	}
+	conn.SetAlertmanagerConfig(cl.Alertmanager)
 }
 
 // syncMetrics makes the live connection read the metrics endpoint the
@@ -143,11 +181,7 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	if r.CanRemove && legacy != "" {
 		r.RemoveLabel = removeLegacyLabel
 	}
-	if ne.Kind == config.EndpointMetrics {
-		r.CanTest = true
-	} else {
-		r.TestNote = "not implemented until S8: a successful GET of / is not a reader's availability"
-	}
+	r.CanTest = true
 	return r
 }
 
@@ -228,6 +262,18 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 	// with the configuration it replaces (Codex's revision 1 review)
 	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointMetrics && cl.Metrics != nil {
 		if err := conn.ChangeMetricsCredential(*cl.Metrics, install); err != nil {
+			return fail(red, err)
+		}
+		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
+	}
+	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointAlertmanager && cl.Alertmanager != nil {
+		if err := conn.ChangeAlertmanagerCredential(cl.Alertmanager, install); err != nil {
+			return fail(red, err)
+		}
+		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
+	}
+	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointLoki && cl.Loki != nil {
+		if err := conn.ChangeLokiCredential(cl.Loki, install); err != nil {
 			return fail(red, err)
 		}
 		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
@@ -316,18 +362,25 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 	return EndpointActionDTO{OK: true, Message: "Moved to the keychain for " + origin + "; fleet.yaml now says auth: {type: bearer}."}
 }
 
-// TestEndpoint reads the endpoint the person reviewed once. Metrics only:
-// Alertmanager and Loki have no reader until S8.
+// TestEndpoint reads the endpoint the person reviewed once: metrics,
+// Alertmanager's status, or Loki's build info and label names (S8b §6).
 func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) EndpointActionDTO {
-	if kind != config.EndpointMetrics {
-		return EndpointActionDTO{Message: "Test is not implemented until S8."}
+	if kind != config.EndpointMetrics && kind != config.EndpointAlertmanager && kind != config.EndpointLoki {
+		return EndpointActionDTO{Message: "Test is not available for " + kind + "."}
 	}
 	s.mu.Lock()
 	_, _, cl, err := s.reviewed(cluster, kind, revision)
 	if err == nil {
 		// the test reads the endpoint as reviewed, never the connection's
 		// older configuration
-		s.syncMetrics(cluster, cl)
+		switch kind {
+		case config.EndpointMetrics:
+			s.syncMetrics(cluster, cl)
+		case config.EndpointAlertmanager:
+			s.syncAlertmanager(cluster, cl)
+		default:
+			s.syncLoki(cluster, cl)
+		}
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -339,9 +392,55 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
 	defer cancel()
+	if kind == config.EndpointLoki {
+		res, err := conn.LokiTest(ctx)
+		if err != nil {
+			return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
+		}
+		return EndpointActionDTO{OK: true, Message: lokiTestText(res)}
+	}
+	if kind == config.EndpointAlertmanager {
+		// a status read, separate from the alerts snapshot: it never moves
+		// the snapshot's freshness or result (S8a §4)
+		st, src, err := conn.AlertmanagerStatus(ctx)
+		if err != nil {
+			return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
+		}
+		// the alerts snapshot reads again on its own, with its own outcome
+		conn.RefreshAlerts()
+		return EndpointActionDTO{OK: true, Message: "Available: " + amStatusText(st) + " at " + src + ", answered."}
+	}
 	_, capb := conn.ClusterMetrics(ctx, true)
 	if !capb.Available {
 		return EndpointActionDTO{Message: "Unavailable: " + capb.Reason}
 	}
 	return EndpointActionDTO{OK: true, Message: "Available: " + capb.Source + " answered."}
+}
+
+// lokiTestText is a Loki Test as Settings reports it (S8b §6).
+func lokiTestText(r fleet.LokiTestResult) string {
+	tenant := "the default tenant"
+	if r.Tenant != "" {
+		tenant = "tenant " + r.Tenant
+	}
+	switch {
+	case !r.Data:
+		return "Loki " + r.Version + " at " + r.Source + " answered, but no streams match this cluster's match in the last hour on " + tenant + " (check tenant and match)."
+	case len(r.Namespace) == 0:
+		return "Loki " + r.Version + " at " + r.Source + " answered, but this cluster's streams carry no namespace label (looked for k8s_namespace_name, namespace): history is not offered."
+	}
+	return "Available: Loki " + r.Version + " at " + r.Source + "; this cluster's streams carry the namespace label " + strings.Join(r.Namespace, " and ") + "."
+}
+
+// amStatusText is an Alertmanager status as Settings' Test reports it.
+func amStatusText(st alertmanager.Status) string {
+	cluster := "cluster status not reported"
+	switch st.ClusterStatus {
+	case "disabled":
+		cluster = "clustering disabled"
+	case "":
+	default:
+		cluster = fmt.Sprintf("cluster %s with %d peers", st.ClusterStatus, st.Peers)
+	}
+	return "Alertmanager " + st.Version + ", " + cluster
 }

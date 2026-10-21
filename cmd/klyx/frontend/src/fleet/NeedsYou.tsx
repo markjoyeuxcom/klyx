@@ -25,7 +25,14 @@ function goDestination(cluster: string, destinationId: string) {
 
 function open(row: QueueRow) {
   if (row.kind === "object") reveal(row.cluster, row.task, row.part, { gvr: row.ref.gvr, namespace: row.ref.namespace, name: row.ref.name, uid: row.ref.uid, parent: row.ref.parent });
+  // an alert row opens the alert in the Alerts lens, which links its subject
+  else if (row.kind === "alert") reveal(row.cluster, row.task, row.part, { gvr: row.ref.gvr, namespace: row.ref.namespace, name: row.ref.name, uid: row.ref.uid, fingerprint: row.ref.fingerprint });
   else goDestination(row.cluster, row.destinationId);
+}
+
+// alertMoreText: "+3 more alerts in Alerts"; a lower bound reads "or more".
+export function alertMoreText(row: Extract<QueueRow, { kind: "alert-more" }>): string {
+  return `+${row.count} ${row.lower ? "or more" : "more"} alert${row.count === 1 ? "" : "s"} in ${row.lens}`;
 }
 
 function Mark({ row }: { row: QueueRow }) {
@@ -61,10 +68,24 @@ function Row({ row, pos, here }: { row: QueueRow; pos: LinePosModel | null; here
       </button>
     );
   }
-  const text = row.kind === "more" ? moreText(row) : row.text;
+  if (row.kind === "alert") {
+    const what = row.subject ?? "the cluster";
+    return (
+      <button type="button" className="queue-row" data-kind="alert" data-tone={row.tone} onClick={() => open(row)}
+        aria-label={`${row.tone === "danger" ? "Critical" : "Warning"} alert: ${row.label}, ${what}, on ${row.cluster}${row.time ? `, ${row.time}` : ""}`}>
+        <span className="queue-mark"><Mark row={row} /></span>
+        <span className="queue-main">
+          <span className="queue-what"><span className="queue-kind">Alert</span> <span className="queue-name">{row.label}</span> <span className="queue-label">{what}</span></span>
+          {row.reason && <span className="queue-reason">{row.reason}</span>}
+        </span>
+        <span className="queue-meta">{where}{row.time && <span className="queue-time">{row.time}</span>}</span>
+      </button>
+    );
+  }
+  const text = row.kind === "more" ? moreText(row) : row.kind === "alert-more" ? alertMoreText(row) : row.text;
   return (
     <button type="button" className="queue-row" data-kind={row.kind} data-tone={row.tone} onClick={() => open(row)} aria-label={`${text}, on ${row.cluster}`}>
-      <span className="queue-mark">{row.kind !== "more" && <Mark row={row} />}</span>
+      <span className="queue-mark">{row.kind !== "more" && row.kind !== "alert-more" && <Mark row={row} />}</span>
       <span className="queue-main"><span className="queue-what">{text}</span></span>
       <span className="queue-meta">{where}</span>
     </button>
@@ -82,7 +103,10 @@ export function NeedsYou({ clusters, models, station = false }: { clusters: Clus
   const faults = useMemo(() => new Set(fleetAxes(clusters, models).axes.fault.map((e) => e.cluster.name)), [clusters, models]);
   // the whole queue's counts, never the samples; "+" on a lower bound
   const plus = q.lower ? "+" : "";
-  const counts = [q.faults > 0 ? `${q.faults}${plus} fault${q.faults === 1 && !plus ? "" : "s"}` : "", q.attention > 0 ? `${q.attention}${plus} to look at` : ""].filter(Boolean).join(" · ");
+  const aplus = q.alertsLower ? "+" : "";
+  // the third count (S8a §6): alerts apart from the objects' faults
+  const counts = [q.faults > 0 ? `${q.faults}${plus} fault${q.faults === 1 && !plus ? "" : "s"}` : "", q.attention > 0 ? `${q.attention}${plus} to look at` : "",
+    q.alerts > 0 ? `${q.alerts}${aplus} alert${q.alerts === 1 && !aplus ? "" : "s"}` : ""].filter(Boolean).join(" · ");
   return (
     <section className="queue" aria-labelledby={station ? "station-queue-h" : "queue-h"} data-testid={station ? "station-queue" : undefined}>
       <div className="queue-head">

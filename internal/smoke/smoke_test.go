@@ -67,8 +67,9 @@ func TestARunnerThatNeverReportsIsIncomplete(t *testing.T) {
 	w, c, _, out := rig(t)
 	w.Arm()
 	w.Started()
+	w.Progress("Admission: a scale refused by the lab policy")
 	c.report <- time.Now()
-	if r := result(t, out); r["result"] != Incomplete || r["why"] != "the runner did not report within 5m0s" {
+	if r := result(t, out); r["result"] != Incomplete || r["why"] != `the runner did not report within 15m0s (the last step it began: "Admission: a scale refused by the lab policy")` {
 		t.Fatalf("%v", r)
 	}
 }

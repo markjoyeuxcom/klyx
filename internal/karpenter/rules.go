@@ -75,41 +75,14 @@ func claimDated(e *health.NativeEval, c NodeClaim) {
 		}
 		e.Since = &since
 	}
+	// The reason is Klyx's fixed wording, never the native message (S10 §8):
+	// a launch failure's text can carry a provider's identifiers.
 	switch {
 	case e.Role != health.Fault && e.Role != health.Degraded:
 	case c.FailingType != "":
-		e.Reason = health.CapReason(c.FailingReason, c.FailingMessage)
+		e.Reason = health.CapReason("", Phrase(&Cond{Type: c.FailingType, Status: c.FailingStatus,
+			Reason: c.FailingReason, ReasonWithheld: c.FailingReasonWithheld}))
 	default:
 		e.Reason = health.CapReason("", "not ready "+LaunchDeadline.String()+" after creation")
 	}
-}
-
-// PoolRule is the NodePools lens rule, relocated verbatim (poolHealth; the
-// header counts fault).
-func PoolRule(p NodePool) health.NativeEval {
-	var e health.NativeEval
-	switch p.Ready {
-	case "ready":
-		e.Role, e.Label = health.OK, "ready"
-	case "not-ready":
-		e.Role, e.Label = health.Fault, "not ready"
-	default:
-		e.Role, e.Label = health.Unknown, "unknown"
-	}
-	e.Included = e.Role == health.Fault
-	// Every pool role is a function of the Ready condition alone, so Ready's
-	// lastTransitionTime is the role's start (The Line §8.1).
-	if !p.ReadySince.IsZero() {
-		since := p.ReadySince
-		e.Since = &since
-	}
-	status := map[string]string{"ready": "True", "not-ready": "False"}[p.Ready]
-	if status == "" {
-		status = "Unknown"
-	}
-	e.Cond = health.CondAt("Ready", status, p.ReadySince)
-	if e.Role == health.Fault {
-		e.Reason = health.CapReason(p.Reason, p.Message)
-	}
-	return e
 }

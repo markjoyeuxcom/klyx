@@ -21,7 +21,6 @@ import (
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/externalsecrets"
 	"github.com/moomora/klyx/internal/health"
-	"github.com/moomora/klyx/internal/karpenter"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -85,9 +84,11 @@ func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 		crd(KindExternalSecrets, "external-secrets.io", "externalsecrets", "v1beta1", "all namespaces"),
 		crd(KindSecretStores, "external-secrets.io", "secretstores", "v1beta1", "all namespaces"),
 		crd(KindClusterSecretStores, "external-secrets.io", "clustersecretstores", "v1beta1", "cluster-scoped"),
-		crd(KindNodePools, "karpenter.sh", "nodepools", "v1", "cluster-scoped"),
-		crd(KindNodeClaims, "karpenter.sh", "nodeclaims", "v1", "cluster-scoped"),
 	}
+	// coverage S10: Karpenter's kinds are projected and budgeted, with the
+	// three class kinds beside them
+	kk, karp := karpenterSpecs(d)
+	kinds = append(kinds, kk...)
 	c := d.Cluster
 	domains := []observe.DomainSpec{
 		{ID: TaskCerts, Parts: []observe.PartSpec{
@@ -102,12 +103,7 @@ func Native(d NativeDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 			{ID: "stores", Entity: "SecretStores and ClusterSecretStores", Scope: "all namespaces + cluster-scoped", Classifier: "native",
 				Counted: []string{KindSecretStores, KindClusterSecretStores}, Evaluate: evalStores(c), Ledger: true},
 		}},
-		{ID: TaskKarpenter, Parts: []observe.PartSpec{
-			{ID: "nodeclaims", Entity: "NodeClaims", Scope: "cluster-scoped", Classifier: "native",
-				Counted: []string{KindNodeClaims}, Evaluate: evalNodeClaims(c), Ledger: true},
-			{ID: "nodepools", Entity: "NodePools", Scope: "cluster-scoped", Classifier: "native",
-				Counted: []string{KindNodePools}, Deps: []string{KindNodeClaims}, Evaluate: evalNodePools(c), Ledger: true},
-		}},
+		karp,
 	}
 	return kinds, domains
 }
@@ -291,47 +287,6 @@ func evalStores(cluster string) func(observe.Capture) observe.PartResult {
 			}
 		}
 		r := nativeResult(c.RoleCap, cluster, TaskESO, "not ready", items)
-		if c.Rows {
-			r.Rows = rowSet(rows)
-		}
-		return r
-	}
-}
-
-func evalNodeClaims(cluster string) func(observe.Capture) observe.PartResult {
-	return func(c observe.Capture) observe.PartResult {
-		var items []nativeItem
-		var rows []Row[karpenter.NodeClaim]
-		for _, u := range unstructuredOf(c.Objects[KindNodeClaims]) {
-			cl := karpenter.ParseNodeClaim(u, c.Now)
-			it := nativeItem{karpenter.ClaimRule(cl), refOf(u, "nodeclaims")}
-			items = append(items, it)
-			rows = append(rows, nativeRow(it, cl))
-		}
-		r := nativeResult(c.RoleCap, cluster, TaskKarpenter, "not ready or appear stuck", items)
-		if c.Rows {
-			r.Rows = rowSet(rows)
-		}
-		return r
-	}
-}
-
-func evalNodePools(cluster string) func(observe.Capture) observe.PartResult {
-	return func(c observe.Capture) observe.PartResult {
-		perPool := map[string]int{}
-		for _, u := range unstructuredOf(c.Objects[KindNodeClaims]) {
-			perPool[u.GetLabels()[karpenter.LabelNodePool]]++
-		}
-		var items []nativeItem
-		var rows []Row[karpenter.NodePool]
-		for _, u := range unstructuredOf(c.Objects[KindNodePools]) {
-			p := karpenter.ParseNodePool(u)
-			p.Nodes = perPool[p.Name]
-			it := nativeItem{karpenter.PoolRule(p), refOf(u, "nodepools")}
-			items = append(items, it)
-			rows = append(rows, nativeRow(it, p))
-		}
-		r := nativeResult(c.RoleCap, cluster, TaskKarpenter, "not ready", items)
 		if c.Rows {
 			r.Rows = rowSet(rows)
 		}

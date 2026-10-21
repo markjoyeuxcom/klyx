@@ -19,6 +19,17 @@ export async function openLogsWindow(
   }
 }
 
+// openLogHistoryWindow opens a native window on a pod's log history (coverage
+// S8b), pinned to its UID. Same false-on-failure contract.
+export async function openLogHistoryWindow(cluster: string, namespace: string, pod: string, uid: string, createdUnix?: number, gone?: boolean): Promise<boolean> {
+  try {
+    const r = (await WindowsService.OpenLogHistoryWindow(cluster, namespace, pod, uid, createdUnix ?? 0, !!gone)) as ActionResultDTO;
+    return !!r?.ok;
+  } catch {
+    return false;
+  }
+}
+
 // openWorkloadLogsWindow opens a native window tailing the AGGREGATE logs of a
 // workload (all pods, fan-in with prefixes). Same false-on-failure contract.
 export async function openWorkloadLogsWindow(

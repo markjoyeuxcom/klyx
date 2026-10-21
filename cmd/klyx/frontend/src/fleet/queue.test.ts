@@ -13,7 +13,10 @@ const ref = (gvr: string, name: string, namespace?: string, label = "CrashLoopBa
   ({ cluster: "x", gvr, namespace, name, role, label, uid: `uid-${name}`, ...over });
 const queue = (clusters: ClusterDTO[], filter: "all" | "prd" | "faults" = "all") =>
   fleetQueue(clusters, Object.fromEntries(clusters.map((c) => [c.name, clusterAttention(useHealth.getState(), c.name, c)])), filter);
-const brief = (r: QueueRow) => r.kind === "object" ? `${r.cluster} ${r.objectKind} ${r.ref.namespace ? `${r.ref.namespace}/` : ""}${r.ref.name} ${r.label}` : `${r.cluster} ${r.kind === "more" ? `+${r.faults + r.attention} ${r.lens}` : r.text}`;
+const brief = (r: QueueRow) => r.kind === "object" ? `${r.cluster} ${r.objectKind} ${r.ref.namespace ? `${r.ref.namespace}/` : ""}${r.ref.name} ${r.label}`
+  : r.kind === "alert" ? `${r.cluster} alert ${r.label} ${r.subject ?? "cluster"}`
+  : r.kind === "alert-more" ? `${r.cluster} +${r.count} alerts`
+  : `${r.cluster} ${r.kind === "more" ? `+${r.faults + r.attention} ${r.lens}` : r.text}`;
 const pods = (cluster: string, n: number, names: string[]) =>
   applySummary(summary(replace(core(), task("pods", [verdict("pods", { fault: n, ok: 1 }, [kind("pods")], { top: names.map((x) => ref("v1/pods", x, "shop")) })])), {}, cluster));
 

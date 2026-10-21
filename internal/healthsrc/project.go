@@ -46,7 +46,8 @@ func projectContainers(cs []corev1.Container) []corev1.Container {
 // ProjectPod keeps metadata identity, labels, owners and lifecycle times;
 // node, restart policy and per-container name/image/ports/resources/restart
 // policy; the pod-level resources and the RuntimeClass overhead, which the
-// scheduler counts (coverage S0); and the complete status. Env, volumes,
+// scheduler counts (coverage S0); the resource claims it references (S11b);
+// and the complete status. Env, volumes,
 // mounts, probes, commands, security context, scheduling constraints and
 // annotations are dropped.
 func ProjectPod(obj any) (any, error) {
@@ -58,7 +59,9 @@ func ProjectPod(obj any) (any, error) {
 		ObjectMeta: projectMeta(p.ObjectMeta, true),
 		Spec: corev1.PodSpec{NodeName: p.Spec.NodeName, RestartPolicy: p.Spec.RestartPolicy,
 			Containers: projectContainers(p.Spec.Containers), InitContainers: projectContainers(p.Spec.InitContainers),
-			Resources: p.Spec.Resources.DeepCopy(), Overhead: p.Spec.Overhead.DeepCopy()},
+			Resources: p.Spec.Resources.DeepCopy(), Overhead: p.Spec.Overhead.DeepCopy(),
+			// coverage S11b §2.1: the claims a pod references (names only)
+			ResourceClaims: append([]corev1.PodResourceClaim(nil), p.Spec.ResourceClaims...)},
 		Status: *p.Status.DeepCopy(),
 	}, nil
 }

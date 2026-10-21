@@ -15,8 +15,10 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	krt "k8s.io/apimachinery/pkg/runtime"
@@ -40,13 +42,27 @@ import (
 
 type loadScale struct {
 	pods, workloads, slices, nodes, flux, certs, eso, gateways, routes, claims, listenersets int
+	// coverage S9: ScaledObjects (each with its HPA), half as many plain
+	// HPAs, a tenth as many ScaledJobs, a quarter as many authentications
+	scalers int
+	// coverage S10: NodePools spread over one class per provider adapter
+	pools int
+	// coverage S11a (no field): a quarter of the nodes advertise 8 GPUs,
+	// half of them with one not allocatable, and a tenth of the pods
+	// request one, some on nodes that do not advertise it
+	//
+	// coverage S11b §7: node-local DRA pools of 8 devices, plus two
+	// all-nodes pools, 8 claims per pool (half allocated, one in eight
+	// pending on a Pending pod whose claims cannot be allocated, the rest
+	// unused) and 5 device classes
+	draPools int
 }
 
 // Coverage S7 §8: the large cluster carries about 500 routes and 50
 // ListenerSets, its Gateways and ListenerSets with listener status.
 var (
-	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50}
-	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5}
+	largeScale = loadScale{pods: 5000, workloads: 1200, slices: 1500, nodes: 50, flux: 200, certs: 300, eso: 400, gateways: 20, routes: 500, claims: 50, listenersets: 50, scalers: 200, pools: 20, draPools: 50}
+	smallScale = loadScale{pods: 500, workloads: 120, slices: 150, nodes: 10, flux: 20, certs: 30, eso: 40, gateways: 2, routes: 50, claims: 5, listenersets: 5, scalers: 20, pools: 3, draPools: 5}
 )
 
 // chaos is an API outage switch for one cluster's list/watch: while down,
@@ -296,18 +312,27 @@ func updateStorm(t *testing.T, ctx context.Context, c *loadCluster, rate int, d 
 	c.sink.mu.Unlock()
 	eval0 := c.o.Stats().EvalTime
 
+	// the pods that report a container (coverage S11b's pending pods,
+	// unschedulable, report none)
+	var storm []int
+	for i, p := range c.pods {
+		if len(p.Status.ContainerStatuses) > 0 {
+			storm = append(storm, i)
+		}
+	}
 	interval := time.Second / time.Duration(rate)
 	var sent []time.Time
 	t0 := time.Now()
 	tick := time.NewTicker(interval)
 	for i := 0; time.Since(t0) < d; i++ {
 		<-tick.C
-		p := c.pods[i%len(c.pods)].DeepCopy()
+		k := storm[i%len(storm)]
+		p := c.pods[k].DeepCopy()
 		p.Status.ContainerStatuses[0].RestartCount = int32(i + 1)
 		if _, err := c.typed.CoreV1().Pods(p.Namespace).UpdateStatus(ctx, p, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		c.pods[i%len(c.pods)] = p
+		c.pods[k] = p
 		sent = append(sent, time.Now())
 	}
 	tick.Stop()
@@ -455,6 +480,10 @@ func init() {
 	add("external-secrets.io", "v1beta1", "clustersecretstores", "ClusterSecretStoreList")
 	add("karpenter.sh", "v1", "nodepools", "NodePoolList")
 	add("karpenter.sh", "v1", "nodeclaims", "NodeClaimList")
+	// coverage S10: the class kinds
+	add("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClassList")
+	add("karpenter.azure.com", "v1beta1", "aksnodeclasses", "AKSNodeClassList")
+	add("eks.amazonaws.com", "v1", "nodeclasses", "NodeClassList")
 	add("kustomize.toolkit.fluxcd.io", "v1", "kustomizations", "KustomizationList")
 	add("helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmReleaseList")
 	add("source.toolkit.fluxcd.io", "v1", "gitrepositories", "GitRepositoryList")
@@ -498,6 +527,15 @@ func init() {
 	add("metallb.io", "v1beta1", "bgpadvertisements", "BGPAdvertisementList")
 	add("metallb.io", "v1beta1", "configurationstates", "ConfigurationStateList")
 	add("cilium.io", "v2", "ciliumloadbalancerippools", "CiliumLoadBalancerIPPoolList")
+	// coverage S9
+	// coverage S11b
+	add("resource.k8s.io", "v1", "resourceslices", "ResourceSliceList")
+	add("resource.k8s.io", "v1", "resourceclaims", "ResourceClaimList")
+	add("resource.k8s.io", "v1", "deviceclasses", "DeviceClassList")
+	add("keda.sh", "v1alpha1", "scaledobjects", "ScaledObjectList")
+	add("keda.sh", "v1alpha1", "scaledjobs", "ScaledJobList")
+	add("keda.sh", "v1alpha1", "triggerauthentications", "TriggerAuthenticationList")
+	add("keda.sh", "v1alpha1", "clustertriggerauthentications", "ClusterTriggerAuthenticationList")
 }
 
 func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
@@ -570,12 +608,37 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 				Containers: []corev1.Container{{Name: "main", Image: "shop/" + app + ":1.0", Env: []corev1.EnvVar{{Name: "A", Value: long}}}}},
 			Status: status,
 		}
+		if i%10 == 0 { // coverage S11a: a tenth of the pods request a GPU
+			gpu := corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+			p.Spec.Containers[0].Resources = corev1.ResourceRequirements{Requests: gpu, Limits: gpu}
+		}
+		if k := i / 100; i%100 == 1 && k < sc.draPools { // coverage S11b: a pod pending on a claim that cannot be allocated
+			claim := fmt.Sprintf("dra-pending-%03d", k)
+			p.Namespace = "dra"
+			p.Spec.NodeName = ""
+			p.Spec.ResourceClaims = []corev1.PodResourceClaim{{Name: "gpu", ResourceClaimName: &claim}}
+			p.Status = corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+				Reason: corev1.PodReasonUnschedulable, LastTransitionTime: created, Message: fmt.Sprintf("0/%d nodes are available: %d cannot allocate all claims.", sc.nodes, sc.nodes)}}}
+		}
 		pods = append(pods, p)
 		typedObjs = append(typedObjs, p)
 	}
 	for i := 0; i < sc.nodes; i++ {
-		typedObjs = append(typedObjs, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%02d", i), UID: types.UID(fmt.Sprintf("node-%02d", i)), Labels: labels("node", i)},
-			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}})
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%02d", i), UID: types.UID(fmt.Sprintf("node-%02d", i)), Labels: labels("node", i)},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: long}}}}
+		if i%4 == 0 { // coverage S11a: a quarter of the nodes advertise GPUs, half of those with one not allocatable
+			alloc := "8"
+			if i%8 == 4 {
+				alloc = "7"
+			}
+			n.Status.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("32"), corev1.ResourceMemory: resource.MustParse("256Gi"), "nvidia.com/gpu": resource.MustParse("8")}
+			n.Status.Allocatable = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("31"), corev1.ResourceMemory: resource.MustParse("250Gi"), "nvidia.com/gpu": resource.MustParse(alloc)}
+			for k, v := range map[string]string{"nvidia.com/gpu.product": "NVIDIA-H100-80GB-HBM3", "nvidia.com/gpu.memory": "81559", "nvidia.com/gpu.count": "8",
+				"nvidia.com/gpu.family": "hopper", "nvidia.com/cuda.driver-version.full": "550.54.15", "nvidia.com/mig.strategy": "none"} {
+				n.Labels[k] = v
+			}
+		}
+		typedObjs = append(typedObjs, n)
 	}
 	for i := 0; i < 50; i++ {
 		metaObjs = append(metaObjs, &metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: metav1.ObjectMeta{Name: ns(i), UID: types.UID(ns(i)),
@@ -606,6 +669,30 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 				TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: ns(i % svcs), Name: fmt.Sprintf("p-%05d-%d", i, e), UID: types.UID(fmt.Sprintf("p-%05d-%d", i, e))}})
 		}
 		typedObjs = append(typedObjs, es)
+	}
+	// coverage S9: each ScaledObject's HPA (controlled by it) and the plain
+	// HPAs, healthy, as kind's HPA controller writes them
+	hpaConds := []autoscalingv2.HorizontalPodAutoscalerCondition{
+		{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale", Message: "recommended size matches current size", LastTransitionTime: created},
+		{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionTrue, Reason: "ValidMetricFound", Message: "the HPA was able to successfully calculate a replica count from external metric s0-prometheus", LastTransitionTime: created},
+		{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionFalse, Reason: "DesiredWithinRange", Message: "the desired count is within the acceptable range", LastTransitionTime: created}}
+	og, min := int64(1), int32(1)
+	hpaOf := func(name, namespace, target string, owner *metav1.OwnerReference) *autoscalingv2.HorizontalPodAutoscaler {
+		h := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name), Generation: 1, CreationTimestamp: created},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: target},
+				MinReplicas: &min, MaxReplicas: 10, Metrics: []autoscalingv2.MetricSpec{{Type: autoscalingv2.ExternalMetricSourceType}}},
+			Status: autoscalingv2.HorizontalPodAutoscalerStatus{ObservedGeneration: &og, CurrentReplicas: 2, DesiredReplicas: 2, Conditions: hpaConds}}
+		if owner != nil {
+			h.OwnerReferences = []metav1.OwnerReference{*owner}
+		}
+		return h
+	}
+	for i := 0; i < sc.scalers; i++ {
+		so := fmt.Sprintf("so-%04d", i)
+		typedObjs = append(typedObjs, hpaOf("keda-hpa-"+so, ns(i), so, &metav1.OwnerReference{APIVersion: "keda.sh/v1alpha1", Kind: "ScaledObject", Name: so, UID: types.UID(so), Controller: ptr(true)}))
+	}
+	for i := 0; i < sc.scalers/2; i++ {
+		typedObjs = append(typedObjs, hpaOf(fmt.Sprintf("hpa-%04d", i), ns(i), fmt.Sprintf("plain-%04d", i), nil))
 	}
 	typed := fake.NewClientset(typedObjs...)
 	scheme := krt.NewScheme()
@@ -737,13 +824,116 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 			"from": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "shop"}},
 			"to":   []any{map[string]any{"group": "", "kind": "Service"}}}, nil, nil))
 	}
-	create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{}, []any{cond("Ready", "True", "Ready")}, nil))
+	// coverage S9: ScaledObjects, ScaledJobs and authentications, as KEDA
+	// 2.21 writes their status (no condition times)
+	kc := func(t, status, reason, msg string) map[string]any {
+		return map[string]any{"type": t, "status": status, "reason": reason, "message": msg}
+	}
+	soConds := []any{kc("Ready", "True", "ScaledObjectReady", "ScaledObject is defined correctly and is ready for scaling"),
+		kc("Active", "True", "ScalerActive", "Scaling is performed because triggers are active"),
+		kc("Fallback", "False", "NoFallbackFound", "No fallbacks are active on this scaled object"), kc("Paused", "False", "", ""), kc("HPAActive", "True", "HPAActive", "HPA is actively scaling")}
+	trigger := []any{map[string]any{"type": "prometheus", "metadata": map[string]any{"serverAddress": "http://prometheus.monitoring.svc:9090", "query": "sum(rate(http_requests_total[1m]))", "threshold": "10"},
+		"authenticationRef": map[string]any{"name": "auth-0000"}}}
+	for i := 0; i < sc.scalers; i++ {
+		name := fmt.Sprintf("so-%04d", i)
+		u := cr("keda.sh/v1alpha1", "ScaledObject", ns(i), name, map[string]any{"scaleTargetRef": map[string]any{"name": name}, "minReplicaCount": int64(1), "maxReplicaCount": int64(10), "triggers": trigger},
+			soConds, map[string]any{"hpaName": "keda-hpa-" + name, "externalMetricNames": []any{"s0-prometheus"}, "triggersActivity": map[string]any{"s0-prometheus": map[string]any{"isActive": true}},
+				"scaleTargetGVKR": map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "resource": "deployments"}, "scaleTargetKind": "apps/v1.Deployment"})
+		u.SetUID(types.UID(name))
+		u.SetCreationTimestamp(created)
+		create("keda.sh", "v1alpha1", "scaledobjects", u)
+	}
+	for i := 0; i < sc.scalers/10; i++ {
+		u := cr("keda.sh/v1alpha1", "ScaledJob", ns(i), fmt.Sprintf("sj-%04d", i), map[string]any{"jobTargetRef": map[string]any{"template": map[string]any{}}, "triggers": trigger},
+			[]any{kc("Ready", "True", "ScaledJobReady", "ScaledJob is defined correctly and is ready for scaling"), kc("Active", "False", "ScalerNotActive", "Scaling is not performed because triggers are not active")}, nil)
+		u.SetCreationTimestamp(created)
+		create("keda.sh", "v1alpha1", "scaledjobs", u)
+	}
+	for i := 0; i < sc.scalers/4; i++ {
+		create("keda.sh", "v1alpha1", "triggerauthentications", cr("keda.sh/v1alpha1", "TriggerAuthentication", ns(i), fmt.Sprintf("auth-%04d", i),
+			map[string]any{"secretTargetRef": []any{map[string]any{"parameter": "bearerToken", "name": "prom-token", "key": "token"}}}, nil, nil))
+	}
+	// coverage S10: one class per adapter, Ready, and pools spread over
+	// them, each with its class link
+	classes := []struct{ apiVersion, kind, resource string }{
+		{"karpenter.k8s.aws/v1", "EC2NodeClass", "ec2nodeclasses"}, {"karpenter.azure.com/v1beta1", "AKSNodeClass", "aksnodeclasses"}, {"eks.amazonaws.com/v1", "NodeClass", "nodeclasses"}}
+	for _, c := range classes {
+		gv := strings.Split(c.apiVersion, "/")
+		create(gv[0], gv[1], c.resource, cr(c.apiVersion, c.kind, "", "default", map[string]any{}, []any{cond("SubnetsReady", "True", "SubnetsReady"), cond("Ready", "True", "Ready")}, nil))
+	}
+	for i := 0; i < sc.pools; i++ {
+		c := classes[i%len(classes)]
+		name := "default"
+		if i > 0 {
+			name = fmt.Sprintf("pool-%02d", i)
+		}
+		create("karpenter.sh", "v1", "nodepools", cr("karpenter.sh/v1", "NodePool", "", name, map[string]any{"template": map[string]any{"spec": map[string]any{
+			"nodeClassRef": map[string]any{"group": strings.Split(c.apiVersion, "/")[0], "kind": c.kind, "name": "default"}}}},
+			[]any{cond("ValidationSucceeded", "True", "ValidationSucceeded"), cond("NodeClassReady", "True", "NodeClassReady"), cond("Ready", "True", "Ready")}, nil))
+	}
 	for i := 0; i < sc.claims; i++ {
 		u := cr("karpenter.sh/v1", "NodeClaim", "", fmt.Sprintf("claim-%03d", i), map[string]any{}, []any{cond("Ready", "True", "Ready"), cond("Launched", "True", "Launched")},
 			map[string]any{"nodeName": fmt.Sprintf("node-%02d", i%sc.nodes)})
 		u.SetLabels(map[string]string{"karpenter.sh/nodepool": "default"})
 		u.SetCreationTimestamp(created)
 		create("karpenter.sh", "v1", "nodeclaims", u)
+	}
+
+	// coverage S11b §7: the DRA objects
+	draObj := func(kind, namespace, name string, spec, status map[string]any) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "resource.k8s.io/v1", "kind": kind,
+			"metadata": map[string]any{"name": name, "uid": "dra-" + namespace + "-" + name}, "spec": spec}}
+		if namespace != "" {
+			u.SetNamespace(namespace)
+		}
+		if status != nil {
+			u.Object["status"] = status
+		}
+		u.SetCreationTimestamp(created)
+		return u
+	}
+	devices := func(prefix string, n int) []any {
+		var out []any
+		for d := 0; d < n; d++ {
+			out = append(out, map[string]any{"name": fmt.Sprintf("%s-%d", prefix, d)})
+		}
+		return out
+	}
+	for c := 0; c < 5; c++ {
+		create("resource.k8s.io", "v1", "deviceclasses", draObj("DeviceClass", "", fmt.Sprintf("class-%d.example.com", c),
+			map[string]any{"selectors": []any{map[string]any{"cel": map[string]any{"expression": fmt.Sprintf("device.driver == \"gpu-%d.example.com\"", c)}}}}, nil))
+	}
+	slice := func(name, pool, node string, devs []any) map[string]any {
+		spec := map[string]any{"driver": "gpu.example.com", "pool": map[string]any{"name": pool, "generation": int64(1), "resourceSliceCount": int64(1)}, "devices": devs}
+		if node == "" {
+			spec["allNodes"] = true
+		} else {
+			spec["nodeName"] = node
+		}
+		return spec
+	}
+	for i := 0; i < sc.draPools; i++ {
+		node := fmt.Sprintf("node-%02d", i%sc.nodes)
+		create("resource.k8s.io", "v1", "resourceslices", draObj("ResourceSlice", "", fmt.Sprintf("pool-%03d", i), slice("", fmt.Sprintf("pool-%03d", i), node, devices("gpu", 8)), nil))
+	}
+	for i := 0; i < 2; i++ {
+		create("resource.k8s.io", "v1", "resourceslices", draObj("ResourceSlice", "", fmt.Sprintf("shared-%d", i), slice("", fmt.Sprintf("shared-%d", i), "", devices("nic", 16)), nil))
+	}
+	req := map[string]any{"devices": map[string]any{"requests": []any{map[string]any{"name": "gpu", "exactly": map[string]any{"deviceClassName": "class-0.example.com", "allocationMode": "ExactCount", "count": int64(1)}}}}}
+	for i := 0; i < 8*sc.draPools; i++ {
+		switch {
+		case i%2 == 0: // allocated, in use
+			pool := fmt.Sprintf("pool-%03d", (i/2)%sc.draPools)
+			create("resource.k8s.io", "v1", "resourceclaims", draObj("ResourceClaim", ns(i), fmt.Sprintf("claim-%04d", i), req, map[string]any{
+				"allocation":  map[string]any{"devices": map[string]any{"results": []any{map[string]any{"request": "gpu", "driver": "gpu.example.com", "pool": pool, "device": fmt.Sprintf("gpu-%d", (i/2/sc.draPools)%8)}}}},
+				"reservedFor": []any{map[string]any{"resource": "pods", "name": fmt.Sprintf("user-%04d", i), "uid": fmt.Sprintf("user-%04d", i)}},
+				"devices": []any{map[string]any{"driver": "gpu.example.com", "pool": pool, "device": fmt.Sprintf("gpu-%d", (i/2/sc.draPools)%8),
+					"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "Configured", "message": long}}}}}))
+		case i%8 == 1: // pending on a Pending pod
+			create("resource.k8s.io", "v1", "resourceclaims", draObj("ResourceClaim", "dra", fmt.Sprintf("dra-pending-%03d", i/8), req, nil))
+		default: // unused
+			create("resource.k8s.io", "v1", "resourceclaims", draObj("ResourceClaim", ns(i), fmt.Sprintf("claim-%04d", i), req, nil))
+		}
 	}
 
 	// The real sources, wrapped: an outage switch on every list/watch, and
@@ -754,10 +944,12 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	nd := NativeDeps{Cluster: name, Dyn: dyn, Served: served, Typed: typed, Meta: meta}
 	kinds, domains := Core(CoreDeps{Cluster: name, Typed: typed, Meta: meta})
 	kinds = append(kinds, SharedNetworkKinds(nd)...)
-	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing} {
+	for _, f := range []func(NativeDeps) ([]observe.KindSpec, []observe.DomainSpec){GitOps, Gateway, Native, Velero, Admission, LoadBalancing, KEDA, DRA} {
 		k, d := f(nd)
 		kinds, domains = append(kinds, k...), append(domains, d...)
 	}
+	// coverage S9: the shared HPA kind and the standalone HPA part
+	kinds, domains = append(kinds, SharedHPAKind(nd)), append(domains, Autoscaling(nd)...)
 	snaps, ed := Events(EventsDeps{Cluster: name, Typed: typed})
 	domains = append(domains, ed...)
 	ch := &chaos{}
@@ -772,6 +964,7 @@ func buildLoadCluster(t *testing.T, name string, sc loadScale) *loadCluster {
 	}
 	s := &loadSink{}
 	o := observe.New(observe.Config{Cluster: name, Sink: s, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: KindNamespaces})
+	o.SetFact(FactServerMinor, 37) // coverage S11b: the pools read for 1.36 and 1.37
 	return &loadCluster{name: name, o: o, sink: s, chaos: ch, typed: typed, pods: pods}
 }
 

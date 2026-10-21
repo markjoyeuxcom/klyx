@@ -126,6 +126,7 @@ func toNodeSummaryDTO(n workloads.NodeSummary) NodeSummaryDTO {
 		Pool:           n.Pool,
 		Zone:           n.Zone,
 		Health:         toHealthDTO(n.Health),
+		Extended:       toExtendedDTO(n.Extended),
 	}
 }
 

@@ -113,7 +113,7 @@ describe("Overview attention reads the cluster's summary (health 1c slice 4)", (
     render(<Overview c={dto} />);
     expect(area("pods").textContent).toContain("1 unverified");
     expect(area("nodes").textContent).toContain("could not be read (forbidden)");
-    expect(screen.getByText("No attention in the 4 areas read; 2 unverified.")).toBeTruthy();
+    expect(screen.getByText("No attention in the 5 areas read; 2 unverified.")).toBeTruthy();
   });
 
   it("each area opens its lens with that lens's attention filter", () => {
@@ -279,6 +279,19 @@ describe("Overview's tool facts follow the model's lifecycle", () => {
     expect(screen.getByTitle("controller unknown: kustomize-controller unreadable")).toBeTruthy();
   });
 
+  // coverage S10 §5: a managed controller is a note - neither a gap nor a fault
+  it("a managed controller is said as management, never as unverified", () => {
+    const c = { ...dto, karpenterPresent: true };
+    useFleet.setState({ clusters: [c] });
+    seed([...core(), task("karpenter", [native("nodeclaims", { ok: 1 }, 0, "not ready or appear stuck", [kind("nodeclaims")]), native("nodepools", { ok: 1 }, 0, "not ready", [kind("nodepools")])],
+      { controller: { state: "managed", reason: "NodeClass managed by EKS Auto Mode; controller health not directly observed" } })]);
+    render(<Overview c={c} />);
+    const ctl = screen.getByTestId("ov-ctl-karpenter");
+    expect(ctl.querySelector("summary")?.textContent).toBe("controller managed by the platform");
+    expect(ctl.getAttribute("data-tone")).toBeNull();
+    expect(screen.getByTestId("ov-area-karpenter").getAttribute("data-state")).toBe("quiet");
+  });
+
   it("the Observer's confirmed absence wins over a lagging present flag", () => {
     const c = { ...dto, fluxPresent: true, argoPresent: true, gatewayAPIVersion: "v1.2" };
     useFleet.setState({ clusters: [c] });
@@ -301,7 +314,7 @@ describe("Overview names what the summary does not carry (slice 6 §4)", () => {
       expect(area(id).getAttribute("data-state")).toBe("checking");
       expect(area(id).textContent).toContain("checking…");
     }
-    expect(screen.getByText(/No attention in the 5 areas read; 4 unverified\./)).toBeTruthy();
+    expect(screen.getByText(/No attention in the 6 areas read; 4 unverified\./)).toBeTruthy();
     expect(container.textContent).not.toContain("not covered");
   });
 

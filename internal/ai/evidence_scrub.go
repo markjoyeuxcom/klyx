@@ -19,6 +19,9 @@ func ScrubEvidence(s string, max int) (string, int) {
 		max = EvidenceFieldMax
 	}
 	s, n := scrub.Credentials(s)
+	// coverage S10 §8: cloud identifiers, before the cap, on every AI path
+	s, m := scrub.Identifiers(s)
+	n += m
 	if r := []rune(s); len(r) > max {
 		s = strings.TrimSpace(string(r[:max])) + "…[truncated]"
 		n++

@@ -300,3 +300,31 @@ func TestSecretContainersOfUnexpectedType(t *testing.T) {
 		}
 	}
 }
+
+// Coverage S9 §10: hashiCorpVault's literal token is masked on both
+// authentication kinds, and the copy is not edit-eligible; the address and
+// method stay.
+func TestSanitizeEmbedded_KEDAVaultToken(t *testing.T) {
+	for _, kind := range []string{"TriggerAuthentication", "ClusterTriggerAuthentication"} {
+		var obj map[string]any
+		doc := `{"apiVersion":"keda.sh/v1alpha1","kind":"` + kind + `","metadata":{"name":"v"},
+			"spec":{"hashiCorpVault":{"address":"https://vault:8200","authentication":"token","credential":{"token":"` + ndl + `"}},
+			"secretTargetRef":[{"parameter":"p","name":"s","key":"k"}]}}`
+		if err := json.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatal(err)
+		}
+		s := SanitizeEmbedded("keda.sh", kind, obj)
+		b, _ := json.Marshal(s.Object)
+		if strings.Contains(string(b), ndl) || s.EditEligible || !s.Payload {
+			t.Fatalf("%s: token kept or edit-eligible: %s (%+v)", kind, b, s.Paths)
+		}
+		for _, keep := range []string{"https://vault:8200", `"token"`, `"secretTargetRef"`} {
+			if !strings.Contains(string(b), keep) {
+				t.Fatalf("%s: %s was dropped: %s", kind, keep, b)
+			}
+		}
+	}
+	if !IsPayloadResource("keda.sh", "triggerauthentications") || !IsPayloadResource("keda.sh", "clustertriggerauthentications") {
+		t.Fatal("the authentication kinds are not payload resources")
+	}
+}

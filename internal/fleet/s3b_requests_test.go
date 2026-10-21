@@ -1,0 +1,227 @@
+package fleet
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/fake"
+	typedfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/moomora/klyx/internal/admission"
+	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/config"
+)
+
+// Coverage S3b §3.1, §8: each write path declares its request, and its
+// error carries it; an attributed refusal - a call failure's 500 among
+// them - wrote nothing; a policy denial whose text says "uid" is not a
+// replacement.
+
+func webhookDenial() error {
+	return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 403,
+		Message: `admission webhook "deny.lab.klyx.dev" denied the request: widgets labelled deny are refused`}}
+}
+
+func callFailure() error {
+	return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 500, Reason: metav1.StatusReasonInternalError,
+		Message: `Internal error occurred: failed calling webhook "deny.lab.klyx.dev": failed to call webhook: Post "https://h.lab.svc:443/v?timeout=10s": no endpoints available for service "h"`}}
+}
+
+func vapUIDText() error {
+	msg := "ValidatingAdmissionPolicy 'needs-uuid' with binding 'b' denied request: the uuid label is required, see the guide"
+	return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 422, Reason: metav1.StatusReasonInvalid,
+		Message: `deployments.apps "api" is forbidden: ` + msg, Details: &metav1.StatusDetails{Name: "api", Group: "apps", Kind: "deployments", Causes: []metav1.StatusCause{{Message: msg}}}}}
+}
+
+func requestOf(t *testing.T, err error) admission.Request {
+	t.Helper()
+	var re *admission.RequestError
+	if !errors.As(err, &re) {
+		t.Fatalf("no request in %v", err)
+	}
+	return re.Request
+}
+
+func TestS3bWorkloadVerbsDeclareTheirRequests(t *testing.T) {
+	want := map[string]admission.Request{
+		"restart deployment":  {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default"},
+		"restart statefulset": {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "statefulsets", Namespace: "db"},
+		"restart daemonset":   {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "daemonsets", Namespace: "kube-system"},
+		"scale deployment":    {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Subresource: "scale", Namespace: "default"},
+		"scale statefulset":   {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "statefulsets", Subresource: "scale", Namespace: "db"},
+		"pause":               {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default"},
+		"undo":                {Operation: "UPDATE", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default"},
+	}
+	for _, v := range workloadVerbs() {
+		for name, refusal := range map[string]error{"denied": webhookDenial(), "call failure": callFailure(), "policy saying uid": vapUIDText()} {
+			t.Run(v.name+"/"+name, func(t *testing.T) {
+				typed := typedfake.NewClientset(seedFor(v))
+				if v.name == "undo" {
+					dep := rolloutDeployment(false, "2")
+					dep.Namespace, dep.Name, dep.UID = "default", "api", "uid-api"
+					old := rolloutRS("api-1", "1", "v1", "", time.Unix(0, 0))
+					old.Namespace, old.OwnerReferences[0].UID = "default", "uid-api"
+					cur := rolloutRS("api-2", "2", "v2", "", time.Unix(0, 0))
+					cur.Namespace, cur.OwnerReferences[0].UID = "default", "uid-api"
+					typed = typedfake.NewClientset(dep, old, cur)
+				}
+				fail := func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, refusal }
+				typed.PrependReactor("patch", "*", fail)
+				typed.PrependReactor("update", "*", fail)
+				err := v.run(newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0))), "uid-"+v.obj)
+				if err == nil || errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
+					t.Fatalf("an attributed refusal wrote nothing and is no replacement: %v", err)
+				}
+				if got := requestOf(t, err); got != want[v.name] {
+					t.Fatalf("request %+v, want %+v", got, want[v.name])
+				}
+			})
+		}
+	}
+}
+
+func TestS3bNodePodAndFluxDeclareTheirRequests(t *testing.T) {
+	conn := newCordonTestConn("node-1", false)
+	conn.typed.(*typedfake.Clientset).PrependReactor("patch", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, callFailure() })
+	err := conn.SetCordon(context.Background(), "node-1", "uid-node-1", true)
+	if got := requestOf(t, err); got != (admission.Request{Operation: "UPDATE", Version: "v1", Resource: "nodes"}) || !strings.Contains(err.Error(), "nothing was written") {
+		t.Fatalf("cordon: %+v %v", got, err)
+	}
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "x", UID: "uid-web"}}
+	typed := typedfake.NewClientset(pod)
+	typed.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, webhookDenial() })
+	err = newPodActionsConn(typed, clock.Real{}).DeletePod(context.Background(), "x", "web-0", "uid-web")
+	if got := requestOf(t, err); got != (admission.Request{Operation: "DELETE", Version: "v1", Resource: "pods", Namespace: "x"}) {
+		t.Fatalf("delete pod: %+v", got)
+	}
+	// a webhook denying with NotFound is its denial, never the pod gone (finding 7)
+	typed404 := typedfake.NewClientset(pod.DeepCopy())
+	typed404.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 404, Reason: metav1.StatusReasonNotFound,
+			Message: `admission webhook "deny.lab.klyx.dev" denied the request: not here`}}
+	})
+	err = newPodActionsConn(typed404, clock.Real{}).DeletePod(context.Background(), "x", "web-0", "uid-web")
+	if err == nil || strings.Contains(err.Error(), "already gone") {
+		t.Fatalf("a webhook's 404 read as the pod gone: %v", err)
+	}
+	if got := requestOf(t, err); got.Operation != "DELETE" {
+		t.Fatalf("%+v", got)
+	}
+	// the server's own NotFound is the pod gone
+	typedGone := typedfake.NewClientset()
+	if err := newPodActionsConn(typedGone, clock.Real{}).DeletePod(context.Background(), "x", "web-0", "uid-web"); err == nil || !strings.Contains(err.Error(), "already gone") {
+		t.Fatalf("the pod gone: %v", err)
+	}
+
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"},
+		seedKustomizationWithSource("app", "GitRepository", "flux-system"))
+	dyn.PrependReactor("patch", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, vapUIDText() })
+	err = newActionConn(dyn).Reconcile(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
+	if errors.Is(err, ErrReplaced) {
+		t.Fatalf("a policy denial saying uid is no replacement: %v", err)
+	}
+	if got := requestOf(t, err); got.Operation != "UPDATE" || got.Resource != "kustomizations" || got.Namespace != "flux-system" {
+		t.Fatalf("reconcile: %+v", got)
+	}
+}
+
+// S3b §2.3: each step keeps its own outcome, in both orders; the source's
+// refusal is reported even when the target is written.
+func TestS3bReconcileWithSourceReportsEachStep(t *testing.T) {
+	gitRepoGVR := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}
+	for _, tc := range []struct {
+		name                 string
+		sourceErr, targetErr error
+	}{
+		{"the source written, the target denied", nil, webhookDenial()},
+		{"the source denied, the target written", webhookDenial(), nil},
+		// a lost answer is unverified, never refused (Codex's implementation review, finding 5)
+		{"the source's answer lost, the target written", context.DeadlineExceeded, nil},
+		// the target's UID guard refused it: definite, though patchArmed
+		// formats its status away (re-review 1)
+		{"the source written, the target replaced", nil, apierrors.NewConflict(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "app",
+			errors.New("StorageError: invalid object, Code: 4, Key: /registry/kustomize.toolkit.fluxcd.io/kustomizations/flux-system/app, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-app, UID in object meta: uid-new"))},
+		{"the source written, the target gone", nil, apierrors.NewNotFound(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "app")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList", gitRepoGVR: "GitRepositoryList"},
+				seedKustomizationWithSource("app", "GitRepository", "flux-system"), seedGitRepoSource("flux-system"))
+			dyn.PrependReactor("patch", "gitrepositories", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if tc.sourceErr != nil {
+					return true, nil, tc.sourceErr
+				}
+				return false, nil, nil
+			})
+			dyn.PrependReactor("patch", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if tc.targetErr != nil {
+					return true, nil, tc.targetErr
+				}
+				return false, nil, nil
+			})
+			steps, err := newActionConn(dyn).ReconcileWithSourceSteps(context.Background(), "Kustomization", "flux-system", "app", "uid-app")
+			if len(steps) != 2 || steps[0].Written != (tc.sourceErr == nil) || steps[1].Written != (tc.targetErr == nil) || (err != nil) != (tc.targetErr != nil) {
+				t.Fatalf("steps %+v, err %v", steps, err)
+			}
+			refused := func(e error) bool { return e != nil && !errors.Is(e, context.DeadlineExceeded) }
+			if steps[0].Refused != refused(tc.sourceErr) || steps[1].Refused != refused(tc.targetErr) {
+				t.Fatalf("refused: %+v", steps)
+			}
+			if !strings.HasPrefix(steps[0].Subject, "GitRepository flux-system/flux-system") || !strings.HasPrefix(steps[1].Subject, "Kustomization flux-system/app") {
+				t.Fatalf("subjects: %+v", steps)
+			}
+			for _, s := range steps {
+				switch {
+				case s.Err == nil:
+				case errors.Is(s.Err, ErrReplaced):
+					// a UID refusal is never an admission finding: its
+					// request is not needed, its outcome is definite
+				default:
+					if q := requestOf(t, s.Err); q.Operation != "UPDATE" {
+						t.Fatalf("%+v", q)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A webhook denying with 409 is its denial, never an apply conflict; the
+// composer's refused CREATE keeps its request for the bridge.
+func TestS3bEditorAndComposerKeepTheRefusal(t *testing.T) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	live := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "app", "uid": "u1"}}}
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), map[schema.GroupVersionResource]string{gvr: "ConfigMapList"}, live)
+	denial409 := &apierrors.StatusError{ErrStatus: metav1.Status{Code: 409, Reason: metav1.StatusReasonConflict, Message: `admission webhook "deny.lab.klyx.dev" denied the request: frozen`}}
+	dyn.PrependReactor("patch", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, denial409 })
+	c := NewClusterConn("x", nil, nil, dyn, nil, clock.Real{}, config.MetricsConfig{})
+	err := c.ApplyResourceYAML(context.Background(), "", "v1", "configmaps", "ConfigMap", "Namespaced", "default", "app", "u1",
+		"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  namespace: default\n  name: app\ndata:\n  key: v\n", false)
+	if err == nil || strings.Contains(err.Error(), "apply conflict") || strings.Contains(err.Error(), "changed since it was opened") {
+		t.Fatalf("a webhook's 409 is its denial: %v", err)
+	}
+	if q := requestOf(t, err); q != (admission.Request{Operation: "UPDATE", Version: "v1", Resource: "configmaps", Namespace: "default"}) {
+		t.Fatalf("%+v", q)
+	}
+
+	ac, adyn := adhocConn(t)
+	adyn.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, webhookDenial() })
+	res := ac.CreateResourceYAML(context.Background(), adhocPodYAML, false)
+	if len(res) != 1 || res[0].OK || res[0].Refusal() == nil {
+		t.Fatalf("the refused document keeps its refusal: %+v", res)
+	}
+	if q := requestOf(t, res[0].Refusal()); q.Operation != "CREATE" || q.Resource != "pods" {
+		t.Fatalf("%+v", q)
+	}
+}

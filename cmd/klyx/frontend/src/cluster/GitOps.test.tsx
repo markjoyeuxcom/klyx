@@ -397,6 +397,7 @@ describe("GitOps view", () => {
     vi.mocked(fluxDiff).mockResolvedValueOnce({
       available: true, hasChanges: true, error: "", via: "cache", revision: "a1b9e3c0a1b2c3d4e5f60718293a4b5c6d7e8f90",
       output: "► Deployment shop/web configured", notes: ["variables shown unsubstituted: postBuild substitution is not applied"],
+      changes: [{ action: "configured", kind: "Deployment", namespace: "shop", name: "web", diff: "x" }],
     });
     useFleet.setState({ clusters: [cluster("Healthy")], gitops: expandedDetail({ suspended: true }) });
     render(<GitOps cluster="x" />);
@@ -406,9 +407,42 @@ describe("GitOps view", () => {
     expect(screen.getByText("variables shown unsubstituted: postBuild substitution is not applied")).toBeTruthy();
     expect(screen.getByText("► Deployment shop/web configured")).toBeTruthy();
 
+    // coverage S3b §4: a completed server-side dry run says what admission
+    // passed and when; the drift sentence is always there
+    expect(screen.getByTestId("diff-dry-run-admission").textContent).toMatch(/^This dry run passed mutating admission and defaulting as of .+, so it shows what the API server would have stored then; a later apply's admission may differ\.$/);
+    expect(screen.getAllByTestId("drift-sentence")[0].textContent).toBe("A difference between the live object and Git can come from a mutating webhook or policy, a controller, or a person. Klyx does not attribute it.");
+
     vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "", output: "", via: "flux CLI" });
     await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
     expect(screen.getByTestId("diff-via").textContent).toBe("computed by flux diff with your local credentials");
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "the server-side dry-run: refused", output: "", via: "cache" });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    expect(screen.getAllByTestId("drift-sentence").length).toBeGreaterThan(0);
+
+    // Codex's S3b implementation review, finding 3: a failed or skipped
+    // object's dry run says nothing of admission or of the live objects
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: true, error: "", via: "cache", output: "► ConfigMap a/b failed",
+      changes: [{ action: "failed", kind: "ConfigMap", namespace: "a", name: "b", error: 'denied by admission webhook "deny"' }] });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "", via: "cache", output: "",
+      changes: [{ action: "skipped", kind: "Deployment", namespace: "a", name: "d" }] });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.queryByTestId("diff-dry-run-admission")).toBeNull();
+    expect(screen.getByText("nothing was dry-run: 1 object was skipped")).toBeTruthy();
+    expect(screen.queryByText(/the dry-run matches the live objects/)).toBeNull();
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: true, error: "", via: "cache", output: "► ConfigMap a/b failed",
+      changes: [{ action: "configured", kind: "Deployment", namespace: "a", name: "d", diff: "x" }, { action: "failed", kind: "ConfigMap", namespace: "a", name: "b", error: "refused" }] });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.getByTestId("diff-dry-run-admission").textContent).toMatch(/^The 1 object whose dry run completed passed mutating admission and defaulting as of .+; 1 failed, was skipped or was not read, and says nothing of admission\. A later apply's admission may differ\.$/);
+    // the control: every object's dry run completed
+    vi.mocked(fluxDiff).mockResolvedValueOnce({ available: true, hasChanges: false, error: "", via: "cache", output: "",
+      changes: [{ action: "unchanged", kind: "Deployment", namespace: "a", name: "d" }] });
+    await act(async () => { fireEvent.click(screen.getByText("Compute diff")); });
+    expect(screen.getByTestId("diff-dry-run-admission").textContent).toMatch(/^This dry run passed mutating admission/);
+    expect(screen.getByText("no changes - the dry-run matches the live objects")).toBeTruthy();
   });
 
   it("lists sources under the sources filter", () => {

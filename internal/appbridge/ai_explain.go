@@ -168,9 +168,14 @@ func (s *AIService) rowEvidence(ctx context.Context, conn AIConn, cluster string
 			}
 		}
 	}
+	if alerts, q := alertEvidence(ctx, conn, alertTarget{t.UID, detail.Kind, detail.Namespace, detail.Name}, sc); len(alerts) > 0 {
+		ev.Alerts, ev.Qualifications = alerts, append(ev.Qualifications, q)
+	}
 	if t.Task == healthsrc.TaskLB {
 		ev = lbEvidence(ev) // S4 §7: no controller message anywhere in the document
 	}
+	ev = karpenterEvidence(ev) // S10 §8: no Karpenter message, whichever task asks
+	ev = draEvidence(ev)       // S11b §6: no DRA message or CEL
 	grounded := fmt.Sprintf("Klyx verdict %q as of %s · %s/%s", verdictLabel(verdict), verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
 	if fact {
 		grounded = fmt.Sprintf("No Klyx verdict (a listed fact) as of %s · %s/%s", verdict.EvaluatedAt, detail.Kind, nsName(detail.Namespace, detail.Name))
@@ -201,6 +206,11 @@ func (s *AIService) objectEvidence(ctx context.Context, conn AIConn, cluster str
 		Operators:      sc.operators(s.operators(cluster)),
 		Qualifications: []string{"Conditions, facts and events were fetched at " + fetchedAt + "."},
 	}
+	if alerts, q := alertEvidence(ctx, conn, alertTarget{detail.UID, detail.Kind, detail.Namespace, detail.Name}, sc); len(alerts) > 0 {
+		ev.Alerts, ev.Qualifications = alerts, append(ev.Qualifications, q)
+	}
+	ev = karpenterEvidence(ev) // S10 §8
+	ev = draEvidence(ev)       // S11b §6
 	return ev, fmt.Sprintf("%s/%s (no Klyx verdict for this kind)", detail.Kind, nsName(detail.Namespace, detail.Name)), nil
 }
 

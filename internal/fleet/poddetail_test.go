@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,97 @@ func TestPodDetail_EmptyLabelsNonNil(t *testing.T) {
 	}
 	if d.Annotations == nil {
 		t.Error("Annotations must be non-nil even when pod has no annotations")
+	}
+}
+
+// Coverage S11b §3.5, §7: the pod's claims as the scheduler maps them, and
+// its device health, init containers first, bounded, messages clipped.
+func TestPodDetail_ClaimsAndDeviceHealth(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	gen, direct, tmpl := "web-abc-gpu-x", "shared-nic", "gpu"
+	pod.Spec.ResourceClaims = []corev1.PodResourceClaim{{Name: "gpu", ResourceClaimTemplateName: &tmpl}, {Name: "nic", ResourceClaimName: &direct}}
+	pod.Status.ResourceClaimStatuses = []corev1.PodResourceClaimStatus{{Name: "gpu", ResourceClaimName: &gen}}
+	long := strings.Repeat("m", 300)
+	var many []corev1.ResourceHealth
+	for i := 0; i < 20; i++ {
+		many = append(many, corev1.ResourceHealth{ResourceID: corev1.ResourceID("cdi/" + string(rune('a'+i))), Health: corev1.ResourceHealthStatusHealthy})
+	}
+	many[0] = corev1.ResourceHealth{ResourceID: "cdi/a", Health: corev1.ResourceHealthStatusUnhealthy, Message: &long}
+	pod.Status.ContainerStatuses[0].AllocatedResourcesStatus = []corev1.ResourceStatus{{Name: "claim:gpu/req", Resources: many}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "side", AllocatedResourcesStatus: []corev1.ResourceStatus{{Name: "claim:nic",
+		Resources: []corev1.ResourceHealth{{ResourceID: "cdi/n", Health: corev1.ResourceHealthStatusUnknown}}}}}}
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Claims) != 2 || d.Claims[0].Claim != gen || d.Claims[0].Source != "template" || d.Claims[1].Claim != direct || d.Claims[1].Source != "claim" {
+		t.Fatalf("claims: %+v", d.Claims)
+	}
+	if len(d.DeviceHealth) != 2 || !d.DeviceHealth[0].Init || d.DeviceHealth[0].Name != "claim:nic" || d.DeviceHealth[1].Container != "web" {
+		t.Fatalf("device health, init containers first: %+v", d.DeviceHealth)
+	}
+	devs := d.DeviceHealth[1].Devices
+	if len(devs) != maxDeviceHealthDevices || devs[0].Health != "Unhealthy" || devs[0].Message != strings.Repeat("m", 256)+"…" {
+		t.Fatalf("devices bounded at %d, message clipped at 256: %d, %+v", maxDeviceHealthDevices, len(devs), devs[0])
+	}
+	// a pod with no claims and no reports carries neither
+	plain := makeFakePod("team-a", "plain")
+	c = &ClusterConn{typed: typedfake.NewSimpleClientset(plain), clk: clock.NewFake(time.Unix(200_000, 0))}
+	if d, err := c.PodDetail(context.Background(), "team-a", "plain"); err != nil || len(d.Claims) != 0 || len(d.DeviceHealth) != 0 {
+		t.Fatalf("plain: %+v %v", d.Claims, err)
+	}
+}
+
+// Codex's implementation review of 177bfe9, finding 3: device health is
+// counted over every device, the unhealthy kept first, and entries past
+// the bound are counted.
+func TestPodDetail_DeviceHealthCountsEverything(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	var res []corev1.ResourceHealth
+	for i := 0; i < 16; i++ {
+		res = append(res, corev1.ResourceHealth{ResourceID: corev1.ResourceID(fmt.Sprintf("cdi/h%02d", i)), Health: corev1.ResourceHealthStatusHealthy})
+	}
+	res = append(res, corev1.ResourceHealth{ResourceID: "cdi/bad", Health: corev1.ResourceHealthStatusUnhealthy})
+	var statuses []corev1.ResourceStatus
+	for i := 0; i < maxDeviceHealth+3; i++ {
+		statuses = append(statuses, corev1.ResourceStatus{Name: corev1.ResourceName(fmt.Sprintf("claim:c%02d", i)), Resources: res})
+	}
+	pod.Status.ContainerStatuses[0].AllocatedResourcesStatus = statuses
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := d.DeviceHealth[0]
+	if h.Unhealthy != 1 || h.Healthy != 16 || h.DevicesOmitted != 1 || len(h.Devices) != maxDeviceHealthDevices || h.Devices[0].ID != "cdi/bad" {
+		t.Fatalf("counted over all, the unhealthy kept first: %+v", h)
+	}
+	if len(d.DeviceHealth) != maxDeviceHealth || d.DeviceHealthOmitted != 3 {
+		t.Fatalf("entries past the bound counted: %d, %d", len(d.DeviceHealth), d.DeviceHealthOmitted)
+	}
+}
+
+// Codex's implementation re-review, finding 1: a claim's reports cut away
+// past 32 entries still count in its summary.
+func TestPodDetail_ClaimHealthCountsEveryReport(t *testing.T) {
+	pod := makeFakePod("team-a", "web-abc")
+	var statuses []corev1.ContainerStatus
+	for i := 0; i < maxDeviceHealth+1; i++ {
+		h, req := corev1.ResourceHealthStatusHealthy, "req0"
+		if i == maxDeviceHealth {
+			h, req = corev1.ResourceHealthStatusUnhealthy, "req1"
+		}
+		statuses = append(statuses, corev1.ContainerStatus{Name: fmt.Sprintf("c%02d", i), AllocatedResourcesStatus: []corev1.ResourceStatus{
+			{Name: corev1.ResourceName("claim:gpu/" + req), Resources: []corev1.ResourceHealth{{ResourceID: corev1.ResourceID(fmt.Sprintf("cdi/%d", i)), Health: h}}}}})
+	}
+	pod.Status.ContainerStatuses = statuses
+	c := &ClusterConn{typed: typedfake.NewSimpleClientset(pod), clk: clock.NewFake(time.Unix(200_000, 0))}
+	d, err := c.PodDetail(context.Background(), "team-a", "web-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.DeviceHealthOmitted != 1 || len(d.ClaimHealth) != 1 || d.ClaimHealth[0] != (ClaimHealth{Claim: "gpu", Unhealthy: 1, Healthy: maxDeviceHealth}) {
+		t.Fatalf("the omitted unhealthy report counts: %d %+v", d.DeviceHealthOmitted, d.ClaimHealth)
 	}
 }

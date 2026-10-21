@@ -1,0 +1,66 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "TriggerAuthentication",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "aws-workload",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447462",
+    "uid": "a0f3ed3f-fd3b-4ccc-b4ac-94ba1c579781"
+   },
+   "spec": {
+    "podIdentity": {
+     "identityOwner": "workload",
+     "provider": "aws"
+    }
+   },
+   "status": {
+    "scaledobjects": "wl-identity"
+   }
+  },
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "TriggerAuthentication",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "missing-secret",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1447391",
+    "uid": "344ce699-e60e-4d36-9314-070a7c28a8c1"
+   },
+   "spec": {
+    "secretTargetRef": [
+     {
+      "key": "token",
+      "name": "no-such-secret",
+      "parameter": "bearerToken"
+     }
+    ]
+   },
+   "status": {
+    "scaledobjects": "bad-auth"
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

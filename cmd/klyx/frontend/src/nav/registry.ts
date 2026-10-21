@@ -8,7 +8,8 @@ import type { ArgoViewMode, ClusterDTO, ClusterSection, FluxViewMode, ResourceRe
 // view, so "Certificates" (diagnosis) and "Certificates" (raw objects) are
 // never mistaken for each other.
 
-export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb";
+export type CapKey = "flux" | "fluxOperator" | "fluxImages" | "fluxComposition" | "fluxNotifications" | "argo" | "certManager" | "externalSecrets" | "gatewayAPI" | "karpenter" | "hubble" | "cilium" | "velero" | "admission" | "loadBalancing" | "metallb" | "alerting" | "keda" | "dra"
+  | "ec2NodeClasses" | "aksNodeClasses" | "autoNodeClasses";
 
 export type NavTarget =
   | { kind: "section"; section: ClusterSection; workloadKinds?: readonly WorkloadKind[]; argoView?: ArgoViewMode; fluxView?: FluxViewMode }
@@ -48,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
       task("overview", "Overview", section("overview")),
       task("nodes", "Nodes", section("nodes")),
       task("events", "Events", section("events"), { keywords: ["warnings"] }),
+      task("alerts", "Alerts", section("alerts"), { cap: "alerting", keywords: ["alertmanager", "firing", "silenced", "inhibited", "muted"] }),
       task("upgrade", "Upgrade check", section("upgrade"), { keywords: ["deprecated apis", "version"] }),
       res("Namespaces", r("", "v1", "namespaces", "Namespace", "Cluster")),
       res("API Services", r("apiregistration.k8s.io", "v1", "apiservices", "APIService", "Cluster")),
@@ -90,13 +92,35 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // coverage S11b: read-only; claims, device pools and device classes in
+    // one view. Present where resource.k8s.io/v1 is served and some DRA
+    // object exists.
+    id: "dra", label: "Devices (DRA)", cap: "dra", lens: "group", destinations: [
+      task("dra", "Devices (DRA)", section("dra"), { keywords: ["dra", "dynamic resource allocation", "resourceclaim", "resourceslice", "deviceclass", "gpu", "device pool"] }),
+      res("ResourceClaims", r("resource.k8s.io", "v1", "resourceclaims", "ResourceClaim", "Namespaced")),
+      res("ResourceClaimTemplates", r("resource.k8s.io", "v1", "resourceclaimtemplates", "ResourceClaimTemplate", "Namespaced")),
+      res("ResourceSlices", r("resource.k8s.io", "v1", "resourceslices", "ResourceSlice", "Cluster")),
+      res("DeviceClasses", r("resource.k8s.io", "v1", "deviceclasses", "DeviceClass", "Cluster")),
+    ],
+  },
+  {
     id: "autoscaling", label: "Autoscaling", destinations: [
-      task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "provisioning"] }),
+      task("karpenter", "Karpenter", section("karpenter"), { cap: "karpenter", keywords: ["nodepools", "nodeclasses", "ec2nodeclass", "aksnodeclass", "provisioning"] }),
+      // coverage S9: HPAs judged as a part (the generic list stays in
+      // Resources), and KEDA in its own vocabulary
+      task("autoscaling", "Autoscalers", section("autoscaling"), { keywords: ["hpa", "horizontal pod autoscaler", "keda", "scaledobject", "scaledjob", "triggerauthentication", "pause"] }),
       res("HorizontalPodAutoscalers", r("autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler", "Namespaced"), { keywords: ["hpa"] }),
+      res("ScaledObjects", r("keda.sh", "v1alpha1", "scaledobjects", "ScaledObject", "Namespaced"), { cap: "keda" }),
+      res("ScaledJobs", r("keda.sh", "v1alpha1", "scaledjobs", "ScaledJob", "Namespaced"), { cap: "keda" }),
+      res("TriggerAuthentications", r("keda.sh", "v1alpha1", "triggerauthentications", "TriggerAuthentication", "Namespaced"), { cap: "keda" }),
+      res("ClusterTriggerAuthentications", r("keda.sh", "v1alpha1", "clustertriggerauthentications", "ClusterTriggerAuthentication", "Cluster"), { cap: "keda" }),
       res("PodDisruptionBudgets", r("policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget", "Namespaced"), { keywords: ["pdb"] }),
       res("NodePools", r("karpenter.sh", "v1", "nodepools", "NodePool", "Cluster"), { cap: "karpenter" }),
       res("NodeClaims", r("karpenter.sh", "v1", "nodeclaims", "NodeClaim", "Cluster"), { cap: "karpenter" }),
-      res("EC2NodeClasses", r("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClass", "Cluster"), { cap: "karpenter" }),
+      // coverage S10: each class kind's raw entry is gated on its own API
+      res("EC2NodeClasses", r("karpenter.k8s.aws", "v1", "ec2nodeclasses", "EC2NodeClass", "Cluster"), { cap: "ec2NodeClasses" }),
+      res("AKSNodeClasses", r("karpenter.azure.com", "v1beta1", "aksnodeclasses", "AKSNodeClass", "Cluster"), { cap: "aksNodeClasses", keywords: ["node auto-provisioning", "nap"] }),
+      res("NodeClasses (EKS Auto Mode)", r("eks.amazonaws.com", "v1", "nodeclasses", "NodeClass", "Cluster"), { cap: "autoNodeClasses", keywords: ["auto mode"] }),
     ],
   },
   {
@@ -266,9 +290,17 @@ export function capState(c: ClusterDTO | undefined, cap: CapKey | undefined): Ca
     gatewayAPI: Boolean(c.gatewayAPIVersion),
     karpenter: c.karpenterPresent ?? false,
     velero: c.veleroPresent ?? false,
+    keda: c.kedaPresent ?? false,
+    ec2NodeClasses: c.ec2NodeClassesPresent ?? false,
+    aksNodeClasses: c.aksNodeClassesPresent ?? false,
+    autoNodeClasses: c.autoNodeClassesPresent ?? false,
     admission: c.admissionPresent ?? false,
+    dra: c.draPresent ?? false,
     loadBalancing: c.loadBalancingPresent ?? false,
     metallb: c.metallbPresent ?? false,
+    // S8a: the alerts snapshot's own evidence (an Alertmanager configured,
+    // or the last read resolved one), on its cadence - never a probe
+    alerting: c.alertsPresent ?? false,
     hubble: c.hasHubble ?? false,
     cilium: c.ciliumPresent ?? false,
   };

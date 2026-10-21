@@ -121,3 +121,62 @@ func TestUnparseableEndpointURL(t *testing.T) {
 		t.Fatalf("problem: %q", p)
 	}
 }
+
+// Coverage S8a §2: match is equality matchers on label names, and
+// serviceRef.path a plain path prefix.
+func TestMatchAndServicePathValidation(t *testing.T) {
+	base := "clusters:\n  - name: a\n    context: a\n    alertmanager:\n"
+	for _, tc := range []struct{ block, want string }{
+		{"      endpoint: https://am.example\n      match: {cluster: aks-prd}\n", ""},
+		{"      endpoint: https://am.example\n      match: {\"a-b\": x}\n", "is not a label name"},
+		{"      endpoint: https://am.example\n      match: {cluster: \"\"}\n", "non-empty value"},
+		{"      endpoint: https://am.example\n      match: {cluster: \"a\\nb\"}\n", "control characters"},
+		{"      serviceRef: {namespace: m, name: am, port: web, path: /alertmanager}\n", ""},
+		{"      serviceRef: {namespace: m, name: am, port: web, path: alertmanager/v2/}\n", ""},
+		{"      serviceRef: {namespace: m, name: am, port: web, path: /a/../b}\n", "plain path prefix"},
+		{"      serviceRef: {namespace: m, name: am, port: web, path: \"/a?x=1\"}\n", "plain path prefix"},
+		{"      serviceRef: {namespace: m, name: am, port: web, path: \"/a#f\"}\n", "plain path prefix"},
+	} {
+		_, err := loadYAML(t, base+tc.block)
+		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%q: %v, want %q", tc.block, err, tc.want)
+		}
+	}
+	// the metrics serviceRef takes the same path
+	if _, err := loadYAML(t, "clusters:\n  - name: a\n    context: a\n    metrics:\n      serviceRef: {namespace: m, name: mimir, port: \"8080\", path: /prometheus}\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two clusters reading the same Alertmanager, one without match, are warned
+// about by name; the origin is compared canonically and the path as written.
+func TestSharedEndpointWithoutMatchWarns(t *testing.T) {
+	doc := func(a, b string) string {
+		return "clusters:\n  - name: a\n    context: a\n    alertmanager:\n" + a + "  - name: b\n    context: b\n    alertmanager:\n" + b
+	}
+	shared := func(w []string) bool {
+		for _, s := range w {
+			if strings.Contains(s, "clusters a, b read the same alertmanager endpoint") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tc := range []struct {
+		a, b string
+		warn bool
+	}{
+		{"      endpoint: https://am.example\n", "      endpoint: https://AM.example:443/\n", true},
+		{"      endpoint: https://am.example\n      match: {cluster: a}\n", "      endpoint: https://am.example\n", true},
+		{"      endpoint: https://am.example\n      match: {cluster: a}\n", "      endpoint: https://am.example\n      match: {cluster: b}\n", false},
+		{"      endpoint: https://am.example/one\n", "      endpoint: https://am.example/two\n", false},
+	} {
+		c, err := loadYAML(t, doc(tc.a, tc.b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := shared(c.Warnings()); got != tc.warn {
+			t.Errorf("%q / %q: warned %v, want %v: %q", tc.a, tc.b, got, tc.warn, c.Warnings())
+		}
+	}
+}

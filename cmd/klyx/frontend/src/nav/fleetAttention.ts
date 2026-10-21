@@ -31,11 +31,13 @@ export function healthReading(m: ClusterAttention): string[] {
   if (mastReading(m).state === "checking") return ["health checking…"];
   const lit: string[] = [];
   const rest: string[] = [];
+  const notes: string[] = []; // S10 §5: a managed controller, said last
   const quiet = new Map<string, string[]>(); // provenance -> parts
   const reason = (a: { controller: { reason?: string } | null }) => (a.controller?.reason ? ` - ${a.controller.reason}` : "");
   for (const a of m.areas) {
     if (a.controller?.state === "not ready") lit.push(`${a.label}: controller not ready${reason(a)}`);
     else if (a.controller?.state === "unknown") rest.push(`${a.label}: controller health unknown${reason(a)}`);
+    else if (a.controller?.state === "managed") notes.push(`${a.label}: controller managed by the platform${reason(a)}`);
     for (const l of a.lines) {
       const name = `${a.label}${a.lines.length > 1 ? ` ${l.label}` : ""}`;
       const p = provenance(a, l);
@@ -46,7 +48,7 @@ export function healthReading(m: ClusterAttention): string[] {
   }
   const out = [...lit, ...rest];
   for (const [p, names] of quiet) out.push(`no attention: ${names.join(", ")} (${p})`);
-  return out;
+  return [...out, ...notes];
 }
 
 export type LampKind = "unreachable" | "danger" | "warning" | "connection" | "connecting" | "unverified" | "healthy";

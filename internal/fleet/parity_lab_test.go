@@ -209,6 +209,8 @@ var parityParts = []parityPart{
 	{"gateway", "routes", "native", []string{"httproutes", "grpcroutes", "tlsroutes", "tcproutes", "udproutes"}}, // coverage S7b
 	{"karpenter", "nodeclaims", "native", []string{"nodeclaims"}},
 	{"karpenter", "nodepools", "native", []string{"nodepools"}},
+	// coverage S10: the NodeClasses are evidence (their pools carry the verdict)
+	{"karpenter", "nodeclasses", "evidence", []string{"ec2nodeclasses", "aksnodeclasses", "nodeclasses"}},
 	{"velero", "schedules", "native", []string{"schedules"}},
 	{"velero", "locations", "native", []string{"backupstoragelocations"}},
 	{"velero", "backups", "native", []string{"backups"}},
@@ -218,7 +220,28 @@ var parityParts = []parityPart{
 	{"lb", "services", "native", []string{"services"}},
 	{"lb", "pools", "native", []string{"ipaddresspools", "ciliumloadbalancerippools"}},
 	{"lb", "metallb", "native", []string{"configurationstates"}},
+	// coverage S8a: the fixture's real Alertmanager, apart from every object
+	{"alerts", "alerts", "alerts", nil},
+	// coverage S9: standalone HPAs only (a KEDA-owned HPA is its
+	// ScaledObject's fact row, parityMemberOf), KEDA's scalers, and its
+	// authentications (evidence)
+	{"autoscaling", "hpas", "native", []string{"horizontalpodautoscalers"}},
+	{"keda", "scaledobjects", "native", []string{"scaledobjects"}},
+	{"keda", "scaledjobs", "native", []string{"scaledjobs"}},
+	{"keda", "authentications", "evidence", []string{"triggerauthentications", "clustertriggerauthentications"}},
+	// coverage S11a: reservations and totals are evidence over the nodes
+	{"extended", "reservations", "evidence", []string{"nodes"}},
+	{"extended", "totals", "evidence", []string{"nodes"}},
+	// coverage S11b: claims by UID; pools by driver/pool (keyed from their
+	// slices, parityPoolKey); device classes are evidence
+	{"dra", "claims", "native", []string{"resourceclaims"}},
+	{"dra", "pools", "native", []string{"resourceslices"}},
+	{"dra", "classes", "evidence", []string{"deviceclasses"}},
 }
+
+// parityAlertsCounted is the fixture's posted alerts that count: two
+// critical and one warning, active (alerts_objects in parity/fixture.sh).
+const parityAlertsCounted = 3
 
 var parityResource = map[string]string{
 	"deployments": "deployments.apps", "statefulsets": "statefulsets.apps", "daemonsets": "daemonsets.apps",
@@ -236,6 +259,9 @@ var parityResource = map[string]string{
 	"grpcroutes":   "grpcroutes.gateway.networking.k8s.io", "tlsroutes": "tlsroutes.gateway.networking.k8s.io",
 	"tcproutes": "tcproutes.gateway.networking.k8s.io", "udproutes": "udproutes.gateway.networking.k8s.io",
 	"nodeclaims": "nodeclaims.karpenter.sh", "nodepools": "nodepools.karpenter.sh",
+	"ec2nodeclasses": "ec2nodeclasses.karpenter.k8s.aws", "aksnodeclasses": "aksnodeclasses.karpenter.azure.com",
+	"nodeclasses":    "nodeclasses.eks.amazonaws.com",
+	"resourceclaims": "resourceclaims.resource.k8s.io", "resourceslices": "resourceslices.resource.k8s.io", "deviceclasses": "deviceclasses.resource.k8s.io",
 	"fluxinstances": "fluxinstances.fluxcd.controlplane.io", "resourcesets": "resourcesets.fluxcd.controlplane.io",
 	"resourcesetinputproviders": "resourcesetinputproviders.fluxcd.controlplane.io",
 	"imagerepositories":         "imagerepositories.image.toolkit.fluxcd.io", "imagepolicies": "imagepolicies.image.toolkit.fluxcd.io",
@@ -249,6 +275,9 @@ var parityResource = map[string]string{
 	"mutatingadmissionpolicies":       "mutatingadmissionpolicies.admissionregistration.k8s.io",
 	"services":                        "services", "ipaddresspools": "ipaddresspools.metallb.io",
 	"ciliumloadbalancerippools": "ciliumloadbalancerippools.cilium.io", "configurationstates": "configurationstates.metallb.io",
+	"horizontalpodautoscalers": "horizontalpodautoscalers.autoscaling",
+	"scaledobjects":            "scaledobjects.keda.sh", "scaledjobs": "scaledjobs.keda.sh",
+	"triggerauthentications": "triggerauthentications.keda.sh", "clustertriggerauthentications": "clustertriggerauthentications.keda.sh",
 }
 
 // parityMember is one counted object's declared evaluation.
@@ -267,31 +296,55 @@ type partExpect struct {
 	Included   int                     `json:"included"`
 	Members    map[string]parityMember `json:"members"`  // uid -> declared evaluation
 	Coverage   map[string]string       `json:"coverage"` // counted kind -> live | stale | unreadable:<class>
+	// Alerts is an alerts part's declared counted alerts (coverage S8a): the
+	// fixture's posted active critical and warning alerts.
+	Alerts int `json:"alerts,omitempty"`
 }
 
 // caseExpect is one case's declared state.
 type caseExpect struct {
 	Case        string            `json:"case"`
 	Parts       []partExpect      `json:"parts"`
-	Controllers map[string]string `json:"controllers"` // task -> "" | not ready | unknown
+	Controllers map[string]string `json:"controllers"` // task -> "" | not ready | unknown | managed
 	State       string            `json:"state"`       // the connection: Synced | Degraded (exact)
 }
 
 type parityObj struct {
 	Metadata struct {
-		UID         string            `json:"uid"`
-		Annotations map[string]string `json:"annotations"`
+		UID             string            `json:"uid"`
+		Annotations     map[string]string `json:"annotations"`
+		OwnerReferences []struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Controller *bool  `json:"controller"`
+		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
-		Type string `json:"type"`
+		Type   string `json:"type"`
+		Driver string `json:"driver"` // a ResourceSlice's (coverage S11b)
+		Pool   struct {
+			Name string `json:"name"`
+		} `json:"pool"`
 	} `json:"spec"`
 }
 
+// parityPoolKey is a ResourceSlice's pool member key (coverage S11b): a pool
+// has no object UID, so its rows and the oracle key it by driver/pool.
+func parityPoolKey(o parityObj) string { return "pool:" + o.Spec.Driver + "/" + o.Spec.Pool.Name }
+
 // parityMemberOf: whether a counted kind's object is a member of the part
-// (coverage S4: the lb services part counts only LoadBalancer Services).
+// (coverage S4: the lb services part counts only LoadBalancer Services;
+// coverage S9: the hpas part counts only HPAs no ScaledObject controls).
 func parityMemberOf(task, part string, o parityObj) bool {
-	if task == "lb" && part == "services" {
+	switch {
+	case task == "lb" && part == "services":
 		return o.Spec.Type == "LoadBalancer"
+	case task == "autoscaling" && part == "hpas":
+		for _, r := range o.Metadata.OwnerReferences {
+			if r.Controller != nil && *r.Controller && r.Kind == "ScaledObject" && strings.HasPrefix(r.APIVersion, "keda.sh/") {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -318,11 +371,14 @@ func addRole(c *observe.Counts, role string) {
 // coverage overrides a kind's expected coverage.
 func (l *parityLab) oracle(name, state string, coverage map[string]string, controllers map[string]string) caseExpect {
 	ex := caseExpect{Case: name, Controllers: map[string]string{}, State: state}
-	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb"} {
+	for _, t := range []string{"flux", "argo", "certs", "eso", "gateway", "karpenter", "velero", "lb", "keda"} {
 		ex.Controllers[t] = controllers[t]
 	}
 	for _, p := range parityParts {
 		pe := partExpect{Task: p.Task, Part: p.Part, Classifier: p.Classifier, Counted: p.Counted, Coverage: map[string]string{}, Members: map[string]parityMember{}}
+		if p.Classifier == "alerts" {
+			pe.Alerts = parityAlertsCounted
+		}
 		for _, kind := range p.Counted {
 			cov := "live"
 			if c, ok := coverage[kind]; ok {
@@ -335,6 +391,30 @@ func (l *parityLab) oracle(name, state string, coverage map[string]string, contr
 			var list struct{ Items []parityObj }
 			if err := json.Unmarshal(l.kubectl("get", parityResource[kind], "-A", "-o", "json"), &list); err != nil {
 				l.t.Fatalf("oracle %s: %v", kind, err)
+			}
+			if p.Task == "dra" && p.Part == "pools" {
+				// a pool is its slices together: its declaration is the one
+				// any of its slices carries
+				pools := map[string]parityMember{}
+				for _, o := range list.Items {
+					key := parityPoolKey(o)
+					m, seen := pools[key]
+					if r := o.Metadata.Annotations["klyx.dev/parity-role"]; r != "" || !seen {
+						m = parityMember{Role: r, Included: o.Metadata.Annotations["klyx.dev/parity-included"] == "true"}
+						if m.Role == "" {
+							m.Role = "ok"
+						}
+					}
+					pools[key] = m
+				}
+				for key, m := range pools {
+					addRole(&pe.Roles, m.Role)
+					if m.Included {
+						pe.Included++
+					}
+					pe.Members[key] = m
+				}
+				continue
 			}
 			for _, o := range list.Items {
 				if !parityMemberOf(p.Task, p.Part, o) {
@@ -400,7 +480,7 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 	}
 	var env struct {
 		Rows []struct {
-			Ref  struct{ UID string }
+			Ref  struct{ UID, Name string }
 			Eval struct {
 				Included bool
 				Role     int
@@ -414,6 +494,8 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 				// Backup, a binding
 				Counted *bool
 				Binding json.RawMessage
+				// a KEDA-owned HPA (coverage S9): its ScaledObject's fact
+				KEDAOwner string
 			}
 		}
 	}
@@ -425,7 +507,8 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 		// a listed fact, by its part's own marker: no evaluation, and no member
 		// of the counted set (FluxInstance rows carry an unrelated Binding)
 		if (key == "velero/backups" && x.Data.Counted != nil && !*x.Data.Counted) ||
-			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") {
+			(key == "admission/policies" && len(x.Data.Binding) > 0 && string(x.Data.Binding) != "null") ||
+			(key == "autoscaling/hpas" && x.Data.KEDAOwner != "") {
 			continue
 		}
 		var m parityMember
@@ -446,7 +529,11 @@ func rowEvals(r observe.Rows, key string) (map[string]parityMember, error) {
 			}
 			m = parityMember{Role: kindRole[x.Eval.Role], Included: x.Eval.Included}
 		}
-		out[x.Ref.UID] = m
+		id := x.Ref.UID
+		if key == "dra/pools" {
+			id = "pool:" + x.Ref.Name // a pool's stated identity (coverage S11b): pools alone have no UID
+		}
+		out[id] = m
 	}
 	return out, nil
 }
@@ -536,6 +623,19 @@ func mismatches(ex caseExpect, sum observe.Summary, rows map[string]observe.Rows
 		if pe.Classifier == "evidence" {
 			if p.Evidence == nil {
 				bad = append(bad, key+" has no evidence count")
+			}
+			continue
+		}
+		if pe.Classifier == "alerts" {
+			// coverage S8a: counted apart, never roles; checked when the
+			// alerts read is live
+			switch {
+			case p.Alerts == nil:
+				bad = append(bad, key+" has no alert counts")
+			case p.Coverage == observe.Live && p.Alerts.Counted != pe.Alerts:
+				bad = append(bad, fmt.Sprintf("%s counted %d alerts, want %d", key, p.Alerts.Counted, pe.Alerts))
+			case p.Coverage != observe.Live:
+				bad = append(bad, fmt.Sprintf("%s coverage %q, want live", key, p.Coverage))
 			}
 			continue
 		}
@@ -669,7 +769,10 @@ type parityConn struct {
 
 func (l *parityLab) connect(kubeconfig string) *parityConn {
 	l.t.Helper()
-	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig}
+	cc := config.ClusterConfig{Name: parityContext, Context: parityContext, Kubeconfig: kubeconfig,
+		// coverage S8a: the fixture's Alertmanager, this cluster's alerts only
+		Alertmanager: &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "parity-alerting", Name: "alertmanager", Port: "web"},
+			Match: map[string]string{"cluster": "kind-klyx-parity"}}}
 	conn, err := fleet.DefaultConnFactory(clock.Real{}, fleet.Credentials{})(cc)
 	if err != nil {
 		l.t.Fatal(err)
@@ -762,7 +865,13 @@ func TestParityGate(t *testing.T) {
 		}
 	})
 
-	none := map[string]string{}
+	// coverage S10: an attributed AWS and Azure stand-in and EKS Auto Mode's
+	// node label: Karpenter's controller task is "managed" in every case (a
+	// note, never attention or a gap)
+	none := map[string]string{"karpenter": "managed"}
+	with := func(task, state string) map[string]string {
+		return map[string]string{"karpenter": "managed", task: state}
+	}
 	var cases []string
 
 	// B and cases 1-6b: the cluster admin.
@@ -776,8 +885,13 @@ func TestParityGate(t *testing.T) {
 	}{
 		{"1", "Synced", none}, {"2", "Synced", none}, {"3", "Synced", none}, {"4", "Synced", none},
 		{"5a", "Synced", none}, {"5b", "Synced", none}, {"5c", "Synced", none}, {"5d", "Synced", none}, {"5e", "Synced", none},
-		{"6", "Synced", map[string]string{"certs": "not ready"}},   // cert-manager is not a connection subsystem
-		{"6b", "Degraded", map[string]string{"flux": "not ready"}}, // the GitOps tier degrades the connection
+		{"6", "Synced", with("certs", "not ready")},   // cert-manager is not a connection subsystem
+		{"6b", "Degraded", with("flux", "not ready")}, // the GitOps tier degrades the connection
+		{"9", "Synced", none},                         // coverage S9: a fallback ScaledObject and an HPA that cannot scale
+		{"10", "Synced", none},                        // coverage S10: a failing EC2NodeClass lights its two pools once each
+		{"11", "Synced", none},                        // coverage S11a: a stopped device plugin's node reads not allocatable
+		{"12", "Synced", none},                        // coverage S11b: a claim no node can satisfy, its pod unschedulable
+		{"13", "Synced", none},                        // coverage S11b: an invalid fixture pool
 	} {
 		l.apply(c.name)
 		l.capture(c.name, admin, l.settle(admin, func() caseExpect { return l.oracle(c.name, c.state, nil, c.controllers) }, paritySettle))

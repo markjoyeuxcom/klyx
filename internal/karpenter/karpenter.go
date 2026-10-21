@@ -9,6 +9,7 @@
 package karpenter
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -30,13 +31,16 @@ const (
 	condConsolidatable = "Consolidatable"
 )
 
-// NodePool is one pool's triage row. Limit/used pointers are nil when the
-// pool declares no limit / reports no capacity - never a fabricated zero.
+// NodePool is one pool's projection (coverage S10 §7): the lens row and
+// the rule's authoritative fields, computed from every condition before the
+// display cap. Limit/used pointers are nil when the pool declares no limit /
+// reports no capacity - never a fabricated zero.
 type NodePool struct {
-	Name     string
-	Ready    string // "ready" | "not-ready" | "unknown"
-	Reason   string
-	Message  string
+	Meta     Meta
+	Ref      *ClassRef // spec.template.spec.nodeClassRef; nil when absent
+	Ready    string    // "ready" | "not-ready" | "unknown"
+	Reason   string    // Ready's reason token
+	Message  string    // Ready's native message: the local inspector only (§8)
 	Weight   int64
 	CPULimit *float64
 	CPUUsed  *float64
@@ -46,12 +50,20 @@ type NodePool struct {
 	// ReadySince is the Ready condition's lastTransitionTime, zero when
 	// absent (The Line §8.1).
 	ReadySince time.Time
+	// The authoritative conditions the rule reads (§3, §7); nil when absent.
+	CondReady, CondValidation, CondNodeClassReady, CondRegistration *Cond
+	// NodeClassObservedGeneration is the class generation registration
+	// health last observed; 0 when not reported.
+	NodeClassObservedGeneration int64
+	Conds                       Conds
+	size                        int
 }
 
 // NodeClaim is one claim's lifecycle row. FailingCondition names the first
 // broken link of the launch chain when the claim is not Ready.
 type NodeClaim struct {
-	Name        string
+	Meta        Meta
+	Ref         *ClassRef // spec.nodeClassRef; nil when absent
 	Pool        string
 	NodeName    string
 	Ready       string // "ready" | "not-ready" | "unknown"
@@ -59,8 +71,12 @@ type NodeClaim struct {
 	// FailingStatus is the chosen link's native condition status. Only
 	// "False" proves that link failed; "Unknown" (or anything else) is a link
 	// still in progress or unverified.
-	FailingStatus  string
-	FailingReason  string
+	FailingStatus string
+	// FailingReason is a reason token; FailingReasonWithheld when the native
+	// reason was outside the schema's pattern (§8).
+	FailingReason         string
+	FailingReasonWithheld bool
+	// FailingMessage is the native message: the local inspector only (§8).
 	FailingMessage string
 	Drifted        bool
 	Consolidatable bool
@@ -71,48 +87,23 @@ type NodeClaim struct {
 	// ReadySince is the Ready condition's lastTransitionTime, zero when
 	// absent (The Line §8.1).
 	ReadySince time.Time
+	size       int
 }
 
-type condition struct {
-	Status  string
-	Reason  string
-	Message string
-	Since   time.Time // lastTransitionTime, zero when absent or invalid
-}
-
-func conditionsOf(u *unstructured.Unstructured) map[string]condition {
-	out := map[string]condition{}
-	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
-	for _, c := range conds {
-		m, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		t, _ := m["type"].(string)
-		if t == "" {
-			continue
-		}
-		st, _ := m["status"].(string)
-		reason, _ := m["reason"].(string)
-		msg, _ := m["message"].(string)
-		var since time.Time
-		if lt, ok := m["lastTransitionTime"].(string); ok {
-			if ts, err := time.Parse(time.RFC3339, lt); err == nil {
-				since = ts
-			}
-		}
-		out[t] = condition{Status: st, Reason: reason, Message: msg, Since: since}
-	}
-	return out
+// At returns the claim with its age relative to now: a projection is parsed
+// once, so the evaluator ages it at each evaluation.
+func (c NodeClaim) At(now time.Time) NodeClaim {
+	c.AgeSeconds = int(now.Sub(c.Created).Seconds())
+	return c
 }
 
 // readyString maps a Ready condition: only "True" and "False" are evidence;
 // a missing, Unknown or unsupported status is "unknown", never a fault.
-func readyString(c condition, found bool) string {
+func readyString(c *Cond) string {
 	switch {
-	case found && c.Status == "True":
+	case c != nil && c.Status == "True":
 		return "ready"
-	case found && c.Status == "False":
+	case c != nil && c.Status == "False":
 		return "not-ready"
 	default:
 		return "unknown"
@@ -131,14 +122,28 @@ func quantityPtr(s string) *float64 {
 	return &v
 }
 
-// ParseNodePool reads one NodePool CR (cluster-scoped).
+// The NodePool's own conditions (§1.1).
+const (
+	condValidation     = "ValidationSucceeded"
+	condNodeClassReady = "NodeClassReady"
+	condRegistration   = "NodeRegistrationHealthy"
+)
+
+// ParseNodePool projects one NodePool (cluster-scoped).
 func ParseNodePool(u *unstructured.Unstructured) NodePool {
-	out := NodePool{Name: u.GetName()}
-	conds := conditionsOf(u)
-	ready, found := conds[condReady]
-	out.Ready = readyString(ready, found)
-	out.Reason, out.Message = ready.Reason, ready.Message
-	out.ReadySince = ready.Since
+	out := NodePool{Meta: metaOf(u, true), Ref: refOf(u, "spec", "template", "spec", "nodeClassRef")}
+	all := condsOf(u)
+	out.Conds = display(all)
+	var idx [4]int
+	out.CondReady, idx[0] = find(all, condReady)
+	out.CondValidation, idx[1] = find(all, condValidation)
+	out.CondNodeClassReady, idx[2] = find(all, condNodeClassReady)
+	out.CondRegistration, idx[3] = find(all, condRegistration)
+	out.Ready = readyString(out.CondReady)
+	if r := out.CondReady; r != nil {
+		out.Reason, out.Message, out.ReadySince = r.Reason, r.Message, r.At
+	}
+	out.NodeClassObservedGeneration, _, _ = unstructured.NestedInt64(u.Object, "status", "nodeClassObservedGeneration")
 
 	out.Weight, _, _ = unstructured.NestedInt64(u.Object, "spec", "weight")
 
@@ -151,6 +156,12 @@ func ParseNodePool(u *unstructured.Unstructured) NodePool {
 	memUsed, _, _ := unstructured.NestedString(u.Object, "status", "resources", "memory")
 	out.CPUUsed = quantityPtr(cpuUsed)
 	out.MemUsed = quantityPtr(memUsed)
+
+	n := metaSize(out.Meta) + 160 + refSize(out.Ref) + condsSize(out.Conds)
+	for i, c := range []*Cond{out.CondReady, out.CondValidation, out.CondNodeClassReady, out.CondRegistration} {
+		n += authSize(c, idx[i])
+	}
+	out.size = n
 	return out
 }
 
@@ -159,50 +170,72 @@ func ParseNodePool(u *unstructured.Unstructured) NodePool {
 // launched but never registered).
 var launchChain = []string{condLaunched, condRegistered, condInitialized}
 
-// ParseNodeClaim reads one NodeClaim CR (cluster-scoped).
+// ParseNodeClaim projects one NodeClaim (cluster-scoped), aged at now.
 func ParseNodeClaim(u *unstructured.Unstructured, now time.Time) NodeClaim {
 	labels := u.GetLabels()
 	out := NodeClaim{
-		Name:         u.GetName(),
-		Pool:         labels[LabelNodePool],
-		CapacityType: labels[LabelCapacityType],
-		InstanceType: labels[LabelInstanceType],
-		AgeSeconds:   int(now.Sub(u.GetCreationTimestamp().Time).Seconds()),
+		Meta:         metaOf(u, false),
+		Ref:          refOf(u, "spec", "nodeClassRef"),
+		Pool:         clip(labels[LabelNodePool], maxName),
+		CapacityType: clip(labels[LabelCapacityType], maxStatus),
+		InstanceType: clip(labels[LabelInstanceType], maxToken),
 		Created:      u.GetCreationTimestamp().Time,
 	}
-	out.NodeName, _, _ = unstructured.NestedString(u.Object, "status", "nodeName")
+	out = out.At(now)
+	out.NodeName = str(u, maxName, "status", "nodeName")
 
-	conds := conditionsOf(u)
-	ready, found := conds[condReady]
-	out.Ready = readyString(ready, found)
-	out.ReadySince = ready.Since
+	all := condsOf(u)
+	ready, _ := find(all, condReady)
+	out.Ready = readyString(ready)
+	if ready != nil {
+		out.ReadySince = ready.At
+	}
 
 	if out.Ready != "ready" {
 		// A confirmed False link is the diagnosis; failing that, the first
 		// link not yet True (in progress / unverified), then Ready itself.
-		pick := func(match func(condition) bool) bool {
+		set := func(t string, c *Cond) {
+			out.FailingType, out.FailingStatus = t, c.Status
+			out.FailingReason, out.FailingReasonWithheld, out.FailingMessage = c.Reason, c.ReasonWithheld, c.Message
+		}
+		pick := func(match func(*Cond) bool) bool {
 			for _, t := range launchChain {
-				if c, ok := conds[t]; ok && match(c) {
-					out.FailingType, out.FailingStatus, out.FailingReason, out.FailingMessage = t, c.Status, c.Reason, c.Message
+				if c, _ := find(all, t); c != nil && match(c) {
+					set(t, c)
 					return true
 				}
 			}
 			return false
 		}
-		if !pick(func(c condition) bool { return c.Status == "False" }) && !pick(func(c condition) bool { return c.Status != "True" }) && found && ready.Status != "True" {
-			out.FailingType, out.FailingStatus, out.FailingReason, out.FailingMessage = condReady, ready.Status, ready.Reason, ready.Message
+		if !pick(func(c *Cond) bool { return c.Status == "False" }) && !pick(func(c *Cond) bool { return c.Status != "True" }) && ready != nil && ready.Status != "True" {
+			set(condReady, ready)
 		}
 	}
 
 	// Informational states, not errors: a drifted claim will be replaced, a
 	// consolidatable one may be disrupted to save capacity.
-	if c, ok := conds[condDrifted]; ok && c.Status == "True" {
+	if c, _ := find(all, condDrifted); c != nil && c.Status == "True" {
 		out.Drifted = true
 	}
-	if c, ok := conds[condConsolidatable]; ok && c.Status == "True" {
+	if c, _ := find(all, condConsolidatable); c != nil && c.Status == "True" {
 		out.Consolidatable = true
 	}
+	out.size = metaSize(out.Meta) + 200 + refSize(out.Ref) + len(out.Pool) + len(out.CapacityType) + len(out.InstanceType) +
+		len(out.NodeName) + len(out.FailingType) + len(out.FailingStatus) + len(out.FailingReason) + len(out.FailingMessage)
 	return out
+}
+
+// SizeOf is the budget's Size function for every Karpenter projection.
+func SizeOf(v any) int {
+	switch o := v.(type) {
+	case *NodePool:
+		return o.size
+	case *NodeClaim:
+		return o.size
+	case *NodeClass:
+		return o.size
+	}
+	return MaxClassObject + 1 // never retained
 }
 
 // SortPoolsBrokenFirst: not-ready, then unknown, then ready; name-stable.
@@ -212,7 +245,7 @@ func SortPoolsBrokenFirst(pools []NodePool) {
 		if rank[pools[i].Ready] != rank[pools[j].Ready] {
 			return rank[pools[i].Ready] < rank[pools[j].Ready]
 		}
-		return pools[i].Name < pools[j].Name
+		return pools[i].Meta.Name < pools[j].Meta.Name
 	})
 }
 
@@ -228,6 +261,41 @@ func SortClaimsStuckFirst(claims []NodeClaim) {
 		if claims[i].Ready != "ready" && claims[i].AgeSeconds != claims[j].AgeSeconds {
 			return claims[i].AgeSeconds < claims[j].AgeSeconds
 		}
-		return claims[i].Name < claims[j].Name
+		return claims[i].Meta.Name < claims[j].Meta.Name
 	})
+}
+
+// The karpenter.sh resources (§2).
+const (
+	Group              = "karpenter.sh"
+	Version            = "v1"
+	ResourceNodePools  = "nodepools"
+	ResourceNodeClaims = "nodeclaims"
+)
+
+// Project is the KindSpec projection for one Karpenter resource: the core
+// kinds and the three class kinds (§7). A claim is projected unaged; the
+// evaluator ages it (NodeClaim.At).
+func Project(resource string) func(obj any) (any, error) {
+	return func(obj any) (any, error) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return nil, fmt.Errorf("karpenter: want *Unstructured, got %T", obj)
+		}
+		switch resource {
+		case ResourceNodePools:
+			p := ParseNodePool(u)
+			return &p, nil
+		case ResourceNodeClaims:
+			c := ParseNodeClaim(u, u.GetCreationTimestamp().Time)
+			return &c, nil
+		}
+		for _, k := range ClassKinds {
+			if k.Resource == resource {
+				c := ParseNodeClass(u, k.Adapter)
+				return &c, nil
+			}
+		}
+		return nil, fmt.Errorf("karpenter: no projection for %s", resource)
+	}
 }

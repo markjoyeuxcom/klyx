@@ -53,8 +53,9 @@ describe("lens tables (parent §2.3, §9)", () => {
   });
 
   it("every verdict table starts with the mark column; evidence and simulations do not", () => {
-    // events are evidence, not an object's verdict; an access grant is a simulation's answer
-    const exempt = new Set(["AccessView.tsx GRANT_COLUMNS", "EventsView.tsx COLUMNS", "KarpenterView.tsx EVENT_COLUMNS"]);
+    // events are evidence, not an object's verdict; an access grant is a simulation's answer;
+    // Alertmanager's alerts are external evidence, never Klyx's verdict (S8a)
+    const exempt = new Set(["AccessView.tsx GRANT_COLUMNS", "EventsView.tsx COLUMNS", "KarpenterView.tsx EVENT_COLUMNS", "AlertsView.tsx COLUMNS"]);
     const seen: string[] = [];
     for (const f of readdirSync(new URL(`file://${cwd}/src/cluster/`))) {
       if (!f.endsWith(".tsx") || f.includes(".test.")) continue;

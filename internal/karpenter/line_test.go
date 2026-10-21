@@ -36,8 +36,9 @@ func TestClaimRuleSinceAndReason(t *testing.T) {
 		t.Errorf("ready: dated by Ready, got %+v", e)
 	}
 	failed := NodeClaim{Ready: "not-ready", ReadySince: at, Created: created, FailingType: "Launched", FailingStatus: "False", FailingReason: "InsufficientCapacity", FailingMessage: "no offering"}
-	if e := ClaimRule(failed); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) || e.Reason != "InsufficientCapacity: no offering" {
-		t.Errorf("not ready: dated by Ready, the failing link's reason, got %+v", e)
+	if e := ClaimRule(failed); e.Role != health.Fault || e.Since == nil || !e.Since.Equal(at) ||
+		e.Reason != "Launched False: InsufficientCapacity: no capacity was available for the requested instance types" {
+		t.Errorf("not ready: dated by Ready, the failing link in Klyx's wording (S10 §8), got %+v", e)
 	}
 
 	stuck := NodeClaim{Ready: "unknown", Created: created, AgeSeconds: 1000}
@@ -46,8 +47,8 @@ func TestClaimRuleSinceAndReason(t *testing.T) {
 		t.Errorf("appears stuck is derived from the launch deadline, got %+v", e)
 	}
 	stuck.ReadySince = deadline.Add(time.Minute) // Ready went Unknown after the deadline
-	stuck.FailingType, stuck.FailingReason, stuck.FailingMessage = "Registered", "NodeNotFound", "node not registered"
-	if e := ClaimRule(stuck); e.Since == nil || !e.Since.Equal(stuck.ReadySince) || e.Reason != "NodeNotFound: node not registered" {
+	stuck.FailingType, stuck.FailingStatus, stuck.FailingReason, stuck.FailingMessage = "Registered", "Unknown", "NodeNotFound", "node not registered"
+	if e := ClaimRule(stuck); e.Since == nil || !e.Since.Equal(stuck.ReadySince) || e.Reason != "Registered Unknown: NodeNotFound: no node has registered for the claim" {
 		t.Errorf("appears stuck, later Ready change and a named link, got %+v", e)
 	}
 
@@ -58,10 +59,17 @@ func TestClaimRuleSinceAndReason(t *testing.T) {
 
 func TestPoolRuleSinceAndReason(t *testing.T) {
 	at := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	if e := PoolRule(NodePool{Ready: "not-ready", Reason: "NodeClassNotReady", Message: "nodeclass missing", ReadySince: at}); e.Since == nil || !e.Since.Equal(at) || e.Reason != "NodeClassNotReady: nodeclass missing" {
+	ready := &Cond{Type: "Ready", Status: "False", Reason: "NodeClassNotReady", Message: "nodeclass missing", At: at}
+	p := NodePool{Ready: "not-ready", CondReady: ready, Conds: Conds{Total: 1}}
+	// S10: the role is the worst of several inputs (the class, its link, the
+	// controllers), so its start is not provable and Since stays nil; the
+	// deciding condition is the dated evidence.
+	e := PoolRule(p, PoolInputs{}).Eval
+	if e.Since != nil || e.Cond == nil || !e.Cond.At.Equal(at) ||
+		e.Reason != "not ready: Ready False: NodeClassNotReady: see the condition in Klyx" {
 		t.Errorf("not ready pool, got %+v", e)
 	}
-	if e := PoolRule(NodePool{Ready: "unknown"}); e.Since != nil || e.Reason != "" {
-		t.Errorf("no Ready condition: undated, got %+v", e)
+	if e := PoolRule(NodePool{Ready: "unknown"}, PoolInputs{}).Eval; e.Since != nil || e.Role != health.Unknown || e.Label != "not reported" {
+		t.Errorf("no conditions: not reported, undated, got %+v", e)
 	}
 }

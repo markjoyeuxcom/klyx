@@ -47,11 +47,18 @@ const LENSES: Record<string, Lens> = {
   "admissionregistration.k8s.io/mutatingwebhookconfigurations": { task: "admission", part: "webhooks", label: "Admission" },
   "admissionregistration.k8s.io/validatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
   "admissionregistration.k8s.io/mutatingadmissionpolicies": { task: "admission", part: "policies", label: "Admission" },
+  // coverage S11b
+  "resource.k8s.io/resourceclaims": { task: "dra", part: "claims", label: "Devices (DRA)" },
+  "resource.k8s.io/deviceclasses": { task: "dra", part: "classes", label: "Devices (DRA)" },
   // coverage S4: a Service opens in Resources (only a LoadBalancer has a
   // verdict, and a hit does not carry the type)
   "metallb.io/ipaddresspools": { task: "lb", part: "pools", label: "Load balancers" },
   "cilium.io/ciliumloadbalancerippools": { task: "lb", part: "pools", label: "Load balancers" },
   "metallb.io/configurationstates": { task: "lb", part: "metallb", label: "Load balancers" },
+  // coverage S9
+  "autoscaling/horizontalpodautoscalers": { task: "autoscaling", part: "hpas", label: "Autoscaling" },
+  "keda.sh/scaledobjects": { task: "keda", part: "scaledobjects", label: "Autoscaling" },
+  "keda.sh/scaledjobs": { task: "keda", part: "scaledjobs", label: "Autoscaling" },
 };
 
 const keyOf = (group: string, resource: string) => `${group}/${resource}`;

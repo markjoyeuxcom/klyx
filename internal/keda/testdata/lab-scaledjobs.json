@@ -1,0 +1,103 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "keda.sh/v1alpha1",
+   "kind": "ScaledJob",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "finalizers": [
+     "finalizer.keda.sh"
+    ],
+    "generation": 2,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "batch",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451530",
+    "uid": "7233ad3d-9364-430e-9f2c-4ff79024dacf"
+   },
+   "spec": {
+    "failedJobsHistoryLimit": 2,
+    "jobTargetRef": {
+     "backoffLimit": 0,
+     "template": {
+      "metadata": {
+       "labels": {
+        "klyx.dev/lab": "s9"
+       }
+      },
+      "spec": {
+       "containers": [
+        {
+         "command": [
+          "sh",
+          "-c",
+          "sleep 5"
+         ],
+         "image": "busybox:1.37",
+         "name": "work",
+         "resources": {}
+        }
+       ],
+       "restartPolicy": "Never"
+      }
+     }
+    },
+    "maxReplicaCount": 1,
+    "pollingInterval": 30,
+    "rollout": {},
+    "scalingStrategy": {},
+    "successfulJobsHistoryLimit": 2,
+    "triggers": [
+     {
+      "metadata": {
+       "desiredReplicas": "2",
+       "end": "59 23 * * *",
+       "start": "0 0 * * *",
+       "timezone": "UTC"
+      },
+      "type": "cron"
+     }
+    ]
+   },
+   "status": {
+    "authenticationsTypes": "",
+    "conditions": [
+     {
+      "message": "ScaledJob is defined correctly and is ready for scaling",
+      "reason": "ScaledJobReady",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "message": "Scaling is performed because triggers are active",
+      "reason": "ScalerActive",
+      "status": "True",
+      "type": "Active"
+     },
+     {
+      "status": "Unknown",
+      "type": "Fallback"
+     },
+     {
+      "status": "False",
+      "type": "Paused"
+     }
+    ],
+    "lastActiveTime": "2026-10-19T20:41:59Z",
+    "triggersActivity": {
+     "s0-cron-UTC-00xxx-5923xxx": {
+      "isActive": true
+     }
+    },
+    "triggersTypes": "cron"
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

@@ -63,6 +63,9 @@ func TestDryRunErrorKeepsOnlyStructuredFacts(t *testing.T) {
 	status := `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Invalid","code":422,` +
 		`"message":"x is invalid: spec.field: Invalid value: ` + needle + `; admission webhook \"policy.example.io\" denied the request: ` + needle + `",` +
 		`"details":{"causes":[{"reason":"FieldValueInvalid","message":"Invalid value: ` + needle + `","field":"spec.field"}]}}`
+	// a real webhook denial: the outer envelope (coverage S3b §2.1)
+	denied := `{"kind":"Status","apiVersion":"v1","status":"Failure","code":400,` +
+		`"message":"admission webhook \"policy.example.io\" denied the request: ` + needle + `"}`
 	cases := []struct {
 		name, group, version, plural, kind string
 		protected                          bool
@@ -72,7 +75,14 @@ func TestDryRunErrorKeepsOnlyStructuredFacts(t *testing.T) {
 		{"Secret", "", "v1", "secrets", "Secret", true},
 		{"ConfigMap", "", "v1", "configmaps", "ConfigMap", false},
 	}
-	for _, c := range cases {
+	for _, c := range append(cases, struct {
+		name, group, version, plural, kind string
+		protected                          bool
+	}{"HelmRelease denied", "helm.toolkit.fluxcd.io", "v2", "helmreleases", "HelmRelease", true}) {
+		st := status
+		if c.name == "HelmRelease denied" {
+			st = denied
+		}
 		apiVersion := c.version
 		if c.group != "" {
 			apiVersion = c.group + "/" + c.version
@@ -80,7 +90,7 @@ func TestDryRunErrorKeepsOnlyStructuredFacts(t *testing.T) {
 		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": c.kind,
 			"metadata": map[string]any{"namespace": "shop", "name": "x", "uid": "u", "resourceVersion": "7"},
 			"spec":     map[string]any{"field": needle}}}
-		srv := dryRunRefusing(t, c.group, c.version, c.plural, c.kind, obj, status)
+		srv := dryRunRefusing(t, c.group, c.version, c.plural, c.kind, obj, st)
 		got, err := ServerSideDiff(context.Background(), &rest.Config{Host: srv.URL}, []*unstructured.Unstructured{obj}, nil, false)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
@@ -93,7 +103,15 @@ func TestDryRunErrorKeepsOnlyStructuredFacts(t *testing.T) {
 			if strings.Contains(e, needle) {
 				t.Errorf("%s: the value crossed in the error: %s", c.name, e)
 			}
-			for _, want := range []string{"Invalid (422)", "FieldValueInvalid at spec.field", `"policy.example.io"`, "withheld"} {
+			wants := []string{"Invalid (422)", "FieldValueInvalid at spec.field", "withheld"}
+			if c.name == "HelmRelease denied" {
+				wants = []string{"(400)", `denied by admission webhook "policy.example.io"`, "withheld"}
+			} else if strings.Contains(e, "policy.example.io") {
+				// S3b §2.1: a denial quoted inside an Invalid's detail is not
+				// an outer envelope, so it attributes nothing
+				t.Errorf("%s: a quoted denial was attributed: %s", c.name, e)
+			}
+			for _, want := range wants {
 				if !strings.Contains(e, want) {
 					t.Errorf("%s: %q missing from %s", c.name, want, e)
 				}

@@ -65,6 +65,10 @@ func (f *fakeConn) FluxDiffKustomization(ctx context.Context, ns, name, path str
 	return fluxcli.DiffResult{}, nil
 }
 func (f *fakeConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error { return nil }
+func (f *fakeConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]Step, error) {
+	return nil, f.ReconcileWithSource(ctx, kind, ns, name, uid)
+}
+
 func (f *fakeConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
 	return nil
 }
@@ -143,6 +147,18 @@ func (f *fakeConn) PodIdentity(context.Context, string, string, string) (identit
 }
 func (f *fakeConn) StoreIdentity(context.Context, string, string, string, string) (identity.StoreReport, error) {
 	return identity.StoreReport{}, nil
+}
+func (f *fakeConn) KEDAInspect(context.Context, string, string, string, string) (KEDAInspection, error) {
+	return KEDAInspection{}, nil
+}
+func (f *fakeConn) KEDAJobsOf(context.Context, string, string, string) (KEDAJobs, error) {
+	return KEDAJobs{}, nil
+}
+func (f *fakeConn) ReplicaOwner(context.Context, string, string, string) ReplicaOwnership {
+	return ReplicaOwnership{}
+}
+func (f *fakeConn) KEDASetPaused(context.Context, string, string, string, string, bool) error {
+	return nil
 }
 func (f *fakeConn) ListVeleroRestores(context.Context) (VeleroRestores, error) {
 	return VeleroRestores{}, nil

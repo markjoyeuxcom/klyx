@@ -1,3 +1,5 @@
+import { validActivityAdmission, type ActivityAdmission, type AdmissionFindingDTO } from "../admission/finding";
+import type { ClaimHealthDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
 import { create } from "zustand";
 import type { HealthLike } from "../health/verdict";
 
@@ -31,7 +33,7 @@ export type ClusterDTO = {
   gatewayExperimentalGap?: string;
   ciliumPresent?: boolean;
   clusterMesh?: boolean;
-  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; veleroPresent?: boolean; admissionPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean;
+  hasHubble?: boolean; karpenterPresent?: boolean; karpenterHealthy?: boolean; ec2NodeClassesPresent?: boolean; aksNodeClassesPresent?: boolean; autoNodeClassesPresent?: boolean; azureNodes?: boolean; veleroPresent?: boolean; kedaPresent?: boolean; admissionPresent?: boolean; draPresent?: boolean; loadBalancingPresent?: boolean; metallbPresent?: boolean; alertsPresent?: boolean; logHistoryPresent?: boolean;
   certManagerTier?: string;
   certManagerReason?: string;
   certManagerPresent?: boolean;
@@ -315,7 +317,10 @@ export type RowsStateDTO = { updating: boolean; refreshing: boolean; evaluatedAt
 // fault: how many counted objects are faults, from the same reading as
 // included - a header's mark never mixes the summary's count with the
 // rows' roles (slice 11b review).
-export type PartCountsDTO = { total: number; included: number; fault: number };
+// stale / lower qualify the numbers by the read that supplied them (the
+// selected counts' own part, never the held rows'): last observed, and a
+// lower bound (capped or incomplete). Present only when true.
+export type PartCountsDTO = { total: number; included: number; fault: number; stale?: boolean; lower?: boolean };
 
 // What the cert-manager rows adapter (health/useCertManagerRows) writes.
 export type CertManagerRowsPayload = Pick<CertManagerSlice, "certificates" | "issuers" | "coverage" | "watchError" | "loading" | "rowsState" | "partCounts">;
@@ -377,7 +382,7 @@ export type ExternalSecretsRowsPayload = Pick<ExternalSecretsSlice, "secrets" | 
 
 // "observability" removed 2026-06-10: metrics ship inline in overview/workloads/network lanes
 // (design principle 5); a dedicated surface can return when it has real content.
-export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers";
+export type ClusterSection = "overview" | "gitops" | "argo" | "helm" | "certs" | "externalsecrets" | "gatewayApi" | "flows" | "resources" | "crds" | "workloads" | "pods" | "events" | "nodes" | "access" | "upgrade" | "connectivity" | "karpenter" | "velero" | "admission" | "loadbalancers" | "alerts" | "autoscaling" | "dra";
 export type ArgoViewMode = "applications" | "projects" | "applicationsets";
 // The Flux lens's two destinations (spec §4): the aggregate KS/HR view and Sources.
 export type FluxViewMode = "reconciliation" | "sources" | "operator" | "images" | "composition" | "notifications";
@@ -439,15 +444,25 @@ export type HeadroomReportDTO = { result: HeadroomResultDTO; pdbBlockers: PDBBlo
 export type ExpiryItemDTO = { source: string; namespace: string; name: string; detail: string; subject: string; notAfterUnix: number };
 
 // Karpenter lens.
-export type KarpenterPoolDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number };
-export type KarpenterClaimDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number };
+// Coverage S10: a NodePool's class link, the findings behind its rule, and
+// the NodeClasses as fact rows. message and native fields carry the
+// provider's own words for this inspector only (never sent to AI).
+export type KarpenterRefDTO = { group: string; kind: string; name: string };
+export type KarpenterCondDTO = { type: string; status: string; reason?: string; reasonWithheld?: boolean; message?: string; observedGeneration?: number; at?: string };
+export type KarpenterFindingDTO = { role: string; label: string; text?: string; native?: string; note?: boolean; unversioned?: boolean };
+export type KarpenterReadingDTO = { state: string; text?: string; native?: string; note?: string };
+export type KarpenterLinkDTO = { state: string; adapter?: string; group?: string; kind?: string; version?: string; asOf?: string; classUid?: string };
+export type KarpenterClassFactsDTO = { subnets?: number; securityGroups?: number; amis?: number; deprecatedAmi?: boolean; podSubnets?: boolean; kubernetesVersion?: string; images?: number; imageFamily?: string; subnetSet?: boolean; role?: string; instanceProfile?: string };
+export type KarpenterClassDTO = { uid: string; gvr: string; generation: number; name: string; group: string; kind: string; adapter: string; created?: string; deleting?: boolean; syncing?: boolean; reading: KarpenterReadingDTO; conditions: KarpenterCondDTO[]; conditionsTotal: number; conditionsCut?: boolean; unknown: string[]; unknownTotal?: number; facts: KarpenterClassFactsDTO; users: string[]; usersComplete: boolean };
+export type KarpenterPoolDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; name: string; ready: string; reason: string; message: string; weight: number; cpuLimit: number | null; cpuUsed: number | null; memLimit: number | null; memUsed: number | null; nodes: number;
+  nodeClassRef?: KarpenterRefDTO; nodeClassObservedGeneration?: number; link?: KarpenterLinkDTO; class?: KarpenterReadingDTO; handler?: string; findings?: KarpenterFindingDTO[]; conditions?: KarpenterCondDTO[]; conditionsTotal?: number; conditionsCut?: boolean };
+export type KarpenterClaimDTO = { rule: RuleDTO; uid?: string; gvr?: string; generation?: number; createdUnix?: number; name: string; pool: string; nodeName: string; ready: string; failingType: string; failingStatus?: string; failingReason: string; failingReasonWithheld?: boolean; failingMessage: string; drifted: boolean; consolidatable: boolean; capacityType: string; instanceType: string; ageSeconds: number; nodeClassRef?: KarpenterRefDTO };
 export type KarpenterEventDTO = { type: string; reason: string; message: string; kind: string; name: string; lastSeenUnix: number };
-// The controller probe and disruption feed, read on demand as of asOfUnix;
-// the NodePools and NodeClaims are the health Observer's shared rows (1c
-// slice 3 §5.5). controllerVerified: a karpenter Deployment was actually
-// read - otherwise controllerHealthy carries no claim and controllerError says
-// why. eventsError / eventsTruncated: the feed is partial or unreadable, never quiet.
-export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; controllerVerified?: boolean; controllerHealthy: boolean; controllerError?: string; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
+// The disruption feed, read on demand as of asOfUnix; the NodePools,
+// NodeClaims and NodeClasses are the health Observer's shared rows (1c
+// slice 3 §5.5) and the controllers are the task's reading (coverage S10
+// §5). eventsError / eventsTruncated: the feed is partial or unreadable, never quiet.
+export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
 export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
@@ -531,7 +546,9 @@ export type PodRowDTO = {
 // probe anchors a push's timing to the lens commit that shows it.
 export type RowsVer = { incarnation: number; ver: number };
 export type PodDetailDTO = { summary: PodSummaryDTO; labels: Record<string, string>; annotations?: Record<string, string>; conditions: ConditionDTO[]; events: EventDTO[]; yaml: string; qosClass: string; serviceAccount: string; asOfUnix?: number; error?: string;
-  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number };
+  resources?: ResizeResourcesDTO[]; ephemeral?: EphemeralDTO[]; ephemeralMore?: number; extended?: ExtendedPodDTO;
+  // coverage S11b §3.5: the claims the pod references and its device health
+  claims?: PodClaimRefDTO[]; deviceHealth?: DeviceHealthDTO[]; deviceHealthOmitted?: number; claimHealth?: ClaimHealthDTO[] };
 
 // A pod selection names the OBJECT (its UID, design §5b): a detail is shown
 // only for that UID, and a verb armed from it writes only that UID.
@@ -633,6 +650,8 @@ export type FactDTO = { group: string; label: string; value: string; tone: strin
 // the unit manages and could delete the namespace itself.
 export type AdhocResultDTO = {
   kind: string; namespace: string; name: string; ok: boolean; error: string;
+  // coverage S3b: the document's refused request's admission finding
+  admission?: AdmissionFindingDTO;
   namespaceOwnerKind: string; namespaceOwnerName: string; namespaceOwnerNamespace: string; namespacePrunes: boolean;
   namespaceManaged: boolean;
   argoTracking: "" | "tracked" | "possible"; argoTrackingApp: string; argoTrackingPrunes: boolean;
@@ -739,6 +758,7 @@ export type Route =
 
 export const SECTION_LABELS: Record<ClusterSection, string> = {
   overview: "Overview",
+  dra: "Devices (DRA)",
   // "Flux" not "GitOps": design principle 8 (speak the tool's vocabulary).
   // The view is Flux-specific; an Argo provider would get its own section.
   gitops: "Flux",
@@ -762,6 +782,8 @@ export const SECTION_LABELS: Record<ClusterSection, string> = {
   velero: "Velero",
   admission: "Admission",
   loadbalancers: "Load balancers",
+  autoscaling: "Autoscaling",
+  alerts: "Alerts",
 };
 
 export type CRDKindDTO = { kind: string; plural: string; scope: string; version: string; operator: string; shortNames: string[] };
@@ -913,7 +935,7 @@ export type MetricsDTO = { available: boolean; mode: string; source: string; war
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
-export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike };
+export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike; extended?: ExtendedDTO };
 // A node on the rows transport: time-stable, so never a relative age (the
 // lens ticks it from createdUnix; addendum §3.1).
 export type NodeRowDTO = Omit<NodeSummaryDTO, "ageSeconds">;
@@ -1034,7 +1056,9 @@ const ARGO_EMPTY_ROWS = {
 
 // info: a fact to note, neither an outcome nor a failure (faults listed at
 // connect, The Line slice 10).
-export type ActionStatus = { kind: "success" | "error" | "info"; message: string };
+// admission: a refused request's finding, its line and its candidates'
+// names (coverage S3b §4); never its message.
+export type ActionStatus = { kind: "success" | "error" | "info"; message: string; admission?: ActivityAdmission[] };
 // One toast on screen / one row in the activity log. `at` is epoch ms.
 export type ActionEvent = ActionStatus & { id: number; at: number };
 
@@ -1057,7 +1081,12 @@ function loadActionLog(): ActionEvent[] {
         e && typeof e.message === "string" && typeof e.at === "number" && typeof e.id === "number" && Number.isFinite(e.id),
     );
     nextActionId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
-    return entries.slice(0, ACTION_LOG_MAX);
+    // older entries, and malformed findings, read as before
+    return entries.slice(0, ACTION_LOG_MAX).map((e) => {
+      const admission = validActivityAdmission(e.admission);
+      const rest: ActionEvent = { kind: e.kind, message: e.message, id: e.id, at: e.at };
+      return admission ? { ...rest, admission } : rest;
+    });
   } catch {
     return [];
   }
@@ -1103,7 +1132,7 @@ export type NavIntent =
   // §5.4) - selection only, never an action
   | { kind: "reveal"; cluster: string; task: string; part: string; ref: RevealRef };
 // RevealRef names one object a summary part points at (its Top ref).
-export type RevealRef = { gvr: string; namespace?: string; name: string; uid?: string; parent?: string };
+export type RevealRef = { gvr: string; namespace?: string; name: string; uid?: string; parent?: string; fingerprint?: string };
 
 type FleetState = {
   clusters: ClusterDTO[];
@@ -1650,3 +1679,15 @@ export function podsText(c: Pick<ClusterDTO, "pods" | "podsKnown" | "podsStale">
   if (c.podsKnown === false) return "—";
   return c.podsStale ? `${c.pods} (last good)` : String(c.pods);
 }
+
+// Coverage S11a: extended resources. Every figure is a decimal string
+// (exact past 2^53): "" when the key is absent, "-" when not established.
+export type ExtendedFactDTO = { key: string; value: string };
+export type ExtendedEntryDTO = { name: string; capacity: string; allocatable: string; accelerator?: boolean; unit?: string; partition?: string; renamedFrom?: string; sharing?: string; facts: ExtendedFactDTO[] };
+export type ExtendedDTO = { entries: ExtendedEntryDTO[]; omitted?: number; factsOmitted?: number; migStrategy?: string };
+export type ReservedDTO = { name: string; advertised?: boolean; requested: string; servedByDra: string; notAdvertised: string };
+export type ReservationDTO = { uid: string; node: string; entries: ReservedDTO[]; omitted?: number; untracked?: boolean };
+export type ExtendedTotalDTO = { name: string; capacity: string; allocatable: string; requested: string };
+export type ExtendedPodEntryDTO = { name: string; quantity: string; servedByDra?: boolean };
+export type ExtendedContainerDTO = { container: string; init?: boolean; entries: ExtendedPodEntryDTO[]; omitted?: number };
+export type ExtendedPodDTO = { containers: ExtendedContainerDTO[]; omitted?: number; claim?: string };

@@ -1,0 +1,1367 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "annotations": {
+     "scaledobject.keda.sh/transfer-hpa-ownership": "true"
+    },
+    "creationTimestamp": "2026-10-19T20:22:28Z",
+    "generation": 10,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "adopted-hpa",
+     "app.kubernetes.io/part-of": "adopted",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "adopted"
+    },
+    "name": "adopted-hpa",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "adopted",
+      "uid": "344dcc0e-aabb-43af-9229-c5f03ec496f3"
+     }
+    ],
+    "resourceVersion": "1451444",
+    "uid": "a302e586-ca9f-497a-bdd3-2ec20ec18d4c"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "adopted"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "adopted"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:28Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:47Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-00xxx-5923xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: adopted,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "adopted"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:22:29Z",
+    "observedGeneration": 10
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:24Z",
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "hpa-gone",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451284",
+    "uid": "41ace146-9b12-4a8d-bf32-cfc61b03edb5"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "resource": {
+       "name": "cpu",
+       "target": {
+        "averageUtilization": 80,
+        "type": "Utilization"
+       }
+      },
+      "type": "Resource"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "no-such-app"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "the HPA controller was unable to get the target's current scale: deployments.apps \"no-such-app\" not found",
+      "reason": "FailedGetScale",
+      "status": "False",
+      "type": "AbleToScale"
+     }
+    ],
+    "currentMetrics": null,
+    "desiredReplicas": 0
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-active-web",
+     "app.kubernetes.io/part-of": "active-web",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "active-web"
+    },
+    "name": "keda-hpa-active-web",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "active-web",
+      "uid": "269fbe77-b85a-4a30-9ccd-10aa0bf4e81a"
+     }
+    ],
+    "resourceVersion": "1447510",
+    "uid": "0a20e227-599f-45d4-8543-6134bcf7ee3b"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "active-web"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "active-web"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-00xxx-5923xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: active-web,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "active-web"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:22:29Z",
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:32Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-cluster-auth",
+     "app.kubernetes.io/part-of": "cluster-auth",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "cluster-auth"
+    },
+    "name": "keda-hpa-cluster-auth",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "cluster-auth",
+      "uid": "41146d6c-2540-4472-a1db-3186e5e1d100"
+     }
+    ],
+    "resourceVersion": "1447439",
+    "uid": "dd2c72a0-cde8-4c0a-9ce4-89d922e92d71"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-prometheus",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "cluster-auth"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "cluster-auth"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the HPA was unable to compute the replica count: unable to get external metric klyx-s9-lab/s0-prometheus/&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: cluster-auth,},MatchExpressions:[]LabelSelectorRequirement{},}: unable to fetch metrics from external metrics API: rpc error: code = Unknown desc = error when getting metric values metric:s0-prometheus encountered error",
+      "reason": "FailedGetExternalMetric",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "type": ""
+     }
+    ],
+    "currentReplicas": 1,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:30Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-failing",
+     "app.kubernetes.io/part-of": "failing",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "failing"
+    },
+    "name": "keda-hpa-failing",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "failing",
+      "uid": "795bc8f8-cb21-47eb-9e7d-fac65c93c77c"
+     }
+    ],
+    "resourceVersion": "1447593",
+    "uid": "95580d1a-2582-4151-86da-6253a26f82a6"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-prometheus",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "failing"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "failing"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:30Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:46Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-prometheus(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: failing,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:46Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:46Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-prometheus",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "failing"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:22:46Z",
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-idle-api",
+     "app.kubernetes.io/part-of": "idle-api",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "idle-api"
+    },
+    "name": "keda-hpa-idle-api",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "idle-api",
+      "uid": "48676173-1f9a-435e-8d2b-0cb0988bb6b1"
+     }
+    ],
+    "resourceVersion": "1448488",
+    "uid": "ef626f15-d224-4626-829d-1b49e53c6513"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-03xxx-13xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "idle-api"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "idle-api"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-03xxx-13xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: idle-api,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:27:29Z",
+      "message": "the desired replica count is less than the minimum replica count",
+      "reason": "TooFewReplicas",
+      "status": "True",
+      "type": "ScalingLimited"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "0"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-03xxx-13xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "idle-api"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 1,
+    "desiredReplicas": 1,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "annotations": {
+     "autoscaling.keda.sh/paused-scale-in": "true"
+    },
+    "creationTimestamp": "2026-10-19T20:38:05Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-one-way",
+     "app.kubernetes.io/part-of": "one-way",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "one-way"
+    },
+    "name": "keda-hpa-one-way",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "one-way",
+      "uid": "96c49c57-2dcb-4e17-92e0-42a5773029a9"
+     }
+    ],
+    "resourceVersion": "1450668",
+    "uid": "cdf449cf-d3cf-47db-bb16-467c00181f9b"
+   },
+   "spec": {
+    "behavior": {
+     "scaleDown": {
+      "policies": [
+       {
+        "periodSeconds": 15,
+        "type": "Percent",
+        "value": 100
+       }
+      ],
+      "selectPolicy": "Disabled"
+     },
+     "scaleUp": {
+      "policies": [
+       {
+        "periodSeconds": 15,
+        "type": "Pods",
+        "value": 4
+       },
+       {
+        "periodSeconds": 15,
+        "type": "Percent",
+        "value": 100
+       }
+      ],
+      "selectPolicy": "Max",
+      "stabilizationWindowSeconds": 0
+     }
+    },
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "one-way"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "one-way"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:38:05Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:38:05Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-00xxx-5923xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: one-way,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:38:05Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:38:05Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "one-way"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:38:05Z",
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:47Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-shared",
+     "app.kubernetes.io/part-of": "shared",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "shared"
+    },
+    "name": "keda-hpa-shared",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "shared",
+      "uid": "3e1fed2c-083d-4a97-83b3-f88fc200687b"
+     }
+    ],
+    "resourceVersion": "1451552",
+    "uid": "4d164b33-f0f7-4872-b3cf-87ae8ebd53c2"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "shared"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "shared"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:47Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:42:03Z",
+      "message": "pods by selector app=shared are controlled by more than one HPA (e.g. [klyx-s9-lab/keda-hpa-shared klyx-s9-lab/shared-plain])",
+      "reason": "AmbiguousSelector",
+      "status": "False",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:47Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:47Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": null,
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:41:47Z",
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:32Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-sts",
+     "app.kubernetes.io/part-of": "sts",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "sts"
+    },
+    "name": "keda-hpa-sts",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "sts",
+      "uid": "74658c33-8d6b-4859-94eb-6a8c0a4577c0"
+     }
+    ],
+    "resourceVersion": "1447541",
+    "uid": "8514e4c2-522b-41b4-bd83-c0b86a383c07"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "sts"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "StatefulSet",
+     "name": "sts"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-00xxx-5923xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: sts,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "sts"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:22:32Z",
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:32Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "keda-hpa-wl-identity",
+     "app.kubernetes.io/part-of": "wl-identity",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "wl-identity"
+    },
+    "name": "keda-hpa-wl-identity",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "wl-identity",
+      "uid": "2b0b6fd3-7153-41fc-a16b-e4e55fc195f0"
+     }
+    ],
+    "resourceVersion": "1451134",
+    "uid": "3cde352f-f671-48c9-9b9a-6b7601b27896"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-aws-sqs-klyx-lab",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "wl-identity"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "5",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "wl-identity"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:32Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:42Z",
+      "message": "the HPA was unable to compute the replica count: unable to get external metric klyx-s9-lab/s0-aws-sqs-klyx-lab/&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: wl-identity,},MatchExpressions:[]LabelSelectorRequirement{},}: unable to fetch metrics from external metrics API: rpc error: code = Unknown desc = error when getting metric values metric:s0-aws-sqs-klyx-lab encountered error",
+      "reason": "FailedGetExternalMetric",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "type": ""
+     }
+    ],
+    "currentReplicas": 1,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:24Z",
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "plain-api",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451293",
+    "uid": "ac8ae720-b112-4afe-a2e8-013baa271170"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "resource": {
+       "name": "cpu",
+       "target": {
+        "averageUtilization": 80,
+        "type": "Utilization"
+       }
+      },
+      "type": "Resource"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "plain-api"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "the HPA was unable to compute the replica count: failed to get cpu utilization: unable to get metrics for resource cpu: unable to fetch metrics from resource metrics API: the server could not find the requested resource (get pods.metrics.k8s.io)",
+      "reason": "FailedGetResourceMetric",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "type": ""
+     }
+    ],
+    "currentReplicas": 1,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:47Z",
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "shared-plain",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451580",
+    "uid": "c559acfc-141e-4faa-9d2f-bd6da2687adf"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "resource": {
+       "name": "cpu",
+       "target": {
+        "averageUtilization": 80,
+        "type": "Utilization"
+       }
+      },
+      "type": "Resource"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "shared"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:48Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:48Z",
+      "message": "pods by selector app=shared are controlled by more than one HPA (e.g. [klyx-s9-lab/shared-plain klyx-s9-lab/keda-hpa-shared])",
+      "reason": "AmbiguousSelector",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": null,
+    "currentReplicas": 2,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:24Z",
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "twice-a",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451404",
+    "uid": "344b9506-484a-4764-8d8c-3966d1408e1f"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "resource": {
+       "name": "cpu",
+       "target": {
+        "averageUtilization": 80,
+        "type": "Utilization"
+       }
+      },
+      "type": "Resource"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "twice"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "pods by selector app=twice are controlled by more than one HPA (e.g. [klyx-s9-lab/twice-b klyx-s9-lab/twice-a])",
+      "reason": "AmbiguousSelector",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": null,
+    "currentReplicas": 1,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:41:24Z",
+    "generation": 1,
+    "labels": {
+     "klyx.dev/lab": "s9"
+    },
+    "name": "twice-b",
+    "namespace": "klyx-s9-lab",
+    "resourceVersion": "1451581",
+    "uid": "b406a6dc-6c25-48eb-9aaa-6105c4a3d28c"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "resource": {
+       "name": "cpu",
+       "target": {
+        "averageUtilization": 80,
+        "type": "Utilization"
+       }
+      },
+      "type": "Resource"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "twice"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "the HPA controller was able to get the target's current scale",
+      "reason": "SucceededGetScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:41:24Z",
+      "message": "pods by selector app=twice are controlled by more than one HPA (e.g. [klyx-s9-lab/twice-a klyx-s9-lab/twice-b])",
+      "reason": "AmbiguousSelector",
+      "status": "False",
+      "type": "ScalingActive"
+     }
+    ],
+    "currentMetrics": null,
+    "currentReplicas": 1,
+    "desiredReplicas": 0,
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "autoscaling/v2",
+   "kind": "HorizontalPodAutoscaler",
+   "metadata": {
+    "creationTimestamp": "2026-10-19T20:22:29Z",
+    "generation": 1,
+    "labels": {
+     "app.kubernetes.io/managed-by": "keda-operator",
+     "app.kubernetes.io/name": "web-autoscaler",
+     "app.kubernetes.io/part-of": "custom-name",
+     "app.kubernetes.io/version": "2.21.0",
+     "klyx.dev/lab": "s9",
+     "scaledobject.keda.sh/name": "custom-name"
+    },
+    "name": "web-autoscaler",
+    "namespace": "klyx-s9-lab",
+    "ownerReferences": [
+     {
+      "apiVersion": "keda.sh/v1alpha1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ScaledObject",
+      "name": "custom-name",
+      "uid": "67ff598a-5c77-4d91-bc3b-35f3750ebd17"
+     }
+    ],
+    "resourceVersion": "1447508",
+    "uid": "d62be0a8-5651-4242-a98d-3710b292c685"
+   },
+   "spec": {
+    "maxReplicas": 3,
+    "metrics": [
+     {
+      "external": {
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "custom-name"
+         }
+        }
+       },
+       "target": {
+        "averageValue": "1",
+        "type": "AverageValue"
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "minReplicas": 1,
+    "scaleTargetRef": {
+     "apiVersion": "apps/v1",
+     "kind": "Deployment",
+     "name": "custom-name"
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "recommended size matches current size",
+      "reason": "ReadyForNewScale",
+      "status": "True",
+      "type": "AbleToScale"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA was able to successfully calculate a replica count from external metric s0-cron-UTC-00xxx-5923xxx(&LabelSelector{MatchLabels:map[string]string{scaledobject.keda.sh/name: custom-name,},MatchExpressions:[]LabelSelectorRequirement{},})",
+      "reason": "ValidMetricFound",
+      "status": "True",
+      "type": "ScalingActive"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the desired count is within the acceptable range",
+      "reason": "DesiredWithinRange",
+      "status": "False",
+      "type": "ScalingLimited"
+     },
+     {
+      "lastTransitionTime": "2026-10-19T20:22:29Z",
+      "message": "the HPA controller did not scale the workload to zero",
+      "reason": "NotScaledToZero",
+      "status": "False",
+      "type": "ScaledToZero"
+     }
+    ],
+    "currentMetrics": [
+     {
+      "external": {
+       "current": {
+        "averageValue": "1"
+       },
+       "metric": {
+        "name": "s0-cron-UTC-00xxx-5923xxx",
+        "selector": {
+         "matchLabels": {
+          "scaledobject.keda.sh/name": "custom-name"
+         }
+        }
+       }
+      },
+      "type": "External"
+     }
+    ],
+    "currentReplicas": 2,
+    "desiredReplicas": 2,
+    "lastScaleTime": "2026-10-19T20:22:29Z",
+    "observedGeneration": 1
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

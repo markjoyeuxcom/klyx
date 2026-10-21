@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { AdmissionFinding } from "../admission/AdmissionFinding";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { useFleet, ResourceRef, InstanceRef, InstanceDetailDTO, SecretKeyDTO, ServiceBackingDTO, HPAScalingDTO, RelatedRefDTO, FactDTO, AIResultDTO, GitOpsOwnershipDTO } from "../store/fleet";
 import { getInstanceDetail, revealSecretKey, copyText, dryRunInstanceYAML, applyInstanceYAML, gitOpsOwnership, ActionResult } from "../bridge/crd";
 import { suggestFix } from "../bridge/ai";
@@ -217,15 +219,9 @@ export function formatKubernetesActionError(raw: string): string {
   const error = raw.trim().replace(/\s+/g, " ");
   if (!error) return "Kubernetes rejected the request.";
 
-  const webhookTimeout = /failed calling webhook "([^"]+)": .*?(context deadline exceeded|timeout|timed out)/i.exec(error);
-  if (webhookTimeout) {
-    return `Admission webhook timed out: ${webhookTimeout[1]}. This is usually transient; retry after the webhook/controller recovers.`;
-  }
-
-  const admission = /admission webhook "([^"]+)" denied the request: (.+)$/i.exec(error);
-  if (admission) {
-    return `Admission denied by ${admission[1]}: ${admission[2]}`;
-  }
+  // An admission refusal is read by the backend's classifier from the
+  // server's own status (coverage S3b §2), never from this text: its finding
+  // is the panel's headline.
 
   const forbidden = /User "([^"]+)" cannot ([a-z]+) resource "([^"]+)"(?: in API group "([^"]*)")?(?: in the namespace "([^"]+)")?/i.exec(error);
   if (forbidden) {
@@ -243,7 +239,7 @@ export function formatKubernetesActionError(raw: string): string {
     return `Immutable field: Kubernetes rejected this because one or more fields cannot be changed after creation. ${extractInvalidDetail(error)}`;
   }
 
-  if (/dry run is not supported|does not support dry run/i.test(error)) {
+  if (/dry run is not supported/i.test(error)) {
     return "Server dry-run is not supported for this resource or API path. Apply is still blocked until the server can validate it another way.";
   }
 
@@ -290,6 +286,9 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
   const identity: YAMLIdentity = {};
   const lines = yaml.split("\n");
   let inMetadata = false;
+  // metadata's own keys sit at one indent; identity is read there only
+  let metadataIndent = -1;
+  const sequenceItem = (t: string) => t === "-" || t.startsWith("- ");
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
@@ -305,6 +304,9 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
     const trimmed = raw.trim();
     if (indent === 0) {
       inMetadata = false;
+      metadataIndent = -1;
+      // a top-level key's sequence (a Role's rules) may sit at its own indent
+      if (sequenceItem(trimmed)) continue;
       const topMatch = /^([A-Za-z0-9_.-]+):(.*)$/.exec(trimmed);
       if (!topMatch) {
         issues.push({ tone: "danger", line: lineNo, column: 1, message: "YAML parse error: expected key: value" });
@@ -319,6 +321,11 @@ export function validateResourceYAML(yaml: string, resource: ResourceRef, instan
     }
 
     if (inMetadata) {
+      if (metadataIndent < 0) metadataIndent = indent;
+      // labels' and annotations' keys (app.kubernetes.io/name), a block
+      // scalar's lines and list items (finalizers, ownerReferences) are not
+      // metadata's own keys: the server's dry run validates them
+      if (indent !== metadataIndent || sequenceItem(trimmed)) continue;
       const metadataMatch = /^([A-Za-z0-9_.-]+):(.*)$/.exec(trimmed);
       if (!metadataMatch) {
         issues.push({ tone: "danger", line: lineNo, column: indent + 1, message: "YAML parse error in metadata: expected key: value" });
@@ -515,9 +522,11 @@ function parsePercent(s: string): number | null {
 }
 
 // HPAScalingSection renders the scaling summary for an autoscaling HPA:
-// replica line, scale-target line (with workloads lens link for
-// Deployment/StatefulSet), per-metric table, and last-scale age.
-function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDTO }) {
+// replica line, scale-target line, per-metric table, and last-scale age.
+// The target links to the object itself when the backend resolved it
+// through discovery (coverage S9 §7) - a Deployment, a Rollout or any
+// scalable kind; an unresolved target is plain text.
+function HPAScalingSection({ scaling, target }: { cluster: string; scaling: HPAScalingDTO; target?: RelatedRefDTO }) {
   const atMax = scaling.currentReplicas >= scaling.maxReplicas && scaling.desiredReplicas >= scaling.maxReplicas;
   const replicaMismatch = scaling.desiredReplicas !== scaling.currentReplicas;
 
@@ -527,17 +536,12 @@ function HPAScalingSection({ scaling }: { cluster: string; scaling: HPAScalingDT
     ? "var(--color-text-info)"
     : "var(--color-text-primary)";
 
-  // Cross-link: for Deployment and StatefulSet, switch to the workloads lens
-  // and expand the matching row using the live store state. The workload key
-  // is "<kind>/<namespace>/<name>" — we don't know the namespace from the HPA
-  // alone so we toggle by name lookup; `toggleWorkloadExpand` handles the key.
-  // Since we don't have the HPA's namespace here (the section is standalone),
-  // we navigate to workloads and let the user pick; the link is still more
-  // useful than plain text.
-  const isWorkloadTarget = scaling.targetKind === "Deployment" || scaling.targetKind === "StatefulSet";
+  const isWorkloadTarget = target != null;
 
   const handleTargetLink = () => {
-    useFleet.getState().setSection("workloads");
+    if (!target) return;
+    useFleet.getState().openResource({ group: target.group, version: target.version, plural: target.plural, kind: target.kind, scope: target.scope });
+    useFleet.getState().openInstance(target.namespace, target.name);
   };
 
   const targetEl = isWorkloadTarget ? (
@@ -719,6 +723,10 @@ function ServiceBackingSection({
   );
 }
 
+// The kinds an alert's labels can name that the generic inspector shows
+// (coverage S8a §5).
+const ALERT_KINDS = new Set(["Namespace", "PersistentVolumeClaim", "Job", "CronJob", "HorizontalPodAutoscaler"]);
+
 // InstanceDetail - the generic (GVR) inspector on the shared InspectorLayout.
 // Lens descriptor (spec §3, documented variant): a raw resource has no domain
 // verb, so the primary is the universal read-only Describe; the secondary is
@@ -761,6 +769,10 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
   const live = !removed && !!d && !d.error;
   const target = d?.uid ? { kind: "object" as const, group: resource.group, version: resource.version, plural: resource.plural, namespace: instance.namespace, name: instance.name, uid: d.uid } : null;
   const ai = useInspectorAI(target, `${resource.kind}/${instance.namespace ? `${instance.namespace}/` : ""}${instance.name}`, live, cluster);
+  const alertKind = ALERT_KINDS.has(resource.kind) && !resource.group.includes(".") ? resource.kind : null;
+  const alertTarget = useMemo(() => (alertKind && d?.uid ? { uid: d.uid, kind: alertKind, namespace: instance.namespace || undefined, name: instance.name } : null),
+    [alertKind, d?.uid, instance.namespace, instance.name]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   // Field titles from the CRD's schema for this version (slice 15c).
   const titleOf = useSchemaTitles(cluster, resource);
   // A suggestion belongs to one object: its UID. A same-name recreation, a
@@ -900,6 +912,7 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
               />
             )}
             {ai.block}
+            {alertsBlock}
             {aiPanel && aiPanel.uid === selectedUID && (
               <InspectorBlock title="Suggested fix (AI)">
                 {aiPanel.loading ? (
@@ -929,7 +942,8 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
             )}
             <SummaryBlock d={d} />
             <FactsSummary facts={d.facts} />
-            {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling} />}
+            {d.hpaScaling != null && <HPAScalingSection cluster={cluster} scaling={d.hpaScaling}
+              target={(d.related ?? []).find((r) => r.relation === "scale target")} />}
             {d.serviceBacking != null && <ServiceBackingSection cluster={cluster} ns={instance.namespace} serviceName={instance.name} backing={d.serviceBacking} />}
             {d.secretKeys && d.secretKeys.length > 0 && !removed && <SecretDataSection cluster={cluster} ns={instance.namespace} name={instance.name} keys={d.secretKeys} />}
             {resource.kind === "ServiceAccount" && resource.group === "" && d.uid && !removed && <ServiceAccountIdentity cluster={cluster} namespace={instance.namespace} name={instance.name} uid={d.uid} active />}
@@ -1138,7 +1152,9 @@ function YamlPanel({
     setStatus(null);
     setConfirmApply(false);
     const r = await dryRunInstanceYAML(cluster, resource, instance, detail?.uid ?? "", draft);
-    setStatus(r.ok ? { ok: true, error: "Server dry-run passed" } : { ok: false, error: formatKubernetesActionError(r.error) });
+    // S3b §4: a completed dry run passed admission as of its time
+    setStatus(r.ok ? { ok: true, error: `Server dry-run passed admission and defaulting as of ${new Date().toLocaleTimeString()}; a later apply's admission may differ` }
+      : { ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
     setBusy(null);
   };
 
@@ -1151,7 +1167,7 @@ function YamlPanel({
     const r = await applyInstanceYAML(cluster, resource, instance, detail?.uid ?? "", submittedYaml);
     setConfirmApply(false);
     if (!r.ok) {
-      setStatus({ ok: false, error: formatKubernetesActionError(r.error) });
+      setStatus({ ok: false, error: formatKubernetesActionError(r.error), admission: r.admission });
       setBusy(null);
       return;
     }
@@ -1220,7 +1236,7 @@ function YamlPanel({
       )}
       {status && (
         <div style={noticeStyle(status.ok ? "success" : "danger")}>
-          {status.error}
+          {status.admission ? <AdmissionFinding cluster={cluster} f={status.admission} /> : status.error}
         </div>
       )}
       {confirmApply && (

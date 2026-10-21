@@ -110,6 +110,7 @@ func Core(d CoreDeps) ([]observe.KindSpec, []observe.DomainSpec) {
 			Counted:  []string{KindNodes},
 			Evaluate: evalNodes(d.Cluster), Ledger: true,
 		}}},
+		extendedDomain(), // coverage S11a
 	}
 	return kinds, domains
 }

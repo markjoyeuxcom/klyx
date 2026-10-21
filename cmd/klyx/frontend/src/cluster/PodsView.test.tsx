@@ -8,6 +8,10 @@ import { rowOf } from "../test/podRows";
 // The rows adapter is mocked: these tests seed the pods slice directly
 // (PodRows.test.tsx mounts the real adapter over the health store).
 vi.mock("../health/usePodRows", () => ({ usePodRows: () => {} }));
+// the pod's claims block joins the claims rows: none, under a whole read
+vi.mock("../health/useDRARows", () => ({
+  useDRAClaims: () => ({ rows: [], coverage: [], watchError: null, loading: false, rowsState: { updating: false, refreshing: false, evaluatedAt: null }, counts: null, complete: true }),
+}));
 
 const aiBridge = vi.hoisted(() => ({
   aiAvailability: vi.fn(async () => ({ backend: "anthropic", ready: true })),
@@ -1078,6 +1082,52 @@ describe("S6 detail continuity", () => {
     act(() => setRow({ evidenceRev: "cccccccccccccccc" })); // an actuation or a debug exit alone
     await act(async () => {});
     expect(openPodDetail).toHaveBeenCalledTimes(1);
+    vi.mocked(openPodDetail).mockClear();
+    act(() => setRow({ ip: "10.9.9.9" })); // not evidence: nothing re-read
+    await act(async () => {});
+    expect(openPodDetail).not.toHaveBeenCalled();
+  });
+});
+
+// Coverage S11b §3.5: a pod's device health and its generated claims'
+// names change only status; each moves the evidence revision (Go:
+// TestEvidenceRevFollowsDeviceHealthAndClaims), which re-reads the selected
+// pod's detail under its UID, and the re-read detail is what the Claims
+// block says.
+describe("S11b detail continuity", () => {
+  beforeEach(() => { useFleet.getState().clearPods(); vi.clearAllMocks(); });
+  const setRow = (overrides: Record<string, unknown>) => useFleet.setState((s) => ({
+    pods: { ...s.pods, items: s.pods.items.map((p) => ({ ...p, ...overrides })) },
+  }));
+  const health = (id: string, h: string) => [{ container: "app", name: "claim:gpu/req", devices: [{ id, health: h }] }];
+  const showDetail = (over: Partial<PodDetailDTO>) => act(() => useFleet.setState((s) => ({ pods: { ...s.pods,
+    selected: { namespace: "monitoring", name: "grafana-xyz", uid: "uid-grafana-xyz" },
+    detail: { ...fakeDetail, claims: [{ podClaim: "gpu", source: "template", claim: "grafana-xyz-gpu-1", state: "resolved" }], ...over }, detailLoading: false,
+  } })));
+  const claimText = () => screen.getAllByTestId("pod-claim").map((l) => l.textContent ?? "").join(" | ");
+  it("Healthy turning Unknown, another device unhealthy at the same count, and a generated claim's name each re-read the detail", async () => {
+    seed([healthy]);
+    setRow({ evidenceRev: "aaaaaaaaaaaaaaaa" });
+    const view = render(<PodsView cluster="homelab" />);
+    fireEvent.click(view.getByText("grafana-xyz"));
+    showDetail({ deviceHealth: health("cdi/a", "Healthy") });
+    await act(async () => {});
+    expect(claimText()).toContain("1 healthy");
+    const steps: [string, Partial<PodDetailDTO>, string][] = [
+      ["bbbbbbbbbbbbbbbb", { deviceHealth: health("cdi/a", "Unknown") }, "health Unknown (reported by the kubelet)"],
+      ["cccccccccccccccc", { deviceHealth: health("cdi/a", "Unhealthy") }, "1 device unhealthy (reported by the kubelet): cdi/a"],
+      ["dddddddddddddddd", { deviceHealth: health("cdi/b", "Unhealthy") }, "1 device unhealthy (reported by the kubelet): cdi/b"],
+      ["eeeeeeeeeeeeeeee", { claims: [{ podClaim: "gpu", source: "template", claim: "grafana-xyz-gpu-2", state: "resolved" }], deviceHealth: health("cdi/b", "Unhealthy") }, "grafana-xyz-gpu-2"],
+    ];
+    for (const [rev, detail, want] of steps) {
+      vi.mocked(openPodDetail).mockClear();
+      act(() => setRow({ evidenceRev: rev }));
+      await act(async () => {});
+      expect(openPodDetail).toHaveBeenCalledWith("homelab", "monitoring", "grafana-xyz", "uid-grafana-xyz");
+      showDetail(detail);
+      await act(async () => {});
+      expect(claimText()).toContain(want);
+    }
     vi.mocked(openPodDetail).mockClear();
     act(() => setRow({ ip: "10.9.9.9" })); // not evidence: nothing re-read
     await act(async () => {});

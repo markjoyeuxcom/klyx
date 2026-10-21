@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { IconExternalLink, IconX, IconAlertTriangle, IconTerminal2, IconCircleDot } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import type { PodDetailDTO, PodRowDTO, PodRowContainerDTO, ContainerSummaryDTO, ContainerUsageDTO, PodUsageResultDTO, KindCoverageDTO } from "../store/fleet";
 import { openPodDetail, deletePod } from "../bridge/pods";
 import { getPodContainerUsage } from "../bridge/metrics";
 import { rightsizing, fmtCpu, fmtMem } from "./saturation";
-import { openLogsWindow } from "../bridge/windows";
+import { openLogHistoryWindow, openLogsWindow } from "../bridge/windows";
 import { rolloutRestart } from "../bridge/workloads";
 import { armProtected } from "../bridge/configsvc";
 import { copyExecCommand, openExecTerminal, openDebugTerminal } from "../bridge/exec";
@@ -38,9 +39,11 @@ import { clock, coverageGaps, kindEvidence, lastGoodAt, type KindEvidence } from
 import { useInspectorAI } from "../ai/AIExplain";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
+import { LogHistoryPane } from "./LogHistoryPane";
 import { expectPin } from "../nav/inspectorPin";
 import { PodIdentity } from "./IdentityBlocks";
-import { DebugChooser, DebugContainersBlock, PodResourcesBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
+import { DebugChooser, DebugContainersBlock, PodResourcesBlock, PodExtendedBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
+import { PodClaimsBlock } from "./DRABlocks";
 import { SyncingChip } from "./staleness";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
@@ -66,7 +69,9 @@ export function imageShort(image: string): string {
   return s;
 }
 
-type LogsTarget = { namespace: string; name: string; containers: { name: string; init?: boolean }[] };
+// uid, createdUnix and gone pin a History view to the pod (coverage S8b §4);
+// history opens the dock in History mode (a gone pod has no Live).
+type LogsTarget = { namespace: string; name: string; containers: { name: string; init?: boolean }[]; uid?: string; createdUnix?: number; gone?: boolean; history?: boolean };
 
 // The age ticks from the creation time (1c slice 3 §3): the rows carry no
 // relative age (addendum §3.1).
@@ -91,6 +96,7 @@ type PodTarget = { namespace: string; name: string; uid: string };
 
 export function PodsView({ cluster }: { cluster: string }) {
   const pods = useFleet((s) => s.pods);
+  const logHistory = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.logHistoryPresent ?? false); // S8b: a Loki configured
   const isProtected = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.protected ?? false);
   const nowS = Math.floor(useNow() / 1000);
 
@@ -254,7 +260,7 @@ export function PodsView({ cluster }: { cluster: string }) {
     }
     if (allItems.length === 0) return ev === "complete" ? "missing" : "wait";
     if (!p) return ev === "complete" ? "missing" : "wait";
-    if (intent.kind === "logs-pod") { setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers }); return "consumed"; }
+    if (intent.kind === "logs-pod") { setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers, uid: p.uid, createdUnix: p.createdUnix }); return "consumed"; }
     autoSelect.current = "done";
     if (!filtered.includes(p)) {
       const st = useFleet.getState();
@@ -275,7 +281,7 @@ export function PodsView({ cluster }: { cluster: string }) {
   }, []);
   const logsFor = useCallback((idx: number) => {
     const p = filtered[idx];
-    if (p) setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers });
+    if (p) setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers, uid: p.uid, createdUnix: p.createdUnix });
   }, [filtered, setLogsTarget]);
   const toggleBulk = useCallback((key: string) => {
     setBulk((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -465,7 +471,7 @@ export function PodsView({ cluster }: { cluster: string }) {
                     bulkSelected={bulk.has(keyOf(p))}
                     onToggleBulk={() => toggleBulk(keyOf(p))}
                     onOpen={() => { setCursor(i); autoSelect.current = "done"; openRow(p); }}
-                    onLogs={() => setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers })}
+                    onLogs={() => setLogsTarget({ namespace: p.namespace, name: p.name, containers: p.containers, uid: p.uid, createdUnix: p.createdUnix })}
                   />
                 )}
               />
@@ -497,7 +503,9 @@ export function PodsView({ cluster }: { cluster: string }) {
             />
           ) : sel && pin.expected && pin.gone ? (
             <PinnedGone cluster={cluster} kind="Pod" namespace={sel.namespace} name={sel.name} uid={pin.expected} gone={pin.gone}
-              onAdopt={pin.next ? () => { const n = pin.next as PodRowDTO; pin.adopt(); openRow(n); } : undefined} onClose={closeInspector} />
+              onAdopt={pin.next ? () => { const n = pin.next as PodRowDTO; pin.adopt(); openRow(n); } : undefined}
+              onHistory={logHistory ? () => setLogsTarget({ namespace: sel.namespace, name: sel.name, containers: [], uid: pin.expected!, gone: true, history: true }) : undefined}
+              onClose={closeInspector} />
           ) : undefined}
           inspectorLabel="Pod details"
           onCloseInspector={closeInspector}
@@ -647,7 +655,11 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
   onClose: () => void;
   onOpenLogs: (t: LogsTarget) => void;
 }) {
+  const logHistory = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.logHistoryPresent ?? false);
   const ai = useInspectorAI(uid ? { kind: "row" as const, task: "pods", part: "pods", uid: uid } : null, `Pod/${row.namespace}/${row.name}`, !gone, cluster);
+  // coverage S8a: Alertmanager's alerts naming this pod
+  const alertTarget = useMemo(() => (uid ? { uid, kind: "Pod", namespace: row.namespace, name: row.name } : null), [uid, row.namespace, row.name]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   const { namespace, name } = row;
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [pending, setPending] = useState<Pending | null>(null);
@@ -756,7 +768,9 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
           </div>
         ) : <VerdictStatus health={message ? { ...p.health, message } : p.health} detail={`${readyOf(p)} ready`}
           pendingMessage={pendingMessage} />}
-        primary={live ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers }) } : undefined}
+        primary={live ? { label: "Logs", kbd: "l", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers, uid: p.uid, createdUnix: p.createdUnix }) }
+          : logHistory && p.uid ? { label: "Log history", onSelect: () => onOpenLogs({ namespace, name, containers: p.containers, uid: p.uid, createdUnix: p.createdUnix, gone: true, history: true }) }
+          : undefined}
         secondary={live && containers.length > 0 ? { label: "Shell", onSelect: () => void openExecTerminal(cluster, namespace, name, containers[0].name), options: per((c) => void openExecTerminal(cluster, namespace, name, c)) } : undefined}
         more={[...(live ? more : []), ...ai.menu]}
         tab={tab}
@@ -764,6 +778,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="pod YAML" /> : null}
       >
         {ai.block}
+        {alertsBlock}
         {forwarding && live && (
           <ForwardPopover
             cluster={cluster}
@@ -786,6 +801,9 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         {uid && !gone && <PodIdentity cluster={cluster} namespace={namespace} name={name} uid={uid} active />}
 
         {shown && <PodResourcesBlock detail={shown} />}
+        {shown && <PodExtendedBlock detail={shown} cluster={cluster} />}
+        {shown && <PodClaimsBlock cluster={cluster} namespace={namespace} podUid={shown.summary.uid} claims={shown.claims ?? []} health={shown.deviceHealth ?? []}
+          healthOmitted={shown.deviceHealthOmitted ?? 0} claimHealth={shown.claimHealth} unbound={!shown.summary.node && shown.summary.phase === "Pending"} />}
         {shown && <DebugContainersBlock detail={shown} />}
 
         <InspectorBlock title="Placement">
@@ -907,7 +925,7 @@ function Chips({ values }: { values?: Record<string, string> }) {
 // LogsDock - full-width resizable dock at the bottom of the lens
 // ---------------------------------------------------------------------------
 
-function LogsDock({ cluster, target, onClose, onPopOut }: {
+export function LogsDock({ cluster, target, onClose, onPopOut }: {
   cluster: string;
   target: LogsTarget;
   onClose: () => void;
@@ -915,6 +933,12 @@ function LogsDock({ cluster, target, onClose, onPopOut }: {
 }) {
   const { height, handleProps } = useResizableDock();
   const [container, setContainer] = useState("");
+  // coverage S8b: Live (the kube API) | History (Loki), History pinned to the
+  // pod's UID; a gone pod has History only
+  const logHistory = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.logHistoryPresent ?? false);
+  const canHistory = logHistory && !!target.uid;
+  const [mode, setMode] = useState<"live" | "history">(target.history || target.gone ? "history" : "live");
+  const history = canHistory && mode === "history";
   return (
     <div data-testid="logs-dock" style={{ flexShrink: 0, height, position: "relative", borderTop: "0.5px solid var(--color-border-tertiary)", display: "flex", flexDirection: "column", background: "var(--color-background-primary)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
       <div {...handleProps} />
@@ -923,15 +947,30 @@ function LogsDock({ cluster, target, onClose, onPopOut }: {
           <span style={{ color: "var(--color-text-tertiary)" }}>{target.namespace}</span>/{target.name}
         </span>
         <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>logs</span>
+        {canHistory && (
+          <div role="group" aria-label="Logs source" className="l-seg" data-testid="logs-mode">
+            <button className="l-chip" aria-pressed={!history} disabled={!!target.gone} title={target.gone ? "The pod is gone: no live logs" : "Live logs from the API server"}
+              onClick={() => setMode("live")}>Live</button>
+            <button className="l-chip" aria-pressed={history} onClick={() => setMode("history")} title="History from the cluster's Loki">History</button>
+          </div>
+        )}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={() => onPopOut(container)} style={{ ...btn, padding: "2px 6px", fontSize: 12, display: "flex", alignItems: "center" }} aria-label="open logs in window" title="Open logs in a separate window">
+          {history ? <button onClick={() => void openLogHistoryWindow(cluster, target.namespace, target.name, target.uid!, target.createdUnix, target.gone)}
+            style={{ ...btn, padding: "2px 6px", fontSize: 12, display: "flex", alignItems: "center" }} aria-label="open log history in window" title="Open the log history in a separate window">
             <IconExternalLink size={13} stroke={1.5} />
-          </button>
+          </button> : <button onClick={() => onPopOut(container)} style={{ ...btn, padding: "2px 6px", fontSize: 12, display: "flex", alignItems: "center" }} aria-label="open logs in window" title="Open logs in a separate window">
+            <IconExternalLink size={13} stroke={1.5} />
+          </button>}
           <button onClick={onClose} style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }} aria-label="close logs dock"><IconX size={13} stroke={1.5} /></button>
         </div>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "8px 12px" }}>
-        <LogsPane key={`${target.namespace}/${target.name}`} cluster={cluster} pod={target} onContainerChange={setContainer} />
+        {history ? (
+          <LogHistoryPane key={`${target.namespace}/${target.name}/${target.uid}`} cluster={cluster}
+            target={{ namespace: target.namespace, name: target.name, uid: target.uid!, createdUnix: target.createdUnix, gone: target.gone, containers: target.containers }} />
+        ) : (
+          <LogsPane key={`${target.namespace}/${target.name}`} cluster={cluster} pod={target} onContainerChange={setContainer} />
+        )}
       </div>
     </div>
   );

@@ -1,4 +1,11 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useExtendedRows, type ExtendedMarks } from "../health/useExtendedRows";
+import { acceleratorsOf, gpuCell, totalsText } from "./extended";
+import type { Mark } from "../health/useExtendedRows";
+import { NodeExtendedBlock } from "./NodeExtended";
+import { NodeDRABlock } from "./DRABlocks";
+import type { ReservationDTO } from "../store/fleet";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { Events } from "@wailsio/runtime";
 import { useFleet } from "../store/fleet";
 import type { ConditionDTO, NodeDetailDTO, NodeRowDTO, PodOnNodeDTO } from "../store/fleet";
@@ -425,6 +432,10 @@ function DrainComposerDialog({ cluster, node, isProtected, onCancel, onConfirm }
       </label>
 
       <div data-testid="drain-command-preview" style={commandPreview}>{preview}</div>
+      {/* coverage S3b §3.2: drain is kubectl's own stream, so no structured refusal reaches Klyx */}
+      <div data-testid="drain-admission-note" className="t-secondary" style={{ fontSize: 11 }}>
+        An eviction or delete that admission refuses appears in kubectl&apos;s own output below; Klyx does not attribute it to a webhook or policy.
+      </div>
     </OperationDialog>
   );
 }
@@ -443,6 +454,9 @@ const NODE_COLUMNS: ColumnDef[] = [
   ROW_MARK,
   { id: "name", width: 240, priority: 0, flex: true },
   { id: "status", width: 140, priority: 1 },
+  // coverage S11a: requested / allocatable for an accelerator, shown only
+  // when some node advertises one
+  { id: "gpu", width: 130, priority: 2 },
   { id: "cpuUsed", width: 104, priority: 2 },
   { id: "memUsed", width: 120, priority: 2 },
   { id: "roles", width: 110, priority: 3 },
@@ -453,7 +467,7 @@ const NODE_COLUMNS: ColumnDef[] = [
   { id: "age", width: 44, priority: 7 },
 ];
 const COLUMN_LABEL: Record<string, string> = {
-  lamp: "", name: "Node", status: "Status", cpuUsed: "CPU used", memUsed: "Memory used", roles: "Roles",
+  lamp: "", name: "Node", status: "Status", gpu: "GPU", cpuUsed: "CPU used", memUsed: "Memory used", roles: "Roles",
   version: "Version", taints: "Taints", cpuAlloc: "CPU alloc / cap", memAlloc: "Mem alloc / cap", age: "Age",
 };
 
@@ -663,10 +677,20 @@ export function NodesView({ cluster }: { cluster: string }) {
   };
 
   const usageAvailable = util?.available !== false;
+  // coverage S11a: the extended task's rows, joined by node UID; nothing
+  // renders on a cluster with no accelerator
+  const ext = useExtendedRows(mine ? cluster : null);
+  // node-only figures (capacity, allocatable, the gap) are qualified by the
+  // Node rows' own evidence; requested and DRA-served by the reservations
+  // capture (Codex's S11a implementation review, finding 4)
+  const nodeMark: Mark = ev === "complete" ? (rowsRefreshing ? "*" : "") : ev === "stale" ? "*" : ev === "failed" ? (scopedNodes.length > 0 ? "*" : "?") : ev === "pending" ? "?" : "+";
+  const extMarks: ExtendedMarks = { ...ext.reservationMarks, nodes: nodeMark };
+  const hasAccel = scopedNodes.some((n) => acceleratorsOf(n.extended).length > 0);
   const fitted = useMemo(
-    () => fitColumns(NODE_COLUMNS.filter((c) => usageAvailable || (c.id !== "cpuUsed" && c.id !== "memUsed")), bodyWidth),
-    [bodyWidth, usageAvailable],
+    () => fitColumns(NODE_COLUMNS.filter((c) => (usageAvailable || (c.id !== "cpuUsed" && c.id !== "memUsed")) && (hasAccel || c.id !== "gpu")), bodyWidth),
+    [bodyWidth, usageAvailable, hasAccel],
   );
+  const totals = totalsText(ext.totals, ext.totalMarks, ext.totalsOmitted);
   const show = (id: string) => fitted.visible.has(id);
   const gridStyle = { gridTemplateColumns: fitted.template };
 
@@ -692,6 +716,26 @@ export function NodesView({ cluster }: { cluster: string }) {
   if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.</div>);
   if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
   if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
+  // coverage S11a: the extended parts' own state - a budget cut, a failed
+  // read, a held capture - each said by the part it belongs to (Codex's S11a
+  // implementation review, findings 1, 5; re-review). The reservations'
+  // notices follow any extended evidence (an ordinary extended resource, a
+  // reservation row), the totals' notices the accelerators they total; with
+  // no such evidence the lens stays quiet.
+  const extEvidence = scopedNodes.some((n) => (n.extended?.entries?.length ?? 0) > 0) || ext.reservations.size > 0 || ext.reservationsDropped > 0;
+  const heldLine = (key: string, testid: string, what: string, st: { refreshError: string | null; asOf: string | null }) =>
+    <div key={key} role="status" data-testid={testid} className="t-secondary" style={{ ...statusLine, overflowWrap: "anywhere" }}>{what} as of {st.asOf ? clock(st.asOf) : "the last read"}{st.refreshError ? ` - the newer read failed: ${st.refreshError}` : " - a newer read is being fetched"}.</div>;
+  if (extEvidence) {
+    const rs = ext.reservationsState;
+    if (ext.reservationsDropped > 0) notices.push(<div key="ext-dropped" role="status" data-testid="nodes-extended-dropped" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Requested not shown for {ext.reservationsDropped} node{ext.reservationsDropped === 1 ? "" : "s"}: the per-cluster bound left their reservations out.</div>);
+    if (rs.error && !ext.reservationsRead) notices.push(<div key="ext-error" role="status" data-testid="nodes-extended-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Extended requests not read: {rs.error}</div>);
+    else if (rs.held) notices.push(heldLine("ext-held", "nodes-extended-held", "Extended requests", rs));
+  }
+  if (hasAccel || ext.totals.length > 0) {
+    const ts = ext.totalsState;
+    if (ts.error && !ext.totalsRead) notices.push(<div key="tot-error" role="status" data-testid="nodes-totals-error" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Accelerator totals not read: {ts.error}</div>);
+    else if (ts.held) notices.push(heldLine("tot-held", "nodes-totals-held", "Accelerator totals", ts));
+  }
 
   const tone = attentionTone(counts);
   const filterLabel = filter !== "all" ? filter[0].toUpperCase() + filter.slice(1) : roleFilter ? `role ${roleFilter}` : query ? "search" : "";
@@ -707,7 +751,7 @@ export function NodesView({ cluster }: { cluster: string }) {
               attention={{ count: counts.attention, marker: mark, phrase: "need attention", fault: tone === "danger", testid: "nodes-attention" }}
               clear={counts.unknown > 0 ? "no known attention" : current ? "none need attention" : "none known to need attention"} />
             <span className="t-secondary">
-              {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} under pressure` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
+              {[counts.fault ? `${counts.fault}${mark} not ready` : "", counts.degraded ? `${counts.degraded}${mark} degraded` : "", counts.unknown ? `${counts.unknown}${mark} unverified` : "", cordonedCount ? `${cordonedCount}${mark} cordoned${asOf}` : ""].filter(Boolean).join(" · ")}
             </span>
           </>
         )}
@@ -782,6 +826,10 @@ export function NodesView({ cluster }: { cluster: string }) {
                       </span>
                     )}
                     {show("status") && <span style={ellipsis}><VerdictLabel health={n.health} />{n.unschedulable && kindOf(n.health) !== "paused" ? <span className="t-secondary"> · cordoned</span> : null}</span>}
+                    {show("gpu") && (() => {
+                      const cell = gpuCell(n.extended, ext.reservations.get(n.uid ?? ""), extMarks, !ext.reservations.has(n.uid ?? ""));
+                      return <span style={{ ...ellipsis, color: "var(--color-text-secondary)" }} title={cell.title || undefined} data-testid="nodes-gpu-cell">{cell.text || "-"}</span>;
+                    })()}
                     {show("cpuUsed") && <UsageCell resource="cpu" usage={usage?.cpu ?? null} allocatable={n.cpuAllocatable} format={fmtCpu} />}
                     {show("memUsed") && <UsageCell resource="mem" usage={usage?.mem ?? null} allocatable={n.memAllocatable} format={fmtMem} />}
                     {show("roles") && <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }}>{n.roles.length > 0 ? n.roles.join(", ") : "-"}</span>}
@@ -801,6 +849,7 @@ export function NodesView({ cluster }: { cluster: string }) {
           <>
             <span className="t-secondary">
               {visibleNodes.length} of {scopedNodes.length}{mark} nodes{filterLabel ? ` · filter: ${filterLabel}` : ""}{asOf} · allocatable {cpuAlloc.toFixed(1)} CPU · {fmtMem(memAlloc)} · {podCap} pod slots
+              {totals.text && <span title={totals.title || undefined} data-testid="nodes-extended-totals"> · {totals.text}</span>}
             </span>
             {filterLabel && <button className="l-chip" style={{ height: 20, color: "var(--color-text-info)" }} onClick={clearFilters}>Show all {scopedNodes.length} nodes</button>}
           </>
@@ -819,6 +868,8 @@ export function NodesView({ cluster }: { cluster: string }) {
             onCordon={(cordon) => setCordonPending({ cluster, node: subject.name, uid: subject.uid ?? "", cordon })}
             onDrain={() => setDrainPending({ cluster, node: subject.name, uid: subject.uid ?? "" })}
             onClose={closeInspector}
+            reservation={ext.reservations.get(subject.uid ?? "")}
+            extMarks={extMarks}
           />
         ) : sel && pin.expected && pin.gone ? (
           <PinnedGone cluster={cluster} kind="Node" name={sel.name} uid={pin.expected} gone={pin.gone}
@@ -1021,7 +1072,9 @@ function CapacityCell({ value, total, format }: { value: number; total: number; 
 // then taints and collapsed metadata. The row (live, or the selection's last)
 // is the verdict and the facts; the detail is shown only for the row's UID
 // (design §5b) - a same-name replacement's detail never becomes this one's.
-function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replaced, onCordon, onDrain, onClose }: {
+function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replaced, onCordon, onDrain, onClose, reservation, extMarks }: {
+  reservation?: ReservationDTO;
+  extMarks?: ExtendedMarks;
   cluster: string;
   row: NodeRowDTO;
   uid: string;
@@ -1035,6 +1088,9 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
   onClose: () => void;
 }) {
   const ai = useInspectorAI(uid ? { kind: "row" as const, task: "nodes", part: "nodes", uid: uid } : null, `Node/${row.name}`, !gone, cluster);
+  // coverage S8a: Alertmanager's alerts naming this node
+  const alertTarget = useMemo(() => (uid ? { uid, kind: "Node", name: row.name } : null), [uid, row.name]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   const [tab, setTab] = useState<"overview" | "manifest">("overview");
   const [describing, setDescribing] = useState(false);
   const podsRef = useRef<HTMLDivElement>(null);
@@ -1094,6 +1150,7 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
         manifest={shown ? <YamlBlock text={shown.yaml} copyLabel="node YAML" /> : null}
       >
         {ai.block}
+        {alertsBlock}
         {describing && live && <DescribePane cluster={cluster} kindArg="node" kind="Node" namespace="" name={name} expectUid={uid || undefined} onClose={() => setDescribing(false)} />}
         {!shown ? (
           detailError && !loading ? (
@@ -1164,6 +1221,9 @@ function NodeInspector({ cluster, row, uid, nowS, detail, loading, gone, replace
                 <span>OS / arch</span><span>{row.os || "-"} / {row.arch || "-"}</span>
               </div>
             </InspectorBlock>
+
+            {extMarks && <NodeExtendedBlock row={row} reservation={reservation} marks={extMarks} rowMissing={!reservation} />}
+            <NodeDRABlock cluster={cluster} node={row.name} />
 
             {shown.taints.length > 0 && (
               <InspectorBlock title="Taints" count={shown.taints.length}>

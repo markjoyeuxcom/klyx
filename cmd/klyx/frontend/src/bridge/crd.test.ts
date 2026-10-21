@@ -7,12 +7,13 @@ vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", ()
     CountKind: vi.fn(),
     ListInstances: vi.fn(),
     GetInstanceDetail: vi.fn(),
+    DeleteAdhocObject: vi.fn(),
   },
 }));
 vi.mock("@wailsio/runtime", () => ({ Clipboard: { SetText: vi.fn() } }));
 
 import { CRDService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { listCRDs, countKind, listInstancePage, loadInstances, getInstanceDetail } from "./crd";
+import { listCRDs, countKind, listInstancePage, loadInstances, getInstanceDetail, deleteAdhocObject } from "./crd";
 
 const ok = (fn: unknown, v: unknown) => (fn as ReturnType<typeof vi.fn>).mockResolvedValue(v);
 const ref = { group: "cert-manager.io", version: "v1", plural: "certificates", kind: "Certificate", scope: "Namespaced" };
@@ -141,5 +142,18 @@ describe("a failed detail read", () => {
     expect(d?.error).toBe("bridge disconnected");
     expect(d?.notFound).toBeFalsy();
     expect(useFleet.getState().instanceDetail.loading).toBe(false);
+  });
+});
+
+// Codex's S3b implementation review, finding 2: a refused scratch DELETE's
+// finding crosses the real bridge
+describe("deleteAdhocObject", () => {
+  it("passes the refusal's finding through", async () => {
+    const admission = { envelope: "webhook-denied", name: "deny.lab.klyx.dev", summary: "delete Pod klyx-scratch/p was refused", candidates: [] };
+    ok(CRDService.DeleteAdhocObject, { ok: false, error: "refused", admission });
+    const r = await deleteAdhocObject("c", { group: "", version: "v1", plural: "pods", kind: "Pod", namespace: "klyx-scratch", name: "p", uid: "u" } as never);
+    expect(r).toEqual({ ok: false, error: "refused", admission });
+    ok(CRDService.DeleteAdhocObject, { ok: true, error: "" });
+    expect(await deleteAdhocObject("c", { group: "", version: "v1", plural: "pods", kind: "Pod", namespace: "klyx-scratch", name: "p", uid: "u" } as never)).toEqual({ ok: true, error: "" });
   });
 });

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moomora/klyx/internal/extres"
 	"github.com/moomora/klyx/internal/health"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -41,6 +42,9 @@ type NodeSummary struct {
 	// Health is the shared verdict (internal/health). Ready/Problems are
 	// legacy and stay only until every consumer has migrated.
 	Health health.Verdict
+	// Extended is the node's extended resources (coverage S11a §2): every
+	// name in capacity or allocatable, accelerators first, within the bounds.
+	Extended extres.NodeResources
 }
 
 // poolLabels are the provider labels that name a node's pool/group, checked in
@@ -61,6 +65,7 @@ func SummarizeNodes(nodes []corev1.Node, now time.Time) []NodeSummary {
 		n := &nodes[i]
 		s := summarizeNode(n, now)
 		s.Health = health.Node(n)
+		s.Extended = extres.OfNode(n)
 		out = append(out, s)
 	}
 

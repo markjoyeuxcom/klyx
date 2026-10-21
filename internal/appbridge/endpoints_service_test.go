@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/secretstore"
 )
@@ -39,6 +41,77 @@ type endpointConnFake struct {
 	set  []config.MetricsConfig
 	cfg  config.MetricsConfig
 	capb metrics.MetricsCapability
+	// Alertmanager
+	amCfg       *config.EndpointConfig
+	amSet       []*config.EndpointConfig
+	amStatus    alertmanager.Status
+	amSrc       string
+	amErr       error
+	amRefreshed int
+	// Loki
+	lokiCfg  *config.EndpointConfig
+	lokiSet  []*config.EndpointConfig
+	lokiTest fleet.LokiTestResult
+	lokiErr  error
+}
+
+func (f *endpointConnFake) LokiConfig() *config.EndpointConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lokiCfg
+}
+func (f *endpointConnFake) SetLokiConfig(c *config.EndpointConfig) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lokiSet = append(f.lokiSet, c)
+	f.lokiCfg = c
+}
+func (f *endpointConnFake) ChangeLokiCredential(c *config.EndpointConfig, install func() error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	f.lokiSet = append(f.lokiSet, c)
+	f.lokiCfg = c
+	return nil
+}
+func (f *endpointConnFake) LokiTest(context.Context) (fleet.LokiTestResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lokiTest, f.lokiErr
+}
+
+func (f *endpointConnFake) AlertmanagerConfig() *config.EndpointConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.amCfg
+}
+func (f *endpointConnFake) SetAlertmanagerConfig(c *config.EndpointConfig) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.amSet = append(f.amSet, c)
+	f.amCfg = c
+}
+func (f *endpointConnFake) ChangeAlertmanagerCredential(c *config.EndpointConfig, install func() error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := install(); err != nil {
+		return err
+	}
+	f.amSet = append(f.amSet, c)
+	f.amCfg = c
+	return nil
+}
+func (f *endpointConnFake) RefreshAlerts() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.amRefreshed++
+}
+func (f *endpointConnFake) AlertmanagerStatus(context.Context) (alertmanager.Status, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.amStatus, f.amSrc, f.amErr
 }
 
 func (f *endpointConnFake) ClusterMetrics(context.Context, bool) (metrics.ClusterMetrics, metrics.MetricsCapability) {
@@ -115,6 +188,19 @@ func (b boundConnFake) SetMetricsConfig(mc config.MetricsConfig) {
 	b.revs.Bump(b.cluster, config.EndpointMetrics, false)
 }
 
+func (b boundConnFake) SetAlertmanagerConfig(c *config.EndpointConfig) {
+	b.endpointConnFake.SetAlertmanagerConfig(c)
+	b.revs.Bump(b.cluster, config.EndpointAlertmanager, false)
+}
+
+func (b boundConnFake) ChangeAlertmanagerCredential(c *config.EndpointConfig, install func() error) error {
+	if err := b.endpointConnFake.ChangeAlertmanagerCredential(c, install); err != nil {
+		return err
+	}
+	b.revs.Bump(b.cluster, config.EndpointAlertmanager, true)
+	return nil
+}
+
 func (b boundConnFake) ChangeMetricsCredential(mc config.MetricsConfig, install func() error) error {
 	if err := b.endpointConnFake.ChangeMetricsCredential(mc, install); err != nil {
 		return err
@@ -162,7 +248,7 @@ func TestEndpointsSetAndState(t *testing.T) {
 	if r.State != string(endpointcred.Missing) || !r.CanSet || r.CanRemove || r.Source != "https://mimir.example/prometheus" || r.Tenant != "platform" {
 		t.Fatalf("missing: %+v", r)
 	}
-	if l := e.row(t, "prd", "loki"); l.CanTest || !strings.Contains(l.TestNote, "not implemented until S8") || l.Username != "klyx" {
+	if l := e.row(t, "prd", "loki"); !l.CanTest || l.TestNote != "" || l.Username != "klyx" { // S8b: Loki has a Test
 		t.Fatalf("loki: %+v", l)
 	}
 	before := e.revs.Revision("prd", "metrics")
@@ -340,8 +426,9 @@ func TestEndpointsActionsAreSerialised(t *testing.T) {
 	<-done
 }
 
-// Test reads metrics only, and says the reason redacted as the transport
-// left it; Alertmanager and Loki wait for S8.
+// Test reads metrics, and says the reason redacted as the transport left
+// it; Loki's Test (S8b §6) reads its build info and label names - the
+// connection synced to the reviewed endpoint first - and says each case.
 func TestEndpointsTest(t *testing.T) {
 	e := newEndpointsEnv(t)
 	e.conn.capb = metrics.MetricsCapability{Available: true, Source: "https://mimir.example/prometheus"}
@@ -350,7 +437,38 @@ func TestEndpointsTest(t *testing.T) {
 		t.Fatalf("test: %+v", res)
 	}
 	l := e.row(t, "prd", "loki")
-	if res := e.svc.TestEndpoint("prd", "loki", l.Revision); res.OK || !strings.Contains(res.Message, "not implemented until S8") {
+	e.conn.lokiTest = fleet.LokiTestResult{Version: "3.7.8", Source: "https://loki.example:443", Data: true, Namespace: []string{"k8s_namespace_name"}}
+	if res := e.svc.TestEndpoint("prd", "loki", l.Revision); !res.OK ||
+		res.Message != "Available: Loki 3.7.8 at https://loki.example:443; this cluster's streams carry the namespace label k8s_namespace_name." {
 		t.Fatalf("loki: %+v", res)
+	}
+	if len(e.conn.lokiSet) != 1 {
+		t.Fatalf("the connection was not synced to the reviewed Loki: %d", len(e.conn.lokiSet))
+	}
+	e.conn.lokiTest = fleet.LokiTestResult{Version: "3.7.8", Source: "https://loki.example:443", Tenant: "lab"}
+	if res := e.svc.TestEndpoint("prd", "loki", l.Revision); !res.OK || !strings.Contains(res.Message, "no streams match this cluster's match in the last hour on tenant lab") {
+		t.Fatalf("loki, no streams: %+v", res)
+	}
+	e.conn.lokiTest = fleet.LokiTestResult{Version: "3.7.8", Source: "s", Data: true}
+	if res := e.svc.TestEndpoint("prd", "loki", l.Revision); !strings.Contains(res.Message, "carry no namespace label") {
+		t.Fatalf("loki, no namespace label: %+v", res)
+	}
+	e.conn.lokiErr = errors.New("refused: Authorization: Bearer LOKI-SECRET")
+	if res := e.svc.TestEndpoint("prd", "loki", l.Revision); res.OK || strings.Contains(res.Message, "LOKI-SECRET") || !strings.HasPrefix(res.Message, "Unavailable: ") {
+		t.Fatalf("loki, failure: %+v", res)
+	}
+}
+
+// Coverage S8b §6: Set for a connected cluster's Loki installs the
+// credential through the connection with the reviewed configuration, as
+// one step (C5 §7), as Alertmanager's does.
+func TestEndpointsLokiSetThroughTheConnection(t *testing.T) {
+	e := newEndpointsEnv(t)
+	l := e.row(t, "prd", "loki")
+	if res := e.svc.SetCredential("prd", "loki", l.Revision, "LOKI-PASS"); !res.OK {
+		t.Fatalf("set: %+v", res)
+	}
+	if len(e.conn.lokiSet) != 1 || e.conn.lokiSet[0].Endpoint != "https://loki.example" {
+		t.Fatalf("the connection did not take the credential with the reviewed Loki: %+v", e.conn.lokiSet)
 	}
 }

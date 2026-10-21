@@ -104,7 +104,7 @@ func TestNativeRulesGolden(t *testing.T) {
 	store("unrecognised state", externalsecrets.Store{State: "Invalid"})
 
 	claim := func(name string, c karpenter.NodeClaim) {
-		c.Name, c.Pool = name, "default"
+		c.Meta.Name, c.Pool = name, "default"
 		c.Created = now.Add(-time.Duration(c.AgeSeconds) * time.Second)
 		dto := toKarpenterClaimDTO(c)
 		out["nodeClaims"] = append(out["nodeClaims"], goldenCase{name, nowU, dto, dto.Rule})
@@ -119,15 +119,21 @@ func TestNativeRulesGolden(t *testing.T) {
 	claim("initializing within the deadline", karpenter.NodeClaim{Ready: "unknown", NodeName: "n2", AgeSeconds: 600})
 	claim("initializing past the deadline", karpenter.NodeClaim{Ready: "unknown", NodeName: "n2", AgeSeconds: 2000})
 
+	// Since S10 a pool's verdict also reads its class link and controllers,
+	// which the lens DTO does not carry: these cases pin the single-object
+	// part the lens fixtures mirror (a pool judged on its Ready alone, its
+	// link unresolved). The rest is the Go rule's own tests.
 	pool := func(name string, p karpenter.NodePool) {
-		p.Name = name
+		p.Meta.Name = name
+		if p.CondReady != nil {
+			p.Reason, p.Conds.Total = p.CondReady.Reason, 1
+		}
 		dto := toKarpenterPoolDTO(p)
 		out["nodePools"] = append(out["nodePools"], goldenCase{name, nowU, dto, dto.Rule})
 	}
-	pool("ready", karpenter.NodePool{Ready: "ready"})
-	pool("not ready", karpenter.NodePool{Ready: "not-ready", Reason: "NodeClassNotReady"})
-	pool("unknown", karpenter.NodePool{Ready: "unknown"})
-	pool("no state", karpenter.NodePool{})
+	pool("ready", karpenter.NodePool{Ready: "ready", CondReady: &karpenter.Cond{Type: "Ready", Status: "True"}})
+	pool("not ready", karpenter.NodePool{Ready: "not-ready", CondReady: &karpenter.Cond{Type: "Ready", Status: "False", Reason: "NodeClassNotReady"}})
+	pool("unknown", karpenter.NodePool{Ready: "unknown", CondReady: &karpenter.Cond{Type: "Ready", Status: "Unknown"}})
 
 	reconciliation := func(name string, r flux.Resource) {
 		r.Kind, r.Namespace, r.Name = flux.KustomizationKind, "flux-system", name

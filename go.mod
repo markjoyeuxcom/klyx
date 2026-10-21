@@ -1,6 +1,6 @@
 module github.com/moomora/klyx
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.76.0

@@ -40,3 +40,34 @@ func Credentials(s string) (string, int) {
 	}
 	return s, n
 }
+
+// identifiers are cloud identifier shapes (coverage S10 §8): providers write
+// them into condition and event text (an Azure subnet's full ARM ID in
+// SubnetsReady, an ARN in an access error), so excluding structured fields
+// does not keep them out of a prompt. Each is replaced whole. A bare name
+// (an instance profile's) has no shape: Karpenter's messages never cross at
+// all, which no pattern could ensure.
+var identifiers = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	// an ARM resource ID, to the end of its path
+	{regexp.MustCompile(`(?i)/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^\s"'<>,;)\]}]*`), "<azure-resource-id>"},
+	// an ARN in any partition
+	{regexp.MustCompile(`\barn:aws[a-z-]*:[^\s"'<>,;)\]}]+`), "<aws-arn>"},
+	// an AWS resource ID of the kinds a node class resolves
+	{regexp.MustCompile(`\b(subnet|sg|ami|vpc|eni|lt|cr|pg)-[0-9a-f]{8}([0-9a-f]{9})?\b`), "<aws-id>"},
+}
+
+// Identifiers replaces every cloud identifier shape in s and reports how
+// many it replaced. Like Credentials it never truncates.
+func Identifiers(s string) (string, int) {
+	n := 0
+	for _, id := range identifiers {
+		s = id.re.ReplaceAllStringFunc(s, func(string) string {
+			n++
+			return id.repl
+		})
+	}
+	return s, n
+}

@@ -176,10 +176,12 @@ func TestUnstructuredProjectionParity(t *testing.T) {
 	}
 	claim := cr("karpenter.sh/v1", "NodeClaim", "", "c1", map[string]any{}, []any{cond("Launched", "True", ""), cond("Registered", "False", "NodeNotFound")}, map[string]any{"nodeName": "n1"})
 	pool := cr("karpenter.sh/v1", "NodePool", "", "default", map[string]any{"weight": int64(10), "limits": map[string]any{"cpu": "100"}}, []any{cond("Ready", "True", "")}, nil)
-	pc, _ := ProjectUnstructured(claim)
-	pp, _ := ProjectUnstructured(pool)
-	if !reflect.DeepEqual(karpenter.ParseNodeClaim(claim, now), karpenter.ParseNodeClaim(pc.(*unstructured.Unstructured), now)) ||
-		!reflect.DeepEqual(karpenter.ParseNodePool(pool), karpenter.ParseNodePool(pp.(*unstructured.Unstructured))) {
+	// S10: Karpenter's kinds project into the structs the rules read, the
+	// same as parsing the raw object (a claim is aged at evaluation)
+	pc, _ := karpenter.Project(KindNodeClaims)(claim)
+	pp, _ := karpenter.Project(KindNodePools)(pool)
+	if !reflect.DeepEqual(karpenter.ParseNodeClaim(claim, now), pc.(*karpenter.NodeClaim).At(now)) ||
+		!reflect.DeepEqual(karpenter.ParseNodePool(pool), *pp.(*karpenter.NodePool)) {
 		t.Fatal("Karpenter objects parse differently after projection")
 	}
 }

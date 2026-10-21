@@ -77,7 +77,7 @@ func TestKarpenterState_NotDetectedIsHonest(t *testing.T) {
 	}
 }
 
-func TestKarpenterState_TriageAndControllerHealth(t *testing.T) {
+func TestKarpenterState_Feed(t *testing.T) {
 	karpDep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "karpenter"},
 		Status:     appsv1.DeploymentStatus{ReadyReplicas: 2},
@@ -100,8 +100,8 @@ func TestKarpenterState_TriageAndControllerHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snap.Detected || !snap.ControllerHealthy || !snap.AsOf.Equal(time.Unix(1000, 0)) {
-		t.Fatalf("detection/health/as-of: %+v", snap)
+	if !snap.Detected || !snap.AsOf.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("detection/as-of: %+v", snap)
 	}
 	// The NodePools and NodeClaims are the Observer's rows now (slice 3
 	// §5.5): the snapshot never lists them.
@@ -114,9 +114,6 @@ func TestKarpenterState_TriageAndControllerHealth(t *testing.T) {
 func TestKarpenterState_PartialInputsStayUnverified(t *testing.T) {
 	c := newKarpConn(true, nil, karpPool("workers", "True"), karpClaim("wk-1", "workers", "True"))
 	typed := c.typed.(*typedfake.Clientset)
-	typed.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "karpenter", nil)
-	})
 	typed.PrependReactor("list", "events", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.(k8stesting.ListAction).GetListRestrictions().Fields.String() == "involvedObject.kind=NodePool" {
 			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", nil)
@@ -127,15 +124,12 @@ func TestKarpenterState_PartialInputsStayUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.ControllerVerified || snap.ControllerHealthy || snap.ControllerError == "" {
-		t.Fatalf("a forbidden controller read must be unverified with its reason: %+v", snap)
-	}
 	if snap.EventsError == "" {
 		t.Fatalf("a failed event read is reported: %+v", snap)
 	}
 }
 
-func TestKarpenterState_MissingControllerIsUnverifiedAndFeedCapIsDisclosed(t *testing.T) {
+func TestKarpenterState_FeedCapIsDisclosed(t *testing.T) {
 	var objs []runtime.Object
 	for i := 0; i < karpenterEventCap; i++ {
 		objs = append(objs, &corev1.Event{
@@ -148,9 +142,6 @@ func TestKarpenterState_MissingControllerIsUnverifiedAndFeedCapIsDisclosed(t *te
 	snap, err := c.KarpenterState(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if snap.ControllerVerified || snap.ControllerError == "" {
-		t.Fatalf("no karpenter Deployment under the expected name is unverified, not an outage: %+v", snap)
 	}
 	if !snap.EventsTruncated {
 		t.Fatalf("a full page of events must disclose partial coverage: %+v", snap)

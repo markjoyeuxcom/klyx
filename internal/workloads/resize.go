@@ -229,6 +229,8 @@ func EvidenceRev(p *corev1.Pod) string {
 		Name      string
 		Allocated corev1.ResourceList
 		Resources *corev1.ResourceRequirements
+		// coverage S11b §3.5: the device health the pod inspector shows
+		Health []corev1.ResourceStatus
 	}
 	type eph struct {
 		Name, State, Reason string
@@ -247,6 +249,12 @@ func EvidenceRev(p *corev1.Pod) string {
 		PodResources *corev1.ResourceRequirements
 		Legacy       string
 		Ephemeral    []eph
+		// coverage S11a: a DRA mapping written after binding re-reads the
+		// pod inspector's extended requests
+		Extended *corev1.PodExtendedResourceClaimStatus
+		// coverage S11b §3.5: a generated claim's name, recorded after
+		// creation, re-reads the pod inspector's claims
+		Claims []corev1.PodResourceClaimStatus
 	}
 	e.Observed = p.Status.ObservedGeneration
 	for _, c := range p.Status.Conditions {
@@ -256,12 +264,17 @@ func EvidenceRev(p *corev1.Pod) string {
 	}
 	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
 		for _, c := range list {
-			e.Containers = append(e.Containers, cs{c.Name, c.AllocatedResources, c.Resources})
+			e.Containers = append(e.Containers, cs{c.Name, c.AllocatedResources, c.Resources, c.AllocatedResourcesStatus})
 		}
 	}
 	e.PodAllocated, e.PodResources = p.Status.AllocatedResources, p.Status.Resources
+	e.Extended = p.Status.ExtendedResourceClaimStatus
+	e.Claims = p.Status.ResourceClaimStatuses
 	e.Legacy = string(p.Status.Resize) //nolint:staticcheck // the deprecated field is shown, so it is part of the evidence
 	for _, c := range p.Status.EphemeralContainerStatuses {
+		if len(c.AllocatedResourcesStatus) > 0 {
+			e.Containers = append(e.Containers, cs{Name: "ephemeral/" + c.Name, Health: c.AllocatedResourcesStatus})
+		}
 		x := eph{Name: c.Name}
 		switch st := c.State; {
 		case st.Running != nil:

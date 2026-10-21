@@ -14,7 +14,7 @@ export function expectsOther(row: { uid?: string } | undefined, uid: string | un
   return !!uid && (!row || row.uid !== uid);
 }
 
-export function PinnedGone({ cluster, kind, namespace, name, uid, gone, removedWords, onAdopt, onClose }: {
+export function PinnedGone({ cluster, kind, namespace, name, uid, gone, removedWords, onAdopt, onHistory, onClose }: {
   cluster: string;
   kind: string;
   namespace?: string;
@@ -25,6 +25,8 @@ export function PinnedGone({ cluster, kind, namespace, name, uid, gone, removedW
   // missing from the attached set is detached)
   removedWords?: ReactNode;
   onAdopt?: () => void;
+  // coverage S8b: the gone object's log history, pinned to its UID
+  onHistory?: () => void;
   onClose: () => void;
 }) {
   const words = gone === "removed" && removedWords ? removedWords
@@ -37,7 +39,8 @@ export function PinnedGone({ cluster, kind, namespace, name, uid, gone, removedW
     <div data-pinned-gone={gone} style={{ display: "contents" }}>
       <InspectorLayout pin={{ cluster, uid }} kind={kind} namespace={namespace} name={name} onClose={onClose}
         verdict={<div className="t-body" style={{ overflowWrap: "anywhere" }}>{words}</div>}
-        primary={gone === "replaced" && onAdopt ? { label: "Open the new object", onSelect: onAdopt } : undefined}>
+        primary={gone === "replaced" && onAdopt ? { label: "Open the new object", onSelect: onAdopt } : onHistory ? { label: "Log history", onSelect: onHistory } : undefined}
+        secondary={gone === "replaced" && onAdopt && onHistory ? { label: "Log history", onSelect: onHistory } : undefined}>
         <p className="t-secondary" style={{ fontSize: 12 }}>
           Nothing of another object is shown here, and no action runs on this one.
         </p>

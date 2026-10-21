@@ -118,6 +118,8 @@ This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
 ## 2. AI feature follow-ups (slices 1–5 shipped + merged 2026-07-09)
 
+- [ ] **The AI programme** (owner, 2026-10-20): deeper evidence-cited investigation, opt-in proactive incident reports, guarded execution - `docs/superpowers/specs/2026-10-20-klyx-ai-investigations-roadmap.md`, with its open decisions in §6.
+
 - [ ] **Review each new Claude Code release** for the CLI provider: run
       `KLYX_CLAUDE_CONTRACT=1 KLYX_CLAUDE_BIN=<binary> go test ./internal/ai -run
       TestClaudeContract_RealBinary`, capture the version's fixtures, and add its

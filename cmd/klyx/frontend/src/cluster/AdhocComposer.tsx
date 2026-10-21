@@ -1,3 +1,5 @@
+import { AdmissionFinding } from "../admission/AdmissionFinding";
+import { activityOf } from "../admission/finding";
 import { useState } from "react";
 import { useFleet, AdhocResultDTO } from "../store/fleet";
 import { createResourceYAML } from "../bridge/crd";
@@ -56,7 +58,8 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
       useFleet.getState().setActionStatus(
         failCount === 0
           ? { kind: "success", message: `Ad-hoc create - ${okCount} object${okCount === 1 ? "" : "s"} on ${cluster} (labeled klyx.dev/adhoc)` }
-          : { kind: "error", message: `Ad-hoc create - ${okCount} ok, ${failCount} failed on ${cluster}` },
+          : { kind: "error", message: `Ad-hoc create - ${okCount} ok, ${failCount} failed on ${cluster}`,
+              ...(rs.some((r) => r.admission) ? { admission: rs.filter((r) => r.admission).map((r) => activityOf(r.admission!)) } : {}) },
       );
     } finally {
       setBusy(null);
@@ -91,7 +94,8 @@ export function AdhocComposer({ cluster, onClose }: { cluster: string; onClose: 
                   <span style={{ color: r.ok ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{r.ok ? "ok" : "fail"}</span>
                   <span>{r.kind || "?"} {r.namespace ? `${r.namespace}/` : ""}{r.name || ""}</span>
                 </div>
-                {r.error && <div style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{r.error}</div>}
+                {r.admission ? <AdmissionFinding cluster={cluster} f={r.admission} />
+                  : r.error && <div style={{ fontSize: 11, color: "var(--color-text-danger)", overflowWrap: "anywhere" }}>{r.error}</div>}
                 {r.ok && (r.namespaceOwnerKind !== "" || r.argoTracking !== "") && (
                   <NamespaceContextNote r={r} />
                 )}

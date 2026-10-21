@@ -91,6 +91,8 @@ function listenErrors(): void {
 
 async function step(steps: Step[], name: string, run: () => Promise<Record<string, unknown> | void>): Promise<void> {
   errors.length = 0;
+  // the watchdog names the step a runner that never reports was in
+  void Call.ByName(`${SVC}.Progress`, name).catch(() => undefined);
   try {
     const facts = (await run()) ?? {};
     if (document.documentElement.scrollWidth > document.documentElement.clientWidth) throw new Error("horizontal overflow");
@@ -125,9 +127,9 @@ const $ = <T extends Element = HTMLElement>(sel: string) => document.querySelect
 // proven by its part instead (partOf).
 export const TITLES: Record<string, string | ((cluster: string) => string)> = {
   overview: (cluster) => cluster, nodes: "Nodes", events: "Events", upgrade: "Upgrade check", workloads: "Workloads", pods: "Pods",
-  karpenter: "Karpenter", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
+  karpenter: "Karpenter", autoscaling: "Autoscaling", connectivity: "Connectivity check", gateway: "Gateways and routes", flows: "Hubble flows", access: "Access check",
   flux: "Flux CD", "flux-sources": "Flux CD", "flux-operator": "Flux CD", "flux-images": "Flux CD", "flux-composition": "Flux CD", "flux-notifications": "Flux CD", argo: "Argo CD", "argo-projects": "Argo CD",
-  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", loadbalancers: "Load balancers", helm: "Helm",
+  "argo-appsets": "Argo CD", certs: "cert-manager", eso: "External Secrets", velero: "Velero", admission: "Admission", dra: "Devices (DRA)", loadbalancers: "Load balancers", alerts: "Alerts", helm: "Helm",
   crds: "API browser", builtins: "Resources",
 };
 
@@ -163,6 +165,10 @@ function key(target: EventTarget, init: KeyboardEventInit): void {
 function typeInto(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function typeIntoArea(area: HTMLTextAreaElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(area, value);
+  area.dispatchEvent(new Event("input", { bubbles: true }));
 }
 function chooseOption(select: HTMLSelectElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
@@ -462,7 +468,8 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await closeDrawer();
     (await within(4000, "the Webhooks tab", () => byText<HTMLElement>("[aria-label='Admission objects'] button", /^Webhooks/))).click();
     const first = await within(10_000, "configuration rows", () => $<HTMLElement>(".lens-row"));
-    if (!/lab-fail-missing|lab-fail-noready/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
+    // lab-s3b's unreachable webhook (coverage S3b) is broken as well
+    if (!/lab-fail-missing|lab-fail-noready|klyx-s3b-deny/.test(first.textContent ?? "")) throw new Error(`not broken-first: the first row is ${first.textContent}`);
     (await within(4000, "the missing backend", () => byText<HTMLElement>(".lens-row", /lab-fail-missing/))).click();
     const panel = await within(8000, "the configuration inspector", () => $("[data-testid='admission-config-panel']"));
     if (!/matching requests may fail/.test(panel.textContent ?? "")) throw new Error(`the fault: ${(panel.textContent ?? "").slice(0, 200)}`);
@@ -829,6 +836,294 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(2000, "focus on the inspector's identity", () => document.activeElement?.id === "inspector-identity");
   });
 
+  // ---- coverage S8a: alerts from the lab's real Alertmanager (lab-s8a) ----
+  // the smoke fleet reads klyx-s8-lab/alertmanager:web with match
+  // cluster=kind-klyx: each state real, another cluster's alert kept out
+  await step(steps, "Alerts: each state, from a real Alertmanager", async () => {
+    await open("alerts");
+    await closeDrawer();
+    await within(20_000, "the lab's alerts", () => $("[data-testid='alert-row-KlyxLabPodCrashLooping']"));
+    const text = (name: string) => $(`[data-testid='alert-row-${name}']`)?.textContent ?? "";
+    if (!/active/.test(text("KlyxLabPodCrashLooping"))) throw new Error(`the pod alert: ${text("KlyxLabPodCrashLooping")}`);
+    await within(90_000, "the silence, the inhibition, the mute and the partial mute", () =>
+      /silenced/.test(text("KlyxLabSilenced")) && /inhibited by KlyxLabCritical/.test(text("KlyxLabWarning")) && /muted by time interval always/.test(text("KlyxLabMuted")) &&
+      /active · muted for lab-muted; active for lab/.test(text("KlyxLabPartlyMuted")));
+    if ($("[data-testid='alert-row-KlyxLabElsewhere']")) throw new Error("another cluster's alert is listed: match was not applied");
+    if (!$("[data-testid='alert-row-KlyxLabClusterWide']")) throw new Error("the cluster alert is not listed");
+    const source = $("[data-testid='alerts-source']")?.textContent ?? "";
+    if (!/klyx-s8-lab\/alertmanager:web/.test(source)) throw new Error(`the source line: ${source}`);
+    return { rows: document.querySelectorAll(".lens-row").length, summary: $("[data-testid='alerts-summary']")?.textContent?.trim() };
+  });
+  await step(steps, "Alerts: the pod's inspector lists its alert", async () => {
+    await open("alerts");
+    await closeDrawer();
+    (await within(10_000, "the pod alert", () => $<HTMLElement>("[data-testid='alert-row-KlyxLabPodCrashLooping']"))).click();
+    const panel = await within(8000, "the alert inspector", () => $("[data-testid='alert-panel']"));
+    if (!/matched by label namespace\/pod/.test(panel.textContent ?? "")) throw new Error(`the correlation: ${(panel.textContent ?? "").slice(0, 200)}`);
+    (await within(4000, "Open Pod", () => byText<HTMLElement>("button", /^Open Pod$/))).click();
+    await within(20_000, "the pod inspector's Alerts block", () => $("[data-testid='insp-alert-KlyxLabPodCrashLooping']"));
+  });
+  await step(steps, "Needs you counts alerts apart", async () => {
+    useFleet.getState().openFleet();
+    const counts = await within(20_000, "the alerts count", () => byText<HTMLElement>(".queue-counts", /alert/));
+    await within(8000, "an alert row", () => [...document.querySelectorAll<HTMLElement>(".queue-row")].find((r) => /alert: KlyxLab/.test(r.getAttribute("aria-label") ?? "")));
+    return { counts: counts.textContent };
+  });
+
+  // ---- coverage S8b: log history from the lab's real Loki (lab-s8b) ----
+  // the smoke fleet reads klyx-s8b-lab/loki:http, tenant lab, match
+  // k8s_cluster_name=kind-klyx (the OTLP shape, which carries pod UIDs):
+  // history-db-0's second generation only, by its UID
+  await step(steps, "Log history: a pod's lines from Loki, by its UID", async () => {
+    await open("pods");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "logs-pod", cluster, namespace: "klyx-s8b-lab", name: "history-db-0" });
+    await within(20_000, "the logs dock", () => $("[data-testid='logs-dock']"));
+    (await within(8000, "History", () => byText<HTMLElement>("[data-testid='logs-mode'] button", /^History$/))).click();
+    await within(30_000, "the UID selector", () => /selected by this pod's UID/.test($("[data-testid='history-strength']")?.textContent ?? ""));
+    const lines = [...document.querySelectorAll("[data-testid='history-line']")].map((l) => l.textContent ?? "");
+    if (lines.length === 0 || lines.some((l) => /gen1/.test(l)) || !lines.every((l) => /gen2/.test(l))) {
+      throw new Error(`the lines are not gen2's alone: ${lines.length} lines, first ${(lines[0] ?? "").slice(0, 120)}`);
+    }
+    if (!/k8s_pod_uid=/.test($("[data-testid='history-selector']")?.textContent ?? "")) throw new Error("the selector does not show the UID");
+    $<HTMLElement>("button[aria-label='close logs dock']")?.click();
+    return { lines: lines.length, strength: $("[data-testid='history-strength']")?.textContent?.slice(0, 80) };
+  });
+
+  // ---- coverage S9: KEDA and autoscaling ownership (lab-s9, a real KEDA 2.21.0) ----
+  // failing's prometheus trigger reaches nothing: KEDA's fallback holds,
+  // and the verdict says so, with the trigger's failure count apart from
+  // the HPA's replicas
+  await step(steps, "KEDA: a ScaledObject on fallback", async () => {
+    await open("autoscaling");
+    await closeDrawer();
+    (await within(20_000, "failing", () => $<HTMLElement>("[data-testid='as-row-failing']"))).click();
+    const panel = await within(8000, "the ScaledObject inspector", () => $("[data-testid='keda-so-panel']"));
+    await within(8000, "the fallback verdict", () => /Fallback active \(static\)/.test(panel.textContent ?? ""));
+    const failures = (await within(8000, "the failure count", () => /(\d+) failures \(Failing\)/.exec($("[data-testid='keda-triggers']")?.textContent ?? "")))[1];
+    const hpa = $("[data-testid='keda-hpa']")?.textContent ?? "";
+    if (!/^keda-hpa-failing: \d+ → \d+/.test(hpa)) throw new Error(`the HPA line: ${hpa}`);
+    return { failures, hpa };
+  });
+  // coverage S3b: lab-s3b's webhook and policy refuse Klyx's own writes;
+  // the YAML panel says the finding with its candidates, a scale's toast
+  // and Activity entry say who refused it
+  await step(steps, "Admission: a YAML apply refused by the lab webhook", async () => {
+    await open("crds");
+    useFleet.getState().openResource({ group: "", version: "v1", plural: "configmaps", kind: "ConfigMap", scope: "Namespaced" });
+    useFleet.getState().openInstance("klyx-s3b-lab", "lab-webhook");
+    await within(15_000, "its detail", () => useFleet.getState().instanceDetail.detail?.name === "lab-webhook");
+    [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest")?.click();
+    const first = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
+    if (!/^data:\n/m.test(first.value)) throw new Error(`no data block in the manifest: ${first.value.slice(0, 200)}`);
+    // the edit goes into whichever editor is mounted, until that editor's
+    // own Apply is enabled; a disabled Apply reports the editor's footer
+    // (how its local validator was found refusing prefixed labels)
+    let footer = "";
+    let typed = 0;
+    const apply = await within(10_000, "an enabled Apply", () => {
+      const area = $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']");
+      if (!area) return null;
+      if (!area.value.includes("\n  smoke: s3b\n")) {
+        typeIntoArea(area, area.value.replace(/^data:\n/m, "data:\n  smoke: s3b\n"));
+        typed++;
+        return null;
+      }
+      const shell = area.parentElement;
+      footer = (shell?.lastElementChild?.textContent ?? "").slice(0, 200);
+      const b = [...(shell?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((x) => x.textContent?.trim() === "Apply");
+      return b && !b.disabled ? b : null;
+    }).catch((e: Error) => { throw new Error(`${e.message} (typed ${typed}x); the editor's footer: ${footer || "(none)"}`); });
+    apply.click();
+    (await within(4000, "Apply changes", () => byText<HTMLButtonElement>("button", /^Apply changes$/))).click();
+    const summary = await within(20_000, "the finding", () => {
+      const t = $("[data-testid='admission-summary']")?.textContent ?? "";
+      return /^update ConfigMap klyx-s3b-lab\/lab-webhook was refused by admission before it was stored: denied by admission webhook "deny\.s3b\.klyx\.dev"$/.test(t) ? t : null;
+    });
+    const candidates = await within(20_000, "the candidates", () => {
+      const t = $("[data-testid='admission-candidates']")?.textContent ?? "";
+      return /klyx-s3b-deny\/deny\.s3b\.klyx\.dev · ValidatingWebhook · named by the refusal/.test(t) ? t : null;
+    });
+    const message = $("[data-testid='admission-message']")?.textContent ?? "";
+    if (message !== "this webhook denies all requests") throw new Error(`the server's message: ${message}`);
+    useFleet.getState().closeResource();
+    return { summary: summary.slice(0, 160), candidates: candidates.slice(0, 240), typed };
+  });
+  await step(steps, "Admission: a scale refused by the lab policy", async () => {
+    await open("workloads");
+    await closeDrawer();
+    // the Activity log persists across runs: only an entry after this one counts
+    const before = useFleet.getState().actionLog[0]?.id ?? 0;
+    useFleet.getState().requestNavIntent({ kind: "scale-workload", cluster, workloadKind: "Deployment", namespace: "klyx-s3b-lab", name: "lab-frozen" });
+    const input = await within(20_000, "the replica count", () => $<HTMLInputElement>("input[aria-label='replica count']"));
+    typeInto(input, "2");
+    (await within(4000, "apply", () => $<HTMLButtonElement>("button[aria-label='apply scale']"))).click();
+    const entry = await within(20_000, "the toast's Activity entry", () => {
+      const e = useFleet.getState().actionLog[0];
+      return e && e.id > before && e.message === 'Scale refused: denied by ValidatingAdmissionPolicy "klyx-s3b-freeze" (binding "klyx-s3b-freeze-binding")' ? e : null;
+    });
+    const named = entry.admission?.[0];
+    if (!named || !/^update Deployment klyx-s3b-lab\/lab-frozen was refused by admission before it was stored/.test(named.summary) || !named.candidates.includes("klyx-s3b-freeze")) {
+      throw new Error(`the Activity entry: ${JSON.stringify(entry)}`);
+    }
+    return { toast: entry.message, candidates: named.candidates };
+  });
+  // a webhook that cannot be called refuses a Flux resume: the toast names
+  // it and the call failure's cause, read after its URL
+  await step(steps, "Admission: a Flux resume refused by a webhook that cannot be called", async () => {
+    await open("flux");
+    await closeDrawer();
+    const before = useFleet.getState().actionLog[0]?.id ?? 0;
+    useFleet.getState().requestNavIntent({ kind: "suspend-flux", cluster, fluxKind: "Kustomization", namespace: "klyx-s3b-lab", name: "lab-unreachable", suspend: false });
+    // the confirm dialog's own button: the inspector offers "Resume" as
+    // well, and at 1024 the inspector is a drawer, itself a dialog
+    (await within(20_000, "the Resume confirm", () => {
+      const dialog = $("[data-testid='confirm-detail']")?.closest("[role='dialog']");
+      return [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((x) => x.textContent === "Resume" && !x.disabled);
+    })).click();
+    const entry = await within(30_000, "the toast's Activity entry", () => {
+      const e = useFleet.getState().actionLog[0];
+      return e && e.id > before && /^Resume (refused|failed)/.test(e.message) ? e : null;
+    });
+    if (entry.message !== 'Resume refused: admission webhook "unreachable.s3b.klyx.dev" could not be called (its connection was refused)') {
+      throw new Error(`the toast: ${entry.message}`);
+    }
+    const named = entry.admission?.[0];
+    if (!named || !/^update Kustomization klyx-s3b-lab\/lab-unreachable was refused by admission before it was stored/.test(named.summary) ||
+      !named.candidates.includes("klyx-s3b-deny/unreachable.s3b.klyx.dev")) {
+      throw new Error(`the Activity entry: ${JSON.stringify(entry)}`);
+    }
+    return { toast: entry.message, candidates: named.candidates };
+  });
+  // the scale verb names what owns the count; cancelled, never applied
+  await step(steps, "Scale: the popover names the KEDA ScaledObject", async () => {
+    await open("workloads");
+    await closeDrawer();
+    useFleet.getState().requestNavIntent({ kind: "scale-workload", cluster, workloadKind: "Deployment", namespace: "klyx-s9-lab", name: "active-web" });
+    const note = await within(20_000, "the owner line", () => {
+      const t = $("[data-testid='scale-owner']")?.textContent ?? "";
+      return /KEDA ScaledObject active-web/.test(t) ? t : null;
+    });
+    if (!byText<HTMLElement>("button", /^scale anyway$/)) throw new Error("the apply button does not read \"scale anyway\"");
+    (await within(4000, "cancel", () => $<HTMLElement>("button[aria-label='cancel scale']"))).click();
+    await within(2000, "the popover closed", () => !$("[data-testid='scale-owner']"));
+    return { owner: note.slice(0, 160) };
+  });
+
+  // ---- coverage S10: node provisioning by provider adapter (lab-s10) ----
+  // lab-subnets-a's EC2NodeClass fails SubnetsReady: the pool's headline is
+  // the class's failure in Klyx's words, with the link and the class named
+  await step(steps, "Karpenter: a NodePool whose EC2NodeClass fails", async () => {
+    await open("karpenter");
+    await closeDrawer();
+    (await within(20_000, "the NodePools view", () => byText<HTMLElement>("button.l-chip", /^NodePools/))).click();
+    (await within(20_000, "lab-subnets-a", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /lab-subnets-a/.test(r.textContent ?? "")))).click();
+    const panel = await within(8000, "the NodePool inspector", () => $("[data-testid='karp-pool-panel']"));
+    const head = await within(8000, "the headline in Klyx's words", () => {
+      const t = $("[data-testid='karp-pool-head']")?.textContent ?? "";
+      return /^SubnetsReady False: SubnetsNotFound: no subnets matched the selector terms$/.test(t) ? t : null;
+    });
+    const link = $("[data-testid='karp-pool-class']")?.textContent ?? "";
+    if (!/EC2NodeClass\/lab-subnets/.test(link) || !/linked/.test(link)) throw new Error(`the class link: ${link}`);
+    if (!/NodeClass lab-subnets not ready/.test(panel.textContent ?? "")) throw new Error("the headline label");
+    return { head, link: link.slice(0, 160) };
+  });
+  // the class is inventory: listed with its reading and both its pools, and
+  // counted on neither itself nor twice
+  await step(steps, "Karpenter: the NodeClasses view", async () => {
+    (await within(8000, "the NodeClasses view", () => byText<HTMLElement>("button.l-chip", /^NodeClasses/))).click();
+    // the view has switched only once its own columns show
+    await within(8000, "the NodeClasses columns", () => /Reading/.test($(".lens-table-head")?.textContent ?? ""));
+    const row = await within(20_000, "lab-subnets", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "lab-subnets"));
+    if (!/not ready/.test(row.textContent ?? "")) throw new Error(`lab-subnets reads: ${row.textContent}`);
+    row.click();
+    const panel = await within(8000, "the NodeClass inspector", () => $("[data-testid='karp-class-panel']"));
+    await within(8000, "its users", () => /lab-subnets-a, lab-subnets-b/.test(panel.textContent ?? ""));
+    if (!/counted on each NodePool that uses it/.test(panel.textContent ?? "")) throw new Error("the class is not said as configuration");
+    return { rows: document.querySelectorAll(".lens-row").length };
+  });
+
+  // coverage S11a: a node's extended resources, from lab-s11a - the real
+  // e2e sample device plugin (example.com/resource) and the lab's NVIDIA
+  // status fixtures with per-resource GPU Feature Discovery labels
+  await step(steps, "Nodes: a node's extended resources", async () => {
+    await open("nodes");
+    await closeDrawer();
+    await within(8000, "the GPU column", () => /GPU/.test($(".lens-table-head")?.textContent ?? ""));
+    const row = await within(20_000, "the kind node", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "klyx-control-plane"));
+    const cell = row.querySelector("[data-testid='nodes-gpu-cell']")?.textContent ?? "";
+    if (cell !== "2 resources") throw new Error(`the GPU cell reads "${cell}"`);
+    row.click();
+    const block = await within(20_000, "the Extended resources block", () => {
+      const b = $("[data-testid='node-extended']");
+      return b && /example\.com\/resource · 1 requested/.test(b.textContent ?? "") ? b : null;
+    });
+    const text = block.textContent ?? "";
+    for (const want of ["nvidia.com/gpu · 3 requested · 8 allocatable · 8 capacity", "shared (time-slicing): each GPU is advertised 4 times",
+      "nvidia.com/mig-1g.5gb · 1 requested · 7 allocatable", "example.com/resource · 1 requested · 2 allocatable", "MIG strategy: mixed"]) {
+      if (!text.includes(want)) throw new Error(`missing "${want}" in ${text.slice(0, 400)}`);
+    }
+    const totals = $("[data-testid='nodes-extended-totals']")?.textContent ?? "";
+    if (!totals.includes("8 nvidia.com/gpu allocatable (3 requested)")) throw new Error(`the totals: ${totals}`);
+    return { cell, totals: totals.slice(0, 160) };
+  });
+
+  // coverage S11b: DRA, from lab-s11b - the upstream example driver's
+  // node-local pool, a template claim in use, a claim no node satisfies,
+  // the fixture pools, and an unhealthy device
+  await step(steps, "Devices (DRA): claims, pools and the pending ladder", async () => {
+    await open("dra");
+    await closeDrawer();
+    const stuck = await within(20_000, "the unsatisfiable claim first", () => {
+      const r = [...document.querySelectorAll<HTMLElement>(".lens-row")][0];
+      return r && /klyx-s11b-lab \/ lab-too-many-gpu-/.test(r.textContent ?? "") && /cannot allocate it/.test(r.textContent ?? "") ? r : null;
+    });
+    stuck.click();
+    const panel = await within(8000, "the claim inspector", () => $("[data-testid='dra-claim-panel']"));
+    const text = panel.textContent ?? "";
+    // lab-s11b's invalid fixture pool turns the scheduler's reason into
+    // "invalid resource pools were encountered" (1.35+); either is quoted
+    for (const want of ['The scheduler: "', "the scheduler could not allocate the pod's claims"]) {
+      if (!text.includes(want)) throw new Error(`missing "${want}" in ${text.slice(0, 400)}`);
+    }
+    if (!/invalid resource pools were encountered|cannot allocate all claims/.test(text)) throw new Error(`no DRA reason quoted in ${text.slice(0, 400)}`);
+    await closeDrawer();
+    (await within(8000, "the Pools tab", () => byText<HTMLButtonElement>("[aria-label='DRA objects'] button", /^Pools/))).click();
+    const pools = await within(20_000, "the pools", () => {
+      const rows = [...document.querySelectorAll<HTMLElement>(".lens-row")].map((r) => r.textContent ?? "");
+      return rows.some((t) => t.includes("fixture.klyx.dev / lab-invalid") && t.includes("Invalid")) && rows.some((t) => t.includes("gpu.example.com / klyx-control-plane")) ? rows : null;
+    });
+    const incomplete = pools.find((t) => t.includes("lab-incomplete")) ?? "";
+    if (!/Being updated|Incomplete/.test(incomplete)) throw new Error(`the incomplete fixture pool reads "${incomplete}"`);
+    return { claim: stuck.textContent?.slice(0, 120), pools: pools.length };
+  });
+
+  await step(steps, "Devices (DRA): the node's pools and the pod's claims", async () => {
+    await open("nodes");
+    await closeDrawer();
+    const row = await within(20_000, "the kind node", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => r.querySelector(".lens-cell-name")?.textContent === "klyx-control-plane"));
+    row.click();
+    const block = await within(20_000, "the node's DRA block", () => {
+      const b = $("[data-testid='node-dra']");
+      return b && /gpu\.example\.com \/ klyx-control-plane · 8 devices/.test(b.textContent ?? "") ? b : null;
+    });
+    await closeDrawer();
+    await open("pods");
+    await closeDrawer();
+    const search = await within(8000, "the pods search", () => $<HTMLInputElement>("input[placeholder='Search pods']"));
+    typeInto(search, "lab-template");
+    const pod = await within(20_000, "lab-template", () => [...document.querySelectorAll<HTMLElement>(".lens-row")].find((r) => /lab-template$/.test(r.querySelector(".lens-cell-name")?.textContent ?? "")));
+    pod.click();
+    // relabs marks lab-template's device unhealthy (lab-s11b/unhealthy.sh):
+    // the kubelet's report, named by its ID
+    const claims = await within(30_000, "the pod's claims, its device unhealthy", () => {
+      const b = $("[data-testid='pod-claims']");
+      return b && /from a template \(the pod's "gpu"\) · Allocated/.test(b.textContent ?? "") && /1 device unhealthy \(reported by the kubelet\): \S+/.test(b.textContent ?? "") ? b : null;
+    });
+    typeInto(search, "");
+    return { node: block.textContent?.slice(0, 120), pod: claims.textContent?.slice(0, 160) };
+  });
+
   // ---- settings and the chat drawer ----
   await step(steps, "Settings", async () => {
     useFleet.getState().openSettings();
@@ -836,10 +1131,16 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const text = document.body.textContent ?? "";
     for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
     // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
-    // their credential states (the smoke fleet configures none)
+    // their credential states (the smoke fleet configures the lab's
+    // Alertmanager); S8a: Test reads its status
     const ep = await within(8000, "the endpoints panel", () => $("[data-testid='endpoints-settings']"));
     if ($("[data-testid='endpoints-error']")) throw new Error(`the endpoints panel could not read fleet.yaml: ${$("[data-testid='endpoints-error']")?.textContent}`);
-    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length };
+    (await within(8000, "the Alertmanager Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Alertmanager endpoint']"))).click();
+    const result = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Alertmanager 0\.34\.1/));
+    // S8b: Loki's Test reads its build info and this cluster's label names
+    (await within(8000, "the Loki Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Loki endpoint']"))).click();
+    await within(20_000, "Loki's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Loki 3\.7\.8/));
+    return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length, test: result.textContent?.trim().slice(0, 120) };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");

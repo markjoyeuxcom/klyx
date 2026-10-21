@@ -105,6 +105,13 @@ type Capture struct {
 	// source both complete and current proves an object of a served kind
 	// absent.
 	Current map[string]bool
+	// AsOf holds, for a stale source, when it was last live: its retained
+	// objects are dated evidence (coverage S9 §3), never current.
+	AsOf map[string]time.Time
+	// Capped names the sources a budget or a cap left objects out of,
+	// whatever their freshness (coverage S11b, Codex's implementation
+	// review finding 1): a stale source that was cut is never whole.
+	Capped map[string]bool
 	// Windows holds, for a capped kind with a Rank (KindSpec.Rank), the
 	// rank of its first left-out object: every object that ranks before it
 	// is here, so a question confined to those has a complete answer
@@ -124,6 +131,7 @@ type PartResult struct {
 	Counts   *Counts
 	Native   *NativeCounts
 	Evidence *int
+	Alerts   *AlertCounts // an alerts part's counts (coverage S8a §6)
 	Top      []Ref
 	Rows     any
 	Next     *time.Time
@@ -605,6 +613,29 @@ func (o *Observer) unrefSourceLocked(name string) {
 	ss.refs--
 	if ss.refs == 0 {
 		o.stopSnap(ss)
+	}
+}
+
+// RekeySnapshot gives a snapshot a new generation carrying key, unless its
+// generation already carries it (coverage S8a §4). The new generation has
+// no items, coverage checking and no as-of time; every outcome of the ended
+// one - items, errors, truncation and freshness - is discarded by apply's
+// generation check. A snapshot that is not running starts with the key
+// when it next starts.
+func (o *Observer) RekeySnapshot(snapshot, key string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ss := o.snaps[snapshot]
+	if ss == nil {
+		return
+	}
+	if ss.key == key && (ss.gen == nil || ss.gen.key == key) {
+		return
+	}
+	ss.key = key
+	if ss.gen != nil {
+		o.stopSnap(ss)
+		o.startSnap(ss)
 	}
 }
 

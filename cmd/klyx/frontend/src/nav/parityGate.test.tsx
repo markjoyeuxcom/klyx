@@ -55,7 +55,8 @@ import { Overview } from "../cluster/Overview";
 
 type Roles = { total: number; fault: number; degraded: number; unknown: number; progressing: number; paused: number; ok: number };
 type Member = { role: string; included: boolean };
-type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; members: Record<string, Member>; coverage: Record<string, string> };
+// alerts: an alerts part's declared counted alerts (coverage S8a)
+type PartExpect = { task: string; part: string; classifier: string; counted: string[]; roles: Roles; included: number; members: Record<string, Member>; coverage: Record<string, string>; alerts?: number };
 type CaseExpect = { case: string; parts: PartExpect[]; controllers: Record<string, string>; state: string };
 type Run = { id: string; commit: string; dirty: boolean; startedAt: string; reprobe: string };
 type Capture = {
@@ -63,13 +64,20 @@ type Capture = {
   rows: { cluster: string; incarnation: number; task: string; evaluatedAt: string; part: HealthPart }[];
   dtos: Record<string, RowsDTO<DtoRow>>; // the production sink's emitted messages: the lens DTOs
 };
-type DtoRow = { uid?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string };
+type DtoRow = { uid?: string; key?: string; rule?: { included: boolean; role: string }; health?: { kind?: string }; counted?: boolean; entity?: string; kedaOwner?: string };
 // the parts with a rows transport (Events and Helm are per-fetch snapshots)
 const ROW_PARTS = ["workloads/workloads", "pods/pods", "nodes/nodes", "flux/reconciliations", "flux/sources", "flux/fluxinstance", "flux/resourcesets", "flux/images", "flux/composition", "flux/receivers", "velero/schedules", "velero/locations", "velero/backups", "admission/webhooks", "admission/policies", "lb/services", "lb/pools", "lb/metallb", "argo/applications", "argo/applicationsets",
-  "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools"];
+  "certs/certificates", "certs/issuers", "eso/externalsecrets", "eso/stores", "gateway/gateways", "gateway/listenersets", "gateway/routes", "karpenter/nodeclaims", "karpenter/nodepools",
+  "alerts/alerts", "autoscaling/hpas", "keda/scaledobjects", "keda/scaledjobs", "keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals",
+  "dra/claims", "dra/pools", "dra/classes"];
+
+// inventory parts the attention model does not carry (coverage S9 §2: KEDA's
+// authentications; S10 §2: Karpenter's NodeClasses - rows, never Needs you);
+// their kinds' gaps read on the parts that depend on them
+const INVENTORY = new Set(["keda/authentications", "karpenter/nodeclasses", "extended/reservations", "extended/totals", "dra/classes"]);
 
 const OUT = process.env.KLYX_PARITY_OUT;
-const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "7", "8"];
+const CASES = ["B", "1", "2", "3", "4", "5a", "5b", "5c", "5d", "5e", "6", "6b", "9", "10", "11", "12", "13", "7", "8"];
 
 function captures(): Capture[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(OUT!, "manifest.json"), "utf8")) as { run: Run; cases: string[] };
@@ -111,15 +119,28 @@ function assertRowDTOs(c: Capture) {
     const key = `${pe.task}/${pe.part}`;
     const dto = c.dtos[key];
     if (!dto) continue;
+    // evidence rows (coverage S9: KEDA's authentications) are facts: no
+    // evaluation, no counts
+    if (pe.classifier === "evidence") continue;
+    if (pe.classifier === "alerts") {
+      // coverage S8a: the lens rows and the summary come from one read;
+      // the counted rows are the part's counted alerts and the oracle's
+      const counted = (dto.rows ?? []).filter((r) => r.counted).length;
+      expect(counted, `${c.case} ${key} counted rows`).toBe(findPart(c.summary, pe.task, pe.part)!.alerts!.counted);
+      expect(counted, `${c.case} ${key} counted rows vs the oracle`).toBe(pe.alerts);
+      continue;
+    }
     const native = pe.classifier === "native";
     const derived: Roles = { total: 0, fault: 0, degraded: 0, unknown: 0, progressing: 0, paused: 0, ok: 0 };
     let included = 0;
     const seen = new Set<string>();
     for (const row of dto.rows ?? []) {
-      // a listed fact (coverage S2b, S3a: an uncounted Backup, a binding)
-      // carries no evaluation and is no member of the counted set
-      if (native && !row.rule && (row.counted === false || row.entity === "binding")) continue;
-      const uid = row.uid ?? "";
+      // a listed fact (coverage S2b, S3a: an uncounted Backup, a binding;
+      // S9: a KEDA-owned HPA) carries no evaluation and is no member of the
+      // counted set
+      if (native && !row.rule && (row.counted === false || row.entity === "binding" || !!row.kedaOwner)) continue;
+      // a pool has no object UID: it is keyed by driver/pool (coverage S11b)
+      const uid = row.uid ?? (row.key ? `pool:${row.key}` : "");
       const role = native ? row.rule?.role : row.health?.kind;
       expect(role, `${c.case} ${key} ${uid}: no evaluation`).toBeTruthy();
       const want = pe.members[uid];
@@ -162,10 +183,24 @@ function assertModel(c: Capture, m: ClusterAttention) {
   // every step 7e area present
   expect(m.areas.map((a) => a.id).sort()).toEqual(TASKS.map((t) => t.task).sort());
   for (const pe of ex.parts) {
-    const { a, l } = lineOf(m, pe.task, pe.part);
     const where = `${c.case} ${pe.task}/${pe.part}`;
+    if (INVENTORY.has(`${pe.task}/${pe.part}`)) {
+      // an inventory part is never a line: inside its task's area when the
+      // task has one, and a lens-only task (S11a's extended) has no area
+      const area = m.areas.find((x) => x.id === pe.task);
+      if (TASKS.some((t) => t.task === pe.task)) expect(area?.lines.some((x) => x.part === pe.part), where).toBe(false);
+      else expect(area, where).toBeUndefined();
+      continue;
+    }
+    const { a, l } = lineOf(m, pe.task, pe.part);
     if (pe.classifier === "evidence") {
       expect(l.state, where).not.toBe("attention"); // evidence is never attention
+      continue;
+    }
+    if (pe.classifier === "alerts") {
+      // counted apart: an alerts line, never attention (S8a §6)
+      expect(l.n, where).toBe(pe.alerts);
+      expect(l.state, where).toBe((pe.alerts ?? 0) > 0 ? "alerts" : "quiet");
       continue;
     }
     if (pe.classifier === "verdict") {

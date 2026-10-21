@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"time"
 
@@ -42,13 +43,17 @@ const (
 
 // Projection limits (S3a §7).
 const (
-	MaxConfig      = 16 << 10
-	maxWebhooks    = 64
-	maxRules       = 8
-	maxRuleItems   = 8
-	maxWarnings    = 8
-	maxShort       = 64
-	maxName        = 253
+	MaxConfig    = 16 << 10
+	maxWebhooks  = 64
+	maxRules     = 8
+	maxRuleItems = 8
+	maxWarnings  = 8
+	maxShort     = 64
+	maxName      = 253
+	// the exact identifiers' bounds (S3b §3.3): a group (253), or a
+	// resource and its subresource, fit; and a list's items
+	maxExactID     = 316
+	maxExactItems  = 32
 	defaultPort    = 443
 	defaultTimeout = 10
 )
@@ -68,6 +73,33 @@ type Rule struct {
 	Versions   []string `json:"ve,omitempty"`
 	Resources  []string `json:"re,omitempty"`
 	Scope      string   `json:"sc,omitempty"`
+	// X are the rule's exact identifiers for matching (coverage S3b §3.3),
+	// kept apart from the display copy above, which is clipped and
+	// scrubbed; nil when the display copy is already exact.
+	X *RuleIDs `json:"x,omitempty"`
+	// Inexact: an identifier longer than maxExactID was not kept; Cut: a
+	// list longer than maxExactItems was cut. Either way the rule may
+	// match through what was not kept.
+	Inexact bool `json:"xi,omitempty"`
+	Cut     bool `json:"xc,omitempty"`
+}
+
+// RuleIDs are a rule's exact identifiers.
+type RuleIDs struct {
+	Operations []string `json:"op,omitempty"`
+	Groups     []string `json:"gr,omitempty"`
+	Versions   []string `json:"ve,omitempty"`
+	Resources  []string `json:"re,omitempty"`
+	Scope      string   `json:"sc,omitempty"`
+}
+
+// IDs are the identifiers a match compares: the exact copy, or the
+// display copy where it is exact.
+func (r Rule) IDs() RuleIDs {
+	if r.X != nil {
+		return *r.X
+	}
+	return RuleIDs{Operations: r.Operations, Groups: r.Groups, Versions: r.Versions, Resources: r.Resources, Scope: r.Scope}
 }
 
 // ServiceRef is a webhook's Service backend.
@@ -157,17 +189,20 @@ func cutLast(s string) (string, string, bool) {
 // Policy is one projected Validating or Mutating AdmissionPolicy.
 type Policy struct {
 	Meta
-	Kind               string     `json:"k"`
-	FailurePolicy      string     `json:"fp,omitempty"`
-	ParamKind          *ParamKind `json:"pk,omitempty"`
-	MatchRules         []Rule     `json:"mr,omitempty"`
-	MatchRuleCount     int        `json:"mrN,omitempty"`
-	Validations        int        `json:"va,omitempty"`
-	Mutations          int        `json:"mu,omitempty"`
-	Variables          int        `json:"vr,omitempty"`
-	MatchConditions    int        `json:"mc,omitempty"`
-	AuditAnnotations   int        `json:"aa,omitempty"`
-	ReinvocationPolicy string     `json:"rp,omitempty"`
+	Kind           string     `json:"k"`
+	FailurePolicy  string     `json:"fp,omitempty"`
+	ParamKind      *ParamKind `json:"pk,omitempty"`
+	MatchRules     []Rule     `json:"mr,omitempty"`
+	MatchRuleCount int        `json:"mrN,omitempty"`
+	// MatchPolicy is matchConstraints.matchPolicy ("" is the default,
+	// Equivalent) (coverage S3b §3.3)
+	MatchPolicy        string `json:"mp,omitempty"`
+	Validations        int    `json:"va,omitempty"`
+	Mutations          int    `json:"mu,omitempty"`
+	Variables          int    `json:"vr,omitempty"`
+	MatchConditions    int    `json:"mc,omitempty"`
+	AuditAnnotations   int    `json:"aa,omitempty"`
+	ReinvocationPolicy string `json:"rp,omitempty"`
 	// HasStatus: a Validating policy (Mutating ones have no status).
 	HasStatus          bool  `json:"st,omitempty"`
 	ObservedGeneration int64 `json:"og,omitempty"`
@@ -275,8 +310,32 @@ func rulesOf(items []any) ([]Rule, int) {
 		if len(out) == maxRules {
 			break
 		}
-		out = append(out, Rule{Operations: capped(strs(m, "operations"), maxRuleItems), Groups: capped(strs(m, "apiGroups"), maxRuleItems),
-			Versions: capped(strs(m, "apiVersions"), maxRuleItems), Resources: capped(strs(m, "resources"), maxRuleItems), Scope: disp(str(m, "scope"), maxShort)})
+		r := Rule{Operations: capped(strs(m, "operations"), maxRuleItems), Groups: capped(strs(m, "apiGroups"), maxRuleItems),
+			Versions: capped(strs(m, "apiVersions"), maxRuleItems), Resources: capped(strs(m, "resources"), maxRuleItems), Scope: disp(str(m, "scope"), maxShort)}
+		ids := RuleIDs{Scope: str(m, "scope")}
+		for _, l := range []struct {
+			key string
+			dst *[]string
+		}{{"operations", &ids.Operations}, {"apiGroups", &ids.Groups}, {"apiVersions", &ids.Versions}, {"resources", &ids.Resources}} {
+			for i, v := range strs(m, l.key) {
+				switch {
+				case i == maxExactItems:
+					r.Cut = true
+				case i > maxExactItems:
+				case len(v) > maxExactID:
+					r.Inexact = true
+				default:
+					*l.dst = append(*l.dst, v)
+				}
+			}
+		}
+		if len(ids.Scope) > maxExactID {
+			r.Inexact, ids.Scope = true, ""
+		}
+		if !reflect.DeepEqual(ids, r.IDs()) {
+			r.X = &ids
+		}
+		out = append(out, r)
 	}
 	return out, len(items)
 }
@@ -388,6 +447,7 @@ func ProjectPolicy(u *unstructured.Unstructured, kind string) *Policy {
 		}
 	}
 	p.MatchRules, p.MatchRuleCount = rulesOf(slice(u.Object, "spec", "matchConstraints", "resourceRules"))
+	p.MatchPolicy = disp(str(u.Object, "spec", "matchConstraints", "matchPolicy"), maxShort)
 	p.Size = size(p)
 	return p
 }

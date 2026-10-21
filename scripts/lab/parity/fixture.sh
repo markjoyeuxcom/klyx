@@ -48,9 +48,10 @@ controllers() {
 	done
 	k label namespace "$ns" klyx.dev/lab=parity --overwrite >/dev/null
 	local spec
-	for spec in flux-system/kustomize-controller cert-manager/cert-manager external-secrets/external-secrets karpenter/karpenter; do
+	for spec in flux-system/kustomize-controller cert-manager/cert-manager external-secrets/external-secrets; do
 		stand_in "${spec%%/*}" "${spec##*/}" ""
 	done
+	karpenter_controllers
 	k apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: StatefulSet
@@ -105,6 +106,157 @@ EOF
 	else
 		settled_pods "$1" "$2" Pending
 	fi
+}
+
+# node_image <ref>: the pause image under another name on the parity node
+# (coverage S10: Karpenter's controllers are attributed by their pods'
+# images), tagged in the node's containerd - no pull, only on the verified
+# parity node container.
+node_image() {
+	local node=$name-control-plane
+	[[ $(docker inspect "$node" --format '{{index .Config.Labels "io.x-k8s.kind.cluster"}}' 2>/dev/null) == "$name" ]] ||
+		die "container $node is not the $name kind node"
+	docker exec "$node" ctr -n k8s.io images tag --force "$pause" "$1" >/dev/null
+}
+
+# extended_objects: coverage S11a's real device plugin, the Kubernetes e2e
+# sample device plugin (1.8.0, pulled), registering example.com/resource
+# (2 devices) through the parity node's kubelet, and a pod requesting 1.
+# Case 11 stops it for real (its DaemonSet's nodeSelector matches nothing),
+# so the kubelet reads capacity 2, allocatable 0 for 5 minutes.
+ext_alloc() { k get node "$name-control-plane" -o 'jsonpath={.status.allocatable.example\.com/resource}'; }
+ext_wait() { # ext_wait <allocatable>: poll the node until its allocatable reads it
+	local i=0
+	until [[ $(ext_alloc) == "$1" ]]; do
+		i=$((i + 1))
+		((i > 60)) && die "example.com/resource allocatable never read $1 (now '$(ext_alloc)')"
+		sleep 2
+	done
+}
+extended_objects() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: parity-device-plugin, namespace: $ns}
+spec:
+  selector: {matchLabels: {app: parity-device-plugin}}
+  template:
+    metadata: {labels: {app: parity-device-plugin}}
+    spec:
+      tolerations: [{operator: Exists}]
+      volumes:
+      - {name: device-plugin, hostPath: {path: /var/lib/kubelet/device-plugins}}
+      - {name: plugins-registry, hostPath: {path: /var/lib/kubelet/plugins_registry}}
+      - {name: cdi-dir, hostPath: {path: /var/run/cdi}}
+      containers:
+      - name: plugin
+        image: registry.k8s.io/e2e-test-images/sample-device-plugin:1.8.0
+        env: [{name: PLUGIN_SOCK_DIR, value: /var/lib/kubelet/device-plugins}]
+        securityContext: {privileged: true}
+        volumeMounts:
+        - {name: device-plugin, mountPath: /var/lib/kubelet/device-plugins}
+        - {name: plugins-registry, mountPath: /var/lib/kubelet/plugins_registry}
+        - {name: cdi-dir, mountPath: /var/run/cdi}
+EOF
+	ext_wait 2
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata: {name: parity-device-user, namespace: $ns}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {requests: {example.com/resource: "1"}, limits: {example.com/resource: "1"}}
+EOF
+	k -n "$ns" wait --for=condition=Ready pod/parity-device-user --timeout=120s >/dev/null
+}
+
+# dra_objects: coverage S11b's upstream example DRA driver (the chart pinned
+# by digest, rendered for the cluster's version and applied into its own
+# namespace: never installed as a Helm release, which would be a
+# helm/releases member the oracle does not model), its node-local
+# pool of 8 devices, one claim allocated to a running pod, and its
+# DeviceClass. Case 12 adds a claim no node can satisfy; case 13 an invalid
+# fixture pool (all-nodes slices under a driver name no plugin serves).
+dra_objects() {
+	if [[ ! -f $dra_chart || $(openssl dgst -sha256 -r "$dra_chart" | awk '{print $1}') != "$dra_chart_sha256" ]]; then
+		helm pull oci://registry.k8s.io/dra-example-driver/charts/dra-example-driver --version "$dra_chart_version" -d "$dir" >/dev/null ||
+			die "could not pull the example DRA driver's chart"
+		local got
+		got=$(openssl dgst -sha256 -r "$dra_chart" | awk '{print $1}')
+		[[ $got == "$dra_chart_sha256" ]] || { rm -f "$dra_chart"; die "the DRA chart has digest $got, pinned $dra_chart_sha256"; }
+	fi
+	local server
+	server=$(k version -o json | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["serverVersion"]["gitVersion"])') ||
+		die "could not read the server's version"
+	k create namespace parity-dra --dry-run=client -o yaml | k apply -f - >/dev/null
+	helm template dra-example-driver "$dra_chart" --namespace parity-dra --kube-version "$server" --api-versions resource.k8s.io/v1 |
+		k -n parity-dra apply -f - >/dev/null || die "the example DRA driver did not apply"
+	k -n parity-dra rollout status daemonset/dra-example-driver-kubeletplugin --timeout=300s >/dev/null ||
+		die "the example DRA driver's kubelet plugin did not roll out"
+	local i=0
+	until k get resourceslices -o 'jsonpath={.items[*].spec.nodeName}' | grep -q "$name-control-plane"; do
+		i=$((i + 1))
+		((i > 90)) && die "the DRA driver published no slice for the node"
+		sleep 2
+	done
+	k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata: {name: parity-claim, namespace: $ns}
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly: {deviceClassName: gpu.example.com, allocationMode: ExactCount, count: 1}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: parity-dra-user, namespace: $ns}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {claims: [{name: gpu}]}
+  resourceClaims: [{name: gpu, resourceClaimName: parity-claim}]
+EOF
+	k -n "$ns" wait --for=condition=Ready pod/parity-dra-user --timeout=180s >/dev/null
+}
+
+# karpenter_controllers: an AWS and an Azure stand-in, labelled as the
+# charts label them and running pause under each provider's controller
+# image, so both are attributed (S10 §5); the parity node carries EKS Auto
+# Mode's label, so the Auto Mode NodeClass is managed. The task reads
+# "managed" in every case.
+karpenter_controllers() {
+	node_image public.ecr.aws/karpenter/controller:parity
+	node_image mcr.microsoft.com/aks/karpenter/controller:parity
+	k create namespace karpenter-azure --dry-run=client -o yaml | k apply -f - >/dev/null
+	local spec
+	for spec in karpenter/public.ecr.aws/karpenter/controller:parity karpenter-azure/mcr.microsoft.com/aks/karpenter/controller:parity; do
+		k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: karpenter, namespace: ${spec%%/*}, labels: {app.kubernetes.io/name: karpenter}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: karpenter}}
+  template:
+    metadata: {labels: {app: karpenter}}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: controller, image: ${spec#*/}, imagePullPolicy: Never}]
+EOF
+		k -n "${spec%%/*}" rollout status deployment/karpenter --timeout=120s >/dev/null
+		settled_pods "${spec%%/*}" karpenter Running
+	done
+	k label nodes --all eks.amazonaws.com/compute-type=auto --overwrite >/dev/null
 }
 
 # settled_pods <ns> <app> <phase>: wait until the app has exactly one pod,
@@ -355,21 +507,82 @@ EOF
 }
 
 karpenter_objects() {
+	# coverage S10: one class per provider adapter, each Ready, and pools that
+	# use them (parity-pool and parity-pool-b share the EC2NodeClass: case
+	# 10 fails it). Every status is written; nothing reconciles.
 	k apply -f - >/dev/null <<EOF
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata: {name: parity-ec2}
+spec: {role: KarpenterNodeRole-parity, amiSelectorTerms: [{alias: al2023@latest}], subnetSelectorTerms: [{tags: {karpenter.sh/discovery: parity}}], securityGroupSelectorTerms: [{tags: {karpenter.sh/discovery: parity}}]}
+---
+apiVersion: karpenter.azure.com/v1beta1
+kind: AKSNodeClass
+metadata: {name: parity-aks}
+spec: {imageFamily: AzureLinux}
+---
+apiVersion: eks.amazonaws.com/v1
+kind: NodeClass
+metadata: {name: parity-auto}
+spec: {role: AutoNodeRole-parity}
+---
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata: {name: parity-pool, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
-spec: {template: {spec: {}}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-b, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-aks, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: karpenter.azure.com, kind: AKSNodeClass, name: parity-aks}}}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata: {name: parity-pool-auto, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
+spec: {template: {spec: {nodeClassRef: {group: eks.amazonaws.com, kind: NodeClass, name: parity-auto}}}}
 ---
 apiVersion: karpenter.sh/v1
 kind: NodeClaim
 metadata: {name: parity-claim, labels: {karpenter.sh/nodepool: parity-pool}, annotations: {klyx.dev/parity-role: ok, klyx.dev/parity-included: "false"}}
-spec: {}
+spec: {nodeClassRef: {group: karpenter.k8s.aws, kind: EC2NodeClass, name: parity-ec2}}
 EOF
-	ready nodepools.karpenter.sh - parity-pool True Ready
+	class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 True
+	class_ready aksnodeclasses.karpenter.azure.com parity-aks True
+	class_ready nodeclasses.eks.amazonaws.com parity-auto True
+	local p
+	for p in parity-pool parity-pool-b parity-pool-aks parity-pool-auto; do pool_ready "$p" True; done
 	local g
 	g=$(gen nodeclaims.karpenter.sh - parity-claim)
 	status nodeclaims.karpenter.sh - parity-claim "{\"conditions\":[$(cond Launched True Launched "$g"),$(cond Registered True Registered "$g"),$(cond Initialized True Initialized "$g"),$(cond Ready True Ready "$g")]}"
+}
+
+# class_ready <resource> <name> <True|False>: a class's Ready, with a
+# failing SubnetsReady for False (S10: the first False dependent).
+class_ready() {
+	local g
+	g=$(gen "$1" - "$2")
+	if [[ $3 == True ]]; then
+		status "$1" - "$2" "{\"conditions\":[$(cond SubnetsReady True SubnetsReady "$g"),$(cond Ready True Ready "$g")]}"
+	else
+		status "$1" - "$2" "{\"conditions\":[$(cond SubnetsReady False SubnetsNotFound "$g"),$(cond Ready False UnhealthyDependents "$g")]}"
+	fi
+}
+
+# pool_ready <pool> <True|False>: a pool's conditions as Karpenter's
+# readiness controller writes them, NodeClassReady copying its class.
+pool_ready() {
+	local g
+	g=$(gen nodepools.karpenter.sh - "$1")
+	if [[ $2 == True ]]; then
+		status nodepools.karpenter.sh - "$1" "{\"conditions\":[$(cond ValidationSucceeded True ValidationSucceeded "$g"),$(cond NodeClassReady True NodeClassReady "$g"),$(cond Ready True Ready "$g")]}"
+	else
+		status nodepools.karpenter.sh - "$1" "{\"conditions\":[$(cond ValidationSucceeded True ValidationSucceeded "$g"),$(cond NodeClassReady False SubnetsNotFound "$g"),$(cond Ready False UnhealthyDependents "$g")]}"
+	fi
 }
 
 fluxop_objects() {
@@ -838,6 +1051,266 @@ EOF
 	status ciliumloadbalancerippools.cilium.io - parity-cilium "{\"conditions\":[$(cond cilium.io/IPsTotal Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsAvailable Unknown noreason "$g" | sed 's/klyx parity fixture/16/'),$(cond cilium.io/IPsUsed Unknown noreason "$g" | sed 's/klyx parity fixture/0/')]}"
 }
 
+# alerts_objects (coverage S8a): a real Alertmanager 0.34.1 in parity-alerting,
+# read by the parity connection through the service proxy with
+# match cluster=kind-klyx-parity. Posted with amtool inside it: two critical
+# and one warning active (counted: 3), one info active (not counted), one
+# critical silenced (suppressed), and another cluster's alert that match
+# must keep out. The baseline waits until every alert is processed.
+am_ns=parity-alerting
+alerts_objects() {
+	k create namespace $am_ns --dry-run=client -o yaml | k apply -f - >/dev/null
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: alertmanager-config, namespace: $am_ns}
+data:
+  alertmanager.yml: |
+    route: {receiver: parity, group_by: [alertname]}
+    receivers: [{name: parity}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: alertmanager, namespace: $am_ns}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata: {labels: {app: alertmanager}}
+    spec:
+      containers:
+        - name: alertmanager
+          image: quay.io/prometheus/alertmanager:v0.34.1
+          args: [--config.file=/etc/am/alertmanager.yml, --storage.path=/data, --cluster.listen-address=]
+          ports: [{name: web, containerPort: 9093}]
+          volumeMounts: [{name: config, mountPath: /etc/am}, {name: data, mountPath: /data}]
+          readinessProbe: {httpGet: {path: /-/ready, port: web}}
+      volumes: [{name: config, configMap: {name: alertmanager-config}}, {name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: alertmanager, namespace: $am_ns}
+spec:
+  selector: {app: alertmanager}
+  ports: [{name: web, port: 9093, targetPort: web}]
+EOF
+	k -n $am_ns rollout status deploy/alertmanager --timeout=240s >/dev/null
+	local ends c=cluster=kind-klyx-parity
+	ends=$(date -u -v+6H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)
+	k -n $am_ns exec deploy/alertmanager -c alertmanager -- sh -c "
+		a() { amtool --alertmanager.url=http://localhost:9093 alert add \"\$@\" --end=$ends >/dev/null; }
+		a alertname=ParityCritA severity=critical $c namespace=$ns
+		a alertname=ParityCritB severity=critical $c
+		a alertname=ParityWarn severity=warning $c namespace=$ns
+		a alertname=ParityInfo severity=info $c
+		a alertname=ParitySilenced severity=critical $c
+		a alertname=ParityElsewhere severity=critical cluster=elsewhere
+		amtool --alertmanager.url=http://localhost:9093 silence add alertname=ParitySilenced --author=klyx-parity --comment=parity --duration=6h >/dev/null"
+	local i
+	for ((i = 0; i < 60; i++)); do
+		if k get --raw "/api/v1/namespaces/$am_ns/services/http:alertmanager:web/proxy/api/v2/alerts?filter=cluster%3D%22kind-klyx-parity%22" |
+			jq -e '(map(select(.status.state == "active")) | length) == 4 and (map(select(.status.state == "suppressed")) | length) == 1' >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+	die "the parity Alertmanager's alerts were not all processed"
+}
+
+# KEDA (coverage S9): the real 2.21.0 release manifest, pinned by its
+# digest (klyx-parity.sh) and cached in the state directory, so the
+# capability reads what it reads on any cluster - the operator by its
+# labels and running image, the admission webhooks, and the external
+# metrics APIService served by KEDA's own metrics server. A stand-in
+# operator cannot serve that API, and its absence is a controller issue
+# (S9 §2), which a healthy baseline cannot carry. The operator and the
+# metrics server watch only the keda namespace, so nothing reconciles the
+# fixture's scalers: their statuses are written here, as every capability
+# object's is. The admission webhooks keep the release's cluster-wide scope
+# and validate every fixture scaler, as they would anywhere.
+keda_install() {
+	local got d i
+	if [[ ! -f $keda_manifest || $(openssl dgst -sha256 -r "$keda_manifest" | awk '{print $1}') != "$keda_sha256" ]]; then
+		curl -fsSL --max-time 120 -o "$keda_manifest.part" "https://github.com/kedacore/keda/releases/download/v$keda_version/keda-$keda_version.yaml" ||
+			die "could not fetch KEDA $keda_version's release manifest"
+		got=$(openssl dgst -sha256 -r "$keda_manifest.part" | awk '{print $1}')
+		[[ $got == "$keda_sha256" ]] || { rm -f "$keda_manifest.part"; die "KEDA's release manifest has digest $got, pinned $keda_sha256"; }
+		mv "$keda_manifest.part" "$keda_manifest"
+	fi
+	k create --dry-run=client -o json -f "$keda_manifest" |
+		jq 'if .kind == "Deployment" and (.metadata.name == "keda-operator" or .metadata.name == "keda-metrics-apiserver")
+			then .spec.template.spec.containers |= map(.env |= map(if .name == "WATCH_NAMESPACE" then .value = "keda" else . end))
+			else . end' |
+		k apply --server-side --force-conflicts --field-manager=klyx-parity -f - >/dev/null
+	for d in keda-operator keda-metrics-apiserver; do
+		[[ $(k -n keda get deployment "$d" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WATCH_NAMESPACE")].value}') == keda ]] ||
+			die "KEDA's $d does not watch only the keda namespace"
+	done
+	for d in keda-operator keda-metrics-apiserver keda-admission; do
+		k -n keda rollout status "deployment/$d" --timeout=300s >/dev/null
+	done
+	# the operator's certificate rotation writes the CA the APIService needs
+	for ((i = 0; i < 90; i++)); do
+		[[ $(k get apiservices.apiregistration.k8s.io v1beta1.external.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}') == True ]] && return
+		sleep 2
+	done
+	die "KEDA's external metrics API did not become available"
+}
+
+# zero_target <name>: a Deployment at 0 replicas - KEDA's idle scale - so
+# kind's HPA controller reports AbleToScale=True and ScalingActive=False
+# ScalingDisabled, the same status every sync and never a metric read: no
+# timer flips an HPA. The Deployment reads Scaled to 0.
+zero_target() {
+	k apply -f - >/dev/null <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $1
+  namespace: $ns
+  annotations:
+    $(marks paused false)
+spec:
+  replicas: 0
+  selector: {matchLabels: {app: $1}}
+  template:
+    metadata: {labels: {app: $1}}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers: [{name: pause, image: $pause, imagePullPolicy: Never}]
+EOF
+}
+
+# keda_hpa <scaledobject> <target>: the HPA KEDA creates for a
+# ScaledObject - its name, labels and controller reference - since no KEDA
+# reconciles the fixture's scalers.
+keda_hpa() {
+	local uid
+	uid=$(k -n "$ns" get scaledobjects.keda.sh "$1" -o jsonpath='{.metadata.uid}')
+	k apply -f - >/dev/null <<EOF
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: keda-hpa-$1
+  namespace: $ns
+  labels: {app.kubernetes.io/managed-by: keda-operator, app.kubernetes.io/name: keda-hpa-$1, app.kubernetes.io/part-of: $1, scaledobject.keda.sh/name: $1}
+  ownerReferences: [{apiVersion: keda.sh/v1alpha1, kind: ScaledObject, name: $1, uid: "$uid", controller: true, blockOwnerDeletion: true}]
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: $2}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: External, external: {metric: {name: s0-prometheus, selector: {matchLabels: {scaledobject.keda.sh/name: $1}}}, target: {type: AverageValue, averageValue: "10"}}}]
+EOF
+}
+
+# hpa_reported <name> <condition> <reason>: wait until kind's HPA
+# controller has reported the HPA (it syncs each every 15s).
+hpa_reported() {
+	local i
+	for ((i = 0; i < 60; i++)); do
+		[[ $(k -n "$ns" get horizontalpodautoscalers.autoscaling "$1" -o jsonpath="{.status.conditions[?(@.type==\"$2\")].reason}" 2>/dev/null) == "$3" ]] && return
+		sleep 2
+	done
+	die "the HPA controller did not report $ns/$1 $2 $3"
+}
+
+# so_status <name> <conditions json> [extra status json, without braces]:
+# a ScaledObject's status as KEDA 2.21 writes it (no condition times).
+so_status() {
+	status scaledobjects.keda.sh "$ns" "$1" "{\"conditions\":$2${3:+,$3}}"
+}
+
+kcond() { printf '{"type":"%s","status":"%s","reason":"%s","message":"%s"}' "$@"; }
+
+keda_objects() {
+	# The baseline (coverage S9): a ScaledObject idle at zero with its HPA
+	# and an authentication; a ScaledObject whose full pause completed (no
+	# HPA); an idle ScaledJob; and a standalone HPA. Faults are case 9's.
+	keda_install
+	zero_target parity-keda-idle
+	zero_target parity-keda-paused
+	zero_target parity-hpa-target
+	k apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata: {name: parity-keda-secret, namespace: $ns}
+stringData: {token: parity-fixture}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata: {name: parity-keda-auth, namespace: $ns}
+spec:
+  secretTargetRef: [{parameter: bearerToken, name: parity-keda-secret, key: token}]
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-idle
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  scaleTargetRef: {name: parity-keda-idle}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  triggers:
+  - type: prometheus
+    metadata: {serverAddress: "http://prometheus.$ns.svc:9090", query: "sum(rate(http_requests_total[1m]))", threshold: "10", authModes: bearer}
+    authenticationRef: {name: parity-keda-auth}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-paused
+  namespace: $ns
+  annotations:
+    autoscaling.keda.sh/paused: "true"
+    $(marks paused false)
+spec:
+  scaleTargetRef: {name: parity-keda-paused}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  triggers: [{type: cron, metadata: {timezone: UTC, start: "0 0 * * *", end: "59 23 * * *", desiredReplicas: "2"}}]
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: parity-sj
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  maxReplicaCount: 1
+  jobTargetRef:
+    template:
+      spec:
+        restartPolicy: Never
+        containers: [{name: pause, image: $pause, imagePullPolicy: Never}]
+  triggers: [{type: cron, metadata: {timezone: UTC, start: "0 3 * * *", end: "1 3 * * *", desiredReplicas: "1"}}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: parity-hpa-plain
+  namespace: $ns
+  annotations:
+    $(marks ok false)
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: parity-hpa-target}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}}]
+EOF
+	keda_hpa parity-so-idle parity-keda-idle
+	local gvkr='"scaleTargetGVKR":{"group":"apps","kind":"Deployment","resource":"deployments","version":"v1"},"scaleTargetKind":"apps/v1.Deployment"'
+	so_status parity-so-idle "[$(kcond Ready True ScaledObjectReady "ScaledObject is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),$(kcond Fallback False NoFallbackFound "No fallbacks are active on this scaled object"),{\"type\":\"Paused\",\"status\":\"False\"},$(kcond HPAActive True HPAActive "HPA is actively scaling")]" \
+		"\"hpaName\":\"keda-hpa-parity-so-idle\",\"externalMetricNames\":[\"s0-prometheus\"],\"originalReplicaCount\":0,$gvkr,\"triggersTypes\":\"prometheus\",\"authenticationsTypes\":\"parity-keda-auth\",\"triggersActivity\":{\"s0-prometheus\":{\"isActive\":false}}"
+	so_status parity-so-paused "[$(kcond Ready True ScaledObjectReady "ScaledObject is paused"),{\"type\":\"Active\",\"status\":\"Unknown\"},$(kcond Fallback False NoFallbackFound "No fallbacks are active on this scaled object"),$(kcond Paused True ScaledObjectPaused "ScaledObject is paused")]"
+	status scaledjobs.keda.sh "$ns" parity-sj "{\"conditions\":[$(kcond Ready True ScaledJobReady "ScaledJob is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),{\"type\":\"Fallback\",\"status\":\"Unknown\"},{\"type\":\"Paused\",\"status\":\"False\"}],\"triggersTypes\":\"cron\"}"
+	hpa_reported keda-hpa-parity-so-idle ScalingActive ScalingDisabled
+	hpa_reported parity-hpa-plain ScalingActive ScalingDisabled
+}
+
 baseline() {
 	controllers
 	flux_objects
@@ -852,6 +1325,10 @@ baseline() {
 	velero_objects
 	admission_objects
 	lb_objects
+	keda_objects
+	alerts_objects
+	extended_objects
+	dra_objects
 	echo "klyx-parity: baseline applied on $ctx"
 }
 
@@ -931,6 +1408,111 @@ EOF
 		stand_in cert-manager cert-manager fault ;;
 	6b) # the Flux controller down: the GitOps tier degrades the connection
 		stand_in flux-system kustomize-controller fault ;;
+	9) # coverage S9: a ScaledObject on fallback (degraded) with its HPA, and
+		# a standalone HPA whose target does not exist (kind's HPA controller
+		# reports AbleToScale=False FailedGetScale every sync)
+		zero_target parity-keda-fallback
+		k apply -f - >/dev/null <<EOF
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: parity-so-fallback
+  namespace: $ns
+  annotations:
+    $(marks degraded true)
+spec:
+  scaleTargetRef: {name: parity-keda-fallback}
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  fallback: {failureThreshold: 3, replicas: 2}
+  triggers:
+  - type: prometheus
+    metadata: {serverAddress: "http://prometheus.$ns.svc:9090", query: "sum(rate(http_requests_total[1m]))", threshold: "10"}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: parity-hpa-gone
+  namespace: $ns
+  annotations:
+    $(marks fault true)
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: parity-missing}
+  minReplicas: 1
+  maxReplicas: 3
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}}]
+EOF
+		keda_hpa parity-so-fallback parity-keda-fallback
+		so_status parity-so-fallback "[$(kcond Ready True ScaledObjectReady "ScaledObject is defined correctly and is ready for scaling"),$(kcond Active False ScalerNotActive "Scaling is not performed because triggers are not active"),$(kcond Fallback True FallbackExists "At least one trigger is falling back on this scaled object"),{\"type\":\"Paused\",\"status\":\"False\"},$(kcond HPAActive True HPAActive "HPA is actively scaling")]" \
+			'"hpaName":"keda-hpa-parity-so-fallback","externalMetricNames":["s0-prometheus"],"health":{"s0-prometheus":{"numberOfFailures":7,"status":"Failing"}},"scaleTargetGVKR":{"group":"apps","kind":"Deployment","resource":"deployments","version":"v1"},"scaleTargetKind":"apps/v1.Deployment","triggersTypes":"prometheus"'
+		hpa_reported keda-hpa-parity-so-fallback ScalingActive ScalingDisabled
+		hpa_reported parity-hpa-gone AbleToScale FailedGetScale ;;
+	10) # coverage S10: the EC2NodeClass fails; its two pools light once each
+		# (the class's failure, never their copies twice), the class not at all
+		class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 False
+		local p
+		for p in parity-pool parity-pool-b; do
+			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=fault klyx.dev/parity-included=true --overwrite >/dev/null
+			pool_ready "$p" False
+		done ;;
+	11) # coverage S11a: the device plugin stops; the node reads its
+		# resource not allocatable (degraded, counted once) within the grace
+		k -n "$ns" patch daemonset parity-device-plugin --type=merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"klyx.dev/parity-plugin":"off"}}}}}' >/dev/null
+		ext_wait 0
+		k annotate node "$name-control-plane" klyx.dev/parity-role=degraded klyx.dev/parity-included=true --overwrite >/dev/null ;;
+	12) # coverage S11b: a claim for nine devices of eight; its pod's only
+		# claim, so the scheduler's reason is claim-specific (degraded), and
+		# the pod is unschedulable (fault)
+		k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: parity-claim-nine
+  namespace: $ns
+  annotations: {klyx.dev/parity-role: degraded, klyx.dev/parity-included: "true"}
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly: {deviceClassName: gpu.example.com, allocationMode: ExactCount, count: 9}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: parity-dra-nine
+  namespace: $ns
+  annotations: {klyx.dev/parity-role: fault}
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: pause
+    image: $pause
+    imagePullPolicy: Never
+    resources: {claims: [{name: gpu}]}
+  resourceClaims: [{name: gpu, resourceClaimName: parity-claim-nine}]
+EOF
+		local i=0
+		until k -n "$ns" get pod parity-dra-nine -o 'jsonpath={.status.conditions[?(@.type=="PodScheduled")].reason}' | grep -q Unschedulable; do
+			i=$((i + 1))
+			((i > 60)) && die "parity-dra-nine never read unschedulable"
+			sleep 2
+		done ;;
+	13) # coverage S11b: an invalid fixture pool (two slices name one device)
+		local s
+		for s in a b; do
+			k apply -f - >/dev/null <<EOF
+apiVersion: resource.k8s.io/v1
+kind: ResourceSlice
+metadata:
+  name: parity-invalid-$s
+  annotations: {klyx.dev/parity-role: degraded, klyx.dev/parity-included: "true"}
+spec:
+  driver: fixture.klyx.dev
+  pool: {name: parity-invalid, generation: 1, resourceSliceCount: 2}
+  allNodes: true
+  devices: [{name: dev-0}]
+EOF
+		done ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 applied"
@@ -951,6 +1533,21 @@ revert_case() {
 	5e) k -n "$ns" delete tcproutes.gateway.networking.k8s.io parity-tcp-noport --wait >/dev/null ;;
 	6) stand_in cert-manager cert-manager "" ;;
 	6b) stand_in flux-system kustomize-controller "" ;;
+	9) k -n "$ns" delete scaledobjects.keda.sh parity-so-fallback --wait >/dev/null
+		k -n "$ns" delete horizontalpodautoscalers.autoscaling keda-hpa-parity-so-fallback parity-hpa-gone --ignore-not-found --wait >/dev/null
+		k -n "$ns" delete deployment parity-keda-fallback --wait >/dev/null ;;
+	10) class_ready ec2nodeclasses.karpenter.k8s.aws parity-ec2 True
+		local p
+		for p in parity-pool parity-pool-b; do
+			k annotate nodepools.karpenter.sh "$p" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null
+			pool_ready "$p" True
+		done ;;
+	11) k -n "$ns" patch daemonset parity-device-plugin --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]' >/dev/null
+		ext_wait 2
+		k annotate node "$name-control-plane" klyx.dev/parity-role=ok klyx.dev/parity-included=false --overwrite >/dev/null ;;
+	12) k -n "$ns" delete pod parity-dra-nine --wait >/dev/null
+		k -n "$ns" delete resourceclaims.resource.k8s.io parity-claim-nine --wait >/dev/null ;;
+	13) k delete resourceslices.resource.k8s.io parity-invalid-a parity-invalid-b --wait >/dev/null ;;
 	*) die "unknown case '$1'" ;;
 	esac
 	echo "klyx-parity: case $1 reverted"
@@ -965,7 +1562,7 @@ rbac() {
 	rules=$(k api-resources --verbs=list,watch -o name | while read -r r; do
 		[[ $deny == *",$r,"* ]] && continue
 		if [[ $r == *.* ]]; then printf '%s\t%s\n' "${r#*.}" "${r%%.*}"; else printf '\t%s\n' "$r"; fi
-	done | jq -Rn '[inputs | split("\t") | {g: .[0], r: .[1]}] | group_by(.g) | map({apiGroups: [.[0].g], resources: map(.r), verbs: ["get", "list", "watch"]})')
+	done | jq -Rn '[inputs | split("\t") | {g: .[0], r: .[1]}] | group_by(.g) | map({apiGroups: [.[0].g], resources: map(.r), verbs: ["get", "list", "watch"]}) + [{apiGroups: [""], resources: ["services/proxy"], verbs: ["get"]}]')
 	k -n kube-system create serviceaccount klyx-parity-observer --dry-run=client -o yaml | k apply -f - >/dev/null
 	jq -n --argjson rules "$rules" '{apiVersion: "rbac.authorization.k8s.io/v1", kind: "ClusterRole", metadata: {name: "klyx-parity-observer"}, rules: $rules}' | k apply -f - >/dev/null
 	k create clusterrolebinding klyx-parity-observer --clusterrole=klyx-parity-observer --serviceaccount=kube-system:klyx-parity-observer --dry-run=client -o yaml | k apply -f - >/dev/null

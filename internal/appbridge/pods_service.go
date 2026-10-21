@@ -39,6 +39,8 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 		Annotations: map[string]string{},
 		Conditions:  []ConditionDTO{},
 		Events:      []EventDTO{},
+		Extended:    ExtendedPodDTO{Containers: []ExtendedContainerDTO{}},
+		Claims:      []PodClaimRefDTO{}, DeviceHealth: []DeviceHealthDTO{}, ClaimHealth: []ClaimHealthDTO{},
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
@@ -73,18 +75,23 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 	summary := toPodSummaryDTO(d.Summary)
 	summary.Sched.Assumption = d.SchedAssumption
 	return PodDetailDTO{
-		Summary:        summary,
-		Resources:      resources,
-		Ephemeral:      eph,
-		EphemeralMore:  d.EphemeralMore,
-		Labels:         labels,
-		Annotations:    annotations,
-		Conditions:     conds,
-		Events:         events,
-		YAML:           d.YAML,
-		QosClass:       d.QoSClass,
-		ServiceAccount: d.ServiceAccount,
-		AsOfUnix:       s.now().Unix(),
+		Summary:             summary,
+		Resources:           resources,
+		Ephemeral:           eph,
+		EphemeralMore:       d.EphemeralMore,
+		Extended:            toExtendedPodDTO(d.Extended),
+		Claims:              toPodClaimsDTO(d.Claims),
+		DeviceHealth:        toDeviceHealthDTO(d.DeviceHealth),
+		DeviceHealthOmitted: d.DeviceHealthOmitted,
+		ClaimHealth:         claimHealthDTO(d.ClaimHealth),
+		Labels:              labels,
+		Annotations:         annotations,
+		Conditions:          conds,
+		Events:              events,
+		YAML:                d.YAML,
+		QosClass:            d.QoSClass,
+		ServiceAccount:      d.ServiceAccount,
+		AsOfUnix:            s.now().Unix(),
 	}
 }
 
@@ -102,7 +109,8 @@ func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSecond
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	r := conn.LaunchDiagnosticPod(ctx, name, image, ttlSeconds)
-	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: r.Error}
+	text, f := adhocFinding(ctx, conn, r.Error, r.Refusal())
+	return AdhocResultDTO{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, OK: r.OK, Error: text, Admission: f}
 }
 
 // DeletePod deletes the pod OBJECT the verb was armed against (uid, design
@@ -119,7 +127,7 @@ func (s *PodsService) DeletePod(cluster, namespace, name, uid string) ActionResu
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.DeletePod(ctx, namespace, name, uid); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

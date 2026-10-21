@@ -1,4 +1,6 @@
+import { replicaOwner, type ReplicaOwnerDTO } from "../bridge/keda";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useInspectorAlerts } from "./AlertsBlock";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -88,7 +90,7 @@ function riskLabel(resource: "cpu" | "mem", cell: ResourceCellDTO): string {
 }
 
 type PendingRestart = { kind: "restart"; w: WorkloadDTO };
-type PendingScale = { kind: "scale"; w: WorkloadDTO; replicas: number };
+type PendingScale = { kind: "scale"; w: WorkloadDTO; replicas: number; owner?: ReplicaOwnerDTO };
 type PendingScaleInput = { kind: "scale-input"; w: WorkloadDTO };
 type PendingDeletePod = { kind: "delete-pod"; w: WorkloadDTO; pod: PodDTO };
 type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
@@ -552,8 +554,11 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
               onLogs={(w) => setLogsTarget({ namespace: w.namespace, name: w.name, kind: w.kind as WorkloadKind })}
               onRestart={(w) => setPending({ kind: "restart", w })}
               onScale={(w) => setPending({ kind: "scale-input", w })}
-              onScaleConfirm={(w, replicas) => {
-                if (isProtected) setPending({ kind: "scale", w, replicas });
+              onScaleConfirm={(w, replicas, owner) => {
+                // coverage S9 §7: an owned or unverified replica count takes the
+                // full confirmation on every cluster; only a count proven
+                // unowned on an unprotected cluster scales from the popover
+                if (isProtected || !ownerProvenFree(owner)) setPending({ kind: "scale", w, replicas, owner });
                 else dispatchArmed({ kind: "scale", w, replicas, cluster }, () => void scaleWorkload(cluster, w.kind, w.namespace, w.name, w.uid ?? "", replicas));
               }}
               onCancelScale={() => setPending(null)}
@@ -610,7 +615,7 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
         <ConfirmDialog
           title="scale"
           cluster={cluster}
-          detail={`${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → ${pending.replicas} replicas`}
+          detail={`${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → ${pending.replicas} replicas${scaleConsequence(pending.owner)}`}
           protected={isProtected}
           danger={pending.replicas < pending.w.desired}
           confirmLabel="Scale"
@@ -694,7 +699,7 @@ function WorkloadInspector({
   onLogs: (w: WorkloadDTO) => void;
   onRestart: (w: WorkloadDTO) => void;
   onScale: (w: WorkloadDTO) => void;
-  onScaleConfirm: (w: WorkloadDTO, replicas: number) => void;
+  onScaleConfirm: (w: WorkloadDTO, replicas: number, owner?: ReplicaOwnerDTO) => void;
   onCancelScale: () => void;
   onDeletePod: (w: WorkloadDTO, pod: PodDTO) => void;
   onOpenPod: (w: WorkloadDTO, pod: PodDTO) => void;
@@ -705,6 +710,12 @@ function WorkloadInspector({
   onPause: (w: WorkloadDTO, pause: boolean) => void;
 }) {
   const ai = useInspectorAI(workload.uid ? { kind: "row" as const, task: "workloads", part: "workloads", uid: workload.uid } : null, `${workload.kind}/${workload.namespace}/${workload.name}`, !gone, cluster);
+  // coverage S8a: alerts naming this workload, and its current pods
+  const podUIDs = workload.pods.map((p) => p.uid ?? "").filter(Boolean).join(",");
+  const alertTarget = useMemo(() => (workload.uid ? { uid: workload.uid, kind: workload.kind, namespace: workload.namespace, name: workload.name,
+    podUIDs: podUIDs ? podUIDs.split(",") : [], podsComplete: podsEv === "complete" } : null),
+  [workload.uid, workload.kind, workload.namespace, workload.name, podUIDs, podsEv]);
+  const alertsBlock = useInspectorAlerts(cluster, alertTarget);
   // Describe (slice 14c): kubectl's report for this object, read-only; never
   // for a removed or unverified selection.
   const describe = useDescribe(cluster, !gone ? { kind: workload.kind, namespace: workload.namespace, name: workload.name, uid: workload.uid } : null);
@@ -763,9 +774,10 @@ function WorkloadInspector({
         more={[...(live ? more : viewManifest ? [viewManifest] : []), ...describe.menu, ...ai.menu]}
       >
         {ai.block}
+        {alertsBlock}
         {live && scaling && (
           <InspectorBlock title="Scale">
-            <ScalePopover initial={w.desired} onConfirm={(n) => onScaleConfirm(w, n)} onCancel={onCancelScale} />
+            <ScalePopover cluster={cluster} w={w} initial={w.desired} onConfirm={(n, owner) => onScaleConfirm(w, n, owner)} onCancel={onCancelScale} />
           </InspectorBlock>
         )}
 
@@ -1089,11 +1101,40 @@ function ReloadChip({ kind, name, namespace }: { kind: "ConfigMap" | "Secret"; n
   );
 }
 
-function ScalePopover({ initial, onConfirm, onCancel }: { initial: number; onConfirm: (n: number) => void; onCancel: () => void }) {
+// ownerProvenFree: nothing sets this count, proven on both axes (S9 §7).
+export function ownerProvenFree(o?: ReplicaOwnerDTO): boolean {
+  return !!o && o.autoscaler === "unowned" && o.gitops === "unowned";
+}
+
+// The scale verb's consequence (S9 §7): what owns the count, and what it
+// does to a manual scale; "unverified" says the limit.
+export function scaleConsequence(o?: ReplicaOwnerDTO): string {
+  if (!o) return ". Who owns the replica count was not read.";
+  const parts: string[] = [];
+  for (const owner of o.owners) {
+    parts.push(owner.startsWith("KEDA") ? `${owner}: pause the ScaledObject instead to hold a count` : `${owner}: the HPA sets replicas back within its sync period (about 15 s)`);
+  }
+  if (o.autoscaler === "unverified") parts.push(`Klyx could not prove no autoscaler sets this count: ${o.autoscalerWhy ?? "the read is incomplete"}`);
+  if (o.gitops === "owned") parts.push(`if Git sets replicas, ${o.gitopsOwner} sets it back on its next reconcile`);
+  if (o.gitops === "unverified") parts.push(`Klyx could not prove Git does not own it: ${o.gitopsWhy ?? "the GitOps check failed"}`);
+  return parts.length ? `. ${parts.join("; ")}.` : "";
+}
+
+function ScalePopover({ cluster, w, initial, onConfirm, onCancel }: { cluster: string; w: WorkloadDTO; initial: number; onConfirm: (n: number, owner?: ReplicaOwnerDTO) => void; onCancel: () => void }) {
   const [value, setValue] = useState(String(initial));
+  const [owner, setOwner] = useState<ReplicaOwnerDTO | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    void replicaOwner(cluster, w.kind, w.namespace, w.name).then((o) => { if (live) setOwner(o); });
+    return () => { live = false; };
+  }, [cluster, w.kind, w.namespace, w.name]);
   const n = parseInt(value, 10);
   const valid = !Number.isNaN(n) && n >= 0 && n <= 10000;
+  const free = ownerProvenFree(owner);
+  const note = owner === undefined ? "checking who owns the replica count…"
+    : free ? "" : scaleConsequence(owner).replace(/^\. /, "");
   return (
+    <span style={{ display: "inline-grid", gap: 4 }}>
     <span
       onClick={(e) => e.stopPropagation()}
       style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "0.5px solid var(--color-border-tertiary)", borderRadius: 4, padding: "2px 6px", background: "var(--color-background-primary)" }}
@@ -1105,12 +1146,14 @@ function ScalePopover({ initial, onConfirm, onCancel }: { initial: number; onCon
         max={10000}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && valid) onConfirm(n); else if (e.key === "Escape") onCancel(); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && valid) onConfirm(n, owner); else if (e.key === "Escape") onCancel(); }}
         autoFocus
         style={{ width: 52, fontSize: 11, padding: "2px 4px", fontFamily: "var(--font-mono)", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: 3, color: "var(--color-text-primary)" }}
       />
-      <button onClick={() => { if (valid) onConfirm(n); }} disabled={!valid} aria-label="apply scale" style={{ ...btn, padding: "2px 8px", opacity: valid ? 1 : 0.4, cursor: valid ? "pointer" : "not-allowed" }}>apply</button>
+      <button onClick={() => { if (valid) onConfirm(n, owner); }} disabled={!valid} aria-label="apply scale" style={{ ...btn, padding: "2px 8px", opacity: valid ? 1 : 0.4, cursor: valid ? "pointer" : "not-allowed" }}>{owner && !free ? "scale anyway" : "apply"}</button>
       <button onClick={onCancel} aria-label="cancel scale" style={{ ...btn, padding: "2px 8px", display: "inline-flex", alignItems: "center" }}><IconX size={12} stroke={1.5} /></button>
+    </span>
+    {note && <span className="t-secondary" data-testid="scale-owner" style={{ maxWidth: 420, whiteSpace: "normal" }}>{note}</span>}
     </span>
   );
 }

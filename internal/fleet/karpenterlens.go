@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/moomora/klyx/internal/clock"
@@ -19,30 +18,24 @@ import (
 // audit (the full event stream lives in the Events lens).
 const karpenterEventCap = 30
 
-// KarpenterSnapshot is the Karpenter lens's on-demand read: controller
-// health re-probed live (the capability snapshot is connect-time; the lens
-// headline must not go stale) and recent NodePool/NodeClaim events - the "why
-// did my node get replaced" feed - as of AsOf. The NodePools and NodeClaims
-// themselves are the health Observer's shared rows (1c slice 3 §5.5).
+// KarpenterSnapshot is the Karpenter lens's on-demand read: recent
+// NodePool/NodeClaim events - the "why did my node get replaced" feed - as
+// of AsOf. The NodePools, NodeClaims and NodeClasses are the health
+// Observer's shared rows (1c slice 3 §5.5), and the controllers are the
+// task's own reading (coverage S10 §5: an attributed inventory and platform
+// evidence), so the lens no longer probes one Deployment by name.
 type KarpenterSnapshot struct {
 	Detected bool
 	AsOf     time.Time
-	// ControllerVerified: a karpenter Deployment was actually read. When
-	// false, ControllerHealthy carries no claim and ControllerError says why
-	// (forbidden, not found under the expected name, ...).
-	ControllerVerified bool
-	ControllerHealthy  bool
-	ControllerError    string
-	Events             []workloads.EventSummary
+	Events   []workloads.EventSummary
 	// EventsError names event reads that failed (the feed is then partial or
 	// unreadable, never quiet); EventsTruncated: more events exist than shown.
 	EventsError     string
 	EventsTruncated bool
 }
 
-// KarpenterState returns the Karpenter lens's controller probe and
-// disruption feed. Capability-gated (honest "not detected", never an empty
-// lens).
+// KarpenterState returns the Karpenter lens's disruption feed.
+// Capability-gated (honest "not detected", never an empty lens).
 func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, error) {
 	c.mu.RLock()
 	present := c.caps.Karpenter.Present
@@ -58,30 +51,6 @@ func (c *ClusterConn) KarpenterState(ctx context.Context) (KarpenterSnapshot, er
 		clk = clock.Real{}
 	}
 	out := KarpenterSnapshot{Detected: true, AsOf: clk.Now()}
-
-	// Controller health, re-probed live (mirrors the detector's namespace
-	// pair). Only a Deployment actually read is evidence: a forbidden read or
-	// a controller installed under another name is unverified, never a
-	// confirmed outage.
-	var ctrlErrs []string
-	for _, ns := range []string{"kube-system", "karpenter"} {
-		dep, derr := c.typed.AppsV1().Deployments(ns).Get(ctx, "karpenter", metav1.GetOptions{})
-		if derr == nil && dep != nil {
-			out.ControllerVerified = true
-			out.ControllerHealthy = dep.Status.ReadyReplicas > 0
-			break
-		}
-		if derr != nil && !apierrors.IsNotFound(derr) {
-			ctrlErrs = append(ctrlErrs, ns+": "+derr.Error())
-		}
-	}
-	if !out.ControllerVerified {
-		if len(ctrlErrs) > 0 {
-			out.ControllerError = "controller Deployment unreadable (" + strings.Join(ctrlErrs, "; ") + ")"
-		} else {
-			out.ControllerError = "no Deployment named karpenter in kube-system or karpenter"
-		}
-	}
 
 	// Disruption feed: events about NodeClaims and NodePools (launch failures,
 	// disruption/consolidation decisions, drift replacements). Optional: a

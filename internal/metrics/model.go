@@ -6,6 +6,7 @@ package metrics
 import (
 	"context"
 
+	"github.com/moomora/klyx/internal/endpointhttp"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -34,6 +35,8 @@ const (
 // ServiceCandidate is an in-cluster Prometheus Service to proxy to.
 type ServiceCandidate struct {
 	Namespace, Name, Port, Scheme string
+	// Path is the prefix the Service serves the API under (S8a §2).
+	Path string
 }
 
 // DiscoveryResult is the single reduced outcome of in-cluster discovery: at
@@ -75,18 +78,9 @@ type TransportFactory interface {
 	Proxy(c ServiceCandidate, tenant string) Querier
 }
 
-// Auth is what a direct request to an endpoint carries (coverage C5 §3-§7):
-// the Authorization header ("" for none), the tenant (X-Scope-OrgID), the
-// redactor for the credential, and a gate that refuses to send once the
-// credential's revision has moved. Unusable says why the credential cannot
-// be used: the endpoint then reads unavailable and nothing is sent.
-type Auth struct {
-	Header   string
-	Tenant   string
-	Redactor safehttp.Redactor
-	Live     func() bool
-	Unusable string
-}
+// Auth is what a direct request to an endpoint carries (coverage C5 §3-§7);
+// endpointhttp owns it for every endpoint kind.
+type Auth = endpointhttp.Auth
 
 // BearerAuth is a plain bearer token, redacted (tests, and the legacy path).
 func BearerAuth(token string) Auth {

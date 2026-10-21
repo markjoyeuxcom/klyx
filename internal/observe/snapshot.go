@@ -17,13 +17,23 @@ type SnapshotSpec struct {
 	Timeout time.Duration
 	// Read returns the items (already projected) and whether they were capped.
 	Read func(ctx context.Context) (items []any, truncated bool, err error)
+	// ReadKeyed, when set, is used instead of Read and receives its
+	// generation's key (coverage S8a §4): a source whose identity can change
+	// reads only the identity its generation was keyed to.
+	ReadKeyed func(ctx context.Context, key string) (items []any, truncated bool, err error)
 }
+
+// ErrSourceAbsent: a snapshot read found its source not installed - a
+// complete answer, never a failure. The snapshot's coverage is absent: no
+// evidence, no gap (coverage S8a §4).
+var ErrSourceAbsent = errors.New("the source is not installed")
 
 type snapState struct {
 	spec  SnapshotSpec
 	refs  int
 	gen   *snapGen
 	parts []partKey
+	key   string // the key the next generation carries (RekeySnapshot)
 }
 
 type snapGen struct {
@@ -41,6 +51,7 @@ type snapGen struct {
 	// overdue read (slice 2b §2): the next good read follows a gap.
 	id    uint64
 	epoch uint64
+	key   string // the source identity this generation reads (RekeySnapshot)
 }
 
 // SnapshotRead is one read's outcome as ReadSnapshot returns it - the
@@ -59,7 +70,7 @@ var ErrSnapshotNotRunning = errors.New("snapshot is not running")
 func (o *Observer) startSnap(ss *snapState) {
 	ctx, cancel := context.WithCancel(o.ctx)
 	o.kindGenSeq++
-	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1), id: o.kindGenSeq}
+	g := &snapGen{o: o, ss: ss, ctx: ctx, cancel: cancel, fresh: freshness{cov: Checking}, refresh: make(chan struct{}, 1), id: o.kindGenSeq, key: ss.key}
 	ss.gen = g
 	o.markSnapLocked(ss)
 	o.goSafe(func() { g.run() })
@@ -146,8 +157,13 @@ func (g *snapGen) read() {
 	g.o.mu.Unlock()
 	done := make(chan SnapshotRead, 1)
 	g.o.goSafe(func() {
-		items, truncated, err := g.ss.spec.Read(rctx)
-		done <- SnapshotRead{items, truncated, err}
+		var r SnapshotRead
+		if g.ss.spec.ReadKeyed != nil {
+			r.Items, r.Truncated, r.Err = g.ss.spec.ReadKeyed(rctx, g.key)
+		} else {
+			r.Items, r.Truncated, r.Err = g.ss.spec.Read(rctx)
+		}
+		done <- r
 	})
 	t := g.o.clk.NewTimer(g.ss.spec.Timeout)
 	defer t.Stop()
@@ -183,12 +199,23 @@ func (g *snapGen) apply(r SnapshotRead) bool {
 		return false
 	}
 	now := o.clk.Now()
+	if errors.Is(r.Err, ErrSourceAbsent) {
+		// not installed: a complete answer with nothing in it - the items
+		// go, and nothing is stale or failing
+		if g.items != nil || g.fresh.truncated {
+			g.items = nil
+			o.bumpSnapLocked(g.ss)
+		}
+		g.fresh = freshness{cov: Absent}
+		o.markSnapLocked(g.ss)
+		return true
+	}
 	if r.Err != nil {
 		g.epoch++
 		switch g.fresh.cov {
 		case Live:
 			g.fresh.cov, g.fresh.lastGoodAt = Stale, g.fresh.readAt
-		case Checking:
+		case Checking, Absent:
 			g.fresh.cov = Unreadable
 		}
 		g.fresh.class, g.fresh.err = classify(r.Err), r.Err.Error()

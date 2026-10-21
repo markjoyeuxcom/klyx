@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/gitops/flux"
 )
 
@@ -108,8 +108,23 @@ func definiteRefusal(err error) bool {
 	if !errors.As(err, &st) {
 		return false
 	}
+	// coverage S3b §2.1: admission precedes storage, so an attributed
+	// finding - a fail-closed webhook's call failure (500) among them -
+	// is a definite refusal; any other 500 stays unverified
+	if admission.Classify(st.Status()).Attributed() {
+		return true
+	}
 	code := st.Status().Code
 	return code >= 400 && code < 500 && code != http.StatusRequestTimeout
+}
+
+// stepRefused: a step's request was refused, so nothing of it was written -
+// a definite refusal, or patchArmed's ErrReplaced, which it returns only for
+// the server's UID-guard answers (NotFound, the UID precondition Conflict,
+// the metadata.uid Invalid) with their status formatted away (Codex's
+// implementation re-review 1). A lost answer is neither.
+func stepRefused(err error) bool {
+	return err != nil && (errors.Is(err, ErrReplaced) || definiteRefusal(err))
 }
 
 // patchArmed writes a UID-guarded merge patch to the armed object. A write
@@ -122,6 +137,7 @@ func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionRes
 		return err
 	}
 	_, err = c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, guarded, metav1.PatchOptions{})
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource, Namespace: ns}, kind, ns, name, err)
 	switch {
 	case err == nil:
 		return nil
@@ -148,10 +164,12 @@ func armedWriteErr(verb, what string, err error) error {
 
 // refusedForUID: a UID-guarded write the server refused because the object
 // at that name is not the armed one - gone (NotFound), or another UID (the
-// immutable-field Invalid, or a UID precondition Conflict).
+// immutable metadata.uid Invalid, or the wrapped UID precondition
+// Conflict), read by their wire shapes and never a substring (coverage S3b
+// §2.5): a policy denial whose text says "uid" is not a replacement.
 func refusedForUID(err error) bool {
-	return apierrors.IsNotFound(err) ||
-		(apierrors.IsInvalid(err) || apierrors.IsConflict(err)) && strings.Contains(strings.ToLower(err.Error()), "uid")
+	var st apierrors.APIStatus
+	return errors.As(err, &st) && admission.UIDRefusal(st.Status())
 }
 
 // Reconcile stamps the Flux reconcile annotation so the controller
@@ -184,32 +202,59 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 // failure must not block the resource), then the resource itself, guarded.
 // Degrades to a plain reconcile when the source can't be resolved.
 func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, uid string) error {
+	_, err := c.ReconcileWithSourceSteps(ctx, kind, ns, name, uid)
+	return err
+}
+
+// Step is one request of a composite action and its outcome (coverage S3b
+// §2.3): each step keeps its own, so a refused source is reported beside a
+// written target, and a refused target beside a written source.
+type Step struct {
+	Verb, Subject string
+	Written       bool
+	// Refused: the server refused the request (definiteRefusal), so nothing
+	// of it was written. A step neither written nor refused is unverified:
+	// its answer was lost and the write may have landed (Codex's
+	// implementation review, finding 5).
+	Refused bool
+	// Err is the step's error, wrapped as its request's (admission.Wrap).
+	Err error
+}
+
+// ReconcileWithSourceSteps is ReconcileWithSource with each step's
+// outcome: the source's (when there is one), then the target's.
+func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, name, uid string) ([]Step, error) {
 	if flux.IsImageKind(flux.Kind(kind)) || flux.IsNotificationKind(flux.Kind(kind)) {
 		// an automation clones Git itself and never reads the GitRepository's
 		// artifact, and a chained verb is not offered (S1b §5); a
 		// notification kind binds no source (S1c §5)
-		return fmt.Errorf("reconcile with source is not offered for %s", kind)
+		return nil, fmt.Errorf("reconcile with source is not offered for %s", kind)
 	}
 	gvr, err := c.gvrForKind(flux.Kind(kind))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	u, err := c.checkArmed(ctx, gvr, kind, ns, name, uid)
 	if err != nil {
-		return fmt.Errorf("reconcile %w", err)
+		return nil, fmt.Errorf("reconcile %w", err)
 	}
+	var steps []Step
 	// The source's outcome is kept: if the target's write then fails, the
 	// error says what already happened to the source - never "nothing".
 	source := ""
 	if ref, ok := flux.BoundSource(u); ok && ref.Kind == string(flux.ExternalArtifactKind) {
 		// S1c §5: its producer reconciles an artifact; nothing was written
-		return fmt.Errorf("reconcile with source is not offered for %s %s/%s: its source is an ExternalArtifact, which its producer reconciles; reconcile it alone", kind, ns, name)
+		return nil, fmt.Errorf("reconcile with source is not offered for %s %s/%s: its source is an ExternalArtifact, which its producer reconciles; reconcile it alone", kind, ns, name)
 	}
 	if ref, ok := flux.BoundSource(u); ok {
 		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 			body := flux.ReconcilePatch(c.clk.Now())
 			what := fmt.Sprintf("its source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
-			switch _, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{}); {
+			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
+			err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: sgvr.Group, Version: sgvr.Version, Resource: sgvr.Resource, Namespace: ref.Namespace},
+				ref.Kind, ref.Namespace, ref.Name, err)
+			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: stepRefused(err), Err: err})
+			switch {
 			case err == nil:
 				source = what + " was already asked to reconcile"
 			case definiteRefusal(err):
@@ -219,13 +264,15 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 			}
 		}
 	}
-	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now())); err != nil {
+	err = c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
+	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: stepRefused(err), Err: err})
+	if err != nil {
 		if source != "" {
-			return fmt.Errorf("reconcile %w; %s", err, source)
+			return steps, fmt.Errorf("reconcile %w; %s", err, source)
 		}
-		return fmt.Errorf("reconcile %w", err)
+		return steps, fmt.Errorf("reconcile %w", err)
 	}
-	return nil
+	return steps, nil
 }
 
 // SetSuspend toggles spec.suspend on the armed Flux resource (uid).

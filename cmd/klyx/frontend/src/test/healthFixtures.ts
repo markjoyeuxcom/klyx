@@ -26,6 +26,8 @@ export const core = (): HealthTask[] => [
   task("nodes", [verdict("nodes", { ok: 1 }, [kind("nodes")])]),
   task("events", [evidence(0, [kind("events")], { asOf: "2026-10-12T12:00:00Z" })]),
   task("helm", [native("releases", { ok: 2 }, 0, "failed or pending", [kind("helm")])]),
+  // coverage S9: standalone HPAs, expected on every cluster
+  task("autoscaling", [native("hpas", { ok: 1 }, 0, "cannot scale", [kind("horizontalpodautoscalers")])]),
 ];
 export const summary = (tasks: HealthTask[], over: Partial<HealthSummary> = {}, cluster = C): HealthSummary => ({
   cluster, incarnation: 1, seq: 1, evaluatedAt: "2026-10-12T12:00:00Z", connection: "connected", namespaces: 4, tasks, ...over,

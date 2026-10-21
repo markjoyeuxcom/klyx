@@ -79,7 +79,7 @@ func (s *NodeOpsService) Cordon(cluster, node, uid string, cordon bool) ActionRe
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	if err := conn.SetCordon(ctx, node, uid, cordon); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return failed(ctx, conn, err)
 	}
 	return ActionResultDTO{OK: true}
 }

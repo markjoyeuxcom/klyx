@@ -22,11 +22,23 @@ const argo = (over = {}) => task("argo", [native("applications", { ok: 2 }, 0, "
 beforeEach(() => resetHealthStore());
 
 describe("lens index entries (§4.1)", () => {
+  it("a destination parts share reads its strongest line, never the last written (coverage S9: Autoscalers)", () => {
+    // the HPAs' fault comes first in TASKS, KEDA's degraded ScaledObject
+    // after it, on the same destination
+    applySummary(summary([...replace(core(), task("autoscaling", [native("hpas", { fault: 1, ok: 1 }, 1, "cannot scale", [kind("horizontalpodautoscalers")])])),
+      task("keda", [native("scaledobjects", { degraded: 1 }, 1, "failing or not scaling", [kind("scaledobjects")]), native("scaledjobs", { ok: 1 }, 0, "failing", [kind("scaledjobs")])]),
+      flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
+    const c = cl({ kedaPresent: true, karpenterPresent: true });
+    const counts = navCounts(clusterAttention(useHealth.getState(), c.name, c));
+    expect([counts.destination.autoscaling?.tone, counts.destination.autoscaling?.title]).toEqual(["danger", expect.stringContaining("HorizontalPodAutoscalers")]);
+    expect(model(c).needsYou.map((e) => [e.key, e.tone])).toEqual([["dest:autoscaling", "danger"]]);
+  });
+
   it("core tasks are lenses of their own; tool groups are one lens each; the browsers are two; index labels apply", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
-    const m = model(cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, loadBalancingPresent: true }));
+    const m = model(cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, draPresent: true, loadBalancingPresent: true, alertsPresent: true }));
     expect(m.needsYou).toEqual([]);
-    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Upgrade check", "Workloads", "Pods", "Admission", "Karpenter", "Connectivity check", "Gateways and routes", "Load balancers", "Hubble flows",
+    expect(labels(m.rest)).toEqual(["Overview", "Nodes", "Events", "Alerts", "Upgrade check", "Workloads", "Pods", "Admission", "Devices (DRA)", "Karpenter", "Autoscalers", "Connectivity check", "Gateways and routes", "Load balancers", "Hubble flows",
       "Access check", "Flux CD", "Argo CD", "cert-manager", "External Secrets", "Velero", "Helm", "API browser", "Resources"]);
     expect(m.absent).toEqual([]);
   });
@@ -54,8 +66,8 @@ describe("lens index entries (§4.1)", () => {
     expect(failed.absent).toEqual([]);
     const m = model(cl({ argoPresent: false }));
     expect(m.rest.some((e) => e.key === "lens:argo")).toBe(false);
-    expect(m.absent).toEqual(["Admission", "Karpenter", "Gateways and routes", "Load balancers", "Hubble flows", "Argo CD", "cert-manager", "External Secrets", "Velero"]);
-    expect(absentLine(m.absent)).toBe("Admission, Karpenter, Gateways and routes, Load balancers, Hubble flows, Argo CD, cert-manager, External Secrets and Velero are not installed here, so they are not listed.");
+    expect(m.absent).toEqual(["Alerts", "Admission", "Devices (DRA)", "Karpenter", "Gateways and routes", "Load balancers", "Hubble flows", "Argo CD", "cert-manager", "External Secrets", "Velero"]);
+    expect(absentLine(m.absent)).toBe("Alerts, Admission, Devices (DRA), Karpenter, Gateways and routes, Load balancers, Hubble flows, Argo CD, cert-manager, External Secrets and Velero are not installed here, so they are not listed.");
     expect(absentLine(["Argo CD"])).toBe("Argo CD is not installed here, so it is not listed.");
     expect(absentLine(["Argo CD", "Karpenter"])).toBe("Argo CD and Karpenter are not installed here, so they are not listed.");
     expect(absentLine([])).toBeNull();
@@ -126,7 +138,7 @@ describe("the current entry (§4.3)", () => {
 
   it("every registry task destination is reachable from an index entry or its lens", () => {
     applySummary(summary([...core(), flux({ ok: 2 }, { ok: 1 }), argo()], {}, "dev"));
-    const c = cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, loadBalancingPresent: true });
+    const c = cl({ gatewayAPIVersion: "v1.2", hasHubble: true, karpenterPresent: true, certManagerPresent: true, externalSecretsPresent: true, veleroPresent: true, admissionPresent: true, draPresent: true, loadBalancingPresent: true, alertsPresent: true });
     const reach = new Set<string>();
     for (const g of NAV_GROUPS) {
       for (const d of g.destinations.filter((x) => x.type === "task")) {

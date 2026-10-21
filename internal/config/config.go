@@ -139,6 +139,10 @@ type MetricsServiceRef struct {
 	Name      string `yaml:"name"`
 	Port      string `yaml:"port"`
 	Scheme    string `yaml:"scheme"` // http|https; default http
+	// Path is the prefix the Service serves its API under (coverage S8a §2):
+	// Mimir's Alertmanager under /alertmanager, its Prometheus API under
+	// /prometheus. "" for none.
+	Path string `yaml:"path"`
 }
 
 // Env returns the environment tag, or "" if unset.
@@ -213,6 +217,7 @@ func (c *Config) Warnings() []string {
 			w = append(w, endpointWarnings(cl.Name, e.Kind, e.Spec)...)
 		}
 	}
+	w = append(w, sharedWithoutMatch(c.Clusters)...)
 	_, notes := c.ApprovedGitRepos()
 	return append(w, notes...)
 }

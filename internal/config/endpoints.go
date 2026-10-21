@@ -3,7 +3,11 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/moomora/klyx/internal/safehttp"
 )
 
 // Coverage C5 §2: one endpoint shape for metrics, Alertmanager and Loki.
@@ -34,6 +38,11 @@ type EndpointConfig struct {
 	ServiceRef    *MetricsServiceRef `yaml:"serviceRef"`
 	Auth          *EndpointAuth      `yaml:"auth"`
 	Tenant        string             `yaml:"tenant"`
+	// Match are the labels that make an alert (or a log stream) this
+	// cluster's in a shared Alertmanager or Loki (coverage S8a §2):
+	// equality matchers, sent as the endpoint's filter and checked again on
+	// what it returns. None means everything there is this cluster's.
+	Match map[string]string `yaml:"match"`
 }
 
 // Spec is the metrics endpoint in the shared shape.
@@ -82,6 +91,16 @@ func EndpointURLProblem(endpoint string) string {
 	return ""
 }
 
+// labelName is a label name Klyx can send as an equality matcher.
+var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// servicePath is a path prefix: path characters only, no query or fragment.
+var servicePath = regexp.MustCompile(`^/?[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$`)
+
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+}
+
 // validateEndpoint checks one endpoint block; prefix names it in errors.
 func validateEndpoint(prefix string, e EndpointConfig, legacyToken bool) error {
 	if sr := e.ServiceRef; sr != nil {
@@ -90,6 +109,22 @@ func validateEndpoint(prefix string, e EndpointConfig, legacyToken bool) error {
 		}
 		if sr.Scheme != "" && sr.Scheme != "http" && sr.Scheme != "https" {
 			return fmt.Errorf("%s.serviceRef.scheme must be http or https", prefix)
+		}
+		if !servicePath.MatchString(sr.Path) || strings.Contains("/"+sr.Path+"/", "/../") || strings.Contains("/"+sr.Path+"/", "/./") {
+			return fmt.Errorf("%s.serviceRef.path must be a plain path prefix such as /alertmanager", prefix)
+		}
+	}
+	names := make([]string, 0, len(e.Match))
+	for k := range e.Match {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if !labelName.MatchString(k) {
+			return fmt.Errorf("%s.match: %q is not a label name", prefix, k)
+		}
+		if v := e.Match[k]; v == "" || hasControl(v) {
+			return fmt.Errorf("%s.match.%s must be a non-empty value without control characters", prefix, k)
 		}
 	}
 	if a := e.Auth; a != nil {
@@ -110,7 +145,7 @@ func validateEndpoint(prefix string, e EndpointConfig, legacyToken bool) error {
 		}
 	}
 	// a header value: no line breaks or other control characters
-	if strings.IndexFunc(e.Tenant, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if hasControl(e.Tenant) {
 		return fmt.Errorf("%s.tenant must not contain control characters", prefix)
 	}
 	return nil
@@ -127,6 +162,46 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	}
 	if p := EndpointURLProblem(e.Endpoint); p != "" {
 		w = append(w, fmt.Sprintf("cluster %q: %s: %s", cluster, prefix, p))
+	}
+	return w
+}
+
+// sharedWithoutMatch warns when two clusters read the same Alertmanager or
+// Loki endpoint and one of them has no match (coverage S8a §2): without
+// match, every alert or stream there is read as that cluster's own.
+func sharedWithoutMatch(clusters []ClusterConfig) []string {
+	type key struct{ kind, at string }
+	users := map[key][]string{}
+	unmatched := map[key]bool{}
+	var order []key
+	for _, cl := range clusters {
+		for _, e := range cl.Endpoints() {
+			if e.Kind == EndpointMetrics || e.Spec.Endpoint == "" || EndpointURLProblem(e.Spec.Endpoint) != "" {
+				continue
+			}
+			u, err := url.Parse(strings.TrimRight(e.Spec.Endpoint, "/"))
+			if err != nil {
+				continue
+			}
+			origin, err := safehttp.CanonicalOrigin(u)
+			if err != nil {
+				continue
+			}
+			k := key{e.Kind, origin + u.Path} // the origin canonical, the path as written
+			if _, seen := users[k]; !seen {
+				order = append(order, k)
+			}
+			users[k] = append(users[k], cl.Name)
+			if len(e.Spec.Match) == 0 {
+				unmatched[k] = true
+			}
+		}
+	}
+	var w []string
+	for _, k := range order {
+		if len(users[k]) > 1 && unmatched[k] {
+			w = append(w, fmt.Sprintf("clusters %s read the same %s endpoint, and at least one has no %s.match: without it, everything there is read as that cluster's own", strings.Join(users[k], ", "), k.kind, k.kind))
+		}
 	}
 	return w
 }

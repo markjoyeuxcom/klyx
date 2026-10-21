@@ -18,6 +18,8 @@ export const TASKS: TaskMeta[] = [
   { task: "pods", label: "Pods", groupId: "workloads", destinationId: "pods", parts: [{ part: "pods", label: "Pods", destinationId: "pods" }] },
   { task: "nodes", label: "Nodes", groupId: "cluster", destinationId: "nodes", parts: [{ part: "nodes", label: "Nodes", destinationId: "nodes" }] },
   { task: "events", label: "Events", groupId: "cluster", destinationId: "events", parts: [{ part: "warnings", label: "Warning events", destinationId: "events" }] },
+  // coverage S8a: Alertmanager's alerts, counted apart from every object
+  { task: "alerts", label: "Alerts", groupId: "cluster", destinationId: "alerts", cap: "alerting", parts: [{ part: "alerts", label: "Alertmanager alerts", destinationId: "alerts" }] },
   { task: "helm", label: "Helm releases", groupId: "helm", destinationId: "helm", parts: [{ part: "releases", label: "Releases", destinationId: "helm" }] },
   { task: "flux", label: "Flux", groupId: "flux", destinationId: "flux", cap: "flux",
     parts: [{ part: "reconciliations", label: "Reconciliations", destinationId: "flux" }, { part: "sources", label: "Sources", destinationId: "flux-sources" },
@@ -34,15 +36,23 @@ export const TASKS: TaskMeta[] = [
     parts: [{ part: "gateways", label: "Gateways", destinationId: "gateway" }, { part: "listenersets", label: "ListenerSets" }, { part: "routes", label: "Routes" }] },
   { task: "lb", label: "Load balancers", groupId: "network", destinationId: "loadbalancers", cap: "loadBalancing",
     parts: [{ part: "services", label: "LoadBalancer Services", destinationId: "loadbalancers" }, { part: "pools", label: "Address pools" }, { part: "metallb", label: "MetalLB configuration" }] },
+  // coverage S9: standalone HPAs (KEDA-owned ones under their ScaledObject)
+  { task: "autoscaling", label: "HPAs", groupId: "autoscaling", destinationId: "autoscaling",
+    parts: [{ part: "hpas", label: "HorizontalPodAutoscalers", destinationId: "autoscaling" }] },
+  { task: "keda", label: "KEDA", groupId: "autoscaling", destinationId: "autoscaling", cap: "keda",
+    parts: [{ part: "scaledobjects", label: "ScaledObjects", destinationId: "autoscaling" }, { part: "scaledjobs", label: "ScaledJobs" }] },
   { task: "karpenter", label: "Karpenter", groupId: "autoscaling", destinationId: "karpenter", cap: "karpenter",
     parts: [{ part: "nodeclaims", label: "NodeClaims", destinationId: "karpenter" }, { part: "nodepools", label: "NodePools" }] },
   { task: "velero", label: "Velero", groupId: "velero", destinationId: "velero", cap: "velero",
     parts: [{ part: "schedules", label: "Schedules", destinationId: "velero" }, { part: "locations", label: "Storage locations" }, { part: "backups", label: "Unscheduled backups" }] },
   { task: "admission", label: "Admission", groupId: "admission", destinationId: "admission", cap: "admission",
     parts: [{ part: "webhooks", label: "Webhook configurations", destinationId: "admission" }, { part: "policies", label: "Admission policies" }] },
+  // coverage S11b: device classes are facts, inventory only
+  { task: "dra", label: "Devices (DRA)", groupId: "dra", destinationId: "dra", cap: "dra",
+    parts: [{ part: "claims", label: "ResourceClaims", destinationId: "dra" }, { part: "pools", label: "Device pools" }] },
 ];
 
-const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence" };
+const CLASSIFIER: Record<string, Line["classifier"]> = { workloads: "verdict", pods: "verdict", nodes: "verdict", events: "evidence", alerts: "alerts" };
 
 // Derived membership (§2.1): an attached route exists only through its
 // parent Gateway, so the parent kind is the routes line's evidence too.
@@ -60,18 +70,23 @@ const KIND_LABELS: Record<string, string> = {
   schedules: "Schedules", backupstoragelocations: "BackupStorageLocations", backups: "Backups",
   ipaddresspools: "IPAddressPools", l2advertisements: "L2Advertisements", bgpadvertisements: "BGPAdvertisements",
   configurationstates: "ConfigurationStates", ciliumloadbalancerippools: "CiliumLoadBalancerIPPools",
+  alerts: "Alertmanager alerts",
+  horizontalpodautoscalers: "HorizontalPodAutoscalers", scaledobjects: "ScaledObjects", scaledjobs: "ScaledJobs",
+  triggerauthentications: "TriggerAuthentications", clustertriggerauthentications: "ClusterTriggerAuthentications",
 };
 const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 
 const hhmm = (iso: string) => { const d = new Date(iso); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getHours())}:${p(d.getMinutes())}`; };
 
-export type LineState = "attention" | "unlit" | "evidence" | "quiet" | "checking" | "unreadable";
+// "alerts": active Alertmanager alerts (coverage S8a §6) - counted apart,
+// never "attention": they light no area, lamp or spine.
+export type LineState = "attention" | "unlit" | "evidence" | "alerts" | "quiet" | "checking" | "unreadable";
 export type Line = {
   task: string;
   part: string;
   label: string;
   destinationId?: string; // the destination this part badges, if it has one
-  classifier: "verdict" | "native" | "evidence";
+  classifier: "verdict" | "native" | "evidence" | "alerts";
   state: LineState;
   n: number; // attention (verdict), Included (native), warnings (evidence); 0 without a count
   // the role counts behind a lit line: faults and degraded objects (verdict
@@ -93,6 +108,8 @@ export type Line = {
   updating: boolean;
   refreshing: boolean;
   top: HealthRef[];
+  // an alerts line's critical count (S8a §6: the Faults filter keeps them)
+  alertsCritical?: number;
 };
 export type Area = {
   id: string;
@@ -206,6 +223,14 @@ function line(meta: TaskMeta, pm: PartMeta, sel: SelectedCounts, capUnknown: boo
     state = lit > 0 ? "attention" : n > 0 ? "unlit" : "quiet";
     tone = lit > 0 ? (nat.roles.fault > 0 ? "danger" : "warning") : undefined;
     text = n > 0 ? `${n}${plus} ${nat.included > 0 ? nat.word : "need attention"}${mixed}` : `none ${nat.word}${mixed}`;
+  } else if (p.classifier === "alerts") {
+    // counted apart from the objects: never a fault or degraded role
+    const al = p.alerts ?? { counted: 0, critical: 0, warning: 0, uncounted: 0, suppressed: 0, unprocessed: 0, unknown: 0, truncated: false };
+    n = al.counted;
+    state = n > 0 ? "alerts" : "quiet";
+    tone = n > 0 ? (al.critical > 0 ? "danger" : "warning") : undefined;
+    text = n > 0 ? `${n}${plus} active alert${n === 1 && !plus ? "" : "s"}${mixed}` : `no active critical or warning alerts${mixed}`;
+    return { ...base, classifier: p.classifier, state, n, fault, degraded, bound, tone, text, gaps: [...gaps, ...qualify], asOf: p.asOf ?? null, top: p.top ?? [], alertsCritical: al.critical };
   } else {
     n = p.evidence ?? 0;
     state = n > 0 ? "evidence" : "quiet";

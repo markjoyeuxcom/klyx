@@ -18,11 +18,17 @@ export type QueueRow =
   // the hidden fault and attention objects past the samples, by role
   | (Base & { kind: "more"; faults: number; attention: number; lower: boolean; destinationId: string; lens: string })
   | (Base & { kind: "controller"; text: string; destinationId: string })
-  | (Base & { kind: "coverage"; text: string; destinationId: string });
+  | (Base & { kind: "coverage"; text: string; destinationId: string })
+  // coverage S8a: an active Alertmanager alert - counted apart from the
+  // objects, never folded into one - and the hidden alerts past the samples
+  | (Base & { kind: "alert"; ref: HealthRef; label: string; subject: string | null; time: string | null; reason: string | null })
+  | (Base & { kind: "alert-more"; count: number; critical: number; lower: boolean; destinationId: string; lens: string });
 export type QueueFilter = "all" | "prd" | "faults";
 // faults and attention count the whole queue's model - every lit line's
 // role counts, not the samples - and lower says a count is a lower bound.
-export type Queue = { rows: QueueRow[]; notRead: { cluster: string; why: string }[]; faults: number; attention: number; lower: boolean };
+// alerts is the third count (S8a §6): active critical and warning alerts,
+// never added to faults or attention; alertsLower says it is a lower bound.
+export type Queue = { rows: QueueRow[]; notRead: { cluster: string; why: string }[]; faults: number; attention: number; lower: boolean; alerts: number; alertsLower: boolean };
 
 // Environment rank, as station order ranks it (one table, pinned to Go's by
 // the parity test); prd sorts first, an unrecognised environment last.
@@ -61,7 +67,7 @@ const taskOrder = (id: string) => { const i = TASKS.findIndex((t) => t.task === 
 export function fleetQueue(clusters: ClusterDTO[], models: Record<string, ClusterAttention>, filter: QueueFilter = "all"): Queue {
   const rows: QueueRow[] = [];
   const notRead: Queue["notRead"] = [];
-  let faults = 0, attention = 0, lower = false;
+  let faults = 0, attention = 0, lower = false, alerts = 0, alertsLower = false;
   for (const c of clusters) {
     const { place } = stationLabel(c);
     const rank = envRankOf(c.env);
@@ -98,6 +104,26 @@ export function fleetQueue(clusters: ClusterDTO[], models: Record<string, Cluste
           const hf = Math.max(0, l.fault - shownF), hd = Math.max(0, l.degraded - shownD);
           if (hf + hd > 0) rows.push({ ...base(l.part, hf > 0 ? "danger" : "warning", `${l.task}/${l.part}/more`), kind: "more", faults: hf, attention: hd, lower: l.bound === "lower", destinationId: l.destinationId ?? a.destinationId, lens: lineName(a, l) });
         }
+        if (l.state === "alerts") {
+          alerts += l.n;
+          if (l.bound === "lower") alertsLower = true;
+          let shown = 0, shownCritical = 0;
+          for (const ref of l.top) {
+            const tone = ref.role === "critical" ? "danger" : ref.role === "warning" ? "warning" : undefined;
+            if (!tone) continue;
+            shown++;
+            if (tone === "danger") shownCritical++;
+            rows.push({ ...base(l.part, tone, `${l.task}/${l.part}/${ref.fingerprint ?? `${ref.label}/${ref.namespace ?? ""}/${ref.name}`}`), kind: "alert", ref, label: ref.label,
+              subject: ref.name ? `${objectKindOf(ref.gvr)} ${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}` : null,
+              time: ref.since ? `started ${hhmm(ref.since)}` : null, reason: ref.reason || null });
+          }
+          const hidden = Math.max(0, l.n - shown);
+          if (hidden > 0) {
+            const critical = Math.max(0, (l.alertsCritical ?? 0) - shownCritical);
+            rows.push({ ...base(l.part, critical > 0 ? "danger" : "warning", `${l.task}/${l.part}/more`), kind: "alert-more", count: hidden, critical, lower: l.bound === "lower",
+              destinationId: l.destinationId ?? a.destinationId, lens: lineName(a, l) });
+          }
+        }
         if (covered(l)) {
           rows.push({ ...base(l.part, undefined, `${l.task}/${l.part}/coverage`), kind: "coverage", text: `${lineName(a, l)}: ${l.state === "unreadable" || l.state === "checking" ? lineText(l) : l.gaps.filter((g) => /could not be read|last good|not read yet/.test(g)).join(" · ")}`, destinationId: l.destinationId ?? a.destinationId });
         }
@@ -105,16 +131,21 @@ export function fleetQueue(clusters: ClusterDTO[], models: Record<string, Cluste
     }
   }
   const toneOrder = (t: Base["tone"]) => (t === "danger" ? 0 : t === "warning" ? 1 : 2);
-  // prd first; then role; then area in task order; refs keep their order
+  // the objects, then the alert samples, then their "+N more"
+  const isAlert = (r: QueueRow) => (r.kind === "alert" ? 1 : r.kind === "alert-more" ? 2 : 0);
+  // prd first; then the objects before the alerts (counted apart); then
+  // role; then area in task order; refs keep their order
   const ordered = rows.map((row, i) => ({ row, i })).sort((x, y) =>
-    (y.row.rank - x.row.rank) || (toneOrder(x.row.tone) - toneOrder(y.row.tone)) || (x.row.areaOrder - y.row.areaOrder) || (x.i - y.i)).map((x) => x.row);
+    (y.row.rank - x.row.rank) || (isAlert(x.row) - isAlert(y.row)) || (toneOrder(x.row.tone) - toneOrder(y.row.tone)) || (x.row.areaOrder - y.row.areaOrder) || (x.i - y.i)).map((x) => x.row);
   const filtered = ordered
     .filter((row) => filter === "all" || (filter === "prd" ? row.rank === PRD : row.tone === "danger"))
-    // under Faults a "+N more" row keeps only its hidden faults
-    .map((row) => (filter === "faults" && row.kind === "more" ? { ...row, attention: 0 } : row));
+    // under Faults a "+N more" row keeps only its hidden faults, and an
+    // alerts "+N more" only its hidden critical alerts
+    .map((row) => (filter === "faults" && row.kind === "more" ? { ...row, attention: 0 }
+      : filter === "faults" && row.kind === "alert-more" ? { ...row, count: row.critical } : row));
   return {
     rows: filtered,
     notRead: filter === "prd" ? notRead.filter((n) => envRankOf(clusters.find((c) => c.name === n.cluster)?.env ?? "") === PRD) : notRead,
-    faults, attention, lower,
+    faults, attention, lower, alerts, alertsLower,
   };
 }

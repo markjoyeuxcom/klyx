@@ -3,6 +3,8 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/identity"
+	"github.com/moomora/klyx/internal/keda"
 	"github.com/moomora/klyx/internal/observe"
 )
 
@@ -254,7 +257,271 @@ func (c *ClusterConn) ServiceAccountIdentity(ctx context.Context, ns, name, uid 
 	}
 	out.Webhooks = webhookSides(e, webhookRelevance(aws, usesAzure(d, pods)))
 	out.Stores, out.StoresRead, out.StoresGap = c.storesFor(ctx, obs, ns, name)
+	out.KEDA, out.KEDARead = c.kedaAuthsFor(ctx, obs, ns, name)
 	return out, nil
+}
+
+// kedaAuthsFor lists the KEDA authentications that authenticate as one
+// ServiceAccount (coverage S9 §6.3): for a KEDA operator's own
+// ServiceAccount, the podIdentity authentications its operator uses; for a
+// workload's, the aws identityOwner workload authentications whose
+// ScaledObjects target a Deployment or StatefulSet running as it. Either
+// link holds only with the forward join's proof - a using scaler whose
+// handler is proven and sees the authentication - and anything short of
+// that, an unread operator inventory, a cut trigger list or an incomplete
+// model says partial (implementation reviews 1 and 2). From the models,
+// with at most 16 target reads.
+func (c *ClusterConn) kedaAuthsFor(ctx context.Context, obs identityObserver, ns, name string) ([]identity.KEDALink, string) {
+	out := []identity.KEDALink{}
+	if !c.kedaServed() {
+		return out, identity.ReadComplete
+	}
+	if obs == nil {
+		return out, identity.ReadNone
+	}
+	read := identity.ReadComplete
+	var auths []*keda.Auth
+	for _, kind := range []string{healthsrc.KindTriggerAuths, healthsrc.KindClusterTriggerAuths} {
+		st, complete, ok := obs.VisitKind(kind, func(obj any) bool {
+			if a, ok := obj.(*keda.Auth); ok && a.PodIdentity != nil {
+				auths = append(auths, a)
+			}
+			return true
+		})
+		if !ok || !complete || st.Coverage != observe.Live || st.Truncated {
+			read = identity.ReadPartial
+		}
+	}
+	h := c.kedaHandling(ctx)
+	// the operator's own ServiceAccount: only a read inventory rules out an
+	// operator in this namespace
+	switch c.kedaOperatorIn(ns) {
+	case keda.Yes:
+		links, complete := c.kedaOperatorUses(obs, ns, name, auths, h)
+		out = append(out, links...)
+		if !complete {
+			read = identity.ReadPartial
+		}
+	case keda.Unknown:
+		read = identity.ReadPartial
+	}
+	// a workload's ServiceAccount lending its role
+	links, complete := c.kedaWorkloadUses(ctx, obs, ns, name, auths, h)
+	out = append(out, links...)
+	if !complete {
+		read = identity.ReadPartial
+	}
+	return out, read
+}
+
+// kedaHandling is the operator candidates read once for one inverse join.
+type kedaHandling struct {
+	configs []keda.Config
+	cut     bool
+	ok      bool
+}
+
+func (c *ClusterConn) kedaHandling(ctx context.Context) kedaHandling {
+	configs, cut, err := c.KEDAOperatorConfigs(ctx)
+	return kedaHandling{configs: configs, cut: cut, ok: err == nil}
+}
+
+// sees is the forward join's proof for one scaler and one authentication:
+// the proven handler and its visibility of the authentication - Yes, No
+// (no operator handles it, or its selector excludes the authentication),
+// or Unknown.
+func (h kedaHandling) sees(s *keda.Scaler, a *keda.Auth) (*keda.Config, keda.Tri) {
+	if !h.ok {
+		return nil, keda.Unknown
+	}
+	hd := keda.HandlerOf(h.configs, h.cut, s.Namespace, s.Labels, s.LabelsCut)
+	switch {
+	case hd.Handler != nil:
+		return hd.Handler, hd.Handler.SeesAuth(a.Labels, a.LabelsCut)
+	case hd.None:
+		return nil, keda.No
+	}
+	return nil, keda.Unknown
+}
+
+// kedaOperatorIn says whether a KEDA operator Deployment runs in ns:
+// unknown when the operators could not be read.
+func (c *ClusterConn) kedaOperatorIn(ns string) keda.Tri {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.caps.KEDA.OperatorsRead {
+		return keda.Unknown
+	}
+	for _, o := range c.caps.KEDA.Operators {
+		if o.Namespace == ns {
+			return keda.Yes
+		}
+	}
+	return keda.No
+}
+
+// authKey is a scaler reference's key among the authentications.
+func authKey(s *keda.Scaler, ref string) string {
+	kind, aname := splitRef(ref)
+	if kind == keda.KindClusterTriggerAuth {
+		return kind + "//" + aname
+	}
+	return kind + "/" + s.Namespace + "/" + aname
+}
+
+// kedaWorkloadUses lists the aws identityOwner workload authentications
+// whose using ScaledObjects in ns, with a proven handler that sees them,
+// target a workload running as ServiceAccount ns/name: the operator
+// assumes that ServiceAccount's role.
+func (c *ClusterConn) kedaWorkloadUses(ctx context.Context, obs identityObserver, ns, name string, auths []*keda.Auth, h kedaHandling) ([]identity.KEDALink, bool) {
+	byKey := map[string]*keda.Auth{}
+	for _, a := range auths {
+		if a.PodIdentity.Provider == "aws" && a.PodIdentity.IdentityOwner == "workload" {
+			byKey[authKind(a)+"/"+a.Namespace+"/"+a.Name] = a
+		}
+	}
+	var out []identity.KEDALink
+	if len(byKey) == 0 {
+		return out, true
+	}
+	complete := true
+	reads := 0
+	seen := map[string]bool{}
+	st, done, ok := obs.VisitKind(healthsrc.KindScaledObjects, func(obj any) bool {
+		so, ok := obj.(*keda.ScaledObject)
+		if !ok || so.Namespace != ns {
+			return true
+		}
+		if so.TriggersCut {
+			complete = false // an omitted trigger may name a workload authentication
+		}
+		for _, ref := range so.AuthRefs() {
+			key := authKey(&so.Scaler, ref)
+			a := byKey[key]
+			if a == nil || seen[key] {
+				continue
+			}
+			switch _, vis := h.sees(&so.Scaler, a); vis {
+			case keda.No:
+				continue // no operator handles it, or KEDA cannot read the authentication
+			case keda.Unknown:
+				complete = false
+				continue
+			}
+			if reads == 16 {
+				complete = false
+				return false
+			}
+			reads++
+			if sa := c.targetServiceAccount(ctx, so); sa == nil {
+				complete = false
+			} else if sa.Name == name {
+				seen[key] = true
+				out = append(out, identity.KEDALink{Kind: authKind(a), Namespace: a.Namespace, Name: a.Name,
+					Via: "the KEDA operator assumes this ServiceAccount's role for ScaledObject " + so.Namespace + "/" + so.Name})
+			}
+		}
+		return true
+	})
+	if !ok || !done || st.Coverage != observe.Live || st.Truncated {
+		complete = false
+	}
+	return out, complete
+}
+
+// kedaOperatorUses lists the podIdentity authentications (not a workload's
+// role) whose using scalers' handling operator runs as ServiceAccount
+// ns/name and sees them; complete is false when any of that is unproven.
+func (c *ClusterConn) kedaOperatorUses(obs identityObserver, ns, name string, auths []*keda.Auth, h kedaHandling) ([]identity.KEDALink, bool) {
+	byKey := map[string]*keda.Auth{}
+	for _, a := range auths {
+		if a.PodIdentity.Provider == "aws" && a.PodIdentity.IdentityOwner == "workload" {
+			continue // the operator assumes a workload's role: listed on that ServiceAccount
+		}
+		byKey[authKind(a)+"/"+a.Namespace+"/"+a.Name] = a
+	}
+	complete := h.ok
+	type use struct {
+		a        *keda.Auth
+		operator string
+		users    []string
+	}
+	uses := map[string]*use{}
+	visit := func(kind string, s *keda.Scaler) {
+		if s.TriggersCut {
+			complete = false // an omitted trigger may name an authentication
+		}
+		for _, ref := range s.AuthRefs() {
+			key := authKey(s, ref)
+			a := byKey[key]
+			if a == nil {
+				continue
+			}
+			hd, vis := h.sees(s, a)
+			switch {
+			case hd == nil && vis == keda.No:
+				continue // no operator handles it
+			case hd == nil:
+				complete = false // the handler is unverified: it may run as this ServiceAccount
+				continue
+			case hd.Namespace != ns:
+				continue
+			case hd.ServiceAccount == "":
+				complete = false // its pods disagree on the ServiceAccount
+				continue
+			case hd.ServiceAccount != name:
+				continue
+			}
+			switch vis {
+			case keda.Yes:
+				u := uses[key]
+				if u == nil {
+					u = &use{a: a, operator: hd.Namespace + "/" + hd.Name}
+					uses[key] = u
+				}
+				u.users = append(u.users, kind+" "+s.Namespace+"/"+s.Name)
+			case keda.Unknown:
+				complete = false
+			}
+		}
+	}
+	for _, kind := range []string{healthsrc.KindScaledObjects, healthsrc.KindScaledJobs} {
+		st, done, ok := obs.VisitKind(kind, func(obj any) bool {
+			switch o := obj.(type) {
+			case *keda.ScaledObject:
+				visit(keda.KindScaledObject, &o.Scaler)
+			case *keda.ScaledJob:
+				visit(keda.KindScaledJob, &o.Scaler)
+			}
+			return true
+		})
+		if !ok || !done || st.Coverage != observe.Live || st.Truncated {
+			complete = false
+		}
+	}
+	keys := make([]string, 0, len(uses))
+	for k := range uses {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []identity.KEDALink
+	for _, k := range keys {
+		u := uses[k]
+		sort.Strings(u.users)
+		via := "the KEDA operator " + u.operator + " runs as this ServiceAccount and handles " + u.users[0]
+		if len(u.users) > 1 {
+			via += fmt.Sprintf(" and %d more", len(u.users)-1)
+		}
+		out = append(out, identity.KEDALink{Kind: authKind(u.a), Namespace: u.a.Namespace, Name: u.a.Name, Via: via})
+	}
+	return out, complete
+}
+
+func authKind(a *keda.Auth) string {
+	if a.Cluster {
+		return keda.KindClusterTriggerAuth
+	}
+	return keda.KindTriggerAuth
 }
 
 // storesFor lists the stores that authenticate through a ServiceAccount:

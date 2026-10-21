@@ -1,15 +1,19 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // The Explain prompt contract (spec 2026-10-13 §4.2). Exactly the fields
@@ -62,10 +66,7 @@ var aiEvidenceFields = map[string]allow{
 		"resources": allow{"group": nil, "kind": nil, "namespace": nil, "name": nil, "status": nil, "health": nil}},
 	healthsrc.TaskArgo + "/applicationsets": {"generators": nil, "templateName": nil, "project": nil, "repoURL": nil, "path": nil, "targetRevision": nil,
 		"destNamespace": nil, "generatedApps": nil, "healthy": nil, "conditions": argoCond},
-	healthsrc.TaskKarpenter + "/nodepools": {"ready": nil, "reason": nil, "message": nil, "weight": nil, "cpuLimit": nil, "cpuUsed": nil, "memLimit": nil,
-		"memUsed": nil, "nodes": nil},
-	healthsrc.TaskKarpenter + "/nodeclaims": {"pool": nil, "nodeName": nil, "ready": nil, "failingType": nil, "failingStatus": nil, "failingReason": nil,
-		"failingMessage": nil, "drifted": nil, "consolidatable": nil, "capacityType": nil, "instanceType": nil, "ageSeconds": nil},
+	// the Karpenter parts: coverage S10 §8 (karpenter_ai.go)
 	healthsrc.TaskGateway + "/gateways": {"className": nil, "listeners": listenerAllow,
 		"accepted": nil, "programmed": nil, "stale": nil, "generation": nil, "observedGeneration": nil, "acceptedCond": condAllow, "programmedCond": condAllow,
 		"allowedListeners": nsAllowance, "attachedListenerSets": nil},
@@ -77,7 +78,13 @@ var aiEvidenceFields = map[string]allow{
 	healthsrc.TaskGateway + "/routes": {"kind": nil, "parent": nil, "parentLabel": nil, "gateway": nil, "hostnames": nil, "hostnameCount": nil, "attachments": attachment, "generation": nil},
 	healthsrc.TaskNodes + "/nodes": {"roles": nil, "ready": nil, "unschedulable": nil, "problems": nil, "version": nil, "os": nil, "arch": nil,
 		"taintCount": nil, "cpuCapacity": nil, "cpuAllocatable": nil, "memCapacity": nil, "memAllocatable": nil, "podCapacity": nil,
-		"ageSeconds": nil, "pool": nil, "zone": nil},
+		"ageSeconds": nil, "pool": nil, "zone": nil,
+		// coverage S11a §7: names, numbers and product strings; no identifier
+		"extended": allow{"entries": allow{"name": nil, "capacity": nil, "allocatable": nil, "accelerator": nil, "unit": nil, "partition": nil,
+			"renamedFrom": nil, "sharing": nil, "facts": allow{"key": nil, "value": nil}}, "omitted": nil, "factsOmitted": nil, "migStrategy": nil}},
+	healthsrc.TaskExtended + "/reservations": {"node": nil, "entries": allow{"name": nil, "advertised": nil, "requested": nil, "servedByDra": nil, "notAdvertised": nil},
+		"omitted": nil, "untracked": nil},
+	healthsrc.TaskExtended + "/totals": {"name": nil, "capacity": nil, "allocatable": nil, "requested": nil},
 	healthsrc.TaskPods + "/pods": {"ownerKind": nil, "ownerName": nil, "node": nil, "ready": nil, "restarts": nil,
 		"containers": allow{"name": nil, "init": nil, "ready": nil, "restarts": nil, "state": nil}},
 	healthsrc.TaskWorkloads + "/workloads": {"kind": nil, "desired": nil, "ready": nil, "available": nil, "updated": nil, "restarts": nil,
@@ -335,6 +342,7 @@ type explainEvidence struct {
 	Related        []evidenceObject `json:"related,omitempty"`
 	IssuanceChain  *evidenceChain   `json:"issuanceChain,omitempty"`
 	Operators      *operatorHealth  `json:"operators,omitempty"`
+	Alerts         []evidenceAlert  `json:"alerts,omitempty"` // coverage S8a §7
 	Qualifications []string         `json:"qualifications,omitempty"`
 	Truncated      bool             `json:"truncated,omitempty"`
 }
@@ -518,3 +526,117 @@ func marshalCapped(ev explainEvidence) ([]byte, bool, error) {
 }
 
 var errEvidenceTooLarge = errors.New("the evidence for this object is too large to send, even trimmed; nothing was sent")
+
+// evidenceAlert is an active Alertmanager alert matched to the target by
+// label (coverage S8a §7): display values only, scrubbed and capped again.
+type evidenceAlert struct {
+	Name       string `json:"name"`
+	Severity   string `json:"severity,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	MatchedBy  string `json:"matchedBy"`
+}
+
+// alertTarget is the freshly fenced object Explain asks about.
+type alertTarget struct{ uid, kind, namespace, name string }
+
+// alertEvidence is the active alerts the alerts part correlates to the
+// object: by its UID where the subject's kind is held and was found, and by
+// kind, namespace and name where Klyx does not hold the kind (Jobs, CronJobs,
+// PVCs, HPAs) or could not establish the subject - each qualified as a label
+// match, never as carrying the object's UID.
+func alertEvidence(ctx context.Context, conn AIConn, t alertTarget, sc *scrubber) ([]evidenceAlert, string) {
+	rows, ok := conn.HealthRowsNow(ctx, healthsrc.TaskAlerts, "alerts")
+	if !ok {
+		return nil, ""
+	}
+	r, ok := rows.Rows.(healthsrc.AlertRows)
+	if !ok {
+		return nil, ""
+	}
+	seen, stale := alertsSeenAt(rows.Part)
+	var out []evidenceAlert
+	byName := false
+	for _, a := range r.Alerts {
+		if a.Alert.StateClass != alertmanager.StateActive {
+			continue
+		}
+		matched := "label " + strings.Join(a.Alert.Subject.Basis, "/")
+		switch {
+		case t.uid != "" && a.SubjectUID == t.uid:
+			if a.SubjectState == healthsrc.SubjectLastObserved {
+				matched += " (the object as last observed: that kind's read is not current)"
+			}
+		case a.SubjectUID == "" && t.name != "" && a.Subject.Kind == t.kind && a.Subject.Namespace == t.namespace && a.Subject.Name == t.name &&
+			(a.SubjectState == healthsrc.SubjectNotLookedUp || a.SubjectState == healthsrc.SubjectNotEstablished):
+			matched += " (by name only: " + a.SubjectState + ")"
+			byName = true
+		default:
+			continue
+		}
+		if len(out) == evidenceListMax {
+			break
+		}
+		out = append(out, evidenceAlert{Name: sc.text(a.Alert.Name), Severity: sc.text(a.Alert.Severity), StartedAt: rfcOrEmpty(a.Alert.StartsAt),
+			LastSeenAt: seen, Summary: sc.text(a.Alert.Summary), MatchedBy: matched})
+	}
+	if len(out) == 0 {
+		return nil, ""
+	}
+	q := "The alerts are Alertmanager's, matched to this object by label, not by UID"
+	if byName {
+		q += "; some only by kind, namespace and name, which a same-name object would share"
+	}
+	switch {
+	case stale:
+		q += "; the alerts reads are failing, and each was last seen active at the last good read, " + seen + "; none is called resolved."
+	case seen != "":
+		q += "; each was seen active at the alerts read of " + seen + "."
+	default:
+		q += "; each was seen active at the last alerts read."
+	}
+	return out, q
+}
+
+// alertsSeenAt is the alerts snapshot's read time from the part's coverage:
+// its last good read when stale, its latest read when live.
+func alertsSeenAt(p observe.Part) (string, bool) {
+	for _, k := range p.Kinds {
+		if k.Kind != healthsrc.SnapAlerts {
+			continue
+		}
+		if k.Coverage == observe.Stale && k.LastGoodAt != nil {
+			return rfcOrEmpty(*k.LastGoodAt), true
+		}
+		if k.AsOf != nil {
+			return rfcOrEmpty(*k.AsOf), false
+		}
+	}
+	return "", false
+}
+
+// Coverage S9 §9: names, the target, conditions, the HPA as read, pause
+// intent, trigger types and metric keys, authentication names and source
+// kinds, and Klyx's findings; never trigger metadata (never retained), an
+// authentication's reference names, details, role or identity id.
+func init() {
+	cond := allow{"type": nil, "status": nil, "reason": nil, "message": nil}
+	pause := allow{"kind": nil, "annotation": nil, "requested": nil, "malformed": nil, "directions": nil, "notApplied": nil, "unverified": nil,
+		"applied": nil, "completed": nil}
+	triggers := allow{"type": nil, "name": nil, "metricType": nil, "authName": nil, "authKind": nil, "cached": nil}
+	findings := allow{"role": nil, "label": nil, "text": nil, "note": nil}
+	aiEvidenceFields[healthsrc.TaskAutoscaling+"/hpas"] = allow{"target": allow{"apiVersion": nil, "kind": nil, "name": nil},
+		"min": nil, "max": nil, "current": nil, "desired": nil, "metrics": nil, "metricTypes": nil, "conditions": cond, "conditionsCut": nil,
+		"generation": nil, "observedGeneration": nil, "generationReported": nil, "kedaOwner": nil, "others": nil, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/scaledobjects"] = allow{"targetGroup": nil, "targetKind": nil, "targetName": nil,
+		"hpaNameSpec": nil, "hpaName": nil, "min": nil, "max": nil, "idle": nil, "fallback": allow{"failureThreshold": nil, "replicas": nil, "behavior": nil},
+		"scalingModifiers": nil, "transfer": nil, "triggers": triggers, "triggerCount": nil, "triggersCut": nil, "conditions": cond, "conditionsCut": nil,
+		"metrics": allow{"metric": nil, "failures": nil, "status": nil, "active": nil}, "metricsCut": nil, "healthTracked": nil, "pause": pause,
+		"hpa": allow{"name": nil, "min": nil, "max": nil, "current": nil, "desired": nil, "conditions": cond}, "hpaCurrent": nil, "hpaComplete": nil,
+		"others": nil, "version": nil, "authsRead": nil, "findings": findings, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/scaledjobs"] = allow{"triggers": triggers, "triggerCount": nil, "triggersCut": nil, "conditions": cond,
+		"conditionsCut": nil, "successfulLimit": nil, "failedLimit": nil, "pause": pause, "version": nil, "findings": findings, "reason": nil}
+	aiEvidenceFields[healthsrc.TaskKEDA+"/authentications"] = allow{"cluster": nil, "sources": allow{"kind": nil, "refCount": nil, "cut": nil, "method": nil},
+		"podIdentity": allow{"provider": nil, "identityOwner": nil}, "users": nil, "usersComplete": nil}
+}

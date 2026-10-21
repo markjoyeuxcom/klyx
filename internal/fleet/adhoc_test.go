@@ -298,7 +298,7 @@ func TestDeleteAdhocObjectPinsTheCheckedUID(t *testing.T) {
 
 	// A precondition conflict says nothing was deleted.
 	dyn.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "dbg", errors.New("Precondition failed: UID in precondition: old, UID in object meta: new"))
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "dbg", errors.New("StorageError: invalid object, Code: 4, Key: /registry/pods/x/dbg, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: old, UID in object meta: new"))
 	})
 	if err := c.DeleteAdhocObject(context.Background(), "", "v1", "pods", "scratch", "dbg", "old"); err == nil || !strings.Contains(err.Error(), "nothing was deleted") {
 		t.Fatalf("a precondition conflict must say nothing was deleted: %v", err)

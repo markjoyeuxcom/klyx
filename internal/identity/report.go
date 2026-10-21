@@ -155,9 +155,24 @@ type SAReport struct {
 	Stores   []StoreLink `json:"stores"`
 	// StoresRead: complete, unread, partial (a controller join is not
 	// resolved; StoresGap says which), or "cut" past MaxStores.
-	StoresRead string   `json:"storesRead"`
-	StoresGap  string   `json:"storesGap,omitempty"`
-	Limits     []string `json:"limits"`
+	StoresRead string `json:"storesRead"`
+	StoresGap  string `json:"storesGap,omitempty"`
+	// KEDA: the TriggerAuthentications that authenticate as this
+	// ServiceAccount (coverage S9 §6.3, the join S5 deferred); KEDARead as
+	// StoresRead.
+	KEDA     []KEDALink `json:"keda"`
+	KEDARead string     `json:"kedaRead"`
+	Limits   []string   `json:"limits"`
+}
+
+// KEDALink is one KEDA authentication that authenticates as a
+// ServiceAccount: Via says how (the operator's own identity, or the role a
+// workload's ServiceAccount lends it).
+type KEDALink struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Via       string `json:"via"`
 }
 
 // PodInspectorReport is the Pod inspector's Identity block.

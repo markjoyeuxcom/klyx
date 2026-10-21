@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/clock"
 )
 
@@ -55,6 +56,9 @@ type AdhocResult struct {
 	Name      string
 	OK        bool
 	Error     string
+	// refusal is the refused request's error (coverage S3b §2.3), for the
+	// bridge's admission finding; Error keeps today's text.
+	refusal error
 
 	NamespaceOwnerKind      string
 	NamespaceOwnerName      string
@@ -194,6 +198,7 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		_, err = resource.Create(ctx, u, opts)
 	}
 	if err != nil {
+		r.refusal = admission.Wrap(admission.Request{Operation: "CREATE", Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource, Namespace: ns}, kind, ns, name, err)
 		if apierrors.IsAlreadyExists(err) {
 			r.Error = fmt.Sprintf("%s %q already exists - the composer only creates new objects; edit the existing one in Resources", kind, name)
 			return r
@@ -379,6 +384,7 @@ func (c *ClusterConn) LaunchDiagnosticPod(ctx context.Context, name, image strin
 	// Ensure the scratch namespace exists; racing an existing one is fine.
 	nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ScratchNamespace, Labels: stamp, Annotations: annos}}
 	if _, err := c.typed.CoreV1().Namespaces().Create(ctx, nsObj, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+		r.refusal = admission.Wrap(admission.Request{Operation: "CREATE", Version: "v1", Resource: "namespaces"}, "Namespace", "", ScratchNamespace, err)
 		r.Error = "create " + ScratchNamespace + " namespace: " + err.Error()
 		return r
 	}
@@ -396,6 +402,7 @@ func (c *ClusterConn) LaunchDiagnosticPod(ctx context.Context, name, image strin
 		},
 	}
 	if _, err := c.typed.CoreV1().Pods(ScratchNamespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil {
+		r.refusal = admission.Wrap(admission.Request{Operation: "CREATE", Version: "v1", Resource: "pods", Namespace: ScratchNamespace}, "Pod", ScratchNamespace, name, err)
 		if apierrors.IsAlreadyExists(err) {
 			r.Error = fmt.Sprintf("pod %q already exists in %s - delete it from the scratch list or pick another name", name, ScratchNamespace)
 			return r
@@ -678,8 +685,9 @@ func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plu
 	} else {
 		err = resource.Delete(ctx, name, opts)
 	}
+	err = admission.Wrap(admission.Request{Operation: "DELETE", Group: group, Version: version, Resource: plural, Namespace: ns}, u.GetKind(), ns, name, err)
 	if err != nil {
-		if apierrors.IsConflict(err) {
+		if apierrors.IsConflict(err) && !admission.Classify(statusOf(err)).Attributed() {
 			return fmt.Errorf("%s %q changed between the check and the delete, so nothing was deleted - refresh and try again", u.GetKind(), name)
 		}
 		return err
@@ -713,4 +721,16 @@ func (c *ClusterConn) resolveGVK(apiVersion, kind string) (schema.GroupVersionRe
 		}
 	}
 	return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("kind %q is not served under %q (typo, or a just-installed CRD - discovery refreshes within a minute)", kind, apiVersion)
+}
+
+// Refusal is the refused request's error, when the server refused one.
+func (r AdhocResult) Refusal() error { return r.refusal }
+
+// statusOf is err's API status, or the zero status.
+func statusOf(err error) metav1.Status {
+	var st apierrors.APIStatus
+	if errors.As(err, &st) {
+		return st.Status()
+	}
+	return metav1.Status{}
 }

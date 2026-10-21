@@ -28,6 +28,8 @@ export type IdStoreLink = { kind: string; namespace?: string; name: string; uid:
 export type IdSAReport = {
   readAt: string; state: string; error?: string; declared?: IdDeclared; pods: IdPodReport[]; podsRead: string;
   webhooks?: IdSide[]; stores: IdStoreLink[]; storesRead: string; storesGap?: string; limits: string[];
+  // coverage S9 §6.3: the KEDA authentications that authenticate as it
+  keda?: { kind: string; namespace?: string; name: string; via: string }[]; kedaRead?: string;
 };
 export type IdPodInspectorReport = { readAt: string; state: string; error?: string; declared?: IdDeclared; saState: string; report?: IdPodReport; webhooks?: IdSide[]; limits: string[] };
 export type IdSubject = {

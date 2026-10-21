@@ -18,10 +18,14 @@ export type Counts = { total: number; fault: number; degraded: number; unknown: 
 export type NativeCounts = { total: number; roles: Counts; included: number; word: string };
 // since and reason are The Line §8.1's rule-backed start time (RFC 3339) and
 // the rule's capped reason; absent when no rule backs them.
-export type HealthRef = { cluster: string; gvr: string; namespace?: string; name: string; uid?: string; parent?: string; role: string; label: string; generation?: number; route?: string; since?: string; condition?: { type: string; status: string; since: string }; reason?: string };
+export type HealthRef = { cluster: string; gvr: string; namespace?: string; name: string; uid?: string; parent?: string; role: string; label: string; generation?: number; route?: string; since?: string; condition?: { type: string; status: string; since: string }; reason?: string;
+  // an alert ref's identity within its source (coverage S8a): an alert has no UID
+  fingerprint?: string };
+// An alerts part's counts (coverage S8a §6), apart from every object count.
+export type AlertCounts = { counted: number; critical: number; warning: number; uncounted: number; suppressed: number; unprocessed: number; unknown: number; truncated: boolean };
 export type HealthPart = {
-  id: string; entity: string; scope: string; classifier: "verdict" | "native" | "evidence"; coverage: Coverage;
-  kinds: KindCoverage[]; counts?: Counts; native?: NativeCounts; evidence?: number; top?: HealthRef[];
+  id: string; entity: string; scope: string; classifier: "verdict" | "native" | "evidence" | "alerts"; coverage: Coverage;
+  kinds: KindCoverage[]; counts?: Counts; native?: NativeCounts; evidence?: number; alerts?: AlertCounts; top?: HealthRef[];
   obs: number; ver: number; asOf?: string; next?: string;
 };
 export type HealthTask = { id: string; parts: HealthPart[]; controller?: { state: string; reason?: string }; coverage: Coverage; asOf?: string };
@@ -234,7 +238,8 @@ export function openFailed(handle: string, token: string, error: string, now = D
   return true;
 }
 
-const uidOf = (r: unknown) => (r as { uid?: string } | null)?.uid ?? "";
+// a delta row's identity: its object UID, or an alert row's opaque key
+const uidOf = (r: unknown) => { const x = r as { uid?: string; key?: string } | null; return x?.uid ?? x?.key ?? ""; };
 
 // withMessage moves a subscription to a full message, or a delta whose base
 // is the Ver held: rows upserted and removed by UID (a kept row keeps its

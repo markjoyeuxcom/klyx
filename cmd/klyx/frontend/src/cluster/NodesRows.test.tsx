@@ -106,7 +106,7 @@ describe("Nodes rows, mounted end to end (slice 3 §5.7)", () => {
       expect(screen.getByRole("alert").textContent).toMatch(/read failed - showing the last good read from .*dial tcp/);
       expect(headline()).toBe("9*");
       expect(screen.getByTestId("nodes-attention").textContent).toBe("5* need attention");
-      expect(screen.getByText(/4\* not ready · 1\* under pressure · 1\* cordoned \(as of /)).toBeTruthy();
+      expect(screen.getByText(/4\* not ready · 1\* degraded · 1\* cordoned \(as of /)).toBeTruthy();
       // the filter chips describe the rows the list can show
       expect(screen.getByRole("button", { name: /^Attention/ }).textContent).toBe("Attention 1");
       const gen = useHealth.getState().subs.n.requestGen;

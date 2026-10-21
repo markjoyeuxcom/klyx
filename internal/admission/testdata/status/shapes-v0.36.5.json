@@ -1,0 +1,631 @@
+[
+ {
+  "name": "webhook-denied-message",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" denied the request: widgets labelled deny are refused",
+   "code": 403
+  }
+ },
+ {
+  "name": "webhook-denied-reason",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" denied the request: WidgetPolicy",
+   "reason": "WidgetPolicy",
+   "code": 400
+  }
+ },
+ {
+  "name": "webhook-denied-noexpl",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" denied the request without explanation",
+   "code": 400
+  }
+ },
+ {
+  "name": "webhook-denied-uid-text",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" denied the request: see the guide: the uuid and fluid labels are required",
+   "reason": "Invalid",
+   "code": 422
+  }
+ },
+ {
+  "name": "dryrun-unsupported",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" does not support dry run",
+   "reason": "BadRequest",
+   "code": 400
+  }
+ },
+ {
+  "name": "call-refused",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": dial tcp 127.0.0.1:PORT: connect: connection refused",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": dial tcp 127.0.0.1:PORT: connect: connection refused"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-x509",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": tls: failed to verify certificate: x509: certificate signed by unknown authority",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": tls: failed to verify certificate: x509: certificate signed by unknown authority"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-deadline",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"http://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": context deadline exceeded",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"http://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": context deadline exceeded"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-client-timeout",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"http://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"http://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-no-endpoints",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": no endpoints available for service \"lab-hook\"",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"https://lab-hook.lab-s3b.svc:443/validate?timeout=10s\": no endpoints available for service \"lab-hook\""
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-rest-client",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": could not get REST client: no client config",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": could not get REST client: no client config"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "call-invalid-response",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: failed calling webhook \"deny.lab.klyx.dev\": received invalid webhook response: expected response.uid=\"a\", got \"b\"",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "failed calling webhook \"deny.lab.klyx.dev\": received invalid webhook response: expected response.uid=\"a\", got \"b\""
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "vap-binding",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: ValidatingAdmissionPolicy 'deny-labelled' with binding 'deny-labelled-binding' denied request: widgets labelled deny are refused",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'deny-labelled' with binding 'deny-labelled-binding' denied request: widgets labelled deny are refused"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "vap-nobinding",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: ValidatingAdmissionPolicy 'deny-labelled' denied request: widgets labelled deny are refused",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'deny-labelled' denied request: widgets labelled deny are refused"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "vap-forbidden",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: ValidatingAdmissionPolicy 'deny-labelled' with binding 'b' denied request: refused",
+   "reason": "Forbidden",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'deny-labelled' with binding 'b' denied request: refused"
+     }
+    ]
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "vap-unnamed",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"Unknown\" is forbidden: ValidatingAdmissionPolicy 'deny-labelled' with binding 'b' denied request: refused",
+   "reason": "Invalid",
+   "details": {
+    "name": "Unknown",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'deny-labelled' with binding 'b' denied request: refused"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "vap-uid-text",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: ValidatingAdmissionPolicy 'needs-uuid' with binding 'b' denied request: the uuid label is required, see the guide",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'needs-uuid' with binding 'b' denied request: the uuid label is required, see the guide"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "generic-binding",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "policy 'set-owner' with binding 'set-owner-b' denied request: owner label missing",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "policy 'set-owner' with binding 'set-owner-b' denied request: owner label missing"
+     }
+    ]
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "generic-nobinding",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "policy \"set-owner\" denied request: owner label missing",
+   "reason": "Forbidden",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "policy \"set-owner\" denied request: owner label missing"
+     }
+    ]
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "generic-several",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "policy 'first' with binding 'first-b' denied request: one",
+   "reason": "Forbidden",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets",
+    "causes": [
+     {
+      "message": "policy 'first' with binding 'first-b' denied request: one"
+     },
+     {
+      "message": "policy \"second\" denied request: two"
+     }
+    ]
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "neg-webhook-vap-cause",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "admission webhook \"deny.lab.klyx.dev\" denied the request: refused",
+   "details": {
+    "causes": [
+     {
+      "message": "ValidatingAdmissionPolicy 'other' with binding 'x' denied request: quoted"
+     }
+    ]
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "neg-invalid-quoting-denial",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Widget.lab.klyx.dev \"w1\" is invalid: spec.note: Forbidden: admission webhook \"deny.lab.klyx.dev\" denied the request: copied",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "Widget",
+    "causes": [
+     {
+      "reason": "FieldValueForbidden",
+      "message": "Forbidden: admission webhook \"deny.lab.klyx.dev\" denied the request: copied",
+      "field": "spec.note"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "neg-internal",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: etcdserver: request timed out",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "etcdserver: request timed out"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "neg-midtext",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "the note says: admission webhook \"deny.lab.klyx.dev\" denied the request: copied",
+   "reason": "BadRequest",
+   "code": 400
+  }
+ },
+ {
+  "name": "neg-midtext-internal",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Internal error occurred: retry: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"x\": refused",
+   "reason": "InternalError",
+   "details": {
+    "causes": [
+     {
+      "message": "retry: failed calling webhook \"deny.lab.klyx.dev\": failed to call webhook: Post \"x\": refused"
+     }
+    ]
+   },
+   "code": 500
+  }
+ },
+ {
+  "name": "neg-rbac",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: User \"klyx\" cannot patch resource \"widgets\" in API group \"lab.klyx.dev\" in the namespace \"lab\"",
+   "reason": "Forbidden",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets"
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "neg-forbidden-policy-text",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "widgets.lab.klyx.dev \"w1\" is forbidden: ValidatingAdmissionPolicy 'x' denied request: quoted by a quota",
+   "reason": "Forbidden",
+   "details": {
+    "name": "w1",
+    "group": "lab.klyx.dev",
+    "kind": "widgets"
+   },
+   "code": 403
+  }
+ },
+ {
+  "name": "uid-precondition-update",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Operation cannot be fulfilled on deployments.apps \"w1\": StorageError: invalid object, Code: 4, Key: /registry/deployments/lab/w1, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-a, UID in object meta: uid-b",
+   "reason": "Conflict",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "deployments"
+   },
+   "code": 409
+  }
+ },
+ {
+  "name": "uid-precondition-delete",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Operation cannot be fulfilled on deployments.apps \"w1\": StorageError: invalid object, Code: 4, Key: /registry/deployments/lab/w1, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-a, UID in object meta: uid-b",
+   "reason": "Conflict",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "deployments"
+   },
+   "code": 409
+  }
+ },
+ {
+  "name": "ctl-rv-precondition",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Operation cannot be fulfilled on deployments.apps \"w1\": StorageError: invalid object, Code: 4, Key: /registry/deployments/lab/w1, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: ResourceVersion in precondition: 6, ResourceVersion in object meta: 7",
+   "reason": "Conflict",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "deployments"
+   },
+   "code": 409
+  }
+ },
+ {
+  "name": "ctl-conflict",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Operation cannot be fulfilled on deployments.apps \"w1\": the object has been modified; please apply your changes to the latest version and try again",
+   "reason": "Conflict",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "deployments"
+   },
+   "code": 409
+  }
+ },
+ {
+  "name": "uid-immutable",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Deployment.apps \"w1\" is invalid: metadata.uid: Invalid value: \"uid-b\": field is immutable",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "Deployment",
+    "causes": [
+     {
+      "reason": "FieldValueInvalid",
+      "message": "Invalid value: \"uid-b\": field is immutable",
+      "field": "metadata.uid"
+     }
+    ]
+   },
+   "code": 422
+  }
+ },
+ {
+  "name": "uid-not-found",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "deployments.apps \"w1\" not found",
+   "reason": "NotFound",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "deployments"
+   },
+   "code": 404
+  }
+ },
+ {
+  "name": "ctl-invalid-uid-text",
+  "status": {
+   "kind": "Status",
+   "apiVersion": "v1",
+   "metadata": {},
+   "status": "Failure",
+   "message": "Deployment.apps \"w1\" is invalid: spec.template.metadata.labels: Invalid value: \"fluid\": see the guide for the uuid label",
+   "reason": "Invalid",
+   "details": {
+    "name": "w1",
+    "group": "apps",
+    "kind": "Deployment",
+    "causes": [
+     {
+      "reason": "FieldValueInvalid",
+      "message": "Invalid value: \"fluid\": see the guide for the uuid label",
+      "field": "spec.template.metadata.labels"
+     }
+    ]
+   },
+   "code": 422
+  }
+ }
+]

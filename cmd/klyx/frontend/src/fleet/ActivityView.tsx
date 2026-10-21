@@ -55,6 +55,11 @@ export function ActivityView() {
               </span>
               <span style={{ color: e.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-primary)", wordBreak: "break-word" }}>
                 {e.message}
+                {(e.admission ?? []).map((a, i) => (
+                  <span key={i} data-testid="activity-admission" style={{ display: "block", color: "var(--color-text-secondary)" }}>
+                    {a.summary}{a.candidates.length ? ` · candidates: ${a.candidates.join(", ")}` : ""}
+                  </span>
+                ))}
               </span>
             </div>
           ))}

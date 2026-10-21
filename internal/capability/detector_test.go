@@ -514,11 +514,11 @@ func TestControllerHealthIsClaimedOnlyFromAWorkloadRead(t *testing.T) {
 			if !tc.known && strings.Contains(c.Reason, "is not ready") {
 				t.Fatalf("an unverified controller is never called not ready: %q", c.Reason)
 			}
-			// Karpenter: no deployment in either conventional namespace is
-			// unverified, as the Karpenter lens says.
+			// Karpenter: no controller found anywhere is unverified (S10 §5
+			// reads the labelled Deployments and both conventional names).
 			if tc.name == "no workload under the conventional name" {
 				k := set.Karpenter
-				if k.Verified || !strings.Contains(k.Reason, "no Deployment kube-system/karpenter; no Deployment karpenter/karpenter") {
+				if k.Verified || !strings.Contains(k.Reason, "no Karpenter controller found") || !strings.Contains(k.Reason, "none named karpenter in kube-system or karpenter") {
 					t.Fatalf("karpenter: verified=%v reason=%q", k.Verified, k.Reason)
 				}
 			}

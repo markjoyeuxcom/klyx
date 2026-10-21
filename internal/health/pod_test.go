@@ -1,6 +1,7 @@
 package health
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,68 @@ func TestPodExitMessageCarriesLoopEvidence(t *testing.T) {
 	v := Pod(newPod(readyCond(corev1.ConditionFalse, t0), container(cs)), t0)
 	if v.Label != "Exited 1" || v.Message != "worker exited 1 (restarted 6 times)" {
 		t.Fatalf("got %q / %q", v.Label, v.Message)
+	}
+}
+
+// Coverage S11b §3.4: device health from allocatedResourcesStatus.
+func TestPodDeviceHealth(t *testing.T) {
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	started := metav1.NewTime(at.Add(-time.Hour))
+	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}}
+	health := func(h corev1.ResourceHealthStatus, ids ...string) []corev1.ResourceStatus {
+		rs := corev1.ResourceStatus{Name: "claim:gpu/req"}
+		for _, id := range ids {
+			rs.Resources = append(rs.Resources, corev1.ResourceHealth{ResourceID: corev1.ResourceID(id), Health: h})
+		}
+		return []corev1.ResourceStatus{rs}
+	}
+	always := corev1.ContainerRestartPolicyAlways
+	mk := func() *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", CreationTimestamp: started},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}},
+				InitContainers: []corev1.Container{{Name: "side", RestartPolicy: &always}, {Name: "setup"}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, StartTime: &started,
+				Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true, State: running}}}}
+	}
+	p := mk()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health(corev1.ResourceHealthStatusUnhealthy, "cdi/a", "cdi/b")
+	if v := Pod(p, at); v.Kind != Degraded || v.Rule != "pod.device-unhealthy" || !strings.Contains(v.Message, "gpu/req: 2 unhealthy") {
+		t.Fatalf("a running container's unhealthy devices: %+v", v)
+	}
+	p = mk()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health(corev1.ResourceHealthStatusUnknown, "cdi/a")
+	if v := Pod(p, at); v.Kind != OK {
+		t.Fatalf("Unknown is not a reading: %+v", v)
+	}
+	p = mk()
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "side", State: running, AllocatedResourcesStatus: health(corev1.ResourceHealthStatusUnhealthy, "cdi/s")}}
+	if v := Pod(p, at); v.Kind != Degraded {
+		t.Fatalf("a running restartable init container counts: %+v", v)
+	}
+	p = mk()
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "setup", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+		AllocatedResourcesStatus: health(corev1.ResourceHealthStatusUnhealthy, "cdi/i")}}
+	if v := Pod(p, at); v.Kind != OK {
+		t.Fatalf("a completed regular init container is history: %+v", v)
+	}
+	// a regular init container re-running in a Running pod (its sandbox
+	// recreated) is not one of the containers the rule reads
+	p = mk()
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "setup", State: running, AllocatedResourcesStatus: health(corev1.ResourceHealthStatusUnhealthy, "cdi/i")}}
+	if v := Pod(p, at); v.Rule == "pod.device-unhealthy" {
+		t.Fatalf("a running regular init container does not count: %+v", v)
+	}
+	p = mk()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health(corev1.ResourceHealthStatusUnhealthy, "cdi/a")
+	p.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	if v := Pod(p, at); v.Kind != Fault {
+		t.Fatalf("a current failure still leads: %+v", v)
+	}
+	p = mk()
+	p.Status.ContainerStatuses[0].AllocatedResourcesStatus = health(corev1.ResourceHealthStatusUnhealthy, "cdi/a")
+	p.Status.Conditions[0].Status = corev1.ConditionFalse
+	if v := Pod(p, at); v.Rule != "pod.device-unhealthy" {
+		t.Fatalf("an unhealthy device outranks Not ready: %+v", v)
 	}
 }

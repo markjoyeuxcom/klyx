@@ -1,5 +1,11 @@
 package appbridge
 
+import (
+	"github.com/moomora/klyx/internal/dra"
+	"github.com/moomora/klyx/internal/extres"
+	"github.com/moomora/klyx/internal/fleet"
+)
+
 // ContainerSummaryDTO is a single container within a pod row.
 type ContainerSummaryDTO struct {
 	Name     string             `json:"name"`
@@ -123,4 +129,117 @@ type PodDetailDTO struct {
 	Resources     []ResizeResourcesDTO `json:"resources"`
 	Ephemeral     []EphemeralDTO       `json:"ephemeral"`
 	EphemeralMore int                  `json:"ephemeralMore,omitempty"`
+	// Coverage S11a §6: the pod's extended requests, bounded.
+	Extended ExtendedPodDTO `json:"extended"`
+	// Coverage S11b §3.5: the claims the pod references (joined to the
+	// claims rows in the inspector), and its device health.
+	Claims       []PodClaimRefDTO  `json:"claims"`
+	DeviceHealth []DeviceHealthDTO `json:"deviceHealth"`
+	// DeviceHealthOmitted: status entries past the bound, so a claim's
+	// health among them is not established
+	DeviceHealthOmitted int `json:"deviceHealthOmitted,omitempty"`
+	// ClaimHealth: each claim's devices counted over every status entry
+	ClaimHealth []ClaimHealthDTO `json:"claimHealth"`
+}
+
+// ClaimHealthDTO is one claim's device health over all its reports.
+type ClaimHealthDTO struct {
+	Claim     string `json:"claim"`
+	Unhealthy int    `json:"unhealthy"`
+	Unknown   int    `json:"unknown"`
+	Healthy   int    `json:"healthy"`
+}
+
+// PodClaimRefDTO is one claim a pod references. State is "resolved",
+// "none-needed" (upstream skips it on purpose) or "not-created".
+type PodClaimRefDTO struct {
+	PodClaim string `json:"podClaim"`
+	Source   string `json:"source"`
+	Claim    string `json:"claim,omitempty"`
+	State    string `json:"state"`
+}
+
+// DeviceHealthDTO is one container's allocatedResourcesStatus entry.
+type DeviceHealthDTO struct {
+	Container string                 `json:"container"`
+	Init      bool                   `json:"init,omitempty"`
+	Name      string                 `json:"name"`
+	Devices   []DeviceHealthEntryDTO `json:"devices"`
+	// counts over every device the entry reports, kept or omitted
+	Unhealthy      int `json:"unhealthy"`
+	Unknown        int `json:"unknown"`
+	Healthy        int `json:"healthy"`
+	DevicesOmitted int `json:"devicesOmitted,omitempty"`
+}
+
+type DeviceHealthEntryDTO struct {
+	ID      string `json:"id"`
+	Health  string `json:"health"`
+	Message string `json:"message,omitempty"`
+}
+
+func toPodClaimsDTO(refs []dra.PodClaimRef) []PodClaimRefDTO {
+	out := make([]PodClaimRefDTO, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, PodClaimRefDTO{PodClaim: r.PodClaim, Source: r.Source, Claim: r.Claim, State: r.State})
+	}
+	return out
+}
+
+func toDeviceHealthDTO(hs []fleet.DeviceHealth) []DeviceHealthDTO {
+	out := make([]DeviceHealthDTO, 0, len(hs))
+	for _, h := range hs {
+		d := DeviceHealthDTO{Container: h.Container, Init: h.Init, Name: h.Name, Devices: make([]DeviceHealthEntryDTO, 0, len(h.Devices)),
+			Unhealthy: h.Unhealthy, Unknown: h.Unknown, Healthy: h.Healthy, DevicesOmitted: h.DevicesOmitted}
+		for _, e := range h.Devices {
+			d.Devices = append(d.Devices, DeviceHealthEntryDTO{ID: e.ID, Health: e.Health, Message: e.Message})
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// ExtendedPodEntryDTO is one container's extended request; Quantity is a
+// decimal string ("-" when not established).
+type ExtendedPodEntryDTO struct {
+	Name        string `json:"name"`
+	Quantity    string `json:"quantity"`
+	ServedByDRA bool   `json:"servedByDra,omitempty"`
+}
+
+// ExtendedContainerDTO is one container's extended requests.
+type ExtendedContainerDTO struct {
+	Container string                `json:"container"`
+	Init      bool                  `json:"init,omitempty"`
+	Entries   []ExtendedPodEntryDTO `json:"entries"`
+	Omitted   int                   `json:"omitted,omitempty"`
+}
+
+// ExtendedPodDTO is a pod's extended requests; Claim names the special
+// ResourceClaim serving its DRA-mapped pairs.
+type ExtendedPodDTO struct {
+	Containers []ExtendedContainerDTO `json:"containers"`
+	Omitted    int                    `json:"omitted,omitempty"`
+	Claim      string                 `json:"claim,omitempty"`
+}
+
+func toExtendedPodDTO(r extres.PodRequests) ExtendedPodDTO {
+	out := ExtendedPodDTO{Containers: make([]ExtendedContainerDTO, 0, len(r.Containers)), Omitted: r.Omitted, Claim: r.Claim}
+	for _, c := range r.Containers {
+		ce := ExtendedContainerDTO{Container: c.Container, Init: c.Init, Entries: make([]ExtendedPodEntryDTO, 0, len(c.Entries)), Omitted: c.Omitted}
+		for _, e := range c.Entries {
+			q := e.Quantity
+			ce.Entries = append(ce.Entries, ExtendedPodEntryDTO{Name: e.Name, Quantity: figureDTO(&q), ServedByDRA: e.ServedByDRA})
+		}
+		out.Containers = append(out.Containers, ce)
+	}
+	return out
+}
+
+func claimHealthDTO(hs []fleet.ClaimHealth) []ClaimHealthDTO {
+	out := make([]ClaimHealthDTO, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, ClaimHealthDTO{Claim: h.Claim, Unhealthy: h.Unhealthy, Unknown: h.Unknown, Healthy: h.Healthy})
+	}
+	return out
 }

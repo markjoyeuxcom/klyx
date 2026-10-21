@@ -147,7 +147,7 @@ func TestWorkloadVerbs_CarryTheArmedUIDOnTheWrite(t *testing.T) {
 // other failures say whether the write may have landed.
 func TestWorkloadVerbs_ReportTheServersAnswer(t *testing.T) {
 	uidConflict := apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "deployments/scale"}, "api",
-		errors.New("Precondition failed: UID in precondition: uid-api, UID in object meta: uid-new"))
+		errors.New("StorageError: invalid object, Code: 4, Key: /registry/deployments/x/api, ResourceVersion: 0, AdditionalErrorMsg: Precondition failed: UID in precondition: uid-api, UID in object meta: uid-new"))
 	for _, v := range workloadVerbs() {
 		for _, tc := range []struct {
 			name     string

@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/execenv"
 )
 
@@ -35,6 +36,7 @@ func (c *ClusterConn) SetCordon(ctx context.Context, nodeName, uid string, cordo
 		return fmt.Errorf("%s marshal: %w", verb, err)
 	}
 	_, err = c.typed.CoreV1().Nodes().Patch(ctx, nodeName, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+	err = admission.Wrap(admission.Request{Operation: "UPDATE", Version: "v1", Resource: "nodes"}, "Node", "", nodeName, err)
 	return armedWriteErr(verb, "node "+nodeName, err)
 }
 

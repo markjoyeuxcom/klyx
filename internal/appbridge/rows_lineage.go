@@ -25,6 +25,9 @@ var deltaParts = map[string]bool{
 	healthsrc.TaskPods + "/pods":           true,
 	healthsrc.TaskWorkloads + "/workloads": true,
 	healthsrc.TaskNodes + "/nodes":         true,
+	// alerts: keyed by the alert's opaque key, so an unchanged read (whose
+	// part moves only its read time) sends no rows (Codex review of 71c181c)
+	healthsrc.TaskAlerts + "/alerts": true,
 }
 
 // uidRow is a delta part's row: its object UID keys upserts and removals.

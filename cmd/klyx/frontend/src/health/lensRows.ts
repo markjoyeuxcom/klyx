@@ -40,10 +40,19 @@ export const partRows = <T,>(r: LensRows<T>): T[] => (r.part ? r.rows ?? [] : []
 export const answered = (r: LensRows<unknown>) => r.part !== null || r.error !== null;
 
 /** partCounts: the one selector's counts for the part (rows', or the
- * summary's past the A4 deadline); none while nothing current is known. */
+ * summary's past the A4 deadline); none while nothing current is known.
+ * They carry the qualification of the read that supplied them - its own
+ * counted kinds, never the held rows' (coverage S10, Codex's re-review of
+ * 0758508): stale is last observed; capped, checking or unreadable is a
+ * lower bound. */
 export function partCounts<T>(r: LensRows<T>): PartCountsDTO | null {
-  const n = r.counts.part?.native;
-  return n ? { total: n.total, included: n.included, fault: n.roles?.fault ?? 0 } : null;
+  const p = r.counts.part;
+  const n = p?.native;
+  if (!p || !n) return null;
+  const counted = (p.kinds ?? []).filter((k) => (k.role ?? "counted") === "counted");
+  const stale = counted.some((k) => k.coverage === "stale");
+  const lower = counted.some((k) => !!k.truncated || k.coverage === "checking" || k.coverage === "unreadable");
+  return { total: n.total, included: n.included, fault: n.roles?.fault ?? 0, ...(stale ? { stale } : {}), ...(lower ? { lower } : {}) };
 }
 
 /** rowsState: the lens's A4 state across its parts. A refreshing view names

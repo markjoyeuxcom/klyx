@@ -9,6 +9,14 @@ import type { NodeSummaryDTO, NodeDetailDTO } from "../store/fleet";
 // The rows adapter is mocked: these tests seed the nodes slice directly
 // (NodesRows.test.tsx mounts the real adapter over the health store).
 vi.mock("../health/useNodeRows", () => ({ useNodeRows: () => {} }));
+// coverage S11a: the extended task's rows (tests set extendedValue)
+let extendedValue: import("../health/useExtendedRows").ExtendedRows = {
+  reservations: new Map(), reservationMarks: { nodes: "", requested: "", dra: "" }, reservationsDropped: 0,
+  totals: [], totalMarks: { nodes: "", requested: "", dra: "" }, totalsOmitted: 0, reservationsRead: true, totalsRead: true, reservationsState: { error: null, refreshError: null, held: false, asOf: null }, totalsState: { error: null, refreshError: null, held: false, asOf: null },
+};
+// coverage S11b: the node inspector's DRA block reads no rows here
+vi.mock("../health/useDRARows", () => ({ useDRAPools: () => ({ rows: [], coverage: [], watchError: null, loading: false, rowsState: { updating: false, refreshing: false, evaluatedAt: null }, counts: null, complete: true }) }));
+vi.mock("../health/useExtendedRows", async (orig) => ({ ...(await orig<typeof import("../health/useExtendedRows")>()), useExtendedRows: () => extendedValue }));
 
 vi.mock("../bridge/nodes", () => ({
   openNodeDetail: vi.fn().mockResolvedValue(undefined),
@@ -896,5 +904,163 @@ describe("NodesView condition polarity (Codex re-review)", () => {
       expect(colored).toBeNull();
     }
     expect(getByText(/task hung/)).toBeTruthy();
+  });
+});
+
+// Coverage S11a §6: the GPU column, the footer's totals and the node
+// inspector's extended resources.
+describe("NodesView extended resources (S11a)", () => {
+  const gpuNode: NodeSummaryDTO = {
+    ...healthy, name: "gpu-1", uid: "uid-gpu-1",
+    health: { kind: "degraded", label: "Resources not allocatable", reason: "NotAllocatable", rule: "node.resources-not-allocatable" },
+    extended: { migStrategy: "mixed", omitted: 1, factsOmitted: 2, entries: [
+      { name: "nvidia.com/gpu", capacity: "8", allocatable: "6", accelerator: true, unit: "GPU", sharing: "shared (time-slicing): each GPU is advertised 4 times, so these count shares of a GPU",
+        facts: [{ key: "product", value: "NVIDIA-A100" }, { key: "replicas", value: "4" }] },
+      { name: "example.com/resource", capacity: "2", allocatable: "2", facts: [] },
+    ] },
+  };
+  const reservation = { uid: "uid-gpu-1", node: "gpu-1", untracked: true, omitted: 2, entries: [
+    { name: "nvidia.com/gpu", advertised: true, requested: "3", servedByDra: "1", notAdvertised: "0" },
+    { name: "example.com/resource", advertised: true, requested: "1", servedByDra: "0", notAdvertised: "0" },
+    { name: "example.com/license", requested: "0", servedByDra: "0", notAdvertised: "2" },
+  ] };
+  const live = { nodes: "" as const, requested: "" as const, dra: "" as const };
+  const base = () => ({ reservations: new Map([["uid-gpu-1", reservation]]), reservationMarks: live, reservationsDropped: 0,
+    totals: [{ name: "nvidia.com/gpu", capacity: "8", allocatable: "6", requested: "3" }], totalMarks: live, totalsOmitted: 0, reservationsRead: true, totalsRead: true, reservationsState: { error: null, refreshError: null, held: false, asOf: null }, totalsState: { error: null, refreshError: null, held: false, asOf: null } });
+
+  it("no accelerator, no GPU column and no totals", () => {
+    extendedValue = { ...base(), reservations: new Map(), totals: [] };
+    seed([healthy]);
+    const { container, queryByText } = render(<NodesView cluster="homelab" />);
+    expect(queryByText("GPU")).toBeNull();
+    expect(container.querySelector("[data-testid='nodes-extended-totals']")).toBeNull();
+  });
+
+  it("the column reads requested / allocatable with the gap, and the footer its totals", () => {
+    extendedValue = base();
+    seed([gpuNode, healthy]);
+    const { getAllByTestId, getByTestId, getByText } = render(<NodesView cluster="homelab" />);
+    expect(getByText("GPU")).toBeTruthy();
+    const cells = getAllByTestId("nodes-gpu-cell").map((c) => c.textContent);
+    expect(cells).toContain("3 / 6 · 2 not allocatable");
+    expect(cells).toContain("-");
+    expect(getByTestId("nodes-extended-totals").textContent).toBe(" · 6 nvidia.com/gpu allocatable (3 requested)");
+  });
+
+  it("a requested figure without its row, or from an unestablished read, is ?", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
+    seed([gpuNode]);
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    expect(getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("? / 6 · 2 not allocatable");
+  });
+
+  it("the inspector names each resource, its sharing and facts, the other requests and every omission", () => {
+    extendedValue = { ...base(), reservationMarks: { nodes: "", requested: "*", dra: "" } };
+    seedWithDetail(gpuNode, { ...fakeDetail, summary: gpuNode });
+    const { getByTestId, getAllByTestId } = render(<NodesView cluster="homelab" />);
+    const block = getByTestId("node-extended");
+    expect(block.textContent).toContain("MIG strategy: mixed (each profile is its own resource)");
+    const lines = getAllByTestId("node-extended-line").map((l) => l.textContent);
+    expect(lines[0]).toContain("nvidia.com/gpu · 3* requested · 6 allocatable · 8 capacity · 2 not allocatable · 1 served by DRA");
+    expect(lines[0]).toContain("each GPU is advertised 4 times");
+    expect(lines[0]).toContain("product NVIDIA-A100");
+    expect(lines[2]).toContain("example.com/license · 2* requested, not advertised by this node");
+    const notes = getAllByTestId("node-extended-note").map((n) => n.textContent);
+    expect(notes).toEqual(expect.arrayContaining(["1 more extended resource not shown", "vendor facts for 2 more resources not shown", "2 more requested resources not shown",
+      "requested from the last observed read"]));
+    expect(notes.some((n) => n?.startsWith("more than 256 distinct names"))).toBe(true);
+  });
+
+  it("the header calls a node degraded, never under pressure: S11a's reading is not pressure", () => {
+    extendedValue = base();
+    seed([gpuNode, healthy]);
+    const { container } = render(<NodesView cluster="homelab" />);
+    expect(container.textContent).toContain("1 degraded");
+    expect(container.textContent).not.toContain("under pressure");
+  });
+
+  // Codex's S11a implementation review, findings 1, 4 and 5
+  it("node figures take the node rows' own qualification, never the reservations'", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsRead: false, reservationMarks: { nodes: "?", requested: "?", dra: "?" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("? / 6 · 2 not allocatable");
+  });
+
+  it("held reservations are as of their capture, and a failed refresh is said", () => {
+    extendedValue = { ...base(), reservationMarks: { nodes: "*", requested: "*", dra: "*" },
+      reservationsState: { error: null, refreshError: "boom", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getAllByTestId("nodes-gpu-cell")[0].textContent).toBe("3* / 6 · 2 not allocatable");
+    expect(screen.getByTestId("nodes-extended-held").textContent).toContain("the newer read failed: boom");
+  });
+
+  it("a failed first read is said, and dropped rows are counted", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsRead: false, reservationsDropped: 2,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-error").textContent).toContain("forbidden: pods");
+    expect(screen.getByTestId("nodes-extended-dropped").textContent).toContain("Requested not shown for 2 nodes");
+  });
+
+  // Codex's S11a implementation re-review: each part says its own state, and
+  // non-accelerator extended resources are not silenced
+  it("a held totals refresh is said by the totals, while the reservations are current", () => {
+    extendedValue = { ...base(), totalMarks: { nodes: "*", requested: "*", dra: "*" },
+      totalsState: { error: null, refreshError: "timeout", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([gpuNode]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-totals-held").textContent).toContain("Accelerator totals as of");
+    expect(screen.getByTestId("nodes-totals-held").textContent).toContain("the newer read failed: timeout");
+    expect(screen.queryByTestId("nodes-extended-held")).toBeNull();
+  });
+
+  it("a node with only an ordinary extended resource still gets the reservations' notices", () => {
+    const plain: NodeSummaryDTO = { ...healthy, name: "plain-1", uid: "uid-plain-1", extended: { entries: [{ name: "example.com/resource", capacity: "2", allocatable: "2", facts: [] }] } };
+    extendedValue = { ...base(), totals: [], reservations: new Map(), reservationsRead: false, reservationsDropped: 3,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([plain]);
+    const { unmount } = render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-error").textContent).toContain("forbidden: pods");
+    expect(screen.getByTestId("nodes-extended-dropped").textContent).toContain("Requested not shown for 3 nodes");
+    unmount();
+    extendedValue = { ...base(), totals: [], reservationMarks: { nodes: "*", requested: "*", dra: "*" },
+      reservationsState: { error: null, refreshError: "boom", held: true, asOf: "2026-10-20T12:00:00Z" } };
+    seed([plain]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.getByTestId("nodes-extended-held").textContent).toContain("the newer read failed: boom");
+  });
+
+  it("no extended evidence, no notices", () => {
+    extendedValue = { ...base(), totals: [], reservations: new Map(), reservationsRead: false,
+      reservationsState: { error: "forbidden: pods", refreshError: null, held: false, asOf: null } };
+    seed([healthy]);
+    render(<NodesView cluster="homelab" />);
+    expect(screen.queryByTestId("nodes-extended-error")).toBeNull();
+  });
+
+  it("the inspector says a dropped row, and a withdrawn plugin as 0 advertised", () => {
+    extendedValue = { ...base(), reservations: new Map(), reservationsDropped: 1 };
+    const withdrawn: NodeSummaryDTO = { ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], capacity: "0", allocatable: "0", sharing: undefined, facts: [] }] } };
+    seedWithDetail(withdrawn, { ...fakeDetail, summary: withdrawn });
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    const line = getAllByTestId("node-extended-line")[0].textContent;
+    expect(line).toBe("nvidia.com/gpu · 0 advertisedunit: GPU"); // the unit is its own line
+    const notes = getAllByTestId("node-extended-note").map((n) => n.textContent);
+    expect(notes.some((n) => n?.startsWith("requested not shown: this node's reservations are not in the current read"))).toBe(true);
+  });
+
+  it("a node-row-only update re-renders the block, from the joined rows", () => {
+    extendedValue = base();
+    seedWithDetail(gpuNode, { ...fakeDetail, summary: gpuNode });
+    const { getAllByTestId } = render(<NodesView cluster="homelab" />);
+    expect(getAllByTestId("node-extended-line")[0].textContent).toContain("6 allocatable");
+    act(() => {
+      useFleet.setState((s) => ({ nodes: { ...s.nodes, items: [{ ...gpuNode, extended: { entries: [{ ...gpuNode.extended!.entries[0], allocatable: "8" }] } }] } }));
+    });
+    expect(getAllByTestId("node-extended-line")[0].textContent).toContain("8 allocatable");
+    expect(getAllByTestId("node-extended-line")[0].textContent).not.toContain("not allocatable");
   });
 });

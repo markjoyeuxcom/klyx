@@ -182,6 +182,14 @@ var payloadKinds = map[string][]surface{
 	// S2a §6: hooks carry exec commands (a Restore's init hooks embed whole
 	// containers); provider config is arbitrary and can embed credentials
 	// in a URL; Velero's messages pass a plugin's error text through.
+	// S9 §10: hashiCorpVault's credential.token is a literal token, the one
+	// literal secret in KEDA's authentication kinds
+	"keda.sh/TriggerAuthentication": {
+		p("spec.hashiCorpVault.credential.token", shapeOpaque),
+	},
+	"keda.sh/ClusterTriggerAuthentication": {
+		p("spec.hashiCorpVault.credential.token", shapeOpaque),
+	},
 	"velero.io/Schedule": {
 		p("spec.template.hooks", shapeOpaque),
 		p("status.validationErrors.[]", shapeVeleroScheduleValidation),

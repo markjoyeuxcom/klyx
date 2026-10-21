@@ -15,7 +15,9 @@
 # cluster klyx-parity this script created, recognised by its ownership
 # marker and its loopback API server. Its kubeconfig is a separate file
 # ($KLYX_PARITY_KUBECONFIG), never ~/.kube/config, so no current-context
-# changes. The CRD source (kind-klyx) is only ever read.
+# changes. The CRD source (kind-klyx) is only ever read. KEDA's release
+# manifest (coverage S9) is fetched once into the state directory and
+# applied only when it matches its pinned digest.
 #
 # The state directory ($KLYX_PARITY_DIR) is the script's only when it holds
 # the script's directory marker: up refuses a non-empty directory without
@@ -31,7 +33,14 @@ dir=${KLYX_PARITY_DIR:-${TMPDIR:-/tmp}/klyx-parity}
 dirmark=$dir/.klyx-parity-dir
 kubeconfig=$dir/kubeconfig
 state=$dir/owner
-own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark")
+keda_version=2.21.0
+keda_sha256=b43c89ffeef81722d7e2dd2c079d74789767a0f89cae1336cff784994814f6d7
+keda_manifest=$dir/keda-$keda_version.yaml
+# coverage S11b: the upstream example DRA driver's chart, pinned by digest
+dra_chart_version=0.5.0
+dra_chart_sha256=ab5232c4f5cc7348d9c67bbcc9e0aa7a5f52a793e41dbd458bf3b2f07d32cb4a
+dra_chart=$dir/dra-example-driver-$dra_chart_version.tgz
+own_files=("$kubeconfig" "$state" "$dir/sa-kubeconfig" "$dirmark" "$keda_manifest" "$keda_manifest.part" "$dra_chart" "$dra_chart.part")
 src=${KLYX_PARITY_CRD_SOURCE:-kind-klyx}
 here=$(cd "$(dirname "$0")" && pwd)
 fixtures=$here/parity
@@ -74,6 +83,7 @@ crds=(
 	grpcroutes.gateway.networking.k8s.io referencegrants.gateway.networking.k8s.io listenersets.gateway.networking.k8s.io
 	tlsroutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io udproutes.gateway.networking.k8s.io
 	nodepools.karpenter.sh nodeclaims.karpenter.sh
+	ec2nodeclasses.karpenter.k8s.aws aksnodeclasses.karpenter.azure.com nodeclasses.eks.amazonaws.com
 	fluxinstances.fluxcd.controlplane.io fluxreports.fluxcd.controlplane.io
 	resourcesets.fluxcd.controlplane.io resourcesetinputproviders.fluxcd.controlplane.io
 	imagerepositories.image.toolkit.fluxcd.io imagepolicies.image.toolkit.fluxcd.io imageupdateautomations.image.toolkit.fluxcd.io

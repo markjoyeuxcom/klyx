@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import type { EphemeralDTO, PodDetailDTO, ResizeConditionDTO, TripleDTO } from "../store/fleet";
 import { InspectorBlock } from "../layout/InspectorLayout";
+import { ClaimLink } from "./ClaimLink";
 import { fmtCpu, fmtMem } from "./saturation";
 import { debugPreflight, type DebugPreflightDTO } from "../bridge/exec";
 import { trapTab } from "../chrome/modalFocus";
@@ -93,7 +94,7 @@ export function PodResourcesBlock({ detail }: { detail: PodDetailDTO }) {
         )}
         <ul className="t-secondary" data-testid="pod-resources-limits" style={{ margin: 0, paddingLeft: 16 }}>
           <li>The reservation assumes the scheduler's minor and its default feature gates; neither is read from the cluster.</li>
-          <li>DRA device resources are not counted.</li>
+          <li>Extended resources served by DRA are listed per container below; their devices are read with DRA.</li>
         </ul>
       </div>
     </InspectorBlock>
@@ -222,4 +223,29 @@ export function debugConfirmText(ns: string, name: string, target: string, c: De
   return `${ns}/${name}${target ? ` (target ${target})` : ""}: kubectl debug adds an ephemeral container - image ${c.image}, profile ${c.profile}: ${c.adds}.`
     + (c.qualified ? ` ${c.qualified}.` : "")
     + " It stays on the pod until the pod is recreated; Git and its controller do not remove it, and adding it increments the pod's generation.";
+}
+
+// Coverage S11a §6: a pod's extended requests, per container (request
+// equals limit, so one figure), implicit DeviceClass names included, the
+// DRA-served pairs and their claim named, linked to the DRA lens (S11b §5).
+// Bounded: 16 per container, 32 per pod, the rest counted.
+export function PodExtendedBlock({ detail, cluster }: { detail: PodDetailDTO; cluster: string }) {
+  const x = detail.extended;
+  if (!x || x.containers.length === 0) return null;
+  const claimed = x.containers.some((c) => c.entries.some((e) => e.servedByDra));
+  return (
+    <InspectorBlock title="Extended resources">
+      <div data-testid="pod-extended">
+        {x.containers.map((c) => (
+          <div key={`${c.init ? "init/" : ""}${c.container}`} className="t-body" style={{ overflowWrap: "anywhere", padding: "2px 0" }}>
+            <span className="t-secondary">{c.init ? "init " : ""}{c.container}: </span>
+            {c.entries.map((e) => `${e.name} ${e.quantity === "-" ? "not established" : e.quantity}${e.servedByDra ? " (served by DRA)" : ""}`).join(" · ")}
+            {(c.omitted ?? 0) > 0 && <span className="t-secondary"> · {c.omitted} more not shown</span>}
+          </div>
+        ))}
+        {(x.omitted ?? 0) > 0 && <div className="t-secondary">{x.omitted} more extended request{x.omitted === 1 ? "" : "s"} not shown</div>}
+        {claimed && x.claim && <div className="t-secondary">DRA serves the marked requests through the ResourceClaim <ClaimLink cluster={cluster} namespace={detail.summary.namespace} name={x.claim} />.</div>}
+      </div>
+    </InspectorBlock>
+  );
 }

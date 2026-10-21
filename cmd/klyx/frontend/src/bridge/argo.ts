@@ -1,8 +1,9 @@
+import { resultStatus, type ActionResultLike } from "../admission/finding";
 import { useFleet } from "../store/fleet";
 import type { ArgoProjectsResultDTO, ArgoResourceDTO } from "../store/fleet";
 import { ArgoService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
-type ActionResultDTO = { ok: boolean; error: string };
+type ActionResultDTO = ActionResultLike;
 export type ArgoSyncOptions = {
   revision: string;
   strategy: "hook" | "apply";
@@ -41,20 +42,12 @@ export async function listArgoProjects(cluster: string): Promise<void> {
 // on their own (no re-list).
 export async function refreshArgoApp(cluster: string, namespace: string, name: string, uid: string): Promise<void> {
   const r = (await ArgoService.RefreshApp(cluster, namespace, name, uid)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok
-      ? { kind: "success", message: `refresh requested for ${namespace}/${name} on ${cluster}` }
-      : { kind: "error", message: `${cluster}: ${r.error || "Refresh failed"}` },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `refresh requested for ${namespace}/${name} on ${cluster}`, "Refresh failed", `${cluster}: `));
 }
 
 // syncArgoApp starts an Argo sync operation on the armed Application with the
 // options selected in the sync modal.
 export async function syncArgoApp(cluster: string, namespace: string, name: string, uid: string, options: ArgoSyncOptions): Promise<void> {
   const r = (await ArgoService.SyncApp(cluster, namespace, name, uid, options)) as ActionResultDTO;
-  useFleet.getState().setActionStatus(
-    r.ok
-      ? { kind: "success", message: `sync started for ${namespace}/${name} on ${cluster}` }
-      : { kind: "error", message: `${cluster}: ${r.error || "Sync failed"}` },
-  );
+  useFleet.getState().setActionStatus(resultStatus(r, `sync started for ${namespace}/${name} on ${cluster}`, "Sync failed", `${cluster}: `));
 }
