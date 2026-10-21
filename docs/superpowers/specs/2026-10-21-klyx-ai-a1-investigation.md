@@ -470,7 +470,7 @@ All four runs pass every text check, with no sideways scroll and every label one
 - `git_changes` to have compared the renders;
 - the cause to be suspected.
 
-All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, on a clean tree, with every lab re-applied.
+All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, on a clean tree, with every lab re-applied. After review 1 they pass again at 6ad5b25, on a clean tree with every lab re-applied, and the server-mode captures pass all four ways. (A run on stale labs failed seven steps that wait on events, alerts and Loki lines the labs had let expire; re-applying them is part of the gate.)
 
 ### 13.3 Not yet done
 
