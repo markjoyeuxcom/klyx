@@ -47,6 +47,8 @@ type ConflictOwnerDTO struct {
 	Namespace string            `json:"namespace"`
 	Name      string            `json:"name"`
 	Up        *ConflictOwnerDTO `json:"up,omitempty"`
+	// UpUnknown: this owner's own owner could not be established
+	UpUnknown bool `json:"upUnknown,omitempty"`
 }
 
 // FluxResourceDTO is the JSON projection of a Flux reconciliation resource.

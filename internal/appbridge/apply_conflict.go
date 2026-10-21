@@ -34,7 +34,7 @@ func ownerDTO(o *fleet.ConflictOwner) *ConflictOwnerDTO {
 	if o == nil {
 		return nil
 	}
-	return &ConflictOwnerDTO{Group: o.Group, Version: o.Version, Kind: o.Kind, Namespace: o.Namespace, Name: o.Name, Up: ownerDTO(o.Up)}
+	return &ConflictOwnerDTO{Group: o.Group, Version: o.Version, Kind: o.Kind, Namespace: o.Namespace, Name: o.Name, Up: ownerDTO(o.Up), UpUnknown: o.UpUnknown}
 }
 
 // clipText cuts s at max bytes on a rune boundary.

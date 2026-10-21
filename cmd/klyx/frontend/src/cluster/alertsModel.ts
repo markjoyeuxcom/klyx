@@ -178,22 +178,53 @@ const whereRank = (n: string) => {
 
 export function distinguishingLabels(xs: AMAlertDTO[]): Map<string, string> {
   const byName = new Map<string, AMAlertDTO[]>();
-  for (const a of xs) byName.set(a.name, [...(byName.get(a.name) ?? []), a]);
+  for (const a of xs) {
+    const g = byName.get(a.name);
+    if (g) g.push(a);
+    else byName.set(a.name, [a]);
+  }
   const out = new Map<string, string>();
   for (const group of byName.values()) {
     if (group.length < 2) continue;
-    const values = group.map((a) => new Map(a.labels.map((l) => [l.name, l.value])));
-    const names = new Set(group.flatMap((a) => a.labels.map((l) => l.name)));
-    names.delete("alertname");
-    const differ = [...names].filter((n) => new Set(values.map((v) => v.get(n) ?? "")).size > 1)
-      .sort((a, b) => whereRank(a) - whereRank(b) || a.localeCompare(b));
+    // one pass over the group's labels (Codex's v0.15.1 review, finding 1):
+    // up to two distinct values per name, and how many complete label lists
+    // carry it - a name a complete list lacks is "(none)" there, while a
+    // list Klyx cut may hold it (finding 3), so its absence says nothing
+    const seen = new Map<string, { values: Set<string>; inComplete: number }>();
+    let complete = 0;
+    for (const a of group) {
+      const whole = (a.labelsMore ?? 0) === 0;
+      if (whole) complete++;
+      for (const l of a.labels) {
+        if (l.name === "alertname") continue;
+        let st = seen.get(l.name);
+        if (!st) {
+          st = { values: new Set(), inComplete: 0 };
+          seen.set(l.name, st);
+        }
+        if (st.values.size < 2) st.values.add(l.value);
+        if (whole) st.inComplete++;
+      }
+    }
+    const differ: string[] = [];
+    for (const [name, st] of seen) {
+      const absentSomewhere = st.inComplete < complete;
+      if (st.values.size > 1 || (absentSomewhere && st.values.size > 0)) differ.push(name);
+    }
+    differ.sort((a, b) => whereRank(a) - whereRank(b) || a.localeCompare(b));
     const shown = differ.slice(0, 2);
-    // a label Klyx did not keep may be the one that differs
     const cut = group.some((a) => (a.labelsMore ?? 0) > 0);
-    group.forEach((a, i) => {
-      if (shown.length > 0) out.set(a.key, shown.map((n) => `${n}=${values[i].get(n) ?? "(none)"}`).join(", "));
-      else if (cut) out.set(a.key, "differs in a label not shown");
-    });
+    for (const a of group) {
+      if (shown.length === 0) {
+        if (cut) out.set(a.key, "differs in a label not shown");
+        continue;
+      }
+      const whole = (a.labelsMore ?? 0) === 0;
+      out.set(a.key, shown.map((n) => {
+        const v = a.labels.find((l) => l.name === n)?.value;
+        return v !== undefined ? `${n}=${v}` : whole ? `${n}=(none)` : `${n} not shown`;
+      }).join(", "));
+    }
   }
   return out;
 }

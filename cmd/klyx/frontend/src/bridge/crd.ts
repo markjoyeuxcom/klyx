@@ -71,7 +71,7 @@ type InstancePageDTO = { items: InstanceDTO[]; nextToken: string; error?: string
 // admission: coverage S3b's finding for a refused request
 // v0.15.1: a refused apply's fields and their managers, and the owner an
 // edit belongs in when a Kubernetes controller owns a field
-export type ConflictOwnerDTO = { group: string; version: string; kind: string; namespace: string; name: string; up?: ConflictOwnerDTO };
+export type ConflictOwnerDTO = { group: string; version: string; kind: string; namespace: string; name: string; up?: ConflictOwnerDTO; upUnknown?: boolean };
 export type ApplyConflictDTO = { fields: { manager: string; class: string; path: string }[]; fieldsOmitted?: number; owner?: ConflictOwnerDTO };
 export type ActionResult = { ok: boolean; error: string; admission?: AdmissionFindingDTO; conflict?: ApplyConflictDTO };
 

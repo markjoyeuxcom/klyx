@@ -1224,7 +1224,7 @@ function YamlPanel({
       {resource.group === "" && resource.kind === "Pod" && (
         // v0.15.1: say it before an edit the server refuses
         <div className="t-secondary" data-testid="pod-immutable-note" style={{ marginBottom: 8 }}>
-          A Pod&apos;s spec cannot change after it is created, except its containers&apos; images, activeDeadlineSeconds and added tolerations; its labels and annotations can. To change anything else, change the workload that owns it.
+          A Pod&apos;s spec cannot change after it is created, apart from a few fields such as its containers&apos; images, activeDeadlineSeconds, added tolerations and removed scheduling gates; its labels and annotations can. To change anything else, change the workload that owns it.
         </div>
       )}
       {versionConflict && (

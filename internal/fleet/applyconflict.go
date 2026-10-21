@@ -40,6 +40,10 @@ type ConflictField struct {
 type ConflictOwner struct {
 	Group, Version, Kind, Namespace, Name string
 	Up                                    *ConflictOwner
+	// UpUnknown: this owner usually has one of its own (a ReplicaSet, a
+	// Job), but the read of it failed or found another object at its name
+	// (Codex's v0.15.1 review, finding 2): its owner is not established
+	UpUnknown bool
 }
 
 // ApplyConflictError is the refused apply: its fields, and the object's
@@ -108,18 +112,25 @@ func (c *ClusterConn) conflictOwner(ctx context.Context, ns string, live *unstru
 	}
 	gv, _ := schema.ParseGroupVersion(ref.APIVersion)
 	o := &ConflictOwner{Group: gv.Group, Version: gv.Version, Kind: ref.Kind, Namespace: ns, Name: ref.Name}
-	var up *unstructured.Unstructured
+	var resource string
 	switch {
 	case gv.Group == "apps" && ref.Kind == "ReplicaSet":
-		up, _ = c.dyn.Resource(schema.GroupVersionResource{Group: "apps", Version: gv.Version, Resource: "replicasets"}).Namespace(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+		resource = "replicasets"
 	case gv.Group == "batch" && ref.Kind == "Job":
-		up, _ = c.dyn.Resource(schema.GroupVersionResource{Group: "batch", Version: gv.Version, Resource: "jobs"}).Namespace(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+		resource = "jobs"
+	default:
+		return o
 	}
-	if up != nil {
-		if r := controllerRef(up.GetOwnerReferences()); r != nil {
-			ugv, _ := schema.ParseGroupVersion(r.APIVersion)
-			o.Up = &ConflictOwner{Group: ugv.Group, Version: ugv.Version, Kind: r.Kind, Namespace: ns, Name: r.Name}
-		}
+	up, err := c.dyn.Resource(schema.GroupVersionResource{Group: gv.Group, Version: gv.Version, Resource: resource}).Namespace(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+	// the second hop only from the object the reference names, by UID: a
+	// replacement at that name is another object, whose owner says nothing
+	if err != nil || up.GetUID() != ref.UID {
+		o.UpUnknown = true
+		return o
+	}
+	if r := controllerRef(up.GetOwnerReferences()); r != nil {
+		ugv, _ := schema.ParseGroupVersion(r.APIVersion)
+		o.Up = &ConflictOwner{Group: ugv.Group, Version: ugv.Version, Kind: r.Kind, Namespace: ns, Name: r.Name}
 	}
 	return o
 }
@@ -197,10 +208,14 @@ func (e *ApplyConflictError) Error() string {
 			s := fmt.Sprintf("%s sets %s, as the Kubernetes controller that maintains this %s", label, fieldsWords(paths), e.Kind)
 			if e.Owner != nil {
 				s += "; its controller is " + e.Owner.words()
-				if e.Owner.Up != nil {
-					s += ", owned by " + e.Owner.Up.words()
+				switch {
+				case e.Owner.Up != nil:
+					s += ", owned by " + e.Owner.Up.words() + ": change the " + e.Owner.Up.Kind + " instead"
+				case e.Owner.UpUnknown:
+					s += ", whose own owner Klyx could not establish: change that owner, or the " + e.Owner.Kind + " if it has none"
+				default:
+					s += ": change the " + e.Owner.Kind + " instead"
 				}
-				s += ": change the " + e.Owner.Top().Kind + " instead"
 			} else {
 				s += ": change what that controller follows instead"
 			}
@@ -211,7 +226,7 @@ func (e *ApplyConflictError) Error() string {
 	}
 	msg := "apply conflict: " + strings.Join(parts, "; ")
 	if e.Pod {
-		msg += ". A Pod's spec cannot change after it is created, except its containers' images, activeDeadlineSeconds and added tolerations"
+		msg += ". A Pod's spec cannot change after it is created, apart from a few fields such as its containers' images, activeDeadlineSeconds, added tolerations and removed scheduling gates"
 	}
 	return msg + ". Klyx never forces another manager's fields."
 }

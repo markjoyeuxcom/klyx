@@ -86,6 +86,29 @@ describe("alerts that share a name (v0.15.1)", () => {
     // nothing kept differs, a label was cut: said as such
     expect(distinguishingLabels([wd("g", { cluster: "x" }, 2), wd("h", { cluster: "x" })]).get("k-g")).toBe("differs in a label not shown");
   });
+  it("a label past the cap is not shown, never (none) (Codex's v0.15.1 review, finding 3)", () => {
+    // i's cluster may be beyond its 64 kept pairs: no origin difference is invented
+    const d = distinguishingLabels([wd("i", { job: "a" }, 5), wd("j", { cluster: "same", job: "b" }), wd("k", { cluster: "same", job: "c" })]);
+    expect(d.get("k-i")).toBe("job=a");
+    expect(d.get("k-j")).toBe("job=b");
+    // a name shown that a cut list lacks reads "not shown" there
+    const e = distinguishingLabels([wd("l", { cluster: "b1" }), wd("m", { cluster: "b2" }), wd("n", { job: "x" }, 3)]);
+    expect(e.get("k-n")).toBe("cluster not shown, job=x");
+    // a complete list lacking a name that differs reads (none)
+    expect(e.get("k-l")).toBe("cluster=b1, job=(none)");
+  });
+  it("the worst read stays fast: 5,000 alerts of 64 labels each (finding 1)", () => {
+    const xs: AMAlertDTO[] = [];
+    for (let i = 0; i < 5000; i++) {
+      const labels: Record<string, string> = { cluster: `c${i % 7}` };
+      for (let j = 0; j < 63; j++) labels[`l${i}-${j}`] = `v${j}`;
+      xs.push(wd(`w${i}`, labels));
+    }
+    const t0 = performance.now();
+    const d = distinguishingLabels(xs);
+    expect(performance.now() - t0).toBeLessThan(1500);
+    expect(d.get("k-w0")).toMatch(/^cluster=c0, /);
+  });
   it("several values of a cluster label with no match suggest a shared Alertmanager", () => {
     const xs = [wd("a", { cluster: "k8s-b1" }), wd("b", { cluster: "k8s-b3" })];
     expect(clusterLabelSpread(xs)).toEqual({ label: "cluster", values: ["k8s-b1", "k8s-b3"] });

@@ -56,7 +56,7 @@ func TestAPodFieldKubeControllerManagerSetsNamesItsOwners(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("not an apply conflict: %v", err)
 	}
-	want := `apply conflict: kube-controller-manager sets .spec.containers[name="grafana"].readinessProbe.failureThreshold, as the Kubernetes controller that maintains this Pod; its controller is ReplicaSet monitoring/grafana-98d, owned by Deployment monitoring/grafana: change the Deployment instead. A Pod's spec cannot change after it is created, except its containers' images, activeDeadlineSeconds and added tolerations. Klyx never forces another manager's fields.`
+	want := `apply conflict: kube-controller-manager sets .spec.containers[name="grafana"].readinessProbe.failureThreshold, as the Kubernetes controller that maintains this Pod; its controller is ReplicaSet monitoring/grafana-98d, owned by Deployment monitoring/grafana: change the Deployment instead. A Pod's spec cannot change after it is created, apart from a few fields such as its containers' images, activeDeadlineSeconds, added tolerations and removed scheduling gates. Klyx never forces another manager's fields.`
 	if err.Error() != want {
 		t.Fatalf("got  %s\nwant %s", err, want)
 	}
@@ -107,5 +107,46 @@ func TestConflictFieldsReadEveryManagerForm(t *testing.T) {
 	got := conflictFields(err)
 	if len(got) != 2 || got[0] != (ConflictField{Manager: "kubelet", Class: ManagerKubernetes, Path: ".status.x"}) || got[1].Manager != `a "quoted" manager` || got[1].Class != ManagerOther {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// Codex's v0.15.1 review, finding 2: the second hop only from the object the
+// owner reference names, by UID - a replacement names nothing.
+func TestTheOwnersOwnerIsFencedByUID(t *testing.T) {
+	applyPod := func(c *ClusterConn) error {
+		return c.ApplyResourceYAML(context.Background(), "", "v1", "pods", "Pod", "Namespaced", "monitoring", "p", "u1",
+			"apiVersion: v1\nkind: Pod\nmetadata:\n  namespace: monitoring\n  name: p\nspec: {}\n", false)
+	}
+	pod := func(ownerKind, apiVersion, ownerName string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "v1", "kind": "Pod",
+			"metadata": map[string]interface{}{"namespace": "monitoring", "name": "p", "uid": "u1", "ownerReferences": owned(ownerKind, apiVersion, ownerName)}}}
+	}
+	refuse := applyConflictStatus(cause("kube-controller-manager", ".spec.x"))
+	// a ReplicaSet replaced at its name: its Deployment is not this pod's
+	replaced := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "ReplicaSet",
+		"metadata": map[string]interface{}{"namespace": "monitoring", "name": "rs", "uid": "u-other", "ownerReferences": owned("Deployment", "apps/v1", "unrelated")}}}
+	for name, extra := range map[string][]runtime.Object{"replaced": {replaced}, "gone": nil} {
+		err := applyPod(conflictConn(t, pod("ReplicaSet", "apps/v1", "rs"), extra, refuse))
+		var ce *ApplyConflictError
+		if !errors.As(err, &ce) || ce.Owner == nil || ce.Owner.Up != nil || !ce.Owner.UpUnknown || ce.Owner.Top().Kind != "ReplicaSet" {
+			t.Fatalf("%s: %+v", name, err)
+		}
+		if strings.Contains(err.Error(), "unrelated") || !strings.Contains(err.Error(), "whose own owner Klyx could not establish: change that owner, or the ReplicaSet if it has none") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// a Job's CronJob, by UID
+	job := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "batch/v1", "kind": "Job",
+		"metadata": map[string]interface{}{"namespace": "monitoring", "name": "j", "uid": "u-j", "ownerReferences": owned("CronJob", "batch/v1", "nightly")}}}
+	err := applyPod(conflictConn(t, pod("Job", "batch/v1", "j"), []runtime.Object{job}, refuse))
+	if err == nil || !strings.Contains(err.Error(), "its controller is Job monitoring/j, owned by CronJob monitoring/nightly: change the CronJob instead") {
+		t.Fatalf("%v", err)
+	}
+	// a ReplicaSet with no owner of its own: change it
+	lone := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "ReplicaSet",
+		"metadata": map[string]interface{}{"namespace": "monitoring", "name": "rs", "uid": "u-rs"}}}
+	err = applyPod(conflictConn(t, pod("ReplicaSet", "apps/v1", "rs"), []runtime.Object{lone}, refuse))
+	if err == nil || !strings.Contains(err.Error(), "its controller is ReplicaSet monitoring/rs: change the ReplicaSet instead") {
+		t.Fatalf("%v", err)
 	}
 }
