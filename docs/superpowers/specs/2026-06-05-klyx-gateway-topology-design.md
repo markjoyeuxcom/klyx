@@ -5,7 +5,7 @@ Status: approved design, ready for plan
 Scope: M5. The marquee feature - render the Gateway API data path as a graph, not
 a CRD list (design principle 3). A per-Gateway columnar topology
 (Gateway → HTTPRoute → Service → Pods) with policies attached at the correct
-node and a route detail panel. Reference: mockup 3 (`docs/mockups.html` #m3) and
+node and a route detail panel. Reference: mockup 3 (`docs/design/mockups-2026-06-04.html` #m3) and
 the approved brainstorm mockup. Architecture: Approach A (server-side topology
 build in Go, snapshot, no watch). Layout: deterministic columnar lanes (no graph
 library).

@@ -1,6 +1,6 @@
-# Klyx v0.9.0 — Signal Bench (release candidate)
+# Klyx v1.0.0 — Signal Bench
 
-The 0.9 release is the 1.0 candidate - a redesign and a declaration: the milestone roadmap is complete, the daily driver is real, and the app now has a visual language of its own — **Signal Bench**, direction C from the design exploration. The app reads as bench hardware: machined modules floating on a desk, data inset in wells, and lamps that only glow when something is wrong.
+The 1.0 release is a redesign and a declaration: the milestone roadmap is complete, the daily driver is real, and the app now has a visual language of its own — **Signal Bench**, direction C from the design exploration. The app reads as bench hardware: machined modules floating on a desk, data inset in wells, and lamps that only glow when something is wrong.
 
 ## The bench (new look, on by default)
 
@@ -36,14 +36,4 @@ The 0.9 release is the 1.0 candidate - a redesign and a declaration: the milesto
 ## Notes
 
 - Read-only lenses stay read-only; Git remains the source of truth. Klyx still never authors desired state.
-- Eyeball checklists for this release: `docs/eyeball-checklist-2026-07-04-gui-pass.md`, `docs/eyeball-checklist-2026-07-05-signal-bench.md`.
-
-## Panel polish and describe (added since the 1.0 draft)
-
-- All detail panels share one anatomy: caption → name + copy → verdict → actions → sections; the inspector is always present with an honest idle state; numeric facts render as counter wells.
-- Flux inspector: verdict box, evline drift rows, inventory truncated broken-first (`+N more`); `r`/`s` keyboard verbs through the same dialogs and prd arming as the buttons.
-- Cert inspector: counter-well facts and the issuance chain as a rail with the deepest stuck node red-boxed.
-- Pod panel: per-container diagnosis blocks including **last state with exit code** (`OOMKilled (exit 137) · 3m ago`), header meta line, live `l` key hint.
-- New read-only **describe** verb (kubectl-backed, argv-validated) on pod, node, and every instance panel.
-
-v1.0.0 follows after a week of daily-driving this build.
+- Eyeball checklists for this release: `docs/checklists/eyeball-checklist-2026-07-04-gui-pass.md`, `docs/checklists/eyeball-checklist-2026-07-05-signal-bench.md`.

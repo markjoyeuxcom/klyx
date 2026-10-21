@@ -4,7 +4,7 @@ Date: 2026-06-05
 Status: approved design, ready for plan
 Scope: M4. A per-cluster custom-resource browser: CRDs grouped by API group with
 owning-operator attribution, category badges, scope, and live (lazy, capped)
-instance counts. Reference: mockup 5 (`docs/mockups.html` #m5). Architecture:
+instance counts. Reference: mockup 5 (`docs/design/mockups-2026-06-04.html` #m5). Architecture:
 Approach A (CRD list + lazy metadata counts, pure request/response - no watch).
 
 ## 1. Scope, decomposition, placement

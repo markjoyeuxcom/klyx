@@ -23,5 +23,5 @@ v0.15.1 fixes what the owner's first checks of v0.15.0 found on their own cluste
 
 ## Known limitations
 
-- Everything in `docs/release-notes-0.15.0.md` still applies.
+- Everything in `docs/releases/release-notes-0.15.0.md` still applies.
 - The match for a shared Alertmanager or Loki is set in `fleet.yaml`; Settings > External endpoints does not edit it yet.

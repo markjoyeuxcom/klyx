@@ -7,7 +7,7 @@ headroom, expiry horizon; 2026-07-21: rollout history/undo/pause — the ranked
 top-12 complete — and node + per-container utilization; 2026-07-20: RBAC
 access lens, Hubble flow lens, fleet compare, the cross-platform exec fix;
 2026-07-10: editable Tiers 1–3). Pulls together the "what's left" that was scattered across `CLAUDE.md`
-deferred notes, `docs/brainstorm-questions.md`, and the eyeball checklists.
+deferred notes, `docs/history/brainstorm-questions.md`, and the eyeball checklists.
 Living doc — prune items as they ship, add as they surface.
 
 Everything for v1.0 is already on `main` and CI-green. The tag is gated on
@@ -34,10 +34,10 @@ real-cluster smoke is on the v1.0.0 gate below.
 
 ## 0. v1.0.0 release gate — the only thing blocking the tag
 
-- [ ] Eyeball checklist: **2026-07-04 GUI pass** (0/50) — `docs/eyeball-checklist-2026-07-04-gui-pass.md`
-- [ ] Eyeball checklist: **2026-07-05 Signal Bench** (0/42) — `docs/eyeball-checklist-2026-07-05-signal-bench.md`
+- [ ] Eyeball checklist: **2026-07-04 GUI pass** (0/50) — `docs/checklists/eyeball-checklist-2026-07-04-gui-pass.md`
+- [ ] Eyeball checklist: **2026-07-05 Signal Bench** (0/42) — `docs/checklists/eyeball-checklist-2026-07-05-signal-bench.md`
       (its visual language is retired by The Line in v0.14.0: only its behaviour items still apply)
-- [ ] Eyeball checklist: **2026-10-15 The Line** (0/31) — `docs/eyeball-checklist-2026-10-15-the-line.md`.
+- [ ] Eyeball checklist: **2026-10-15 The Line** (0/31) — `docs/checklists/eyeball-checklist-2026-10-15-the-line.md`.
       The owner walked slices 13 and 14 on the kind lab on 2026-10-16 ("looking nicely polished");
       the checklist itself is still unticked
 - [ ] Eyeball the UI merged **since** those checklists (not yet on any list):
@@ -105,7 +105,7 @@ real-cluster smoke is on the v1.0.0 gate below.
       Windows host and type into it. The 2026-10-03 review remediation moved the
       Windows launch to PowerShell via CreateProcess; its Windows-only tests
       compile but have never run (CI and the dev machine are not Windows)
-- [ ] Finalize `docs/release-notes-1.0.0.md` and cut the `v1.0.0` tag
+- [ ] Finalize `docs/releases/release-notes-1.0.0.md` and cut the `v1.0.0` tag
 
 This is a walk-the-app-and-tick-boxes exercise; no coding is blocking 1.0.
 
@@ -242,7 +242,7 @@ entirely demand-driven from sections 1–4.
 
 ## 8. Open architectural questions
 
-See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
+See `docs/history/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 ---
 
@@ -263,7 +263,7 @@ Merged to `main` — do not re-add to the backlog:
   smoke 209/209 four ways. Still owed: the owner's real-model smoke (the
   scored eval will make it repeatable) and A1.1, rollout history
 
-**2026-10-21 - v0.15.1 (notes `docs/release-notes-0.15.1.md`), from the
+**2026-10-21 - v0.15.1 (notes `docs/releases/release-notes-0.15.1.md`), from the
 owner's first checks of v0.15.0 on their own clusters:**
 - An apply conflict names each field's manager from the server's causes and
   advises by kind of manager (Git for Flux and Argo, the owner for a
@@ -275,7 +275,7 @@ owner's first checks of v0.15.0 on their own clusters:**
 
 **2026-10-21 - First-class coverage (v0.15.0, roadmap
 `docs/superpowers/specs/2026-10-16-klyx-coverage-roadmap.md` and its slice
-notes, notes `docs/release-notes-0.15.0.md`; PRs #50 and #51):**
+notes, notes `docs/releases/release-notes-0.15.0.md`; PRs #50 and #51):**
 - Flux in full: the Flux Operator (S1a), image automation (S1b), source
   composition and notification facts (S1c)
 - Velero, read-only (S2a, S2b); admission backend availability (S3a) and
@@ -295,7 +295,7 @@ notes, notes `docs/release-notes-0.15.0.md`; PRs #50 and #51):**
 
 **2026-10-16 — The Line (v0.14.0, spec
 `docs/superpowers/specs/2026-10-14-klyx-the-line-redesign.md` and its slice
-notes, notes `docs/release-notes-0.14.0.md`):**
+notes, notes `docs/releases/release-notes-0.14.0.md`):**
 - The redesign from the owner's "Klyx redesign" mockups: night and day
   themes with bundled type and shape-coded marks (slice 1); the fleet drawn
   as a railway line with Needs you, the Ledger and the Horizon (3, 5); the
@@ -317,7 +317,7 @@ notes, notes `docs/release-notes-0.14.0.md`):**
   v0.13.1 was written up but never published: its changes ship in v0.14.0
 
 **2026-10-14 — Claude Code any build, chat chips (v0.13.1, notes
-`docs/release-notes-0.13.1.md`):**
+`docs/releases/release-notes-0.13.1.md`):**
 - The Claude Code CLI admits any build at or above 2.1.296 once Test has
   checked it on this machine (owner decision after 2.1.299 and 2.1.300
   shipped hours apart): tested builds in `claude-builds.json` beside
@@ -328,7 +328,7 @@ notes, notes `docs/release-notes-0.14.0.md`):**
 
 **2026-10-14 — Cluster chat (v0.13.0, spec
 `docs/superpowers/specs/2026-10-14-klyx-cluster-chat.md`, notes
-`docs/release-notes-0.13.0.md`):**
+`docs/releases/release-notes-0.13.0.md`):**
 - A read-only chat drawer, one conversation per cluster (at most 8): the mast
   button, ⌘K and "Ask a follow-up" under Explain (seeded, UID-fenced)
 - Seven validated read-only tools for API-key providers; a bounded
@@ -343,7 +343,7 @@ notes, notes `docs/release-notes-0.14.0.md`):**
   Each slice Codex-reviewed; real-model smoke pending (§0)
 
 **2026-10-14 — UI polish and code-quality fixes (v0.12.0, notes
-`docs/release-notes-0.12.0.md`):**
+`docs/releases/release-notes-0.12.0.md`):**
 - The 2026-10-13 joint UI review, all items in three slices: palette ranking
   and new entries, modal cheatsheet, keyboard fleet cards, 4.5:1 text
   contrast (pinned by a test), a calmer Overview, per-tool fleet cards,

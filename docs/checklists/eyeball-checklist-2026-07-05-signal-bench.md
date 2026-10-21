@@ -1,6 +1,6 @@
 # Native eyeball checklist — Signal Bench (2026-07-05)
 
-Branch `feat/signal-bench`, direction C from `design/direction-c-signal-bench.html`.
+Branch `feat/signal-bench`, direction C from `docs/design/direction-c-signal-bench.html`.
 Everything below is a visual language change verified headless-only; the four
 design rules (notes §Design rules) are the review bar.
 
@@ -64,7 +64,7 @@ design rules (notes §Design rules) are the review bar.
 - [ ] Instance panels (replicasets, HPAs, any CR with conditions) open with a conditions-derived verdict ("Ready True", "AbleToScale True"); objects with no conditions show no fabricated verdict.
 - [ ] Helm history/values render in the shared section idiom.
 
-## Panel refit (panels/ screenshots, 2026-07-06)
+## Panel refit (2026-07-06; its reference screenshots were removed from the repository on 2026-10-22)
 - [ ] Flux inspector opens with the shared verdict (Failed=danger with the failing reason, Ready=success, Reconciling=info, suspended=warning; revision on the sub-line), the controller message as one line beneath, and uppercase InspectorSection headers; drift/events rows read as evlines (dot, reason, drift chip, ellipsized message, ×count, age right).
 - [ ] Flux inventory shows at most 8 entries (dot + kind + namespace/name link) then a mono "+N more" - no "all healthy" claim because inventory entries carry no health.
 - [ ] Cert inspector opens with the verdict (Failed/expired=danger, Issuing=info, renewal window=warning), requests/warnings/stuck as counter wells, kv rows on the 88px grid with left-adjacent values, and the issuance chain as a rail (one vertical line, lamp per node, deepest stuck node's message in a red-ringed box).

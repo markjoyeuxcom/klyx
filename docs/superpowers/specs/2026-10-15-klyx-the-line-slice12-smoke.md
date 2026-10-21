@@ -84,7 +84,7 @@ The report is compared with 12a's log for the same lab state: the same pages, he
 
 ## 4. 12c: the eyeball checklist
 
-`docs/eyeball-checklist-2026-10-15-the-line.md`, in the form of the earlier checklists: each item an action and what to see, grouped by screen, for the owner to run in the native app in night and day.
+`docs/checklists/eyeball-checklist-2026-10-15-the-line.md`, in the form of the earlier checklists: each item an action and what to see, grouped by screen, for the owner to run in the native app in night and day.
 - **The fleet board:**
   - the line reads at a glance: stations, lit segments, the legend;
   - "Needs you" order;
@@ -204,4 +204,4 @@ Codex requested changes. Each is answered below, and the runs in §8 were repeat
 - **12b, the native smoke:** `KlyxSmoke.app` built at clean commit `bdeb16a` from fresh assets (hash recorded in each report), hidden window. Night and day at 1440×900 and 1024×768 all `pass`, 113/113 steps, with the inspector split at 1440 and a drawer at 1024.
 
   The installed Klyx (`/Applications/klyx.app`) held the ordinary `com.moomora.klyx` lock throughout, observed read-only with `lsof`, so the separate identity is proven in use. The owner's app and data were not touched.
-- **12c:** `docs/eyeball-checklist-2026-10-15-the-line.md`.
+- **12c:** `docs/checklists/eyeball-checklist-2026-10-15-the-line.md`.

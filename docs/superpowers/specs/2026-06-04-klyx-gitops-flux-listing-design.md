@@ -5,7 +5,7 @@ Status: approved design, ready for plan
 Scope: M3-a, the first content-bearing drilldown. Read-only, Flux-only listing of
 Kustomizations + HelmReleases with reconciliation status, rendered in the GitOps
 section. Establishes the lazy per-cluster drilldown data + bridge pattern reused
-by all future drilldowns. Reference: `docs/mockups.html` mockup 2 (minus the
+by all future drilldowns. Reference: `docs/design/mockups-2026-06-04.html` mockup 2 (minus the
 drift expansion). Builds on the drill-in navigation slice.
 
 ## 1. Context and scope
