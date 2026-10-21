@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { IconX, IconMessageChatbot } from "@tabler/icons-react";
 import { useFleet, type ResourceRef } from "../store/fleet";
-import { chatAsk, chatClear, chatStart, chatState, chatStop, onChatRead, type ChatCheck, type ChatExchange, type ChatRead, type ChatRef, type ChatState } from "../bridge/chat";
+import { chatAsk, chatClear, chatSetComparison, chatStart, chatState, chatStop, investigationStart, investigationState, onChatRead, type ChatCheck, type ChatExchange, type ChatRead, type ChatRef, type ChatSeed, type ChatState } from "../bridge/chat";
 import { providerLabel } from "../app/AISettingsPanel";
 import { WELL_KNOWN_RESOURCE_REFS } from "../cluster/resourceRefs";
 import { SafeMarkdown, type Cite } from "./SafeMarkdown";
 import { useChat } from "./chatStore";
+import { FindingsPanel } from "./FindingsPanel";
 import { Rail, type RailSegment, type RailStep } from "../chrome/primitives";
 
 // ChatDrawer is the cluster chat (spec 2026-10-14 §8): one conversation per
@@ -17,12 +18,20 @@ import { Rail, type RailSegment, type RailStep } from "../chrome/primitives";
 const QUESTION_MAX_BYTES = 4096;
 const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
+// The first turn of an investigation needs no question of the operator's
+// (AI A1 §1); the drawer sends the backend's own default when none is typed.
+const INVESTIGATE_Q = "Investigate why this object is failing, and end with your findings.";
+
 export function ChatDrawer() {
   const open = useChat((s) => s.open);
   const cluster = useChat((s) => s.cluster);
-  if (!open || !cluster) return null;
-  return <ChatPanel key={cluster} cluster={cluster} />;
+  const slot = useChat((s) => s.slot) ?? cluster;
+  if (!open || !cluster || !slot) return null;
+  return <ChatPanel key={slot} cluster={cluster} slot={slot} />;
 }
+
+const seedUID = (s: ChatSeed | undefined) => (s && "uid" in s ? s.uid : "");
+const seedName = (s: ChatSeed | undefined) => (s && "name" in s ? s.name : "the object");
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -30,45 +39,51 @@ const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 // (a refusal is never applied), and its outcome - a refusal, a notice or a
 // bridge failure - settles the outcome slot only if it is the cluster's
 // latest request (Codex reviews of 0725e47 and c4ae925).
-async function request(cluster: string, call: () => Promise<ChatState>): Promise<ChatState | null> {
-  const n = useChat.getState().nextReq(cluster);
+// A slot is a cluster's chat (its name) or its investigation: each is read
+// back through its own call.
+async function request(slot: string, cluster: string, call: () => Promise<ChatState>): Promise<ChatState | null> {
+  const n = useChat.getState().nextReq(slot);
   try {
     const st = await call();
-    useChat.getState().apply(cluster, st);
-    useChat.getState().settle(cluster, n, st.error ? { kind: "error", text: st.error } : st.notice ? { kind: "notice", text: st.notice } : undefined);
-    logCalls(cluster, useChat.getState().states[cluster]);
+    useChat.getState().apply(slot, st);
+    useChat.getState().settle(slot, n, st.error ? { kind: "error", text: st.error } : st.notice ? { kind: "notice", text: st.notice } : undefined);
+    logCalls(cluster, useChat.getState().states[slot]);
     return st;
   } catch (e) {
-    useChat.getState().settle(cluster, n, { kind: "error", text: `Klyx could not reach its chat service: ${messageOf(e)}` });
+    useChat.getState().settle(slot, n, { kind: "error", text: `Klyx could not reach its chat service: ${messageOf(e)}` });
     return null;
   }
 }
 
+const reader = (slot: string, cluster: string) => (slot === cluster ? () => chatState(cluster) : () => investigationState(cluster));
+
 // refresh reads the conversation back as a request of its own.
-function refresh(cluster: string): Promise<ChatState | null> {
-  return request(cluster, () => chatState(cluster));
+function refresh(slot: string, cluster: string): Promise<ChatState | null> {
+  return request(slot, cluster, reader(slot, cluster));
 }
 
 // background reads the conversation back while something else is the
 // latest request (a running Ask, a read event): its state still goes
 // through the version guard, but it never claims or settles the outcome
 // slot, so a request's own outcome is not hidden by it.
-async function background(cluster: string): Promise<void> {
+async function background(slot: string, cluster: string): Promise<void> {
   try {
-    useChat.getState().apply(cluster, await chatState(cluster));
-    logCalls(cluster, useChat.getState().states[cluster]);
+    useChat.getState().apply(slot, await reader(slot, cluster)());
+    logCalls(cluster, useChat.getState().states[slot]);
   } catch {
     // the next request reports a lasting failure
   }
 }
 
-function ChatPanel({ cluster }: { cluster: string }) {
-  const st = useChat((s) => s.states[cluster]);
-  const draft = useChat((s) => s.drafts[cluster] ?? "");
-  const followUp = useChat((s) => s.seeds[cluster]);
-  const asking = useChat((s) => s.asking[cluster]);
-  const cleared = useChat((s) => s.cleared[cluster] ?? false);
-  const outcome = useChat((s) => s.outcomes[cluster]);
+function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
+  const isInv = slot !== cluster;
+  const st = useChat((s) => s.states[slot]);
+  const draft = useChat((s) => s.drafts[slot] ?? "");
+  const followUp = useChat((s) => s.seeds[slot]);
+  const asking = useChat((s) => s.asking[slot]);
+  const cleared = useChat((s) => s.cleared[slot] ?? false);
+  const outcome = useChat((s) => s.outcomes[slot]);
+  const anchor = useChat((s) => s.anchors[slot]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const { setDraft, setSeed, setAsking, setCleared, close } = useChat.getState();
@@ -76,24 +91,27 @@ function ChatPanel({ cluster }: { cluster: string }) {
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const s = await refresh(cluster);
+      const s = await refresh(slot, cluster);
       // Opening the drawer starts a conversation - unless the operator
-      // cleared it, which never starts another by itself.
-      if (alive && s && !s.conversationId && !useChat.getState().cleared[cluster]) {
-        await request(cluster, () => chatStart(cluster));
+      // cleared it, which never starts another by itself. An investigation
+      // starts on the object it was opened for.
+      if (alive && s && !s.conversationId && !useChat.getState().cleared[slot]) {
+        const a = useChat.getState().anchors[slot];
+        if (!isInv) await request(slot, cluster, () => chatStart(cluster));
+        else if (a) await request(slot, cluster, () => investigationStart(cluster, a.seed));
       }
     })();
     inputRef.current?.focus();
     return () => {
       alive = false;
     };
-  }, [cluster]);
+  }, [cluster, slot, isInv]);
 
   const conversationId = st?.conversationId;
   useEffect(() => {
     if (!conversationId) return;
-    return onChatRead(conversationId, () => void background(cluster));
-  }, [conversationId, cluster]);
+    return onChatRead(conversationId, () => void background(slot, cluster));
+  }, [conversationId, cluster, slot]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
@@ -106,38 +124,47 @@ function ChatPanel({ cluster }: { cluster: string }) {
   const bytes = utf8Bytes(draft);
   const tooLong = bytes > QUESTION_MAX_BYTES;
 
+  // an investigation's first turn may go without a typed question
+  const firstInv = isInv && !!st && st.exchanges.length === 0;
+
   const ask = async () => {
-    const q = draft.trim();
+    const typed = draft.trim();
+    const q = typed || (firstInv ? INVESTIGATE_Q : "");
     if (!q || !conversationId || asking || tooLong) return;
     const seed = followUp?.seed;
-    setDraft(cluster, "");
-    setSeed(cluster, undefined);
-    setAsking(cluster, { conversationId, question: q });
-    const pending = request(cluster, () => chatAsk(cluster, conversationId, q, seed));
-    void background(cluster); // shows the question as soon as the backend has it
+    setDraft(slot, "");
+    setSeed(slot, undefined);
+    setAsking(slot, { conversationId, question: q });
+    const pending = request(slot, cluster, () => chatAsk(cluster, conversationId, q, seed));
+    void background(slot, cluster); // shows the question as soon as the backend has it
     const next = await pending;
-    if (useChat.getState().asking[cluster]?.question === q) setAsking(cluster, undefined);
+    if (useChat.getState().asking[slot]?.question === q) setAsking(slot, undefined);
     const refused = next === null || ((!!next.notice || !!next.error) && !next.exchanges.some((e) => e.question === q));
-    if (refused && !useChat.getState().drafts[cluster]) {
+    if (refused && !useChat.getState().drafts[slot]) {
       // A refusal (too long, one already running, the conversation gone):
       // the question comes back to the editor, and its follow-up target too.
-      setDraft(cluster, q);
-      if (seed && followUp) setSeed(cluster, followUp);
+      setDraft(slot, typed);
+      if (seed && followUp) setSeed(slot, followUp);
     }
   };
 
   const clear = async () => {
     if (!conversationId) return;
     await chatClear(cluster, conversationId);
-    setCleared(cluster, true);
-    await refresh(cluster);
+    setCleared(slot, true);
+    await refresh(slot, cluster);
   };
 
   const start = async () => {
     if (conversationId) await chatClear(cluster, conversationId);
-    setCleared(cluster, false);
-    await request(cluster, () => chatStart(cluster));
+    setCleared(slot, false);
+    if (!isInv) await request(slot, cluster, () => chatStart(cluster));
+    else if (anchor) await request(slot, cluster, () => investigationStart(cluster, anchor.seed));
   };
+
+  // the drawer was opened on another object than the open investigation's
+  const otherAnchor = isInv && !!anchor && !!st?.anchor && seedUID(st.anchor) !== seedUID(anchor.seed);
+  const title = isInv ? `Investigate ${anchor?.label ?? seedName(st?.anchor)}` : `Ask about ${cluster}`;
 
   const inFlight = st?.exchanges.find((e) => e.outcome === "");
   const busy = !!asking || !!st?.active;
@@ -146,15 +173,15 @@ function ChatPanel({ cluster }: { cluster: string }) {
   const notice = outcome?.kind === "notice" ? outcome.text : undefined;
 
   return (
-    <aside className="chat-drawer" role="complementary" aria-label={`Ask about ${cluster}`} data-testid="chat-drawer"
+    <aside className="chat-drawer" role="complementary" aria-label={title} data-testid="chat-drawer"
       onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } }}>
       <div className="chat-head">
         <IconMessageChatbot size={15} stroke={1.5} />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div className="chat-title">Ask about {cluster}</div>
+          <div className="chat-title">{title}</div>
           {st?.provider && (
             <div className="t-legend chat-sub">
-              {providerLabel(st.provider)}{st.model ? ` · ${st.model}` : ""} · {st.mode === "snapshot" ? "snapshot" : "tools"} · read-only
+              {isInv ? `${cluster} · investigation · ` : ""}{providerLabel(st.provider)}{st.model ? ` · ${st.model}` : ""} · {st.mode === "snapshot" ? "snapshot" : "tools"} · read-only
             </div>
           )}
         </div>
@@ -163,7 +190,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
 
       {st?.provider && (
         <div className="chat-small chat-guarantee" data-testid="chat-guarantee">
-          Chat sends what it reads to {providerLabel(st.provider)}{st.origin ? ` (${st.origin})` : ""}. Logs and text are scrubbed, not guaranteed secret-free. Secret values, Helm values and ConfigMap values are never sent.
+          {isInv ? "An investigation" : "Chat"} sends what it reads to {providerLabel(st.provider)}{st.origin ? ` (${st.origin})` : ""}. Logs and text are scrubbed, not guaranteed secret-free. Secret values, Helm values and ConfigMap values are never sent.
           {st.protected && <> This is a protected cluster; Settings &gt; AI allows its data to go to this provider.</>}
         </div>
       )}
@@ -186,8 +213,19 @@ function ChatPanel({ cluster }: { cluster: string }) {
         )}
         {st && st.removed > 0 && <div className="chat-small">{st.removed} earlier exchange{st.removed === 1 ? " was" : "s were"} removed.</div>}
         {st?.trimmed && <div className="chat-small">Earlier messages are no longer sent to the model.</div>}
+        {otherAnchor && conversationId && (
+          <div className="chat-notice" role="status" data-testid="inv-other">
+            An investigation of {seedName(st?.anchor)} is open on {cluster}. Clear it to investigate {anchor?.label}.
+            <div><button type="button" className="l-btn" onClick={() => void start()}>Clear and investigate {anchor?.label}</button></div>
+          </div>
+        )}
         {st?.mode === "snapshot" && st.exchanges.length === 0 && !asking && (
-          <div className="chat-small">This provider answers from a snapshot Klyx assembles per question. Name objects as kind/name or namespace/name to bring them in.</div>
+          <div className="chat-small">{isInv
+            ? "This provider answers from a fixed set of evidence Klyx reads for the object; you cannot ask it to read more."
+            : "This provider answers from a snapshot Klyx assembles per question. Name objects as kind/name or namespace/name to bring them in."}</div>
+        )}
+        {isInv && st && conversationId && (
+          <Comparison cluster={cluster} slot={slot} st={st} editable={firstInv && !busy && !otherAnchor} />
         )}
         {st?.exchanges.map((ex) => <Exchange key={ex.id} cluster={cluster} ex={ex} cite={cite} />)}
         {asking && asking.conversationId === conversationId && !inFlight && !st?.exchanges.some((e) => e.question === asking.question) && (
@@ -209,7 +247,7 @@ function ChatPanel({ cluster }: { cluster: string }) {
         {followUp && (
           <div className="chat-chips" data-testid="chat-followup">
             <span className="l-chip">About {followUp.label}</span>
-            <button type="button" className="l-btn" aria-label="remove follow-up target" onClick={() => setSeed(cluster, undefined)}><IconX size={11} stroke={1.5} /></button>
+            <button type="button" className="l-btn" aria-label="remove follow-up target" onClick={() => setSeed(slot, undefined)}><IconX size={11} stroke={1.5} /></button>
           </div>
         )}
         <textarea
@@ -217,8 +255,8 @@ function ChatPanel({ cluster }: { cluster: string }) {
           aria-label="question"
           value={draft}
           disabled={!available}
-          placeholder={available ? "Ask about this cluster… (Enter to send, Shift+Enter for a new line)" : ""}
-          onChange={(e) => setDraft(cluster, e.target.value)}
+          placeholder={!available ? "" : firstInv ? "Optional: add what you know, then Investigate (Enter)" : isInv ? "Ask about this investigation… (Enter to send)" : "Ask about this cluster… (Enter to send, Shift+Enter for a new line)"}
+          onChange={(e) => setDraft(slot, e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -235,11 +273,40 @@ function ChatPanel({ cluster }: { cluster: string }) {
         <div className="chat-actions">
           {busy && conversationId
             ? <button type="button" className="l-btn" onClick={() => void chatStop(cluster, conversationId)}>Stop</button>
-            : <button type="button" className="l-btn" disabled={!available || draft.trim() === "" || tooLong} onClick={() => void ask()}>Ask</button>}
+            : <button type="button" className="l-btn" disabled={!available || (draft.trim() === "" && !firstInv) || tooLong || otherAnchor} onClick={() => void ask()}>{firstInv ? "Investigate" : "Ask"}</button>}
           <button type="button" className="l-btn" disabled={!conversationId || busy} onClick={() => void clear()}>Clear</button>
         </div>
       </div>
     </aside>
+  );
+}
+
+// Comparison is an investigation's comparison set (A-C2): chosen from the
+// fleet's other clusters before the first question, fixed after.
+function Comparison({ cluster, slot, st, editable }: { cluster: string; slot: string; st: ChatState; editable: boolean }) {
+  const fleet = useFleet((s) => s.clusters);
+  const set = st.comparison ?? [];
+  const [picked, setPicked] = useState<string[]>(set);
+  const others = fleet.map((c) => c.name).filter((n) => n !== cluster);
+  if (!editable) {
+    return (
+      <div className="chat-small" data-testid="inv-comparison">
+        {set.length > 0 ? `Compared with ${set.join(", ")}: each checked before its read and before every send that carries it.` : "No comparison clusters."}
+      </div>
+    );
+  }
+  if (others.length === 0) return null;
+  const toggle = (n: string) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
+  const changed = picked.length !== set.length || picked.some((n) => !set.includes(n));
+  return (
+    <fieldset className="inv-compare" data-testid="inv-comparison">
+      <legend className="t-legend">Compare with (fixed once the investigation begins)</legend>
+      {others.map((n) => (
+        <label key={n} className="chat-small"><input type="checkbox" checked={picked.includes(n)} onChange={() => toggle(n)} /> {n}</label>
+      ))}
+      <button type="button" className="l-btn" disabled={!changed || !st.conversationId}
+        onClick={() => void request(slot, cluster, () => chatSetComparison(cluster, st.conversationId!, picked))}>Set comparison</button>
+    </fieldset>
   );
 }
 
@@ -297,6 +364,7 @@ function Exchange({ cluster, ex, cite }: { cluster: string; ex: ChatExchange; ci
           </div>
         </>
       )}
+      {ex.findings && <FindingsPanel findings={ex.findings} reads={ex.reads} cite={cite} />}
       {ex.outcome === "failed" && <div className="chat-err">▲ {ex.error}</div>}
       {ex.note && <div className="chat-small">{ex.note}</div>}
       {ex.outcome === "cancelled" && <div className="chat-small">Stopped.</div>}

@@ -815,6 +815,7 @@ export function InstanceDetail({ cluster, resource, instance, removed: listRemov
   const more: MenuItem[] = [];
   if (live && target) {
     if (!ai.readiness.ready) more.push(...ai.menu);
+    else more.push(...ai.investigate); // Explain is the secondary action
     if (ai.readiness.configured) more.push({ label: "Suggest fix (AI, Git-only)", disabled: !ai.readiness.ready || aiBusy, hint: ai.readiness.ready ? "Draft a fix to commit to Git - Klyx never applies it" : ai.readiness.reason, onSelect: runFix });
   }
   if (live && resource.kind === "ServiceAccount") {

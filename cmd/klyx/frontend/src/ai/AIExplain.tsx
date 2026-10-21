@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { openChat } from "./chatStore";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { openChat, openInvestigation } from "./chatStore";
 import type { ChatSeed } from "../bridge/chat";
 import { create } from "zustand";
 import { aiAvailability, aiEgressAllowed, explain, type ExplainTarget } from "../bridge/ai";
@@ -43,6 +43,27 @@ export const usePendingExplain = create<PendingExplain>((set, get) => ({
     return Date.now() - at <= pendingExplainTTL;
   },
 }));
+
+// A palette "Investigate" parks its target the same way (AI A1 §5): the
+// inspector showing it opens the investigation once AI is ready.
+export const usePendingInvestigate = create<PendingExplain>((set, get) => ({
+  key: null,
+  at: 0,
+  seq: 0,
+  request: (key) => set((s) => ({ key, at: Date.now(), seq: s.seq + 1 })),
+  take: (key) => {
+    const { key: pending, at } = get();
+    if (pending !== key) return false;
+    set({ key: null, at: 0 });
+    return Date.now() - at <= pendingExplainTTL;
+  },
+}));
+
+// investigable: an investigation is pinned by UID, so a Helm release (no
+// UID) is never one.
+export function investigable(t: ExplainTarget | null): t is Exclude<ExplainTarget, { kind: "helm" }> {
+  return !!t && t.kind !== "helm" && !!t.uid;
+}
 
 export type AIReadiness = {
   loading: boolean;
@@ -139,8 +160,14 @@ export function aiExplainMenuItem(readiness: AIReadiness, state: AIExplainState,
   return [{ label: state.status === "loading" ? "Explaining…" : "Explain with AI", disabled: state.status === "loading", onSelect: run }];
 }
 
+/** aiInvestigateMenuItem is the inspector's "Investigate with AI" entry. */
+export function aiInvestigateMenuItem(readiness: AIReadiness, open: (() => void) | undefined): MenuItem[] {
+  if (readiness.loading || !readiness.ready || !open) return [];
+  return [{ label: "Investigate with AI", hint: "a read-only investigation with cited findings", onSelect: open }];
+}
+
 /** AIExplainBlock renders the explanation, with what it rests on. */
-export function AIExplainBlock({ state, onDismiss, onFollowUp }: { state: AIExplainState; onDismiss: () => void; onFollowUp?: () => void }) {
+export function AIExplainBlock({ state, onDismiss, onFollowUp, onInvestigate }: { state: AIExplainState; onDismiss: () => void; onFollowUp?: () => void; onInvestigate?: () => void }) {
   if (state.status === "idle") return null;
   const r = state.result;
   return (
@@ -158,8 +185,11 @@ export function AIExplainBlock({ state, onDismiss, onFollowUp }: { state: AIExpl
               {r.redacted ? ` · ${r.redacted} value${r.redacted === 1 ? "" : "s"} masked` : ""}
             </div>
             <div className="t-legend" style={{ color: "var(--color-text-tertiary)" }}>AI-generated from Klyx's resolved state - verify before acting.</div>
-            {onFollowUp && (
-              <div><button type="button" className="l-btn" onClick={onFollowUp}>Ask a follow-up</button></div>
+            {(onFollowUp || onInvestigate) && (
+              <div style={{ display: "flex", gap: 6 }}>
+                {onFollowUp && <button type="button" className="l-btn" onClick={onFollowUp}>Ask a follow-up</button>}
+                {onInvestigate && <button type="button" className="l-btn" onClick={onInvestigate}>Investigate</button>}
+              </div>
             )}
           </>
         )}
@@ -177,6 +207,7 @@ export function AIExplainBlock({ state, onDismiss, onFollowUp }: { state: AIExpl
  */
 export function useInspectorAI(target: ExplainTarget | null, describe: string, enabled: boolean, cluster: string): {
   menu: MenuItem[];
+  investigate: MenuItem[]; // the Investigate entry alone, for an inspector that shows Explain elsewhere
   block: ReactNode;
   readiness: AIReadiness;
   state: AIExplainState;
@@ -185,12 +216,30 @@ export function useInspectorAI(target: ExplainTarget | null, describe: string, e
   const readiness = useAIReadiness(cluster);
   const active = enabled && !!cluster && !!target;
   const { state, run, dismiss } = useAIExplain(cluster, active ? target : null, readiness, describe);
+  // the investigation opens on the target as it is now, read through a ref,
+  // so the callback stays stable across renders
+  const key = targetKey(cluster, active ? target : null);
+  const targetNow = useRef(target);
+  targetNow.current = target;
+  const canInvestigate = active && investigable(target);
+  const investigate = useMemo(
+    () => (canInvestigate ? () => openInvestigation(cluster, targetNow.current as ChatSeed, describe) : undefined),
+    [canInvestigate, cluster, describe],
+  );
+  // a palette "Investigate" for this target opens once AI is ready
+  const pendingInv = usePendingInvestigate((p) => p.seq);
+  useEffect(() => {
+    if (key && readiness.ready && investigate && usePendingInvestigate.getState().take(key)) investigate();
+  }, [key, readiness.ready, investigate, pendingInv]);
+  const invItem = active ? aiInvestigateMenuItem(readiness, investigate) : [];
   return {
-    menu: active ? aiExplainMenuItem(readiness, state, run) : [],
+    menu: active ? [...aiExplainMenuItem(readiness, state, run), ...invItem] : [],
+    investigate: invItem,
     // "Ask a follow-up" opens this cluster's chat seeded with Explain's own
     // target - the row, object or release it explained - so the backend
     // reads that exact object and refuses a replacement by UID.
-    block: <AIExplainBlock state={state} onDismiss={dismiss} onFollowUp={cluster && active && target ? () => openChat(cluster, { seed: target as ChatSeed, label: describe }) : undefined} />,
+    block: <AIExplainBlock state={state} onDismiss={dismiss} onFollowUp={cluster && active && target ? () => openChat(cluster, { seed: target as ChatSeed, label: describe }) : undefined}
+      onInvestigate={readiness.ready ? investigate : undefined} />,
     readiness,
     state,
     run,

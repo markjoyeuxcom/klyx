@@ -827,3 +827,27 @@ details[open] > summary > .ov-chev { transform: rotate(90deg); }
 .chat-checks { margin: 2px 0 0; padding-left: 14px; font-size: 11px; color: var(--color-text-secondary); }
 .chat-cite { font-family: var(--font-mono); font-size: 10px; padding: 0 4px; margin: 0 1px; border: 0.5px solid var(--color-border-secondary); border-radius: 3px; background: var(--color-background-secondary); color: var(--color-text-info); cursor: pointer; vertical-align: baseline; }
 .chat-read-hit { outline: 1px solid var(--color-border-info); outline-offset: 2px; border-radius: 2px; }
+
+/* AI A1 §5: an investigation's findings and comparison set. The labels are
+   Klyx's: checked (its own evaluation), reading, suspected, unsupported, and
+   a remedy proposed and never run. Statements are plain text. */
+.inv-findings { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px 10px; border: 0.5px solid var(--line-hair); border-radius: 4px; background: var(--line-sunk); }
+.inv-checks summary { cursor: pointer; }
+.inv-group { margin-top: 4px; }
+.inv-group ul, .inv-missing ul { margin: 2px 0 0; padding-left: 14px; font-size: 11px; color: var(--color-text-secondary); }
+.inv-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.inv-finding { font-size: 12px; }
+.inv-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.inv-statement { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-text-primary); }
+.inv-cites, .inv-checked, .inv-note { overflow-wrap: anywhere; }
+.inv-note { color: var(--color-text-tertiary); }
+.inv-label { display: inline-block; font: 500 10px/14px var(--font-mono); padding: 0 5px; margin-right: 6px; border: 0.5px solid var(--line-hair); border-radius: 3px; color: var(--color-text-secondary); text-transform: lowercase; }
+.inv-label-checked { color: var(--color-text-info); border-color: var(--color-border-info); }
+.inv-label-suspected { color: var(--color-text-warning); border-color: var(--color-border-warning); }
+.inv-label-unsupported { color: var(--color-text-danger); border-color: var(--color-border-danger); }
+.inv-unsupported .inv-statement { color: var(--color-text-tertiary); }
+.inv-label-proposed { color: var(--color-text-tertiary); border-style: dashed; }
+.inv-remedy { display: flex; flex-direction: column; gap: 4px; }
+.inv-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); }
+.inv-compare { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 8px; padding: 6px 8px; border: 0.5px solid var(--line-hair); border-radius: 4px; }
+.inv-compare legend { padding: 0 4px; }
