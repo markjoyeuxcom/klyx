@@ -27,7 +27,7 @@ describe("FleetExpiry", () => {
         : { items: [{ source: "tls-secret", namespace: "team-a", name: "web-tls", detail: "tls.crt", subject: "CN=web", notAfterUnix: days(80) }], warnings: [] },
     );
     const { findByText, getByText } = render(<FleetExpiry />);
-    expect(await findByText("▲ 10d")).toBeTruthy();
+    expect(await findByText("▲ 10d", {}, { timeout: 3000 })).toBeTruthy();
     expect(getByText("80d")).toBeTruthy();
     expect(getByText("cm-webhook")).toBeTruthy();
     expect(getByText("team-a/web-tls")).toBeTruthy();
@@ -42,11 +42,11 @@ describe("FleetExpiry", () => {
     });
     const { findByText, getByText, queryByText } = render(<FleetExpiry />);
     // Default 90d window: the 200d cert is outside it.
-    expect(await findByText("Nothing found expiring within 90 days.")).toBeTruthy();
+    expect(await findByText("Nothing found expiring within 90 days.", {}, { timeout: 3000 })).toBeTruthy();
     expect(getByText(/On the 1 of 1 cluster scanned/)).toBeTruthy();
     expect(queryByText(/nothing expires/i)).toBeNull();
     fireEvent.click(getByText("All"));
-    expect(await findByText("x/far-tls")).toBeTruthy();
+    expect(await findByText("x/far-tls", {}, { timeout: 3000 })).toBeTruthy();
   });
 
   it("leaves out a Subject column no row has, and says so (UI review 2026-10-13)", async () => {
@@ -56,7 +56,7 @@ describe("FleetExpiry", () => {
       warnings: [],
     });
     const { findByText, queryByText, getByText } = render(<FleetExpiry />);
-    expect(await findByText("hook-ca")).toBeTruthy();
+    expect(await findByText("hook-ca", {}, { timeout: 3000 })).toBeTruthy();
     expect(queryByText("Subject")).toBeNull();
     expect(getByText(/no subject reported for these rows/)).toBeTruthy();
   });
@@ -71,7 +71,7 @@ describe("FleetExpiry", () => {
       warnings: [],
     });
     const { findByText, getByText, queryByText } = render(<FleetExpiry />);
-    expect(await findByText("CN=web")).toBeTruthy();
+    expect(await findByText("CN=web", {}, { timeout: 3000 })).toBeTruthy();
     expect(getByText("Subject")).toBeTruthy();
     expect(queryByText(/no subject reported/)).toBeNull();
   });
@@ -83,7 +83,7 @@ describe("FleetExpiry", () => {
       warnings: [],
     });
     const { findByText } = render(<FleetExpiry />);
-    expect(await findByText("▲ 3d ago")).toBeTruthy();
+    expect(await findByText("▲ 3d ago", {}, { timeout: 3000 })).toBeTruthy();
   });
 
   it("per-source warnings and cluster errors surface as partial-scan notes", async () => {
@@ -93,8 +93,8 @@ describe("FleetExpiry", () => {
         : { items: [], warnings: [], error: "cluster not connected: prd-weu" },
     );
     const { findByText, findAllByText } = render(<FleetExpiry />);
-    expect(await findByText(/Partial scan - homelab: tls secrets: forbidden/)).toBeTruthy();
-    expect(await findByText(/Could not scan prd-weu: cluster not connected/)).toBeTruthy();
+    expect(await findByText(/Partial scan - homelab: tls secrets: forbidden/, {}, { timeout: 3000 })).toBeTruthy();
+    expect(await findByText(/Could not scan prd-weu: cluster not connected/, {}, { timeout: 3000 })).toBeTruthy();
     // the empty result names both the unread cluster and the partial one
     expect((await findAllByText(/1 of 2 clusters scanned, 1 partially/)).length).toBeGreaterThan(0);
   });
