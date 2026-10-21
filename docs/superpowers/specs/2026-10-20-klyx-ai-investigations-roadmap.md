@@ -29,6 +29,7 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
   - inline Prometheus metrics;
   - Alertmanager alerts (S8a);
   - Loki history (S8b);
+  - a refused write's admission finding: the webhook or policy that refused it, and its candidates (S3b);
   - rollout history;
   - the Observer's verdicts and the ledger.
 - **The verbs** (C4):
@@ -127,7 +128,9 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 
 **Open: writing to Git** (opening a branch or pull request for a desired-state remedy). That would cross "Git history through the system git, never writing a working tree", and stays out unless the owner decides it in.
 
-## 5. Sequencing (proposed; the owner decides)
+## 5. Sequencing
+
+**Decided (owner, 2026-10-21):** the coverage programme is complete (v0.15.0, with v0.15.1's fixes), and the AI programme comes next: A1, then A2 and A3, then extensions. That is option 1 below; the choice between the two options lapsed when coverage finished first.
 
 - **Option 1** (the 2026-10-16 order): finish the coverage programme (S10, S11a, S11b, S3b), then A1, A2, A3, then extensions.
 - **Option 2:** A1 right after S10. It reuses chat's contract and needs the evidence S8a, S8b and S9 just added. A2 and A3 follow the coverage programme.
@@ -188,7 +191,7 @@ What it needs beyond §6.1:
 
 ## 7. Open owner decisions
 
-1. **Sequencing:** §5's option 1 or 2.
+1. ~~**Sequencing:** §5's option 1 or 2.~~ Decided 2026-10-21 (§5): A1 now, then A2 and A3. The decisions below gate A2 and A3, not A1.
 2. **Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.
 3. **A3's reach:** day-2 verbs only, or Git pull requests too (§4, and §6's approval step).
 4. **Report retention:** how many reports, and for how long.
