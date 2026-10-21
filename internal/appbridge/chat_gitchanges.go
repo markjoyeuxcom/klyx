@@ -156,6 +156,7 @@ func (t *chatTools) changes(ctx context.Context, ns, name string) ChatToolResult
 	if out.RenderErr != "" {
 		data.Render = chatRenderInfo{State: "not established", Reason: p.str(out.RenderErr, chatStringMax), Qualifications: quals}
 		env.Complete = false
+		read.Detail = "the render comparison was not established"
 		env.Data = data
 		return t.finishWithin(env, read, chatChangesResultMax)
 	}

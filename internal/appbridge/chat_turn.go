@@ -38,6 +38,16 @@ Rules:
 - Secret values, Helm values and ConfigMap values are never available. Logs and messages are scrubbed of recognized credentials.
 - Answer concisely in plain Markdown: short paragraphs, lists and code blocks. No images, no HTML, no links unless the operator asked for one.`
 
+// invToolsAddendum frames an investigation (AI A1 §1, §4): the first
+// turn investigates the anchor and every turn ends with findings.
+const invToolsAddendum = `
+
+This conversation is an investigation of one object: the <seeded-object> in the operator's first message, pinned by its UID.
+- Investigate why it is failing, reading what you need; then end every turn by calling report_findings once, and answer briefly after it.
+- A finding is an observation (what the evidence shows) or a cause (what you think explains the failure). Every finding cites the read and check IDs it rests on, and names its subject. Klyx checks each citation and labels each finding itself: an observation is shown as your reading, a cause as suspected, and a finding whose citations do not hold up as unsupported. Nothing is shown as proven.
+- Evidence observed before the failure began does not establish it. A check held by name is about whatever had that name then.
+- Name what you could not read in missing. A remedy is text only: a Git change and a mitigation, proposed and never run.`
+
 const chatSnapshotSystem = `You are Klyx's assistant for one Kubernetes cluster, %q. You see one bounded snapshot of this cluster that Klyx assembled for this question; you cannot ask for more.
 
 Rules:
@@ -186,7 +196,7 @@ func (r *turnRunner) nextReadID() string {
 // Clear nothing is recorded (Codex review of 5d8003e).
 func (r *turnRunner) addRead(read ChatRead) {
 	r.s.mu.Lock()
-	live := r.s.convs[r.c.cluster] == r.c && r.c.active == r.turn
+	live := r.s.convs[r.c.key] == r.c && r.c.active == r.turn
 	if !live {
 		r.s.mu.Unlock()
 		return
@@ -263,16 +273,21 @@ func chatAITools() []ai.Tool {
 	return out
 }
 
-// tools runs the tool loop: at most chatMaxModelCalls model calls and
-// chatMaxToolCalls tool calls, counted per batch before dispatch. Every read
+// tools runs the tool loop: at most the conversation's model calls and
+// tool calls (turnLimits), counted per batch before dispatch. Every read
 // goes through the guarded conn; a request over the exact serialized budget
 // drops one more whole old exchange and is built again, nothing sent.
 func (r *turnRunner) tools(ctx context.Context) (string, error) {
 	exec := newChatTools(guardedConn{r}, r.s.now)
 	r.equip(exec)
 	tools := chatAITools()
+	if r.c.kind == kindInvestigation {
+		d := findingsToolDef()
+		tools = append(tools, ai.Tool{Name: d.Name, Description: d.Description, Schema: d.Schema})
+	}
 	used := 0
-	for call := 0; call < chatMaxModelCalls; call++ {
+	lim := r.c.limits()
+	for call := 0; call < lim.models; call++ {
 		var t ai.Turn
 		skip := 0
 		for {
@@ -288,7 +303,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			req := ai.ConvRequest{System: fmt.Sprintf(chatToolsSystem, r.c.cluster), Messages: msgs, Tools: tools, MaxBytes: chatRequestBudget}
+			req := ai.ConvRequest{System: r.toolsSystem(), Messages: msgs, Tools: tools, MaxBytes: chatRequestBudget}
 			idx := -1
 			t, err = func() (ai.Turn, error) {
 				idx = r.startCall(st)
@@ -335,7 +350,77 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 		}
 		r.ex.msgs = append(r.ex.msgs, ai.ConvMessage{Role: "tool", Results: results})
 	}
-	return "", &chatError{msg: fmt.Sprintf("the model did not finish within %d steps", chatMaxModelCalls)}
+	return "", &chatError{msg: fmt.Sprintf("the model did not finish within %d steps", lim.models)}
+}
+
+// ledger is the conversation's reads so far, every exchange's, copied.
+func (r *turnRunner) ledger() []ChatRead {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return ledgerLocked(r.c)
+}
+
+func ledgerLocked(c *conversation) []ChatRead {
+	var out []ChatRead
+	for _, ex := range c.exchanges {
+		for _, rd := range ex.reads {
+			rd.Refs = append([]ChatRef(nil), rd.Refs...)
+			rd.Checks = append([]ChatCheck(nil), rd.Checks...)
+			out = append(out, rd)
+		}
+	}
+	return out
+}
+
+// reportFindings records the turn's findings as Klyx labels them (AI A1
+// §4): once a turn, an invalid call answered with its error and retried at
+// most once. It is not a read: no ledger entry, no tool budget.
+func (r *turnRunner) reportFindings(call ai.ToolCall) ai.ToolResult {
+	fail := func(msg string) ai.ToolResult {
+		b, _ := json.Marshal(map[string]any{"errors": []string{msg}})
+		return ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true, Content: string(b)}
+	}
+	r.s.mu.Lock()
+	r.ex.findingCalls++
+	n, done := r.ex.findingCalls, r.ex.findings != nil
+	r.s.mu.Unlock()
+	switch {
+	case done:
+		return fail("findings were already reported this turn: answer briefly now")
+	case n > findingsAttemptsTurn:
+		return fail("report_findings was already retried this turn: answer with what you have")
+	}
+	in, err := parseFindings(call.Args)
+	if err != nil {
+		return fail("report_findings: " + chatScrub(err.Error(), nil) + "; correct it and call once more")
+	}
+	ledger := r.ledger()
+	dto := labelFindings(in, ledger, anchorOf(r.c.anchor, ledger))
+	r.s.mu.Lock()
+	r.ex.findings = &dto
+	r.s.version++
+	r.s.mu.Unlock()
+	type label struct {
+		Finding int      `json:"finding"`
+		Label   string   `json:"label"`
+		Notes   []string `json:"notes,omitempty"`
+	}
+	var labels []label
+	for i, f := range dto.Findings {
+		labels = append(labels, label{i + 1, f.Label, f.Notes})
+	}
+	b, _ := json.Marshal(map[string]any{"recorded": len(dto.Findings), "labels": labels,
+		"note": "Klyx shows these labels with your findings; nothing is shown as proven. Answer the operator briefly now."})
+	return ai.ToolResult{CallID: call.ID, Name: call.Name, Content: string(b)}
+}
+
+// toolsSystem is the tools-mode system prompt for the conversation's kind.
+func (r *turnRunner) toolsSystem() string {
+	sys := fmt.Sprintf(chatToolsSystem, r.c.cluster)
+	if r.c.kind == kindInvestigation {
+		sys += invToolsAddendum
+	}
+	return sys
 }
 
 // dropCall removes a call record whose request was never sent.
@@ -348,16 +433,23 @@ func (r *turnRunner) dropCall(i int) {
 }
 
 // dispatch runs one batch of calls within the remaining tool budget, at most
-// chatReadWorkers at once. Each executor reads through the guarded conn, so
+// the conversation's read workers at once. Each executor reads through the guarded conn, so
 // a component read inside a tool is guarded too. Calls past the budget get a
 // budget result and are not run.
 func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.ToolCall, used *int) ([]ai.ToolResult, error) {
-	remaining := chatMaxToolCalls - *used
+	lim := r.c.limits()
+	remaining := lim.tools - *used
 	results := make([]ai.ToolResult, len(calls))
-	sem := make(chan struct{}, chatReadWorkers)
+	sem := make(chan struct{}, lim.workers)
 	var wg sync.WaitGroup
+	reads := 0 // the batch's reads: report_findings is not one
 	for i, call := range calls {
-		if i >= remaining {
+		if call.Name == toolFindings && r.c.kind == kindInvestigation {
+			results[i] = r.reportFindings(call)
+			continue
+		}
+		reads++
+		if reads > remaining {
 			results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true,
 				Content: `{"errors":["tool budget for this question used up: answer with what you have"]}`}
 			r.addRead(ChatRead{Tool: call.Name, Outcome: "failed", Detail: "tool budget used up"})
@@ -385,11 +477,7 @@ func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.T
 		}()
 	}
 	wg.Wait()
-	if n := len(calls); n < remaining {
-		*used += n
-	} else {
-		*used += remaining
-	}
+	*used += min(reads, remaining)
 	if err := r.aborted(); err != nil {
 		return nil, err
 	}
