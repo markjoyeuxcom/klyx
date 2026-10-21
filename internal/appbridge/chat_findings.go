@@ -20,6 +20,7 @@ import (
 const (
 	toolFindings          = "report_findings"
 	findingsMax           = 20
+	findingCheckedMax     = 12 // checks shown beside one finding
 	findingStatementMax   = 500
 	findingCitesMax       = 10
 	findingsMissingMax    = 10
@@ -174,7 +175,9 @@ func anchorOf(anchor *ChatSeedDTO, ledger []ChatRead) anchorFacts {
 			if a.subject.Kind == "" {
 				a.subject.Kind = c.Subject.Kind
 			}
-			if c.Class != checkCondition && c.Class != checkStatus && c.Class != checkHealthCheck {
+			// a failure in force when read; a past restart is not one (A1
+			// implementation review, finding 5)
+			if !c.Failing {
 				continue
 			}
 			a.failing = true
@@ -222,21 +225,39 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 		fd := FindingDTO{Type: f.Type, Statement: chatScrub(f.Statement, &n), Subject: subj, Cites: append([]string{}, f.Cites...)}
 		var unknown []string
 		about, byUID, before, cited := false, false, 0, 0
+		shown := map[string]bool{}
+		// check is one check the finding rests on, cited directly or held
+		// by a read it cites: its time and coverage qualify the finding
+		// either way (A1 implementation review, finding 6)
+		check := func(c ChatCheck, via string) bool {
+			if shown[c.ID] || len(fd.Checked) == findingCheckedMax {
+				return false
+			}
+			shown[c.ID] = true
+			fc := FindingCheckDTO{ID: c.ID, Class: c.Class, Statement: c.Statement, Observed: c.Observed}
+			fc.Before = a.failing && a.start != "" && c.Observed != "" && c.Observed < a.start
+			fd.Checked = append(fd.Checked, fc)
+			if qualifiedCoverage(c.Coverage) {
+				if via == "" {
+					fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, whose coverage is %s", c.ID, c.Coverage))
+				} else {
+					fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, which holds %s, whose coverage is %s", via, c.ID, c.Coverage))
+				}
+			}
+			if fc.Before && via != "" {
+				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, whose %s was observed before the failure was reported", via, c.ID))
+			}
+			return fc.Before
+		}
 		for _, id := range f.Cites {
 			if c, ok := checks[id]; ok {
 				cited++
-				fc := FindingCheckDTO{ID: c.ID, Class: c.Class, Statement: c.Statement, Observed: c.Observed}
-				if a.failing && a.start != "" && c.Observed != "" && c.Observed < a.start {
-					fc.Before = true
+				if check(c, "") {
 					before++
 				}
-				fd.Checked = append(fd.Checked, fc)
 				if sameSubject(c.Subject, subj) {
 					about = true
 					byUID = byUID || c.Subject.Identity == identityUID
-				}
-				if c.Coverage == "stale" || c.Coverage == "partial" {
-					fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, whose coverage is %s", c.ID, c.Coverage))
 				}
 				continue
 			}
@@ -245,9 +266,13 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 				unknown = append(unknown, id)
 				continue
 			}
+			// a read is evidence read now, never wholly before the failure
 			cited++
 			if r.Outcome != "completed" {
 				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, a read that %s", id, map[string]string{"failed": "failed", "truncated": "was truncated", "cancelled": "was cancelled"}[r.Outcome]))
+			}
+			if len(r.Gaps) > 0 {
+				fd.Notes = append(fd.Notes, fmt.Sprintf("cites %s, part of which could not be read", id))
 			}
 			for _, ref := range r.Refs {
 				if ref.Namespace == subj.Namespace && ref.Name == subj.Name && refIsKind(ref.GVR, subj.Kind) {
@@ -259,6 +284,15 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 				if sameSubject(c.Subject, subj) {
 					about = true
 					byUID = byUID || c.Subject.Identity == identityUID
+					check(c, id)
+				}
+			}
+			// a by-name read supports a by-name reading, never one by UID
+			// (A1 implementation review, finding 7)
+			for _, s := range r.About {
+				if sameSubject(s, subj) {
+					about = true
+					byUID = byUID || s.Identity == identityUID
 				}
 			}
 		}
@@ -281,7 +315,7 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 			if !byUID {
 				fd.Notes = append(fd.Notes, findingIdentityByName)
 			}
-			if before > 0 && before == len(fd.Checked) && cited == before {
+			if before > 0 && cited == before {
 				fd.Notes = append(fd.Notes, "its evidence was observed before the failure was reported, so it does not establish the failure")
 			}
 		}
@@ -294,6 +328,11 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 		out.Remedy = &RemedyDTO{Git: chatScrub(in.Remedy.Git, &n), Mitigation: chatScrub(in.Remedy.Mitigation, &n), Label: proposedNotRun}
 	}
 	return out
+}
+
+// qualifiedCoverage is a check's coverage that qualifies what rests on it.
+func qualifiedCoverage(c string) bool {
+	return c != "" && c != "live" && c != "render"
 }
 
 func sameSubject(c, f ChatCheckSubject) bool {
@@ -318,9 +357,22 @@ func missingFrom(ledger []ChatRead) []MissingDTO {
 		case r.Tool == toolChanges && strings.Contains(r.Detail, "not established"):
 			out = append(out, MissingDTO{From: "klyx", Read: r.ID, Text: "git_changes " + r.Target + ": the render comparison was not established"})
 		}
+		for _, g := range r.Gaps {
+			if r.Outcome == "failed" || r.Outcome == "cancelled" {
+				break // its outcome says so
+			}
+			out = append(out, MissingDTO{From: "klyx", Read: r.ID, Text: strings.TrimSpace(r.Tool + " " + r.Target + ": part of it could not be read: " + g)})
+		}
+		covered := map[string]bool{}
 		for _, c := range r.Checks {
 			if c.Class == checkHealthCheck && (strings.Contains(c.Statement, joinMissing) || strings.Contains(c.Statement, "ambiguous") || strings.Contains(c.Statement, joinNoInventory)) {
 				out = append(out, MissingDTO{From: "klyx", Read: c.ID, Text: "a health-check entry was not joined to the inventory"})
+			}
+			// stale, partial, checking or unreadable evidence, once per
+			// read and coverage
+			if qualifiedCoverage(c.Coverage) && !covered[c.Coverage] {
+				covered[c.Coverage] = true
+				out = append(out, MissingDTO{From: "klyx", Read: c.ID, Text: fmt.Sprintf("%s %s holds evidence whose coverage is %s", r.Tool, r.Target, c.Coverage)})
 			}
 		}
 	}

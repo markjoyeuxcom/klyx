@@ -119,6 +119,8 @@ func (t *chatTools) logHistory(ctx context.Context, ns, pod, uid, container, win
 		Detail: fmt.Sprintf("%d lines, %s", data.Lines, strings.SplitN(data.Identity, ":", 2)[0])}
 	if page.Mode == "uid" {
 		read.Refs = []ChatRef{{GVR: "v1/pods", Namespace: ns, Name: pod, UID: uid}}
+	} else {
+		read.About = []ChatCheckSubject{byName("Pod", ns, pod)}
 	}
 	return t.finish(env, read)
 }

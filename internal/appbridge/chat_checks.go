@@ -57,6 +57,11 @@ type ChatCheck struct {
 	Observed  string           `json:"observed,omitempty"`
 	Onset     string           `json:"onset,omitempty"`
 	Coverage  string           `json:"coverage,omitempty"`
+	// Failing says the check reads a failure in force when it was read: a
+	// failing condition, a container that cannot run, a health check Flux
+	// is failing now. A past restart or termination is a status check
+	// without it. Only these decide whether an anchor is failing.
+	Failing bool `json:"failing,omitempty"`
 }
 
 func (s ChatCheckSubject) words() string {
@@ -112,7 +117,7 @@ func conditionChecks(u *unstructured.Unstructured, subj ChatCheckSubject, readAt
 			st += ", reason " + checkText(reason, p)
 		}
 		onset, _ := m["lastTransitionTime"].(string)
-		out = append(out, ChatCheck{Class: checkCondition, Subject: subj, Statement: st, Observed: readAt, Onset: onset, Coverage: "live"})
+		out = append(out, ChatCheck{Class: checkCondition, Subject: subj, Statement: st, Observed: readAt, Onset: onset, Coverage: "live", Failing: true})
 	}
 	return out
 }
@@ -124,7 +129,9 @@ var failingWaiting = map[string]bool{
 }
 
 // podStatusChecks reads a pod's containers: a failing waiting reason, the
-// restart count and the last termination's exit code and reason.
+// restart count and the last termination's exit code and reason. Only a
+// failing waiting reason is a failure in force; restarts and the last
+// termination are history, kept as facts.
 func podStatusChecks(u *unstructured.Unstructured, subj ChatCheckSubject, readAt string, p *projector) []ChatCheck {
 	var out []ChatCheck
 	for _, field := range []string{"initContainerStatuses", "containerStatuses"} {
@@ -157,7 +164,7 @@ func podStatusChecks(u *unstructured.Unstructured, subj ChatCheckSubject, readAt
 				parts = append(parts, t)
 			}
 			st := fmt.Sprintf("container %s of %s: %s", checkText(name, p), subj.words(), strings.Join(parts, "; "))
-			out = append(out, ChatCheck{Class: checkStatus, Subject: subj, Statement: st, Observed: readAt, Coverage: "live"})
+			out = append(out, ChatCheck{Class: checkStatus, Subject: subj, Statement: st, Observed: readAt, Coverage: "live", Failing: failingWaiting[waiting]})
 		}
 	}
 	return out

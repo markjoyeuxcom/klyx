@@ -195,7 +195,7 @@ func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, 
 	if len(pods) == 0 {
 		data.Note += " The workload has no pods now: no series was read."
 		env.Data = data
-		return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Detail: "no pods"})
+		return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Detail: "no pods", About: metricsAbout(kind, ns, name, nil)})
 	}
 	sel := metrics.Equals("namespace", ns) + "," + metrics.MatchAnyOf("pod", "", pods, "")
 	ctr := sel + `,container!="",container!="POD"`
@@ -281,5 +281,23 @@ func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, 
 	env.Data = data
 	env.Checks = capChecks(checks)
 	return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Redacted: p.redacted,
-		Detail: fmt.Sprintf("%d series over %d pods, %s", data.SeriesTotal, len(pods), window)})
+		Detail: fmt.Sprintf("%d series over %d pods, %s", data.SeriesTotal, len(pods), window), About: metricsAbout(kind, ns, name, pods)})
+}
+
+// metricsAbout is a metrics read's subjects: series are selected by pod
+// name, so the target and its pods are held by name.
+func metricsAbout(kind, ns, name string, pods []string) []ChatCheckSubject {
+	if kind == "" {
+		kind = "Pod"
+	}
+	out := []ChatCheckSubject{byName(kind, ns, name)}
+	for _, n := range pods {
+		if len(out) == chatReadAboutMax {
+			break
+		}
+		if kind != "Pod" || n != name {
+			out = append(out, byName("Pod", ns, n))
+		}
+	}
+	return out
 }

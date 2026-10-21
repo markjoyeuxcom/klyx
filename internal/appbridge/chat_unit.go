@@ -213,14 +213,22 @@ type healthSource struct {
 	onset time.Time
 }
 
-// healthFailure finds a unit's failed health check. While Flux retries, its
-// Ready and Healthy conditions read Unknown, Progressing for the whole
-// health-check run and the message is gone; Flux's own HealthCheckFailed
-// event about this unit, by its UID, still holds it (AI A1 lab, kustomize-
-// controller v1.9.6). When this revision first failed comes from
-// status.history, else the condition's transition, else the event.
+// healthFailure finds a unit's current failed health check. A Ready unit
+// has none: older evidence never overrides a current success. While Flux
+// retries, its Ready and Healthy conditions read Unknown, Progressing for
+// the whole health-check run and the message is gone; Flux's own
+// HealthCheckFailed event about this unit, by its UID, still holds it (AI A1
+// lab, kustomize-controller v1.9.6). The event is read as the current
+// failure only during a retry status.history establishes, and only when it
+// was seen within that retry: an event from before it, or from another
+// revision, stays dated context the events tool shows. When this revision
+// first failed comes from status.history, else the condition's transition,
+// else the event.
 func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructured, ns, uid string) (healthSource, bool) {
 	var src healthSource
+	if _, ready, _, _ := conditionRaw(u, "Ready"); ready == "True" {
+		return src, false
+	}
 	first := firstFailedReconcile(u)
 	for _, typ := range []string{"Ready", "Healthy"} {
 		since, status, reason, msg := conditionRaw(u, typ)
@@ -233,6 +241,10 @@ func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructu
 			return src, true
 		}
 	}
+	streak, retrying := retryOf(u)
+	if !retrying || uid == "" {
+		return src, false
+	}
 	evs, _, err := t.conn.ListEvents(ctx, ns)
 	if err != nil {
 		return src, false
@@ -240,7 +252,7 @@ func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructu
 	var newest *workloads.EventSummary
 	for i := range evs {
 		e := &evs[i]
-		if e.Type == "Warning" && e.Reason == "HealthCheckFailed" && e.UID == uid && uid != "" && (newest == nil || e.LastSeenUnix > newest.LastSeenUnix) {
+		if e.Type == "Warning" && e.Reason == "HealthCheckFailed" && e.UID == uid && (newest == nil || e.LastSeenUnix > newest.LastSeenUnix) {
 			newest = e
 		}
 	}
@@ -248,11 +260,44 @@ func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructu
 		return src, false
 	}
 	at := time.Unix(newest.LastSeenUnix, 0).UTC()
-	src = healthSource{msg: newest.Message, from: fmt.Sprintf("Flux's HealthCheckFailed event at %s, while the unit retries", rfcOrEmpty(at)), observed: rfcOrEmpty(at), onset: first}
+	if at.Before(streak.Add(-retryEventSkew)) {
+		return src, false
+	}
+	src = healthSource{msg: newest.Message, observed: rfcOrEmpty(at), onset: first,
+		from: fmt.Sprintf("Flux's HealthCheckFailed event at %s, while the unit retries: it is not Ready, and status.history records the attempted revision's health check failing since %s", rfcOrEmpty(at), rfcOrEmpty(streak))}
 	if src.onset.IsZero() && newest.FirstSeenUnix > 0 {
 		src.onset = time.Unix(newest.FirstSeenUnix, 0).UTC()
 	}
 	return src, true
+}
+
+// retryEventSkew is how far before its history entry a retry's event may be
+// stamped: kustomize-controller records the event as the health check fails
+// and the history entry as it finishes the reconcile, in whole seconds.
+const retryEventSkew = 5 * time.Second
+
+// retryOf says whether Flux is retrying the attempted revision after a
+// failed health check: the attempted revision's newest status.history entry
+// records HealthCheckFailed. streak is that entry's firstReconciled, when
+// the current run of failures began. Flux merges consecutive reconciles of
+// one digest and status into one entry, newest first.
+func retryOf(u *unstructured.Unstructured) (streak time.Time, retrying bool) {
+	attempted, _, _ := unstructured.NestedString(u.Object, "status", "lastAttemptedRevision")
+	hist, _, _ := unstructured.NestedSlice(u.Object, "status", "history")
+	for _, h := range hist {
+		m, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if rev, _, _ := unstructured.NestedString(m, "metadata", "revision"); rev != attempted || attempted == "" {
+			continue
+		}
+		status, _ := m["lastReconciledStatus"].(string)
+		at, _ := m["firstReconciled"].(string)
+		tm, err := time.Parse(time.RFC3339, at)
+		return tm, status == "HealthCheckFailed" && err == nil
+	}
+	return time.Time{}, false
 }
 
 // firstFailedReconcile is when the attempted revision first failed its
@@ -323,7 +368,7 @@ func (t *chatTools) healthCheck(ctx context.Context, u *unstructured.Unstructure
 			st += "; " + ce.Join
 		}
 		st += " (from " + src.from + ")"
-		checks = append(checks, ChatCheck{Class: checkHealthCheck, Subject: subj, Statement: st, Observed: src.observed, Onset: rfcOrEmpty(onset), Coverage: "live"})
+		checks = append(checks, ChatCheck{Class: checkHealthCheck, Subject: subj, Statement: st, Observed: src.observed, Onset: rfcOrEmpty(onset), Coverage: "live", Failing: true})
 		if known && e.Status != "Current" && read < chatUnitCurrentMax {
 			read++
 			cur, c, ref := t.currentOf(ctx, e, ce.Group, onset, verdicts, p)

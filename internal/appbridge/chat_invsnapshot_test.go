@@ -78,10 +78,11 @@ func TestSnapshotInvestigationRunsKlyxsPlanFromItsOwnLinks(t *testing.T) {
 	for _, m := range fd.Missing {
 		missing = append(missing, m.From+":"+m.Read)
 	}
-	// the unjoined Widget entry, the alerts no snapshot answered, and the
+	// the anchor's two reads' gap (the fixture serves no verdicts), the
+	// unjoined Widget entry, the alerts no snapshot answered, and the
 	// model's own note
-	if strings.Join(missing, ",") != "klyx:r2.c3,klyx:r8,model:" {
-		t.Fatalf("%v", missing)
+	if strings.Join(missing, ",") != "klyx:r1,klyx:r2,klyx:r2.c3,klyx:r8,model:" {
+		t.Fatalf("%v %+v", missing, fd.Missing)
 	}
 }
 

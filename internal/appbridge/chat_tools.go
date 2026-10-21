@@ -78,6 +78,10 @@ const (
 	chatResultMax = 16 * 1024
 	// chatLogLineMax caps one log line after scrubbing (spec §4).
 	chatLogLineMax = 2000
+	// a read's gaps and by-name subjects in its ledger entry (AI A1)
+	chatReadGapsMax  = 3
+	chatReadGapMax   = 200
+	chatReadAboutMax = 20
 )
 
 // ChatToolDef is one tool as offered to a provider: a name, what it does, and
@@ -200,6 +204,19 @@ type ChatRead struct {
 	Redacted int         `json:"redacted,omitempty"`
 	Refs     []ChatRef   `json:"refs,omitempty"`
 	Checks   []ChatCheck `json:"checks,omitempty"`
+	// Gaps are the parts of a read its result says it could not read: its
+	// first errors, short
+	Gaps []string `json:"gaps,omitempty"`
+	// About is what a read is about that Refs and Checks do not carry, with
+	// how Klyx holds each: a by-name read (Loki by name, metrics selected by
+	// pod name, alerts matched by label) names its subjects here by name,
+	// never as a reference by UID
+	About []ChatCheckSubject `json:"about,omitempty"`
+}
+
+// byName is a read's subject held by name only.
+func byName(kind, ns, name string) ChatCheckSubject {
+	return ChatCheckSubject{Kind: kind, Namespace: ns, Name: name, Identity: identityName}
 }
 
 // ChatToolResult is one executed call: the envelope the model sees and the
@@ -773,6 +790,7 @@ func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatT
 			if env.Truncated && read.Outcome == "completed" {
 				read.Outcome = "truncated"
 			}
+			read.Gaps = gapsOf(env.Errors)
 			return ChatToolResult{JSON: b, Read: read}
 		}
 		env.Truncated = true
@@ -780,7 +798,24 @@ func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatT
 	}
 	b, _ := json.Marshal(chatEnvelope{Tool: env.Tool, ReadID: env.ReadID, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Checks: env.Checks, Errors: []string{"the result was too large to send"}})
 	read.Outcome = "truncated"
+	read.Gaps = gapsOf(env.Errors)
 	return ChatToolResult{JSON: b, Read: read}
+}
+
+// gapsOf keeps a read's first errors, short, for its ledger entry.
+func gapsOf(errs []string) []string {
+	var out []string
+	for i, e := range errs {
+		if i == chatReadGapsMax {
+			out = append(out, fmt.Sprintf("+%d more", len(errs)-i))
+			break
+		}
+		if r := []rune(e); len(r) > chatReadGapMax {
+			e = string(r[:chatReadGapMax]) + "…"
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // shrink halves list data and sheds the bulkiest parts of an object.

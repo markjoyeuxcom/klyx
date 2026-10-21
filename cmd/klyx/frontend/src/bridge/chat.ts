@@ -9,9 +9,14 @@ export type ChatRef = { gvr: string; namespace?: string; name: string; uid?: str
 // AI A1 §2: a check is an observation Klyx evaluated itself on a read, by
 // UID or by name only; id is its citation ("r4.c1").
 export type ChatCheckSubject = { kind: string; namespace?: string; name: string; uid?: string; identity: "uid" | "name" };
-export type ChatCheck = { id: string; class: string; subject: ChatCheckSubject; statement: string; observed?: string; onset?: string; coverage?: string };
-// id is the read's citation ("r4") within its conversation.
-export type ChatRead = { id?: string; tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[]; checks?: ChatCheck[] };
+// failing: the check reads a failure in force when read, not a past one.
+export type ChatCheck = { id: string; class: string; subject: ChatCheckSubject; statement: string; observed?: string; onset?: string; coverage?: string; failing?: boolean };
+// id is the read's citation ("r4") within its conversation; gaps are the
+// parts it could not read; about, what a by-name read is about.
+export type ChatRead = {
+  id?: string; tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[]; checks?: ChatCheck[];
+  gaps?: string[]; about?: ChatCheckSubject[];
+};
 export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[]; outcome: string };
 // AI A1 §4: an investigation turn's findings as Klyx labels them. A finding
 // is the model's; a check it cites is Klyx's, shown as checked.

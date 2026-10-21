@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -190,6 +191,14 @@ func (t *chatTools) alerts(ctx context.Context, kind, ns, name string) ChatToolR
 	env.Total = &chatTotal{Count: data.Total, Exact: env.Complete}
 	env.Data = data
 	env.Checks = capChecks(checks)
+	// alerts match by label: the target and each alert's subject by name
+	about := []ChatCheckSubject{byName(k.Kind, ns, name)}
+	for _, i := range idx {
+		s := byName(found[i].Subject.Kind, found[i].Subject.Namespace, found[i].Subject.Name)
+		if len(about) < chatReadAboutMax && s.Name != "" && !slices.Contains(about, s) {
+			about = append(about, s)
+		}
+	}
 	return t.finish(env, ChatRead{Tool: toolAlerts, Target: target, Outcome: "completed", Redacted: p.redacted,
-		Detail: fmt.Sprintf("%d alerts", data.Total)})
+		Detail: fmt.Sprintf("%d alerts", data.Total), About: about})
 }

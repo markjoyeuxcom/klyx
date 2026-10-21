@@ -393,9 +393,73 @@ func TestUnitReadsARetryingUnitsFailureFromItsEvent(t *testing.T) {
 	if !a.failing || a.start != "2026-10-21T12:37:43Z" {
 		t.Fatalf("%+v", a)
 	}
+	if !strings.Contains(d.HealthCheck.From, "status.history records the attempted revision's health check failing since 2026-10-21T12:37:43Z") {
+		t.Fatalf("the retry the event is read under is said: %q", d.HealthCheck.From)
+	}
 	f.events = nil
 	if env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`); unitData(t, env).HealthCheck != nil {
 		t.Fatal("no condition and no event: nothing is parsed")
+	}
+	// AI A1 implementation review, finding 4: the event is the current
+	// failure only during a retry history establishes, and only when seen
+	// within it
+	newest := workloads.EventSummary{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: msg, LastSeenUnix: 1792586683}
+	for _, tc := range []struct {
+		name  string
+		mod   func(st map[string]any)
+		event workloads.EventSummary
+	}{
+		{"an event from before the retry", nil, workloads.EventSummary{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: msg, LastSeenUnix: 1792586000}},
+		{"no history", func(st map[string]any) { delete(st, "history") }, newest},
+		{"the attempted revision last reconciled", func(st map[string]any) {
+			st["history"] = append([]any{map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "firstReconciled": "2026-10-21T12:40:00Z",
+				"metadata": map[string]any{"revision": "main@sha1:bbb"}}}, st["history"].([]any)...)
+		}, newest},
+		{"history of another revision only", func(st map[string]any) { st["history"] = st["history"].([]any)[1:] }, newest},
+		{"another revision failing", func(st map[string]any) {
+			st["history"] = []any{map[string]any{"lastReconciledStatus": "HealthCheckFailed", "firstReconciled": "2026-10-21T12:37:43Z",
+				"metadata": map[string]any{"revision": "main@sha1:ccc"}}}
+		}, newest},
+	} {
+		u := unitObj("ignored")
+		st := u.Object["status"].(map[string]any)
+		st["conditions"] = []any{map[string]any{"type": "Ready", "status": "Unknown", "reason": "Progressing", "lastTransitionTime": "2026-10-21T12:43:13Z"}}
+		st["history"] = []any{
+			map[string]any{"lastReconciledStatus": "HealthCheckFailed", "firstReconciled": "2026-10-21T12:37:43Z", "metadata": map[string]any{"revision": "main@sha1:bbb"}},
+			map[string]any{"lastReconciledStatus": "ReconciliationSucceeded", "firstReconciled": "2026-10-21T12:30:00Z", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+		}
+		if tc.mod != nil {
+			tc.mod(st)
+		}
+		f := unitChat(u)
+		f.events = []workloads.EventSummary{tc.event}
+		if env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`); unitData(t, env).HealthCheck != nil {
+			t.Fatalf("%s: the event is not this retry's failure", tc.name)
+		}
+	}
+}
+
+// AI A1 implementation review, finding 4: a Ready unit has no current
+// health-check failure, whatever older event or condition holds.
+func TestUnitRecoveredDoesNotReviveAnOldFailure(t *testing.T) {
+	msg := "health check failed after 1m30s: timeout waiting for: [Deployment/shop/web status: 'InProgress']"
+	u := unitObj("ignored")
+	st := u.Object["status"].(map[string]any)
+	st["conditions"] = []any{
+		map[string]any{"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded", "lastTransitionTime": "2026-10-21T12:50:00Z"},
+		map[string]any{"type": "Healthy", "status": "False", "reason": "HealthCheckFailed", "message": msg, "lastTransitionTime": "2026-10-21T12:40:00Z"},
+	}
+	st["history"] = []any{map[string]any{"lastReconciledStatus": "HealthCheckFailed", "firstReconciled": "2026-10-21T12:37:43Z", "metadata": map[string]any{"revision": "main@sha1:bbb"}}}
+	f := unitChat(u)
+	f.events = []workloads.EventSummary{{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: msg, LastSeenUnix: 1792586683}}
+	env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`)
+	if d := unitData(t, env); d.HealthCheck != nil {
+		t.Fatalf("a Ready unit reuses an older failure as current: %+v", d.HealthCheck)
+	}
+	for _, c := range env.Checks {
+		if c.Class == checkHealthCheck {
+			t.Fatalf("%+v", c)
+		}
 	}
 	// read from its Ready condition, the revision still first failed when
 	// history says, not at the condition's latest transition
