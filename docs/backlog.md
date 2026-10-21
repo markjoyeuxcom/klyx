@@ -68,6 +68,17 @@ real-cluster smoke is on the v1.0.0 gate below.
       Karpenter lens (against the EKS lab once Karpenter lands there: does
       detection fire, do stuck claims name the right chain link, does the
       floor caption appear on the survivability module)
+- [ ] **Eyeball the coverage programme (v0.15.0) on your own clusters** - verified
+      on the kind lab only (native smoke 208/208 four ways; S7 also on AKS dev).
+      Against EKS and on-prem: the Flux lens's Operator, Images, Composition and
+      Notifications views; the Velero lens; Admission (a fail-closed webhook's
+      backend, and a refused write's finding in the YAML panel and its toast);
+      Load balancers (MetalLB, Cilium LB IPAM, k3s ServiceLB); workload identity
+      (IRSA, Pod Identity) on an EKS pod; a resize reading; Gateway ListenerSets
+      and L4 routes; the Alerts lens and Log history (with Alertmanager and Loki
+      set in Settings > External endpoints); KEDA; Karpenter NodeClasses; the
+      DRA lens (the ROCm homelab, once authorised); and the YAML editor's Apply
+      on a labelled object
 - [ ] **Real-cluster smoke of health 1c** (shipped in v0.10.0, verified only on
       the kind parity fixture): the mast, tree, Overview, fleet spine, meters and
       cards against the live AKS fleet - do the attention areas, counts and
@@ -238,6 +249,26 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 ## Recently shipped (so it's not mistaken for open)
 
 Merged to `main` — do not re-add to the backlog:
+
+**2026-10-21 - First-class coverage (v0.15.0, roadmap
+`docs/superpowers/specs/2026-10-16-klyx-coverage-roadmap.md` and its slice
+notes, notes `docs/release-notes-0.15.0.md`; PRs #50 and #51):**
+- Flux in full: the Flux Operator (S1a), image automation (S1b), source
+  composition and notification facts (S1c)
+- Velero, read-only (S2a, S2b); admission backend availability (S3a) and
+  proven attribution of Klyx's own refused writes (S3b); on-prem load
+  balancing (S4); workload identity (S5); pods, correct (S6); Gateway API
+  current (S7a, S7b)
+- External endpoints with keychain credentials (C5); Alertmanager alerts
+  (S8a) and Loki log history (S8b); KEDA (S9); node provisioning by
+  provider adapter (S10); extended resources (S11a) and DRA (S11b)
+- The shared contracts C1 to C5; the pod projection fix (S0) and embedded
+  payloads sanitised on every path (S0b)
+- The Line slices 15 (the generic browser) and 16 (the inspector widens and
+  expands); the YAML editor's validator fixed (it refused every object with
+  a prefixed label); the Go 1.27.3 floor
+- Every slice Codex-reviewed before and after building; native smoke
+  208/208 four ways on the kind lab
 
 **2026-10-16 — The Line (v0.14.0, spec
 `docs/superpowers/specs/2026-10-14-klyx-the-line-redesign.md` and its slice
