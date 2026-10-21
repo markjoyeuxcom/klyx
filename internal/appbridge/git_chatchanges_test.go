@@ -99,7 +99,6 @@ func TestGitChangesStopsAtItsFence(t *testing.T) {
 	if _, err := svc.changes(ctx, req); !errors.Is(err, changed) || len(store.ensured) != 1 {
 		t.Fatalf("the second fetch is not made: %v %v", err, store.ensured)
 	}
-	// the two renders build at once: the counts are atomic
 	var builds atomic.Int32
 	exe := childExe
 	childExe = func() (string, error) { builds.Add(1); return exe() }
@@ -111,7 +110,7 @@ func TestGitChangesStopsAtItsFence(t *testing.T) {
 		return nil
 	})
 	if out, err := svc.changes(ctx, req); !errors.Is(err, changed) || builds.Load() != 2 || out.RenderErr != "" || out.New != nil {
-		t.Fatalf("a build is not run once the fence changes, and no render failure is claimed: %v %d %+v", err, builds.Load(), out)
+		t.Fatalf("the second build is not run, and no render failure is claimed: %v %d %+v", err, builds.Load(), out)
 	}
 	if out, err := svc.changes(context.Background(), req); err != nil || len(out.Old) != 1 || len(out.New) != 1 {
 		t.Fatalf("the control: %v %+v", err, out)
@@ -200,11 +199,11 @@ func TestAComparisonRunsInsideTheAdmission(t *testing.T) {
 	}
 }
 
-// One comparison at a time, fleet-wide: its two renders build at once, and
-// another comparison waits within its deadline.
+// One comparison at a time, fleet-wide, and another waits within its
+// deadline.
 func TestChatComparisonsWaitForTheAdmission(t *testing.T) {
-	if cap(chatRenderAdmission) != 1 || chatRendersAtOnce != 2 {
-		t.Fatalf("one comparison of two renders: %d %d", cap(chatRenderAdmission), chatRendersAtOnce)
+	if cap(chatRenderAdmission) != 1 {
+		t.Fatalf("one comparison at a time: %d", cap(chatRenderAdmission))
 	}
 	release, err := admitComparison(context.Background())
 	if err != nil {

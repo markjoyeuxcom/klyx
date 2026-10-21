@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	ssautil "github.com/fluxcd/pkg/ssa/utils"
@@ -22,22 +21,21 @@ import (
 // ensured in the history cache; the commits and changed files between them
 // are listed under spec.path; and each revision is built with the cache
 // diff's confined build under today's Kustomization spec. A fleet-wide
-// admission takes one comparison at a time: its two renders build at once,
-// and the comparison runs before the admission is released, so at most two
-// renders are building or held fleet-wide (A1 §1; the §8 load test found
-// that admitting renders one by one let each waiting investigation hold
-// its first render). Nothing here reaches a model: the tool projects what
-// it returns.
+// admission takes one comparison at a time: its two revisions build one
+// after the other, and the comparison runs before the admission is
+// released, so at most one render is building and two are held fleet-wide
+// (A1 §1; the §8 load test found that admitting renders one by one let
+// each waiting investigation hold its first render). Nothing here reaches
+// a model: the tool projects what it returns.
 
 const (
 	chatChangesCommitsMax = gitcli.MaxLogCommits // 20
 	chatChangesFilesMax   = 200
-	chatRendersAtOnce     = 2 // one comparison's two revisions
 )
 
 // chatRenderAdmission admits one investigation comparison at a time,
 // fleet-wide; the rest wait within their turn's deadline.
-var chatRenderAdmission = make(chan struct{}, chatRendersAtOnce/2)
+var chatRenderAdmission = make(chan struct{}, 1)
 
 // chatBuilding counts the confined builds running for investigations (the
 // §8 load test reads it).
@@ -180,43 +178,29 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 		return out, err
 	}
 	defer release()
-	type render struct {
-		objs      []*unstructured.Unstructured
-		generated bool
-		err       error
-	}
-	var renders [2]render
-	var wg sync.WaitGroup
+	// one render after the other, in this read worker: a render is a read
+	// of the Git cache, and §1 counts each read's own fan-out
+	var renders [2][]*unstructured.Unstructured
 	for i, rev := range []gitcli.Rev{applied, attempted} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r := &renders[i]
-			r.objs, r.generated, r.err = s.chatRender(ctx, cs, url, rev, specPath, req.Spec)
-		}()
-	}
-	wg.Wait()
-	if err := ctx.Err(); err != nil {
-		return out, err
-	}
-	var failed renderFailure
-	for _, r := range renders {
-		if r.err != nil && !errors.As(r.err, &failed) {
-			return out, r.err // the read fence, never a render's failure
-		}
-	}
-	for i, r := range renders {
-		if errors.As(r.err, &failed) {
+		objs, generated, err := s.chatRender(ctx, cs, url, rev, specPath, req.Spec)
+		var failed renderFailure
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return out, ctx.Err()
+		case errors.As(err, &failed):
 			out.RenderErr = fmt.Sprintf("the render of %s: %s", []string{req.Applied, req.Attempted}[i][:7], failed.class)
 			return out, nil
+		case err != nil:
+			return out, err // the read fence, never a render's failure
 		}
+		renders[i] = objs
+		out.Generated = out.Generated || generated
 	}
-	out.Generated = renders[0].generated || renders[1].generated
 	if req.Compare != nil {
-		req.Compare(renders[0].objs, renders[1].objs)
+		req.Compare(renders[0], renders[1])
 		return out, nil
 	}
-	out.Old, out.New = renders[0].objs, renders[1].objs
+	out.Old, out.New = renders[0], renders[1]
 	return out, nil
 }
 

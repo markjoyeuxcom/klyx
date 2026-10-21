@@ -337,10 +337,10 @@ func TestInvestigationsAtTheirBoundsAtOnce(t *testing.T) {
 	if peakComparisons == 0 || peakBuilds == 0 || peakReads <= invReadWorkers {
 		t.Errorf("the samplers saw no comparison (%d), no build (%d), or no reads beyond one investigation's (%d)", peakComparisons, peakBuilds, peakReads)
 	}
-	if peakReads > chatMaxConvs*invReadWorkers || peakComparisons > 1 || peakBuilds > chatRendersAtOnce {
-		t.Errorf("reads in flight %d (bound %d), comparisons admitted %d (bound 1), builds %d (bound %d)",
-			peakReads, chatMaxConvs*invReadWorkers, peakComparisons, peakBuilds, chatRendersAtOnce)
+	if peakReads > chatMaxConvs*invReadWorkers || peakComparisons > 1 || peakBuilds > 1 {
+		t.Errorf("reads in flight %d (bound %d), comparisons admitted %d (bound 1), builds %d (bound 1)",
+			peakReads, chatMaxConvs*invReadWorkers, peakComparisons, peakBuilds)
 	}
-	t.Logf("%d investigations in %s: renders of %d x %d KiB; reads in flight at most %d (bound %d); comparisons admitted at most %d (bound 1), builds at most %d (bound %d); largest results %v; retained %d KiB in all; heap in use at most %d MiB",
-		chatMaxConvs, took.Round(time.Millisecond), n, size>>10, peakReads, chatMaxConvs*invReadWorkers, peakComparisons, peakBuilds, chatRendersAtOnce, sent, retained>>10, peakHeap>>20)
+	t.Logf("%d investigations in %s: renders of %d x %d KiB; reads in flight at most %d (bound %d); comparisons admitted at most %d (bound 1), builds at most %d (bound 1); largest results %v; retained %d KiB in all; heap in use at most %d MiB",
+		chatMaxConvs, took.Round(time.Millisecond), n, size>>10, peakReads, chatMaxConvs*invReadWorkers, peakComparisons, peakBuilds, sent, retained>>10, peakHeap>>20)
 }
