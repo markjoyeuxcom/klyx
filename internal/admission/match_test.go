@@ -36,7 +36,7 @@ type oracleReq struct {
 }
 
 func (o oracleReq) request() Request {
-	return Request{Operation: o.Operation, Group: o.Group, Version: o.Version, Resource: o.Resource, Subresource: o.Subresource, Namespace: o.Namespace}
+	return Request(o)
 }
 
 var longGroup = strings.Repeat("l", 60) + ".lab.klyx.dev"
