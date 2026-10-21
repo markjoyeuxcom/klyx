@@ -49,6 +49,7 @@ type fakeChatConn struct {
 	compareHook  func() // runs after each compare read
 	graph        depgraph.Graph
 	graphUIDs    []string
+	graphHook    func(ctx context.Context) // runs inside DependencyGraph
 	chain        *certmanager.Chain
 	topo         *gwapi.Topology
 	rules        map[string]routemetrics.GatewayRules // by Gateway ns/name
@@ -70,7 +71,10 @@ func (f *fakeChatConn) WorkloadCompare(_ context.Context, kind, ns, name string)
 	return f.compare, nil
 }
 
-func (f *fakeChatConn) DependencyGraph(_ context.Context, _, _, _, uid string) depgraph.Graph {
+func (f *fakeChatConn) DependencyGraph(ctx context.Context, _, _, _, uid string) depgraph.Graph {
+	if f.graphHook != nil {
+		f.graphHook(ctx)
+	}
 	f.graphUIDs = append(f.graphUIDs, uid)
 	return f.graph
 }

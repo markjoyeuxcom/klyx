@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/procrun"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // AI A1 §3.2: the Git half of git_changes. The unit's GitRepository URL maps
@@ -93,7 +94,12 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 	if err != nil {
 		return out, err
 	}
+	// the read fence before each step: a fetch, the history reads, each
+	// render's inputs and its build (A1 implementation review, finding 3)
 	for _, sha := range []string{req.Applied, req.Attempted} {
+		if err := readfence.Check(ctx); err != nil {
+			return out, err
+		}
 		if err := cs.EnsureCommit(ctx, url, sha); err != nil {
 			return out, fmt.Errorf("fetching %s: %w", sha[:7], err)
 		}
@@ -110,13 +116,25 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 	err = cs.Read(url, func(repo gitcli.Repo) error {
 		var err error
 		inc, exc := []gitcli.Rev{attempted}, []gitcli.Rev{applied}
+		if err := readfence.Check(ctx); err != nil {
+			return err
+		}
 		if out.Commits, err = repo.LogPath(ctx, inc, exc, chatChangesCommitsMax, paths); err != nil {
+			return err
+		}
+		if err := readfence.Check(ctx); err != nil {
 			return err
 		}
 		if out.CommitsTotal, err = repo.CountPath(ctx, inc, exc, paths); err != nil {
 			return err
 		}
+		if err := readfence.Check(ctx); err != nil {
+			return err
+		}
 		if out.Ancestor, err = repo.IsAncestor(ctx, applied, attempted); err != nil {
+			return err
+		}
+		if err := readfence.Check(ctx); err != nil {
 			return err
 		}
 		files, err := repo.DiffNames(ctx, applied, attempted, paths)
@@ -139,13 +157,16 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 		into *[]*unstructured.Unstructured
 	}{{applied, req.Applied, &out.Old}, {attempted, req.Attempted, &out.New}} {
 		objs, generated, err := s.chatRender(ctx, cs, url, r.rev, specPath, req.Spec)
-		if err != nil {
-			if ctx.Err() != nil {
-				return out, ctx.Err()
-			}
+		var failed renderFailure
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return out, ctx.Err()
+		case errors.As(err, &failed):
 			out.Old, out.New = nil, nil
-			out.RenderErr = fmt.Sprintf("the render of %s: %s", r.sha[:7], failureClass(err))
+			out.RenderErr = fmt.Sprintf("the render of %s: %s", r.sha[:7], failed.class)
 			return out, nil
+		case err != nil:
+			return out, err // the read fence, never a render's failure
 		}
 		*r.into = objs
 		out.Generated = out.Generated || generated
@@ -163,6 +184,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 		return nil, false, ctx.Err()
 	}
 	defer func() { <-chatRenderAdmission }()
+	if err := readfence.Check(ctx); err != nil {
+		return nil, false, err
+	}
 	source := cachediff.CacheSource{Store: cs, URL: url, Rev: rev}
 	set, err := cachediff.Compute(ctx, source, specPath)
 	if err != nil {
@@ -172,6 +196,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	for _, e := range set.Files {
 		entries = append(entries, e)
 	}
+	if err := readfence.Check(ctx); err != nil {
+		return nil, false, err
+	}
 	contents, err := source.Read(ctx, entries)
 	if err != nil {
 		return nil, false, renderFailure{"the revision's files could not be read from the Git cache", err}
@@ -179,6 +206,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	exe, err := childExe()
 	if err != nil {
 		return nil, false, renderFailure{"the confined build is not available", err}
+	}
+	if err := readfence.Check(ctx); err != nil {
+		return nil, false, err
 	}
 	objs, err := cachediff.Build(ctx, exe, set, contents, spec)
 	if err != nil {
@@ -204,15 +234,6 @@ type renderFailure struct {
 
 func (f renderFailure) Error() string { return f.class }
 func (f renderFailure) Unwrap() error { return f.err }
-
-// failureClass is the fixed words of a render failure.
-func failureClass(err error) string {
-	var f renderFailure
-	if errors.As(err, &f) {
-		return f.class
-	}
-	return "the render failed"
-}
 
 func inputFailure(err error) string {
 	for _, c := range []error{cachediff.ErrInputMissing, cachediff.ErrInputUnsupported, cachediff.ErrInputUnreadable, cachediff.ErrInputBound} {

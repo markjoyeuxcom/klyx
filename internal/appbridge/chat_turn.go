@@ -21,6 +21,7 @@ import (
 	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -95,6 +96,9 @@ func (r *turnRunner) check() error {
 }
 
 func (r *turnRunner) run(ctx context.Context) (string, error) {
+	// every component read of the turn, inside composites too, checks the
+	// turn's fence first (A1 implementation review, finding 3)
+	ctx = readfence.With(ctx, r.check)
 	if err := r.seedRead(ctx); err != nil {
 		return "", err
 	}

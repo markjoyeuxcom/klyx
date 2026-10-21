@@ -40,6 +40,12 @@ func fluxGroupForKind(kind flux.Kind) (group, fallbackVersion string, ok bool) {
 // (servedVersion; the documented version when discovery cannot answer, e.g. in
 // tests).
 func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, error) {
+	return gvrForKindIn(c.discovery(), kind)
+}
+
+// gvrForKindIn is gvrForKind through disc: a composite read passes its
+// context-bound discovery (discoveryFor).
+func gvrForKindIn(disc discoveryLike, kind flux.Kind) (schema.GroupVersionResource, error) {
 	group, fallback, ok := fluxGroupForKind(kind)
 	if !ok {
 		return schema.GroupVersionResource{}, fmt.Errorf("unsupported kind %q", kind)
@@ -48,7 +54,7 @@ func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, e
 	if !ok {
 		return schema.GroupVersionResource{}, fmt.Errorf("unsupported kind %q", kind)
 	}
-	version, served := servedVersion(c.discovery(), group, resource, fallback)
+	version, served := servedVersion(disc, group, resource, fallback)
 	if !served {
 		return schema.GroupVersionResource{}, fmt.Errorf("%s is not served by this cluster (%s CRD not installed)", kind, resource)
 	}

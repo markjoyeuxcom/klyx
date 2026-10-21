@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/gitcli"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // AI A1 §3.2: the Git half of git_changes over a real repository and the
@@ -73,6 +74,64 @@ func TestGitChangesListsAndRendersBothRevisions(t *testing.T) {
 	if err != nil || out.RenderErr != "the render of "+shas[0][:7]+": kustomize reported an error; its text is not sent, since it can quote the repository's values" ||
 		out.Old != nil || out.New != nil || out.FilesTotal != 1 {
 		t.Fatalf("%v %+v", err, out)
+	}
+}
+
+// AI A1 implementation review, finding 3: each Git step checks the read
+// fence, so one that changes after the first fetch, or once the second
+// render reaches its build, stops the rest; the control reads on.
+func TestGitChangesStopsAtItsFence(t *testing.T) {
+	store, shas := newHistoryFixture(t,
+		map[string]string{"clusters/prd/kustomization.yaml": "resources: [deployment.yaml]\n", "clusters/prd/deployment.yaml": fmt.Sprintf(historyBase, "1.0", "a")},
+		map[string]string{"clusters/prd/deployment.yaml": fmt.Sprintf(historyBase, "1.1", "b")},
+	)
+	svc := newDiffService(t, store)
+	req := gitChangesReq{RepoURL: "https://github.com/acme/fleet.git", Applied: shas[0], Attempted: shas[1], Spec: map[string]any{"path": "./clusters/prd"}}
+	changed := errors.New("the fence changed")
+	ctx := readfence.With(context.Background(), func() error {
+		if len(store.ensured) >= 1 {
+			return changed
+		}
+		return nil
+	})
+	if _, err := svc.changes(ctx, req); !errors.Is(err, changed) || len(store.ensured) != 1 {
+		t.Fatalf("the second fetch is not made: %v %v", err, store.ensured)
+	}
+	builds := 0
+	exe := childExe
+	childExe = func() (string, error) { builds++; return exe() }
+	t.Cleanup(func() { childExe = exe })
+	ctx = readfence.With(context.Background(), func() error {
+		if builds >= 2 {
+			return changed
+		}
+		return nil
+	})
+	if out, err := svc.changes(ctx, req); !errors.Is(err, changed) || builds != 2 || out.RenderErr != "" || out.New != nil {
+		t.Fatalf("the second build is not run, and no render failure is claimed: %v %d %+v", err, builds, out)
+	}
+	if out, err := svc.changes(context.Background(), req); err != nil || len(out.Old) != 1 || len(out.New) != 1 {
+		t.Fatalf("the control: %v %+v", err, out)
+	}
+	// every step is fenced: two fetches, four history reads, and each
+	// render's inputs, files and build; a fence failing at any one of them
+	// stops the comparison there
+	calls := 0
+	count := readfence.With(context.Background(), func() error { calls++; return nil })
+	if _, err := svc.changes(count, req); err != nil || calls != 12 {
+		t.Fatalf("12 fenced steps: %d %v", calls, err)
+	}
+	for n := 1; n <= 12; n++ {
+		calls := 0
+		ctx := readfence.With(context.Background(), func() error {
+			if calls++; calls == n {
+				return changed
+			}
+			return nil
+		})
+		if out, err := svc.changes(ctx, req); !errors.Is(err, changed) || out.RenderErr != "" {
+			t.Fatalf("a fence failing at step %d: %v %+v", n, err, out)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
@@ -18,6 +20,7 @@ import (
 	"github.com/moomora/klyx/internal/hpa"
 	"github.com/moomora/klyx/internal/keda"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // AI A1 §3.3 and §8: get_dependencies maps each drawing to typed nodes and
@@ -58,6 +61,31 @@ func nodeOf(d chatDepsData, kind, name string) *chatDepNode {
 		}
 	}
 	return nil
+}
+
+// AI A1 implementation review, finding 3: the turn's context carries its
+// fence into a composite read, so a connection lost after a drawing's first
+// component read stops the rest; the cluster's transports check it before
+// each request (fleet's TestACompositeReadStopsAtItsFence).
+func TestACompositeReadCarriesTheTurnsFence(t *testing.T) {
+	f := newToolsFixture(t, calls(ai.ToolCall{ID: "d", Name: toolDeps, Args: json.RawMessage(`{"kind":"Kustomization","namespace":"flux-system","name":"app"}`)}), answer("never"))
+	src := unitChat(unitObj("x"))
+	src.kinds["kustomization"] = []fleet.ChatKind{{GVR: ksGVR, Kind: "Kustomization", Namespaced: true}}
+	src.summary = f.conn.summary
+	var before, after error
+	src.graphHook = func(ctx context.Context) {
+		before = readfence.Check(ctx)
+		f.mu.Lock()
+		f.usable = false // lost after the drawing's first component read
+		f.mu.Unlock()
+		after = readfence.Check(ctx)
+	}
+	f.conn, f.cur = src, src
+	st := f.svc.Start("x")
+	st = f.svc.Ask("x", st.ConversationID, "what does app depend on?", nil)
+	if before != nil || after == nil || !strings.Contains(after.Error(), "the cluster disconnected") || len(f.prov.reqs) != 1 || st.Ended == "" {
+		t.Fatalf("the fence holds, then stops the drawing's next read: %v %v %d %q", before, after, len(f.prov.reqs), st.Ended)
+	}
 }
 
 func TestDepsFluxGraph(t *testing.T) {

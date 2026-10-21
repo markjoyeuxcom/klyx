@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -71,13 +72,18 @@ type Direct struct {
 // trip - the first request and each redirect hop - is refused once the
 // credential's revision has moved (C5 §7).
 func NewDirect(base string, auth Auth, client *http.Client, lim Limits) *Direct {
-	if auth.Live != nil && client != nil {
+	if client != nil {
 		gated := *client
 		rt := gated.Transport
 		if rt == nil {
 			rt = http.DefaultTransport
 		}
-		gated.Transport = liveRoundTripper{base: rt, live: auth.Live}
+		if auth.Live != nil {
+			rt = liveRoundTripper{base: rt, live: auth.Live}
+		}
+		// each round trip checks its context's read fence too (AI A1
+		// implementation review, finding 3)
+		gated.Transport = readfence.Transport(rt)
 		client = &gated
 	}
 	return &Direct{base: strings.TrimRight(base, "/"), auth: auth, client: client, lim: lim}

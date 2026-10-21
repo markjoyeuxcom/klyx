@@ -184,7 +184,7 @@ func (c *ClusterConn) fluxOwnerRevision(ctx context.Context, o *workloads.Owner)
 	if c.dyn == nil {
 		return "", "revision not read - no dynamic client"
 	}
-	gvr, err := c.gvrForKind(flux.Kind(o.Kind))
+	gvr, err := gvrForKindIn(c.discoveryFor(ctx), flux.Kind(o.Kind))
 	if err != nil {
 		return "", "Flux " + o.Kind + " API not served"
 	}

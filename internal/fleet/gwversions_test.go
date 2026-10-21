@@ -101,17 +101,17 @@ func TestGatewayVersionsFollowTheResourceCandidates(t *testing.T) {
 func TestGatewayOnDemandReadsResolvePerResource(t *testing.T) {
 	v14 := gwDiscovery([2]string{"v1", "gateways"}, [2]string{"v1alpha2", "tlsroutes"}, [2]string{"v1alpha3", "tlsroutes"})
 	c := probeConn(v14)
-	if gvr, err := c.gwGVR("tlsroutes"); err != nil || gvr.Version != "v1alpha3" {
+	if gvr, err := c.gwGVR(context.Background(), "tlsroutes"); err != nil || gvr.Version != "v1alpha3" {
 		t.Errorf("tlsroutes = %v, %v; want v1alpha3", gvr, err)
 	}
-	if _, err := c.gwGVR("listenersets"); err == nil || !strings.Contains(err.Error(), "not served") {
+	if _, err := c.gwGVR(context.Background(), "listenersets"); err == nil || !strings.Contains(err.Error(), "not served") {
 		t.Errorf("an unserved resource must say so, got %v", err)
 	}
-	if _, err := probeConn(gwDiscovery([2]string{"v2", "gateways"})).gwGVR("gateways"); err == nil || !strings.Contains(err.Error(), "Klyx reads") {
+	if _, err := probeConn(gwDiscovery([2]string{"v2", "gateways"})).gwGVR(context.Background(), "gateways"); err == nil || !strings.Contains(err.Error(), "Klyx reads") {
 		t.Errorf("a version Klyx does not read must be named, got %v", err)
 	}
 	// discovery that cannot answer at all tries the first candidate
-	if gvr, err := probeConn(failingDiscovery{}).gwGVR("gateways"); err != nil || gvr.Version != "v1" {
+	if gvr, err := probeConn(failingDiscovery{}).gwGVR(context.Background(), "gateways"); err != nil || gvr.Version != "v1" {
 		t.Errorf("failing discovery = %v, %v; want the first candidate", gvr, err)
 	}
 }

@@ -58,7 +58,7 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 		}
 	}
 
-	cmVer := preferredVersion(c.discovery(), "cert-manager.io", "v1")
+	cmVer := preferredVersion(c.discoveryFor(ctx), "cert-manager.io", "v1")
 	crGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: cmVer, Resource: "certificaterequests"}
 	reqs, err := c.dyn.Resource(crGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -95,7 +95,7 @@ func (c *ClusterConn) GetCertificateChain(ctx context.Context, ns, name string) 
 // denial, timeout) is recorded as a chain warning: an RBAC-denied Order list
 // used to look exactly like a non-ACME issuer, hiding the stuck link.
 func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string, warnings *[]string) []certmanager.ChainNode {
-	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
+	acmeVer := preferredVersion(c.discoveryFor(ctx), "acme.cert-manager.io", "v1")
 	orderGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "orders"}
 	orders, err := c.dyn.Resource(orderGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -117,7 +117,7 @@ func (c *ClusterConn) resolveOrders(ctx context.Context, ns, requestName string,
 }
 
 func (c *ClusterConn) resolveChallenges(ctx context.Context, ns, orderName string, warnings *[]string) []certmanager.ChainNode {
-	acmeVer := preferredVersion(c.discovery(), "acme.cert-manager.io", "v1")
+	acmeVer := preferredVersion(c.discoveryFor(ctx), "acme.cert-manager.io", "v1")
 	challengeGVR := schema.GroupVersionResource{Group: "acme.cert-manager.io", Version: acmeVer, Resource: "challenges"}
 	challenges, err := c.dyn.Resource(challengeGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
