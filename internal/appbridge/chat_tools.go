@@ -136,6 +136,11 @@ func ChatToolDefs() []ChatToolDef {
 			"namespace": strProp("The Kustomization's namespace."),
 			"name":      strProp("The Kustomization's exact name."),
 		}, "kind", "namespace", "name")},
+		{toolAlerts, "Alertmanager alerts Klyx read for one object: those whose labels name it, one of its current pods, or its namespace, with state, severity, start time, allowlisted labels and the summary. Matched by label, never by UID.", obj(map[string]any{
+			"kind":      strProp("Kind, plural or short name, e.g. Deployment, pod, node."),
+			"namespace": strProp("Namespace, for namespaced kinds."),
+			"name":      strProp("Exact object name."),
+		}, "kind", "name")},
 	}
 }
 
@@ -373,6 +378,19 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
 		}
 		return t.changes(ctx, a.NS, a.Name)
+	case toolAlerts:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if err := firstErr(checkKind(a.Kind), checkName("namespace", a.NS, false), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.Name, err)
+		}
+		return t.alerts(ctx, a.Kind, a.NS, a.Name)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -699,6 +717,9 @@ func shrink(d any) any {
 		default:
 			return nil
 		}
+		return v
+	case chatAlertsData:
+		v.Alerts = v.Alerts[:len(v.Alerts)/2]
 		return v
 	case chatChangesData:
 		// the file list first, then the commits, then the objects
