@@ -916,8 +916,9 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     [...document.querySelectorAll<HTMLButtonElement>("[role='tab']")].find((b) => b.textContent === "Manifest")?.click();
     const first = await within(5000, "the editor", () => $<HTMLTextAreaElement>("textarea[aria-label='resource yaml']"));
     if (!/^data:\n/m.test(first.value)) throw new Error(`no data block in the manifest: ${first.value.slice(0, 200)}`);
-    // the panel can remount while its detail settles: the edit goes into
-    // whichever editor is mounted, until that editor's own Apply is enabled
+    // the edit goes into whichever editor is mounted, until that editor's
+    // own Apply is enabled; a disabled Apply reports the editor's footer
+    // (how its local validator was found refusing prefixed labels)
     let footer = "";
     let typed = 0;
     const apply = await within(10_000, "an enabled Apply", () => {
