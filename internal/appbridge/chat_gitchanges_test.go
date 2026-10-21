@@ -171,12 +171,12 @@ func TestChangesComparesTheRendersAndChecksEachObject(t *testing.T) {
 func TestChangesFallsBackWhenTheRenderIsNotEstablished(t *testing.T) {
 	f, g := changesChat(nil)
 	g.out = gitChangesOut{Files: []gitcli.NameStatus{{Status: "M", Path: "clusters/prd/a.yaml"}}, FilesTotal: 1,
-		RenderErr: "the render of 2222222: the build passed 60s and was stopped"}
+		RenderErr: "the render of 2222222: the confined build passed its time bound and was stopped"}
 	env, read, _ := runChanges(t, f, g, changesArgs)
 	b, _ := json.Marshal(env.Data)
 	var d chatChangesData
 	_ = json.Unmarshal(b, &d)
-	if d.Render.State != "not established" || !strings.Contains(d.Render.Reason, "passed 60s") || len(d.Objects) != 0 || len(env.Checks) != 0 ||
+	if d.Render.State != "not established" || !strings.Contains(d.Render.Reason, "time bound") || len(d.Objects) != 0 || len(env.Checks) != 0 ||
 		env.Complete || len(d.Files) != 1 || read.Outcome != "completed" {
 		t.Fatalf("a failed render keeps the files and commits and claims no change: %s %+v", b, env)
 	}

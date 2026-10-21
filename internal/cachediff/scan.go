@@ -63,7 +63,7 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 	pending := []string{root}
 	for round := 1; len(pending) > 0; round++ {
 		if round > MaxRounds {
-			return InputSet{}, fmt.Errorf("the kustomization nests deeper than %d rounds", MaxRounds)
+			return InputSet{}, class(ErrInputBound, fmt.Errorf("the kustomization nests deeper than %d rounds", MaxRounds))
 		}
 		kfiles := map[string]string{} // directory -> its kustomization file
 		for _, d := range pending {
@@ -77,7 +77,7 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 					return InputSet{}, err
 				}
 				if len(es) == 0 {
-					return InputSet{}, fmt.Errorf("%s does not exist at this revision", show(d))
+					return InputSet{}, class(ErrInputMissing, fmt.Errorf("%s does not exist at this revision", show(d)))
 				}
 				for _, e := range es {
 					if err := set.add(e); err != nil {
@@ -93,7 +93,7 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 			}
 		}
 		if len(set.Files) > MaxFiles {
-			return InputSet{}, fmt.Errorf("the build reads more than %d files", MaxFiles)
+			return InputSet{}, class(ErrInputBound, fmt.Errorf("the build reads more than %d files", MaxFiles))
 		}
 		var entries []gitcli.TreeEntry
 		for _, d := range sortedKeys(kfiles) {
@@ -119,7 +119,7 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 				}
 				switch {
 				case len(es) == 0:
-					return InputSet{}, fmt.Errorf("%s: %s does not exist at this revision", kfiles[d], f)
+					return InputSet{}, class(ErrInputMissing, fmt.Errorf("%s: %s does not exist at this revision", kfiles[d], f))
 				case len(es) == 1 && es[0].Path == f:
 					if err := set.add(es[0]); err != nil {
 						return InputSet{}, err
@@ -137,7 +137,7 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 		pending = next
 	}
 	if len(set.Files) > MaxFiles {
-		return InputSet{}, fmt.Errorf("the build reads more than %d files", MaxFiles)
+		return InputSet{}, class(ErrInputBound, fmt.Errorf("the build reads more than %d files", MaxFiles))
 	}
 	return set, nil
 }
@@ -146,12 +146,12 @@ func Compute(ctx context.Context, src Source, specPath string) (InputSet, error)
 func (s *InputSet) add(e gitcli.TreeEntry) error {
 	switch e.Mode {
 	case "120000":
-		return fmt.Errorf("%s is a symbolic link, which the confined build cannot follow", e.Path)
+		return class(ErrInputUnsupported, fmt.Errorf("%s is a symbolic link, which the confined build cannot follow", e.Path))
 	case "160000":
-		return fmt.Errorf("%s is a submodule, which the cache does not hold", e.Path)
+		return class(ErrInputUnsupported, fmt.Errorf("%s is a submodule, which the cache does not hold", e.Path))
 	}
 	if e.Type != "blob" {
-		return fmt.Errorf("%s is a %s, not a file", e.Path, e.Type)
+		return class(ErrInputUnsupported, fmt.Errorf("%s is a %s, not a file", e.Path, e.Type))
 	}
 	s.Files[e.Path] = e
 	return nil
@@ -237,21 +237,21 @@ type generator struct {
 func references(dir string, content []byte) (dirs, files []string, err error) {
 	var k kfile
 	if err := yaml.Unmarshal(content, &k); err != nil {
-		return nil, nil, fmt.Errorf("not a readable kustomization: %v", err)
+		return nil, nil, class(ErrInputUnreadable, fmt.Errorf("not a readable kustomization: %v", err))
 	}
 	if len(k.HelmCharts) > 0 || k.HelmGlobals != nil || len(k.HelmChartInflationGenerator) > 0 {
-		return nil, nil, fmt.Errorf("Helm charts are not built from the cache")
+		return nil, nil, class(ErrInputUnsupported, fmt.Errorf("Helm charts are not built from the cache"))
 	}
 	resolve := func(entry string) (string, error) {
 		if Remote(entry) {
-			return "", fmt.Errorf("the remote reference %q is not supported yet; remote bases are refused", entry)
+			return "", class(ErrInputUnsupported, fmt.Errorf("the remote reference %q is not supported yet; remote bases are refused", entry))
 		}
 		if path.IsAbs(entry) {
-			return "", fmt.Errorf("%q is absolute", entry)
+			return "", class(ErrInputUnsupported, fmt.Errorf("%q is absolute", entry))
 		}
 		p := path.Clean(path.Join(dir, entry))
 		if p == ".." || strings.HasPrefix(p, "../") {
-			return "", fmt.Errorf("%q leaves the repository", entry)
+			return "", class(ErrInputUnsupported, fmt.Errorf("%q leaves the repository", entry))
 		}
 		if p == "." {
 			p = ""

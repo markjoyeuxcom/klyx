@@ -41,19 +41,19 @@ func Build(ctx context.Context, exe string, set InputSet, contents map[string][]
 		StdoutMax: outputMax, StderrMax: stderrMax, Deadline: buildDeadline, StdinDeadline: buildDeadline, WaitDelay: 2 * time.Second})
 	switch {
 	case r.StartErr != nil:
-		return nil, fmt.Errorf("the confined build did not start: %w", r.StartErr)
+		return nil, class(ErrBuildStart, fmt.Errorf("the confined build did not start: %w", r.StartErr))
 	case r.GateErr != nil:
-		return nil, fmt.Errorf("the confined build did not take its input: %w", r.GateErr)
+		return nil, class(ErrBuildStart, fmt.Errorf("the confined build did not take its input: %w", r.GateErr))
 	case r.TimedOut:
-		return nil, fmt.Errorf("the confined build passed %s and was stopped", buildDeadline)
+		return nil, class(ErrBuildDeadline, fmt.Errorf("the confined build passed %s and was stopped", buildDeadline))
 	case r.StdoutOver:
-		return nil, fmt.Errorf("the build's output passes %d MiB", outputMax>>20)
+		return nil, class(ErrBuildOutput, fmt.Errorf("the build's output passes %d MiB", outputMax>>20))
 	case r.ExitCode != 0:
 		msg := strings.TrimSpace(string(r.Stderr))
 		if msg == "" {
 			msg = fmt.Sprintf("exit %d", r.ExitCode)
 		}
-		return nil, errors.New(truncate(msg, 2000))
+		return nil, class(ErrBuildFailed, errors.New(truncate(msg, 2000)))
 	}
 	return decodeObjects(r.Stdout)
 }
@@ -107,7 +107,7 @@ func decodeObjects(out []byte) ([]*unstructured.Unstructured, error) {
 			if errors.Is(err, io.EOF) {
 				return objs, nil
 			}
-			return nil, fmt.Errorf("reading the build's output: %w", err)
+			return nil, class(ErrBuildDecode, fmt.Errorf("reading the build's output: %w", err))
 		}
 		if len(m) == 0 {
 			continue

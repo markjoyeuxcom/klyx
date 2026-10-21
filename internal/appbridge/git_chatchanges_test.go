@@ -2,8 +2,10 @@ package appbridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,8 +70,41 @@ func TestGitChangesListsAndRendersBothRevisions(t *testing.T) {
 	// a build that fails falls back: the commits and files stand
 	bad := map[string]any{"path": "./clusters/prd", "patches": []any{map[string]any{"patch": "not: [valid"}}}
 	out, err = svc.changes(context.Background(), gitChangesReq{RepoURL: "https://github.com/acme/fleet.git", Applied: shas[0], Attempted: shas[2], Spec: bad})
-	if err != nil || out.RenderErr == "" || out.Old != nil || out.New != nil || out.FilesTotal != 1 {
+	if err != nil || out.RenderErr != "the render of "+shas[0][:7]+": kustomize reported an error; its text is not sent, since it can quote the repository's values" ||
+		out.Old != nil || out.New != nil || out.FilesTotal != 1 {
 		t.Fatalf("%v %+v", err, out)
+	}
+}
+
+// AI A1 implementation review, P1: a failed render's own text never reaches
+// the model. kustomize quotes an invalid patch whole, an ordinary Helm value
+// included, which no scrubber recognises; the tool sends the failure's
+// fixed class.
+func TestAFailedRenderSendsOnlyItsClass(t *testing.T) {
+	const needle = "PrivateHelmValueNeedle"
+	release := "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: web\nspec:\n  values:\n    featureMode: " + needle + "\n"
+	bad := "resources: [release.yaml]\npatches:\n- patch: |-\n    - op: add\n      path: /spec/values\n      value: {featureMode: " + needle + "}\n    - invalid\n"
+	store, shas := newHistoryFixture(t,
+		map[string]string{"clusters/prd/kustomization.yaml": "resources: [release.yaml]\n", "clusters/prd/release.yaml": release},
+		map[string]string{"clusters/prd/kustomization.yaml": bad},
+	)
+	svc := newDiffService(t, store)
+	f, _ := changesChat(func(ks map[string]any) {
+		st := ks["status"].(map[string]any)
+		st["lastAppliedRevision"], st["lastAttemptedRevision"] = "main@sha1:"+shas[0], "main@sha1:"+shas[1]
+		delete(ks["spec"].(map[string]any), "postBuild")
+	})
+	env, read, raw := runChanges(t, f, svc, changesArgs)
+	b, _ := json.Marshal(env.Data)
+	var d chatChangesData
+	_ = json.Unmarshal(b, &d)
+	if d.Render.State != "not established" ||
+		d.Render.Reason != "the render of "+shas[1][:7]+": kustomize reported an error; its text is not sent, since it can quote the repository's values" ||
+		d.FilesTotal != 1 || read.Outcome != "completed" {
+		t.Fatalf("the build failed and the files stand: %s", b)
+	}
+	if strings.Contains(raw, needle) || strings.Contains(read.Detail, needle) || strings.Contains(raw, "invalid") {
+		t.Fatalf("the renderer's text reached the model: %s", raw)
 	}
 }
 

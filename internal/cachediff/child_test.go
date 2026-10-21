@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -154,6 +155,34 @@ func TestTheChildIsConfined(t *testing.T) {
 				t.Fatalf("the refusal took %v", time.Since(start))
 			}
 		})
+	}
+}
+
+// AI A1 implementation review, P1: kustomize's error for an invalid patch
+// quotes the patch, values and all. The failure keeps that text for the
+// operator's local diagnostic and carries a fixed class for a caller that
+// must not echo it.
+func TestABuildFailureHasAFixedClass(t *testing.T) {
+	const needle = "PrivateHelmValueNeedle"
+	patch := "- op: add\n  path: /spec/values\n  value: {featureMode: " + needle + "}\n- invalid\n"
+	var k strings.Builder
+	k.WriteString("resources: [object.yaml]\npatches:\n- patch: |-\n")
+	for _, l := range strings.Split(strings.TrimSuffix(patch, "\n"), "\n") {
+		k.WriteString("    " + l + "\n")
+	}
+	set, contents := repo("", map[string]string{"kustomization.yaml": k.String(),
+		"object.yaml": "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: web\nspec:\n  values:\n    featureMode: " + needle + "\n"})
+	_, err := Build(context.Background(), self(t), set, contents, nil)
+	if err == nil || !errors.Is(err, ErrBuildFailed) {
+		t.Fatalf("an invalid patch fails, classed: %v", err)
+	}
+	if !strings.Contains(err.Error(), needle) {
+		t.Fatalf("the control: kustomize's own text quotes the value, so it is kept for local use only: %v", err)
+	}
+	for _, c := range []error{ErrInputMissing, ErrInputUnsupported, ErrInputUnreadable, ErrInputBound, ErrBuildStart, ErrBuildDeadline, ErrBuildOutput, ErrBuildDecode, ErrBuildFailed} {
+		if strings.Contains(c.Error(), needle) || strings.Contains(c.Error(), "%") {
+			t.Fatalf("a class is fixed text: %q", c)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/procrun"
 )
 
 // AI A1 §3.2: the Git half of git_changes. The unit's GitRepository URL maps
@@ -143,7 +144,7 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 				return out, ctx.Err()
 			}
 			out.Old, out.New = nil, nil
-			out.RenderErr = gitcli.Scrub(fmt.Sprintf("the render of %s: %v", r.sha[:7], err))
+			out.RenderErr = fmt.Sprintf("the render of %s: %s", r.sha[:7], failureClass(err))
 			return out, nil
 		}
 		*r.into = objs
@@ -165,7 +166,7 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	source := cachediff.CacheSource{Store: cs, URL: url, Rev: rev}
 	set, err := cachediff.Compute(ctx, source, specPath)
 	if err != nil {
-		return nil, false, err
+		return nil, false, renderFailure{inputFailure(err), err}
 	}
 	var entries []gitcli.TreeEntry
 	for _, e := range set.Files {
@@ -173,15 +174,15 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	}
 	contents, err := source.Read(ctx, entries)
 	if err != nil {
-		return nil, false, err
+		return nil, false, renderFailure{"the revision's files could not be read from the Git cache", err}
 	}
 	exe, err := childExe()
 	if err != nil {
-		return nil, false, fmt.Errorf("the confined build: %w", err)
+		return nil, false, renderFailure{"the confined build is not available", err}
 	}
 	objs, err := cachediff.Build(ctx, exe, set, contents, spec)
 	if err != nil {
-		return nil, false, err
+		return nil, false, renderFailure{buildFailure(err), err}
 	}
 	labels, _, _ := unstructured.NestedStringMap(spec, "commonMetadata", "labels")
 	annotations, _, _ := unstructured.NestedStringMap(spec, "commonMetadata", "annotations")
@@ -189,4 +190,50 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 		ssautil.SetCommonMetadata(objs, labels, annotations)
 	}
 	return objs, set.Generated, nil
+}
+
+// renderFailure is a render that was not established, told in fixed words:
+// the stage and the failure's class, never the scanner's, reader's or
+// builder's text. A kustomize error can quote a patch, Helm values
+// included, and no scrubber recognises an ordinary value (A1
+// implementation review, P1). The error itself stays for local use.
+type renderFailure struct {
+	class string
+	err   error
+}
+
+func (f renderFailure) Error() string { return f.class }
+func (f renderFailure) Unwrap() error { return f.err }
+
+// failureClass is the fixed words of a render failure.
+func failureClass(err error) string {
+	var f renderFailure
+	if errors.As(err, &f) {
+		return f.class
+	}
+	return "the render failed"
+}
+
+func inputFailure(err error) string {
+	for _, c := range []error{cachediff.ErrInputMissing, cachediff.ErrInputUnsupported, cachediff.ErrInputUnreadable, cachediff.ErrInputBound} {
+		if errors.Is(err, c) {
+			return c.Error()
+		}
+	}
+	return "the build's inputs could not be read from the Git cache"
+}
+
+func buildFailure(err error) string {
+	if errors.Is(err, procrun.ErrUnsupported) {
+		return "the confined build is not supported on this platform"
+	}
+	for _, c := range []error{cachediff.ErrBuildStart, cachediff.ErrBuildDeadline, cachediff.ErrBuildOutput, cachediff.ErrBuildDecode} {
+		if errors.Is(err, c) {
+			return c.Error()
+		}
+	}
+	if errors.Is(err, cachediff.ErrBuildFailed) {
+		return "kustomize reported an error; its text is not sent, since it can quote the repository's values"
+	}
+	return "the confined build failed"
 }
