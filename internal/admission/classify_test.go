@@ -124,7 +124,7 @@ func TestTheEnvelopesAreExact(t *testing.T) {
 		t.Fatalf("the NewForbidden form: %+v", f)
 	}
 	for _, msg := range []string{
-		"note: " + cause,                                // not NewForbidden's prefix
+		"note: " + cause, // not NewForbidden's prefix
 		`widgets.lab "w" is forbidden: ` + cause + " x", // not the whole tail
 		`widgets.lab is invalid: ` + cause,              // another prefix
 	} {
