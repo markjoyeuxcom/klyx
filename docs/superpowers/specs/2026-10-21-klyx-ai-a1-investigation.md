@@ -412,6 +412,8 @@ Stages 1 to 8 are built on `feat/ai-a1`, with the fixes from Codex's implementat
 | R1 | d42d55d | Every component read of a composite checks the turn's fence (3) |
 | R1 | 8b962da, 5b71d8f | The load test of §8; one comparison at a time, its renders one after the other |
 | R1 | 665b751 | A finding's notes are bounded, once per read and qualification (found reviewing 999a0af) |
+| R2 | 4f9e073 | Input discovery checks the fence before each read and acquisition (re-review 1, finding 1) |
+| R2 | 689e183 | The current stage, live verdicts and historical time decide the labels (re-review 1, findings 2-4) |
 
 **How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders (a comparison's two revisions render one after the other, 5b71d8f). None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time. The load test (§13.4) measured at most 48 reads in flight across eight investigations, their bound.
 
@@ -419,7 +421,7 @@ Stages 1 to 8 are built on `feat/ai-a1`, with the fixes from Codex's implementat
 
 Codex ruled on each in review 1 (§13.4): accepted, except 1, 12 and 14, which its findings 3, 5 and 4 replaced, and 4, accepted as a scope reduction. Each item below describes the code as it now stands.
 
-1. **The guard runs before every component read (§3; review 1, finding 3).** It first ran once before each drawing; Codex ruled that a drawing-level guard is not a before-every-read guard, and that Git and Loki composites had the same gap. The turn's context now carries its fence (`internal/readfence`): every client built from a cluster's REST config and every direct endpoint client checks it before each request, discovery inside the chat-reachable composites is bound to the context, and `git_changes` checks it at each of its twelve steps.
+1. **The guard runs before every component read (§3; review 1, finding 3).** It first ran once before each drawing; Codex ruled that a drawing-level guard is not a before-every-read guard, and that Git and Loki composites had the same gap. The turn's context now carries its fence (`internal/readfence`): every client built from a cluster's REST config and every direct endpoint client checks it before each request, discovery inside the chat-reachable composites is bound to the context, and `git_changes` checks it at each of its steps, the Git cache's listings, acquisitions and blob reads inside a render's input discovery included (22 for a one-directory unit; re-review 1, finding 1). A fence that no longer holds is a typed `readfence.Error`, reported as the fence, never as a render that was not established.
 2. **`route_p99` is not offered (§3.4).** The per-rule source reads no latency, and the per-route latency read is instant only. `route_requests` and `route_5xx_ratio` use that source's fixed 30-minute window whatever window is asked, and say so.
 3. **`get_metrics` takes a `kind` argument (§3.4).** Workload templates need Deployment, StatefulSet or DaemonSet; route templates take HTTPRoute. A container's limit is the pod's as read now, said in the result.
 4. **Rollout history is not read (§1.1): a scope reduction.** A1 does not deliver the design's rollout observation. No A1 tool reads rollout history, no rollout check is made, and the workload plan says so in missing evidence.
@@ -430,9 +432,9 @@ Codex ruled on each in review 1 (§13.4): accepted, except 1, 12 and 14, which i
 9. **Revisions are read from the raw status (§3.1, §3.2).** S0b's scp-form URL rule turns `main@sha1:<sha>` into `sha1:<sha>` in every sanitised copy, `get_resource` included. That rule is a known issue to fix in `urlscrub` on its own, not in A1.
 10. **A member failing its fence ends the investigation (A-C2, §3.7)**, rather than only the turn: the conversation's history carries its data into every later send. `fleet_difference` takes an optional `clusters` subset.
 11. **`report_findings` is not a read.** It has no ledger ID and no tool budget. One valid report per turn, one retry after an invalid call.
-12. **The failure's window (§4; review 1, finding 5)** is the earliest onset among the anchor's checks by UID that read a failure in force (a check's `failing`): a failing condition, of which Ready=False dates it; a container that cannot run; a health check Flux is failing now, which carries when the revision first failed. A past restart or termination stays a status fact and does not make the anchor failing. The window is "no failure to date" without such a check, and "unknown" when the anchor is failing without an onset. A verdict's "since" is not used.
+12. **The failure's window (§4; review 1, finding 5; re-review 1, finding 3)** is the earliest onset among the anchor's checks by UID that read a failure in force (a check's `failing`): a failing condition, of which Ready=False dates it; a container that cannot run; a health check Flux is failing now, which carries when the revision first failed; Klyx's own live verdict of fault or degraded, which carries no onset. A past restart or termination stays a status fact and does not make the anchor failing. The window is "no failure to date" without such a check, and "unknown" when the anchor is failing without an onset. A verdict's "since" is not used.
 13. **`git_changes` compares from Flux's history when applied equals attempted (§3.2; found on the lab).** `lastAppliedRevision` is not always the last healthy revision: a revision whose first reconcile passed its health check stays recorded as applied after it fails. It then compares from the newest other revision `status.history` records as `ReconciliationSucceeded`, and says so in `baseFrom`.
-14. **`gitops_unit` reads a retrying unit's failure from Flux's event (§3.1; found on the lab; review 1, finding 4).** While Flux retries, Ready and Healthy read Unknown and the message is gone. A Ready unit has no current failure, whatever older condition or event holds. Otherwise it reads Ready=False, else Healthy=False, else the unit's newest `HealthCheckFailed` event by UID, but only during a retry `status.history` establishes (the attempted revision's newest entry records `HealthCheckFailed`) and only for an event seen within that retry; it says which, and the retry it relied on. When the revision first failed comes from `status.history`.
+14. **`gitops_unit` reads a retrying unit's failure from Flux's event (§3.1; found on the lab; review 1, finding 4).** While Flux retries, Ready and Healthy read Unknown and the message is gone. A Ready unit has no current failure, whatever older condition or event holds, and neither has a unit failing now at another stage (Ready=False for a build, an artifact or an apply) or one whose Ready is not read: an older health check is then history (re-review 1, finding 2). While the health check is the current stage, it reads Ready=False, else Healthy=False, else the unit's newest `HealthCheckFailed` event by UID, but only during a retry `status.history` establishes (the attempted revision's newest entry records `HealthCheckFailed`) and only for an event seen within that retry; it says which, and the retry it relied on. When the revision first failed comes from `status.history`.
 
 ### 13.2 Stage 8: the lab, captures and the native smoke (2026-10-21)
 
@@ -476,7 +478,8 @@ All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, o
 
 - **The real-LLM smoke:** the owner's key, the owner's step.
 - **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
-- **Codex's re-review of the fixes in §13.4.**
+- **Codex's re-review of the fixes in §13.5.**
+- **Rollout history (deviation 4), as A1.1:** decided by the owner on 2026-10-23, after A1's acceptance and before A3, which needs the rollback target. One read-only tool sends a workload's revisions (number, creation time, images, the pods' owners), scrubbed, and makes `rollout` checks; its design addendum goes to Codex before it is built.
 
 ### 13.4 Codex's implementation review 1 and the fixes (2026-10-21)
 
@@ -515,3 +518,14 @@ The first column is what the load test found: the admission bounded the builds, 
 - about 2 MiB retained across the eight conversations.
 
 The test does not exercise the Git cache's 2 GiB eviction (its repository is local) or the Observer itself (the fake connection serves its rows).
+
+### 13.5 Codex's re-review 1 and the fixes (2026-10-23)
+
+Codex re-reviewed 2ebd8fa (handoff 536fad47): the P1 and findings 2 and 7 to 11 resolved, four residual P2s in the fixes for 3 to 6, and its own heavy load run passing (434 MiB sampled heap, one comparison and one build at a time). Its probes are adapted as regression tests, with the first round's, and each fix had a mutation pass.
+
+1. **Input discovery read past its fence.** Compute lists and acquires round by round, and an acquisition fetches missing blobs; the fence surrounded it as one step. `CacheSource` now checks before each listing, acquisition and blob read, and a fence failure is typed and reported as the fence (4f9e073).
+2. **A different current failure revived an old health check:** §13.1 item 14 (689e183).
+3. **A live failing verdict read as no failure:** §13.1 item 12 (689e183).
+4. **Historical reads lost their time.** A read now keeps when its evidence describes the world: Loki's lines, or with none the window it searched, and a metric window, as `observedFrom` and `observedTo`. A pod's log has no timestamps, so its time is marked as not known. A finding citing such a read is qualified as observed before the failure, partly before it, or of unknown time, never by when Klyx fetched it, and a finding resting only on earlier evidence says so (689e183).
+
+The native smoke passes 209 of 209 four ways at 689e183, on a clean tree with every lab re-applied, and the server-mode captures pass four ways. The lab re-apply now also keeps the base lab's cert-manager fixture dates relative to now: one fixture had passed its written expiry, sorted first as expired, and hid the issuance chain the smoke draws.
