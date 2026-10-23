@@ -213,6 +213,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 	}
 	source := cachediff.CacheSource{Store: cs, URL: url, Rev: rev}
 	set, err := cachediff.Compute(ctx, source, specPath)
+	if readfence.Failed(err) {
+		return nil, false, err // the fence, never the render's failure
+	}
 	if err != nil {
 		return nil, false, renderFailure{inputFailure(err), err}
 	}
@@ -224,6 +227,9 @@ func (s *GitService) chatRender(ctx context.Context, cs cacheStore, url string, 
 		return nil, false, err
 	}
 	contents, err := source.Read(ctx, entries)
+	if readfence.Failed(err) {
+		return nil, false, err
+	}
 	if err != nil {
 		return nil, false, renderFailure{"the revision's files could not be read from the Git cache", err}
 	}

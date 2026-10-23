@@ -9,6 +9,7 @@ package readfence
 
 import (
 	"context"
+	"errors"
 	"net/http"
 )
 
@@ -32,12 +33,30 @@ func With(ctx context.Context, check func() error) context.Context {
 	return context.WithValue(ctx, key{}, check)
 }
 
-// Check runs ctx's fence: nil when it holds, or when ctx has none.
+// Error is a fence that no longer holds: the read was not made. It wraps
+// the fence's own error.
+type Error struct{ Err error }
+
+func (e *Error) Error() string { return e.Err.Error() }
+func (e *Error) Unwrap() error { return e.Err }
+
+// Check runs ctx's fence: nil when it holds, or when ctx has none, else an
+// *Error.
 func Check(ctx context.Context) error {
 	if f, ok := ctx.Value(key{}).(func() error); ok {
-		return f()
+		if err := f(); err != nil {
+			return &Error{Err: err}
+		}
 	}
 	return nil
+}
+
+// Failed says whether err, however wrapped, is a fence that no longer
+// holds, so a caller reports it as such and never as the read's own
+// failure.
+func Failed(err error) bool {
+	var e *Error
+	return errors.As(err, &e)
 }
 
 // Transport checks the request's fence before each round trip.

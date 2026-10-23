@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/readfence"
 )
 
@@ -115,15 +116,18 @@ func TestGitChangesStopsAtItsFence(t *testing.T) {
 	if out, err := svc.changes(context.Background(), req); err != nil || len(out.Old) != 1 || len(out.New) != 1 {
 		t.Fatalf("the control: %v %+v", err, out)
 	}
-	// every step is fenced: two fetches, four history reads, and each
-	// render's inputs, files and build; a fence failing at any one of them
-	// stops the comparison there
+	// every step is fenced: two fetches and four history reads, then per
+	// render its inputs, files and build (3), inside Compute the root's
+	// listing and its kustomization's acquisition and read (3), and the
+	// files' acquisition and read (2): 6 + 2 x 8. A fence failing at any one
+	// of them stops the comparison there, as the fence (AI A1 re-review,
+	// finding 1).
 	var calls atomic.Int32
 	count := readfence.With(context.Background(), func() error { calls.Add(1); return nil })
-	if _, err := svc.changes(count, req); err != nil || calls.Load() != 12 {
-		t.Fatalf("12 fenced steps: %d %v", calls.Load(), err)
+	if _, err := svc.changes(count, req); err != nil || calls.Load() != 22 {
+		t.Fatalf("22 fenced steps: %d %v", calls.Load(), err)
 	}
-	for n := int32(1); n <= 12; n++ {
+	for n := int32(1); n <= 22; n++ {
 		var calls atomic.Int32
 		ctx := readfence.With(context.Background(), func() error {
 			if calls.Add(1) == n {
@@ -166,6 +170,58 @@ func TestAFailedRenderSendsOnlyItsClass(t *testing.T) {
 	}
 	if strings.Contains(raw, needle) || strings.Contains(read.Detail, needle) || strings.Contains(raw, "invalid") {
 		t.Fatalf("the renderer's text reached the model: %s", raw)
+	}
+}
+
+// fenceCache acquires as the Git cache does, and moves the fence after its
+// first acquisition.
+type fenceCache struct {
+	*cacheFake
+	moved               bool
+	acquisitions, after int
+}
+
+func (c *fenceCache) AcquireIDs(context.Context, string, []string) error {
+	c.acquisitions++
+	if c.moved {
+		c.after++
+	}
+	c.moved = true
+	return nil
+}
+
+// AI A1 re-review, finding 1: input discovery makes reads round by round -
+// a kustomization, then its base's - and an acquisition may fetch missing
+// blobs. A fence that moves after the first acquisition stops the next
+// before it is made, and is reported as the fence, never as a render that
+// was not established.
+func TestInputDiscoveryStopsAtItsFence(t *testing.T) {
+	store, shas := newHistoryFixture(t, map[string]string{
+		"clusters/prd/kustomization.yaml":  "resources: [../base]\n",
+		"clusters/base/kustomization.yaml": "resources: [deployment.yaml]\n",
+		"clusters/base/deployment.yaml":    fmt.Sprintf(historyBase, "1.0", "a"),
+	})
+	svc := newDiffService(t, store)
+	rev, err := gitcli.SHA(shas[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := &fenceCache{cacheFake: store}
+	if objs, _, err := svc.chatRender(context.Background(), control, "https://github.com/acme/fleet.git", rev, "clusters/prd", nil); err != nil || len(objs) != 1 || control.acquisitions < 2 {
+		t.Fatalf("the control: %d acquisitions, %d objects: %v", control.acquisitions, len(objs), err)
+	}
+	c := &fenceCache{cacheFake: store}
+	changed := errors.New("egress revoked after the first acquisition")
+	ctx := readfence.With(context.Background(), func() error {
+		if c.moved {
+			return changed
+		}
+		return nil
+	})
+	_, _, err = svc.chatRender(ctx, c, "https://github.com/acme/fleet.git", rev, "clusters/prd", nil)
+	var failed renderFailure
+	if !errors.Is(err, changed) || !readfence.Failed(err) || errors.As(err, &failed) || c.after != 0 {
+		t.Fatalf("no acquisition after the fence moved, and the fence reported as such: %v, %d after", err, c.after)
 	}
 }
 
