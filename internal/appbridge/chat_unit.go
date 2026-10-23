@@ -213,21 +213,31 @@ type healthSource struct {
 	onset time.Time
 }
 
-// healthFailure finds a unit's current failed health check. A Ready unit
-// has none: older evidence never overrides a current success. While Flux
-// retries, its Ready and Healthy conditions read Unknown, Progressing for
-// the whole health-check run and the message is gone; Flux's own
-// HealthCheckFailed event about this unit, by its UID, still holds it (AI A1
-// lab, kustomize-controller v1.9.6). The event is read as the current
-// failure only during a retry status.history establishes, and only when it
-// was seen within that retry: an event from before it, or from another
+// healthFailure finds a unit's current failed health check, which needs
+// the health check to be the stage failing now. A Ready unit has none:
+// older evidence never overrides a current success. Ready=False for another
+// reason (a build, an artifact, an apply) is a different current failure,
+// and an older health check - a Healthy=False condition, history, an event
+// - stays history (AI A1 re-review, finding 2). While Flux retries, its
+// Ready and Healthy conditions read Unknown, Progressing for the whole
+// health-check run and the message is gone; Flux's own HealthCheckFailed
+// event about this unit, by its UID, still holds it (AI A1 lab,
+// kustomize-controller v1.9.6). The event is read as the current failure
+// only during a retry status.history establishes, and only when it was
+// seen within that retry: an event from before it, or from another
 // revision, stays dated context the events tool shows. When this revision
 // first failed comes from status.history, else the condition's transition,
 // else the event.
 func (t *chatTools) healthFailure(ctx context.Context, u *unstructured.Unstructured, ns, uid string) (healthSource, bool) {
 	var src healthSource
-	if _, ready, _, _ := conditionRaw(u, "Ready"); ready == "True" {
+	_, ready, readyReason, _ := conditionRaw(u, "Ready")
+	switch {
+	case ready == "True":
 		return src, false
+	case ready == "False" && readyReason != "HealthCheckFailed":
+		return src, false
+	case ready != "False" && ready != "Unknown":
+		return src, false // no Ready condition: the current stage is not read
 	}
 	first := firstFailedReconcile(u)
 	for _, typ := range []string{"Ready", "Healthy"} {

@@ -281,7 +281,8 @@ func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, 
 	env.Data = data
 	env.Checks = capChecks(checks)
 	return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Redacted: p.redacted,
-		Detail: fmt.Sprintf("%d series over %d pods, %s", data.SeriesTotal, len(pods), window), About: metricsAbout(kind, ns, name, pods)})
+		Detail: fmt.Sprintf("%d series over %d pods, %s", data.SeriesTotal, len(pods), window), About: metricsAbout(kind, ns, name, pods),
+		ObservedFrom: data.Start, ObservedTo: data.End})
 }
 
 // metricsAbout is a metrics read's subjects: series are selected by pod

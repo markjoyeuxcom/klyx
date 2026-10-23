@@ -439,6 +439,39 @@ func TestUnitReadsARetryingUnitsFailureFromItsEvent(t *testing.T) {
 	}
 }
 
+// AI A1 re-review, finding 2: an older health check is history when a
+// different stage fails now, or when the current stage is not read; it is
+// the current failure while the health check runs.
+func TestUnitADifferentCurrentFailureKeepsTheHealthCheckHistorical(t *testing.T) {
+	msg := "health check failed after 1m30s: timeout waiting for: [Deployment/shop/web status: 'InProgress']"
+	for _, tc := range []struct {
+		name  string
+		conds []any
+		want  bool
+	}{
+		{"Ready=False for a build", []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "kustomization is invalid", "lastTransitionTime": "2026-10-21T12:44:00Z"}}, false},
+		{"a build failing beside an old Healthy=False", []any{
+			map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "kustomization is invalid", "lastTransitionTime": "2026-10-21T12:44:00Z"},
+			map[string]any{"type": "Healthy", "status": "False", "reason": "HealthCheckFailed", "message": msg, "lastTransitionTime": "2026-10-21T12:40:00Z"}}, false},
+		{"no Ready condition", []any{map[string]any{"type": "Healthy", "status": "False", "reason": "HealthCheckFailed", "message": msg}}, false},
+		{"the control: the health check runs now", []any{
+			map[string]any{"type": "Ready", "status": "Unknown", "reason": "Progressing", "lastTransitionTime": "2026-10-21T12:43:13Z"},
+			map[string]any{"type": "Healthy", "status": "False", "reason": "HealthCheckFailed", "message": msg, "lastTransitionTime": "2026-10-21T12:40:00Z"}}, true},
+		{"the control: Ready=False for the health check", []any{map[string]any{"type": "Ready", "status": "False", "reason": "HealthCheckFailed", "message": msg, "lastTransitionTime": "2026-10-21T12:44:00Z"}}, true},
+	} {
+		u := unitObj("ignored")
+		st := u.Object["status"].(map[string]any)
+		st["conditions"] = tc.conds
+		st["history"] = []any{map[string]any{"lastReconciledStatus": "HealthCheckFailed", "firstReconciled": "2026-10-21T12:37:43Z", "metadata": map[string]any{"revision": "main@sha1:bbb"}}}
+		f := unitChat(u)
+		f.events = []workloads.EventSummary{{Type: "Warning", Reason: "HealthCheckFailed", UID: "uid-ks", Message: msg, LastSeenUnix: 1792586500}}
+		env, _ := run(t, f, toolUnit, `{"kind":"Kustomization","namespace":"flux-system","name":"app"}`)
+		if got := unitData(t, env).HealthCheck != nil; got != tc.want {
+			t.Fatalf("%s: a current health-check failure %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // AI A1 implementation review, finding 4: a Ready unit has no current
 // health-check failure, whatever older event or condition holds.
 func TestUnitRecoveredDoesNotReviveAnOldFailure(t *testing.T) {

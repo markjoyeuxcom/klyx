@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -263,8 +264,18 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 				unknown = append(unknown, id)
 				continue
 			}
-			// a read is evidence read now, never wholly before the failure
+			// a read describes the cluster as read, unless it is historical:
+			// then its own interval says when (AI A1 re-review, finding 4)
 			cited++
+			switch {
+			case r.ObservedUnknown:
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose evidence's time is not known", id))
+			case a.failing && a.start != "" && r.ObservedTo != "" && timeBefore(r.ObservedTo, a.start):
+				before++
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose evidence was observed before the failure was reported (%s to %s)", id, r.ObservedFrom, r.ObservedTo))
+			case a.failing && a.start != "" && r.ObservedFrom != "" && timeBefore(r.ObservedFrom, a.start):
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, part of whose evidence was observed before the failure was reported (from %s)", id, r.ObservedFrom))
+			}
 			if r.Outcome != "completed" {
 				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, a read that %s", id, map[string]string{"failed": "failed", "truncated": "was truncated", "cancelled": "was cancelled"}[r.Outcome]))
 			}
@@ -351,6 +362,14 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 		out.Remedy = &RemedyDTO{Git: chatScrub(in.Remedy.Git, &n), Mitigation: chatScrub(in.Remedy.Mitigation, &n), Label: proposedNotRun}
 	}
 	return out
+}
+
+// timeBefore says whether RFC 3339 time a is before b; an unreadable time
+// is never before.
+func timeBefore(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	return errA == nil && errB == nil && ta.Before(tb)
 }
 
 // qualifiedCoverage is a check's coverage that qualifies what rests on it.

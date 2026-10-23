@@ -122,6 +122,22 @@ func (t *chatTools) logHistory(ctx context.Context, ns, pod, uid, container, win
 	} else {
 		read.About = []ChatCheckSubject{byName("Pod", ns, pod)}
 	}
+	// when its lines were written, or, with none, the window it searched
+	var times []string
+	for i, l := range page.Lines {
+		if i == tail {
+			break
+		}
+		times = append(times, l.TS)
+	}
+	if len(times) == 0 {
+		times = []string{page.Start, page.End}
+	}
+	if from, to, ok := observedSpan(times); ok {
+		read.ObservedFrom, read.ObservedTo = from, to
+	} else {
+		read.ObservedUnknown = true
+	}
 	return t.finish(env, read)
 }
 

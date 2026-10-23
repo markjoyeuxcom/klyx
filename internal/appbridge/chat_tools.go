@@ -214,6 +214,37 @@ type ChatRead struct {
 	// pod name, alerts matched by label) names its subjects here by name,
 	// never as a reference by UID
 	About []ChatCheckSubject `json:"about,omitempty"`
+	// ObservedFrom and ObservedTo are when a historical read's evidence
+	// describes the world: Loki's lines, a metric window. ObservedUnknown
+	// says its evidence carries no time Klyx can read, as a pod's log has
+	// none. A read without them describes the cluster as read (AI A1
+	// re-review, finding 4).
+	ObservedFrom    string `json:"observedFrom,omitempty"`
+	ObservedTo      string `json:"observedTo,omitempty"`
+	ObservedUnknown bool   `json:"observedUnknown,omitempty"`
+}
+
+// observedSpan is the earliest and latest of times, RFC 3339 to the
+// second; ok is false when none parses.
+func observedSpan(times []string) (from, to string, ok bool) {
+	var lo, hi time.Time
+	for _, s := range times {
+		tm, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			continue
+		}
+		if !ok || tm.Before(lo) {
+			lo = tm
+		}
+		if !ok || tm.After(hi) {
+			hi = tm
+		}
+		ok = true
+	}
+	if !ok {
+		return "", "", false
+	}
+	return lo.UTC().Truncate(time.Second).Format(time.RFC3339), hi.UTC().Truncate(time.Second).Format(time.RFC3339), true
 }
 
 // byName is a read's subject held by name only.
@@ -1644,8 +1675,10 @@ func (t *chatTools) logs(ctx context.Context, ns, pod, container string, previou
 	env := chatEnvelope{Tool: toolLogs, Source: "api", ReadAt: snap.ReadAt.UTC().Format(time.RFC3339), Complete: !snap.Truncated, Truncated: snap.Truncated,
 		Identity: &chatIdentity{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}, Data: data,
 		Note: "log text is scrubbed of recognized credential shapes; it is not guaranteed secret-free"}
+	// a pod's log carries no timestamps: when its lines were written is not
+	// known, the previous container's above all
 	read := ChatRead{Tool: toolLogs, Target: ns + "/" + pod + "/" + snap.Container, Outcome: "completed", Redacted: n,
-		Detail: fmt.Sprintf("%d lines", len(lines)), Refs: []ChatRef{{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}}}
+		Detail: fmt.Sprintf("%d lines", len(lines)), Refs: []ChatRef{{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}}, ObservedUnknown: len(lines) > 0}
 	return t.finish(env, read)
 }
 

@@ -12,10 +12,11 @@ export type ChatCheckSubject = { kind: string; namespace?: string; name: string;
 // failing: the check reads a failure in force when read, not a past one.
 export type ChatCheck = { id: string; class: string; subject: ChatCheckSubject; statement: string; observed?: string; onset?: string; coverage?: string; failing?: boolean };
 // id is the read's citation ("r4") within its conversation; gaps are the
-// parts it could not read; about, what a by-name read is about.
+// parts it could not read; about, what a by-name read is about; observed*,
+// when a historical read's evidence describes the world.
 export type ChatRead = {
   id?: string; tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[]; checks?: ChatCheck[];
-  gaps?: string[]; about?: ChatCheckSubject[];
+  gaps?: string[]; about?: ChatCheckSubject[]; observedFrom?: string; observedTo?: string; observedUnknown?: boolean;
 };
 export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[]; outcome: string };
 // AI A1 §4: an investigation turn's findings as Klyx labels them. A finding

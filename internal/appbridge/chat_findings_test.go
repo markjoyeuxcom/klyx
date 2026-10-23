@@ -6,12 +6,18 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 var errMetricsDown = fmt.Errorf("%w: down", fleet.ErrChatMetricsUnavailable)
@@ -266,6 +272,144 @@ func TestFindingsNotesAreBounded(t *testing.T) {
 	res := f.prov.reqs[1].Messages[len(f.prov.reqs[1].Messages)-1].Results[0].Content
 	if len(res) > chatResultMax/2 || !strings.Contains(res, `"recorded":20`) || !strings.Contains(res, `"moreNotes":`) {
 		t.Fatalf("%d bytes: %.300s", len(res), res)
+	}
+}
+
+type linesHistory struct {
+	mode  string
+	lines []string // timestamps
+}
+
+func (h linesHistory) history(context.Context, PodHistoryRequestDTO) LogHistoryPageDTO {
+	p := LogHistoryPageDTO{Mode: h.mode, Start: "2026-10-21T11:10:00Z", End: "2026-10-21T12:10:00Z"}
+	for _, ts := range h.lines {
+		p.Lines = append(p.Lines, LogHistoryLineDTO{TS: ts, Line: "application exited"})
+	}
+	return p
+}
+
+// AI A1 re-review, finding 4: a historical read keeps when its evidence
+// describes the world - Loki's lines by UID or by name, a metric window -
+// and a finding citing it is qualified by that time, never by when Klyx
+// fetched it. A pod's log has no timestamps: its time is not known.
+func TestFindingsAHistoricalReadKeepsItsObservationTime(t *testing.T) {
+	ledger := ledgerFixture() // the anchor failing since 12:05
+	label := func(rd ChatRead) FindingDTO {
+		rd.ID = "r8"
+		l := append(ledgerFixture(), rd)
+		in, err := parseFindings(json.RawMessage(`{"findings":[` + finding("observation", "Pod", "shop", "web", "the log reports an application exit", "r8") + `]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return labelFindings(in, l, anchorOf(&podAnchor, ledger)).Findings[0]
+	}
+	loki := func(mode string, lines ...string) ChatRead {
+		tools := newChatTools(newFakeChat(), func() time.Time { return time.Date(2026, 10, 21, 12, 10, 0, 0, time.UTC) })
+		tools.history = linesHistory{mode: mode, lines: lines}
+		if mode == "uid" {
+			tools.ledgerUIDs = func(string, string) []string { return []string{"uid-p"} }
+		}
+		return tools.as("r8").Run(context.Background(), toolLogHistory, json.RawMessage(`{"namespace":"shop","pod":"web","window":"1h"}`)).Read
+	}
+	for _, tc := range []struct {
+		name, want string
+		read       ChatRead
+	}{
+		{"by name, before", "cites r8, whose evidence was observed before the failure was reported (2026-10-21T11:45:00Z to 2026-10-21T11:45:00Z)", loki("name", "2026-10-21T11:45:00.123456789Z")},
+		{"by UID, before", "cites r8, whose evidence was observed before the failure was reported (2026-10-21T11:40:00Z to 2026-10-21T11:50:00Z)", loki("uid", "2026-10-21T11:50:00Z", "2026-10-21T11:40:00Z")},
+		{"spanning the failure", "cites r8, part of whose evidence was observed before the failure was reported (from 2026-10-21T11:50:00Z)", loki("name", "2026-10-21T12:08:00Z", "2026-10-21T11:50:00Z")},
+		{"unreadable times", "cites r8, whose evidence's time is not known", loki("name", "", "yesterday")},
+		{"no lines: the window searched", "part of whose evidence was observed before the failure was reported (from 2026-10-21T11:10:00Z)", loki("name")},
+	} {
+		f := label(tc.read)
+		if !strings.Contains(strings.Join(f.Notes, ";"), tc.want) {
+			t.Fatalf("%s: %v (read %+v)", tc.name, f.Notes, tc.read)
+		}
+	}
+	// the control: lines after the failure need no qualification
+	if f := label(loki("name", "2026-10-21T12:08:00Z")); strings.Contains(strings.Join(f.Notes, ";"), "before") || strings.Contains(strings.Join(f.Notes, ";"), "time is not known") {
+		t.Fatalf("current lines: %v", f.Notes)
+	}
+	// a finding resting only on earlier evidence says so
+	if f := label(loki("name", "2026-10-21T11:45:00Z")); !contains(f.Notes, "its evidence was observed before the failure was reported, so it does not establish the failure") {
+		t.Fatalf("%v", f.Notes)
+	}
+	// a metric window without a check, and a pod's log
+	_, mx := run(t, alertsChat(observe.KindCoverage{}), toolMetrics, `{"template":"workload_cpu","kind":"Deployment","namespace":"shop","name":"web","window":"1h"}`)
+	if mx.ObservedFrom == "" || mx.ObservedTo == "" || len(mx.Checks) != 0 {
+		t.Fatalf("a metric read keeps its window: %+v", mx)
+	}
+	f := newFakeChat()
+	f.logs = fleet.LogSnapshot{PodUID: "uid-p", Container: "web", Previous: true, Text: "fatal: mode crash\n"}
+	_, logs := run(t, f, toolLogs, `{"namespace":"shop","pod":"web","previous":true}`)
+	if !logs.ObservedUnknown || !contains(label(logs).Notes, "cites r8, whose evidence's time is not known") {
+		t.Fatalf("a pod's log has no time: %+v", logs)
+	}
+}
+
+// timeBefore reads the times, so an offset or fractional seconds never
+// order them by their text.
+func TestTimeBefore(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"2026-10-21T12:30:00+01:00", "2026-10-21T12:05:00Z", true}, // 11:30Z
+		{"2026-10-21T12:05:00.5Z", "2026-10-21T12:05:00Z", false},
+		{"2026-10-21T11:30:00Z", "2026-10-21T12:05:00Z", true},
+		{"", "2026-10-21T12:05:00Z", false},
+	} {
+		if got := timeBefore(tc.a, tc.b); got != tc.want {
+			t.Fatalf("%s before %s: %v", tc.a, tc.b, got)
+		}
+	}
+}
+
+// AI A1 re-review, finding 3: Klyx's own live verdict of fault or degraded
+// is a failure in force, even one no condition names - a real pod rule's
+// unhealthy device - and its window is unknown, never "no failure to date";
+// a stale, progressing or paused verdict is not.
+func TestAnchorALiveFailingVerdictIsAFailure(t *testing.T) {
+	u := object("v1", "Pod", "shop", "web", map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "app"}}}, "status": map[string]any{
+		"phase": "Running", "conditions": []any{map[string]any{"type": "Ready", "status": "True"}},
+		"containerStatuses": []any{map[string]any{"name": "app", "ready": true, "restartCount": int64(0), "state": map[string]any{"running": map[string]any{}},
+			"allocatedResourcesStatus": []any{map[string]any{"name": "claim:gpu/req", "resources": []any{map[string]any{"resourceID": "cdi/a", "health": "Unhealthy"}}}}}},
+	}})
+	u.SetUID("uid-p")
+	var pod corev1.Pod
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &pod); err != nil {
+		t.Fatal(err)
+	}
+	device := health.Pod(&pod, fixedNow())
+	if device.Kind != health.Degraded || device.Label != "Device unhealthy" {
+		t.Fatalf("the control: the pod rule's verdict: %+v", device)
+	}
+	read := func(v health.Verdict, cov observe.Coverage) anchorFacts {
+		f := newFakeChat()
+		f.objects[key(podsGVR, "shop", "web")] = u
+		rows := podVerdictRows("uid-p", 0, cov)
+		rs := rows.Rows.(healthsrc.RowSet[workloads.PodSummary])
+		rs.Rows[0].Data.Health = v
+		rows.Rows = rs
+		f.rows = map[string]observe.Rows{"pods/pods": rows}
+		_, rd := run(t, f, toolGet, `{"kind":"pod","namespace":"shop","name":"web"}`)
+		rd.ID = "r1"
+		return anchorOf(&podAnchor, []ChatRead{rd})
+	}
+	if a := read(device, observe.Live); !a.failing || a.start != "" || labelFindings(findingsInput{}, nil, a).Window != "unknown" {
+		t.Fatalf("a live unhealthy device is a failure of unknown onset: %+v", a)
+	}
+	for name, tc := range map[string]struct {
+		v   health.Verdict
+		cov observe.Coverage
+	}{
+		"stale":       {device, observe.Stale},
+		"progressing": {health.Verdict{Kind: health.Progressing, Label: "Rolling out"}, observe.Live},
+		"paused":      {health.Verdict{Kind: health.Paused, Label: "Suspended"}, observe.Live},
+	} {
+		if a := read(tc.v, tc.cov); a.failing {
+			t.Fatalf("%s: not a failure in force: %+v", name, a)
+		}
 	}
 }
 

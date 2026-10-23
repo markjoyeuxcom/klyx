@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // AI A1 §2: a check is an observation Klyx evaluated itself, deterministically,
@@ -78,7 +81,11 @@ func checkText(s string, p *projector) string {
 	return p.str(s, chatCheckReasonMax)
 }
 
-// verdictCheck states Klyx's own verdict for an object found by its UID.
+// verdictCheck states Klyx's own verdict for an object found by its UID. A
+// live verdict of fault or degraded is a failure in force: Klyx's rules
+// establish failures no condition names, such as an unhealthy device (AI A1
+// re-review, finding 3). Stale, checking or unreadable coverage cannot say
+// what holds now, and progressing, paused, unknown and ok are not failures.
 func verdictCheck(subj ChatCheckSubject, v chatVerdict, p *projector) *ChatCheck {
 	if v.Label == "" {
 		return nil
@@ -87,8 +94,12 @@ func verdictCheck(subj ChatCheckSubject, v chatVerdict, p *projector) *ChatCheck
 	if v.Reason != "" {
 		st += " - " + checkText(v.Reason, p)
 	}
-	return &ChatCheck{Class: checkVerdict, Subject: subj, Statement: st, Observed: v.EvaluatedAt, Coverage: v.Coverage}
+	failing := v.Coverage == string(observe.Live) && (verdictFails[v.Kind] || verdictFails[v.Role])
+	return &ChatCheck{Class: checkVerdict, Subject: subj, Statement: st, Observed: v.EvaluatedAt, Coverage: v.Coverage, Failing: failing}
 }
+
+// verdictFails are the verdict kinds that count toward attention.
+var verdictFails = map[string]bool{health.Fault.String(): true, health.Degraded.String(): true}
 
 // Conditions whose status says a failure: a positive condition that is
 // False, or a negative one that is True.

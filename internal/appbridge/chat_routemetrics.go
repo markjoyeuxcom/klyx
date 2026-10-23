@@ -182,5 +182,5 @@ func (t *chatTools) routeSeries(ctx context.Context, template, ns, name, window 
 	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(ks[gvrIdx].GVR), Namespace: ns, Name: name, UID: uid}
 	return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref},
-		Detail: fmt.Sprintf("%d rule series through %d Gateways", data.SeriesTotal, len(gws))})
+		Detail: fmt.Sprintf("%d rule series through %d Gateways", data.SeriesTotal, len(gws)), ObservedFrom: data.Start, ObservedTo: data.End})
 }
