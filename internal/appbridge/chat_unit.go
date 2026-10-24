@@ -111,6 +111,7 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	if err != nil {
 		return t.failed(toolUnit, "api", target, err)
 	}
+	acquired := acquisition()
 	if raw.GetKind() != kind {
 		return t.refuse(toolUnit, target, fmt.Errorf("the object read is a %s, not a %s", label(raw.GetKind()), kind))
 	}
@@ -181,7 +182,7 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	env.Data = data
 	env.Checks = capChecks(checks)
 	res := t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
-	res.facts = []actionFact{factOf(gvr, raw, t.readID, env.ReadAt)}
+	res.facts = []actionFact{factOf(gvr, raw, t.readID, env.ReadAt, acquired)}
 	return res
 }
 

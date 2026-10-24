@@ -181,6 +181,7 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	if err != nil {
 		return t.failed(toolRollout, "api", target, err)
 	}
+	acquired := acquisition()
 	uid := string(w.GetUID())
 	data := chatRolloutData{Kind: kind, Namespace: ns, Name: name, UID: uid, Generation: w.GetGeneration()}
 	data.ObservedGeneration, _, _ = unstructured.NestedInt64(w.Object, "status", "observedGeneration")
@@ -429,8 +430,9 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	out := t.finish(env, read)
 	// AI A3 §2.2: the workload's facts, and what this read established -
 	// the desired revision and the partner an undo is pinned to
-	fact := factOf(gvr, w, t.readID, env.ReadAt)
+	fact := factOf(gvr, w, t.readID, env.ReadAt, acquired)
 	fact.History = historyFactsOf(kind, desired, partner, t.readID, env.ReadAt)
+	fact.History.acquired = acquired
 	out.facts = []actionFact{fact}
 	return out
 }

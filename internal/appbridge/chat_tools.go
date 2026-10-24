@@ -1637,7 +1637,7 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	if wantUID != "" && string(u.GetUID()) != wantUID {
 		return t.refuse(toolGet, gvr.Resource+" "+target, errors.New("the object was replaced since you asked about it (its UID changed); nothing about the new object was read"))
 	}
-	read := u
+	read, acquired := u, acquisition()
 	// coverage S0b §3: the sanitiser runs before the structural projection,
 	// so a registered surface never reaches a model, scrubbed or not
 	u = &unstructured.Unstructured{Object: crd.SanitizeEmbedded(gvr.Group, u.GetKind(), u.Object).Object}
@@ -1684,7 +1684,7 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
 	res := t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
-	res.facts = []actionFact{factOf(gvr, read, t.readID, env.ReadAt)}
+	res.facts = []actionFact{factOf(gvr, read, t.readID, env.ReadAt, acquired)}
 	return res
 }
 

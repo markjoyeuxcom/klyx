@@ -2,6 +2,8 @@ package appbridge
 
 import (
 	"encoding/json"
+	"strconv"
+	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -36,6 +38,12 @@ type objectFacts struct {
 	ReadID     string `json:"readId"`
 	ReadAt     string `json:"readAt"`
 	Generation int64  `json:"generation,omitempty"`
+	// acquired orders Klyx's reads of the object itself, taken as the
+	// object is read, not when its tool's composite finished: a part is
+	// replaced only by a later acquisition, never by an older read
+	// completing late (A3 stage 2 review, finding 2). A sequence, not a
+	// clock, so two reads never tie.
+	acquired uint64
 	// a workload's spec.replicas (nil: not a scalable workload, or unset
 	// with no default Klyx can state), its pause, update strategy,
 	// StatefulSet partition and desired pods
@@ -53,8 +61,19 @@ type objectFacts struct {
 	OwnerUID  string `json:"ownerUid,omitempty"`
 	// a node's spec.unschedulable
 	Unschedulable bool `json:"unschedulable,omitempty"`
-	// a KEDA scaler's autoscaling.keda.sh/paused annotation
-	KEDAPaused bool `json:"kedaPaused,omitempty"`
+	// a KEDA scaler's autoscaling.keda.sh/paused annotation: whether it is
+	// set and its value (KEDA 2.13 and later read the value, 2.12 the
+	// presence), and another pause annotation set beside it
+	KEDAPauseSet   bool   `json:"kedaPauseSet,omitempty"`
+	KEDAPause      string `json:"kedaPause,omitempty"`
+	KEDAOtherPause string `json:"kedaOtherPause,omitempty"`
+}
+
+// kedaPausedTrue: the paused annotation's value is true, which pauses on
+// every KEDA version that applies it.
+func (o *objectFacts) kedaPausedTrue() bool {
+	b, err := strconv.ParseBool(o.KEDAPause)
+	return o.KEDAPauseSet && err == nil && b
 }
 
 // historyFacts are what rollout_history established (AI A1.1 §8): the
@@ -63,6 +82,7 @@ type objectFacts struct {
 type historyFacts struct {
 	ReadID           string `json:"readId"`
 	ReadAt           string `json:"readAt"`
+	acquired         uint64
 	DesiredRevision  int64  `json:"desiredRevision,omitempty"`
 	PartnerRevision  int64  `json:"partnerRevision,omitempty"`
 	PartnerObjectUID string `json:"partnerObjectUid,omitempty"`
@@ -71,9 +91,9 @@ type historyFacts struct {
 
 // factOf extracts an object's facts from Klyx's read of it, by its GVR. A
 // kind no matrix verb acts on carries its identity only.
-func factOf(gvr schema.GroupVersionResource, u *unstructured.Unstructured, readID, readAt string) actionFact {
+func factOf(gvr schema.GroupVersionResource, u *unstructured.Unstructured, readID, readAt string, acquired uint64) actionFact {
 	f := actionFact{Kind: u.GetKind(), Group: gvr.Group, Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())}
-	o := &objectFacts{ReadID: readID, ReadAt: readAt, Generation: u.GetGeneration()}
+	o := &objectFacts{ReadID: readID, ReadAt: readAt, Generation: u.GetGeneration(), acquired: acquired}
 	obj := u.Object
 	switch gvr.Group + "/" + gvr.Resource {
 	case "apps/deployments":
@@ -103,7 +123,16 @@ func factOf(gvr schema.GroupVersionResource, u *unstructured.Unstructured, readI
 	case "/nodes":
 		o.Unschedulable, _, _ = unstructured.NestedBool(obj, "spec", "unschedulable")
 	case "keda.sh/scaledobjects", "keda.sh/scaledjobs":
-		_, o.KEDAPaused = u.GetAnnotations()["autoscaling.keda.sh/paused"]
+		ann := u.GetAnnotations()
+		o.KEDAPause, o.KEDAPauseSet = ann["autoscaling.keda.sh/paused"]
+		if len(o.KEDAPause) > 16 {
+			o.KEDAPause = o.KEDAPause[:16]
+		}
+		for _, other := range []string{"autoscaling.keda.sh/paused-replicas", "autoscaling.keda.sh/paused-scale-in", "autoscaling.keda.sh/paused-scale-out"} {
+			if _, ok := ann[other]; ok && o.KEDAOtherPause == "" {
+				o.KEDAOtherPause = other
+			}
+		}
 	}
 	f.Object = o
 	return f
@@ -143,10 +172,10 @@ func (a *actionFacts) add(f actionFact) {
 	}
 	merged := *cur
 	merged.Kind, merged.Group, merged.Namespace, merged.Name, merged.UID = f.Kind, f.Group, f.Namespace, f.Name, f.UID
-	if f.Object != nil {
+	if f.Object != nil && newerObject(f.Object, cur.Object) {
 		merged.Object = f.Object
 	}
-	if f.History != nil {
+	if f.History != nil && (cur.History == nil || f.History.acquired > cur.History.acquired) {
 		merged.History = f.History
 	}
 	if b, err := json.Marshal(merged); err != nil || len(b) > actionFactBytesMax {
@@ -164,6 +193,22 @@ func (a *actionFacts) add(f actionFact) {
 		a.order = a.order[1:]
 	}
 }
+
+// newerObject: n replaces cur only when Klyx acquired it later and its
+// generation did not go back; a late completion of an older read, or a tie,
+// keeps what is held.
+func newerObject(n, cur *objectFacts) bool {
+	if cur == nil {
+		return true
+	}
+	return n.acquired > cur.acquired && n.Generation >= cur.Generation
+}
+
+var acquisitions atomic.Uint64
+
+// acquisition is the next read's place in the order every fact part is
+// compared by.
+func acquisition() uint64 { return acquisitions.Add(1) }
 
 // touch moves uid to the newest end: a newer read keeps a subject.
 func (a *actionFacts) touch(uid string) {

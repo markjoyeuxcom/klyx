@@ -697,6 +697,9 @@ func (r *turnRunner) snapshot(ctx context.Context) (string, error) {
 		}
 		res := exec.as(r.nextReadID()).Run(ctx, name, json.RawMessage(args))
 		r.addRead(res.Read)
+		// a follow-up snapshot's reads keep their facts too (stage 2
+		// review, finding 3); recordFacts keeps none for a chat
+		r.recordFacts(res)
 		sections = append(sections, string(res.JSON))
 		included = append(included, label+" ("+res.Read.Outcome+")")
 		return r.aborted()

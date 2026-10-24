@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -17,6 +18,8 @@ import (
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -31,7 +34,7 @@ var (
 )
 
 func objFact(gvr schema.GroupVersionResource, m map[string]any) actionFact {
-	return factOf(gvr, uobj(m), "r1", "2026-10-24T12:00:00Z")
+	return factOf(gvr, uobj(m), "r1", "2026-10-24T12:00:00Z", acquisition())
 }
 
 func TestFactsAreReadOffTheObject(t *testing.T) {
@@ -69,7 +72,7 @@ func TestFactsAreReadOffTheObject(t *testing.T) {
 		t.Fatal("node")
 	}
 	so := objFact(soGVR, map[string]any{"kind": "ScaledObject", "metadata": map[string]any{"name": "q", "uid": "so1", "annotations": map[string]any{"autoscaling.keda.sh/paused": "true"}}})
-	if !so.Object.KEDAPaused {
+	if !so.Object.kedaPausedTrue() {
 		t.Fatal("scaledobject")
 	}
 }
@@ -219,7 +222,7 @@ func TestStepsThatCouldNotTakeEffectAreRefused(t *testing.T) {
 		"suspend suspended":    {actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{Suspended: true}}, step("flux-suspend", "Kustomization", "n", "w", "", "r1"), "already suspended"},
 		"cordon cordoned":      {actionFact{Kind: "Node", Name: "w", UID: "u", Object: &objectFacts{Unschedulable: true}}, step("cordon", "Node", "", "w", "", "r1"), "already cordoned"},
 		"uncordon schedulable": {actionFact{Kind: "Node", Name: "w", UID: "u", Object: &objectFacts{}}, step("uncordon", "Node", "", "w", "", "r1"), "not cordoned"},
-		"keda pause paused":    {actionFact{Kind: "ScaledObject", Group: "keda.sh", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{KEDAPaused: true}}, step("keda-pause", "ScaledObject", "n", "w", "", "r1"), "already carries"},
+		"keda pause paused":    {actionFact{Kind: "ScaledObject", Group: "keda.sh", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{KEDAPauseSet: true, KEDAPause: "true"}}, step("keda-pause", "ScaledObject", "n", "w", "", "r1"), "already true"},
 		"keda resume active":   {actionFact{Kind: "ScaledObject", Group: "keda.sh", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{}}, step("keda-resume", "ScaledObject", "n", "w", "", "r1"), "carries no pause"},
 		"pause paused":         {actionFact{Kind: "Deployment", Group: "apps", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{Paused: true}}, step("rollout-pause", "Deployment", "n", "w", "", "r1"), "already paused"},
 		"another API group":    {actionFact{Kind: "Kustomization", Group: "kustomize.config.k8s.io", Namespace: "n", Name: "w", UID: "u", Object: &objectFacts{}}, step("flux-suspend", "Kustomization", "n", "w", "", "r1"), "was read from API group"},
@@ -513,5 +516,188 @@ func TestBuildAIStateCarriesProposals(t *testing.T) {
 	}
 	if st := BuildAIState(nil, nil, func(string) string { return "" }); st.ProposalsOff {
 		t.Fatal("on by default")
+	}
+}
+
+// AI A3 stage 2 review, finding 1: a fence that ends the investigation
+// withdraws its offered steps; a model's own failure does not.
+func TestAFenceWithdrawsTheOfferedSteps(t *testing.T) {
+	seed := ChatSeedDTO{Kind: "object", Group: "apps", Version: "v1", Plural: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}
+	propose := ai.ToolCall{ID: "a1", Name: toolActions, Args: json.RawMessage(`{"steps":[` + step("rollout-pause", "Deployment", "shop", "web", "", "r1") + `]}`)}
+	setup := func(t *testing.T, final func(f *chatFixture) func(ai.ConvRequest) (ai.Turn, error)) (*chatFixture, ChatStateDTO) {
+		var f *chatFixture
+		f = newToolsFixture(t, calls(propose), func(r ai.ConvRequest) (ai.Turn, error) { return final(f)(r) })
+		f.conn.objects[key(deploysGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+			"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web"}, "spec": map[string]any{"replicas": int64(3)}})
+		inv := f.svc.StartInvestigation("x", seed)
+		return f, f.svc.Ask("x", inv.ConversationID, "", nil)
+	}
+	stateOf := func(st ChatStateDTO) string { return st.Exchanges[0].Plan.Steps[0].State }
+
+	_, st := setup(t, func(*chatFixture) func(ai.ConvRequest) (ai.Turn, error) { return answer("done") })
+	if stateOf(st) != stepOffered {
+		t.Fatalf("a completed turn keeps its offer: %+v", st.Exchanges[0].Plan)
+	}
+	_, st = setup(t, func(f *chatFixture) func(ai.ConvRequest) (ai.Turn, error) {
+		return func(r ai.ConvRequest) (ai.Turn, error) {
+			f.mu.Lock()
+			f.cur = newFakeChat() // the connection is replaced during the final call
+			f.mu.Unlock()
+			return answer("done")(r)
+		}
+	})
+	if stateOf(st) != stepWithdrawn || !strings.Contains(st.Exchanges[0].Plan.Steps[0].Reason, "withdrawn") {
+		t.Fatalf("a replaced connection withdraws the offer: %+v %q", st.Exchanges[0].Plan, st.Ended)
+	}
+	_, st = setup(t, func(f *chatFixture) func(ai.ConvRequest) (ai.Turn, error) {
+		return func(r ai.ConvRequest) (ai.Turn, error) {
+			s := *f.aiSvc.load()
+			s.ProposalsOff = true
+			SetAIState(f.aiSvc, &s)
+			return answer("done")(r)
+		}
+	})
+	if stateOf(st) != stepWithdrawn {
+		t.Fatalf("proposals turned off withdraw the offer: %+v", st.Exchanges[0].Plan)
+	}
+	f, st := setup(t, func(*chatFixture) func(ai.ConvRequest) (ai.Turn, error) {
+		return func(ai.ConvRequest) (ai.Turn, error) { return ai.Turn{}, errors.New("model overloaded") }
+	})
+	if st.Exchanges[0].Outcome != "failed" || stateOf(st) != stepOffered {
+		t.Fatalf("a model's failure is not a fence: %+v %s", st.Exchanges[0].Plan, st.Exchanges[0].Outcome)
+	}
+	// an earlier plan, read later, is withdrawn once the fence fails
+	s := *f.aiSvc.load()
+	SetAIState(f.aiSvc, &s) // a new revision: the settings changed
+	if got := f.svc.InvestigationState("x"); got.Exchanges[0].Plan.Steps[0].State != stepWithdrawn {
+		t.Fatalf("a retained plan: %+v", got.Exchanges[0].Plan)
+	}
+}
+
+// Stage 2 review, finding 2: an older read completing late never replaces
+// a newer one's facts, for either part; a newer read does.
+func TestAnOlderReadNeverReplacesANewerOne(t *testing.T) {
+	f := newToolsFixture(t)
+	dep := uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web", "generation": int64(3)}, "spec": map[string]any{"replicas": int64(3)}})
+	f.conn.objects[key(deploysGVR, "shop", "web")] = dep
+	tools := newChatTools(f.conn, fixedNow)
+	older := tools.as("r1").getGVR(context.Background(), deploysGVR, "shop", "web", "uid-web")
+	_ = unstructured.SetNestedField(dep.Object, true, "spec", "paused")
+	dep.SetGeneration(4)
+	newer := tools.as("r2").getGVR(context.Background(), deploysGVR, "shop", "web", "uid-web")
+	facts := newActionFacts()
+	facts.add(newer.facts[0])
+	facts.add(older.facts[0]) // the older read completes last
+	got := facts.named("Deployment", "shop", "web")[0]
+	if !got.Object.Paused || got.Object.Generation != 4 || got.Object.ReadID != "r2" {
+		t.Fatalf("the newer read is kept: %+v", got.Object)
+	}
+	in, _ := parseActions(json.RawMessage(`{"steps":[` + step("rollout-restart", "Deployment", "shop", "web", "", "r2") + `]}`))
+	if s := validatePlan(in, facts, []ChatRead{{ID: "r2", Refs: []ChatRef{{UID: "uid-web"}}}}, anchorFacts{}).dto.Steps[0]; s.State != stepRefused || !strings.Contains(s.Reason, "paused") {
+		t.Fatalf("the paused Deployment's restart stays refused: %+v", s)
+	}
+	// the history part likewise
+	h := newActionFacts()
+	h.add(actionFact{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "u", History: &historyFacts{ReadID: "r5", PartnerRevision: 4, acquired: 9}})
+	h.add(actionFact{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "u", History: &historyFacts{ReadID: "r4", PartnerRevision: 3, acquired: 8}})
+	if got := h.named("Deployment", "shop", "web")[0].History; got.ReadID != "r5" {
+		t.Fatalf("the newer history is kept: %+v", got)
+	}
+	h.add(actionFact{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "u", History: &historyFacts{ReadID: "r6", PartnerRevision: 5, acquired: 10}})
+	if got := h.named("Deployment", "shop", "web")[0].History; got.ReadID != "r6" {
+		t.Fatalf("a newer history replaces it: %+v", got)
+	}
+	// a metadata-only change keeps the generation: only the order decides
+	k := newActionFacts()
+	paused := actionFact{Kind: "ScaledObject", UID: "q", Name: "q", Object: &objectFacts{ReadID: "late", Generation: 2, KEDAPauseSet: true, KEDAPause: "true", acquired: 21}}
+	unpaused := actionFact{Kind: "ScaledObject", UID: "q", Name: "q", Object: &objectFacts{ReadID: "early", Generation: 2, acquired: 20}}
+	k.add(paused)
+	k.add(unpaused) // read first, completed last
+	if got := k.named("ScaledObject", "", "q")[0].Object; got.ReadID != "late" || !got.kedaPausedTrue() {
+		t.Fatalf("same generation, the later acquisition is kept: %+v", got)
+	}
+	// a later read at a lower generation (a stale source) is not newer
+	o := newActionFacts()
+	o.add(actionFact{Kind: "Deployment", UID: "u", Name: "w", Object: &objectFacts{ReadID: "a", Generation: 5, acquired: 1}})
+	o.add(actionFact{Kind: "Deployment", UID: "u", Name: "w", Object: &objectFacts{ReadID: "b", Generation: 4, acquired: 2}})
+	if got := o.named("Deployment", "", "w")[0].Object; got.ReadID != "a" {
+		t.Fatalf("a generation that went back is not newer: %+v", got)
+	}
+}
+
+// Stage 2 review, finding 3: a snapshot follow-up's own reads keep their
+// facts, so it can propose on an object it read by UID.
+func TestASnapshotFollowUpKeepsItsReadsFacts(t *testing.T) {
+	n := 0
+	p := &fakeConverser{complete: func(ai.Request) (ai.Result, error) {
+		n++
+		if n == 1 {
+			return ai.Result{Text: "first"}, nil
+		}
+		return ai.Result{Text: "the other pod\n```actions\n{\"steps\":[" + step("delete-pod", "Pod", "shop", "web-2", "", "r1") + "]}\n```"}, nil
+	}}
+	f := newChatFixture(t, snapshotOnly{p})
+	f.conn.objects[key(podsGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-p"}})
+	f.conn.objects[key(podsGVR, "shop", "web-2")] = uobj(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": "web-2", "namespace": "shop", "uid": "uid-p2"}})
+	rows := podVerdictRows("uid-p2", 1, observe.Live)
+	rs := rows.Rows.(healthsrc.RowSet[workloads.PodSummary])
+	rs.Rows[0].Ref.Name = "web-2"
+	rows.Rows = rs
+	f.conn.rows = map[string]observe.Rows{"pods/pods": rows}
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.Ask("x", inv.ConversationID, "", nil)
+	st := f.svc.Ask("x", inv.ConversationID, "and pod/web-2?", nil)
+	if !strings.Contains(p.creqs[1].User, "uid-p2") {
+		t.Fatalf("the follow-up read pod web-2 by UID: %s", p.creqs[1].User)
+	}
+	plan := st.Exchanges[1].Plan
+	if plan == nil || plan.Steps[0].State != stepOffered || plan.Steps[0].Target.UID != "uid-p2" {
+		t.Fatalf("the follow-up's read is eligible: %+v", plan)
+	}
+}
+
+// Stage 2 review, finding 4: KEDA's pause is its annotation's value on
+// 2.13 and later; only a true value is "no change" for a pause.
+func TestKEDAPauseReadsTheAnnotationsValue(t *testing.T) {
+	for _, c := range []struct {
+		res, kind string
+		ann       map[string]any
+		verb      string
+		state     string
+	}{
+		{"scaledobjects", "ScaledObject", map[string]any{"autoscaling.keda.sh/paused": "false"}, "keda-pause", stepOffered},
+		{"scaledobjects", "ScaledObject", map[string]any{"autoscaling.keda.sh/paused": "true"}, "keda-pause", stepRefused},
+		{"scaledobjects", "ScaledObject", map[string]any{}, "keda-pause", stepOffered},
+		{"scaledjobs", "ScaledJob", map[string]any{"autoscaling.keda.sh/paused": "false"}, "keda-pause", stepOffered},
+		{"scaledjobs", "ScaledJob", map[string]any{"autoscaling.keda.sh/paused": "true"}, "keda-pause", stepRefused},
+		{"scaledobjects", "ScaledObject", map[string]any{}, "keda-resume", stepRefused},
+		{"scaledobjects", "ScaledObject", map[string]any{"autoscaling.keda.sh/paused": "false"}, "keda-resume", stepOffered},
+		{"scaledobjects", "ScaledObject", map[string]any{"autoscaling.keda.sh/paused": "true", "autoscaling.keda.sh/paused-replicas": "0"}, "keda-resume", stepRefused},
+	} {
+		gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: c.res}
+		fact := factOf(gvr, uobj(map[string]any{"kind": c.kind, "metadata": map[string]any{"name": "q", "namespace": "n", "uid": "u", "annotations": c.ann}}), "r1", "t", acquisition())
+		facts := newActionFacts()
+		facts.add(fact)
+		in, _ := parseActions(json.RawMessage(`{"steps":[` + step(c.verb, c.kind, "n", "q", "", "r1") + `]}`))
+		if got := validatePlan(in, facts, []ChatRead{{ID: "r1", Refs: []ChatRef{{UID: "u"}}}}, anchorFacts{}).dto.Steps[0]; got.State != c.state {
+			t.Errorf("%s %s %v: %s %q", c.kind, c.verb, c.ann, got.State, got.Reason)
+		}
+	}
+}
+
+// Stage 2 review, finding 5: a retained plan's pinned facts and partners
+// count in the exchange's retention bytes.
+func TestRetentionCountsAPlansPins(t *testing.T) {
+	in, _ := parseActions(json.RawMessage(`{"steps":[` + step("rollout-undo", "Deployment", "klyx-a1-app", "web", `{"revision":4}`, "r4.c1") + `]}`))
+	facts, ledger, a := planFixture()
+	p := validatePlan(in, facts, ledger, a)
+	with := exchangeBytes(&exchange{plan: &p})
+	bare := p
+	bare.facts, bare.partner = nil, nil
+	without := exchangeBytes(&exchange{plan: &bare})
+	pins, _ := json.Marshal(p.facts)
+	if with-without < len(pins) {
+		t.Fatalf("the pins are counted: %d vs %d (pins %d)", with, without, len(pins))
 	}
 }

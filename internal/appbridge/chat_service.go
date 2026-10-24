@@ -410,13 +410,52 @@ func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Kind: c.kind, Anchor: c.anchor, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
 		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{},
 		Version: s.version}
+	fence := ""
+	if c.kind == kindInvestigation {
+		fence = s.planFenceLocked(c)
+	}
 	for _, e := range c.exchanges {
-		out.Exchanges = append(out.Exchanges, e.dto())
+		d := e.dto()
+		if d.Plan != nil && fence != "" {
+			withdraw(d.Plan, fence)
+		}
+		out.Exchanges = append(out.Exchanges, d)
 	}
 	for _, m := range c.members {
 		out.Comparison = append(out.Comparison, m.cluster)
 	}
 	return out
+}
+
+// planFenceLocked is why an investigation's unrun steps are withdrawn (AI A3
+// §2.4, §6): the conversation ended, or its fence no longer holds - the AI
+// settings or the pinned connection changed - or proposals are off. ""
+// when none applies; a model's own failure is not a fence.
+func (s *ChatService) planFenceLocked(c *conversation) string {
+	if c.ended != "" {
+		return "the investigation ended (" + c.ended + ")"
+	}
+	st := s.ai.load()
+	switch {
+	case st == nil || st.Rev != c.rev:
+		return "AI settings changed"
+	case st.ProposalsOff:
+		return errActionsOff.Error()
+	}
+	if conn, usable := s.state(c.cluster); conn == nil || conn != c.conn || !usable {
+		return "the cluster disconnected"
+	}
+	return ""
+}
+
+// withdraw shows a fenced plan's offered steps as withdrawn, with why: the
+// proposal stays readable, and nothing of it is offered.
+func withdraw(p *ActionPlanDTO, why string) {
+	for i := range p.Steps {
+		if p.Steps[i].State == stepOffered {
+			p.Steps[i].State, p.Steps[i].Reason = stepWithdrawn, "withdrawn: "+why
+		}
+	}
 }
 
 // dto is a detached copy: a running turn keeps appending reads and
@@ -704,9 +743,15 @@ func exchangeBytes(e *exchange) int {
 		b, _ := json.Marshal(e.reported)
 		n += len(b)
 	}
-	// and its action proposal (AI A3 §2.4)
+	// and its action proposal, with the facts and partners it pins, which
+	// can outlive the conversation's facts record (AI A3 §2.4; stage 2
+	// review, finding 5)
 	if e.plan != nil {
 		b, _ := json.Marshal(e.plan.dto)
+		n += len(b)
+		b, _ = json.Marshal(e.plan.facts)
+		n += len(b)
+		b, _ = json.Marshal(e.plan.partner)
 		n += len(b)
 	}
 	if e.proposed != nil {

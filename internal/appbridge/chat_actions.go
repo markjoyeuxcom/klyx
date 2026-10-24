@@ -30,6 +30,7 @@ const (
 	stepRefused         = "refused"
 	stepUnsupported     = "unsupported"
 	stepNotOffered      = "not offered"
+	stepWithdrawn       = "withdrawn"
 )
 
 // matrixVerb is one verb A3 offers (§1): the kinds it acts on, by kind and
@@ -351,12 +352,17 @@ func eligible(s actionStepInput, st ActionStepDTO, facts *actionFacts) (actionFa
 			return f, nil, "no change: it is not cordoned"
 		}
 	case "keda-pause":
-		if o.KEDAPaused {
-			return f, nil, "no change: it already carries the pause annotation"
+		// only a true value pauses on every version; a present "false" is a
+		// real change on 2.13 and later, which the verb's version gate checks
+		if o.kedaPausedTrue() {
+			return f, nil, "no change: its pause annotation is already true"
 		}
 	case "keda-resume":
-		if !o.KEDAPaused {
+		switch {
+		case !o.KEDAPauseSet:
 			return f, nil, "no change: it carries no pause annotation"
+		case o.KEDAOtherPause != "":
+			return f, nil, fmt.Sprintf("it is paused by %s, set outside Klyx: Klyx resumes only its own pause", o.KEDAOtherPause)
 		}
 	}
 	return f, nil, ""
