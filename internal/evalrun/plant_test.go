@@ -55,7 +55,8 @@ func crashLab(waiting string) *kubefake.Clientset {
 			OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: owner, UID: types.UID("uid-" + owner), Controller: &ctl}}},
 			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{st}}}
 	}
-	crash := corev1.ContainerStatus{Name: "web", RestartCount: 7, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: waiting}}}
+	crash := corev1.ContainerStatus{Name: "web", RestartCount: 7, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: waiting}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}}
 	run := corev1.ContainerStatus{Name: "web", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
 	return kubefake.NewSimpleClientset(dep, rs("web-old", "uid-web-old", "1"), rs("web-new", "uid-web-new", "2"),
 		pod("web-new-a", "uid-pod-new", "web-new", crash), pod("web-old-a", "uid-pod-old", "web-old", run))
@@ -117,6 +118,15 @@ func TestABrokenPlantSaysWhichInvariant(t *testing.T) {
 				t.Fatalf("want %q, got %+v", c.want, p)
 			}
 		})
+	}
+}
+
+func TestACrashLoopHoldsWhateverItsStateNow(t *testing.T) {
+	s := e1Plant()
+	s.Invariants[2].Pods = &PodsSpec{Crashing: true, MinRestarts: 1}
+	// between back-offs the container runs again: still a crash loop
+	if p := checker(crashLab("ContainerCreating"), kustomization("main@sha1:a9b3c81", "False", "HealthCheckFailed"), depObj()).Check(context.Background(), s); !p.OK {
+		t.Fatal(p.Failed)
 	}
 }
 
@@ -206,5 +216,28 @@ invariants:
 	}
 	if _, err := LoadScenarios(dir, []string{"e9-missing"}); err == nil {
 		t.Fatal("an unknown scenario name is refused")
+	}
+}
+
+func TestTheLabsScenariosLoad(t *testing.T) {
+	ss, err := LoadScenarios("../../scripts/lab/eval", nil)
+	if err != nil || len(ss) != 2 || ss[0].Name != "e1-flux-crashloop" || !ss[1].Control {
+		t.Fatalf("%v %+v", err, ss)
+	}
+	if len(ss[0].Predicates) != 2 || ss[0].Repos[0] != "https://github.com/markjoyeuxcom/klyx-lab-a1" {
+		t.Fatalf("%+v", ss[0])
+	}
+	st, err := LoadScenarios("../../scripts/lab/eval/selftest", nil)
+	if err != nil || len(st) != 3 {
+		t.Fatalf("%v %+v", err, st)
+	}
+	// a filter keeps only the named, whatever their order
+	one, err := LoadScenarios("../../scripts/lab/eval", []string{"e1-flux-crashloop"})
+	if err != nil || len(one) != 1 || one[0].Name != "e1-flux-crashloop" {
+		t.Fatalf("%v %+v", err, one)
+	}
+	two, err := LoadScenarios("../../scripts/lab/eval/selftest", []string{"s3-drift", "s1-broken-plant"})
+	if err != nil || len(two) != 2 || two[0].Name != "s1-broken-plant" || two[1].Name != "s3-drift" {
+		t.Fatalf("%v %+v", err, two)
 	}
 }

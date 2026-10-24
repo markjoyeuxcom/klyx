@@ -1,0 +1,11 @@
+# Self-test: a witness the self-test changes while the model answers is
+# drift.
+name: s3-drift
+control: true
+anchor: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+invariants:
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+    condition: {type: Available, status: "True"}
+witnesses:
+  - object: {version: v1, resource: configmaps, kind: ConfigMap, namespace: klyx-eval, name: eval-witness}
+    path: data.value

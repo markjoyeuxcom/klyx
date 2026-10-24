@@ -226,6 +226,16 @@ func (c Checker) pods(ctx context.Context, d Ref, spec PodsSpec) error {
 			if !ok {
 				return fmt.Errorf("pod %s is not waiting for %s with %d restarts", pod.Name, spec.Waiting, spec.MinRestarts)
 			}
+		case spec.Crashing:
+			ok := false
+			for _, cs := range pod.Status.ContainerStatuses {
+				if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 && cs.RestartCount >= spec.MinRestarts {
+					ok = true
+				}
+			}
+			if !ok {
+				return fmt.Errorf("pod %s has not crashed %d times", pod.Name, spec.MinRestarts)
+			}
 		case spec.Ready:
 			ready := false
 			for _, cond := range pod.Status.Conditions {

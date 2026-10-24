@@ -98,8 +98,12 @@ type ConditionSpec struct {
 type PodsSpec struct {
 	// Waiting: each pod has a container waiting for this reason with at
 	// least MinRestarts restarts.
-	Waiting     string `json:"waiting,omitempty"`
-	MinRestarts int32  `json:"minRestarts,omitempty"`
+	Waiting string `json:"waiting,omitempty"`
+	// Crashing: each pod has a container that has terminated with an error
+	// at least MinRestarts times, whatever its state at this instant (a
+	// crash loop is running, waiting or terminated in turn).
+	Crashing    bool  `json:"crashing,omitempty"`
+	MinRestarts int32 `json:"minRestarts,omitempty"`
 	// Ready: each pod is Ready with no restarts.
 	Ready bool `json:"ready,omitempty"`
 	// Min is how many pods there must be at least (default 1).
@@ -151,6 +155,7 @@ func LoadScenarios(dir string, names []string) ([]*Scenario, error) {
 	}
 	sort.Strings(paths)
 	var out []*Scenario
+	found := map[string]bool{}
 	for _, p := range paths {
 		s, err := loadScenario(p)
 		if err != nil {
@@ -158,11 +163,13 @@ func LoadScenarios(dir string, names []string) ([]*Scenario, error) {
 		}
 		if len(want) == 0 || want[s.Name] {
 			out = append(out, s)
-			delete(want, s.Name)
+			found[s.Name] = true
 		}
 	}
 	for n := range want {
-		return nil, fmt.Errorf("no scenario %q under %s", n, dir)
+		if !found[n] {
+			return nil, fmt.Errorf("no scenario %q under %s", n, dir)
+		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no scenarios under %s", dir)

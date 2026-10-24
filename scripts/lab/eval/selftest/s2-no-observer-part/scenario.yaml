@@ -1,0 +1,9 @@
+# Self-test: a correct plant whose anchor Klyx's Observer never classifies
+# is Klyx's, sut-not-ready, with the reason seen.
+name: s2-no-observer-part
+control: true
+anchor: {version: v1, resource: configmaps, kind: ConfigMap, namespace: klyx-eval, name: eval-witness}
+invariants:
+  - object: {version: v1, resource: configmaps, kind: ConfigMap, namespace: klyx-eval, name: eval-witness}
+    path: data.value
+    matches: '.'
