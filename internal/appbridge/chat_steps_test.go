@@ -439,7 +439,7 @@ func TestAConnectionChangedDuringTheRunNeverWrites(t *testing.T) {
 func (sf *stepsFixture) plantPlan(steps []ActionStepDTO, facts []actionFact, partners []*fleet.RevisionExpect) {
 	sf.svc.mu.Lock()
 	defer sf.svc.mu.Unlock()
-	p := &actionPlan{dto: ActionPlanDTO{Steps: steps}, facts: facts, partner: partners}
+	p := &actionPlan{dto: ActionPlanDTO{Steps: steps}, facts: facts, partner: partners, settled: true}
 	for range steps {
 		p.runs = append(p.runs, &stepRun{})
 	}
@@ -553,5 +553,46 @@ func TestEveryPrerequisiteIsItsOwnPredicate(t *testing.T) {
 				t.Errorf("%s holds=%v: %q", c.verb, holds, why)
 			}
 		}
+	}
+}
+
+// Stage 2 re-review 2: a withdrawal observed while the turn runs survives
+// the turn's settlement, and no step is offered before it settles.
+func TestAWithdrawalSurvivesTheTurnsSettlement(t *testing.T) {
+	seed := ChatSeedDTO{Kind: "object", Group: "apps", Version: "v1", Plural: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}
+	propose := ai.ToolCall{ID: "a1", Name: toolActions, Args: json.RawMessage(`{"steps":[` + pauseWeb + `]}`)}
+	release := make(chan struct{})
+	reached := make(chan struct{})
+	f := newToolsFixture(t, calls(propose), func(r ai.ConvRequest) (ai.Turn, error) {
+		close(reached)
+		<-release
+		return answer("done")(r)
+	})
+	f.conn.objects[key(deploysGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web"}, "spec": map[string]any{"replicas": int64(3)}})
+	inv := f.svc.StartInvestigation("x", seed)
+	done := make(chan ChatStateDTO, 1)
+	go func() { done <- f.svc.Ask("x", inv.ConversationID, "", nil) }()
+	<-reached
+	ex := f.svc.InvestigationState("x").Exchanges[0]
+	if r := f.svc.ReviewStep("x", inv.ConversationID, ex.ID, 1); r.Offered || !strings.Contains(r.Reason, "still running") {
+		t.Fatalf("no step is offered while its turn runs: %+v", r)
+	}
+	f.mu.Lock()
+	f.usable = false
+	f.mu.Unlock()
+	if st := f.svc.InvestigationState("x"); st.Exchanges[0].Plan.Steps[0].State != stepWithdrawn {
+		t.Fatalf("withdrawn mid-turn: %+v", st.Exchanges[0].Plan)
+	}
+	f.mu.Lock()
+	f.usable = true
+	f.mu.Unlock()
+	close(release)
+	settled := <-done
+	if settled.Exchanges[0].Plan.Steps[0].State != stepWithdrawn {
+		t.Fatalf("the settled plan keeps the withdrawal: %+v", settled.Exchanges[0].Plan)
+	}
+	if r := f.svc.ReviewStep("x", inv.ConversationID, ex.ID, 1); r.Offered || !strings.Contains(r.Reason, "withdrawn") {
+		t.Fatalf("and its steps stay withdrawn: %+v", r)
 	}
 }

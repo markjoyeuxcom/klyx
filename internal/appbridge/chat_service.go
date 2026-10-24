@@ -659,7 +659,14 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		ledger := ledgerLocked(c)
 		p := validatePlan(*ex.proposed, c.facts, ledger, anchorOf(c.anchor, ledger))
 		p.dto.Note = ex.plan.dto.Note
+		// a withdrawal observed while the turn ran is irreversible: the
+		// re-decision keeps it (stage 2 re-review 2)
+		p.withdrawn = ex.plan.withdrawn
 		ex.plan, ex.proposed = &p, nil
+	}
+	if c.kind == kindInvestigation && ex.plan != nil {
+		// a plan's steps are offered only once its turn has settled
+		ex.plan.settled = true
 	}
 	if c.kind == kindInvestigation && ex.findings == nil && ex.outcome == "answered" {
 		// the model reported nothing: Klyx's own missing evidence still shows

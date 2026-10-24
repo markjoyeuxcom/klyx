@@ -189,6 +189,9 @@ type actionPlan struct {
 	// withdrawn is the fence that withdrew the plan's unrun steps, kept
 	// once observed (stage 2 re-review)
 	withdrawn string
+	// settled: the turn that proposed it has ended, so its decision is the
+	// settled one; no step is offered before
+	settled bool
 }
 
 // validatePlan is Klyx's decision on every step (§2.3), in order. A step

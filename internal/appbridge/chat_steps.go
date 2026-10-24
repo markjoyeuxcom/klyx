@@ -160,6 +160,9 @@ func (s *ChatService) offeredLocked(c *conversation, p *actionPlan, n int) strin
 	if p.withdrawn != "" {
 		return "withdrawn: " + p.withdrawn
 	}
+	if !p.settled {
+		return "the turn that proposed the plan is still running"
+	}
 	switch {
 	case p.declined:
 		return "the plan was dismissed"

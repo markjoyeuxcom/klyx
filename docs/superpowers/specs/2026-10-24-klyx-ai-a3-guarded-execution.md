@@ -491,6 +491,10 @@ Codex requested changes at e9bffad (four P2, one P3) and accepted the six deviat
 
 Codex found the other four fixes resolved and one residual P2 at 30fbea6: the withdrawal changed only the reply, not the plan, and published no new version, so a delayed older reply could restore the offer, and a connection that recovered offered the plan again. Now `withdrawFencedLocked`, run before every state reply and in every step's offer check, records the failed fence on each plan not yet withdrawn (`actionPlan.withdrawn`, sticky), and publishes a new version once when that hides an offer; a plan's reply shows the recorded withdrawal, never a live recomputation. Tests: the version advances once and a second read publishes nothing; a recovered connection keeps the plan withdrawn; an earlier retained plan is withdrawn with the latest; the chat store keeps the withdrawn reply when an older offered one arrives late. A mutation pass caught 5 of 5. The fix is on top of stage 3 (6997ed7), whose offer check uses the recorded withdrawal.
 
+### 16.3 Codex's re-review 2 and the fix (2026-10-24)
+
+Codex found the sticky withdrawal working for a settled plan, and one residual P2 at 6b5b9e2: the turn's settlement decided the proposal again as a new plan and dropped the recorded withdrawal, so a withdrawal observed during the final model call was lost when the turn settled, and the offer returned under a newer version. Now the settlement keeps the withdrawal, and a plan is marked settled when its turn ends, whatever its outcome; no step is offered before (stage 3's offer check), so nothing can run on a plan the settlement replaces. Test: the final call blocked, the connection fails and recovers, and the settled plan stays withdrawn; a review during the running turn is refused. A mutation pass caught 3 of 3.
+
 ## 17. Stage 3 as built: execution (2026-10-24)
 
 **What it adds** (`chat_steps.go`):
