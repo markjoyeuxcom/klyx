@@ -1053,6 +1053,10 @@ func (r *turnRunner) equip(t *chatTools) {
 	}
 	t.ledgerUIDs = r.ledgerPodUIDs
 	t.cluster = r.c.cluster
+	if r.c.kind == kindInvestigation && r.c.anchor != nil {
+		a := *r.c.anchor
+		t.anchor = &a
+	}
 	r.s.mu.Lock()
 	members := append([]member(nil), r.c.members...)
 	r.s.mu.Unlock()

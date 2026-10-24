@@ -118,7 +118,9 @@ func (p *loadProvider) Converse(_ context.Context, req ai.ConvRequest) (ai.Turn,
 	switch steps {
 	case 0:
 		cs = append(cs, loadCall(0, toolUnit, unit), loadCall(1, toolChanges, unit))
-		for i := 2; i < 7; i++ {
+		// AI A1.1 §9: the rollout history at its full admitted shape, beside
+		cs = append(cs, loadCall(2, toolRollout, map[string]any{"kind": "Deployment", "namespace": "shop", "name": "web"}))
+		for i := 3; i < 7; i++ {
 			cs = append(cs, loadCall(i, toolList, map[string]any{"kind": "ConfigMap", "namespace": "shop"}))
 		}
 		for i := 7; i < 12; i++ {
@@ -226,6 +228,7 @@ func TestInvestigationsAtTheirBoundsAtOnce(t *testing.T) {
 		fc.objects[key(cmGVR, "shop", o.GetName())] = o
 	}
 	fc.lists[cmGVR.String()+"|shop"] = list
+	rolloutFullShape(fc)
 	for i := 0; i < 500; i++ {
 		fc.events = append(fc.events, workloads.EventSummary{Type: "Warning", Reason: fmt.Sprintf("Reason%d", i%40), Message: strings.Repeat("m", 300),
 			Count: 3, Namespace: "shop", Kind: "Pod", Name: fmt.Sprintf("web-%d", i), UID: fmt.Sprintf("uid-p%d", i), LastSeenUnix: fixedNow().Unix() - int64(i)})
@@ -343,4 +346,36 @@ func TestInvestigationsAtTheirBoundsAtOnce(t *testing.T) {
 	}
 	t.Logf("%d investigations in %s: renders of %d x %d KiB; reads in flight at most %d (bound %d); comparisons admitted at most %d (bound 1), builds at most %d (bound 1); largest results %v; retained %d KiB in all; heap in use at most %d MiB",
 		chatMaxConvs, took.Round(time.Millisecond), n, size>>10, peakReads, chatMaxConvs*invReadWorkers, peakComparisons, peakBuilds, sent, retained>>10, peakHeap>>20)
+}
+
+// rolloutFullShape is AI A1.1's admitted maximum on shop/web: 50 large
+// ReplicaSets of 8 containers each, the newest the current template, and
+// 100 pods, all owned.
+func rolloutFullShape(fc *fakeChatConn) {
+	big := func(rev int) map[string]any {
+		var cs []any
+		for c := 0; c < 8; c++ {
+			var env []any
+			for e := 0; e < 20; e++ {
+				env = append(env, map[string]any{"name": fmt.Sprintf("E%02d", e), "value": strings.Repeat("v", 200) + fmt.Sprint(rev)})
+			}
+			cs = append(cs, map[string]any{"name": fmt.Sprintf("c%d", c), "image": fmt.Sprintf("registry.example/%s:%d", strings.Repeat("i", 100), rev), "env": env,
+				"args": []any{strings.Repeat("a", 500)}})
+		}
+		return map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "web"}}, "spec": map[string]any{"containers": cs}}
+	}
+	fc.objects[key(deployGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-d", "generation": int64(50), "annotations": map[string]any{"deployment.kubernetes.io/revision": "50"}},
+		"spec":     map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}, "template": big(50)},
+		"status":   map[string]any{"observedGeneration": int64(50)}})
+	rs := &unstructured.UnstructuredList{}
+	for n := 50; n >= 1; n-- {
+		rs.Items = append(rs.Items, rsObj(fmt.Sprintf("web-%02d", n), fmt.Sprintf("uid-rs%d", n), fmt.Sprint(n), withHash(big(n), fmt.Sprint(n)), "uid-d", "2026-10-10T08:00:00Z", 2, 2))
+	}
+	fc.lists[replicaSetsGVR.String()+"|shop"] = rs
+	pods := &unstructured.UnstructuredList{}
+	for i := 0; i < 100; i++ {
+		pods.Items = append(pods.Items, rolloutPod(fmt.Sprintf("web-%03d", i), fmt.Sprintf("uid-wp%d", i), "ReplicaSet", fmt.Sprintf("uid-rs%d", 50-i%3), i%2 == 0, nil))
+	}
+	fc.lists[podsGVR.String()+"|shop"] = pods
 }

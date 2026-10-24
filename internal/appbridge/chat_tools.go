@@ -177,6 +177,11 @@ func ChatToolDefs() []ChatToolDef {
 			"name":      strProp("Exact pod or workload name."),
 			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h", "24h"}, "description": "How far back (default 1h)."},
 		}, "template", "namespace", "name")},
+		{toolRollout, "One Deployment's, StatefulSet's or DaemonSet's retained revisions, newest first: each revision's images, pods and Klyx's verdicts for them, the controller's revision markers as reported, the revision whose pod template equals the workload's (the only one called current) and the nearest lower retained revision, and what their pod templates differ in (hidden values by path only). Creation times are metadata: a rollback reuses an old revision object, so they date neither a rollout nor a change.", obj(map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"Deployment", "StatefulSet", "DaemonSet"}, "description": "Deployment, StatefulSet or DaemonSet."},
+			"namespace": strProp("The workload's namespace."),
+			"name":      strProp("The workload's exact name."),
+		}, "kind", "namespace", "name")},
 		{toolDeps, "The dependencies Klyx draws for one object, as typed nodes and edges with Klyx's verdict by UID: a Flux unit's dependency graph, a workload's owner chain and pods, a Certificate's issuance chain, a Gateway's topology or an HTTPRoute's parents and backends, a ScaledObject's or HPA's target and owner. A node without a UID is by name.", obj(map[string]any{
 			"kind":      strProp("Kind, e.g. Kustomization, Deployment, Certificate, Gateway, HTTPRoute, ScaledObject."),
 			"namespace": strProp("Namespace, for namespaced kinds."),
@@ -310,6 +315,9 @@ type chatTools struct {
 	// cluster is the conversation's; members its comparison set (A-C2)
 	cluster string
 	members []chatMember
+	// anchor is an investigation's pinned object, nil in a chat: a tool
+	// that reads it by name says when the UID differs (AI A1.1 §5)
+	anchor *ChatSeedDTO
 }
 
 // as is a copy of t that runs one read under its citation ID.
@@ -538,6 +546,22 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, a.Template, err)
 		}
 		return t.metricSeries(ctx, a.Template, a.Kind, a.NS, a.Name, a.Window)
+	case toolRollout:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if _, ok := rolloutResources[a.Kind]; !ok {
+			return t.refuse(name, label(a.Kind), errors.New("kind must be Deployment, StatefulSet or DaemonSet"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.rollout(ctx, a.Kind, a.NS, a.Name)
 	case toolDeps:
 		var a struct {
 			Kind string `json:"kind"`
@@ -1348,6 +1372,9 @@ type chatVerdict struct {
 type chatVerdicts struct {
 	byUID   map[string]chatVerdict
 	problem string
+	// capped names a capture's kinds that are capped snapshots: their
+	// verdicts may be missing even in a live part (A1.1 §4)
+	capped string
 }
 
 func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
@@ -1444,6 +1471,13 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
 	out := &chatVerdicts{byUID: map[string]chatVerdict{}, problem: partProblem(tp[0], rows)}
+	var capped []string
+	for _, k := range rows.Part.Kinds {
+		if k.Truncated {
+			capped = append(capped, fmt.Sprintf("%s/%s: %s is a capped snapshot of %d objects; Klyx's verdicts may be missing", tp[0], rows.Part.ID, k.Kind, k.Objects))
+		}
+	}
+	out.capped = strings.Join(capped, "; ")
 	forEachRow(rows.Rows, func(r capturedRow) {
 		if v, ok := verdictOf(rows, r, n); ok {
 			out.byUID[r.ref.UID] = v
