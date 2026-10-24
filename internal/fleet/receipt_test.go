@@ -2,9 +2,14 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,11 +23,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -90,6 +98,7 @@ func TestReceiptsAreNotedOnlyUnderARecorder(t *testing.T) {
 // A3 §1: restart's token is unique, so two restarts within one second are
 // distinct templates; the receipt holds it and the armed read's generation.
 func TestRestartTokenIsUniqueAndReceipted(t *testing.T) {
+	resetAttemptTokens(t)
 	dep := rolloutDeployment(false, "1")
 	dep.Generation = 4
 	typed := k8sfake.NewSimpleClientset(dep)
@@ -153,6 +162,7 @@ func TestArmingRefusalsAreNotSent(t *testing.T) {
 
 // A3 §1: reconcile's receipt holds the requestedAt token it wrote.
 func TestReconcileReceiptHoldsItsToken(t *testing.T) {
+	resetAttemptTokens(t)
 	listKinds := map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"}
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomization("app"))
 	c := newActionConn(dyn)
@@ -255,7 +265,6 @@ func TestUndoWritesOnlyTheReviewedRevision(t *testing.T) {
 	for name, expect := range map[string]*RevisionExpect{
 		"another object":   {ObjectUID: "rs-other", TemplateDigest: rev2.TemplateDigest},
 		"another template": {ObjectUID: rev2.ObjectUID, TemplateDigest: "0000"},
-		"no digest":        {ObjectUID: rev2.ObjectUID},
 	} {
 		typed, c, _ := undoFixture(t)
 		err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2, expect)
@@ -408,8 +417,194 @@ func TestUndoRefusesARevisionWithoutADigest(t *testing.T) {
 	bare.Data.Raw = []byte(`{"spec":{}}`)
 	typed := k8sfake.NewSimpleClientset(sts, bare, stsRevision("pg-rev2", 2, "postgres:16.3", stsUID))
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
-	err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1, &RevisionExpect{ObjectUID: "cr1-uid"})
+	err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1, &RevisionExpect{ObjectUID: "cr1-uid", TemplateDigest: "a-digest"})
 	if !errors.Is(err, ErrRevisionChanged) {
 		t.Fatalf("no digest is never a match: %v", err)
+	}
+}
+
+// resetAttemptTokens starts the process-wide token clock over, for a test
+// that reads its fake clock's token back.
+func resetAttemptTokens(t *testing.T) {
+	t.Helper()
+	tokenMu.Lock()
+	lastToken = time.Time{}
+	tokenMu.Unlock()
+}
+
+// AI A3 stage 1 review, finding 1: there is no undo without the reviewed
+// revision, on either path; nothing is sent.
+func TestUndoNeedsItsReviewedRevision(t *testing.T) {
+	for name, expect := range map[string]*RevisionExpect{
+		"none":      nil,
+		"no object": {TemplateDigest: "d"},
+		"no digest": {ObjectUID: "rs-cart-2"},
+	} {
+		typed, c, _ := undoFixture(t)
+		before := len(typed.Actions())
+		err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2, expect)
+		if !errors.Is(err, ErrNoRevisionExpectation) || !errors.Is(err, ErrNotSent) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if len(typed.Actions()) != before {
+			t.Errorf("%s: nothing is read or written before the expectation", name)
+		}
+	}
+	stsUID := types.UID("sts-uid")
+	typed := k8sfake.NewSimpleClientset(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "db", Name: "pg", UID: stsUID}},
+		stsRevision("pg-rev1", 1, "postgres:16.2", stsUID))
+	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
+	if err := c.undoFromControllerRevision(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1, nil); !errors.Is(err, ErrNoRevisionExpectation) {
+		t.Fatalf("the ControllerRevision path refuses too: %v", err)
+	}
+}
+
+// AI A3 stage 1 review, finding 3: every attempt's token is its own, with a
+// clock that stands still, steps back, or serves writes at once.
+func TestAttemptTokensAreUnique(t *testing.T) {
+	resetAttemptTokens(t)
+	fixed := time.Date(2026, 10, 24, 12, 0, 0, 123, time.UTC)
+	a, b := attemptToken(fixed), attemptToken(fixed)
+	if a == b {
+		t.Fatalf("an unchanged clock repeated a token: %s", a)
+	}
+	back := attemptToken(fixed.Add(-time.Hour))
+	ta, _ := time.Parse(time.RFC3339Nano, b)
+	tb, _ := time.Parse(time.RFC3339Nano, back)
+	if !tb.After(ta) {
+		t.Fatalf("a stepped-back clock went backwards: %s after %s", back, b)
+	}
+	seen := sync.Map{}
+	var wg sync.WaitGroup
+	dup := false
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, loaded := seen.LoadOrStore(attemptToken(fixed), true); loaded {
+				dup = true
+			}
+		}()
+	}
+	wg.Wait()
+	if dup {
+		t.Fatal("two concurrent attempts shared a token")
+	}
+}
+
+// A reconcile already handled, then an attempt whose answer is lost: the
+// attempt keeps its own token, which is not the handled one, and has no
+// receipt.
+func TestALostReconcileKeepsItsOwnToken(t *testing.T) {
+	resetAttemptTokens(t)
+	listKinds := map[schema.GroupVersionResource]string{ksGVR(): "KustomizationList"}
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(dynScheme(), listKinds, seedKustomization("app"))
+	c := newActionConn(dyn)
+	c.clk = clock.NewFake(time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC))
+	first, rec1 := WithReceipts(context.Background())
+	if err := c.Reconcile(first, "Kustomization", "flux-system", "app", "uid-app"); err != nil {
+		t.Fatal(err)
+	}
+	handled, _ := rec1.Of("uid-app")
+	dyn.PrependReactor("patch", "kustomizations", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
+	})
+	second, rec2 := WithReceipts(context.Background())
+	err := c.Reconcile(second, "Kustomization", "flux-system", "app", "uid-app") // the clock has not moved
+	if o, _ := WriteOutcome(err); o != OutcomeUnverified {
+		t.Fatalf("a lost answer is unverified: %v", err)
+	}
+	if _, ok := rec2.Of("uid-app"); ok {
+		t.Fatal("a lost answer has no receipt")
+	}
+	att, ok := rec2.AttemptOf("uid-app")
+	if !ok || att.Token == "" || att.Token == handled.Token {
+		t.Fatalf("the attempt's own token, not the handled one: %+v vs %s", att, handled.Token)
+	}
+}
+
+// AI A3 stage 1 review, finding 4: int64 values above 2^53 keep their
+// identity, typed, unstructured or as a ControllerRevision's raw data.
+func TestDigestKeepsExactIntegers(t *testing.T) {
+	tmpl := func(grace int64) corev1.PodTemplateSpec {
+		return corev1.PodTemplateSpec{Spec: corev1.PodSpec{TerminationGracePeriodSeconds: &grace, Containers: []corev1.Container{{Name: "c", Image: "i"}}}}
+	}
+	lo, hi := int64(9007199254740992), int64(9007199254740993)
+	dLo, _ := workloads.TemplateDigest(tmpl(lo), false)
+	dHi, _ := workloads.TemplateDigest(tmpl(hi), false)
+	if dLo == dHi {
+		t.Fatal("two int64 values above 2^53 became one template")
+	}
+	u, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: tmpl(hi)}})
+	if d, _ := workloads.TemplateDigest(u["spec"].(map[string]any)["template"], false); d != dHi {
+		t.Fatal("typed and unstructured reads digest alike")
+	}
+	// a ControllerRevision's data is the server's serialisation of the template
+	raw, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": tmpl(hi)}})
+	if !strings.Contains(string(raw), "9007199254740993") {
+		t.Fatalf("the raw data carries the exact value: %s", raw)
+	}
+	m, err := workloads.RevisionDataTemplate(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := workloads.TemplateDigest(m, false); d != dHi {
+		t.Fatal("a ControllerRevision's raw data digests alike")
+	}
+	// the undo refuses a template changed only in such a value
+	typed, c, rev2 := undoFixture(t)
+	rs, _ := typed.AppsV1().ReplicaSets("shop").Get(context.Background(), "cart-2", metav1.GetOptions{})
+	rs.Spec.Template.Spec.TerminationGracePeriodSeconds = &lo
+	_, _ = typed.AppsV1().ReplicaSets("shop").Update(context.Background(), rs, metav1.UpdateOptions{})
+	hist, _, _ := c.RolloutHistory(context.Background(), "Deployment", "shop", "cart")
+	var pinned string
+	for _, r := range hist {
+		if r.Revision == 2 {
+			pinned = r.TemplateDigest
+		}
+	}
+	rs.Spec.Template.Spec.TerminationGracePeriodSeconds = &hi
+	_, _ = typed.AppsV1().ReplicaSets("shop").Update(context.Background(), rs, metav1.UpdateOptions{})
+	before := patchedDeployments(typed)
+	err = c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2, &RevisionExpect{ObjectUID: rev2.ObjectUID, TemplateDigest: pinned})
+	if !errors.Is(err, ErrRevisionChanged) || patchedDeployments(typed) != before {
+		t.Fatalf("a changed int64 must be refused: %v", err)
+	}
+}
+
+// AI A3 stage 1 review, finding 5: a fence that refuses the write before it
+// is sent is a refusal, nothing sent - through a real client and transport.
+func TestAFenceBeforeThePatchIsNotSent(t *testing.T) {
+	var patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patches.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"cart","namespace":"shop","uid":"dep-uid-1","generation":2}}`))
+	}))
+	defer srv.Close()
+	typed, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, WrapTransport: readfence.Transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
+	var checks atomic.Int32
+	fence := func() error {
+		if checks.Add(1) > 1 { // the arming GET passes; the PATCH does not
+			return errors.New("the connection was replaced")
+		}
+		return nil
+	}
+	ctx, rec := WithReceipts(readfence.With(context.Background(), fence))
+	err = c.RolloutPause(ctx, "shop", "cart", "dep-uid-1", true)
+	if o, ns := WriteOutcome(err); o != OutcomeRefused || !ns {
+		t.Fatalf("a fence before the PATCH: %s/%v %v", o, ns, err)
+	}
+	if !readfence.Failed(err) || patches.Load() != 0 {
+		t.Fatalf("the fence's error stays in the chain, and no PATCH was sent: %v %d", err, patches.Load())
+	}
+	if _, ok := rec.Of("dep-uid-1"); ok {
+		t.Fatal("no receipt")
 	}
 }

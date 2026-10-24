@@ -198,9 +198,11 @@ func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string)
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
 		return notSent(fmt.Errorf("reconcile %w", err))
 	}
-	// the requestedAt token is this request's own witness (A3 §1)
-	now := c.clk.Now()
-	if err := c.patchArmed(withToken(ctx, flux.ReconcileToken(now)), gvr, kind, ns, name, uid, flux.ReconcilePatch(now)); err != nil {
+	// the requestedAt token is this attempt's own witness (A3 §1): unique in
+	// the process, noted before the request is sent
+	token := attemptToken(c.clk.Now())
+	NoteAttempt(ctx, Attempt{UID: uid, Token: token})
+	if err := c.patchArmed(withToken(ctx, token), gvr, kind, ns, name, uid, flux.ReconcilePatchToken(token)); err != nil {
 		return fmt.Errorf("reconcile %w", err)
 	}
 	return nil

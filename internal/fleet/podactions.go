@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,9 +49,9 @@ func (c *ClusterConn) RolloutRestart(ctx context.Context, kind, namespace, name,
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	// RFC3339Nano, as reconcile's token: two restarts within one second are
-	// distinct templates, and the token is this request's own witness (A3 §1)
-	ts := clk.Now().UTC().Format(time.RFC3339Nano)
+	// this attempt's own token (A3 §1): unique in the process, so two
+	// restarts are distinct templates and the token is this request's witness
+	ts := attemptToken(clk.Now())
 
 	prior, err := c.armedWorkload(ctx, kind, namespace, name, uid)
 	if err != nil {
@@ -75,6 +74,7 @@ func (c *ClusterConn) RolloutRestart(ctx context.Context, kind, namespace, name,
 		return notSent(fmt.Errorf("rollout restart marshal: %w", err))
 	}
 
+	NoteAttempt(ctx, Attempt{UID: uid, Token: ts})
 	var meta metav1.Object
 	switch kind {
 	case "Deployment":

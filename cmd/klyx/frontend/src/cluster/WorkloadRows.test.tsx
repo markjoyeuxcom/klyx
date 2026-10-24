@@ -290,8 +290,8 @@ describe("attribution evidence: Pods and ReplicaSets", () => {
 // Codex review of 24442cd: the rollout history is the selected OBJECT's.
 describe("rollout history is fenced by UID", () => {
   const hist = (uid: string, image: string): RolloutHistoryResultDTO => ({ uid, revisions: [
-    { revision: 2, ageSeconds: 60, images: [`${image}:v2`], current: true },
-    { revision: 1, ageSeconds: 600, images: [`${image}:v1`], current: false },
+    { revision: 2, ageSeconds: 60, images: [`${image}:v2`], current: true, objectUID: `${uid}-rs2`, templateDigest: "d2" },
+    { revision: 1, ageSeconds: 600, images: [`${image}:v1`], current: false, objectUID: `${uid}-rs1`, templateDigest: "d1" },
   ] });
   function deferred<T>() {
     let resolve!: (v: T) => void;
@@ -319,8 +319,10 @@ describe("rollout history is fenced by UID", () => {
     await act(async () => { next.resolve(hist("uid-api-2", "new-object-image")); });
     expect(inspector().getByText(/new-object-image:v1/)).toBeTruthy();
     fireEvent.click(inspector().getByText("undo →"));
+    // the consequence lands first (the read failed here: it says so)
+    expect(await screen.findByText(/could not read which GitOps unit manages it/)).toBeTruthy();
     fireEvent.click(screen.getByText("Roll back"));
-    expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1, "", "");
+    expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1, "uid-api-2-rs1", "d1");
   });
 
   it("a deferred reply for the earlier object never lands on the replacement once it is opened", async () => {

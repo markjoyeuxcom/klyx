@@ -17,6 +17,7 @@ export function ConfirmDialog({
   arm,
   lockName = "prd lock",
   showScope = true,
+  waiting,
 }: {
   title: string;
   cluster: string;
@@ -43,6 +44,11 @@ export function ConfirmDialog({
   lockName?: string;
   /** Show the "on <cluster>" line (off when `cluster` is a phrase). */
   showScope?: boolean;
+  /**
+   * Set while what the confirmation rests on is still being read (a rollout
+   * undo's GitOps consequence): Confirm is not offered until it lands.
+   */
+  waiting?: string;
 }) {
   const [typed, setTyped] = useState("");
   const [armError, setArmError] = useState<string | null>(null);
@@ -76,6 +82,7 @@ export function ConfirmDialog({
   // before dispatching: destructive verbs there consume a one-shot grant and
   // refuse without it (defense in depth over the UI-side gate).
   const confirm = async () => {
+    if (waiting) return;
     if (isProtected) {
       setArming(true);
       const r = await (arm ? arm(typed) : armProtected(cluster, typed));
@@ -155,7 +162,7 @@ export function ConfirmDialog({
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0 }}>
           <button ref={cancelRef} onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
-          <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming} style={btnStyle(true, danger, !armed || arming)}>{confirmLabel}</button>
+          <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming || !!waiting} title={waiting} style={btnStyle(true, danger, !armed || arming || !!waiting)}>{confirmLabel}</button>
         </div>
       </div>
     </div>

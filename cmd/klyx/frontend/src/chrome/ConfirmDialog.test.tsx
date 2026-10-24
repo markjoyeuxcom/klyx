@@ -40,6 +40,25 @@ describe("ConfirmDialog", () => {
     expect(armProtected).toHaveBeenCalledWith("prd-we", "prd-we");
   });
 
+  // A3 stage 1 review, finding 2: while what the confirmation rests on is
+  // read, neither the button nor Enter in the typed field dispatches, and
+  // no grant is armed.
+  it("waiting: nothing confirms, not even Enter in the typed field", async () => {
+    const onConfirm = vi.fn();
+    const props = { title: "roll back", cluster: "prd-we", detail: "deployment shop/web", protected: true, onConfirm, onCancel: () => {} };
+    const { getByText, getByPlaceholderText, rerender } = render(<ConfirmDialog {...props} waiting="reading" />);
+    const input = getByPlaceholderText("prd-we");
+    fireEvent.change(input, { target: { value: "prd-we" } });
+    expect((getByText("Confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await Promise.resolve();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(armProtected).not.toHaveBeenCalled();
+    rerender(<ConfirmDialog {...props} />);
+    fireEvent.keyDown(getByPlaceholderText("prd-we"), { key: "Enter" });
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+  });
+
   it("protected: a failed arm blocks onConfirm and surfaces the error", async () => {
     vi.mocked(armProtected).mockResolvedValueOnce({ ok: false, error: "confirmation mismatch" });
     const onConfirm = vi.fn();

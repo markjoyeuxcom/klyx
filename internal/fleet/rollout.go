@@ -154,6 +154,10 @@ type RevisionExpect struct {
 // one it was reviewed against - another object, or another template.
 var ErrRevisionChanged = errors.New("the revision is no longer the one reviewed")
 
+// ErrNoRevisionExpectation: an undo names no reviewed revision. There is no
+// unchecked undo by number (AI A3 stage 1 review, finding 1).
+var ErrNoRevisionExpectation = errors.New("an undo needs the revision it was reviewed against: its revision object and its template")
+
 // RolloutUndo rolls a workload back to a prior revision with kubectl's own
 // semantics: for a Deployment the target ReplicaSet's pod template (minus the
 // pod-template-hash label) replaces spec.template; for StatefulSets and
@@ -164,10 +168,13 @@ var ErrRevisionChanged = errors.New("the revision is no longer the one reviewed"
 // (design §5b): it is confirmed before the history is read, and the write
 // itself is guarded by it (a JSON-patch test for a Deployment, metadata.uid
 // for a StatefulSet/DaemonSet patch). expect, when given, is the revision
-// the undo was reviewed against: the revision object selected by number
-// must be that object with that template, or nothing is written (A3 §4.5).
-// Every refusal before the patch is ErrNotSent.
+// the undo was reviewed against, and is required: the revision object
+// selected by number must be that object with that template, or nothing is
+// written (A3 §4.5). Every refusal before the patch is ErrNotSent.
 func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64, expect *RevisionExpect) error {
+	if expect == nil || expect.ObjectUID == "" || expect.TemplateDigest == "" {
+		return notSent(fmt.Errorf("rollout undo %s %s/%s to revision %d: %w - nothing was written", kind, namespace, name, revision, ErrNoRevisionExpectation))
+	}
 	if err := c.CheckWorkloadArmed(ctx, kind, namespace, name, uid); err != nil {
 		return notSent(fmt.Errorf("rollout undo %w - nothing was written", err))
 	}
@@ -204,10 +211,10 @@ func (c *ClusterConn) RolloutUndo(ctx context.Context, kind, namespace, name, ui
 
 // expected refuses a selected revision object that is not the reviewed
 // one: another UID, or another template. A digest that could not be
-// computed never matches.
+// computed never matches, nor does a missing expectation.
 func expected(expect *RevisionExpect, kind, namespace, name string, revision int64, objUID, digest string) error {
 	if expect == nil {
-		return nil
+		return notSent(fmt.Errorf("rollout undo %s %s/%s: revision %d: %w - nothing was written", kind, namespace, name, revision, ErrNoRevisionExpectation))
 	}
 	if objUID != expect.ObjectUID || digest == "" || digest != expect.TemplateDigest {
 		return notSent(fmt.Errorf("rollout undo %s %s/%s: revision %d: %w - nothing was written", kind, namespace, name, revision, ErrRevisionChanged))

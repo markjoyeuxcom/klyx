@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
+
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // Receipt is one write's own witness (A3 §5.1): the written object's
@@ -26,16 +29,74 @@ type Receipt struct {
 // verb notes its receipt only when the caller attached a recorder, so the
 // manual verbs' signatures stay as they are (A3 §4.4).
 type Receipts struct {
-	mu   sync.Mutex
-	list []Receipt
+	mu       sync.Mutex
+	list     []Receipt
+	attempts []Attempt
+}
+
+// Attempt is a write about to be sent, with the token it carries: a
+// restart's restartedAt, a reconcile's requestedAt. It is noted before the
+// request goes, so a write whose answer is lost still has its own token
+// (AI A3 stage 1 review): an attempt is never a receipt.
+type Attempt struct {
+	UID   string
+	Token string
 }
 
 type receiptsKey struct{}
 
-// WithReceipts attaches a recorder to ctx.
+// WithReceipts attaches a recorder to ctx, and a write tracker so a fence
+// that refuses a write before sending it says so (readfence.ErrNotForwarded).
 func WithReceipts(ctx context.Context) (context.Context, *Receipts) {
 	r := &Receipts{}
-	return context.WithValue(ctx, receiptsKey{}, r), r
+	return context.WithValue(readfence.WithWriteTracker(ctx), receiptsKey{}, r), r
+}
+
+// AttemptOf returns the last attempted write to uid with a token.
+func (r *Receipts) AttemptOf(uid string) (Attempt, bool) {
+	if r == nil {
+		return Attempt{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.attempts) - 1; i >= 0; i-- {
+		if r.attempts[i].UID == uid {
+			return r.attempts[i], true
+		}
+	}
+	return Attempt{}, false
+}
+
+// NoteAttempt records a write's token before it is sent; a ClusterConn
+// stand-in calls it the same way.
+func NoteAttempt(ctx context.Context, a Attempt) {
+	r, _ := ctx.Value(receiptsKey{}).(*Receipts)
+	if r == nil || a.UID == "" {
+		return
+	}
+	r.mu.Lock()
+	r.attempts = append(r.attempts, a)
+	r.mu.Unlock()
+}
+
+var (
+	tokenMu   sync.Mutex
+	lastToken time.Time
+)
+
+// attemptToken is one write's own token (AI A3 §1): the clock's reading,
+// made strictly later than every token this process issued before, so an
+// unchanged or stepped-back clock, or two writes at once, never repeat one.
+// Its format stays the clock's RFC3339Nano, as Flux and kubectl write it.
+func attemptToken(now time.Time) string {
+	tokenMu.Lock()
+	defer tokenMu.Unlock()
+	t := now.UTC()
+	if !t.After(lastToken) {
+		t = lastToken.Add(time.Nanosecond)
+	}
+	lastToken = t
+	return t.Format(time.RFC3339Nano)
 }
 
 // Of returns the receipt of the write to uid, the last one when a verb
@@ -115,7 +176,7 @@ func WriteOutcome(err error) (outcome string, wasNotSent bool) {
 	switch {
 	case err == nil:
 		return OutcomeWritten, false
-	case errors.Is(err, ErrNotSent):
+	case errors.Is(err, ErrNotSent), errors.Is(err, readfence.ErrNotForwarded):
 		return OutcomeRefused, true
 	case stepRefused(err):
 		return OutcomeRefused, false

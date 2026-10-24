@@ -141,6 +141,49 @@ describe("WorkloadsView", () => {
     expect(queryByText("Roll back")).toBeNull();
   });
 
+  // A3 stage 1 review, finding 2: Confirm waits for the consequence, and a
+  // reply to a cancelled opening never lands on a later one.
+  it("undo offers no confirmation until its ownership read lands, and ignores a cancelled opening's reply", async () => {
+    const crd = await import("../bridge/crd");
+    const replies: Array<(o: unknown) => void> = [];
+    vi.mocked(crd.gitOpsOwnership).mockImplementation(() => new Promise((r) => { replies.push(r as (o: unknown) => void); }) as never);
+    vi.mocked(rolloutHistory).mockResolvedValue({ uid: "uid-ollama", revisions: [
+      { revision: 3, ageSeconds: 600, images: ["v3"], current: true, objectUID: "rs3", templateDigest: "d3" },
+      { revision: 2, ageSeconds: 7200, images: ["v2"], current: false, objectUID: "rs2", templateDigest: "d2" },
+    ] });
+    seed([broken]);
+    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect(await findByText("#3")).toBeTruthy();
+    fireEvent.click(getByText("undo →"));
+    expect(getByText(/checking which GitOps unit manages it/)).toBeTruthy();
+    expect((getByText("Roll back") as HTMLButtonElement).disabled).toBe(true);
+    const before = vi.mocked(rolloutUndo).mock.calls.length;
+    fireEvent.click(getByText("Roll back"));
+    expect(vi.mocked(rolloutUndo).mock.calls.length).toBe(before);
+    fireEvent.click(getByText("Cancel"));
+    fireEvent.click(getByText("undo →"));
+    const suspended = { ownerKind: "Kustomization", ownerNamespace: "flux-system", ownerName: "ollama", ownerPrunes: true, ownerSuspended: true, basis: "flux-inventory",
+      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "", argoApps: [], warnings: [] };
+    await act(async () => { replies[0](suspended); });
+    expect(screen.queryByText(/It is suspended/)).toBeNull();
+    await act(async () => { replies[1]({ ...suspended, ownerSuspended: false }); });
+    expect(getByText(/While it is not suspended/)).toBeTruthy();
+    expect((getByText("Roll back") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a revision whose identity was not read offers no undo", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValue({ uid: "uid-ollama", revisions: [
+      { revision: 3, ageSeconds: 600, images: ["v3"], current: true },
+      { revision: 2, ageSeconds: 7200, images: ["v2"], current: false },
+    ] });
+    seed([broken]);
+    const { findByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect(await findByText("no undo")).toBeTruthy();
+    expect(queryByText("undo →")).toBeNull();
+  });
+
   it("a failed history read renders its error, never a silently missing section", async () => {
     vi.mocked(rolloutHistory).mockResolvedValue({ revisions: [], error: "list replicasets in shop: forbidden" });
     seed([broken]);

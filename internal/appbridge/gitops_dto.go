@@ -27,6 +27,7 @@ type ActionResultDTO struct {
 	Outcome string      `json:"outcome,omitempty"`
 	NotSent bool        `json:"notSent,omitempty"`
 	Receipt *ReceiptDTO `json:"receipt,omitempty"`
+	Attempt *AttemptDTO `json:"attempt,omitempty"`
 }
 
 // ApplyConflictDTO is a server-side apply refused for fields other managers

@@ -1,6 +1,7 @@
 package workloads
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,14 +20,16 @@ const templateHashLabel = "pod-template-hash"
 // decoded map; both pass through one JSON round trip first, so a typed
 // object and the same object read as unstructured digest alike. Fields a
 // typed decode drops (newer than the client's types) make the digests
-// differ, which refuses a write rather than allowing one.
+// differ, which refuses a write rather than allowing one. Numbers keep
+// their exact text: a float64 round trip would make two int64 values above
+// 2^53 one template (AI A3 stage 1 review, finding 4).
 func TemplateDigest(tmpl any, dropHash bool) (string, error) {
 	raw, err := json.Marshal(tmpl)
 	if err != nil {
 		return "", err
 	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
+	if err := decodeExact(raw, &m); err != nil {
 		return "", err
 	}
 	if m == nil {
@@ -63,11 +66,19 @@ func RevisionDataTemplate(raw []byte) (map[string]any, error) {
 			Template map[string]any `json:"template"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
+	if err := decodeExact(raw, &obj); err != nil {
 		return nil, err
 	}
 	if obj.Spec.Template == nil {
 		return nil, errors.New("the revision's data holds no pod template")
 	}
 	return obj.Spec.Template, nil
+}
+
+// decodeExact decodes JSON keeping every number as its literal text
+// (json.Number), which marshals back unchanged.
+func decodeExact(raw []byte, into any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	return dec.Decode(into)
 }

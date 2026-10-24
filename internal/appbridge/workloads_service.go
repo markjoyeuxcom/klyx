@@ -64,8 +64,9 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 // the protected-cluster grant, and the frontend confirm carries the
 // GitOps-owned-will-be-reverted warning. uid is the armed workload (§5b).
 // objectUID and templateDigest are the revision the history showed (A3
-// §4.5): the undo writes only that revision object with that template, and
-// refuses before writing when it changed. Both empty is today's behaviour.
+// §4.5), and are required: the undo writes only that revision object with
+// that template, and refuses before writing when either is missing or the
+// revision changed.
 func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid string, revision int, objectUID, templateDigest string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
 		return refusedNotSent(err.Error())
@@ -76,11 +77,11 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	var expect *fleet.RevisionExpect
-	if objectUID != "" || templateDigest != "" {
-		expect = &fleet.RevisionExpect{ObjectUID: objectUID, TemplateDigest: templateDigest}
+	if objectUID == "" || templateDigest == "" {
+		// after checkProtected: the refusal consumes the grant like any armed call
+		return refusedNotSent(fleet.ErrNoRevisionExpectation.Error())
 	}
-	return doRolloutUndo(ctx, conn, kind, namespace, name, uid, revision, expect)
+	return doRolloutUndo(ctx, conn, kind, namespace, name, uid, revision, &fleet.RevisionExpect{ObjectUID: objectUID, TemplateDigest: templateDigest})
 }
 
 // RolloutPause pauses/resumes a Deployment's rollouts (spec.paused). Reversible
