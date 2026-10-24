@@ -452,3 +452,16 @@ The plant's paths can now name a map key holding dots or slashes, such as `annot
 ### 16.3 ACCEPT (2026-10-24)
 
 Codex accepted stage 2 at 1563142 (handoff 26dc2826), with no remaining findings, after the review and one re-review. At that head, from a clean build, the self-test passes 19 of 19 on the kind lab with the stricter E3 and E4 plants (reports under `eval-lab/out/selftest-20261024T132315`). The eval is now ready for stage 3, the owner's first real-model run; `klyx-lab-a1` stays E1's fixture (the owner, 2026-10-24).
+
+## 17. Stage 3: the owner's first real-model run (2026-10-24)
+
+The owner ran E1 once, with Anthropic's `claude-sonnet-5-5` in tools mode, on the build accepted at 1563142. This was also Klyx's first investigation with a real model, the real-LLM smoke owed since A1 (A1 §13.3). The report stays outside the repository, under the eval directory's `out/20261024T134320`.
+- **The run:** `completed`, with 4 model calls, 7 reads and 21 s.
+- **The evidence:** both planted predicates were delivered, the Git diff (r5, its check r5.c1 bound) and the previous container's log (r7).
+- **The cause:** one cause finding, labelled suspected, about Deployment `web`, citing r5.c1, r7 and r4.c1. It earned the grounded-cause mark, cited no lookalike, and matched the cause proxy.
+  - It names commit a9b3c81's `MODE` change as the cause, and says the value itself was inferred from the log, since Klyx withholds it.
+  - It mentions the `release` label as a change without blaming it.
+- **The rest:** four observations, no unsupported finding, no early evidence. Its missing evidence named what it did not read: the env value, the command and args, alerts and metrics.
+- **Adjudication:** the owner's, in the report.
+
+Next, at the owner's call: all four scenarios, with repetitions, and other models.
