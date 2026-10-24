@@ -38,10 +38,11 @@ const (
 	planStatusWithdrawn   = "withdrawn"
 	planStatusDeclined    = "declined"
 	planStatusHeld        = "held"
-	// a step's record is at most 1 KiB (§2.4): its texts are capped, and
-	// stepRunBytes is what retention counts for the rest of it
+	// a step's record serializes to at most 1 KiB (§2.4): its texts are
+	// capped by their JSON encoding, and stepRunBytes is what retention
+	// counts for the rest of it
 	stepErrMax   = 512
-	stepWhyMax   = 384
+	stepWhyMax   = 352
 	stepRunBytes = 128
 )
 
@@ -710,16 +711,48 @@ func (s *ChatService) settleEffect(c *conversation, p *actionPlan, n int, effect
 	s.version++
 }
 
-// capRecord caps a record's text at max bytes, on a rune boundary.
+// capRecord caps a record's text so its JSON encoding, escapes included,
+// is at most max bytes (stage 3 re-review, finding 3), cut on a rune
+// boundary.
 func capRecord(s string, max int) string {
-	if len(s) <= max {
+	if jsonTextLen(s) <= max {
 		return s
 	}
-	cut := max - len("…")
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+	budget, n := max-len("…"), 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := escapedLen(r, size)
+		if n+w > budget {
+			return s[:i] + "…"
+		}
+		n += w
+		i += size
 	}
-	return s[:cut] + "…"
+	return s
+}
+
+// jsonTextLen is an upper bound of s's length inside a JSON string, as
+// encoding/json writes it (HTML-safe escapes included).
+func jsonTextLen(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		n += escapedLen(r, size)
+		i += size
+	}
+	return n
+}
+
+func escapedLen(r rune, size int) int {
+	switch {
+	case r == utf8.RuneError && size == 1: // invalid UTF-8: \ufffd
+		return 6
+	case r == '\n', r == '\r', r == '\t', r == '"', r == '\\':
+		return 2
+	case r < 0x20, r == '<', r == '>', r == '&', r == '\u2028', r == '\u2029':
+		return 6
+	}
+	return size
 }
 
 // DismissPlan ends a plan as declined (§4.6): its unrun steps are not run.

@@ -21,9 +21,14 @@ import (
 var verdictOfHook func(f actionFact) subjectVerdict
 
 // subjectVerdict is one subject's verdict by UID in the Observer's capture.
+// state is its verdict's state whichever classifier made it: a verdict
+// part's Kind, a native part's Role (stage 3 re-review, finding 1);
+// completed is a KEDA scaler row's own evidence of a completed pause.
 type subjectVerdict struct {
-	v     chatVerdict
-	found bool
+	v         chatVerdict
+	found     bool
+	state     string
+	completed bool
 }
 
 // verdictOf is Klyx's verdict for one subject by UID, from the Observer's
@@ -46,7 +51,7 @@ func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*c
 		return subjectVerdict{}
 	}
 	v, ok := vs.byUID[f.UID]
-	return subjectVerdict{v: v, found: ok}
+	return subjectVerdict{v: v, found: ok, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID]}
 }
 
 // stateEffect says whether a state verb's effect holds on u, its target as
@@ -97,15 +102,25 @@ func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionS
 	case "uncordon":
 		return !o.Unschedulable, "it is cordoned (spec.unschedulable true)"
 	case "keda-pause":
-		if !o.kedaPausedTrue() {
+		// the fresh read's annotation and conditions, joined to the
+		// capture's own completion evidence (S9's PauseCompleted or
+		// JobPauseCompleted, with its HPA evidence) at the same generation
+		switch {
+		case !o.kedaPausedTrue():
 			return false, "its pause annotation is not true"
+		case condStatus(u, "Paused") != "True":
+			return false, "its Paused condition is not True"
+		case condStatus(u, "Ready") == "False":
+			return false, "Ready is False"
 		}
 		sv := s.verdictOf(conn, f, nil)
-		if !sv.found || sv.v.Coverage != "live" {
+		switch {
+		case !sv.found || sv.v.Coverage != "live":
 			return false, "Klyx holds no live verdict that its pause completed"
-		}
-		if sv.v.Kind != "paused" {
-			return false, fmt.Sprintf("KEDA's pause has not completed (Klyx reads it %s)", orText(sv.v.Kind, "unknown"))
+		case sv.v.Generation != u.GetGeneration():
+			return false, fmt.Sprintf("Klyx's verdict describes generation %d, not the read's %d", sv.v.Generation, u.GetGeneration())
+		case !sv.completed:
+			return false, fmt.Sprintf("KEDA's pause has not completed (Klyx reads it %s)", orText(sv.state, "unknown"))
 		}
 		return true, ""
 	case "keda-resume":
@@ -123,8 +138,12 @@ func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionS
 }
 
 // currentPartner is a Deployment undo's further witness (§1): its current
-// ReplicaSet is the partner's, by UID - the partner, read by name, carries
-// the Deployment's revision. Another kind's undo has none.
+// ReplicaSet is the partner's, by A1.1's evidence rule (stage 3 re-review,
+// finding 2) - the partner, read by name, is the pinned UID, controlled by
+// this Deployment's UID, with the pinned template; no other ReplicaSet the
+// Deployment controls has that template (an ambiguity is unestablished,
+// and so is a partial read); and, corroborating, it carries the
+// Deployment's revision. Another kind's undo has none.
 func (s *ChatService) currentPartner(ctx context.Context, conn ChatConn, f actionFact, partner *fleet.RevisionExpect, d *unstructured.Unstructured) (bool, string) {
 	if f.Kind != "Deployment" {
 		return true, ""
@@ -136,8 +155,38 @@ func (s *ChatService) currentPartner(ctx context.Context, conn ChatConn, f actio
 	if err != nil {
 		return false, "the partner ReplicaSet could not be read: " + chatScrub(readError(err), nil)
 	}
-	if string(rs.GetUID()) != partner.ObjectUID {
+	digest := func(o *unstructured.Unstructured) string {
+		tm, ok, _ := unstructured.NestedMap(o.Object, "spec", "template")
+		if !ok {
+			return ""
+		}
+		dg, _ := workloads.TemplateDigest(tm, true)
+		return dg
+	}
+	switch {
+	case string(rs.GetUID()) != partner.ObjectUID:
 		return false, "the partner ReplicaSet was replaced"
+	case controllerUID(rs) != f.UID:
+		return false, "the partner ReplicaSet is no longer controlled by this Deployment"
+	case digest(rs) != partner.TemplateDigest:
+		return false, "the partner ReplicaSet's template changed"
+	}
+	sel, err := selectorOf(d)
+	if err != nil {
+		return false, err.Error()
+	}
+	list, err := conn.ChatList(ctx, replicaSetsGVR, f.Namespace, sel.String(), chatReplicaSetsMax)
+	if err != nil {
+		return false, "the Deployment's ReplicaSets could not be read: " + chatScrub(readError(err), nil)
+	}
+	if len(list.Items) >= chatReplicaSetsMax || list.GetContinue() != "" {
+		return false, "the Deployment's ReplicaSets were read only in part: Klyx cannot rule out another with the partner's template"
+	}
+	for i := range list.Items {
+		o := &list.Items[i]
+		if string(o.GetUID()) != partner.ObjectUID && controllerUID(o) == f.UID && digest(o) == partner.TemplateDigest {
+			return false, "ambiguous: another ReplicaSet of this Deployment has the partner's template"
+		}
 	}
 	const rev = "deployment.kubernetes.io/revision"
 	if have := rs.GetAnnotations()[rev]; have == "" || have != d.GetAnnotations()[rev] {

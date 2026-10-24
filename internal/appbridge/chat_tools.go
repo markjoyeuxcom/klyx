@@ -1386,8 +1386,11 @@ type chatVerdict struct {
 // chatVerdicts is one part's verdicts by UID, with the part's coverage
 // problem when it is not live.
 type chatVerdicts struct {
-	byUID   map[string]chatVerdict
-	problem string
+	byUID map[string]chatVerdict
+	// completed is a KEDA scaler row's own evidence of a completed full
+	// pause (keda.Verdict.Completed), by UID (AI A3 stage 3 re-review)
+	completed map[string]bool
+	problem   string
 	// capped names a capture's kinds that are capped snapshots: their
 	// verdicts may be missing even in a live part (A1.1 §4)
 	capped string
@@ -1486,7 +1489,7 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 	if !ok {
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
-	out := &chatVerdicts{byUID: map[string]chatVerdict{}, problem: partProblem(tp[0], rows)}
+	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, problem: partProblem(tp[0], rows)}
 	var capped []string
 	for _, k := range rows.Part.Kinds {
 		if k.Truncated {
@@ -1497,6 +1500,12 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 	forEachRow(rows.Rows, func(r capturedRow) {
 		if v, ok := verdictOf(rows, r, n); ok {
 			out.byUID[r.ref.UID] = v
+		}
+		switch d := r.data.(type) {
+		case healthsrc.ScaledObjectRow:
+			out.completed[r.ref.UID] = d.Verdict.Completed
+		case healthsrc.ScaledJobRow:
+			out.completed[r.ref.UID] = d.Verdict.Completed
 		}
 	})
 	return out

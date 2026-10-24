@@ -531,7 +531,7 @@ Codex requested changes: five P2 and no P1. It accepted deviations 1, 3, 4, 5, 6
    - KEDA resume: no pause annotation of either kind, and Ready not False.
 4. **P2, a dismissal survives settlement.** The re-decision keeps `declined` as it keeps the withdrawal.
 5. **P2, run records are bounded and counted.**
-   - A run's error is capped at 512 bytes and its effect's reason at 384, on a rune boundary, so a record stays within §2.4's 1 KiB.
+   - A run's error is capped at 512 bytes and its effect's reason at 384, on a rune boundary, so a record stays within §2.4's 1 KiB (as raw text; §17.2 makes it the serialized size, with the reason at 352).
    - `exchangeBytes` counts each run and review.
    - Retention runs after a run and after its effect settles, and never drops the exchange whose step is running.
    - Past 16 step records, the oldest superseded plan is dropped from the card, with a note on its exchange.
@@ -543,3 +543,22 @@ Codex requested changes: five P2 and no P1. It accepted deviations 1, 3, 4, 5, 6
 **Tests:** every finding has its regression: the five consequence changes and an unchanged control; a newer plan refused while the first plan's step verifies and while its write is in flight, then offered once it settles; a dismissal during the turn; a 100 KiB error; seventeen refused runs; retention around a running plan; a rune-boundary cap; a run's record taking the conversation over its byte bound; the record cap around the current and running plans; and a table of 33 prerequisite cases, including Codex's two KEDA counterexamples.
 
 **Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 29 of 29, after four mutations were rewritten to compile and two tests were added: one for retention after a run whose effect is still pending, one for the record cap's guards.
+
+### 17.2 Codex's re-review 1 and the fixes (2026-10-24)
+
+Codex found four of the five findings resolved and the fifth's accounting sound (its probe needed the 96-byte review correction). It requested two changes and one clarification:
+
+1. **P2, a native verdict's state is its Role.** A native part (KEDA's among them) leaves a verdict's Kind empty and puts its state in Role, so a real completed pause was always refused; the test hook had supplied a Kind. Now:
+   - a subject's verdict carries its state from whichever field its classifier fills;
+   - a KEDA pause's completion is the captured row's own evidence (`keda.Verdict.Completed`, S9's `PauseCompleted` or `JobPauseCompleted` with its HPA evidence), joined to the fresh read: the verdict must describe the read's generation, and the read must show the annotation true, Paused True and Ready not False.
+
+   The regression builds real rows through `keda.ScaledObjectRule` and `keda.ScaledJobRule`, without the hook: completed; HPA absence unproven; a capture that lags the read; and a read showing Ready False.
+2. **P2, a Deployment undo's current ReplicaSet follows A1.1's evidence rule.** The partner, read by name, must:
+   - be the pinned UID;
+   - be controlled by the Deployment's UID;
+   - carry the pinned template.
+
+   A LIST of the Deployment's ReplicaSets, by its selector, must show no other ReplicaSet of that Deployment with the same template: an ambiguity is unestablished, and so is a read in part. The revision annotation only corroborates. Codex's probe passes with one change: its Deployment fixture gains the `spec.selector` every apps/v1 Deployment has.
+3. **P3, the bound is the serialized record.** `capRecord` caps a text by its JSON encoding as `encoding/json` writes it, counting control characters, HTML-safe escapes and invalid UTF-8 as 6 bytes, quote and backslash as 2. With the error at 512 bytes and the reason at 352, a record of the longest values serializes within 1 KiB; the test tries seven worst-case characters.
+
+**Gates:** as in §17.1. A mutation pass caught 15 of 15, after three real-row cases were added for mutations the earlier checks had masked.

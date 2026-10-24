@@ -12,11 +12,16 @@ import (
 	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/keda"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -539,12 +544,21 @@ func TestEveryPrerequisiteIsTheMatrixEffect(t *testing.T) {
 		}
 		return st
 	}
-	paused := subjectVerdict{v: chatVerdict{Kind: "paused", Coverage: "live"}, found: true}
-	ok := subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live"}, found: true}
-	stale := subjectVerdict{v: chatVerdict{Kind: "paused", Coverage: "stale"}, found: true}
-	rs := func(uid, rev string) *unstructured.Unstructured {
-		return uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": "o-4", "namespace": "n", "uid": uid, "annotations": ann("deployment.kubernetes.io/revision", rev)}})
+	// a native part's verdict: its state in Role, KEDA's completion in the
+	// row's own evidence
+	paused := subjectVerdict{v: chatVerdict{Role: "paused", Coverage: "live", Generation: 1}, found: true, state: "paused", completed: true}
+	notDone := subjectVerdict{v: chatVerdict{Role: "fault", Coverage: "live", Generation: 1}, found: true, state: "fault"}
+	stale := subjectVerdict{v: chatVerdict{Role: "paused", Coverage: "stale", Generation: 1}, found: true, state: "paused", completed: true}
+	older := subjectVerdict{v: chatVerdict{Role: "paused", Coverage: "live", Generation: 0}, found: true, state: "paused", completed: true}
+	controller := true
+	rsOf := func(uid, owner, rev string, template map[string]any) *unstructured.Unstructured {
+		r := uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": "o-4", "namespace": "n", "uid": uid, "annotations": ann("deployment.kubernetes.io/revision", rev)}, "spec": map[string]any{"template": template}})
+		r.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "o", UID: types.UID(owner), Controller: &controller}})
+		return r
 	}
+	rs := func(uid, rev string) *unstructured.Unstructured { return rsOf(uid, "u", rev, tmpl) }
+	selector := map[string]any{"matchLabels": map[string]any{"app": "o"}}
+	pausedConds := map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}, map[string]any{"type": "Paused", "status": "True"}}}
 	for _, c := range []struct {
 		name        string
 		verb        string
@@ -556,44 +570,55 @@ func TestEveryPrerequisiteIsTheMatrixEffect(t *testing.T) {
 		status      map[string]any
 		digest      string
 		rs          *unstructured.Unstructured
+		siblings    []*unstructured.Unstructured // the Deployment's other ReplicaSets
 		verdict     *subjectVerdict
 		holds       bool
 	}{
-		{"suspended", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, true},
-		{"resumed from outside", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, false},
-		{"resumed", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, true},
-		{"suspended again", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, false},
-		{"scaled", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(2)}), "", nil, nil, true},
-		{"count changed", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(3)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, false},
-		{"status not the count", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, false},
-		{"scale unobserved", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(0, map[string]any{"replicas": int64(2)}), "", nil, nil, false},
-		{"paused", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, true},
-		{"pause unobserved", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(0, nil), "", nil, nil, false},
-		{"resumed from outside", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, false},
-		{"rollout resumed", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, true},
-		{"paused again", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, false},
-		{"cordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, true},
-		{"uncordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, false},
-		{"schedulable", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, true},
-		{"cordoned again", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, false},
-		{"pause completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, &paused, true},
-		{"annotation false", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "false"), map[string]any{}, nil, "", nil, &paused, false},
+		{"suspended", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, nil, true},
+		{"resumed from outside", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, nil, false},
+		{"resumed", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, nil, true},
+		{"suspended again", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, nil, false},
+		{"scaled", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(2)}), "", nil, nil, nil, true},
+		{"count changed", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(3)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, nil, false},
+		{"status not the count", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, nil, false},
+		{"scale unobserved", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(0, map[string]any{"replicas": int64(2)}), "", nil, nil, nil, false},
+		{"paused", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, nil, true},
+		{"pause unobserved", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(0, nil), "", nil, nil, nil, false},
+		{"resumed from outside", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, nil, false},
+		{"rollout resumed", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, nil, true},
+		{"paused again", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, nil, false},
+		{"cordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, nil, true},
+		{"uncordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, nil, false},
+		{"schedulable", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, nil, true},
+		{"cordoned again", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, nil, false},
+		{"pause completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, pausedConds, "", nil, nil, &paused, true},
+		{"verdict not completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, pausedConds, "", nil, nil, &notDone, false},
+		{"verdict of an older generation", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, pausedConds, "", nil, nil, &older, false},
+		{"paused condition not true", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, nil, &paused, false},
+		{"annotation false", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "false"), map[string]any{}, nil, "", nil, nil, &paused, false},
 		// Codex's counterexample: the annotation alone, Ready False and not paused
-		{"pause not completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("False"), "", nil, &ok, false},
-		{"no verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, nil, "", nil, &subjectVerdict{}, false},
-		{"stale verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, nil, "", nil, &stale, false},
-		{"resumed and ready", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("True"), "", nil, nil, true},
-		{"paused again", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, nil, false},
+		{"pause not completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}, map[string]any{"type": "Paused", "status": "True"}}}, "", nil, nil, &paused, false},
+		{"no verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, pausedConds, "", nil, nil, &subjectVerdict{}, false},
+		{"stale verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, pausedConds, "", nil, nil, &stale, false},
+		{"resumed and ready", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("True"), "", nil, nil, nil, true},
+		{"paused again", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, nil, nil, false},
 		// Codex's counterexample: another pause annotation, Ready False
-		{"another pause", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused-replicas", "0"), map[string]any{}, ready("True"), "", nil, nil, false},
-		{"ready false", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("False"), "", nil, nil, false},
-		{"reverted", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, true},
-		{"template changed", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": map[string]any{"spec": map[string]any{}}}, observed(1, nil), d, rs("rs-uid", "5"), nil, false},
-		{"undo unobserved", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(0, nil), d, rs("rs-uid", "5"), nil, false},
-		{"partner replaced", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-other", "5"), nil, false},
-		{"partner not current", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "6"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, false},
-		{"partner unread", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, nil, nil, false},
-		{"statefulset reverted", "rollout-undo", stsGVR, "StatefulSet", ActionStepDTO{}, nil, map[string]any{"template": tmpl}, observed(1, nil), sd, nil, nil, true},
+		{"another pause", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused-replicas", "0"), map[string]any{}, ready("True"), "", nil, nil, nil, false},
+		{"ready false", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("False"), "", nil, nil, nil, false},
+		{"reverted", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, nil, true},
+		{"template changed", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": map[string]any{"spec": map[string]any{}}}, observed(1, nil), d, rs("rs-uid", "5"), nil, nil, false},
+		{"undo unobserved", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(0, nil), d, rs("rs-uid", "5"), nil, nil, false},
+		{"partner replaced", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-other", "5"), nil, nil, false},
+		{"partner not current", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "6"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, nil, false},
+		{"partner unread", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, nil, nil, nil, false},
+		// stage 3 re-review, finding 2: A1.1's evidence rule, the revision
+		// annotation only corroborating
+		{"partner owned by another", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rsOf("rs-uid", "other", "5", tmpl), nil, nil, false},
+		{"partner template changed", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rsOf("rs-uid", "u", "5", map[string]any{"spec": map[string]any{}}), nil, nil, false},
+		{"ambiguous", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), []*unstructured.Unstructured{rsOf("rs-twin", "u", "2", tmpl)}, nil, false},
+		{"a twin of another Deployment", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), []*unstructured.Unstructured{rsOf("rs-twin", "other", "2", tmpl)}, nil, true},
+		{"replicasets read in part", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), manyReplicaSets(chatReplicaSetsMax), nil, false},
+		{"statefulset reverted", "rollout-undo", stsGVR, "StatefulSet", ActionStepDTO{}, nil, map[string]any{"template": tmpl}, observed(1, nil), sd, nil, nil, nil, true},
 	} {
 		t.Run(c.verb+"/"+c.name, func(t *testing.T) {
 			f := newToolsFixture(t)
@@ -601,13 +626,25 @@ func TestEveryPrerequisiteIsTheMatrixEffect(t *testing.T) {
 			if c.annotations != nil {
 				md["annotations"] = c.annotations
 			}
-			obj := map[string]any{"kind": c.kind, "metadata": md, "spec": c.spec}
+			spec := map[string]any{}
+			for k, v := range c.spec {
+				spec[k] = v
+			}
+			if c.kind == "Deployment" {
+				spec["selector"] = selector
+			}
+			obj := map[string]any{"kind": c.kind, "metadata": md, "spec": spec}
 			if c.status != nil {
 				obj["status"] = c.status
 			}
 			f.conn.objects[key(c.gvr, "n", "o")] = uobj(obj)
 			if c.rs != nil {
 				f.conn.objects[key(replicaSetsGVR, "n", "o-4")] = c.rs
+				l := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*c.rs}}
+				for _, s := range c.siblings {
+					l.Items = append(l.Items, *s)
+				}
+				f.conn.lists[replicaSetsGVR.String()+"|n"] = l
 			}
 			prev := verdictOfHook
 			verdictOfHook = func(actionFact) subjectVerdict {
@@ -934,5 +971,94 @@ func TestTheStepRecordCapKeepsTheCurrentAndRunningPlans(t *testing.T) {
 	retainStepRecords(c, func(e *exchange) bool { return e.plan != nil && e.plan == c.stepRunning })
 	if c.exchanges[0].plan != nil || c.exchanges[1].plan != running || c.exchanges[2].plan != current {
 		t.Fatalf("%+v", c.exchanges)
+	}
+}
+
+// manyReplicaSets is a full page of unrelated ReplicaSets: a read in part.
+func manyReplicaSets(n int) []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
+	for i := 0; i < n; i++ {
+		out = append(out, uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": fmt.Sprint("x", i), "namespace": "n", "uid": fmt.Sprint("x", i)}}))
+	}
+	return out
+}
+
+// Stage 3 re-review, finding 1: a real completed pause, as the Observer
+// captures it - a native part, its state in Role, the row's own Completed -
+// permits the dependent step; the row's evidence and the fresh read must
+// both show it.
+func TestARealCompletedKEDAPauseStands(t *testing.T) {
+	conds := func(paused, ready string) map[string]any {
+		return map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": ready}, map[string]any{"type": "Paused", "status": paused}}}
+	}
+	for _, c := range []struct {
+		name        string
+		kind        string
+		row, get    map[string]any // the captured object's status, the fresh read's
+		hpaComplete bool
+		holds       bool
+	}{
+		{"completed", "ScaledObject", conds("True", "True"), conds("True", "True"), true, true},
+		{"completed", "ScaledJob", conds("True", "True"), conds("True", "True"), true, true},
+		{"its HPA not proven absent", "ScaledObject", conds("True", "True"), conds("True", "True"), false, false},
+		{"the capture lags the read", "ScaledObject", conds("False", "True"), conds("True", "True"), true, false},
+		{"the capture lags the read", "ScaledJob", conds("False", "True"), conds("True", "True"), true, false},
+		{"the read shows Ready False", "ScaledObject", conds("True", "True"), conds("True", "False"), true, false},
+		{"the read shows Ready False", "ScaledJob", conds("True", "True"), conds("True", "False"), true, false},
+	} {
+		t.Run(c.kind+"/"+c.name, func(t *testing.T) {
+			f := newToolsFixture(t)
+			res := strings.ToLower(c.kind) + "s"
+			gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: res}
+			obj := func(status map[string]any) *unstructured.Unstructured {
+				return uobj(map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": c.kind, "metadata": map[string]any{"name": "q", "namespace": "shop", "uid": "q-uid", "generation": int64(3), "annotations": map[string]any{"autoscaling.keda.sh/paused": "true"}}, "status": status})
+			}
+			ver := keda.Version{Known: true, Major: 2, Minor: 21}
+			ref := healthsrc.RowRef{UID: "q-uid", GVR: "keda.sh/v1alpha1/" + res, Namespace: "shop", Name: "q", Generation: 3}
+			var rowset any
+			var role string
+			if c.kind == "ScaledObject" {
+				proj := keda.ProjectScaledObject(obj(c.row))
+				v := keda.ScaledObjectRule(proj, keda.SOInputs{Now: fixedNow(), Version: ver, HPA: keda.HPAEvidence{Current: true, Complete: c.hpaComplete}})
+				role = v.Eval.Role.String()
+				rowset = healthsrc.RowSet[healthsrc.ScaledObjectRow]{Rows: []healthsrc.Row[healthsrc.ScaledObjectRow]{{Ref: ref, Data: healthsrc.ScaledObjectRow{ScaledObject: proj, Verdict: v, Version: ver, HPACurrent: true, HPAComplete: c.hpaComplete}, Eval: v.Eval}}}
+			} else {
+				proj := keda.ProjectScaledJob(obj(c.row))
+				v := keda.ScaledJobRule(proj, keda.JobInputs{Now: fixedNow(), Version: ver})
+				role = v.Eval.Role.String()
+				rowset = healthsrc.RowSet[healthsrc.ScaledJobRow]{Rows: []healthsrc.Row[healthsrc.ScaledJobRow]{{Ref: ref, Data: healthsrc.ScaledJobRow{ScaledJob: proj, Verdict: v, Version: ver}, Eval: v.Eval}}}
+			}
+			part := chatParts["keda.sh/"+res]
+			f.conn.rows = map[string]observe.Rows{part[0] + "/" + part[1]: {Task: part[0], EvaluatedAt: fixedNow(), Part: observe.Part{ID: part[1], Classifier: "native", Coverage: observe.Live}, Rows: rowset}}
+			get := obj(c.get)
+			f.conn.objects[key(gvr, "shop", "q")] = get
+			fact := factOf(gvr, get, "r1", "now", acquisition())
+			if sv := f.svc.verdictOf(f.conn, fact, nil); !sv.found || sv.v.Kind != "" || sv.state == "" || sv.state != role {
+				t.Fatalf("a native verdict's state is its Role: %+v (role %q)", sv, role)
+			}
+			_, why := f.svc.observePrior(context.Background(), f.conn, stepSnapPrior{n: 1, verb: "keda-pause", fact: fact})
+			if c.holds != (why == "") {
+				t.Fatalf("holds=%v: %q", c.holds, why)
+			}
+			if !c.holds && c.name != "the read shows Ready False" && !strings.Contains(why, "Klyx reads it "+role) {
+				t.Fatalf("the reason names Klyx's reading: %q", why)
+			}
+		})
+	}
+}
+
+// Stage 3 re-review, finding 3: the record's bound is its serialized size,
+// escapes included.
+func TestARecordSerializesWithinOneKiB(t *testing.T) {
+	for _, worst := range []string{"\x00", "<", "\u2028", "\"", "\xff", "日", "a"} {
+		r := StepRunStateDTO{Request: fleet.OutcomeUnverified, NotSent: true, Error: capRecord(strings.Repeat(worst, 2048), stepErrMax), Effect: stepEffectEstablished,
+			EffectWhy: capRecord(strings.Repeat(worst, 2048), stepWhyMax), RanAt: fixedNow().UTC().Format(time.RFC3339)}
+		b, _ := json.Marshal(r)
+		if len(b) > 1024 || !utf8.ValidString(r.Error) && worst != "\xff" {
+			t.Fatalf("%q: %d bytes", worst, len(b))
+		}
+		if e, _ := json.Marshal(r.Error); len(e)-2 > stepErrMax {
+			t.Fatalf("%q: the error encodes to %d bytes", worst, len(e)-2)
+		}
 	}
 }
