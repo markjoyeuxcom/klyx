@@ -227,8 +227,9 @@ Codex accepted the design at 3a0f9d3 (handoff 353d3d44), with no remaining findi
 2. **The shrink keeps the pinned rows,** dropping first the unpinned rows' changes, then the unpinned rows. Past that, the pinned rows lose their changes and images, and the result says the pinned data could not fit. The rows themselves (numbers, objects, pods) are always kept.
 3. **The heap peak rose by 68 MiB at A1's worst shape,** from eight concurrent full-shape history reads. It is measured and reported here rather than bounded further.
 
+- **The native smoke** passes 209 of 209 four ways at 8c71d41, from a clean tree with every lab re-applied. **The server-mode captures** pass four ways.
+
 ### 13.2 Not done yet
 
-- The native smoke and the captures, four ways, on the kind lab.
 - Codex's implementation review.
 - Counting the change check as E1 evidence, which is the eval's addendum once this is merged.
