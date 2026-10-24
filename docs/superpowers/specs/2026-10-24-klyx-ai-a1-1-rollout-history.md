@@ -1,6 +1,6 @@
 # Klyx AI A1.1: rollout history
 
-Opened 2026-10-24, on `feat/ai-a1-1`; revision 1 the same day (§10). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`) for review; nothing is built.
+Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`) for review; nothing is built.
 
 ## 0. Why
 
@@ -48,7 +48,7 @@ A marker naming a revision the page does not hold is reported as "not in the his
 - A ControllerRevision's comparison uses its `data.spec.template` without the `$patch` directive.
 - No match in the page read is "not established", with the history coverage. Two matches are "ambiguous". Neither falls back to a marker.
 
-**The comparison partner.** This is the nearest lower revision retained in the read, below the desired-template revision. It is said as "the nearest lower retained revision". When its number is not the next lower one, the data says that revisions between them were not retained. It is never called the previous rollout, or a chronological predecessor.
+**The comparison partner.** This is the nearest lower revision retained in the read, below the desired-template revision. It is said as "the nearest lower retained revision". When its number is not the next lower one, the data says that the revisions between them are not held in this history read. Why they are absent from the cluster is not established. It is never called the previous rollout, or a chronological predecessor.
 
 **Pinned before any cut.** The desired-template revision and its partner, when held, are chosen before the 10-row limit and the byte cut, and kept by both. When either is not held, the data says so.
 
@@ -73,7 +73,7 @@ Newest revision number first:
 **What changed, compared like `git_changes` (A1 §3.2).** The two revisions' pod templates are compared with `objectChanges`, as two objects of kind ReplicaSet in group `apps`. A1's alignment and projection rules then apply unchanged:
 - **The templates:** a ReplicaSet's `spec.template`, with the `pod-template-hash` label removed on both sides. A ControllerRevision's `data.spec.template`, with its `$patch` directive removed. Only that wrapper is built around the template. Nothing else from the raw objects enters it.
 - **What is shown:** a difference chat's projection shows (an image, resources, a probe) is listed with its projected values. Every other difference is a path marker, "changed (not shown)": an env value, a command, args, a template annotation outside the allowlist. No hidden value, and no digest of one, is serialized.
-- **Bounds:** at most 20 paths per comparison, counted beyond, as `git_changes`; the raw walk is `objectChanges`' own bound of 1000 paths.
+- **Bounds:** at most 20 paths per comparison, counted beyond, as `git_changes`. `objectChanges` keeps at most 1000 raw paths, which bounds what it retains, not the work of the walk; that work is measured by the full-shape load test (§9).
 - **No template:** a ControllerRevision whose data holds no `spec.template` says "template not readable" and is not compared. Nothing is guessed.
 
 **The envelope:** chat's 16 KiB. Every output string is scrubbed (`ScrubEvidence`) before the clip. When it clips, the unpinned revisions' changes go first, then the unpinned revisions. If the pinned rows still do not fit, the result says their data could not fit, rather than claiming them.
@@ -102,10 +102,10 @@ Deterministic, with Klyx's own text. None sets `Failing`. A rollout check attrib
    - The last sentence appears only when established; otherwise the statement names the marker, such as "the revision the controller's annotation names".
    - Observed: the verdict capture's time. Coverage: the capture's.
    - A retained (stale) failure makes no check. The data shows it as last observed.
-2. **The partner revision's pods are ready.** Made only when every listed pod of the comparison partner has a current verdict, none failing, and every one is Ready by its pod status.
-   - Statement: "Deployment shop/web's revision 3 (ReplicaSet web-5c4), the nearest lower retained revision, has 2 listed pods, both Ready and neither failing by Klyx's verdict."
-   - Observed: the later of the pod read and the verdict capture. Coverage: the narrower of the two.
-   - Otherwise the data keeps the neutral inventory and no check is made. Nothing is said about a partner with no pods now: its past health is not in the data.
+2. **The partner revision's pods: two checks, one per source.** Each has its own observation time, so A1's chronology qualifies each on its own, whether a finding cites the check or its whole read. No check combines them, and no check says the partner is serving.
+   - **2a, readiness:** made only when every listed pod of the comparison partner is Ready by its pod status. Statement: "Deployment shop/web's revision 3 (ReplicaSet web-5c4), the nearest lower retained revision, has 2 listed pods, both Ready." Observed: the pod read's time. Coverage: the pod list's.
+   - **2b, verdicts:** made only when every listed pod of the partner has a current verdict, and none is failing. Statement: "none of the 2 listed pods of Deployment shop/web's revision 3 (ReplicaSet web-5c4) is failing by Klyx's verdict." Observed: the verdict capture's time. Coverage: the capture's.
+   - When a check's condition does not hold, that check is not made, and the data keeps the neutral inventory. Nothing is said about a partner with no pods now: its past health is not in the data.
 3. **What two retained revisions' templates differ in.** Made for the desired-template revision against its partner, when both are held and compared.
    - Statement: "the pod template of Deployment shop/web's revision 4, which matches its current template, differs from revision 3, the nearest lower retained revision, in: containers[web].image, registry/web:1.2 to registry/web:1.3; containers[web].env[MODE], changed (not shown). When revision 4 became active is not in the data."
    - At most 5 paths in the statement, as `git_changes`, and "+N more".
@@ -143,7 +143,7 @@ The checks pass through `capChecks` and chat's statement bound (1024 characters)
   - a lagging Deployment, whose annotation names the old revision while its spec asks for a new one, never calls the old one current, and says the generation lag;
   - a StatefulSet whose `updateRevision` and `currentRevision` differ reports both as markers;
   - a desired revision outside the page read, or below the 10-row range, is "not in the history read", or kept by the pin;
-  - a missing intermediate revision makes the partner "the nearest lower retained revision", with revisions between not retained;
+  - a missing intermediate revision makes the partner "the nearest lower retained revision", with the revisions between not held in this history read;
   - a capped DaemonSet list gives "highest retained in this read" with partial coverage.
 - **Times:** a rolled-back revision reusing an old object, for each kind, beside a newly created revision as the control. The change check is observed at the read's time, and A1's chronology labels are asserted, not only the text.
 - **Pod health:**
@@ -156,6 +156,7 @@ The checks pass through `capChecks` and chat's statement bound (1024 characters)
   - a fully current, ready partner as the positive control.
 
   Each asserts the checks' times, coverage and A1 labels, not only the counts.
+- **The partner's two times:** the failure between the verdict capture and the pod read, in both orders, and both sources after it. A finding citing check 2a or 2b directly, and one citing the whole read, each get the time qualification of what it cites, with the source's coverage kept.
 - **Joins:** a Deployment's pods by owner UID; a StatefulSet's by the ControllerRevision's name; a DaemonSet's by its hash label; a pod whose label matches no revision is unjoined and counted.
 - **What never crosses:** env values, commands, args, probe commands, template annotations outside the allowlist, encrypted values, the change cause's text and a ControllerRevision's raw data are absent from the serialized result, searched as bytes. A maximal-length name and a ControllerRevision without `spec.template` are handled.
 - **Identity:** a replaced anchor makes no rollout check. A by-name health-check object carries the replacement caveat.
@@ -181,3 +182,13 @@ Also from the guidance:
 - the egress needles add args, probes, annotations, encrypted values and maximal names;
 - the reads are counted once: the tool shares `workloadPods`' join code, not its reads;
 - a full-shape load measurement beside A1's load test, and a shrink-policy test with large pinned rows (§9).
+
+## 11. Revision 2: Codex's re-review of 8807917
+
+Codex found the three revision 1 findings resolved, and requested changes for one residual P2 (handoff abfe5c0b), taken:
+
+1. **Taking the later source time refreshed the older part of the partner check.** A `ChatCheck` has one observation time, and A1's labeller dates a citation by it alone. The partner check is now two checks, one per source: 2a, readiness from the pod list at the pod read's time; 2b, no failing verdict from the Observer at the capture's time. Each is made only under its own condition, with its own coverage (§6). Tests put the failure between the two times in both orders and after both, and compare a direct citation with a whole-read citation (§9).
+
+Also from the notes:
+- a gap in the history read says the revisions between are not held in this read, never why they are absent from the cluster (§2);
+- `objectChanges`' 1000-path bound limits what it keeps, not the walk's work, which the load test measures (§3).
