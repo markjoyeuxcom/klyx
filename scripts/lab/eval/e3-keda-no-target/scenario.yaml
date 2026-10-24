@@ -19,14 +19,49 @@ invariants:
     absent: true
   - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: no-target}
     event: {reason: ScaledObjectCheckFailed, message: 'deployments\.apps "no-such-deployment" not found', within: 1h}
+  # the lookalikes fail with the same reason for another cause: their
+  # targets exist, and the failure KEDA reports is the bearer token their
+  # authentication cannot supply (a missing Secret; a missing
+  # TriggerAuthentication)
   - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: bad-auth}
     condition: {type: Ready, status: "False", reason: ScaledObjectCheckFailed}
+  - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: bad-auth}
+    path: status.conditions[type=Ready].message
+    matches: 'bearer token=<empty> is required when bearer auth is enabled'
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval-e3, name: bad-auth}
+    path: metadata.name
+    matches: '^bad-auth$'
   - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: ghost-auth}
     condition: {type: Ready, status: "False", reason: ScaledObjectCheckFailed}
+  - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: ghost-auth}
+    path: status.conditions[type=Ready].message
+    matches: 'bearer token=<empty> is required when bearer auth is enabled'
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval-e3, name: ghost-auth}
+    path: metadata.name
+    matches: '^ghost-auth$'
+  - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: bad-auth}
+    path: spec.triggers[0].authenticationRef.name
+    matches: '^missing-secret$'
+  - object: {group: keda.sh, version: v1alpha1, resource: triggerauthentications, kind: TriggerAuthentication, namespace: klyx-eval-e3, name: missing-secret}
+    path: spec.secretTargetRef[0].name
+    matches: '^no-such-secret$'
+  - object: {version: v1, resource: secrets, kind: Secret, namespace: klyx-eval-e3, name: no-such-secret}
+    absent: true
+  - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: ghost-auth}
+    path: spec.triggers[0].authenticationRef.name
+    matches: '^no-such-auth$'
+  - object: {group: keda.sh, version: v1alpha1, resource: triggerauthentications, kind: TriggerAuthentication, namespace: klyx-eval-e3, name: no-such-auth}
+    absent: true
 witnesses:
   - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: bad-auth}
     path: metadata.uid
   - object: {group: keda.sh, version: v1alpha1, resource: scaledobjects, kind: ScaledObject, namespace: klyx-eval-e3, name: ghost-auth}
+    path: metadata.uid
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval-e3, name: bad-auth}
+    path: metadata.uid
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval-e3, name: ghost-auth}
+    path: metadata.uid
+  - object: {group: keda.sh, version: v1alpha1, resource: triggerauthentications, kind: TriggerAuthentication, namespace: klyx-eval-e3, name: missing-secret}
     path: metadata.uid
 predicates:
   - id: e3-event

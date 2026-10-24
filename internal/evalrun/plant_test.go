@@ -171,7 +171,15 @@ func TestLookup(t *testing.T) {
 	if v, ok := lookup(obj, "status.history[0].lastReconciledStatus"); !ok || v != "HealthCheckFailed" {
 		t.Fatal(v)
 	}
-	for _, p := range []string{"status.history[3].x", "status.conditions[type=Healthy]", "spec.x", "status.history[a]"} {
+	ann := map[string]any{"metadata": map[string]any{"annotations": map[string]any{"metallb.io/address-pool": "klyx-eval-one"}},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "cilium.io/IPAMRequestSatisfied", "reason": "out_of_ips"}}}}
+	if v, ok := lookup(ann, "metadata.annotations['metallb.io/address-pool']"); !ok || v != "klyx-eval-one" {
+		t.Fatal(v)
+	}
+	if v, ok := lookup(ann, "status.conditions[type=cilium.io/IPAMRequestSatisfied].reason"); !ok || v != "out_of_ips" {
+		t.Fatal(v)
+	}
+	for _, p := range []string{"status.history[3].x", "status.conditions[type=Healthy]", "spec.x", "status.history[a]", "metadata.annotations['no.such/key']"} {
 		if _, ok := lookup(obj, p); ok {
 			t.Fatalf("%s resolved", p)
 		}
@@ -323,5 +331,148 @@ func TestARecoveredPodDoesNotHoldTheCrashPlant(t *testing.T) {
 		if got := crashing(c.pod, 1, now); got != c.want {
 			t.Errorf("%s: want %v", c.name, c.want)
 		}
+	}
+}
+
+// stage2 builds a lab of unstructured objects for the real E3 and E4
+// manifests: the dynamic client serves them, the typed client their events.
+func stage2(objs []*unstructured.Unstructured, events ...*corev1.Event) Checker {
+	gvrs := map[schema.GroupVersionResource]string{}
+	var ros []runtime.Object
+	for _, o := range objs {
+		gv, _ := schema.ParseGroupVersion(o.GetAPIVersion())
+		res := strings.ToLower(o.GetKind()) + "s"
+		gvrs[gv.WithResource(res)] = o.GetKind() + "List"
+		ros = append(ros, o)
+	}
+	for _, g := range []schema.GroupVersionResource{{Version: "v1", Resource: "secrets"}, {Group: "keda.sh", Version: "v1alpha1", Resource: "triggerauthentications"}} {
+		if _, ok := gvrs[g]; !ok {
+			gvrs[g] = "List"
+		}
+	}
+	var evs []runtime.Object
+	for _, e := range events {
+		evs = append(evs, e)
+	}
+	return Checker{Dyn: dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrs, ros...), Kube: kubefake.NewSimpleClientset(evs...),
+		Now: func() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) }}
+}
+
+func uo(apiVersion, kind, ns, name, uid string, rest map[string]any) *unstructured.Unstructured {
+	o := map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": name, "namespace": ns, "uid": uid}}
+	for k, v := range rest {
+		if k == "metadata" {
+			for mk, mv := range v.(map[string]any) {
+				o["metadata"].(map[string]any)[mk] = mv
+			}
+			continue
+		}
+		o[k] = v
+	}
+	return &unstructured.Unstructured{Object: o}
+}
+
+func ev(uid, reason, msg string) *corev1.Event {
+	return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: uid + reason, Namespace: "klyx-eval-e4"}, Reason: reason, Message: msg,
+		InvolvedObject: corev1.ObjectReference{UID: types.UID(uid)}, LastTimestamp: metav1.NewTime(time.Date(2026, 10, 24, 11, 50, 0, 0, time.UTC))}
+}
+
+func scenario(t *testing.T, name string) *Scenario {
+	t.Helper()
+	ss, err := LoadScenarios("../../scripts/lab/eval", []string{name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ss[0]
+}
+
+type e4lab struct {
+	poolAddrs []any
+	oneBPool  string
+	ciliumUID string
+}
+
+func (l e4lab) checker() Checker {
+	svc := func(name, uid string, ann map[string]any, spec map[string]any, status map[string]any) *unstructured.Unstructured {
+		md := map[string]any{}
+		if ann != nil {
+			md["annotations"] = ann
+		}
+		return uo("v1", "Service", "klyx-eval-e4", name, uid, map[string]any{"metadata": md, "spec": spec, "status": status})
+	}
+	pending := map[string]any{"loadBalancer": map[string]any{}}
+	objs := []*unstructured.Unstructured{
+		uo("metallb.io/v1beta1", "IPAddressPool", "metallb-system", "klyx-eval-one", "uid-pool", map[string]any{"spec": map[string]any{"addresses": l.poolAddrs, "autoAssign": false}}),
+		svc("one-a", "uid-a", map[string]any{"metallb.io/address-pool": "klyx-eval-one"}, map[string]any{"type": "LoadBalancer"},
+			map[string]any{"loadBalancer": map[string]any{"ingress": []any{map[string]any{"ip": "192.168.97.230"}}}}),
+		svc("one-b", "uid-b", map[string]any{"metallb.io/address-pool": l.oneBPool}, map[string]any{"type": "LoadBalancer"}, pending),
+		svc("cilium-l2", l.ciliumUID, nil, map[string]any{"type": "LoadBalancer", "loadBalancerClass": "io.cilium/l2-announcer"},
+			map[string]any{"loadBalancer": map[string]any{}, "conditions": []any{map[string]any{"type": "cilium.io/IPAMRequestSatisfied", "status": "False", "reason": "out_of_ips"}}}),
+		svc("wrong-pool", "uid-w", map[string]any{"metallb.io/address-pool": "klyx-eval-no-such-pool"}, map[string]any{"type": "LoadBalancer"}, pending),
+	}
+	return stage2(objs, ev("uid-b", "AllocationFailed", `Failed to allocate IP for "klyx-eval-e4/one-b": no available IPs in pool klyx-eval-one`),
+		ev("uid-w", "AllocationFailed", `Failed to allocate IP for "klyx-eval-e4/wrong-pool": unknown pool "klyx-eval-no-such-pool"`))
+}
+
+// Codex's stage 2 review, finding 1: E4's exhaustion is current
+// configuration, and its lookalikes are witnessed.
+func TestE4sPlantIsTheCurrentConfiguration(t *testing.T) {
+	s := scenario(t, "e4-lb-pool-exhausted")
+	base := e4lab{poolAddrs: []any{"192.168.97.230/32"}, oneBPool: "klyx-eval-one", ciliumUID: "uid-c"}
+	before := base.checker().Check(context.Background(), s)
+	if !before.OK {
+		t.Fatal(before.Failed)
+	}
+	for name, after := range map[string]e4lab{
+		"the pool enlarged":           {poolAddrs: []any{"192.168.97.230/32", "192.168.97.231/32"}, oneBPool: "klyx-eval-one", ciliumUID: "uid-c"},
+		"one-b asks for another pool": {poolAddrs: []any{"192.168.97.230/32"}, oneBPool: "klyx-eval-no-such-pool", ciliumUID: "uid-c"},
+		"cilium-l2 replaced":          {poolAddrs: []any{"192.168.97.230/32"}, oneBPool: "klyx-eval-one", ciliumUID: "uid-c2"},
+	} {
+		p := after.checker().Check(context.Background(), s)
+		if got, why := Classify(RunFacts{Before: before, Ready: true, AnchorRead: true, Outcome: "answered", Report: "accepted", After: p}); got != StatusDrift {
+			t.Errorf("%s: %s (%s)", name, got, why)
+		}
+	}
+}
+
+// Codex's stage 2 review, finding 2: E3's lookalikes fail for their
+// authentication, never for a missing target of their own.
+func TestE3sLookalikesFailForAnotherCause(t *testing.T) {
+	s := scenario(t, "e3-keda-no-target")
+	so := func(name, uid, msg string, authRef string) *unstructured.Unstructured {
+		trig := map[string]any{"type": "prometheus"}
+		if authRef != "" {
+			trig["authenticationRef"] = map[string]any{"name": authRef}
+		}
+		return uo("keda.sh/v1alpha1", "ScaledObject", "klyx-eval-e3", name, uid, map[string]any{
+			"spec":   map[string]any{"triggers": []any{trig}},
+			"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "ScaledObjectCheckFailed", "message": msg}}}})
+	}
+	bearer := "failed to ensure HPA is correctly created for ScaledObject: error parsing prometheus metadata: bearer token=<empty> is required when bearer auth is enabled"
+	lab := func(lookalikeMsg func(name string) string, deployments bool) Checker {
+		objs := []*unstructured.Unstructured{
+			so("no-target", "uid-nt", `ScaledObject doesn't have correct scaleTargetRef specification: deployments.apps "no-such-deployment" not found`, ""),
+			so("bad-auth", "uid-ba", lookalikeMsg("bad-auth"), "missing-secret"),
+			so("ghost-auth", "uid-ga", lookalikeMsg("ghost-auth"), "no-such-auth"),
+			uo("keda.sh/v1alpha1", "TriggerAuthentication", "klyx-eval-e3", "missing-secret", "uid-ta", map[string]any{"spec": map[string]any{"secretTargetRef": []any{map[string]any{"name": "no-such-secret"}}}}),
+		}
+		if deployments {
+			objs = append(objs, uo("apps/v1", "Deployment", "klyx-eval-e3", "bad-auth", "uid-dba", nil), uo("apps/v1", "Deployment", "klyx-eval-e3", "ghost-auth", "uid-dga", nil))
+		}
+		e := ev("uid-nt", "ScaledObjectCheckFailed", `ScaledObject doesn't have correct scaleTargetRef specification: deployments.apps "no-such-deployment" not found`)
+		e.Namespace = "klyx-eval-e3"
+		return stage2(objs, e)
+	}
+	if p := lab(func(string) string { return bearer }, true).Check(context.Background(), s); !p.OK {
+		t.Fatalf("the planted lab holds: %s", p.Failed)
+	}
+	missingTarget := func(name string) string {
+		return `ScaledObject doesn't have correct scaleTargetRef specification: deployments.apps "` + name + `" not found`
+	}
+	if p := lab(missingTarget, false).Check(context.Background(), s); p.OK {
+		t.Fatal("lookalikes failing for a missing target of their own are not the scenario's lookalikes")
+	}
+	if p := lab(func(string) string { return bearer }, false).Check(context.Background(), s); p.OK {
+		t.Fatal("a lookalike whose target is gone does not hold the plant")
 	}
 }

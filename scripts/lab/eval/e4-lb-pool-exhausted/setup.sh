@@ -14,7 +14,8 @@ owned
 k get crd ipaddresspools.metallb.io >/dev/null 2>&1 || die "MetalLB is not installed on $ctx (klyx-eval.sh install)"
 NS=klyx-eval-e4
 POOL=klyx-eval-one
-ADDR=${KLYX_EVAL_E4_ADDRESS:-192.168.97.230/32}
+# fixed: scenario.yaml expects this address (beside the S4 lab's pools)
+ADDR=192.168.97.230/32
 claim namespace $NS
 claim -n metallb-system ipaddresspool $POOL
 for s in one-a one-b cilium-l2 wrong-pool; do claim -n $NS service $s; done
@@ -55,11 +56,12 @@ YAML
 # Cilium's own condition on its classed Service, as Cilium writes it (a
 # Service has no generation, so the condition names none)
 k -n $NS patch svc cilium-l2 --subresource=status --type=merge -p "{\"status\":{\"conditions\":[{\"type\":\"cilium.io/IPAMRequestSatisfied\",\"status\":\"False\",\"reason\":\"out_of_ips\",\"message\":\"No more IPs available\",\"lastTransitionTime\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}]}}" >/dev/null
-# renew MetalLB's refusal of one-b
-k -n $NS annotate --overwrite svc one-b klyx.dev/eval-nudge="$(date +%s)" >/dev/null
-refused() {
-	k -n $NS get events --field-selector involvedObject.name=one-b,reason=AllocationFailed -o jsonpath='{.items[*].message}' 2>/dev/null | grep -q 'no available IPs'
+# renew MetalLB's refusals of one-b and wrong-pool
+for s in one-b wrong-pool; do k -n $NS annotate --overwrite svc $s klyx.dev/eval-nudge="$(date +%s)" >/dev/null; done
+refused() { # refused <service> <message>
+	k -n $NS get events --field-selector "involvedObject.name=$1,reason=AllocationFailed" -o jsonpath='{.items[*].message}' 2>/dev/null | grep -q "$2"
 }
-wait_for 120 "MetalLB refusing one-b" refused
+both() { refused one-b 'no available IPs' && refused wrong-pool 'unknown pool'; }
+wait_for 120 "MetalLB refusing one-b and wrong-pool" both
 [[ -z $(ip one-b) && -z $(ip cilium-l2) && -z $(ip wrong-pool) ]] || die "a Service that should be pending has an address"
 echo "e4: planted"

@@ -247,10 +247,12 @@ func (s *Scenario) validate() error {
 func (s *Scenario) Script(name string) string { return filepath.Join(s.dir, name) }
 
 // lookup follows a dotted path into an object: a segment is a key, a key
-// with [N] for a list item, or a key with [k=v] for the item whose k is v.
+// with [N] for a list item, a key with [k=v] for the item whose k is v, or
+// a key with ['name'] for a map's member whose name holds dots or slashes
+// (an annotation). Dots inside brackets do not split the path.
 func lookup(obj map[string]any, path string) (any, bool) {
 	var cur any = obj
-	for _, seg := range strings.Split(path, ".") {
+	for _, seg := range splitPath(path) {
 		key, sel, hasSel := strings.Cut(seg, "[")
 		m, ok := cur.(map[string]any)
 		if !ok {
@@ -263,6 +265,16 @@ func lookup(obj map[string]any, path string) (any, bool) {
 			continue
 		}
 		sel = strings.TrimSuffix(sel, "]")
+		if len(sel) >= 2 && sel[0] == '\'' && sel[len(sel)-1] == '\'' {
+			mm, ok := cur.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			if cur, ok = mm[sel[1:len(sel)-1]]; !ok {
+				return nil, false
+			}
+			continue
+		}
 		l, ok := cur.([]any)
 		if !ok {
 			return nil, false
@@ -287,4 +299,24 @@ func lookup(obj map[string]any, path string) (any, bool) {
 		cur = l[n]
 	}
 	return cur, true
+}
+
+// splitPath splits a path on the dots outside brackets.
+func splitPath(path string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i, c := range path {
+		switch c {
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case '.':
+			if depth == 0 {
+				out = append(out, path[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(out, path[start:])
 }

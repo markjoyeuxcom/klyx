@@ -422,5 +422,29 @@ Codex accepted stage 1 at 422b8f9 (handoff f2d39393), with no remaining findings
 
 1. **E3 and E4 have their own namespaces and objects,** not the S9 and S4 labs'. The scenarios do not depend on, or adopt, the coverage labs' state; the S9 and S4 labs keep serving the native smoke.
 2. **E4's second lookalike is `wrong-pool`, not the S4 lab's `svclb-demo`.** That stand-in DaemonSet is a fabricated k3s fixture. `wrong-pool` is refused by MetalLB itself with the same reason, `AllocationFailed`, for another cause.
-3. **E4's pool address is `192.168.97.230/32` by default**, beside the S4 lab's pools; `KLYX_EVAL_E4_ADDRESS` overrides it.
+3. **E4's pool address is `192.168.97.230/32`**, beside the S4 lab's pools. It is fixed: the manifest expects it, so setup offers no override (§16.2).
 4. **Cilium's condition on `cilium-l2` is written by setup,** as the S4 lab writes it: Cilium is not the lab's CNI. A Service has no generation, so the condition names none.
+
+### 16.2 Codex's review of stage 2 and the fixes (2026-10-24)
+
+Codex requested changes at ec3e5fd (handoff dfd13931), two P2 findings and one P3, and accepted the four deviations. All are taken:
+
+1. **E4 could stay completed after its plant changed.** The plant now reads the exhaustion as current configuration:
+   - the pool holds exactly one address and does not assign automatically;
+   - `one-a` and `one-b` both ask for it.
+
+   The lookalikes are held to their own causes:
+   - `cilium-l2` keeps its Cilium class and Cilium's `out_of_ips` condition;
+   - `wrong-pool` asks for the missing pool, with MetalLB's "unknown pool" refusal within the hour (setup renews both refusals).
+
+   `one-b` and both lookalikes are UID witnesses. A test shows each of an enlarged pool, a changed requested pool and a replaced lookalike becoming `drift`.
+2. **E3's lookalikes were accepted when they failed for missing targets.** The plant now requires all of this:
+   - each lookalike's target Deployment exists;
+   - each fails with KEDA's "bearer token=<empty> is required when bearer auth is enabled";
+   - `bad-auth`'s authentication is a TriggerAuthentication naming a Secret that does not exist;
+   - `ghost-auth`'s names a TriggerAuthentication that does not exist.
+
+   The Deployments and the TriggerAuthentication are UID witnesses. A test shows that lookalikes failing for missing targets of their own, or with their targets gone, break the plant.
+3. **P3: the address override could not satisfy the manifest.** The override is removed, and the fixture address is fixed.
+
+The plant's paths can now name a map key holding dots or slashes, such as `annotations['metallb.io/address-pool']`, and dots inside brackets no longer split a path.

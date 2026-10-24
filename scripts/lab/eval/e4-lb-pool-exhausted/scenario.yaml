@@ -17,18 +17,50 @@ invariants:
     matches: '^map\[\]$'
   - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-b}
     event: {reason: AllocationFailed, message: 'no available IPs in pool klyx-eval-one', within: 1h}
+  # the exhaustion is current configuration, not only an event: the pool
+  # holds one address, and both Services ask for it
+  - object: {group: metallb.io, version: v1beta1, resource: ipaddresspools, kind: IPAddressPool, namespace: metallb-system, name: klyx-eval-one}
+    path: spec.addresses
+    matches: '^\[192\.168\.97\.230/32\]$'
+  - object: {group: metallb.io, version: v1beta1, resource: ipaddresspools, kind: IPAddressPool, namespace: metallb-system, name: klyx-eval-one}
+    path: spec.autoAssign
+    matches: '^false$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-a}
+    path: metadata.annotations['metallb.io/address-pool']
+    matches: '^klyx-eval-one$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-b}
+    path: metadata.annotations['metallb.io/address-pool']
+    matches: '^klyx-eval-one$'
+  # the lookalikes pend for their own causes
   - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: cilium-l2}
     path: status.loadBalancer
     matches: '^map\[\]$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: cilium-l2}
+    path: spec.loadBalancerClass
+    matches: '^io\.cilium/l2-announcer$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: cilium-l2}
+    path: status.conditions[type=cilium.io/IPAMRequestSatisfied].reason
+    matches: '^out_of_ips$'
   - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: wrong-pool}
     path: status.loadBalancer
     matches: '^map\[\]$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: wrong-pool}
+    path: metadata.annotations['metallb.io/address-pool']
+    matches: '^klyx-eval-no-such-pool$'
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: wrong-pool}
+    event: {reason: AllocationFailed, message: 'unknown pool "klyx-eval-no-such-pool"', within: 1h}
 witnesses:
   - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-a}
     path: status.loadBalancer.ingress[0].ip
   - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-a}
     path: metadata.uid
   - object: {group: metallb.io, version: v1beta1, resource: ipaddresspools, kind: IPAddressPool, namespace: metallb-system, name: klyx-eval-one}
+    path: metadata.uid
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: one-b}
+    path: metadata.uid
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: cilium-l2}
+    path: metadata.uid
+  - object: {version: v1, resource: services, kind: Service, namespace: klyx-eval-e4, name: wrong-pool}
     path: metadata.uid
 predicates:
   - id: e4-event
