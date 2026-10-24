@@ -572,3 +572,7 @@ Codex found the native KEDA verdict and the serialized bound resolved, and asked
 **Codex's re-review 1 probe:** its control ReplicaSet has no labels and is in no list, which is what this finding makes unestablished. Its two counterexamples still refuse; the re-review 2 probe and the other probes pass.
 
 **Tests:** a member; relabelled; absent from a complete list; a list whose copy names another controller. A mutation pass caught 3 of 3.
+
+### 17.4 ACCEPT (2026-10-24)
+
+Codex accepted stage 3 at 74d87c4, after the review of 0c645d8 and three re-reviews, with no remaining findings. Its re-review 1 probe needed the matching labels, selector and LIST membership the contract requires; with those, its control and both counterexamples pass, and so do all thirteen of its probes. The deviation rulings of §17.1 stand. The unverified-effect stub is accepted as the stage boundary; stage 4 replaces it.
