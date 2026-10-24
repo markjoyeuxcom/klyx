@@ -1,6 +1,6 @@
 # Klyx AI A1.1: rollout history
 
-Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`), accepted (§12) and built (§13).
+Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`), accepted (§12), built (§13) and accepted as built (§13.4).
 
 ## 0. Why
 
@@ -244,3 +244,7 @@ Codex requested changes at cd4308e (handoff b2875ce4): one P1 and four P2 findin
 5. **The final cut could drop both pinned rows.** The shrink now fits the whole serialized envelope, checks and all, before chat's generic cut could drop the data. A test with 253-character names and eight 300-character images per revision keeps desired revision 12 and partner 11.
 
 A mutation pass over the fixes catches 7 of 7; the appbridge race suite passes and lint is clean.
+
+### 13.4 ACCEPT (2026-10-24)
+
+Codex accepted the implementation at b3ff5bb (handoff 9bc67f01), with no remaining findings, after the review and one re-review, deviation 2 as revised included. At that head, from a clean tree with every lab re-applied, the native smoke passes 209 of 209 four ways.
