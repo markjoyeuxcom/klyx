@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); nothing is built.
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built (§15).
 
 ## 0. Why
 
@@ -301,3 +301,47 @@ Also from the guidance:
 Codex accepted the design at 3f04d6f (handoff 64c8fe8f), with no remaining findings, after the review and three re-reviews. For the build, it asks that the corpus check how reasons reduce over several attempts: a later delivered match establishes a predicate, and an earlier failure or a local refusal does not override it. A refused request that is retried and sent is not `not-sent`. The decisions stay deterministic, within the 64-entry bound.
 
 Two decisions stay the owner's: E1's public fixture repository, before stage 1, and every real-model run.
+
+## 15. As built: stage 1 (2026-10-24)
+
+**What was built, on `feat/ai-eval`:**
+- `internal/evalrun/record` (87d55b5): the delivered-evidence record (§5). Predicates are evaluated on each final envelope. Bound checks are kept, and each unestablished predicate gets its reason. Reads are ordered by read ID, so a batch's arrival order decides nothing.
+- Chat's hooks (0828f3b): the seed read, each dispatched or planned read, each tools request sent or refused for its size, the snapshot fill and send, and each report. `SetEvalRecorder` and `EvalAnchorReady` exist only in the eval build.
+- `internal/evalrun` (20839df, 7389a90):
+  - the preflight (§3);
+  - scenario manifests read strictly;
+  - plant checks on the runner's own connection;
+  - the statuses (§4), the scorer (§6) and the report (§7).
+- `cmd/klyx/eval.go` (073bd38): the eval build's `init` and the hand-off from `main`.
+- `scripts/lab/klyx-eval.sh` and `scripts/lab/eval/` (8f4bc8e): init, install, setup, teardown, run and selftest; E1 and E2; the scripted model; the self-test's scenarios and checker.
+
+**Evidence:**
+- The self-test passes 15 of 15 cases on the kind lab, from a clean build at 7919205. It produces every status but `sut-failure`, and each mark the design names, in tools and snapshot modes.
+- The race suite passes in CI's scope (66 packages), and again with `-tags eval` for appbridge and evalrun. Lint is clean in both variants.
+- A mutation pass catches 36 of 36. It mutates the record's reasons and bindings, the statuses, the scorer's marks, the plant checks, the preflight's refusals and the runner's readiness and anchor pin. Its two survivors were closed with tests (7919205).
+
+### 15.1 Deviations, for review
+
+1. **`sut-failure` is not produced on the lab.** The unit tests cover it: a refused start, an unread anchor, and an anchor read under another UID. No lab fixture makes Klyx fail to read an anchor that the runner's own read finds. A replaced anchor is `drift`.
+2. **The statuses' precedence, which §4 did not state:** `not-ready`, `sut-not-ready`, `drift`, `sut-failure`, `model-failure`, `report-failure`, `completed`. Drift comes before Klyx's and the model's failures: a replaced anchor fails the read, and the lab caused it.
+3. **Klyx's readiness also needs a connection chat accepts** (Synced, Degraded or Stale). The first self-test found chat refusing ("the cluster is not connected") seconds after start, while the Observer was already live.
+4. **E1's plant reads `status.history`, not the Ready condition.** Flux sets Ready to Unknown while it retries the health check, which made the first self-test's E1 `not-ready`.
+5. **E1 is the A1 lab:** its namespaces, and Flux's controllers (`scripts/lab/eval/flux-controllers.yaml`, the A1 lab's export, pinned by digest).
+   - `install` requires Flux's CRDs to be present and does not install them.
+   - Setup pins the fixture repository by commit: the steady commit applied, then the crash commit attempted.
+6. **The eval binary never writes to the cluster.** `klyx-eval.sh` does, after `owned()`.
+7. **The hooks exist in every build** as empty methods on a zero-size field (`evalHook struct{}`). The eval build gives them their bodies.
+8. **When a request counts as sent:**
+   - tools mode: when the provider's call returns without an error; a failed call is not marked sent;
+   - snapshot mode: when its one call returns.
+
+   The run is a `model-failure` either way.
+9. **The self-test's `sut-not-ready` case** comes from an anchor Klyx's Observer does not classify (a ConfigMap), which is deterministic. A stalled connection reaches the same status through the readiness check (deviation 3).
+10. **The scripted model picks its script by the configured model name.** The self-test writes one fleet config per case into the eval directory.
+11. **A lookalike is matched by the cited read's references** (resource, namespace and name).
+
+### 15.2 Not done yet
+
+- Stage 2, E3 and E4: the S9 and S4 labs move into `scripts/lab/eval/`.
+- The owner's two decisions: E1's fixture repository, and the first real-model run.
+- Counting A1.1's change check, naming `env[MODE]`, as E1 evidence beside the Git diff, once A1.1 is merged: an addendum here.
