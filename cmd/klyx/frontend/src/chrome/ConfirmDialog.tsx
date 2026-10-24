@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { armProtected } from "../bridge/configsvc";
 import { useRestoreFocus } from "./useRestoreFocus";
@@ -21,7 +21,8 @@ export function ConfirmDialog({
 }: {
   title: string;
   cluster: string;
-  detail: string;
+  // a plain line, or a reviewed step's change, consequence and facts
+  detail: ReactNode;
   protected: boolean;
   confirmLabel?: string;
   danger?: boolean;

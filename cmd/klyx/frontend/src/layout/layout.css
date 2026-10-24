@@ -851,3 +851,29 @@ details[open] > summary > .ov-chev { transform: rotate(90deg); }
 .inv-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); }
 .inv-compare { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 8px; padding: 6px 8px; border: 0.5px solid var(--line-hair); border-radius: 4px; }
 .inv-compare legend { padding: 0 4px; }
+/* AI A3 §3: the proposed plan, a stretch of The Line - each step a station,
+   the segment into it lit only once the step before it took its effect.
+   The same well as the findings; danger has its shape; outcomes are words. */
+.act-card { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px 10px; border: 0.5px solid var(--line-hair); border-radius: 4px; background: var(--line-sunk); }
+.act-head { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.act-n { font: 500 10px/14px var(--font-mono); color: var(--color-text-tertiary); }
+.act-verb { font-weight: 600; color: var(--color-text-primary); }
+.act-object { font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
+.act-change { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); }
+.act-danger { color: var(--color-text-danger); align-self: center; flex-shrink: 0; }
+.act-body { display: flex; flex-direction: column; gap: 3px; }
+.act-reason { color: var(--color-text-tertiary); }
+/* metadata keeps its case: object and cluster names are case-sensitive */
+.act-meta { font: 400 11px/16px var(--font-mono); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.act-protected { color: var(--color-text-warning); }
+.act-outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
+.act-outcome .chat-small { flex-basis: 100%; }
+.act-error { color: var(--color-text-danger); overflow-wrap: anywhere; }
+.act-note { color: var(--color-text-warning); }
+.act-status { display: flex; align-items: baseline; gap: 2px; flex-wrap: wrap; }
+.act-status-held .inv-label, .act-status-withdrawn .inv-label { color: var(--color-text-warning); border-color: var(--color-border-warning); }
+.act-incident { display: flex; flex-direction: column; gap: 3px; padding-top: 6px; border-top: 0.5px solid var(--line-hair); }
+.act-incident ul, .act-review ul { margin: 2px 0 0; padding-left: 14px; }
+.act-review { display: flex; flex-direction: column; gap: 6px; }
+.act-observed { font-size: 11px; color: var(--color-text-tertiary); }
+.act-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 2px; }

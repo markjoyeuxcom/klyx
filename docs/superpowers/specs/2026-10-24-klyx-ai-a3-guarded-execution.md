@@ -673,3 +673,36 @@ Codex found the earlier findings resolved and asked for one more change:
 ### 18.3 ACCEPT (2026-10-24)
 
 Codex accepted stage 4 at 944f55c, after the review of 3554e02 and two re-reviews, with no remaining findings. All thirteen of its probes pass unchanged, and the five deviations of §18 stand. Actual-cluster watch behaviour is stage 6's lab.
+
+## 19. Stage 5 as built: the card (2026-10-24)
+
+**What it adds:**
+- **The card** (`ActionCard.tsx`) is rendered in an investigation exchange, under its findings; an ordinary chat never shows one. It is drawn as a stretch of The Line, with each step a station:
+  - the segment into a step is lit (the route) only once the step before it took its effect;
+  - it is the plain track while that step waits, its words ("waits for step N") spoken, not shown;
+  - it is danger, with its words shown, when that step held the plan.
+- **The header** says the model proposed the plan and Klyx checked eligibility, not the remedy. Under it: the cluster, the number of steps and, on a protected cluster, that each step needs its own typed confirmation.
+- **Each step:**
+  - the verb in Klyx's words, the danger triangle on a destructive step, and the object as a chip that opens it (its API rides on the step as `gvr`, local to the card and never echoed to the model);
+  - the change its parameters ask for, the model's why labelled as its reading with its citations as chips, and when Klyx read the object;
+  - why Klyx did not offer it, if it did not;
+  - once run, the request's and the effect's outcomes as words (§5), when it ran, the effect's reason and the request's error.
+- **Review…** is the primary action, on the next step only. It is not offered while a step runs, past an unestablished effect, or on a plan with a status. It calls `ReviewStep`:
+  - a refusal is said on the step, and the plan is read again;
+  - an offer opens the ConfirmDialog, titled "Run step N of the investigation's plan", with the change, the consequence, the expected result with its bound, each fact read with its time, and how long the review holds. Danger is the verb's, and a protected cluster takes the typed confirmation, which arms one grant.
+- **Confirm** calls `RunStep` with the review's token, and the Activity log records the step "from an investigation's plan", with the request's outcome or why nothing ran. Cancel leaves the step offered.
+- **Dismiss plan** is offered on a current or held plan while no step runs and an offered step is unrun. A superseded, withdrawn or declined plan shows its status and offers nothing.
+- **The incident** shows its state as a word and each subject's reading, with the verdict and time Klyx read it, and reminds that a held unit stays suspended until the Git fix lands.
+- **The drawer** follows background changes: the backend emits `chat-plan:<conversation>` when an effect settles and when the incident starts, reads changed or settles. The drawer reads the conversation back, ordered by version as ever.
+- **Settings > AI** gains "Propose actions in investigations", on by default and saved like any setting.
+- **ConfirmDialog**'s detail takes rich content; every existing caller still passes text.
+
+**Design** (The Line): the findings' hairline well; the outcome chips in their tones (established and written checked, unverified suspected, refused unsupported, pending dashed); metadata in a quiet mono that keeps its case, since object and cluster names are case-sensitive. Rendered headless in both themes from fixture plans in six states and with the dialog open, before the review (Chromium renders; the app's WKWebView is checked at stage 6).
+
+**Tests:**
+- `ActionCard.test.tsx`, seventeen tests: the header and Klyx's words; danger on a destructive step only; the next step only, with the waiting segment; the object chip; Review, the dialog and its token, and the Activity entry; one protected grant armed before RunStep; Cancel; refusals at Review and at Run; each outcome in words with the lit and held segments; nothing offered while a step runs, nor past an unestablished effect; Dismiss, never on a finished plan; a refused step's reason; the incident and the held reminder, and none without a hold; the plan's note.
+- `ChatDrawer.test.tsx`: the card in an investigation, a plan event reading the state back, and no card in a chat.
+- `AISettingsPanel.test.tsx`: the setting on by default, off when saved off, and saved.
+- Go: the step's API in the plan; the plan events for a settled effect, the incident's start and its settling.
+
+**Gates:** as before, with 2464 frontend tests. A mutation pass caught 19 of 19 on the frontend, after two redundant guards were removed (`nextStep` already withholds Review while a step runs; a refused request never carries an effect), two mutations were rewritten to change behaviour, and three tests were added.

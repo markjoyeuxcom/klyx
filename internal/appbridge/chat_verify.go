@@ -600,6 +600,7 @@ func (s *ChatService) maybeIncident(c *conversation, p *actionPlan) {
 	s.retainLocked(c)
 	s.version++
 	s.mu.Unlock()
+	s.emitPlan(c)
 	safeGo("investigation-incident", func() { s.readIncident(c, p, subjects, last) })
 }
 
@@ -719,12 +720,16 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 			return
 		}
 		s.mu.Lock()
-		if !reflect.DeepEqual(p.incident.Subjects, rows) {
+		changed := !reflect.DeepEqual(p.incident.Subjects, rows)
+		if changed {
 			p.incident.Subjects = rows // a new reading publishes; an unchanged one does not
 			s.retainLocked(c)
 			s.version++
 		}
 		s.mu.Unlock()
+		if changed {
+			s.emitPlan(c)
+		}
 		select {
 		case <-tick.C:
 		case <-ctx.Done():
@@ -803,6 +808,7 @@ func readSubjects(verdict func(actionFact) subjectVerdict, subjects []incidentSu
 // settleIncident records the incident's outcome. A resolution is recorded
 // only if the fence still holds (stage 4 review, finding 2).
 func (s *ChatService) settleIncident(c *conversation, p *actionPlan, state, why string, rows []IncidentSubjectDTO) {
+	defer s.emitPlan(c)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if state == incidentResolved {

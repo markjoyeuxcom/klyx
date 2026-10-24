@@ -13,6 +13,10 @@ const bridge = vi.hoisted(() => ({
   chatStop: vi.fn(async () => {}),
   chatClear: vi.fn(async () => {}),
   onChatRead: vi.fn(() => () => {}),
+  onChatPlan: vi.fn(() => () => {}),
+  reviewStep: vi.fn(),
+  runStep: vi.fn(),
+  dismissPlan: vi.fn(),
   investigationStart: vi.fn(),
   investigationState: vi.fn(),
   chatSetComparison: vi.fn(),
@@ -43,6 +47,7 @@ describe("ChatDrawer", () => {
   beforeEach(() => {
     for (const f of Object.values(bridge)) f.mockReset?.();
     bridge.onChatRead.mockImplementation(() => () => {});
+    bridge.onChatPlan.mockImplementation(() => () => {});
     bridge.chatStop.mockImplementation(async () => {});
     bridge.chatClear.mockImplementation(async () => {});
     useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
@@ -336,6 +341,7 @@ describe("citations (AI A1 §4)", () => {
   beforeEach(() => {
     for (const f of Object.values(bridge)) f.mockReset?.();
     bridge.onChatRead.mockImplementation(() => () => {});
+    bridge.onChatPlan.mockImplementation(() => () => {});
     useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
   });
 
@@ -367,6 +373,7 @@ describe("investigations (AI A1 §5)", () => {
   const reset = () => {
     for (const f of Object.values(bridge)) f.mockReset?.();
     bridge.onChatRead.mockImplementation(() => () => {});
+    bridge.onChatPlan.mockImplementation(() => () => {});
     bridge.chatClear.mockImplementation(async () => {});
     useChat.setState({ open: false, cluster: null, slot: null, anchors: {}, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
     useFleet.setState({ clusters: ["x", "stg", "prd"].map((name) => ({ name })) as never });
@@ -447,6 +454,32 @@ describe("investigations (AI A1 §5)", () => {
     expect(fixed.textContent).toContain("Compared with stg");
     expect(after.queryByText("Set comparison")).toBeNull();
     expect(fixed.querySelector("input")).toBeNull();
+  });
+
+  // AI A3 stage 5: an investigation's proposal is its card, under the
+  // findings; a plan change made in the background reads the state back.
+  it("shows the proposed plan and reads the state back when it changes", async () => {
+    const plan = { steps: [{ n: 1, verb: "rollout-pause", target: { kind: "Deployment", namespace: "shop", name: "web", uid: "uid-web", identity: "uid" as const }, why: "stop the rollout", cites: ["r1"], state: "offered" }] };
+    bridge.investigationState.mockResolvedValue(inv({ exchanges: [exchange({ plan })] }));
+    let fire: () => void = () => {};
+    bridge.onChatPlan.mockImplementation(((_id: string, f: () => void) => { fire = f; return () => {}; }) as never);
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const { findByTestId } = render(<ChatDrawer />);
+    expect((await findByTestId("act-card")).textContent).toContain("pause rollouts of");
+    await waitFor(() => expect(bridge.onChatPlan).toHaveBeenCalledWith("i1", expect.any(Function)));
+    const reads = bridge.investigationState.mock.calls.length;
+    act(() => fire());
+    await waitFor(() => expect(bridge.investigationState.mock.calls.length).toBeGreaterThan(reads));
+  });
+
+  it("never shows a plan in an ordinary chat", async () => {
+    const plan = { steps: [{ n: 1, verb: "rollout-pause", target: { kind: "Deployment", namespace: "shop", name: "web", uid: "uid-web", identity: "uid" as const }, why: "", cites: [], state: "offered" }] };
+    bridge.chatState.mockResolvedValue(state({ exchanges: [exchange({ plan })] }));
+    act(() => openChat("x"));
+    const { findAllByTestId, queryByTestId } = render(<ChatDrawer />);
+    await findAllByTestId("chat-exchange");
+    expect(queryByTestId("act-card")).toBeNull();
+    expect(bridge.onChatPlan).not.toHaveBeenCalled();
   });
 
   it("says when another object's investigation is open", async () => {

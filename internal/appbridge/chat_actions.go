@@ -163,6 +163,9 @@ type ActionStepDTO struct {
 	// FactsRead and FactsAt are the read the step's eligibility rests on
 	FactsRead string `json:"factsRead,omitempty"`
 	FactsAt   string `json:"factsAt,omitempty"`
+	// GVR is the bound object's API, as a ChatRef names it, so the card's
+	// chip opens it (stage 5); local to the card, never echoed to the model
+	GVR string `json:"gvr,omitempty"`
 }
 
 // ActionPlanDTO is a turn's proposal, as Klyx decided it.
@@ -249,6 +252,9 @@ func validatePlan(in actionsInput, facts *actionFacts, ledger []ChatRead, a anch
 				st.Target.UID, st.Target.Identity = fact.UID, identityUID
 				st.Danger = actionMatrix[s.Verb].danger || (s.Verb == "scale" && fact.Object.Replicas != nil && int64(*st.Replicas) < *fact.Object.Replicas)
 				st.FactsRead, st.FactsAt = fact.Object.ReadID, fact.Object.ReadAt
+				if fact.Resource != "" {
+					st.GVR = gvrString(factGVR(fact))
+				}
 				if r := citationProblem(s.Cites, reads, checks, fact.UID, a.subject.UID); r != "" {
 					state, reason = stepUnsupported, r
 				}

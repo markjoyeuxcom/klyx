@@ -334,6 +334,19 @@ export function AISettingsPanel() {
             />
             <span style={{ fontSize: 11 }}>Send protected (prd) clusters' context to this provider. Off: Explain stays disabled there unless the model runs on this Mac.</span>
           </label>
+
+          {/* AI A3 §6: on by default; off removes the tool, the snapshot
+              instruction and the card - the remedy stays text */}
+          <label style={{ ...row, cursor: "pointer" }}>
+            <span style={labelStyle}>investigations</span>
+            <input
+              type="checkbox"
+              aria-label="Propose actions in investigations"
+              checked={draft.proposeActions ?? true}
+              onChange={(e) => update({ proposeActions: e.target.checked })}
+            />
+            <span style={{ fontSize: 11 }}>Propose actions in investigations: the model may propose day-2 steps, and each runs only when you review and confirm it. Off: the remedy stays text.</span>
+          </label>
         </>
       )}
 

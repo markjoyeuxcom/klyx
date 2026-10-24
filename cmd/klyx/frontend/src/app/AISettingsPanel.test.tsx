@@ -98,6 +98,32 @@ describe("AISettingsPanel", () => {
     await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ allowProtectedEgress: true })));
   });
 
+  // AI A3 §6: on by default; turning it off is saved like any setting.
+  it("proposes actions in investigations unless turned off", async () => {
+    const on = state({
+      persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain", proposeActions: true },
+      keysStored: { anthropic: true },
+      active: { backend: "anthropic", ready: true, model: "claude-opus-5-5", origin: "https://api.anthropic.com" },
+    });
+    bridge.getAISettings.mockResolvedValue(on);
+    const view = render(<AISettingsPanel />);
+    const box = (await screen.findByLabelText("Propose actions in investigations")) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ proposeActions: false })));
+    view.unmount();
+    bridge.getAISettings.mockResolvedValue({ ...on, persisted: { ...on.persisted, proposeActions: false } });
+    const off = render(<AISettingsPanel />);
+    expect(((await screen.findByLabelText("Propose actions in investigations")) as HTMLInputElement).checked).toBe(false);
+    off.unmount();
+    const unset = { ...on.persisted };
+    delete unset.proposeActions;
+    bridge.getAISettings.mockResolvedValue({ ...on, persisted: unset });
+    render(<AISettingsPanel />);
+    expect(((await screen.findByLabelText("Propose actions in investigations")) as HTMLInputElement).checked).toBe(true);
+  });
+
   it("discloses a custom origin for a vendor key", async () => {
     bridge.getAISettings.mockResolvedValue(state());
     render(<AISettingsPanel />);

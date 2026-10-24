@@ -1161,3 +1161,31 @@ func TestAnIncidentWaitsOnlyTheTimeLeft(t *testing.T) {
 		t.Fatalf("%+v", p.incident)
 	}
 }
+
+// Stage 5: a settled effect and an incident's reading tell the drawer to
+// read the conversation back.
+func TestAPlanChangeTellsTheDrawer(t *testing.T) {
+	quietIncident(t)
+	establish(t)
+	em := &fakeEmitterWithData{}
+	sf := newStepsFixture(t, pauseWeb)
+	sf.svc.em = em
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	sf.svc.mu.Unlock()
+	sf.svc.maybeIncident(c, p)
+	awaitSettled(t, "the incident", sf.incidentSettled())
+	n := 0
+	for _, e := range em.events_() {
+		if e.name == "chat-plan:"+sf.conv {
+			n++
+		}
+	}
+	if n < 3 { // the effect, the incident's start, its settling
+		t.Fatalf("%d plan events: %+v", n, em.events_())
+	}
+}

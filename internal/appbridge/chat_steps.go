@@ -711,6 +711,7 @@ func (s *ChatService) verifyStep(c *conversation, p *actionPlan, n int, sn stepS
 // settleEffect records a step's effect and ends its run, releasing the
 // conversation's running step.
 func (s *ChatService) settleEffect(c *conversation, p *actionPlan, n int, effect, why string) {
+	defer s.emitPlan(c)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := p.runs[n-1]
@@ -729,6 +730,15 @@ func (s *ChatService) settleEffect(c *conversation, p *actionPlan, n int, effect
 	}
 	s.retainLocked(c)
 	s.version++
+}
+
+// emitPlan tells the drawer that a plan's run or incident changed in the
+// background (AI A3 stage 5): it reads the conversation back, ordered by
+// version as ever. Called without the service lock.
+func (s *ChatService) emitPlan(c *conversation) {
+	if s.em != nil {
+		s.em.Emit("chat-plan:"+c.id, struct{}{})
+	}
 }
 
 // capRecord caps a record's text so its JSON encoding, escapes included,

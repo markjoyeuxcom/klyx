@@ -111,7 +111,7 @@ func planFixture() (*actionFacts, []ChatRead, anchorFacts) {
 	facts.add(actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "klyx-a1-flux", Name: "a1-web", UID: "ks-uid",
 		Object: &objectFacts{ReadID: "r1", ReadAt: "t1", Interval: "1m"}})
 	three := int64(3)
-	facts.add(actionFact{Kind: "Deployment", Group: "apps", Namespace: "klyx-a1-app", Name: "web", UID: "dep-uid",
+	facts.add(actionFact{Kind: "Deployment", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "klyx-a1-app", Name: "web", UID: "dep-uid",
 		Object:  &objectFacts{ReadID: "r3", ReadAt: "t3", Replicas: &three, Desired: &three, Strategy: "RollingUpdate"},
 		History: &historyFacts{ReadID: "r4", DesiredRevision: 5, PartnerRevision: 4, PartnerObjectUID: "rs4-uid", PartnerDigest: "dig4"}})
 	ledger := []ChatRead{
@@ -156,7 +156,7 @@ func TestTheAcceptancePlanIsOffered(t *testing.T) {
 			t.Fatalf("step %d: %+v", s.N, s)
 		}
 	}
-	if p.dto.Steps[1].Target.UID != "dep-uid" || !p.dto.Steps[1].Danger || p.dto.Steps[1].FactsRead != "r3" {
+	if p.dto.Steps[1].Target.UID != "dep-uid" || !p.dto.Steps[1].Danger || p.dto.Steps[1].FactsRead != "r3" || p.dto.Steps[1].GVR != "apps/v1/deployments" {
 		t.Fatalf("the undo's target is Klyx's: %+v", p.dto.Steps[1])
 	}
 	if p.partner[1] == nil || p.partner[1].ObjectUID != "rs4-uid" || p.partner[1].TemplateDigest != "dig4" {
