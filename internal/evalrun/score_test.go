@@ -77,7 +77,30 @@ func TestTheCorpus(t *testing.T) {
 		{"a cause citing a real but unrelated read",
 			exchange("2026-10-24T12:00:00Z", cause("suspected", "The Kustomization is misconfigured.", "r1")), established("r5"),
 			func(t *testing.T, m Marks) {
+				if m.GroundedCause || m.CitedLookalike {
+					t.Fatalf("%+v", m)
+				}
+			}},
+		{"an unsupported cause citing the planted read is not grounded",
+			exchange("2026-10-24T12:00:00Z", cause("unsupported", "MODE changed", "r5")), established("r5"),
+			func(t *testing.T, m Marks) {
 				if m.GroundedCause {
+					t.Fatalf("only a suspected cause can be grounded: %+v", m)
+				}
+			}},
+		{"a cause about an object outside the scenario is not grounded",
+			exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "cause", Label: "suspected", Statement: "MODE changed",
+				Subject: appbridge.ChatCheckSubject{Kind: "Deployment", Namespace: "kube-system", Name: "coredns"}, Cites: []string{"r5"}}), established("r5"),
+			func(t *testing.T, m Marks) {
+				if m.GroundedCause {
+					t.Fatalf("%+v", m)
+				}
+			}},
+		{"a finding with evidence from after the failure is not early",
+			exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "cause", Label: "suspected", Statement: "MODE changed", Subject: deployment, Cites: []string{"r5"},
+				Checked: []appbridge.FindingCheckDTO{{ID: "r5.c1", Before: true}, {ID: "r4.c1"}}}), established("r5"),
+			func(t *testing.T, m Marks) {
+				if m.EarlyEvidence != 0 {
 					t.Fatalf("%+v", m)
 				}
 			}},

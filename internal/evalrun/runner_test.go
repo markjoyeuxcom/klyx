@@ -204,3 +204,13 @@ func TestAnOversizedReportSaysWhatItLeftOut(t *testing.T) {
 		t.Fatalf("%d bytes, omitted %v", len(b), rep.Omitted)
 	}
 }
+
+func TestAnAnchorReadUnderAnotherUIDIsNotTheAnchor(t *testing.T) {
+	ex := anchoredExchange(windowNoFailure)
+	ex.Reads[0].Refs[0].UID = "uid-someone-else"
+	chat := &fakeChat{ex: ex}
+	rep := controlRunner(chat, true).Run(context.Background(), []*Scenario{controlScenario()})
+	if rep.Runs[0].Status != StatusSUTFailure {
+		t.Fatalf("%+v", rep.Runs[0])
+	}
+}

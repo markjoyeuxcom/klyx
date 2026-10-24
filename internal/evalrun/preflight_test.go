@@ -146,6 +146,10 @@ func TestRefusals(t *testing.T) {
 			refused(t, l.preflight(), "service reference")
 		})
 	}
+	t.Run("an explicit endpoint beside a service reference", func(t *testing.T) {
+		l := newLab(t, oneCluster+"  loki:\n    endpoint: https://loki.example.invalid\n    serviceRef: {namespace: monitoring, name: loki, port: \"3100\"}\n", "")
+		refused(t, l.preflight(), "service reference")
+	})
 	t.Run("an explicit Prometheus endpoint", func(t *testing.T) {
 		l := newLab(t, oneCluster+"  metrics:\n    endpoint: https://prometheus.example.invalid\n", "")
 		refused(t, l.preflight(), "Prometheus must be a service reference")

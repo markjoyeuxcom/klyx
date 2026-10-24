@@ -322,3 +322,37 @@ func TestBadPredicatesAreRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestAnotherObjectsEventDoesNotCount(t *testing.T) {
+	r := rec(t)
+	other := detailed()
+	other["objectUID"] = "uid-bad-auth"
+	r.Read(conv, "get_events", eventsArgs, "r2", false, env(t, "get_events", "r2", false, []any{other}))
+	r.Sent(conv, []string{"r2"})
+	if o := outcome(t, r.Facts(), "e3-event"); o.Established {
+		t.Fatalf("an event about another object, same message: %+v", o)
+	}
+}
+
+func TestACheckAboutAnotherSubjectIsNotBound(t *testing.T) {
+	r := rec(t)
+	data := map[string]any{"objects": []any{map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web",
+		"hidden": []any{map[string]any{"path": "spec.template.containers[web].env[MODE]"}}}}}
+	elsewhere := map[string]any{"id": "r3.c1", "subject": map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "api"}, "statement": "changed Deployment klyx-a1-app/api: env[MODE]"}
+	r.Read(conv, "git_changes", args(map[string]any{"kind": "Kustomization", "namespace": "klyx-a1-flux", "name": "a1-web"}), "r3", false, env(t, "git_changes", "r3", false, data, elsewhere))
+	r.Sent(conv, []string{"r3"})
+	if o := outcome(t, r.Facts(), "e1-diff"); !o.Established || len(o.Checks) != 0 {
+		t.Fatalf("the read establishes it, the other subject's check is not bound: %+v", o)
+	}
+}
+
+func TestAConditionWithAnotherReasonDoesNotCount(t *testing.T) {
+	r := rec(t)
+	data := map[string]any{"object": map[string]any{"kind": "ScaledObject", "uid": "uid-nt",
+		"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "Paused", "message": `deployments.apps "no-such-deployment" not found`}}}}
+	r.Read(conv, "get_resource", args(map[string]any{"kind": "ScaledObject", "namespace": "klyx-s9-lab", "name": "no-target"}), "r1", false, env(t, "get_resource", "r1", false, data))
+	r.Sent(conv, []string{"r1"})
+	if o := outcome(t, r.Facts(), "e3-condition"); o.Established {
+		t.Fatalf("the planted condition has its reason: %+v", o)
+	}
+}
