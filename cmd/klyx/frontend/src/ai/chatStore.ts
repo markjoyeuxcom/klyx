@@ -13,10 +13,19 @@ export type ChatAsking = { conversationId: string; question: string };
 // recoverable notice. It is kept apart from the conversation state.
 export type ChatOutcome = { kind: "error" | "notice"; text: string };
 export type ChatFollowUp = { seed: ChatSeed; label: string };
+// ChatAnchor is the object an investigation is opened on (AI A1 §1).
+export type ChatAnchor = { seed: ChatSeed; label: string };
+
+// The drawer shows one slot: a cluster's chat (its slot is the cluster's
+// name) or its investigation. Every map below is keyed by slot.
+export const invSlot = (cluster: string) => `investigation\u0000${cluster}`;
+const slotKind = (slot: string) => (slot.startsWith("investigation\u0000") ? "investigation" : "chat");
 
 type ChatUI = {
   open: boolean;
   cluster: string | null;
+  slot: string | null;
+  anchors: Record<string, ChatAnchor | undefined>;
   states: Record<string, ChatState>;
   drafts: Record<string, string>;
   seeds: Record<string, ChatFollowUp | undefined>;
@@ -31,6 +40,7 @@ type ChatUI = {
   nextReq: (cluster: string) => number;
   settle: (cluster: string, req: number, outcome: ChatOutcome | undefined) => void;
   openFor: (cluster: string, followUp?: ChatFollowUp) => void;
+  openInvestigationFor: (cluster: string, anchor: ChatAnchor) => void;
   close: () => void;
   apply: (cluster: string, st: ChatState) => boolean;
   setDraft: (cluster: string, text: string) => void;
@@ -42,6 +52,8 @@ type ChatUI = {
 export const useChat = create<ChatUI>((set, get) => ({
   open: false,
   cluster: null,
+  slot: null,
+  anchors: {},
   states: {},
   drafts: {},
   seeds: {},
@@ -58,15 +70,21 @@ export const useChat = create<ChatUI>((set, get) => ({
     if (get().reqs[cluster] === req) set((s) => ({ outcomes: { ...s.outcomes, [cluster]: outcome } }));
   },
   openFor: (cluster, followUp) =>
-    set((s) => ({ open: true, cluster, seeds: followUp ? { ...s.seeds, [cluster]: followUp } : s.seeds })),
+    set((s) => ({ open: true, cluster, slot: cluster, seeds: followUp ? { ...s.seeds, [cluster]: followUp } : s.seeds })),
+  openInvestigationFor: (cluster, anchor) =>
+    set((s) => ({ open: true, cluster, slot: invSlot(cluster), anchors: { ...s.anchors, [invSlot(cluster)]: anchor } })),
   close: () => set({ open: false }),
   // apply keeps the newest state per cluster: an older reply (a lower
   // version) is dropped whatever order replies arrive in. A reply with an
   // error is a refusal, not a conversation: it is never applied, whatever
-  // its version, so it cannot replace the conversation on screen.
+  // its version, so it cannot replace the conversation on screen. Nor is a
+  // reply for another kind of conversation: a late investigation reply
+  // never turns the slot into the chat (AI A1 implementation review,
+  // finding 11).
   apply: (cluster, st) => {
     const cur = get().states[cluster];
     if (st.error) return false;
+    if (st.kind && st.kind !== slotKind(cluster)) return false;
     if (cur && (st.version ?? 0) < (cur.version ?? 0)) return false;
     set((s) => ({ states: { ...s.states, [cluster]: st } }));
     return true;
@@ -81,4 +99,10 @@ export const useChat = create<ChatUI>((set, get) => ({
 // one object.
 export function openChat(cluster: string, followUp?: ChatFollowUp): void {
   useChat.getState().openFor(cluster, followUp);
+}
+
+// openInvestigation opens the drawer on a cluster's investigation of one
+// object (AI A1 §5).
+export function openInvestigation(cluster: string, seed: ChatSeed, label: string): void {
+  useChat.getState().openInvestigationFor(cluster, { seed, label });
 }

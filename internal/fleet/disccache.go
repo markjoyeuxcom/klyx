@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // discTTL bounds how long discovery results are reused. Long enough to
@@ -233,6 +234,34 @@ func (c *ClusterConn) discovery() discoveryLike {
 		c.disc = cd
 	}
 	return c.disc
+}
+
+// discoveryFor is the cached discovery bound to ctx: each call checks ctx's
+// read fence first, a cached answer included, and a network read carries
+// ctx. A composite read resolving versions between its component reads (a
+// drawing, a cert chain, a workload's Flux owner) stops at its next step
+// once its fence changes (AI A1 implementation review, finding 3).
+func (c *ClusterConn) discoveryFor(ctx context.Context) discoveryLike {
+	return boundDiscovery{ctx: ctx, d: c.probeDiscovery()}
+}
+
+type boundDiscovery struct {
+	ctx context.Context
+	d   *cachedDiscovery
+}
+
+func (b boundDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
+	if err := readfence.Check(b.ctx); err != nil {
+		return nil, err
+	}
+	return b.d.ServerGroupsCtx(b.ctx)
+}
+
+func (b boundDiscovery) ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error) {
+	if err := readfence.Check(b.ctx); err != nil {
+		return nil, err
+	}
+	return b.d.ServerResourcesForGroupVersionCtx(b.ctx, groupVersion)
 }
 
 // probeDiscovery is the context-aware view the health probes use.

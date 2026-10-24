@@ -24,7 +24,7 @@ import { zoomIn, zoomOut, zoomPercent, zoomReset } from "../app/zoom";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
 import { reveal } from "../nav/reveal";
 import { laneKey, routeId, routeKindOf } from "../cluster/gatewayModel";
-import { targetKey, usePendingExplain } from "../ai/AIExplain";
+import { targetKey, usePendingExplain, usePendingInvestigate } from "../ai/AIExplain";
 import type { ExplainTarget } from "../bridge/ai";
 
 export type FleetStore = ReturnType<typeof useFleet.getState>;
@@ -136,6 +136,27 @@ function explainVerb(cluster: string, task: string, part: string, label: string,
       reveal(cluster, task, part, ref);
     },
   };
+}
+
+// aiVerbs are an object's AI verbs: explain, and - for an object pinned by
+// UID, never a Helm release - investigate (AI A1 §5), which parks its target
+// for the inspector to open the investigation once AI is ready.
+function aiVerbs(cluster: string, task: string, part: string, label: string, ref: RevealRef, target: ExplainTarget, kind: string): Command[] {
+  const verbs = [explainVerb(cluster, task, part, label, ref, target, kind)];
+  if (target.kind !== "helm" && target.uid) {
+    verbs.push({
+      id: `verb:investigate:${cluster}/${task}/${part}/${ref.namespace ?? ""}/${ref.name}`,
+      group: "Actions",
+      target: { cluster, kind, namespace: ref.namespace, name: ref.name, uid: ref.uid },
+      title: `investigate ${label}`,
+      hint: `${cluster} · AI, read-only, cited findings`,
+      run: () => {
+        usePendingInvestigate.getState().request(targetKey(cluster, target));
+        reveal(cluster, task, part, ref);
+      },
+    });
+  }
+  return verbs;
 }
 
 export function buildCommands(s: FleetStore): Command[] {
@@ -269,7 +290,7 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (p.uid) {
-        cmds.push(explainVerb(podCluster, "pods", "pods", `pod ${p.namespace}/${p.name}`, { gvr: "v1/pods", namespace: p.namespace, name: p.name, uid: p.uid }, { kind: "row", task: "pods", part: "pods", uid: p.uid }, "Pod"));
+        cmds.push(...aiVerbs(podCluster, "pods", "pods", `pod ${p.namespace}/${p.name}`, { gvr: "v1/pods", namespace: p.namespace, name: p.name, uid: p.uid }, { kind: "row", task: "pods", part: "pods", uid: p.uid }, "Pod"));
       }
       cmds.push({
         id: `verb:logs:${podCluster}/${p.namespace}/${p.name}`,
@@ -299,7 +320,7 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (n.uid) {
-        cmds.push(explainVerb(nodeCluster, "nodes", "nodes", `node ${n.name}`, { gvr: "v1/nodes", name: n.name, uid: n.uid }, { kind: "row", task: "nodes", part: "nodes", uid: n.uid }, "Node"));
+        cmds.push(...aiVerbs(nodeCluster, "nodes", "nodes", `node ${n.name}`, { gvr: "v1/nodes", name: n.name, uid: n.uid }, { kind: "row", task: "nodes", part: "nodes", uid: n.uid }, "Node"));
       }
       cmds.push({
         id: `verb:drain:${nodeCluster}/${n.name}`,
@@ -339,7 +360,7 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (workloadCluster && w.uid && w.gvr) {
-        cmds.push(explainVerb(workloadCluster, "workloads", "workloads", `${w.kind.toLowerCase()} ${w.namespace}/${w.name}`, { gvr: w.gvr, namespace: w.namespace, name: w.name, uid: w.uid }, { kind: "row", task: "workloads", part: "workloads", uid: w.uid }, w.kind));
+        cmds.push(...aiVerbs(workloadCluster, "workloads", "workloads", `${w.kind.toLowerCase()} ${w.namespace}/${w.name}`, { gvr: w.gvr, namespace: w.namespace, name: w.name, uid: w.uid }, { kind: "row", task: "workloads", part: "workloads", uid: w.uid }, w.kind));
       }
       if (workloadCluster) {
         cmds.push({
@@ -391,7 +412,7 @@ export function buildCommands(s: FleetStore): Command[] {
           void openHelmRelease(helmCluster, r.namespace, r.name);
         },
       });
-      cmds.push(explainVerb(helmCluster, "helm", "releases", `helm release ${r.namespace}/${r.name}`, { gvr: "", namespace: r.namespace, name: r.name }, { kind: "helm", namespace: r.namespace, name: r.name }, "HelmRelease"));
+      cmds.push(...aiVerbs(helmCluster, "helm", "releases", `helm release ${r.namespace}/${r.name}`, { gvr: "", namespace: r.namespace, name: r.name }, { kind: "helm", namespace: r.namespace, name: r.name }, "HelmRelease"));
     }
   }
 
@@ -412,7 +433,7 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (r.uid && r.gvr) {
-        cmds.push(explainVerb(gitopsCluster, "flux", "reconciliations", `${r.kind.toLowerCase()} ${r.namespace}/${r.name}`, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid }, { kind: "row", task: "flux", part: "reconciliations", uid: r.uid }, r.kind));
+        cmds.push(...aiVerbs(gitopsCluster, "flux", "reconciliations", `${r.kind.toLowerCase()} ${r.namespace}/${r.name}`, { gvr: r.gvr, namespace: r.namespace, name: r.name, uid: r.uid }, { kind: "row", task: "flux", part: "reconciliations", uid: r.uid }, r.kind));
       }
       cmds.push({
         id: `verb:reconcile:${gitopsCluster}/${key}`,
@@ -451,7 +472,7 @@ export function buildCommands(s: FleetStore): Command[] {
         },
       });
       if (a.uid && a.gvr) {
-        cmds.push(explainVerb(argoCluster, "argo", "applications", `application ${a.namespace}/${a.name}`, { gvr: a.gvr, namespace: a.namespace, name: a.name, uid: a.uid }, { kind: "row", task: "argo", part: "applications", uid: a.uid }, "Application"));
+        cmds.push(...aiVerbs(argoCluster, "argo", "applications", `application ${a.namespace}/${a.name}`, { gvr: a.gvr, namespace: a.namespace, name: a.name, uid: a.uid }, { kind: "row", task: "argo", part: "applications", uid: a.uid }, "Application"));
       }
       cmds.push({
         id: `verb:argo-sync:${argoCluster}/${key}`,

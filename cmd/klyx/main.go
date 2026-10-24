@@ -521,6 +521,8 @@ func main() {
 		}
 		return cc, false
 	}, aiSvc, em)
+	appbridge.SetChatGit(chatSvc, gitSvc)               // AI A1 §3.2: git_changes
+	appbridge.SetChatLogHistory(chatSvc, logHistorySvc) // AI A1 §3.6: get_log_history
 
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.

@@ -2,6 +2,7 @@ package cachediff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -146,6 +147,15 @@ func TestTheInputSetRefuses(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want %q", err, c.want)
 			}
+			// each refusal has a fixed class, for a caller that must not
+			// echo the repository's text (AI A1)
+			class := map[string]error{"does not exist": ErrInputMissing, "not a readable kustomization": ErrInputUnreadable}[c.want]
+			if class == nil {
+				class = ErrInputUnsupported
+			}
+			if !errors.Is(err, class) {
+				t.Fatalf("%v is not classed %v", err, class)
+			}
 		})
 	}
 }
@@ -156,14 +166,14 @@ func TestTheRoundsAreCapped(t *testing.T) {
 		files[fmt.Sprintf("l%d/kustomization.yaml", i)] = fmt.Sprintf("resources: [../l%d]", i+1)
 	}
 	files[fmt.Sprintf("l%d/kustomization.yaml", MaxRounds+1)] = "resources: []"
-	if _, err := Compute(context.Background(), &fakeSource{files: files}, "l0"); err == nil || !strings.Contains(err.Error(), "rounds") {
+	if _, err := Compute(context.Background(), &fakeSource{files: files}, "l0"); err == nil || !strings.Contains(err.Error(), "rounds") || !errors.Is(err, ErrInputBound) {
 		t.Fatalf("deep nesting: %v", err)
 	}
 	many := map[string]string{"k/kustomization.yaml": "resources: []"}
 	for i := 0; i < MaxFiles; i++ {
 		many[fmt.Sprintf("k/f%05d.yaml", i)] = "x"
 	}
-	if _, err := Compute(context.Background(), &fakeSource{files: many}, "k"); err == nil || !strings.Contains(err.Error(), "files") {
+	if _, err := Compute(context.Background(), &fakeSource{files: many}, "k"); err == nil || !strings.Contains(err.Error(), "files") || !errors.Is(err, ErrInputBound) {
 		t.Fatalf("too many files: %v", err)
 	}
 }

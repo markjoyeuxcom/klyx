@@ -51,8 +51,8 @@ var policyCandidateVersions = map[string][]string{
 
 // servedResourceGVR finds the served GVR for a (group, resource), probing the
 // candidate versions in order. ok=false means the CRD is not installed.
-func (c *ClusterConn) servedResourceGVR(group, resource string) (schema.GroupVersionResource, bool) {
-	disc := c.discovery()
+func (c *ClusterConn) servedResourceGVR(ctx context.Context, group, resource string) (schema.GroupVersionResource, bool) {
+	disc := c.discoveryFor(ctx)
 	for _, v := range policyCandidateVersions[group] {
 		rl, err := disc.ServerResourcesForGroupVersion(group + "/" + v)
 		if err != nil || rl == nil {
@@ -72,7 +72,7 @@ func (c *ClusterConn) servedResourceGVR(group, resource string) (schema.GroupVer
 // list-failed (operational).
 func (c *ClusterConn) attachGatewayPolicies(ctx context.Context, topo *gwapi.Topology) {
 	for _, pk := range policyKinds {
-		gvr, ok := c.servedResourceGVR(pk.Group, pk.Resource)
+		gvr, ok := c.servedResourceGVR(ctx, pk.Group, pk.Resource)
 		if !ok {
 			topo.Warnings = append(topo.Warnings, pk.Kind+" CRD not installed")
 			continue
@@ -95,7 +95,7 @@ func (c *ClusterConn) attachGatewayPolicies(ctx context.Context, topo *gwapi.Top
 // Reuses the served-resource discovery + two warning classes. Inferred=true throughout.
 func (c *ClusterConn) attachCiliumPolicies(ctx context.Context, topo *gwapi.Topology) {
 	for _, ck := range ciliumPolicyKinds {
-		gvr, ok := c.servedResourceGVR(ciliumGroup, ck.Resource)
+		gvr, ok := c.servedResourceGVR(ctx, ciliumGroup, ck.Resource)
 		if !ok {
 			topo.Warnings = append(topo.Warnings, ck.Kind+" CRD not installed")
 			continue
@@ -156,8 +156,8 @@ func attachOneCiliumPolicy(u *unstructured.Unstructured, kind string, cluster bo
 // (coverage S7 §2, gwapi.Versions), never the group's preferred version. An
 // error says the resource is not served, or is served only at a version
 // Klyx does not read: either way nothing is read.
-func (c *ClusterConn) gwGVR(resource string) (schema.GroupVersionResource, error) {
-	v, served, err := servedResourceAmong(c.discovery(), gwGroup, resource, gwapi.Versions(resource))
+func (c *ClusterConn) gwGVR(ctx context.Context, resource string) (schema.GroupVersionResource, error) {
+	v, served, err := servedResourceAmong(c.discoveryFor(ctx), gwGroup, resource, gwapi.Versions(resource))
 	switch {
 	case err != nil:
 		return schema.GroupVersionResource{}, err
@@ -169,7 +169,7 @@ func (c *ClusterConn) gwGVR(resource string) (schema.GroupVersionResource, error
 
 // listGW lists a Gateway API resource at its resolved version.
 func (c *ClusterConn) listGW(ctx context.Context, resource string) (*unstructured.UnstructuredList, error) {
-	gvr, err := c.gwGVR(resource)
+	gvr, err := c.gwGVR(ctx, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (c *ClusterConn) listGW(ctx context.Context, resource string) (*unstructure
 // GetGatewayTopology builds the per-Gateway data path. A core failure (the Gateway
 // cannot be read) returns an error; soft issues accumulate in Topology.Warnings.
 func (c *ClusterConn) GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error) {
-	gwGVR, err := c.gwGVR("gateways")
+	gwGVR, err := c.gwGVR(ctx, "gateways")
 	if err != nil {
 		return gwapi.Topology{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
 	}
@@ -201,7 +201,7 @@ var errGWNotServed = errors.New("not served")
 // readGWList lists a Gateway API resource: served=false when it is not
 // served (nothing to say), an error when the list failed.
 func (c *ClusterConn) readGWList(ctx context.Context, resource string) (*unstructured.UnstructuredList, bool, error) {
-	gvr, err := c.gwGVR(resource)
+	gvr, err := c.gwGVR(ctx, resource)
 	if errors.Is(err, errGWNotServed) {
 		return nil, false, nil
 	}

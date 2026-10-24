@@ -9,7 +9,7 @@ const bridge = vi.hoisted(() => ({
 }));
 vi.mock("../bridge/ai", () => bridge);
 
-import { useInspectorAI, usePendingExplain, targetKey, pendingExplainTTL } from "./AIExplain";
+import { useInspectorAI, usePendingExplain, usePendingInvestigate, targetKey, pendingExplainTTL } from "./AIExplain";
 import { useFleet } from "../store/fleet";
 import { buildCommands } from "../chrome/commands";
 import type { ExplainTarget } from "../bridge/ai";
@@ -183,5 +183,53 @@ describe("palette Explain (parked request)", () => {
     expect(cmd).toBeTruthy();
     cmd!.run();
     expect(usePendingExplain.getState().key).toBe(targetKey("c1", pod));
+  });
+});
+
+describe("Investigate (AI A1 §5)", () => {
+  beforeEach(async () => {
+    usePendingInvestigate.setState({ key: null, at: 0, seq: 0 });
+    const { useChat } = await import("./chatStore");
+    useChat.setState({ open: false, cluster: null, slot: null, anchors: {} });
+  });
+
+  it("offers Investigate for an object pinned by UID, opening its investigation, never for a Helm release", async () => {
+    const { useChat, invSlot } = await import("./chatStore");
+    const { unmount } = render(<Harness target={pod} cluster="c1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Investigate with AI" }));
+    expect(useChat.getState().slot).toBe(invSlot("c1"));
+    expect(useChat.getState().anchors[invSlot("c1")]).toEqual({ seed: pod, label: "Pod/shop/api" });
+    useChat.getState().close();
+    unmount();
+    render(<Harness target={{ kind: "helm", namespace: "shop", name: "web" }} cluster="c1" />);
+    await screen.findByRole("button", { name: "Explain with AI" });
+    expect(screen.queryByRole("button", { name: "Investigate with AI" })).toBeNull();
+  });
+
+  it("puts Investigate beside Ask a follow-up under an explanation", async () => {
+    const { useChat, invSlot } = await import("./chatStore");
+    render(<Harness target={pod} cluster="c1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explain with AI" }));
+    await waitFor(() => expect(screen.getByTestId("ai-explain").textContent).toContain("keeps exiting"));
+    fireEvent.click(screen.getByRole("button", { name: "Investigate" }));
+    expect(useChat.getState().slot).toBe(invSlot("c1"));
+    useChat.getState().close();
+  });
+
+  it("a palette investigate parks its target and the inspector opens it once AI is ready", async () => {
+    const { useChat, invSlot } = await import("./chatStore");
+    const s = useFleet.getState();
+    useFleet.setState({ pods: { ...s.pods, cluster: "c1", items: [{ ...(s.pods.items[0] ?? {}), namespace: "shop", name: "api", uid: "u1", gvr: "v1/pods" } as never] } });
+    const cmds = buildCommands(useFleet.getState());
+    const cmd = cmds.find((c) => c.title === "investigate pod shop/api");
+    expect(cmd).toBeTruthy();
+    cmd!.run();
+    expect(usePendingInvestigate.getState().key).toBe(targetKey("c1", pod));
+    expect(useChat.getState().slot).toBeNull();
+    render(<Harness target={pod} cluster="c1" />);
+    await waitFor(() => expect(usePendingInvestigate.getState().key).toBeNull());
+    expect(useChat.getState().slot).toBe(invSlot("c1"));
+    expect(useChat.getState().open).toBe(true);
+    useChat.getState().close();
   });
 });

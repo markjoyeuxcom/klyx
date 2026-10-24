@@ -13,11 +13,14 @@ const bridge = vi.hoisted(() => ({
   chatStop: vi.fn(async () => {}),
   chatClear: vi.fn(async () => {}),
   onChatRead: vi.fn(() => () => {}),
+  investigationStart: vi.fn(),
+  investigationState: vi.fn(),
+  chatSetComparison: vi.fn(),
 }));
 vi.mock("../bridge/chat", () => bridge);
 
 import { ChatDrawer } from "./ChatDrawer";
-import { useChat, openChat } from "./chatStore";
+import { useChat, openChat, openInvestigation, invSlot } from "./chatStore";
 import { useFleet } from "../store/fleet";
 import type { ChatExchange, ChatState } from "../bridge/chat";
 
@@ -300,6 +303,17 @@ describe("ChatDrawer", () => {
     expect(queryByTestId("chat-failure")).toBeNull();
   });
 
+  // AI A1 implementation review, finding 11: a slot keeps its kind.
+  it("a reply of another kind of conversation is never applied to a slot", () => {
+    act(() => {
+      useChat.getState().apply(invSlot("x"), state({ version: 9500, conversationId: "inv-1", kind: "investigation" }));
+      useChat.getState().apply(invSlot("x"), state({ version: 9501, conversationId: "c-chat", kind: "chat" }));
+      useChat.getState().apply("x", state({ version: 9502, conversationId: "inv-2", kind: "investigation" }));
+    });
+    expect(useChat.getState().states[invSlot("x")].conversationId).toBe("inv-1");
+    expect(useChat.getState().states.x?.conversationId).not.toBe("inv-2");
+  });
+
   it("a background read keeps the latest request's notice", async () => {
     const bg = deferred<ChatState>();
     bridge.chatState.mockResolvedValueOnce(state({ version: 9400, active: true })).mockReturnValueOnce(bg.promise);
@@ -313,5 +327,134 @@ describe("ChatDrawer", () => {
     expect((await findByTestId("chat-input-notice")).textContent).toContain("already being answered");
     await act(async () => bg.resolve(state({ version: 9400, active: true })));
     expect(getByTestId("chat-input-notice").textContent).toContain("already being answered");
+  });
+});
+
+// AI A1 stage 1: each read's citation ID and Klyx's checks in the ledger, and
+// an answer's [r1] or [r1.c1] a chip only when the ledger holds it.
+describe("citations (AI A1 §4)", () => {
+  beforeEach(() => {
+    for (const f of Object.values(bridge)) f.mockReset?.();
+    bridge.onChatRead.mockImplementation(() => () => {});
+    useChat.setState({ open: false, cluster: null, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
+  });
+
+  it("shows read IDs and checks, and chips only the IDs the ledger holds", async () => {
+    bridge.chatState.mockResolvedValue(state({ exchanges: [exchange({
+      answer: "web crash-loops [r1.c1] after its last change [r1]; see also [r9] and [r1](https://example.com).",
+      reads: [{ id: "r1", tool: "get_resource", target: "Pod shop/web", outcome: "completed",
+        checks: [{ id: "r1.c1", class: "status", subject: { kind: "Pod", namespace: "shop", name: "web", uid: "u1", identity: "uid" }, statement: "container web of Pod shop/web: waiting CrashLoopBackOff" }] }],
+    })] }));
+    act(() => openChat("x"));
+    const { findAllByTestId, getByTestId, getByText } = render(<ChatDrawer />);
+    const chips = await findAllByTestId("chat-cite");
+    expect(chips.map((c) => c.textContent)).toEqual(["r1.c1", "r1"]);
+    expect(chips[0].getAttribute("title")).toBe("container web of Pod shop/web: waiting CrashLoopBackOff");
+    // an ID the ledger does not hold stays text; a link stays a link
+    expect(getByTestId("safe-markdown").textContent).toContain("[r9]");
+    expect(getByText("r1", { selector: "button.md-link" })).toBeTruthy();
+    expect(getByTestId("chat-checks").textContent).toContain("r1.c1container web of Pod shop/web: waiting CrashLoopBackOff");
+    // a chip opens its read in the ledger
+    const reads = getByTestId("chat-reads") as HTMLDetailsElement;
+    expect(reads.open).toBe(false);
+    fireEvent.click(chips[0]);
+    expect(reads.open).toBe(true);
+  });
+});
+
+describe("investigations (AI A1 §5)", () => {
+  const seed = { kind: "row" as const, task: "workloads", part: "workloads", uid: "uid-d" };
+  const reset = () => {
+    for (const f of Object.values(bridge)) f.mockReset?.();
+    bridge.onChatRead.mockImplementation(() => () => {});
+    bridge.chatClear.mockImplementation(async () => {});
+    useChat.setState({ open: false, cluster: null, slot: null, anchors: {}, states: {}, drafts: {}, seeds: {}, asking: {}, cleared: {}, outcomes: {}, reqs: {} });
+    useFleet.setState({ clusters: ["x", "stg", "prd"].map((name) => ({ name })) as never });
+  };
+  beforeEach(reset);
+  const inv = (over: Partial<ChatState> = {}) => state({ conversationId: "i1", kind: "investigation", anchor: seed, ...over });
+
+  it("starts on its object, beside the chat, and investigates without a typed question", async () => {
+    bridge.investigationState.mockResolvedValue(inv({ conversationId: undefined, anchor: undefined }));
+    bridge.investigationStart.mockResolvedValue(inv());
+    bridge.chatAsk.mockResolvedValue(inv({ exchanges: [exchange({ question: "Investigate why this object is failing, and end with your findings." })] }));
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const { findByText, getByLabelText } = render(<ChatDrawer />);
+    await waitFor(() => expect(bridge.investigationStart).toHaveBeenCalledWith("x", seed));
+    expect(bridge.chatStart).not.toHaveBeenCalled();
+    expect(getByLabelText("Investigate Deployment shop/web")).toBeTruthy();
+    const go = await findByText("Investigate", { selector: "button" });
+    await waitFor(() => expect((go as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(go);
+    await waitFor(() => expect(bridge.chatAsk).toHaveBeenCalledWith("x", "i1", "Investigate why this object is failing, and end with your findings.", undefined));
+    expect(useChat.getState().states[invSlot("x")]?.conversationId).toBe("i1");
+    expect(useChat.getState().states["x"]).toBeUndefined();
+  });
+
+  it("labels findings with Klyx's words and chips only ledger IDs", async () => {
+    bridge.investigationState.mockResolvedValue(inv({ exchanges: [exchange({
+      answer: "web is failing [r1.c1].",
+      reads: [{ id: "r1", tool: "get_resource", target: "Pod shop/web", outcome: "completed",
+        checks: [{ id: "r1.c1", class: "status", subject: { kind: "Pod", namespace: "shop", name: "web", uid: "u1", identity: "uid" }, statement: "container web of Pod shop/web: waiting CrashLoopBackOff" }] }],
+      findings: {
+        window: "2026-10-21T12:05:00Z",
+        findings: [
+          { type: "observation", label: "reading", statement: "the pod crash-loops", subject: { kind: "Pod", namespace: "shop", name: "web" }, cites: ["r1.c1"],
+            checked: [{ id: "r1.c1", class: "status", statement: "container web of Pod shop/web: waiting CrashLoopBackOff", before: true }] },
+          { type: "cause", label: "suspected", statement: "the new image is broken", subject: { kind: "Pod", namespace: "shop", name: "web" }, cites: ["r1"] },
+          { type: "cause", label: "unsupported", statement: "<b>api</b> is down", subject: { kind: "Deployment", namespace: "shop", name: "api" }, cites: ["r9"], notes: ["cites r9, not in this investigation's reads"] },
+        ],
+        missing: [{ from: "klyx", read: "r1", text: "get_metrics pod_cpu shop/web failed" }, { from: "model", text: "the registry" }],
+        remedy: { git: "pin the image to 1.0", label: "proposed, not run" },
+      },
+    })] }));
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const { findAllByTestId, getByTestId } = render(<ChatDrawer />);
+    const items = await findAllByTestId("inv-finding");
+    expect(items.map((i) => i.querySelector(".inv-label")?.textContent)).toEqual(["reading", "suspected", "unsupported"]);
+    expect(items[0].textContent).toContain("checked");
+    expect(items[0].textContent).toContain("observed before the failure was reported");
+    // a statement is plain text, never markup
+    expect(items[2].querySelector("b")).toBeNull();
+    expect(items[2].textContent).toContain("<b>api</b> is down");
+    // cites chip only an ID the ledger holds
+    expect(items[1].querySelector("button.chat-cite")?.textContent).toBe("r1");
+    expect(items[2].querySelector("button.chat-cite")).toBeNull();
+    expect(getByTestId("inv-window").textContent).toContain("2026-10-21T12:05:00Z");
+    expect(getByTestId("inv-missing").textContent).toContain("the model's note");
+    expect(getByTestId("inv-remedy").textContent).toContain("proposed, not run");
+    for (const l of document.querySelectorAll(".inv-finding > .inv-head > .inv-label")) {
+      expect(["checked", "proven"]).not.toContain(l.textContent);
+    }
+  });
+
+  it("fixes the comparison set before the first question and locks it after", async () => {
+    bridge.investigationState.mockResolvedValue(inv());
+    bridge.chatSetComparison.mockResolvedValue(inv({ comparison: ["stg"] }));
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const view = render(<ChatDrawer />);
+    const box = await view.findByLabelText("stg");
+    expect(view.queryByLabelText("x")).toBeNull();
+    fireEvent.click(box);
+    fireEvent.click(view.getByText("Set comparison"));
+    await waitFor(() => expect(bridge.chatSetComparison).toHaveBeenCalledWith("x", "i1", ["stg"]));
+    view.unmount();
+    reset();
+    bridge.investigationState.mockResolvedValue(inv({ comparison: ["stg"], exchanges: [exchange()] }));
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const after = render(<ChatDrawer />);
+    const fixed = await after.findByTestId("inv-comparison");
+    expect(fixed.textContent).toContain("Compared with stg");
+    expect(after.queryByText("Set comparison")).toBeNull();
+    expect(fixed.querySelector("input")).toBeNull();
+  });
+
+  it("says when another object's investigation is open", async () => {
+    bridge.investigationState.mockResolvedValue(inv({ anchor: { kind: "object", group: "apps", version: "v1", plural: "deployments", namespace: "shop", name: "api", uid: "uid-api" } }));
+    act(() => openInvestigation("x", seed, "Deployment shop/web"));
+    const { findByTestId, getByText } = render(<ChatDrawer />);
+    expect((await findByTestId("inv-other")).textContent).toContain("An investigation of api is open on x");
+    expect((getByText("Investigate", { selector: "button" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(bridge.investigationStart).not.toHaveBeenCalled();
   });
 });

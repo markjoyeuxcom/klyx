@@ -13,27 +13,101 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
 type fakeChatConn struct {
-	kinds      map[string][]fleet.ChatKind
-	incomplete []string
-	rows       map[string]observe.Rows               // task/part
-	objects    map[string]*unstructured.Unstructured // gvr|ns|name
-	lists      map[string]*unstructured.UnstructuredList
-	listErr    error
-	summary    *observe.Summary
-	events     []workloads.EventSummary
-	eventsCap  bool
-	eventsErr  error
-	logs       fleet.LogSnapshot
-	logsErr    error
-	logCalls   int
+	kinds        map[string][]fleet.ChatKind
+	incomplete   []string
+	rows         map[string]observe.Rows               // task/part
+	objects      map[string]*unstructured.Unstructured // gvr|ns|name
+	lists        map[string]*unstructured.UnstructuredList
+	listErr      error
+	summary      *observe.Summary
+	events       []workloads.EventSummary
+	eventsCap    bool
+	eventsErr    error
+	logs         fleet.LogSnapshot
+	logsErr      error
+	logCalls     int
+	flux         map[string]*unstructured.Unstructured // Kind|ns|name
+	fluxErr      error
+	fluxCalls    int
+	fluxHook     func(kind string) // runs after each Flux read
+	compare      fleet.WorkloadCompareInfo
+	compareErr   error
+	compareCalls int
+	compareHook  func() // runs after each compare read
+	graph        depgraph.Graph
+	graphUIDs    []string
+	graphHook    func(ctx context.Context) // runs inside DependencyGraph
+	chain        *certmanager.Chain
+	topo         *gwapi.Topology
+	rules        map[string]routemetrics.GatewayRules // by Gateway ns/name
+	ruleCalls    []string
+	series       map[string][]metrics.LabeledSeries // by query
+	seriesErr    error
+	queries      []string
+	steps        []time.Duration
+}
+
+func (f *fakeChatConn) WorkloadCompare(_ context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
+	f.compareCalls++
+	if f.compareHook != nil {
+		defer f.compareHook()
+	}
+	if f.compareErr != nil {
+		return fleet.WorkloadCompareInfo{}, f.compareErr
+	}
+	return f.compare, nil
+}
+
+func (f *fakeChatConn) DependencyGraph(ctx context.Context, _, _, _, uid string) depgraph.Graph {
+	if f.graphHook != nil {
+		f.graphHook(ctx)
+	}
+	f.graphUIDs = append(f.graphUIDs, uid)
+	return f.graph
+}
+
+func (f *fakeChatConn) GetCertificateChain(_ context.Context, ns, name string) (certmanager.Chain, error) {
+	if f.chain == nil {
+		return certmanager.Chain{}, apierrors.NewNotFound(schema.GroupResource{Resource: "certificates"}, name)
+	}
+	return *f.chain, nil
+}
+
+func (f *fakeChatConn) GetGatewayTopology(_ context.Context, ns, name string) (gwapi.Topology, error) {
+	if f.topo == nil {
+		return gwapi.Topology{}, apierrors.NewNotFound(schema.GroupResource{Resource: "gateways"}, name)
+	}
+	return *f.topo, nil
+}
+
+func (f *fakeChatConn) RuleMetrics(_ context.Context, ns, name string) (routemetrics.GatewayRules, error) {
+	f.ruleCalls = append(f.ruleCalls, ns+"/"+name)
+	r, ok := f.rules[ns+"/"+name]
+	if !ok {
+		return routemetrics.GatewayRules{}, apierrors.NewNotFound(schema.GroupResource{Resource: "gateways"}, name)
+	}
+	return r, nil
+}
+
+func (f *fakeChatConn) ChatMetricsRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+	f.queries, f.steps = append(f.queries, promql), append(f.steps, step)
+	if f.seriesErr != nil {
+		return nil, f.seriesErr
+	}
+	return f.series[promql], nil
 }
 
 func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {
@@ -83,6 +157,20 @@ func (f *fakeChatConn) ListEvents(context.Context, string) ([]workloads.EventSum
 	return f.events, f.eventsCap, f.eventsErr
 }
 
+func (f *fakeChatConn) FluxObject(_ context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
+	f.fluxCalls++
+	if f.fluxHook != nil {
+		defer f.fluxHook(kind)
+	}
+	if f.fluxErr != nil {
+		return nil, f.fluxErr
+	}
+	if u, ok := f.flux[kind+"|"+ns+"|"+name]; ok {
+		return u, nil
+	}
+	return nil, apierrors.NewNotFound(schema.GroupResource{Resource: kind}, name)
+}
+
 func (f *fakeChatConn) PodLogSnapshot(context.Context, string, string, string, bool, int64) (fleet.LogSnapshot, error) {
 	f.logCalls++
 	return f.logs, f.logsErr
@@ -118,6 +206,28 @@ func run(t *testing.T, f *fakeChatConn, tool, args string) (chatEnvelope, ChatRe
 		t.Fatalf("%s result is not an envelope: %v %s", tool, err, res.JSON)
 	}
 	return env, res.Read
+}
+
+// AI A1 implementation review, finding 10: the last resort keeps the
+// envelope and as many checks as fit, failures first, and says how many it
+// left out; the ledger holds the checks sent.
+func TestFinishFallsBackWithinItsBound(t *testing.T) {
+	tools := newChatTools(newFakeChat(), fixedNow).as("r7")
+	var checks []ChatCheck
+	for i := 0; i < chatChecksMax; i++ {
+		checks = append(checks, ChatCheck{Class: checkEvent, Subject: ChatCheckSubject{Kind: "Pod", Namespace: "shop", Name: fmt.Sprintf("p%d", i), Identity: identityName},
+			Statement: strings.Repeat("s", 4000)})
+	}
+	env := chatEnvelope{Tool: toolEvents, Source: "api", Checks: checks, Data: strings.Repeat("d", 9000)}
+	res := tools.finishWithin(env, ChatRead{Tool: toolEvents, Outcome: "completed"}, 4096)
+	var got chatEnvelope
+	if err := json.Unmarshal(res.JSON, &got); err != nil || len(res.JSON) > 4096 {
+		t.Fatalf("%d bytes: %v", len(res.JSON), err)
+	}
+	if len(got.Checks) == 0 || len(got.Checks) == chatChecksMax || len(res.Read.Checks) != len(got.Checks) || got.Checks[0].ID != "r7.c1" ||
+		!strings.Contains(got.Errors[0], fmt.Sprintf("of its %d checks were left out", chatChecksMax)) || res.Read.Outcome != "truncated" {
+		t.Fatalf("%+v %+v", got, res.Read)
+	}
 }
 
 func TestChatToolsRefuseBadArguments(t *testing.T) {

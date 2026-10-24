@@ -14,6 +14,7 @@ import (
 
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/execenv"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // RESTConfig builds a *rest.Config for the cluster's kubeconfig context.
@@ -47,6 +48,10 @@ func RESTConfig(cc config.ClusterConfig) (*rest.Config, error) {
 	if rc.Burst == 0 {
 		rc.Burst = 100
 	}
+	// every request checks its context's read fence first: a composite AI
+	// read stops at its next component once its fence changes (AI A1
+	// implementation review, finding 3); a context without one is unchanged
+	rc.Wrap(readfence.Transport)
 	return rc, nil
 }
 

@@ -21,10 +21,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/gwapi"
 	"github.com/moomora/klyx/internal/health"
 	"github.com/moomora/klyx/internal/healthsrc"
+	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/routemetrics"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -42,7 +47,23 @@ type ChatConn interface {
 	HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool)
 	ListEvents(ctx context.Context, namespace string) ([]workloads.EventSummary, bool, error)
 	PodLogSnapshot(ctx context.Context, ns, pod, container string, previous bool, tail int64) (fleet.LogSnapshot, error)
+	// FluxObject reads one Flux object live at its served version (AI A1 §3.1).
+	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
+	// ChatMetricsRange runs a range query Klyx built from a template (§3.4).
+	ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
+	// RuleMetrics reads one Gateway's per-rule Envoy metrics (The Line 7c).
+	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
+	// The drawings get_dependencies reads (A1 §3.3).
+	DependencyGraph(ctx context.Context, kind, ns, name, uid string) depgraph.Graph
+	GetCertificateChain(ctx context.Context, ns, name string) (certmanager.Chain, error)
+	GetGatewayTopology(ctx context.Context, namespace, name string) (gwapi.Topology, error)
+	// WorkloadCompare reads one workload's fleet-compare facts (§3.7).
+	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 }
+
+// The cluster connection is chat's read surface (main.go asserts it at run
+// time; this fails the build instead).
+var _ ChatConn = (*fleet.ClusterConn)(nil)
 
 const (
 	toolOverview  = "cluster_overview"
@@ -57,6 +78,12 @@ const (
 	chatResultMax = 16 * 1024
 	// chatLogLineMax caps one log line after scrubbing (spec §4).
 	chatLogLineMax = 2000
+	// a read's gaps and by-name subjects in its ledger entry (AI A1)
+	chatReadGapsMax  = 3
+	chatReadGapMax   = 200
+	chatReadAboutMax = 20
+	// chatCheckStatementMax caps one check's statement (bytes)
+	chatCheckStatementMax = 1024
 )
 
 // ChatToolDef is one tool as offered to a provider: a name, what it does, and
@@ -120,6 +147,41 @@ func ChatToolDefs() []ChatToolDef {
 			"namespace": strProp("Optional namespace filter."),
 			"name":      strProp("Optional exact unit name."),
 		})},
+		{toolUnit, "One Flux Kustomization or HelmRelease read live: its Ready condition, applied and attempted revisions, source, dependencies, inventory and Klyx's verdict. A failed health check is parsed into the objects it names, by name, each joined to the unit's inventory, with the object of that name now as a separate fact.", obj(map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"Kustomization", "HelmRelease"}, "description": "Kustomization or HelmRelease."},
+			"namespace": strProp("The unit's namespace."),
+			"name":      strProp("The unit's exact name."),
+		}, "kind", "namespace", "name")},
+		{toolChanges, "What changed in Git between a Flux Kustomization's last applied revision and its last attempted one: the commits and files under its path, and both revisions rendered and compared object by object. A render is a source render under the current spec (the spec in force at the applied revision is unknown); hidden values are named by path only. Needs the source's repository approved in Klyx's Git settings.", obj(map[string]any{
+			"kind":      map[string]any{"type": "string", "enum": []string{"Kustomization"}, "description": "Kustomization."},
+			"namespace": strProp("The Kustomization's namespace."),
+			"name":      strProp("The Kustomization's exact name."),
+		}, "kind", "namespace", "name")},
+		{toolAlerts, "Alertmanager alerts Klyx read for one object: those whose labels name it, one of its current pods, or its namespace, with state, severity, start time, allowlisted labels and the summary. Matched by label, never by UID.", obj(map[string]any{
+			"kind":      strProp("Kind, plural or short name, e.g. Deployment, pod, node."),
+			"namespace": strProp("Namespace, for namespaced kinds."),
+			"name":      strProp("Exact object name."),
+		}, "kind", "name")},
+		{toolLogHistory, "A pod's log history from Loki, newest first, scrubbed: for a pod that is gone, or history beyond its previous container. By the pod's UID when this conversation's reads hold it and the log shipper records it, otherwise by namespace and name (every pod of that name in the window); the result says which.", obj(map[string]any{
+			"namespace": strProp("Pod namespace."),
+			"pod":       strProp("Exact pod name."),
+			"uid":       strProp("Optional: one of the pod UIDs this conversation's reads returned; needed only when they hold several pods of that name."),
+			"container": strProp("Optional container name."),
+			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h"}, "description": "How far back (default 1h)."},
+			"tail":      intProp("Lines, 1-200 (default 100).", 1, 200),
+		}, "namespace", "pod")},
+		{toolMetrics, "Prometheus series from one of Klyx's templates, summarised (min, max, last, gaps, counter resets, a threshold crossed): pod_cpu and pod_memory per container of a pod, against its limit; workload_cpu and workload_memory summed over a workload's current pods; restarts per pod (kube-state-metrics); route_requests and route_5xx_ratio per rule of an HTTPRoute, through each Gateway it names (Envoy Gateway, its last 30 minutes). Series are by pod or Envoy cluster name.", obj(map[string]any{
+			"template":  map[string]any{"type": "string", "enum": []string{"pod_cpu", "pod_memory", "workload_cpu", "workload_memory", "restarts", "route_requests", "route_5xx_ratio"}, "description": "The template."},
+			"kind":      map[string]any{"type": "string", "enum": []string{"Pod", "Deployment", "StatefulSet", "DaemonSet", "HTTPRoute"}, "description": "Pod for pod templates (default); a workload kind for workload templates, and for restarts of a workload's pods; HTTPRoute for route templates."},
+			"namespace": strProp("Namespace."),
+			"name":      strProp("Exact pod or workload name."),
+			"window":    map[string]any{"type": "string", "enum": []string{"15m", "1h", "6h", "24h"}, "description": "How far back (default 1h)."},
+		}, "template", "namespace", "name")},
+		{toolDeps, "The dependencies Klyx draws for one object, as typed nodes and edges with Klyx's verdict by UID: a Flux unit's dependency graph, a workload's owner chain and pods, a Certificate's issuance chain, a Gateway's topology or an HTTPRoute's parents and backends, a ScaledObject's or HPA's target and owner. A node without a UID is by name.", obj(map[string]any{
+			"kind":      strProp("Kind, e.g. Kustomization, Deployment, Certificate, Gateway, HTTPRoute, ScaledObject."),
+			"namespace": strProp("Namespace, for namespaced kinds."),
+			"name":      strProp("Exact object name."),
+		}, "kind", "name")},
 	}
 }
 
@@ -132,14 +194,63 @@ type ChatRef struct {
 	UID       string `json:"uid,omitempty"`
 }
 
-// ChatRead is one ledger entry (spec §5.4): names only, never content.
+// ChatRead is one ledger entry (spec §5.4): names only, never content. ID is
+// the read's citation ID within its conversation (AI A1 §2); Checks are the
+// observations Klyx evaluated on it.
 type ChatRead struct {
-	Tool     string    `json:"tool"`
-	Target   string    `json:"target,omitempty"`
-	Outcome  string    `json:"outcome"` // completed | failed | truncated | cancelled
-	Detail   string    `json:"detail,omitempty"`
-	Redacted int       `json:"redacted,omitempty"`
-	Refs     []ChatRef `json:"refs,omitempty"`
+	ID       string      `json:"id,omitempty"`
+	Tool     string      `json:"tool"`
+	Target   string      `json:"target,omitempty"`
+	Outcome  string      `json:"outcome"` // completed | failed | truncated | cancelled
+	Detail   string      `json:"detail,omitempty"`
+	Redacted int         `json:"redacted,omitempty"`
+	Refs     []ChatRef   `json:"refs,omitempty"`
+	Checks   []ChatCheck `json:"checks,omitempty"`
+	// Gaps are the parts of a read its result says it could not read: its
+	// first errors, short
+	Gaps []string `json:"gaps,omitempty"`
+	// About is what a read is about that Refs and Checks do not carry, with
+	// how Klyx holds each: a by-name read (Loki by name, metrics selected by
+	// pod name, alerts matched by label) names its subjects here by name,
+	// never as a reference by UID
+	About []ChatCheckSubject `json:"about,omitempty"`
+	// ObservedFrom and ObservedTo are when a historical read's evidence
+	// describes the world: Loki's lines, a metric window. ObservedUnknown
+	// says its evidence carries no time Klyx can read, as a pod's log has
+	// none. A read without them describes the cluster as read (AI A1
+	// re-review, finding 4).
+	ObservedFrom    string `json:"observedFrom,omitempty"`
+	ObservedTo      string `json:"observedTo,omitempty"`
+	ObservedUnknown bool   `json:"observedUnknown,omitempty"`
+}
+
+// observedSpan is the earliest and latest of times, RFC 3339 at their full
+// precision (a Loki line's nanoseconds decide its order against an onset);
+// ok is false when none parses.
+func observedSpan(times []string) (from, to string, ok bool) {
+	var lo, hi time.Time
+	for _, s := range times {
+		tm, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			continue
+		}
+		if !ok || tm.Before(lo) {
+			lo = tm
+		}
+		if !ok || tm.After(hi) {
+			hi = tm
+		}
+		ok = true
+	}
+	if !ok {
+		return "", "", false
+	}
+	return lo.UTC().Format(time.RFC3339Nano), hi.UTC().Format(time.RFC3339Nano), true
+}
+
+// byName is a read's subject held by name only.
+func byName(kind, ns, name string) ChatCheckSubject {
+	return ChatCheckSubject{Kind: kind, Namespace: ns, Name: name, Identity: identityName}
 }
 
 // ChatToolResult is one executed call: the envelope the model sees and the
@@ -170,6 +281,7 @@ type chatTotal struct {
 // chatEnvelope is every tool result's shape (spec §3.3).
 type chatEnvelope struct {
 	Tool      string        `json:"tool"`
+	ReadID    string        `json:"readId,omitempty"`
 	Source    string        `json:"source"`
 	ReadAt    string        `json:"readAt"`
 	Identity  *chatIdentity `json:"identity,omitempty"`
@@ -179,6 +291,7 @@ type chatEnvelope struct {
 	Truncated bool          `json:"truncated"`
 	Errors    []string      `json:"errors,omitempty"`
 	Note      string        `json:"note,omitempty"`
+	Checks    []ChatCheck   `json:"checks,omitempty"`
 	Data      any           `json:"data,omitempty"`
 }
 
@@ -186,6 +299,24 @@ type chatEnvelope struct {
 type chatTools struct {
 	conn ChatConn
 	now  func() time.Time
+	// readID is the citation ID of the one read this copy runs (AI A1 §2)
+	readID string
+	// git reads Git history for git_changes; nil when it is not available
+	git chatGit
+	// history reads Loki for get_log_history; nil when not available
+	history chatHistory
+	// ledgerUIDs are the pod UIDs the conversation's own reads hold
+	ledgerUIDs func(ns, name string) []string
+	// cluster is the conversation's; members its comparison set (A-C2)
+	cluster string
+	members []chatMember
+}
+
+// as is a copy of t that runs one read under its citation ID.
+func (t *chatTools) as(id string) *chatTools {
+	c := *t
+	c.readID = id
+	return &c
 }
 
 func newChatTools(conn ChatConn, now func() time.Time) *chatTools {
@@ -308,6 +439,135 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 			return t.refuse(name, "", err)
 		}
 		return t.gitops(ctx, a.NS, a.Name)
+	case toolUnit:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if _, ok := unitResources[a.Kind]; !ok {
+			return t.refuse(name, label(a.Kind), errUnitKind)
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.unit(ctx, a.Kind, a.NS, a.Name)
+	case toolChanges:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if a.Kind != "Kustomization" {
+			return t.refuse(name, label(a.Kind), errors.New("kind must be Kustomization"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.changes(ctx, a.NS, a.Name)
+	case toolAlerts:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if err := firstErr(checkKind(a.Kind), checkName("namespace", a.NS, false), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.Name, err)
+		}
+		return t.alerts(ctx, a.Kind, a.NS, a.Name)
+	case toolLogHistory:
+		var a struct {
+			NS        string `json:"namespace"`
+			Pod       string `json:"pod"`
+			UID       string `json:"uid"`
+			Container string `json:"container"`
+			Window    string `json:"window"`
+			Tail      *int   `json:"tail"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		tail := 100
+		if a.Tail != nil {
+			tail = *a.Tail
+		}
+		if a.Window == "" {
+			a.Window = "1h"
+		}
+		if _, ok := chatHistoryWindows[a.Window]; !ok {
+			return t.refuse(name, a.NS+"/"+a.Pod, errors.New("window must be 15m, 1h or 6h"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("pod", a.Pod, true), checkName("uid", a.UID, false),
+			checkName("container", a.Container, false), checkRange("tail", tail, 1, chatHistoryLinesMax)); err != nil {
+			return t.refuse(name, a.NS+"/"+a.Pod, err)
+		}
+		return t.logHistory(ctx, a.NS, a.Pod, a.UID, a.Container, a.Window, tail)
+	case toolMetrics:
+		var a struct {
+			Template string `json:"template"`
+			Kind     string `json:"kind"`
+			NS       string `json:"namespace"`
+			Name     string `json:"name"`
+			Window   string `json:"window"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if a.Window == "" {
+			a.Window = "1h"
+		}
+		if _, ok := chatMetricTemplates[a.Template]; !ok {
+			return t.refuse(name, label(a.Template), errors.New("template must be one of pod_cpu, pod_memory, workload_cpu, workload_memory, restarts, route_requests or route_5xx_ratio; Klyx runs no other query"))
+		}
+		if _, ok := chatMetricWindows[a.Window]; !ok {
+			return t.refuse(name, a.Template, errors.New("window must be 15m, 1h, 6h or 24h"))
+		}
+		if a.Kind != "" && a.Kind != "Pod" && a.Kind != "HTTPRoute" && !chatMetricWorkloads[a.Kind] {
+			return t.refuse(name, a.Template, errors.New("kind must be Pod, Deployment, StatefulSet, DaemonSet or HTTPRoute"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Template, err)
+		}
+		return t.metricSeries(ctx, a.Template, a.Kind, a.NS, a.Name, a.Window)
+	case toolDeps:
+		var a struct {
+			Kind string `json:"kind"`
+			NS   string `json:"namespace"`
+			Name string `json:"name"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if err := firstErr(checkKind(a.Kind), checkName("namespace", a.NS, false), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.Name, err)
+		}
+		return t.deps(ctx, a.Kind, a.NS, a.Name)
+	case toolFleetDiff:
+		var a struct {
+			Kind     string   `json:"kind"`
+			NS       string   `json:"namespace"`
+			Name     string   `json:"name"`
+			Clusters []string `json:"clusters"`
+		}
+		if err := strictArgs(args, &a); err != nil {
+			return t.refuse(name, "", err)
+		}
+		if !chatMetricWorkloads[a.Kind] {
+			return t.refuse(name, label(a.Kind), errors.New("kind must be Deployment, StatefulSet or DaemonSet"))
+		}
+		if err := firstErr(checkName("namespace", a.NS, true), checkName("name", a.Name, true)); err != nil {
+			return t.refuse(name, a.Kind+" "+a.NS+"/"+a.Name, err)
+		}
+		return t.fleetDiff(ctx, a.Kind, a.NS, a.Name, a.Clusters)
 	}
 	return t.refuse(name, "", fmt.Errorf("Klyx offers no tool named %q", label(name)))
 }
@@ -542,24 +802,67 @@ func readError(err error) string {
 // finish serializes an envelope within chatResultMax, shrinking its data
 // (and marking it truncated) when it does not fit.
 func (t *chatTools) finish(env chatEnvelope, read ChatRead) ChatToolResult {
+	return t.finishWithin(env, read, chatResultMax)
+}
+
+// finishWithin is finish under another cap (git_changes' 32 KiB).
+func (t *chatTools) finishWithin(env chatEnvelope, read ChatRead, max int) ChatToolResult {
+	// the read's citation ID, and its checks' (AI A1 §2): the envelope the
+	// model reads and the ledger entry carry the same IDs
+	env.ReadID, read.ID = t.readID, t.readID
+	for i := range env.Checks {
+		env.Checks[i].ID = fmt.Sprintf("%s.c%d", t.readID, i+1)
+		if s := env.Checks[i].Statement; len(s) > chatCheckStatementMax {
+			env.Checks[i].Statement = clipUTF8(s, chatCheckStatementMax) + "…"
+		}
+	}
+	read.Gaps = gapsOf(env.Errors)
 	for i := 0; i < 12; i++ {
 		b, err := json.Marshal(env)
 		if err != nil {
 			env.Data, env.Errors = nil, append(env.Errors, "the result could not be encoded")
 			continue
 		}
-		if len(b) <= chatResultMax {
+		if len(b) <= max {
 			if env.Truncated && read.Outcome == "completed" {
 				read.Outcome = "truncated"
 			}
+			read.Checks = append([]ChatCheck(nil), env.Checks...)
 			return ChatToolResult{JSON: b, Read: read}
 		}
 		env.Truncated = true
 		env.Data = shrink(env.Data)
 	}
-	b, _ := json.Marshal(chatEnvelope{Tool: env.Tool, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Errors: []string{"the result was too large to send"}})
+	// The data does not fit: the envelope alone, with as many of its
+	// checks as fit, failures first (capChecks' order). The ledger holds
+	// the checks the model was sent (A1 implementation review, finding 10).
+	fb := chatEnvelope{Tool: env.Tool, ReadID: env.ReadID, Source: env.Source, ReadAt: env.ReadAt, Truncated: true, Checks: env.Checks,
+		Errors: []string{"the result was too large to send"}}
+	b, _ := json.Marshal(fb)
+	for len(b) > max && len(fb.Checks) > 0 {
+		fb.Checks = fb.Checks[:len(fb.Checks)-1]
+		fb.Errors = []string{fmt.Sprintf("the result was too large to send; %d of its %d checks were left out", len(env.Checks)-len(fb.Checks), len(env.Checks))}
+		b, _ = json.Marshal(fb)
+	}
 	read.Outcome = "truncated"
+	read.Checks = append([]ChatCheck(nil), fb.Checks...)
 	return ChatToolResult{JSON: b, Read: read}
+}
+
+// gapsOf keeps a read's first errors, short, for its ledger entry.
+func gapsOf(errs []string) []string {
+	var out []string
+	for i, e := range errs {
+		if i == chatReadGapsMax {
+			out = append(out, fmt.Sprintf("+%d more", len(errs)-i))
+			break
+		}
+		if r := []rune(e); len(r) > chatReadGapMax {
+			e = string(r[:chatReadGapMax]) + "…"
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // shrink halves list data and sheds the bulkiest parts of an object.
@@ -601,6 +904,77 @@ func shrink(d any) any {
 			return v
 		}
 		v.Object = shrink(v.Object).(ChatObject)
+		return v
+	case chatUnitData:
+		// the inventory first, then the parts' kinds, then the entries
+		switch {
+		case len(v.Inventory) > 0:
+			v.Inventory = v.Inventory[:len(v.Inventory)/2]
+		case v.Verdict != nil && len(v.Verdict.Kinds) > 0:
+			vv := *v.Verdict
+			vv.Kinds = nil
+			v.Verdict = &vv
+		case v.HealthCheck != nil && len(v.HealthCheck.Entries) > 0:
+			hc := *v.HealthCheck
+			hc.Entries = hc.Entries[:len(hc.Entries)/2]
+			v.HealthCheck = &hc
+		case v.Ready != nil && v.Ready.Message != "":
+			r := *v.Ready
+			r.Message = ""
+			v.Ready = &r
+		default:
+			return nil
+		}
+		return v
+	case chatFleetDiffData:
+		for i := range v.Clusters {
+			v.Clusters[i].Containers = nil
+		}
+		v.Note += " Containers left out to fit."
+		return v
+	case chatDepsData:
+		// half the nodes, and only the edges between those kept
+		v.Nodes = v.Nodes[:len(v.Nodes)/2]
+		kept := map[string]bool{}
+		for _, n := range v.Nodes {
+			kept[n.ID] = true
+		}
+		var es []chatDepEdge
+		for _, e := range v.Edges {
+			if kept[e.From] && kept[e.To] {
+				es = append(es, e)
+			}
+		}
+		v.Edges = es
+		return v
+	case chatMetricsData:
+		if len(v.Pods) > 0 {
+			v.Pods = v.Pods[:len(v.Pods)/2]
+		} else {
+			v.Series = v.Series[:len(v.Series)/2]
+		}
+		return v
+	case chatLogHistoryData:
+		// the newest half stays (the lines are newest first)
+		lines := strings.Split(v.Text, "\n")
+		v.Text = strings.Join(lines[:len(lines)/2], "\n")
+		v.Lines = len(lines) / 2
+		return v
+	case chatAlertsData:
+		v.Alerts = v.Alerts[:len(v.Alerts)/2]
+		return v
+	case chatChangesData:
+		// the file list first, then the commits, then the objects
+		switch {
+		case len(v.Files) > 0:
+			v.Files = v.Files[:len(v.Files)/2]
+		case len(v.Commits) > 0:
+			v.Commits = v.Commits[:len(v.Commits)/2]
+		case len(v.Objects) > 0:
+			v.Objects = v.Objects[:len(v.Objects)/2]
+		default:
+			return nil
+		}
 		return v
 	case chatLogData:
 		lines := strings.Split(v.Text, "\n")
@@ -1163,7 +1537,7 @@ func (t *chatTools) events(ctx context.Context, ns, kind, name string, warnings 
 	if err != nil {
 		return t.failed(toolEvents, "api", ns, err)
 	}
-	env := chatEnvelope{Tool: toolEvents, Source: "api", ReadAt: t.stamp(), Complete: complete, Total: &chatTotal{Count: total, Exact: complete}, Data: evs}
+	env := chatEnvelope{Tool: toolEvents, Source: "api", ReadAt: t.stamp(), Complete: complete, Total: &chatTotal{Count: total, Exact: complete}, Data: evs, Checks: capChecks(eventChecks(evs))}
 	if !complete {
 		env.Note = "the event read was capped: this is a sample, newest first among what was read"
 	}
@@ -1242,6 +1616,21 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 		}
 	}
 	env.Data = data
+	// AI A1 §2: what Klyx itself reads off the object, its verdict and its
+	// warning events, all by the object's UID
+	subj := ChatCheckSubject{Kind: o.Kind, Namespace: ns, Name: name, UID: o.UID, Identity: identityUID}
+	var checks []ChatCheck
+	if data.Verdict != nil {
+		if c := verdictCheck(subj, *data.Verdict, p); c != nil {
+			checks = append(checks, *c)
+		}
+	}
+	checks = append(checks, conditionChecks(u, subj, env.ReadAt, p)...)
+	if gvr.Group == "" && gvr.Resource == "pods" {
+		checks = append(checks, podStatusChecks(u, subj, env.ReadAt, p)...)
+	}
+	checks = append(checks, eventChecks(data.Events)...)
+	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
 	return t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
 }
@@ -1287,8 +1676,10 @@ func (t *chatTools) logs(ctx context.Context, ns, pod, container string, previou
 	env := chatEnvelope{Tool: toolLogs, Source: "api", ReadAt: snap.ReadAt.UTC().Format(time.RFC3339), Complete: !snap.Truncated, Truncated: snap.Truncated,
 		Identity: &chatIdentity{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}, Data: data,
 		Note: "log text is scrubbed of recognized credential shapes; it is not guaranteed secret-free"}
+	// a pod's log carries no timestamps: when its lines were written is not
+	// known, the previous container's above all
 	read := ChatRead{Tool: toolLogs, Target: ns + "/" + pod + "/" + snap.Container, Outcome: "completed", Redacted: n,
-		Detail: fmt.Sprintf("%d lines", len(lines)), Refs: []ChatRef{{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}}}
+		Detail: fmt.Sprintf("%d lines", len(lines)), Refs: []ChatRef{{GVR: "v1/pods", Namespace: ns, Name: pod, UID: snap.PodUID}}, ObservedUnknown: len(lines) > 0}
 	return t.finish(env, read)
 }
 

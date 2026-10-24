@@ -632,6 +632,65 @@ func TestChatLateAskReturnsTheCurrentConversation(t *testing.T) {
 	}
 }
 
+// AI A1 implementation review, finding 10: an investigation's findings,
+// its report and its snapshot bookkeeping count toward retention.
+func TestChatRetentionCountsFindings(t *testing.T) {
+	cites := make([]string, findingCitesMax)
+	for i := range cites {
+		cites[i] = fmt.Sprintf("unknown-%d-", i) + strings.Repeat("x", 200)
+	}
+	in, err := parseFindings(json.RawMessage(`{"findings":[` + finding("observation", "Pod", "shop", "web", strings.Repeat("s", 500), cites...) + `]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := labelFindings(in, nil, anchorFacts{})
+	c := &conversation{}
+	for n := 0; n < 4; n++ {
+		rs := make([]ai.ToolResult, 16)
+		for i := range rs {
+			rs[i] = ai.ToolResult{CallID: fmt.Sprintf("call%d", i), Name: toolGet, Content: strings.Repeat("x", 16000)}
+		}
+		c.exchanges = append(c.exchanges, &exchange{question: "q", findings: &dto, reported: &in, snapshotSkipped: []string{strings.Repeat("k", 2000)},
+			msgs: []ai.ConvMessage{{Role: "tool", Results: rs}}})
+	}
+	// each retained field is counted: measured independently
+	for _, e := range c.exchanges {
+		msgs, _ := json.Marshal(e.msgs)
+		f, _ := json.Marshal(e.findings)
+		r, _ := json.Marshal(e.reported)
+		if own := len(e.question) + len(msgs) + len(f) + len(r) + len(e.snapshotSkipped[0]); exchangeBytes(e) < own {
+			t.Fatalf("exchangeBytes %d < %d", exchangeBytes(e), own)
+		}
+	}
+	// just under the bound without the findings: with them, over it
+	plain := 0
+	for _, e := range c.exchanges {
+		f, r := e.findings, e.reported
+		e.findings, e.reported = nil, nil
+		plain += exchangeBytes(e)
+		e.findings, e.reported = f, r
+	}
+	gap := chatRetainBytes - plain - 512
+	for n := 0; gap > 0 && n < 4; n++ {
+		for i := range c.exchanges[n].msgs[0].Results {
+			add := min(gap, 300)
+			c.exchanges[n].msgs[0].Results[i].Content += strings.Repeat("x", add)
+			gap -= add
+		}
+	}
+	(&ChatService{}).retainLocked(c)
+	total := 0
+	for _, e := range c.exchanges {
+		msgs, _ := json.Marshal(e.msgs)
+		f, _ := json.Marshal(e.findings)
+		r, _ := json.Marshal(e.reported)
+		total += len(e.question) + len(msgs) + len(f) + len(r) + len(e.snapshotSkipped[0])
+	}
+	if total > chatRetainBytes || len(c.exchanges) == 4 {
+		t.Fatalf("findings count toward the bound: %d bytes kept in %d exchanges", total, len(c.exchanges))
+	}
+}
+
 // Retention counts a follow-up's seed envelope and, for a sole oversized
 // exchange, sheds it too.
 func TestChatRetentionCountsSeedEnvelopes(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/moomora/klyx/internal/cachediff"
 	smokepkg "github.com/moomora/klyx/internal/smoke"
 )
 
@@ -19,6 +20,12 @@ import (
 // lab's fleet config in a smoke-only directory.
 
 func init() {
+	// The confined build re-runs this binary as a child with an empty
+	// environment (cachediff.RunChild, in main): the smoke stands aside, or
+	// every render in a smoke build dies at start (found by AI A1's lab).
+	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
+		return
+	}
 	out := os.Getenv("KLYX_SMOKE_OUT")
 	if out == "" {
 		log.Fatal("the smoke build needs KLYX_SMOKE_OUT")

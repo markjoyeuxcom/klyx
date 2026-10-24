@@ -40,7 +40,7 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 	if !hasEnvoy {
 		return routemetrics.Unavailable(q, "Envoy Gateway not detected"), nil
 	}
-	gwGVR, err := c.gwGVR("gateways")
+	gwGVR, err := c.gwGVR(ctx, "gateways")
 	if err != nil {
 		return routemetrics.GatewayRules{}, fmt.Errorf("get gateway %s/%s: %w", namespace, name, err)
 	}
@@ -112,7 +112,7 @@ func (c *ClusterConn) envoyProxyReason(ctx context.Context, gw *unstructured.Uns
 		refs = append(refs, ref{"the Gateway", g, k, gw.GetNamespace(), n})
 	}
 	if className, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName"); className != "" {
-		gcGVR, err := c.gwGVR("gatewayclasses")
+		gcGVR, err := c.gwGVR(ctx, "gatewayclasses")
 		var gc *unstructured.Unstructured
 		if err == nil {
 			gc, err = c.dyn.Resource(gcGVR).Get(ctx, className, metav1.GetOptions{})
@@ -132,7 +132,7 @@ func (c *ClusterConn) envoyProxyReason(ctx context.Context, gw *unstructured.Uns
 		if r.group != envoyGroup || r.kind != "EnvoyProxy" || r.ns == "" || r.name == "" {
 			return fmt.Sprintf("%s: %s refers to %s %s/%s, not an EnvoyProxy Klyx can read", routemetrics.ReasonSharedClusters, r.from, r.kind, r.ns, r.name)
 		}
-		gvr, ok := c.servedResourceGVR(envoyGroup, "envoyproxies")
+		gvr, ok := c.servedResourceGVR(ctx, envoyGroup, "envoyproxies")
 		if !ok {
 			return fmt.Sprintf("%s: the EnvoyProxy %s/%s is referenced but the resource is not served", routemetrics.ReasonSharedClusters, r.ns, r.name)
 		}

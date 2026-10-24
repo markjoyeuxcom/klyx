@@ -32,6 +32,12 @@ const (
 	chatMaxConvs       = 8
 	chatSnapshotMax    = 48 * 1024
 	chatSnapshotPrior  = 16 * 1024
+
+	// An investigation's turn reads more (AI A1 §1).
+	invTurnDeadline  = 300 * time.Second
+	invMaxModelCalls = 12
+	invMaxToolCalls  = 24
+	invReadWorkers   = 6
 )
 
 // ChatConnState reports a cluster's current connection: the conn the
@@ -45,6 +51,8 @@ type ChatService struct {
 	ai    *AIService
 	em    Emitter
 	now   func() time.Time
+	git   chatGit     // set once at startup (SetChatGit); nil without Git
+	logs  chatHistory // set once at startup (SetChatLogHistory)
 
 	mu      sync.Mutex
 	convs   map[string]*conversation // by cluster
@@ -57,20 +65,35 @@ func NewChatService(state ChatConnState, aiSvc *AIService, em Emitter) *ChatServ
 }
 
 type conversation struct {
-	id       string
-	cluster  string
-	conn     ChatConn
-	rev      uint64
-	provider ai.ProviderID
-	model    string
-	origin   string
-	mode     string // tools | snapshot
-	ended    string
-	trimmed  bool
-	removed  int
+	id      string
+	cluster string
+	// key is the conversation's slot: the cluster for chat, invKey(cluster)
+	// for an investigation (AI A1 §1); both count in chatMaxConvs.
+	key string
+	// kind is chat or investigation; anchor is an investigation's object,
+	// fenced by UID like an Explain seed.
+	kind   string
+	anchor *ChatSeedDTO
+	// members are an investigation's comparison set, fixed before its first
+	// question (A-C2); membersRead, once a member's data was read: every
+	// later send carries it and is fenced by every member
+	members     []member
+	membersRead bool
+	conn        ChatConn
+	rev         uint64
+	provider    ai.ProviderID
+	model       string
+	origin      string
+	mode        string // tools | snapshot
+	ended       string
+	trimmed     bool
+	removed     int
 
 	exchanges []*exchange
 	active    *activeTurn
+	// reads numbers the conversation's ledger for citation (AI A1 §2):
+	// never reset, so an ID removed by retention is never reused
+	reads int
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -100,6 +123,16 @@ type exchange struct {
 	note      string
 	seed      *ChatSeedDTO
 	seedData  string // the seeded object's envelope, sent as data with the question
+	// findings are an investigation turn's, as Klyx labels them (AI A1 §4);
+	// reported holds the model's report until the turn ends, when it is
+	// labelled again against the turn's settled ledger
+	findings     *FindingsDTO
+	reported     *findingsInput
+	findingCalls int
+	// a snapshot investigation's sections left out to fit (read IDs) and
+	// the plan steps its budget stopped
+	snapshotDropped []string
+	snapshotSkipped []string
 }
 
 // ChatModelCallDTO is one attempted model call, for the Activity log: never
@@ -125,12 +158,16 @@ type ChatExchangeDTO struct {
 	Snapshot []string           `json:"snapshot,omitempty"`
 	Note     string             `json:"note,omitempty"`
 	At       string             `json:"at"`
+	Findings *FindingsDTO       `json:"findings,omitempty"`
 }
 
 // ChatStateDTO is the drawer's whole view of a cluster's conversation.
 type ChatStateDTO struct {
 	ConversationID string            `json:"conversationId,omitempty"`
 	Cluster        string            `json:"cluster"`
+	Kind           string            `json:"kind"`             // chat | investigation
+	Anchor         *ChatSeedDTO      `json:"anchor,omitempty"` // an investigation's object
+	Comparison     []string          `json:"comparison,omitempty"`
 	Mode           string            `json:"mode,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
 	Model          string            `json:"model,omitempty"`
@@ -179,6 +216,51 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
+// invIDPrefix marks an investigation's conversation ID, so a request for
+// one that is gone is answered from its own slot, never with the cluster's
+// chat (A1 implementation review, finding 11).
+const invIDPrefix = "inv-"
+
+// slotOf is the slot a conversation ID was made for.
+func slotOf(cluster, id string) string {
+	if strings.HasPrefix(id, invIDPrefix) {
+		return invKey(cluster)
+	}
+	return cluster
+}
+
+const (
+	kindChat          = "chat"
+	kindInvestigation = "investigation"
+)
+
+// invKey is an investigation's slot: one per cluster, beside its chat. A
+// NUL never appears in a cluster's name.
+func invKey(cluster string) string { return "\x00investigation:" + cluster }
+
+// turnLimits are a conversation's per-turn budgets.
+type turnLimits struct {
+	models, tools, workers int
+	deadline               time.Duration
+}
+
+func (c *conversation) limits() turnLimits {
+	if c.kind == kindInvestigation {
+		return turnLimits{invMaxModelCalls, invMaxToolCalls, invReadWorkers, invTurnDeadline}
+	}
+	return turnLimits{chatMaxModelCalls, chatMaxToolCalls, chatReadWorkers, chatTurnDeadline}
+}
+
+// convLocked finds a cluster's conversation by its ID, in either slot.
+func (s *ChatService) convLocked(cluster, id string) *conversation {
+	for _, key := range []string{cluster, invKey(cluster)} {
+		if c := s.convs[key]; c != nil && c.id == id {
+			return c
+		}
+	}
+	return nil
+}
+
 // Start returns the cluster's conversation, starting one when there is none
 // or the last one ended. It refuses when AI is unavailable, egress to this
 // cluster is not allowed, or the cluster is not connected.
@@ -188,12 +270,46 @@ func (s *ChatService) Start(cluster string) ChatStateDTO {
 	if c := s.convs[cluster]; c != nil && c.ended == "" {
 		return s.stateLocked(c)
 	}
+	return s.startLocked(cluster, cluster, kindChat, nil)
+}
+
+// StartInvestigation returns the cluster's investigation of anchor, starting
+// one when there is none or the last one ended (AI A1 §1). Another open
+// investigation on the cluster is refused: one at a time per cluster.
+func (s *ChatService) StartInvestigation(cluster string, anchor ChatSeedDTO) ChatStateDTO {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := invKey(cluster)
+	refuse := func(msg string) ChatStateDTO {
+		return ChatStateDTO{Cluster: cluster, Kind: kindInvestigation, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+	}
+	if anchor.Kind != "row" && anchor.Kind != "object" {
+		return refuse("an investigation starts from an object Klyx shows")
+	}
+	if err := checkSeed(&anchor); err != nil {
+		return refuse("the object to investigate is not valid: " + err.Error())
+	}
+	if anchor.UID == "" {
+		return refuse("the object to investigate has no UID: Klyx pins an investigation by it")
+	}
+	if c := s.convs[key]; c != nil && c.ended == "" {
+		if *c.anchor == anchor {
+			return s.stateLocked(c)
+		}
+		return refuse(fmt.Sprintf("an investigation of %s is open on this cluster; clear it first", c.anchor.Name))
+	}
+	a := anchor
+	return s.startLocked(cluster, key, kindInvestigation, &a)
+}
+
+// startLocked starts a conversation in a slot, or refuses.
+func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO) ChatStateDTO {
 	// A refusal changes nothing; it carries the current version (never an
 	// older one) and its Error marks it a refusal, which the drawer shows
 	// as the request's outcome and never applies as the conversation
 	// (Codex reviews of 0725e47 and c4ae925).
 	refuse := func(msg string) ChatStateDTO {
-		return ChatStateDTO{Cluster: cluster, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+		return ChatStateDTO{Cluster: cluster, Kind: kind, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	st := s.ai.load()
 	if refusal := s.refusal(st, cluster); refusal != "" {
@@ -203,15 +319,19 @@ func (s *ChatService) Start(cluster string) ChatStateDTO {
 	if conn == nil || !usable {
 		return refuse("the cluster is not connected")
 	}
-	if len(s.convs) >= chatMaxConvs && s.convs[cluster] == nil {
+	if len(s.convs) >= chatMaxConvs && s.convs[key] == nil {
 		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))
 	}
 	mode := "snapshot"
 	if _, ok := st.Provider.(ai.Converser); ok {
 		mode = "tools"
 	}
-	c := &conversation{id: newID(), cluster: cluster, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
-	s.convs[cluster] = c
+	id := newID()
+	if kind == kindInvestigation {
+		id = invIDPrefix + id
+	}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
+	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
 }
@@ -237,24 +357,35 @@ func (s *ChatService) refusal(st *AIState, cluster string) string {
 func (s *ChatService) State(cluster string) ChatStateDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.currentLocked(cluster)
+	return s.currentLocked(cluster, cluster)
 }
 
-// currentLocked is the cluster's conversation as it stands, or the empty
-// state when it has none.
-func (s *ChatService) currentLocked(cluster string) ChatStateDTO {
-	if c := s.convs[cluster]; c != nil {
+// InvestigationState returns the cluster's investigation as it stands.
+func (s *ChatService) InvestigationState(cluster string) ChatStateDTO {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentLocked(cluster, invKey(cluster))
+}
+
+// currentLocked is a slot's conversation as it stands, or the empty state
+// when it has none.
+func (s *ChatService) currentLocked(cluster, key string) ChatStateDTO {
+	if c := s.convs[key]; c != nil {
 		return s.stateLocked(c)
 	}
-	return ChatStateDTO{Cluster: cluster, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
+	kind := kindChat
+	if key != cluster {
+		kind = kindInvestigation
+	}
+	return ChatStateDTO{Cluster: cluster, Kind: kind, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 }
 
 // obsoleteLocked answers a request for a conversation that is no longer
 // the cluster's: the reply is the conversation that is current, never an
 // empty state stamped with the current version, and the refusal is its
 // notice (Codex review of c4ae925).
-func (s *ChatService) obsoleteLocked(cluster, msg string) ChatStateDTO {
-	st := s.currentLocked(cluster)
+func (s *ChatService) obsoleteLocked(cluster, key, msg string) ChatStateDTO {
+	st := s.currentLocked(cluster, key)
 	if st.ConversationID != "" {
 		msg += "; this is the current conversation"
 	} else {
@@ -265,11 +396,14 @@ func (s *ChatService) obsoleteLocked(cluster, msg string) ChatStateDTO {
 }
 
 func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
-	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
+	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Kind: c.kind, Anchor: c.anchor, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
 		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{},
 		Version: s.version}
 	for _, e := range c.exchanges {
 		out.Exchanges = append(out.Exchanges, e.dto())
+	}
+	for _, m := range c.members {
+		out.Comparison = append(out.Comparison, m.cluster)
 	}
 	return out
 }
@@ -288,15 +422,20 @@ func (e *exchange) dto() ChatExchangeDTO {
 		c.Tools = append([]string(nil), c.Tools...)
 		calls = append(calls, c)
 	}
-	return ChatExchangeDTO{ID: e.id, Question: e.question, Answer: e.answer, Outcome: e.outcome, Error: e.err, Reads: reads, Calls: calls,
+	out := ChatExchangeDTO{ID: e.id, Question: e.question, Answer: e.answer, Outcome: e.outcome, Error: e.err, Reads: reads, Calls: calls,
 		Snapshot: append([]string(nil), e.snapshot...), Note: e.note, At: e.at.UTC().Format(time.RFC3339)}
+	if e.findings != nil {
+		f := *e.findings // the turn never changes a recorded one; copied for the reply
+		out.Findings = &f
+	}
+	return out
 }
 
 // Stop cancels the conversation's active turn, if it is that conversation's.
 func (s *ChatService) Stop(cluster, conversationID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.convs[cluster]; c != nil && c.id == conversationID && c.active != nil {
+	if c := s.convLocked(cluster, conversationID); c != nil && c.active != nil {
 		c.active.stopped = true
 		c.active.cancel()
 		s.version++
@@ -308,12 +447,12 @@ func (s *ChatService) Stop(cluster, conversationID string) {
 func (s *ChatService) Clear(cluster, conversationID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.convs[cluster]; c != nil && c.id == conversationID {
+	if c := s.convLocked(cluster, conversationID); c != nil {
 		if c.active != nil {
 			c.active.stopped = true
 			c.active.cancel()
 		}
-		delete(s.convs, cluster)
+		delete(s.convs, c.key)
 		s.version++
 	}
 }
@@ -324,18 +463,26 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSeedDTO) ChatStateDTO {
 	question = strings.TrimSpace(question)
 	s.mu.Lock()
-	c := s.convs[cluster]
+	c := s.convLocked(cluster, conversationID)
 	notice := func(msg string) ChatStateDTO {
 		st := s.stateLocked(c)
 		st.Notice = msg
 		s.mu.Unlock()
 		return st
 	}
+	// the first turn of an investigation is the investigation (AI A1 §1): it
+	// reads the anchor, and needs no question of the operator's
+	first := c != nil && c.kind == kindInvestigation && len(c.exchanges) == 0
+	if first && question == "" {
+		question = "Investigate why this object is failing, and end with your findings."
+	}
 	switch {
-	case c == nil || c.id != conversationID:
-		st := s.obsoleteLocked(cluster, "that conversation has ended")
+	case c == nil:
+		st := s.obsoleteLocked(cluster, slotOf(cluster, conversationID), "that conversation has ended")
 		s.mu.Unlock()
 		return st
+	case first && seed != nil:
+		return notice("an investigation reads its own object; ask without a follow-up target")
 	case c.ended != "":
 		return notice("this conversation has ended; start a new one")
 	case c.active != nil:
@@ -350,7 +497,11 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 			return notice("the follow-up target is not valid: " + err.Error())
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), chatTurnDeadline)
+	if first {
+		seed = c.anchor // validated when the investigation started
+	}
+	lim := c.limits()
+	ctx, cancel := context.WithTimeout(context.Background(), lim.deadline)
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
 	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed}
@@ -373,9 +524,9 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.convs[cluster] != c || c.active != turn {
+	if s.convs[c.key] != c || c.active != turn {
 		// Cleared or replaced while the turn ran: the late result is dropped.
-		return s.obsoleteLocked(cluster, "that conversation was cleared before its answer arrived")
+		return s.obsoleteLocked(cluster, c.key, "that conversation was cleared before its answer arrived")
 	}
 	c.active = nil
 	if turn.stopped && err == nil {
@@ -387,13 +538,28 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	case errors.Is(err, context.Canceled):
 		ex.outcome, ex.err = "cancelled", "stopped"
 	case errors.Is(err, context.DeadlineExceeded):
-		ex.outcome, ex.err = "failed", fmt.Sprintf("no answer within %s", chatTurnDeadline)
+		ex.outcome, ex.err = "failed", fmt.Sprintf("no answer within %s", lim.deadline)
 	default:
 		ex.outcome, ex.err = "failed", chatScrub(modelOrChatError(err), nil)
 	}
 	var ended *endError
 	if errors.As(err, &ended) {
 		c.ended = ended.reason
+	}
+	if c.kind == kindInvestigation && ex.reported != nil {
+		// reads in the report's batch, and any after it, settle first:
+		// Klyx's labels and missing evidence never depend on when the
+		// model chose to report (A1 implementation review, finding 8)
+		ledger := ledgerLocked(c)
+		f := labelFindings(*ex.reported, ledger, anchorOf(c.anchor, ledger))
+		ex.findings, ex.reported = &f, nil
+	}
+	if c.kind == kindInvestigation && ex.findings == nil && ex.outcome == "answered" {
+		// the model reported nothing: Klyx's own missing evidence still shows
+		ledger := ledgerLocked(c)
+		f := labelFindings(findingsInput{}, ledger, anchorOf(c.anchor, ledger))
+		f.Note = "the model reported no findings this turn"
+		ex.findings = &f
 	}
 	s.retainLocked(c)
 	s.version++
@@ -499,9 +665,23 @@ func exchangeBytes(e *exchange) int {
 	for _, s := range e.snapshot {
 		n += len(s)
 	}
+	for _, s := range append(append([]string{}, e.snapshotDropped...), e.snapshotSkipped...) {
+		n += len(s)
+	}
 	reads, _ := json.Marshal(e.reads)
 	calls, _ := json.Marshal(e.calls)
-	return n + len(reads) + len(calls)
+	n += len(reads) + len(calls)
+	// an investigation's findings and the report they come from are
+	// retained too (A1 implementation review, finding 10)
+	if e.findings != nil {
+		b, _ := json.Marshal(e.findings)
+		n += len(b)
+	}
+	if e.reported != nil {
+		b, _ := json.Marshal(e.reported)
+		n += len(b)
+	}
+	return n
 }
 
 func msgBytes(m ai.ConvMessage) int {

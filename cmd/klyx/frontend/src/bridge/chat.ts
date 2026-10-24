@@ -6,8 +6,34 @@ import { ChatService } from "../../bindings/github.com/moomora/klyx/internal/app
 // the conversation back. Failures fold into the state's error.
 
 export type ChatRef = { gvr: string; namespace?: string; name: string; uid?: string };
-export type ChatRead = { tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[] };
+// AI A1 §2: a check is an observation Klyx evaluated itself on a read, by
+// UID or by name only; id is its citation ("r4.c1").
+export type ChatCheckSubject = { kind: string; namespace?: string; name: string; uid?: string; identity: "uid" | "name" };
+// failing: the check reads a failure in force when read, not a past one.
+export type ChatCheck = { id: string; class: string; subject: ChatCheckSubject; statement: string; observed?: string; onset?: string; coverage?: string; failing?: boolean };
+// id is the read's citation ("r4") within its conversation; gaps are the
+// parts it could not read; about, what a by-name read is about; observed*,
+// when a historical read's evidence describes the world.
+export type ChatRead = {
+  id?: string; tool: string; target?: string; outcome: string; detail?: string; redacted?: number; refs?: ChatRef[]; checks?: ChatCheck[];
+  gaps?: string[]; about?: ChatCheckSubject[]; observedFrom?: string; observedTo?: string; observedUnknown?: boolean;
+};
 export type ChatModelCall = { provider: string; model: string; mode: string; tools?: string[]; outcome: string };
+// AI A1 §4: an investigation turn's findings as Klyx labels them. A finding
+// is the model's; a check it cites is Klyx's, shown as checked.
+export type FindingCheck = { id: string; class: string; statement: string; observed?: string; before?: boolean };
+export type Finding = {
+  type: "observation" | "cause";
+  label: "reading" | "suspected" | "unsupported";
+  statement: string;
+  subject: { kind: string; namespace?: string; name: string; uid?: string; identity?: string };
+  cites: string[];
+  checked?: FindingCheck[];
+  notes?: string[];
+};
+export type Missing = { from: "klyx" | "model"; read?: string; text: string };
+export type Remedy = { git?: string; mitigation?: string; label: string };
+export type Findings = { window: string; findings: Finding[]; missing: Missing[]; remedy?: Remedy; note?: string; scope?: string };
 export type ChatExchange = {
   id: string;
   question: string;
@@ -19,10 +45,14 @@ export type ChatExchange = {
   snapshot?: string[];
   note?: string;
   at: string;
+  findings?: Findings;
 };
 export type ChatState = {
   conversationId?: string;
   cluster: string;
+  kind?: "chat" | "investigation";
+  anchor?: ChatSeed; // an investigation's object, pinned by its UID
+  comparison?: string[]; // an investigation's comparison clusters (A-C2)
   mode?: "tools" | "snapshot" | string;
   provider?: string;
   model?: string;
@@ -66,6 +96,22 @@ export async function chatStop(cluster: string, conversationId: string): Promise
 
 export async function chatClear(cluster: string, conversationId: string): Promise<void> {
   await ChatService.Clear(cluster, conversationId);
+}
+
+// An investigation (AI A1 §1): one per cluster beside its chat, pinned to
+// one object by UID; Ask, Stop and Clear work on it by its conversation ID.
+export async function investigationStart(cluster: string, anchor: ChatSeed): Promise<ChatState> {
+  return (await ChatService.StartInvestigation(cluster, anchor as never)) as ChatState;
+}
+
+export async function investigationState(cluster: string): Promise<ChatState> {
+  return (await ChatService.InvestigationState(cluster)) as ChatState;
+}
+
+// chatSetComparison fixes an investigation's comparison set before its
+// first question (A-C2).
+export async function chatSetComparison(cluster: string, conversationId: string, members: string[]): Promise<ChatState> {
+  return (await ChatService.SetComparison(cluster, conversationId, members)) as ChatState;
 }
 
 // onChatRead subscribes to a conversation's ledger as reads finish.
