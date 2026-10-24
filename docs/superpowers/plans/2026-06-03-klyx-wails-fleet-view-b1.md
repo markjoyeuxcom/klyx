@@ -555,11 +555,11 @@ Port the mockup's CSS variables; light/dark with persistence.
 - Modify: `frontend/src/main.tsx` (import tokens.css; wrap app in ThemeProvider)
 - Modify: `frontend/package.json` (add vitest + testing-library devDeps if absent)
 
-- [ ] **Step 1: Add the token CSS (from `docs/mockups.html`)**
+- [ ] **Step 1: Add the token CSS (from `docs/design/mockups-2026-06-04.html`)**
 
-`frontend/src/theme/tokens.css` — copy the exact `:root` and `[data-theme="dark"]` variable blocks from `docs/mockups.html` (the `--color-*`, `--font-*`, `--border-radius-*` definitions), plus base rules:
+`frontend/src/theme/tokens.css` — copy the exact `:root` and `[data-theme="dark"]` variable blocks from `docs/design/mockups-2026-06-04.html` (the `--color-*`, `--font-*`, `--border-radius-*` definitions), plus base rules:
 ```css
-/* tokens.css — ported verbatim from docs/mockups.html */
+/* tokens.css — ported verbatim from docs/design/mockups-2026-06-04.html */
 :root {
   --color-background-primary: #ffffff;
   --color-background-secondary: #f5f4ed;

@@ -37,3 +37,7 @@
 
 # Reference screenshots (local design material, not source)
 /images/
+
+# Review reports and agent working files: local only, never published
+/docs/reviews/
+/scratchpad/

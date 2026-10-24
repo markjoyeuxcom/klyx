@@ -6,7 +6,7 @@ Scope: the M1 GUI milestone as one slice - Wails v3 native shell, the Go->JS
 live data bridge, the full app chrome, the fleet cluster-card grid to mockup
 fidelity, a rich command palette, and light/dark theming. Builds on the Go data
 foundation + resilience + capability-health slices. Reference mockups:
-`docs/mockups.html` (mockups 1 and 4 are the fleet view).
+`docs/design/mockups-2026-06-04.html` (mockups 1 and 4 are the fleet view).
 
 ## 1. Context and goal
 

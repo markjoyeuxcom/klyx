@@ -81,19 +81,19 @@ Klyx leads with diagnostic lenses - health, ownership, traffic path, policy, obs
 
 ## Visual language
 
-Signal Bench (2026-07-05, PRs #10-#11) supersedes the original mockup language: the app as bench hardware - lamps that glow only on faults, inset wells for data against raised modules for chrome, a permanent function-key row. The design of record lives in `design/` (`direction-c-signal-bench.html`, `signal-bench-implementation-notes.md`, `tokens-signal-bench.css`). Four rules are enforced in review:
+The Line (v0.14.0, 2026-10-16) is the visual language of record; its spec is `docs/superpowers/specs/2026-10-14-klyx-the-line-redesign.md` (§1 principles, §2 the visual system). It replaced Signal Bench (2026-07-05), whose design record is kept in `docs/design/`. Enforced in review:
 
-- Only faults glow. A healthy lamp is lit but never glows.
-- Blink is spine-only: the fleet spine is the one place a lamp may blink.
-- Danger gets shape, not only colour: ▲, hazard tape, typed interlock.
-- Wells hold data; modules hold chrome.
+- One sentence leads every screen, then a drawing, then the evidence; the sentence states only what the evidence supports.
+- Healthy carries no mark. Status marks differ by shape as well as colour (`Aspect`): fault filled, look at hollow, checking dotted, not yet realized dashed.
+- One accent: route blue means matched, selected, focused or primary action, never status.
+- Danger keeps its shape: ▲ and the typed-confirmation interlock.
+- Nothing blinks. Only overlays animate, briefly; reduced motion means opacity only.
+- A line drawn on screen states a typed relation, and its legend says which.
 
 Still in force from the original language:
 
 - Sentence case for everything, never Title Case or ALL CAPS - except deliberate verdict words (e.g. REACHABLE / BLOCKED)
 - Monospace for resource names, namespaces, revisions, and any string that's a K8s identifier
-- Status colours from CSS variables (success, warning, danger, info) - never hardcoded hex
+- Status colours from CSS variables - never hardcoded hex
 - Tabler outline icons only
-- Light and dark mode are both first-class (`bench` / `bench-light` are the default themes). Every colour must work in both
-
-Superseded: "flat surfaces, no shadows" (wells and modules are machined with inset and raised shading) and the two-weight / 0.5px-border-only rules.
+- Night (dark) and day (light) are both first-class and are the default themes. Every colour must work in both

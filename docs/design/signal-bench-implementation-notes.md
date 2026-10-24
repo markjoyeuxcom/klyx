@@ -1,7 +1,7 @@
 # Signal Bench — implementation notes
 
-Mockup of record: `design/direction-c-signal-bench.html` (10 screens).
-Theme draft: `design/tokens-signal-bench.css` (`bench` / `bench-light`).
+Mockup of record: `docs/design/direction-c-signal-bench.html` (10 screens).
+Theme draft: `docs/design/tokens-signal-bench.css` (`bench` / `bench-light`).
 
 Most of the direction lands as CSS variables. Three things are new primitives.
 Everything else is a restyle of existing components in place.

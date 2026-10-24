@@ -5,7 +5,7 @@ Status: approved design, ready for plan
 Scope: a frontend-only slice adding the app chrome (sidebar/header/breadcrumb),
 a styled theme toggle, clickable cards that drill into a per-cluster detail shell
 (real Overview + honest placeholders), built on the B-1 Wails fleet app. No Go /
-appbridge changes. Reference: `docs/mockups.html` (chrome appears across all
+appbridge changes. Reference: `docs/design/mockups-2026-06-04.html` (chrome appears across all
 mockups; breadcrumbs in mockups 2/3/5).
 
 ## 1. Context and goal

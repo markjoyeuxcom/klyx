@@ -1,4 +1,4 @@
-/* tokens.css — ported verbatim from docs/mockups.html */
+/* tokens.css — ported verbatim from docs/design/mockups-2026-06-04.html */
 :root {
   color-scheme: light;
   --color-background-primary: #ffffff;
@@ -201,8 +201,8 @@ div[role="button"]:hover {
 
 /* ================================================================ bench --- */
 /* "Signal Bench" (direction C, 2026-07-05): the app as bench hardware.
- * Mockup of record: design/direction-c-signal-bench.html; rules in
- * design/signal-bench-implementation-notes.md. New tokens (--bench-*,
+ * Mockup of record: docs/design/direction-c-signal-bench.html; rules in
+ * docs/design/signal-bench-implementation-notes.md. New tokens (--bench-*,
  * --lamp-*) exist ONLY in these two themes; every consumer carries a var()
  * fallback so the eight prior themes render flat-but-correct. */
 [data-theme="bench"] {

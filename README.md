@@ -35,18 +35,16 @@ klyx/
 ├── cmd/klyx/                    # Wails desktop app and React frontend
 ├── cmd/klyxctl/                 # CLI entry point
 ├── internal/                    # fleet, capability, GitOps, Gateway, metrics, and bridge layers
-├── design/                      # Signal Bench design of record (mockups, notes, tokens)
 ├── docs/
+│   ├── README.md                # what is here and where to start
 │   ├── backlog.md               # living status: v1.0.0 gate, shipped log, what's left
-│   ├── design-principles.md     # design philosophy
-│   ├── eyeball-checklist-*.md   # manual verification checklists
-│   ├── release-notes-*.md       # release notes
-│   ├── superpowers/{plans,specs}/  # feature plans and specs
-│   ├── brainstorm-questions.md  # open architectural questions
-│   ├── example-prompts.md       # prompts per phase
-│   └── mockups.html             # the original six UI mockups (open in browser)
-├── panels/                      # reference screenshots for the panel refit
-└── scripts/                     # build helpers (version stamping)
+│   ├── design-principles.md     # design philosophy and the visual language
+│   ├── superpowers/{specs,plans}/  # one spec per feature or slice, with as-built notes
+│   ├── releases/                # release notes
+│   ├── checklists/              # native eyeball checklists
+│   ├── design/                  # design record: mockups, Signal Bench directions, prompt
+│   └── history/                 # founding prompt, early open questions
+└── scripts/                     # build helpers and the kind lab parity fixtures
 ```
 
 ## Status
@@ -54,7 +52,8 @@ klyx/
 Klyx is well past its initial foundation: fleet overview, Flux and Argo CD
 lenses, cert-manager and External Secrets diagnosis, CRD/resource browsing,
 Gateway topology, ClusterMesh edges, inline metrics, the editable surface, AI
-assist, and daily-driver Kubernetes operations are on `main`. The latest tag,
-`v0.9.0` (2026-07-06), predates most of that: everything merged after PR #14 is
-untagged until v1.0.0. `docs/backlog.md` is the living status - the v1.0.0
-release gate and what's left - and `CLAUDE.md` carries the milestone history.
+explain and cluster chat, first-class coverage of the tools beside Kubernetes,
+and daily-driver operations are on `main`. The latest tag is `v0.15.1`
+(2026-10-21; notes in `docs/releases/`). `docs/backlog.md` is the living
+status - the v1.0.0 release gate and what's left - and `CLAUDE.md` carries the
+milestone history.

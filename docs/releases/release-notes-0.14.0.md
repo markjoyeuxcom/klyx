@@ -116,7 +116,7 @@ Every slice was reviewed by Codex. The spec is `docs/superpowers/specs/2026-10-1
 
 ## From v0.13.1
 
-v0.13.1 was never published, so its changes ship here. The details are in `docs/release-notes-0.13.1.md`.
+v0.13.1 was never published, so its changes ship here. The details are in `docs/releases/release-notes-0.13.1.md`.
 - **The Claude Code CLI admits any build at or above 2.1.296** once Test has checked it on this Mac.
 - **Chat chips** name their kind and say how many they hold back.
 
@@ -127,7 +127,7 @@ v0.13.1 was never published, so its changes ship here. The details are in `docs/
   - the headless walks;
   - the parity gate.
 
-  It has not run against the AKS fleet. The native eyeball checklist `docs/eyeball-checklist-2026-10-15-the-line.md` is still open.
+  It has not run against the AKS fleet. The native eyeball checklist `docs/checklists/eyeball-checklist-2026-10-15-the-line.md` is still open.
 - **Git history** needs each repository approved in Settings > Git, and system `git` 2.45 or newer. Semver ranges, default branches and unqualified Argo refs are not fetched.
 - **Describe's Formatted view** is a best-effort reading of kubectl's text. Where kubectl's text is ambiguous it shows plain lines, and the Text view is the authority. Describe needs `kubectl`.
 - **A few ▲ marks remain:** Gateway topology, the Karpenter controller banner, Upgrade check verdicts, and log, settings and AI error lines. Danger dialogs keep ▲ on purpose.
