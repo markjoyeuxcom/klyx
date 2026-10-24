@@ -3,12 +3,15 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/evalrun/record"
+	"github.com/moomora/klyx/internal/observe"
 )
 
 // The AI eval's delivered-evidence record (eval design §5), in the eval
@@ -136,4 +139,28 @@ func readIDOf(envelope string) string {
 		return ""
 	}
 	return e.ReadID
+}
+
+// EvalAnchorReady is the eval's readiness check (eval design §2): the
+// anchor's row in Klyx's Observer, in a live capture evaluated after the
+// plant check. Otherwise it says what it saw, never why.
+func EvalAnchorReady(ctx context.Context, conn ChatConn, group, resource, uid string, since time.Time) (bool, string) {
+	tp, ok := chatParts[group+"/"+resource]
+	if !ok {
+		return false, "Klyx's Observer has no part for " + resource
+	}
+	rows, ok := conn.HealthRowsNow(ctx, tp[0], tp[1])
+	switch {
+	case !ok:
+		return false, "no Observer capture: none yet, or the Observer ended"
+	case rows.Part.Coverage != observe.Live:
+		return false, "the Observer's " + tp[1] + " part is " + string(rows.Part.Coverage)
+	}
+	if _, found := findRow(rows.Rows, uid); !found {
+		return false, "no row for the anchor"
+	}
+	if !rows.EvaluatedAt.After(since) {
+		return false, "the anchor's row was evaluated before the plant check"
+	}
+	return true, ""
 }
