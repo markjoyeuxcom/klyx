@@ -345,3 +345,36 @@ Two decisions stay the owner's: E1's public fixture repository, before stage 1, 
 - Stage 2, E3 and E4: the S9 and S4 labs move into `scripts/lab/eval/`.
 - The owner's two decisions: E1's fixture repository, and the first real-model run.
 - Counting A1.1's change check, naming `env[MODE]`, as E1 evidence beside the Git diff, once A1.1 is merged: an addendum here.
+
+### 15.3 Codex's implementation review 1 and the fixes (2026-10-24)
+
+Codex requested changes at aeeb39e (handoff 607ac265): nine P2 findings and one P3, each with a counterexample probe. It accepted deviations 1 to 7 and 9 to 11, and asked for deviation 8 to change (finding 7). All are taken:
+
+1. **The fleet re-read the config and re-resolved the kubeconfig.** Main now runs on the configuration the preflight checked. The fleet's connections come from `fleet.ResolvingConnFactory` with the preflight's REST config, and any other cluster is refused. The preflight digests both files, and checks them again after resolving. The runner checks them before every repetition, and a change stops the eval: that run is `not-ready`, the report says it stopped, and later runs are not made.
+2. **Teardown could delete what was never the eval's.** Every scenario object now carries the eval directory's owner label (`klyx.dev/eval-owner`, a digest of its token, never the token).
+   - Setup refuses an existing object without it.
+   - The A1 lab's objects (`klyx.dev/lab=a1`) are adopted only on an explicit `KLYX_EVAL_ADOPT=a1`.
+   - Teardown deletes only labelled objects and says what it left alone.
+   - A test runs the real scripts against stand-in `kind` and `kubectl`.
+3. **A replaced ReplicaSet was not drift.** The plant records each predicate's resolved identities as witnesses: the subject's UID, the newest ReplicaSet's UID, and its pods' UIDs.
+4. **A recovered pod held the crash plant.** A pod is crash looping when all of these hold:
+   - it is not Ready;
+   - a container failed at least the minimum number of times, the last within ten minutes;
+   - the container is waiting, failed again, or has run for less than ten minutes since.
+5. **Only the first matching read grounded a cause.** The record keeps every delivered establishing read and its bound checks, at most eight and sixteen.
+6. **Unsent results were reported as `no-match`.** Delivery is decided apart from the match. `no-match` and `capped` are reasons only for delivered results; a result never sent is `not-sent` or `turn-ended`, with `capped` kept as a flag. The record also flags a matching result that was never sent.
+7. **A provider error after receipt counted as never sent.** The hooks pass the provider call's error:
+   - a size refusal is `Refused`;
+   - an answer, or an HTTP status from the provider, is received;
+   - a call that failed without a response is `SentUncertain`.
+
+   The new reason `delivery-uncertain` (not assigned) says so. Both modes are tested against a 500 and a transport error. This adds a reason to §5's table.
+8. **The early mark ignored read times.** It now applies A1's own rule (`labelFindings`):
+   - a check is early by its observation time;
+   - a whole read is early only when its historical interval ended before the failure;
+   - a live read, or a read whose time is unknown, is never early.
+9. **The readiness allowance did not bound the readiness read.** Every attempt runs under a context with the allowance's deadline. A read that never answers ends as `sut-not-ready`, "did not answer within" the allowance.
+
+P3, the lookalikes: a cited check is about its own subject. A whole read is about all its references and all its checks' subjects, so a mixed read is not a lookalike's. References match by group, resource, namespace and name; check subjects by kind.
+
+**Also found, by the self-test.** One self-test run stalled in a single case for its whole bound. Run alone, the case finished correctly. The runner's own API reads had no deadline, so they are now bounded: 30 s per request, and two minutes per plant check. The eval binary also has a watchdog: past its runs' bound, it logs every goroutine's stack and exits.
