@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -300,26 +301,43 @@ func (r *Recorder) Facts() Facts {
 	default:
 		f.Report = ReportMissing
 	}
+	reads := r.ordered()
 	for i, p := range r.preds {
-		f.Predicates = append(f.Predicates, r.outcome(i, p))
+		f.Predicates = append(f.Predicates, reduce(reads, i, p, r.mode))
 	}
 	return f
+}
+
+// ordered is the reads by read ID (r1, r2, ...): a batch's reads run at
+// once and record in any order, so the IDs Klyx assigned decide "first".
+// A read without an ID keeps its place after the numbered ones.
+func (r *Recorder) ordered() []*read {
+	out := append([]*read(nil), r.reads...)
+	num := func(rd *read) int {
+		if n, err := strconv.Atoi(strings.TrimPrefix(rd.id, "r")); err == nil && strings.HasPrefix(rd.id, "r") {
+			return n
+		}
+		return int(^uint(0) >> 1)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return num(out[i]) < num(out[j]) })
+	return out
 }
 
 // reason ranks: the furthest a relevant read got. A matched result that was
 // never sent says more than a delivered one that did not match.
 var reasonRank = map[string]int{NotSent: 5, TurnEnded: 4, Capped: 3, NoMatch: 2, ReadFailed: 1}
 
-func (r *Recorder) outcome(i int, p compiled) Outcome {
+// reduce is one predicate's outcome over the ordered reads.
+func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 	o := Outcome{Predicate: p.ID}
-	for _, rd := range r.reads {
+	for _, rd := range reads {
 		if m, ok := rd.matched[i]; ok && rd.delivered {
 			o.Established, o.Read, o.Checks, o.Previous, o.Capped = true, rd.id, m.checks, m.previous, rd.truncated
 			return o
 		}
 	}
 	best := ""
-	for _, rd := range r.reads {
+	for _, rd := range reads {
 		if !rd.relevant[i] {
 			continue
 		}
@@ -343,7 +361,7 @@ func (r *Recorder) outcome(i int, p compiled) Outcome {
 	}
 	if best == "" {
 		best = NotRequested
-		if r.mode == "snapshot" {
+		if mode == "snapshot" {
 			best = NotPlanned
 		}
 	}

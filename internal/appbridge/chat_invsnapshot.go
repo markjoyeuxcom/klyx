@@ -80,6 +80,7 @@ func (p *invPlan) step(tool, args, label string) (ChatToolResult, bool, error) {
 	p.reads++
 	res := p.exec.as(p.r.nextReadID()).Run(p.ctx, tool, json.RawMessage(args))
 	p.r.addRead(res.Read)
+	p.r.evalRead(tool, json.RawMessage(args), res)
 	p.sections = append(p.sections, string(res.JSON))
 	p.included = append(p.included, res.Read.ID+" "+label+" ("+res.Read.Outcome+")")
 	return res, true, p.r.aborted()
@@ -269,6 +270,7 @@ func (r *turnRunner) investigationSnapshot(ctx context.Context) (string, error) 
 	}
 	sections := append([]string{r.ex.seedData}, p.sections...)
 	doc, dropped := invSnapshotDoc(sections, r.ex.question)
+	r.evalSnapshotDoc(sections, dropped)
 	included := append([]string{"the object investigated"}, p.included...)
 	for _, s := range p.skipped {
 		included = append(included, "not read: "+s)
@@ -295,11 +297,13 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 		return "", err
 	}
 	r.finishCall(idx, res.ModelUsed, nil, "completed")
+	r.evalSnapshotSent()
 	prose, block, found := takeFindings(res.Text)
 	ledger := r.ledger()
 	a := anchorOf(r.c.anchor, ledger)
 	var f FindingsDTO
 	in, perr := parseFindings(json.RawMessage(block))
+	r.evalSnapshotReport(found, found && perr == nil)
 	switch {
 	case !found:
 		f = labelFindings(findingsInput{}, ledger, a)

@@ -53,6 +53,7 @@ type ChatService struct {
 	now   func() time.Time
 	git   chatGit     // set once at startup (SetChatGit); nil without Git
 	logs  chatHistory // set once at startup (SetChatLogHistory)
+	eval  evalHook    //nolint:unused // the AI eval's record: read only in the eval build
 
 	mu      sync.Mutex
 	convs   map[string]*conversation // by cluster

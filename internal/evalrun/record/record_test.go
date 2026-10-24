@@ -240,6 +240,16 @@ func TestTheFirstDeliveredMatchIsTheRead(t *testing.T) {
 	}
 }
 
+func TestTheFirstReadIsByReadIDNotByArrival(t *testing.T) {
+	r := rec(t)
+	r.Read(conv, "get_events", eventsArgs, "r10", false, env(t, "get_events", "r10", false, []any{detailed()}))
+	r.Read(conv, "get_events", eventsArgs, "r9", false, env(t, "get_events", "r9", false, []any{detailed()}))
+	r.Sent(conv, []string{"r9", "r10"})
+	if o := outcome(t, r.Facts(), "e3-event"); o.Read != "r9" {
+		t.Fatalf("a batch's reads arrive in any order; r9 is first: %+v", o)
+	}
+}
+
 func TestReportStates(t *testing.T) {
 	cases := []struct {
 		name string
