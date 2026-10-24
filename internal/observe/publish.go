@@ -191,7 +191,7 @@ func (o *Observer) publish(now time.Time) {
 }
 
 func (o *Observer) rowsOf(p *partState, rows any, now time.Time) Rows {
-	return Rows{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Task: p.key.task, EvaluatedAt: p.evaluatedAt, Part: *p.last, Rows: rows}
+	return Rows{Cluster: o.cfg.Cluster, Incarnation: o.incarnation, Task: p.key.task, EvaluatedAt: p.evaluatedAt, CapturedAt: p.capturedAt, Part: *p.last, Rows: rows}
 }
 
 // evaluate captures one part atomically, evaluates it and advances its
@@ -245,6 +245,7 @@ func (o *Observer) evaluate(p *partState, now time.Time, forceRows bool) (verCha
 	if verChanged || p.evaluatedAt.IsZero() {
 		p.evaluatedAt = c.Now // the capture's own clock read (slice 2b review)
 	}
+	p.capturedAt = c.Now // every evaluation, changed or not
 	if subscribed {
 		p.lastRows, p.hasRows = res.Rows, true
 	} else {

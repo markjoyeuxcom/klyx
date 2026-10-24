@@ -182,6 +182,7 @@ type partState struct {
 	hasRows       bool
 	boundaryFired bool        // its Next passed and it awaits re-evaluation
 	evaluatedAt   time.Time   // the capture time of its current version
+	capturedAt    time.Time   // the capture time of its latest evaluation
 	rowsPubVer    uint64      // the version last broadcast to subscribers
 	rowsPub       bool        // rows were broadcast in this subscription period
 	ledger        *partLedger // the role ledger (Ledger parts only)

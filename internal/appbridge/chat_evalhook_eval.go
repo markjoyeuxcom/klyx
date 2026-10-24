@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -180,4 +181,27 @@ func EvalAnchorReady(ctx context.Context, conn ChatConn, group, resource, uid st
 		return false, "the anchor's row was evaluated before the plant check"
 	}
 	return true, ""
+}
+
+// EvalIncidentProbe reads one subject as an A3 incident does (verdictOf),
+// through conn, and through the investigation's own pinned connection,
+// for the A3 lab's record: what each lookup found, and whether the pinned
+// connection is conn.
+func EvalIncidentProbe(ctx context.Context, s *ChatService, cluster string, conn ChatConn, group, version, resource, ns, name, uid string) string {
+	f := actionFact{Group: group, Version: version, Resource: resource, Namespace: ns, Name: name, UID: uid}
+	describe := func(sv subjectVerdict) string {
+		return fmt.Sprintf("found=%v state=%q coverage=%q at=%s gone=%v replaced=%v", sv.found, sv.state, sv.v.Coverage, sv.at.Format(time.RFC3339Nano), sv.gone, sv.replaced)
+	}
+	out := "registry conn: " + describe(s.verdictOf(ctx, conn, f, nil))
+	s.mu.Lock()
+	c := s.convs[invKey(cluster)]
+	var pinned ChatConn
+	if c != nil {
+		pinned = c.conn
+	}
+	s.mu.Unlock()
+	if pinned == nil {
+		return out + "; no investigation"
+	}
+	return out + fmt.Sprintf("; pinned is the registry's: %v; pinned conn: %s", pinned == conn, describe(s.verdictOf(ctx, pinned, f, nil)))
 }

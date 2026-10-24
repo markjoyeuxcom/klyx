@@ -990,6 +990,33 @@ func TestRowsNowNeverConsumesTheBroadcastOwedToSubscribers(t *testing.T) {
 	}, "the existing subscriber still receives the version the bootstrap advanced")
 }
 
+// A RowsNow reply carries its own capture's time: a quiet part's
+// EvaluatedAt stays at its last change, while CapturedAt is the request's
+// (AI A3 stage 6: a suspended unit that stays quiet is still read).
+func TestRowsNowCarriesItsCaptureTime(t *testing.T) {
+	src := newSource()
+	src.put("a", nil)
+	h := start(t, Config{Kinds: []KindSpec{cmKind("cms", src)}, Domains: []DomainSpec{{ID: "things", Parts: []PartSpec{cmPart("cms", "cms")}}}})
+	h.o.SubscribeRows("things", "cms", Owner{Kind: "lens", ID: "t"})
+	h.eventually(h.partIs("things", "cms", live), "live")
+	first, ok := h.o.RowsNow("things", "cms")
+	if !ok || !first.CapturedAt.Equal(h.clk.Now()) {
+		t.Fatalf("captured at %v, the clock at %v", first.CapturedAt, h.clk.Now())
+	}
+	h.clk.Step(time.Minute)
+	quiet, ok := h.o.RowsNow("things", "cms")
+	if !ok || !quiet.EvaluatedAt.Equal(first.EvaluatedAt) || !quiet.CapturedAt.Equal(h.clk.Now()) || quiet.Part.Ver != first.Part.Ver {
+		t.Fatalf("a quiet part keeps its evaluation time and version and is captured now: %v %v ver %d, then %v %v ver %d",
+			first.EvaluatedAt, first.CapturedAt, first.Part.Ver, quiet.EvaluatedAt, quiet.CapturedAt, quiet.Part.Ver)
+	}
+	src.put("b", nil)
+	h.eventually(func() bool { r, ok := h.o.RowsNow("things", "cms"); return ok && r.Part.Counts.Total == 2 }, "b")
+	changed, _ := h.o.RowsNow("things", "cms")
+	if !changed.EvaluatedAt.After(first.EvaluatedAt) || changed.CapturedAt.Before(changed.EvaluatedAt) {
+		t.Fatalf("a change moves the evaluation time, and the capture is never older: %v %v", changed.EvaluatedAt, changed.CapturedAt)
+	}
+}
+
 func TestDiscoveryIsPerKindAndSharedKindsHaveOneGeneration(t *testing.T) {
 	v1, beta, absentSrc, svc := newSource(), newSource(), newSource(), newSource()
 	v1.put("k1", nil)

@@ -1383,8 +1383,10 @@ type chatVerdict struct {
 	Kinds               []chatKindCov `json:"kinds,omitempty"`
 	// at is the capture's evaluation time in full: EvaluatedAt is
 	// second-precision text, and a reading must follow a write by its own
-	// clock (AI A3 stage 4 review, finding 3). Never sent.
-	at time.Time
+	// clock (AI A3 stage 4 review, finding 3). Never sent. captured is
+	// when this reading's capture was taken (observe.Rows.CapturedAt): at
+	// moves only when the part's data changes.
+	at, captured time.Time
 }
 
 // chatVerdicts is one part's verdicts by UID, with the part's coverage
@@ -1399,9 +1401,10 @@ type chatVerdicts struct {
 	// it is gone (AI A3 §5.3)
 	byName   map[string]string
 	complete bool
-	// at is when the capture was evaluated: an absence it shows is dated by it
-	at      time.Time
-	problem string
+	// at is when the capture was evaluated: an absence it shows is dated by
+	// it; captured is when this reading's capture was taken
+	at, captured time.Time
+	problem      string
 	// capped names a capture's kinds that are capped snapshots: their
 	// verdicts may be missing even in a live part (A1.1 §4)
 	capped string
@@ -1416,7 +1419,7 @@ func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
 		Classifier: v.Classifier, Kind: v.Kind, Role: v.Role, IncludedInAttention: v.IncludedInAttention,
 		Label: chatScrub(v.Label, n), Reason: chatScrub(v.Reason, n), Generation: r.ref.Generation,
 		EvaluatedAt: v.EvaluatedAt, Incarnation: rows.Incarnation, PartVer: rows.Part.Ver, Coverage: string(rows.Part.Coverage),
-		Kinds: chatKinds(rows.Part.Kinds, n), at: rows.EvaluatedAt,
+		Kinds: chatKinds(rows.Part.Kinds, n), at: rows.EvaluatedAt, captured: rows.CapturedAt,
 	}, true
 }
 
@@ -1500,7 +1503,7 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 	if !ok {
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
-	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, byName: map[string]string{}, complete: rows.Part.Coverage == observe.Live, at: rows.EvaluatedAt, problem: partProblem(tp[0], rows)}
+	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, byName: map[string]string{}, complete: rows.Part.Coverage == observe.Live, at: rows.EvaluatedAt, captured: rows.CapturedAt, problem: partProblem(tp[0], rows)}
 	var capped []string
 	for _, k := range rows.Part.Kinds {
 		if k.Truncated {

@@ -18,6 +18,9 @@
 //   eval-snapshot-block     refuses tools; the snapshot answer carries a valid block
 //   eval-snapshot-none      refuses tools; the snapshot answer carries no block
 //   eval-snapshot-malformed refuses tools; the snapshot answer's block does not parse
+//   a3-plan                 AI A3 §7 on E1: eval-grounded's reads and web's rollout history, then
+//                           proposes suspending a1-web and rolling web back to the partner revision
+//   a3-undo-only            A3 §7's counterexample: the same reads, and only the roll back
 //
 // usage: node fake-model.mjs [port]   (default 18791)
 import http from 'node:http';
@@ -87,6 +90,32 @@ function plantedCites(msgs) {
   return [diff?.id ?? changes?.readId, ...logs.map((l) => l.readId)].filter(Boolean);
 }
 
+// a3Plan is AI A3 §7's investigation on E1: eval-grounded's reads (the
+// unit, the Git changes, the dependencies, the crashing pod's previous log),
+// then web's rollout history; then a proposal citing those reads (its
+// revision is the partner the history named) with the planted cause; then
+// the answer. One script serves the lab and the native smoke's A1 and A3
+// steps alike.
+function a3Plan(script, a, msgs, turns) {
+  if (!isE1(a)) return report([]);
+  const next = e1Reads(msgs, turns);
+  if (next) return { calls: next };
+  if (!byTool(msgs, 'rollout_history').length) return { calls: [call('rollout_history', { kind: 'Deployment', namespace: NS_APP, name: 'web' })] };
+  const unit = byTool(msgs, 'gitops_unit')[0];
+  const hist = byTool(msgs, 'rollout_history')[0];
+  const partner = hist?.data?.nearestLowerRetained?.revision;
+  const suspend = { verb: 'flux-suspend', target: { kind: 'Kustomization', namespace: NS_FLUX, name: UNIT }, cites: [unit?.readId ?? a.readId],
+    why: 'Flux reapplies the failing revision at each reconcile; suspending it lets a rollback hold.' };
+  const undo = { verb: 'rollout-undo', target: deployment, params: { revision: partner ?? 0 }, cites: [hist?.readId ?? a.readId],
+    why: `The nearest lower retained revision, ${partner}, ran the steady template.` };
+  const steps = script === 'a3-undo-only' ? [undo] : [suspend, undo];
+  return { calls: [
+    call('propose_actions', { steps }),
+    call('report_findings', { findings: [{ type: 'cause', statement: "The second revision changed web's MODE environment value; the new pods exit as they start, so the rollout never completes.", subject: deployment, cites: plantedCites(msgs) }],
+      remedy: { git: 'Revert the commit that changed MODE in apps/web.', mitigation: 'Suspend a1-web, then roll web back to its previous revision.' } }),
+  ] };
+}
+
 async function tools(script, msgs) {
   const a = anchor(msgs);
   const turns = msgs.filter((m) => m.role === 'assistant').length;
@@ -115,6 +144,9 @@ async function tools(script, msgs) {
         : "The second revision changed web's MODE environment value; the new pods exit as they start, so the rollout never completes.";
       return report([{ type: 'cause', statement, subject: deployment, cites: plantedCites(msgs) }]);
     }
+    case 'a3-plan':
+    case 'a3-undo-only':
+      return a3Plan(script, a, msgs, turns);
     case 'eval-at-once':
       return report([{ type: 'cause', statement: 'The workload is misconfigured.', subject: isE1(a) ? deployment : { kind: a.kind, namespace: a.namespace, name: a.name }, cites: [a.readId] }]);
     case 'eval-drift':

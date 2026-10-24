@@ -2,6 +2,7 @@ import { Call } from "@wailsio/runtime";
 import { NAV_GROUPS, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 import { useChat, invSlot } from "../ai/chatStore";
+import { investigationState } from "../bridge/chat";
 import { setThemeChoice } from "../theme/ThemeProvider";
 import { describeResource } from "../bridge/exec";
 import { describeArg } from "../chrome/describe/targets";
@@ -1186,10 +1187,47 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/ completed: \d+ commits/.test(changes)) throw new Error(`git_changes did not compare the renders: ${changes || "not read"}`);
     if (!labels.includes("suspected")) throw new Error(`no suspected cause: ${labels.join(", ")}`);
     const reads = drawer.querySelectorAll("[data-testid='chat-reads'] .chat-read-id").length;
-    button(/^Clear$/)?.click();
-    key(drawer, { key: "Escape" });
-    await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
+    // the investigation stays open: the A3 step reviews its proposal
     return { labels, reads, ledger };
+  });
+
+  // ---- AI A3: the investigation's proposed plan (the eval's a3-plan) ----
+  // The card renders from the scripted model's proposal; Review opens the
+  // ConfirmDialog in Klyx's words, and Cancel sends nothing: read back from
+  // the backend, step 1 is still offered and has no run.
+  await step(steps, "Review a proposed step, then Cancel", async () => {
+    const drawer = await within(4000, "the investigation", () => $("[data-testid='chat-drawer']"));
+    const button = (re: RegExp) => byText<HTMLButtonElement>("[data-testid='chat-drawer'] button", re);
+    try {
+      const card = await within(30_000, "the proposed plan", () => drawer.querySelector<HTMLElement>("[data-testid='act-card']"));
+      sized(card, "the proposed plan");
+      const text = card.textContent ?? "";
+      for (const want of ["Proposed by the model", "suspend", "Kustomization klyx-a1-flux/a1-web", "roll back", "Deployment klyx-a1-app/web"]) {
+        if (!text.includes(want)) throw new Error(`the card lacks "${want}"`);
+      }
+      (await within(4000, "Review…", () => card.querySelector<HTMLButtonElement>("[data-testid='act-review']"))).click();
+      // the ConfirmDialog by its own detail: another surface may carry the
+      // dialog role too (at 1024 px one does)
+      const confirm = () => $("[data-testid='confirm-detail']")?.closest<HTMLElement>("[role='dialog']") ?? null;
+      const dialog = await within(30_000, "the confirmation", confirm);
+      const words = dialog.textContent ?? "";
+      const others = [...document.querySelectorAll("[role='dialog']")].filter((d) => d !== dialog).map((d) => (d.textContent ?? "").slice(0, 80));
+      for (const want of ["Run step 1 of the investigation's plan", "spec.suspend: false → true", "within 30 s"]) {
+        if (!words.includes(want)) throw new Error(`the confirmation lacks "${want}"; other dialogs: ${JSON.stringify(others)}`);
+      }
+      (await within(2000, "Cancel", () => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => /^Cancel$/.test(b.textContent ?? "")))).click();
+      await within(4000, "the confirmation closed", () => !confirm());
+      const st = await investigationState(cluster);
+      const plan = st.exchanges[st.exchanges.length - 1]?.plan;
+      const first = plan?.steps[0];
+      if (!first || first.state !== "offered" || first.run) throw new Error(`step 1 after Cancel: ${JSON.stringify(first)}`);
+      if (!card.querySelector("[data-testid='act-review']")) throw new Error("step 1 is no longer offered on the card");
+      return { steps: plan?.steps.map((s) => `${s.n} ${s.verb} ${s.state}`), otherDialogs: others };
+    } finally {
+      button(/^Clear$/)?.click();
+      key(drawer, { key: "Escape" });
+      await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
+    }
   });
 
   // ---- the inspector at this width ----

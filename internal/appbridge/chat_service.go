@@ -876,7 +876,7 @@ func exchangeBytes(e *exchange) int {
 			if r.review != nil {
 				n += len(r.review.token) + len(r.review.digest)
 			}
-			n += len(r.request) + len(r.errText) + len(r.effect) + len(r.effectWhy)
+			n += len(r.request) + len(r.errText) + len(r.effect) + len(r.effectWhy) + len(r.owner)
 		}
 	}
 	if e.proposed != nil {

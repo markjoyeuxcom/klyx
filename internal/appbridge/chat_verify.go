@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -77,10 +79,15 @@ func effectBound(verb string, u *unstructured.Unstructured) time.Duration {
 }
 
 // fenced is ctx cancelled once fence fails, checked each tick: a read
-// blocked on the cluster or the Observer ends with the conversation.
-func fenced(ctx context.Context, fence func() error) (context.Context, context.CancelFunc) {
+// blocked on the cluster or the Observer ends with the conversation. why
+// is the failure that cancelled it, kept: a fence that holds again by the
+// next check does not undo the cancellation, so the caller ends with this
+// reason rather than with what the cancelled reads returned (the A3 lab).
+func fenced(ctx context.Context, fence func() error) (context.Context, context.CancelFunc, func() string) {
 	ctx, cancel := context.WithCancel(ctx)
 	every := verifyTick // read here, not by the goroutine
+	var mu sync.Mutex
+	reason := ""
 	go func() {
 		t := time.NewTicker(every)
 		defer t.Stop()
@@ -89,14 +96,21 @@ func fenced(ctx context.Context, fence func() error) (context.Context, context.C
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if fence() != nil {
+				if err := fence(); err != nil {
+					mu.Lock()
+					reason = err.Error()
+					mu.Unlock()
 					cancel()
 					return
 				}
 			}
 		}
 	}()
-	return ctx, cancel
+	return ctx, cancel, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return reason
+	}
 }
 
 // witness is what one step's effect is judged by.
@@ -246,7 +260,7 @@ func (s *ChatService) verifyStepEffect(c *conversation, p *actionPlan, n int, sn
 	fence := s.verifyFence(c)
 	// one context for every read: fenced, and bounded by verifyObject and
 	// verifyDeletion from before their first read
-	ctx, stop := fenced(readfence.With(context.Background(), fence), fence)
+	ctx, stop, fencedWhy := fenced(readfence.With(context.Background(), fence), fence)
 	defer stop()
 	w := &witness{sn: sn, written: res.Outcome == fleet.OutcomeWritten}
 	if res.Receipt != nil {
@@ -268,6 +282,8 @@ func (s *ChatService) verifyStepEffect(c *conversation, p *actionPlan, n int, sn
 		// a fence that failed during a read: whatever the read returned,
 		// the verification ends with the fence's reason (§2.4)
 		effect, why = stepEffectUnverified, err.Error()
+	} else if f := fencedWhy(); f != "" {
+		effect, why = stepEffectUnverified, f
 	}
 	if effect == stepEffectEstablished && res.Outcome == fleet.OutcomeUnverified {
 		// the request's answer was lost: a state effect may be another
@@ -565,6 +581,15 @@ type incidentSubject struct {
 	holdStep    ActionStepDTO
 	removedBy   int
 	removedLost bool
+	// revertBy is the GitOps unit that may revert step revertStep's change
+	// to this subject: the unit its consequence named, applying its desired
+	// state once the plan's steps ran. Its recovery or hold is not counted
+	// while it may (the A3 lab)
+	revertBy   string
+	revertStep int
+	// wrote is when its own latest step's request was sent: a reading of
+	// it must rest on data the Observer evaluated after that (the A3 lab)
+	wrote time.Time
 }
 
 // maybeIncident starts the incident's reading once every offered step ran
@@ -623,9 +648,14 @@ func incidentSubjectsLocked(c *conversation, p *actionPlan) []incidentSubject {
 		}
 		seen[f.UID] = true
 		sub := incidentSubject{fact: f}
+		owner, applies, from := "", false, 0
 		for i, st := range p.dto.Steps {
 			if p.facts[i].UID != f.UID || p.runs[i].request == "" {
 				continue
+			}
+			sub.wrote = p.runs[i].sentAt // steps run in order: the last is the latest
+			if p.runs[i].owner != "" {
+				owner, applies, from = p.runs[i].owner, p.runs[i].applies, i+1
 			}
 			switch {
 			case st.Verb == "delete-pod":
@@ -633,6 +663,27 @@ func incidentSubjectsLocked(c *conversation, p *actionPlan) []incidentSubject {
 			case st.Verb == "flux-suspend", st.Verb == "keda-pause", st.Verb == "cordon", st.Verb == "scale" && st.Replicas != nil && *st.Replicas == 0:
 				sub.held, sub.holdStep = i+1, st
 			}
+		}
+		// the unit's state after the plan's later steps: a written suspension
+		// stops it applying, a resume that may have been written starts it
+		// again (their effects are those steps' own readings)
+		for j := from; owner != "" && j < len(p.dto.Steps); j++ {
+			if unitWho(p.facts[j].Kind, p.facts[j].Namespace, p.facts[j].Name) != owner {
+				continue
+			}
+			switch r := p.runs[j]; p.dto.Steps[j].Verb {
+			case "flux-suspend":
+				if r.request == fleet.OutcomeWritten {
+					applies = false
+				}
+			case "flux-resume":
+				if r.request == fleet.OutcomeWritten || r.request == fleet.OutcomeUnverified {
+					applies = true
+				}
+			}
+		}
+		if owner != "" && applies {
+			sub.revertBy, sub.revertStep = owner, from
 		}
 		out = append(out, sub)
 	}
@@ -689,33 +740,53 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 	// a blocked read waits only the time left until the bound
 	ctx, cancel := context.WithTimeout(context.Background(), deadline.Sub(s.now()))
 	defer cancel()
-	ctx, stop := fenced(ctx, fence)
+	ctx, stop, fencedWhy := fenced(ctx, fence)
 	defer stop()
 	tick := time.NewTicker(verifyTick)
 	defer tick.Stop()
+	// The bound is decided on the last reading completed within it. A
+	// reading that ran into the bound - its context expired, or the service
+	// clock passed the deadline while it read - is not counted: its lookups
+	// may have failed for that reason alone (the A3 lab: a fault seen for ten
+	// minutes ended "no fresh reading" on the reading made at the bound).
+	// Its rows are already published: each reading within the bound
+	// publishes what changed.
+	read, lastFaulted := false, false
 	for {
 		if err := fence(); err != nil {
 			s.settleIncident(c, p, incidentUnverif, err.Error(), nil)
 			return
 		}
-		cache := map[string]*chatVerdicts{}
-		rows, recovered, open, faulted := readSubjects(func(f actionFact) subjectVerdict { return s.verdictOf(ctx, c.conn, f, cache) }, subjects, lastWrite)
-		if err := fence(); err != nil {
-			// the fence failed during the reading: its reason, not the bound's
-			s.settleIncident(c, p, incidentUnverif, err.Error(), rows)
-			return
-		}
-		// a reading that finished past the bound resolves nothing (stage 4
-		// re-review): the bound is decided first
-		switch {
-		case !s.now().Before(deadline) || ctx.Err() != nil:
-			if faulted {
-				s.settleIncident(c, p, incidentNot, fmt.Sprintf("a subject is not recovered %s after the last step", incidentBound), rows)
-			} else {
-				s.settleIncident(c, p, incidentUnverif, "Klyx holds no fresh reading that resolves every subject within the bound", rows)
+		if !s.now().Before(deadline) || ctx.Err() != nil {
+			switch {
+			case !read:
+				s.settleIncident(c, p, incidentUnverif, "Klyx completed no reading within the bound", nil)
+			case lastFaulted:
+				s.settleIncident(c, p, incidentNot, fmt.Sprintf("a subject is not recovered %s after the last step", incidentBound), nil)
+			default:
+				s.settleIncident(c, p, incidentUnverif, "Klyx holds no fresh reading that resolves every subject within the bound", nil)
 			}
 			return
-		case open == 0 && recovered > 0:
+		}
+		cache := map[string]*chatVerdicts{}
+		rows, recovered, open, faulted := readSubjects(func(f actionFact) subjectVerdict { return s.verdictOf(ctx, c.conn, f, cache) }, subjects, lastWrite)
+		// a reading the fence ended is not counted: the rows stay the last
+		// counted reading's
+		if err := fence(); err != nil {
+			// the fence failed during the reading: its reason, not the bound's
+			s.settleIncident(c, p, incidentUnverif, err.Error(), nil)
+			return
+		}
+		if f := fencedWhy(); f != "" {
+			// it failed and held again: the reads it cancelled say nothing
+			s.settleIncident(c, p, incidentUnverif, f, nil)
+			return
+		}
+		if !s.now().Before(deadline) || ctx.Err() != nil {
+			continue // it ran into the bound: decided above, on the last one within it
+		}
+		read, lastFaulted = true, faulted
+		if open == 0 && recovered > 0 {
 			s.settleIncident(c, p, incidentResolved, "every subject recovered or is held as intended", rows)
 			return
 		}
@@ -764,10 +835,14 @@ func readSubjects(verdict func(actionFact) subjectVerdict, subjects []incidentSu
 			// part's Kind, a native part's Role (stage 3 re-review 1)
 			sv := verdict(f)
 			v, state := sv.v, sv.state
-			after := !sv.at.IsZero() && sv.at.After(lastWrite)
+			// a reading after the last write is a capture taken after it,
+			// not a change after it: a suspended unit stays quiet, and its
+			// part's evaluation time stops (the A3 lab). The data it rests
+			// on must still postdate the subject's own write, if it has one.
+			after := sv.captured.After(lastWrite) && (sub.wrote.IsZero() || sv.at.After(sub.wrote))
 			fresh := sv.found && v.Coverage == "live" && after
 			if sv.found {
-				row.Verdict, row.At = state, v.EvaluatedAt
+				row.Verdict, row.At = state, sv.captured.UTC().Format(time.RFC3339)
 			}
 			switch {
 			case sv.replaced && after:
@@ -778,6 +853,15 @@ func readSubjects(verdict func(actionFact) subjectVerdict, subjects []incidentSu
 				open++
 			case !fresh:
 				row.Reading = "pending: no fresh reading"
+				open++
+			case (state == "ok" || state == "paused" && sub.held > 0 && holdShown(sub.holdStep, sv)) && sub.revertBy != "":
+				// the reading may not last: the unit the step's consequence
+				// named may reapply its desired state at its next reconcile
+				when := ": it is not suspended"
+				if strings.HasPrefix(sub.revertBy, "Argo CD's ") {
+					when = " when it syncs"
+				}
+				row.Reading = fmt.Sprintf("%s for now, but %s may revert step %d's change%s", map[bool]string{true: "recovered", false: "held"}[state == "ok"], sub.revertBy, sub.revertStep, when)
 				open++
 			case state == "ok":
 				row.Reading = "recovered"

@@ -201,8 +201,15 @@ type Rows struct {
 	Incarnation uint64    `json:"incarnation"`
 	Task        string    `json:"task"`
 	EvaluatedAt time.Time `json:"evaluatedAt"`
-	Part        Part      `json:"part"`
-	Rows        any       `json:"rows"`
+	// CapturedAt is when these rows' capture was taken. EvaluatedAt moves
+	// only when the part's data or result changes; a RowsNow reply is
+	// evaluated on request, so its CapturedAt is the request's own capture,
+	// covering every mutation so far. A reader that needs a reading taken
+	// after a moment dates it by this (AI A3's incident: a suspended unit
+	// that stays quiet is still read).
+	CapturedAt time.Time `json:"capturedAt"`
+	Part       Part      `json:"part"`
+	Rows       any       `json:"rows"`
 }
 
 // ---- the role ledger and transition stream (The Line slice 2b) ----------

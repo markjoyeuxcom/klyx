@@ -35,8 +35,10 @@ type subjectVerdict struct {
 	// replaced: another UID holds its name (§5.3)
 	gone, replaced bool
 	// at is when the capture this reading comes from was evaluated, for a
-	// verdict and an absence alike (stage 4 review, finding 3)
-	at time.Time
+	// verdict and an absence alike (stage 4 review, finding 3): it moves
+	// only when the part's data changes. captured is when the capture was
+	// taken, which a quiet part's reading moves too (the A3 lab)
+	at, captured time.Time
 }
 
 // verdictOf is Klyx's verdict for one subject by UID, from the Observer's
@@ -60,7 +62,7 @@ func (s *ChatService) verdictOf(ctx context.Context, conn ChatConn, f actionFact
 		return subjectVerdict{}
 	}
 	if v, ok := vs.byUID[f.UID]; ok {
-		return subjectVerdict{v: v, found: true, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID], at: v.at}
+		return subjectVerdict{v: v, found: true, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID], at: v.at, captured: v.captured}
 	}
 	if !vs.complete {
 		return subjectVerdict{}
@@ -71,7 +73,7 @@ func (s *ChatService) verdictOf(ctx context.Context, conn ChatConn, f actionFact
 		}
 	}
 	other := vs.byName[rowName(f.Resource, f.Namespace, f.Name)]
-	return subjectVerdict{gone: other == "", replaced: other != "", at: vs.at}
+	return subjectVerdict{gone: other == "", replaced: other != "", at: vs.at, captured: vs.captured}
 }
 
 // stateEffect says whether a state verb's effect holds on u, its target as

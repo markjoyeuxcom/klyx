@@ -529,7 +529,7 @@ func TestTheIncidentTable(t *testing.T) {
 		return s
 	}
 	v := func(state string, at time.Time, coverage string) subjectVerdict {
-		return subjectVerdict{v: chatVerdict{Role: state, EvaluatedAt: at.UTC().Format(time.RFC3339), Coverage: coverage}, found: true, state: state, at: at}
+		return subjectVerdict{v: chatVerdict{Role: state, EvaluatedAt: at.UTC().Format(time.RFC3339), Coverage: coverage}, found: true, state: state, at: at, captured: at}
 	}
 	scaledToZero := v("paused", fresh, "live")
 	scaledToZero.v.Reason = "ScaledToZero"
@@ -537,7 +537,7 @@ func TestTheIncidentTable(t *testing.T) {
 		"ok": v("ok", fresh, "live"), "held": scaledToZero, "paused": v("paused", fresh, "live"), "held otherwise": v("paused", fresh, "live"),
 		"progressing": v("progressing", fresh, "live"), "fault": v("fault", fresh, "live"), "degraded": v("degraded", fresh, "live"),
 		"unknown": v("unknown", fresh, "live"), "stale": v("ok", stale, "live"), "coverage": v("ok", fresh, "stale"),
-		"gone": {gone: true, at: fresh}, "replaced": {replaced: true, at: fresh}, "gone before": {gone: true, at: stale}, "replaced before": {replaced: true, at: stale},
+		"gone": {gone: true, at: fresh, captured: fresh}, "replaced": {replaced: true, at: fresh, captured: fresh}, "gone before": {gone: true, at: stale, captured: stale}, "replaced before": {replaced: true, at: stale, captured: stale},
 		"removed": v("ok", fresh, "live"),
 	}
 	look := func(f actionFact) subjectVerdict { return verdicts[f.UID] }
@@ -578,7 +578,9 @@ func TestTheIncidentTable(t *testing.T) {
 
 // The incident's outcome (§5.3): resolved as soon as every subject is
 // recovered or held and one recovered; at the bound, not resolved on a
-// fresh failure, else unverified; a fence ends it unverified.
+// fresh failure, else unverified; a fence ends it unverified. The bound is
+// decided on the last reading completed within it: here the clock passes
+// the bound during the second reading, which is not counted.
 func TestTheIncidentsOutcome(t *testing.T) {
 	last := fixedNow()
 	fresh := last.Add(time.Second).UTC().Format(time.RFC3339)
@@ -599,20 +601,17 @@ func TestTheIncidentsOutcome(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fastVerify(t, time.Second)
-			// a resolution needs the bound still open; the other outcomes
-			// are read at it
-			incidentBound = 0
-			if c.want == incidentResolved {
-				incidentBound = time.Hour
-			}
+			incidentBound = time.Hour
 			sf := newStepsFixture(t, pauseWeb)
+			clock := boundClock(sf, last, len(c.states))
 			prev := verdictOfHook
 			verdictOfHook = func(f actionFact) subjectVerdict {
+				clock()
 				st := c.states[f.UID]
 				if st == "" {
 					return subjectVerdict{}
 				}
-				sv := subjectVerdict{v: chatVerdict{Role: st, EvaluatedAt: fresh, Coverage: "live"}, found: true, state: st, at: last.Add(time.Second)}
+				sv := subjectVerdict{v: chatVerdict{Role: st, EvaluatedAt: fresh, Coverage: "live"}, found: true, state: st, at: last.Add(time.Second), captured: last.Add(time.Second)}
 				if st == "paused" {
 					sv.v.Reason = "ScaledToZero"
 				}
@@ -644,6 +643,85 @@ func TestTheIncidentsOutcome(t *testing.T) {
 			sf.svc.mu.Unlock()
 			if got.State != c.want {
 				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
+
+// boundClock is the service clock for an incident test: the bound is open
+// for the first reading of n subjects, and passes at the first lookup of
+// the second, so that reading runs into it. Its tick is called per lookup.
+func boundClock(sf *stepsFixture, last time.Time, n int) func() {
+	var mu sync.Mutex
+	now, calls := last.Add(time.Second), 0
+	sf.svc.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if calls++; calls == n+1 {
+			now = last.Add(incidentBound)
+		}
+	}
+}
+
+// The lab's undo-only case (stage 6): the investigated workload read
+// faulted for minutes, and the reading made at the bound failed for the
+// bound's reason alone. A reading that runs into the bound is not counted,
+// whatever it read; the bound is decided on the last one within it, and a
+// fault seen there is not resolved. With no reading within it, unverified.
+func TestTheBoundIsDecidedOnTheLastReadingWithinIt(t *testing.T) {
+	last := fixedNow()
+	fault := subjectVerdict{v: chatVerdict{Role: "degraded", EvaluatedAt: last.Add(time.Second).UTC().Format(time.RFC3339), Coverage: "live"}, found: true, state: "degraded", at: last.Add(time.Second), captured: last.Add(time.Second)}
+	ok := fault
+	ok.v.Role, ok.state = "ok", "ok"
+	for _, c := range []struct {
+		name          string
+		first, second subjectVerdict // the second runs into the bound
+		within        bool           // the first completes within the bound
+		want, why     string
+	}{
+		{"its lookups failed at the bound", fault, subjectVerdict{}, true, incidentNot, "a subject is not recovered 1h0m0s after the last step"},
+		{"it would have resolved", fault, ok, true, incidentNot, "a subject is not recovered 1h0m0s after the last step"},
+		{"none within the bound", ok, ok, false, incidentUnverif, "Klyx completed no reading within the bound"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fastVerify(t, time.Second)
+			incidentBound = time.Hour
+			sf := newStepsFixture(t, pauseWeb)
+			n := 1
+			if !c.within {
+				n = 0 // the bound passes at the first lookup
+			}
+			clock := boundClock(sf, last, n)
+			readings := 0
+			prev := verdictOfHook
+			verdictOfHook = func(actionFact) subjectVerdict {
+				clock()
+				if readings++; readings == 1 {
+					return c.first
+				}
+				return c.second
+			}
+			t.Cleanup(func() { verdictOfHook = prev })
+			subjects := []incidentSubject{{fact: actionFact{Kind: "Deployment", Resource: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}}}
+			sf.svc.mu.Lock()
+			conv := sf.svc.convs[invKey("x")]
+			p := conv.exchanges[0].plan
+			p.incident = &IncidentDTO{State: incidentPending}
+			sf.svc.mu.Unlock()
+			sf.svc.readIncident(conv, p, subjects, last)
+			sf.svc.mu.Lock()
+			got := *p.incident
+			sf.svc.mu.Unlock()
+			if got.State != c.want || got.Why != c.why {
+				t.Fatalf("%+v", got)
+			}
+			if c.within && (len(got.Subjects) != 1 || got.Subjects[0].Verdict != "degraded") {
+				t.Fatalf("the rows are the last reading within the bound: %+v", got.Subjects)
 			}
 		})
 	}
@@ -847,7 +925,7 @@ func TestALostAnswerIsWitnessedByItsAttemptsToken(t *testing.T) {
 
 // capturedWorkloads is a live workloads capture evaluated at at.
 func capturedWorkloads(at time.Time, ws ...workloads.Workload) observe.Rows {
-	r := observe.Rows{Task: "workloads", EvaluatedAt: at, Part: observe.Part{ID: "workloads", Classifier: "verdict", Coverage: observe.Live}}
+	r := observe.Rows{Task: "workloads", EvaluatedAt: at, CapturedAt: at, Part: observe.Part{ID: "workloads", Classifier: "verdict", Coverage: observe.Live}}
 	var rows []healthsrc.Row[workloads.Workload]
 	for _, w := range ws {
 		rows = append(rows, healthsrc.Row[workloads.Workload]{Ref: healthsrc.RowRef{UID: string(w.UID), GVR: "apps/v1/deployments", Namespace: w.Namespace, Name: w.Name, Generation: w.Generation}, Data: w})
@@ -860,6 +938,7 @@ func capturedWorkloads(at time.Time, ws ...workloads.Workload) observe.Rows {
 type blockingGet struct {
 	ChatConn
 	entered chan context.Context
+	release chan struct{} // as blockingRows's
 }
 
 func (c *blockingGet) ChatGet(ctx context.Context, _ schema.GroupVersionResource, _, _ string) (*unstructured.Unstructured, error) {
@@ -868,6 +947,9 @@ func (c *blockingGet) ChatGet(ctx context.Context, _ schema.GroupVersionResource
 	default:
 	}
 	<-ctx.Done()
+	if c.release != nil {
+		<-c.release
+	}
 	return nil, ctx.Err()
 }
 
@@ -875,6 +957,9 @@ func (c *blockingGet) ChatGet(ctx context.Context, _ schema.GroupVersionResource
 type blockingRows struct {
 	ChatConn
 	entered chan context.Context
+	// release, when set, holds a cancelled read until it closes: the
+	// caller then sees the read end only after what the test did meanwhile
+	release chan struct{}
 }
 
 func (c *blockingRows) HealthRowsNow(ctx context.Context, _, _ string) (observe.Rows, bool) {
@@ -883,6 +968,9 @@ func (c *blockingRows) HealthRowsNow(ctx context.Context, _, _ string) (observe.
 	default:
 	}
 	<-ctx.Done()
+	if c.release != nil {
+		<-c.release
+	}
 	return observe.Rows{}, false
 }
 
@@ -990,6 +1078,91 @@ func TestFreshnessIsTheCapturesOwnClock(t *testing.T) {
 		if rows[0].Reading != c.reading {
 			t.Errorf("%s: %+v", c.name, rows[0])
 		}
+	}
+}
+
+// The lab's plan case (stage 6): a capture taken after the last write is a
+// reading after it, though its part's data last changed before it - a
+// suspended unit stays quiet, and its evaluation time stops. The data must
+// still postdate the subject's own write, and no capture before the last
+// write is fresh, whatever its data's time.
+func TestAQuietPartIsReadByItsCapture(t *testing.T) {
+	ownWrite, lastWrite := fixedNow(), fixedNow().Add(2*time.Second)
+	f := newToolsFixture(t)
+	ok := workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 2, Desired: 1, Health: health.Verdict{Kind: health.OK, Label: "Ready"}}
+	look := func(fact actionFact) subjectVerdict { return f.svc.verdictOf(context.Background(), f.conn, fact, nil) }
+	quiet := func(data, captured time.Time, ws ...workloads.Workload) observe.Rows {
+		if ws == nil {
+			ws = []workloads.Workload{ok}
+		}
+		r := capturedWorkloads(data, ws...)
+		r.CapturedAt = captured
+		return r
+	}
+	other := ok
+	other.UID, other.Name = "uid-other", "other"
+	for _, c := range []struct {
+		name    string
+		rows    observe.Rows
+		wrote   time.Time
+		reading string
+	}{
+		{"quiet since its own write", quiet(ownWrite.Add(time.Second), lastWrite.Add(time.Minute)), ownWrite, "recovered"},
+		{"quiet, no write of its own", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(time.Minute)), time.Time{}, "recovered"},
+		{"its data before its own write", quiet(ownWrite.Add(-time.Second), lastWrite.Add(time.Minute)), ownWrite, "pending: no fresh reading"},
+		{"captured before the last write", quiet(ownWrite.Add(time.Second), lastWrite.Add(-time.Millisecond)), ownWrite, "pending: no fresh reading"},
+		{"gone, its absence quiet since", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(time.Minute), other), time.Time{}, "unverified: gone"},
+		{"gone, captured before the last write", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(-time.Millisecond), other), time.Time{}, "pending: no fresh reading"},
+	} {
+		f.conn.rows = map[string]observe.Rows{"workloads/workloads": c.rows}
+		rows, _, _, _ := readSubjects(look, []incidentSubject{{fact: webFact, wrote: c.wrote}}, lastWrite)
+		if rows[0].Reading != c.reading {
+			t.Errorf("%s: %+v", c.name, rows[0])
+		}
+		if want := c.rows.CapturedAt.UTC().Format(time.RFC3339); rows[0].Verdict != "" && rows[0].At != want {
+			t.Errorf("%s: the row is dated by its capture, %s: %+v", c.name, want, rows[0])
+		}
+	}
+}
+
+// A subject's own write is its latest step's send time.
+func TestASubjectsOwnWriteIsItsLatestStep(t *testing.T) {
+	sf := newStepsFixture(t, pauseWeb)
+	webF := factOf(deploysGVR, sf.web(), "r1", "t", acquisition())
+	ksF := actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations", Namespace: "flux-system", Name: "web", UID: "uid-ks"}
+	steps := []ActionStepDTO{{N: 1, Verb: "rollout-pause", State: stepOffered}, {N: 2, Verb: "flux-suspend", State: stepOffered}, {N: 3, Verb: "rollout-resume", State: stepOffered}}
+	sf.plantPlan(steps, []actionFact{webF, ksF, webF}, []*fleet.RevisionExpect{nil, nil, nil})
+	sf.svc.mu.Lock()
+	defer sf.svc.mu.Unlock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	at := fixedNow()
+	for i, r := range p.runs {
+		r.request, r.sentAt = fleet.OutcomeWritten, at.Add(time.Duration(i)*time.Second)
+	}
+	got := incidentSubjectsLocked(c, p)
+	if len(got) != 1 || !got[0].wrote.Equal(at.Add(2*time.Second)) {
+		t.Fatalf("web's own latest write is step 3's: %+v", got)
+	}
+}
+
+// RunStep records when the request was sent, before its answer.
+func TestRunStepRecordsTheSendTime(t *testing.T) {
+	sf := newStepsFixture(t, pauseWeb)
+	prev := verifyStepHook
+	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {}
+	t.Cleanup(func() { verifyStepHook = prev })
+	tok := sf.review(1).Token
+	sent := sf.now
+	sf.sc.onWrite = func() { sf.now = sent.Add(time.Second) } // the answer arrives a second later
+	if r := sf.run(1, tok); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	r := *sf.svc.convs[invKey("x")].exchanges[0].plan.runs[0]
+	sf.svc.mu.Unlock()
+	if !r.sentAt.Equal(sent) || !r.ranAt.Equal(sent.Add(time.Second)) {
+		t.Fatalf("sent %v ran %v", r.sentAt, r.ranAt)
 	}
 }
 
@@ -1119,7 +1292,7 @@ func TestEveryPositiveResultLandsInsideItsBound(t *testing.T) {
 		sf.mu.Lock()
 		sf.now = last.Add(21 * time.Millisecond) // the reading finishes past the bound
 		sf.mu.Unlock()
-		return subjectVerdict{v: chatVerdict{Role: "ok", Coverage: "live"}, found: true, state: "ok", at: last.Add(21 * time.Millisecond)}
+		return subjectVerdict{v: chatVerdict{Role: "ok", Coverage: "live"}, found: true, state: "ok", at: last.Add(21 * time.Millisecond), captured: last.Add(21 * time.Millisecond)}
 	}
 	t.Cleanup(func() { verdictOfHook = prev })
 	sf.svc.mu.Lock()
@@ -1187,5 +1360,253 @@ func TestAPlanChangeTellsTheDrawer(t *testing.T) {
 	}
 	if n < 3 { // the effect, the incident's start, its settling
 		t.Fatalf("%d plan events: %+v", n, em.events_())
+	}
+}
+
+// The A3 lab: a fence that fails at one tick and holds again by the next
+// check still ends the reading - with its own reason, never with what the
+// reads it cancelled returned ("no fresh reading").
+func TestABriefFenceFailureEndsWithItsReason(t *testing.T) {
+	fastVerify(t, time.Second)
+	sf := newStepsFixture(t, pauseWeb)
+	br := &blockingRows{ChatConn: sf.sc, entered: make(chan context.Context, 1), release: make(chan struct{})}
+	sf.mu.Lock()
+	sf.cur = br
+	sf.mu.Unlock()
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	c.conn = br
+	p := c.exchanges[0].plan
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.mu.Unlock()
+	done := make(chan struct{})
+	go func() { sf.svc.readIncident(c, p, []incidentSubject{{fact: webFact}}, sf.now); close(done) }()
+	read := <-br.entered
+	sf.mu.Lock()
+	sf.usable = false // a blip
+	sf.mu.Unlock()
+	<-read.Done() // the watcher saw it and cancelled the blocked read
+	sf.mu.Lock()
+	sf.usable = true // and the fence holds again
+	sf.mu.Unlock()
+	close(br.release) // only now does the cancelled read return
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the reading did not end")
+	}
+	if p.incident.State != incidentUnverif || !strings.Contains(p.incident.Why, "disconnected") {
+		t.Fatalf("%+v", p.incident)
+	}
+}
+
+// The same for a verification: the fence fails at one tick, cancels the
+// blocked read, and holds again before the read returns; the effect ends
+// unverified with the fence's reason, never with the cancelled read's.
+func TestABriefFenceFailureEndsAVerificationWithItsReason(t *testing.T) {
+	fastVerify(t, time.Second)
+	quietIncident(t)
+	sf := newStepsFixture(t, pauseWeb)
+	bg := &blockingGet{ChatConn: sf.sc, entered: make(chan context.Context, 1), release: make(chan struct{})}
+	sf.mu.Lock()
+	sf.cur = bg
+	sf.mu.Unlock()
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	c.conn = bg
+	p := c.exchanges[0].plan
+	p.runs[0].request, p.runs[0].effect, p.running, c.stepRunning = fleet.OutcomeWritten, stepEffectPending, 1, p
+	sn := stepSnap{n: 1, step: p.dto.Steps[0], fact: p.facts[0]}
+	sf.svc.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		sf.svc.verifyStepEffect(c, p, 1, sn, ActionResultDTO{Outcome: fleet.OutcomeWritten}, sf.now)
+		close(done)
+	}()
+	read := <-bg.entered
+	sf.mu.Lock()
+	sf.usable = false
+	sf.mu.Unlock()
+	<-read.Done()
+	sf.mu.Lock()
+	sf.usable = true
+	sf.mu.Unlock()
+	close(bg.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the verification did not end")
+	}
+	sf.svc.mu.Lock()
+	r := *p.runs[0]
+	sf.svc.mu.Unlock()
+	if r.effect != stepEffectUnverified || !strings.Contains(r.effectWhy, "disconnected") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// The A3 lab: a step's change to an object a GitOps unit manages, the unit
+// not suspended, may be reverted at its next reconcile - the consequence the
+// operator reviewed says so - so the subject's recovery or hold is not
+// counted while it may, and the incident cannot resolve on it.
+func TestARecoveryAUnitMayRevertIsNotCounted(t *testing.T) {
+	sf := newStepsFixture(t, scaleWeb)
+	sf.sc.owner = fleet.GitOpsOwnership{OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "a1-web", Basis: "flux-inventory"}
+	prev := verifyStepHook
+	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {}
+	t.Cleanup(func() { verifyStepHook = prev })
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	owner, applies := p.runs[0].owner, p.runs[0].applies
+	subjects := incidentSubjectsLocked(c, p)
+	sf.svc.mu.Unlock()
+	if owner != "Kustomization flux-system/a1-web" || !applies || len(subjects) != 1 || subjects[0].revertBy != owner || subjects[0].revertStep != 1 {
+		t.Fatalf("%q %v %+v", owner, applies, subjects)
+	}
+	at := fixedNow().Add(time.Second)
+	ok := func(actionFact) subjectVerdict {
+		return subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live"}, found: true, state: "ok", at: at, captured: at}
+	}
+	rows, recovered, open, faulted := readSubjects(ok, subjects, fixedNow())
+	if recovered != 0 || open != 1 || faulted || rows[0].Reading != "recovered for now, but Kustomization flux-system/a1-web may revert step 1's change: it is not suspended" {
+		t.Fatalf("%+v %d %d %v", rows, recovered, open, faulted)
+	}
+}
+
+// The unit that may revert a step's change is followed through the plan's
+// later steps: a written suspension of it ends the caveat, a resume that
+// may have been written brings it back; a step before the change, another
+// unit's step, and an unverified or refused suspension change nothing.
+func TestTheRevertCaveatFollowsTheUnitThroughThePlan(t *testing.T) {
+	const ks = "Kustomization flux-system/a1-web"
+	type st struct{ verb, unit, request string }
+	for _, c := range []struct {
+		name    string
+		before  *st // a step before the change
+		after   []st
+		applies bool // the unit applied when the change ran
+		want    string
+	}{
+		{"nothing after", nil, nil, true, ks},
+		{"a written suspension", nil, []st{{"flux-suspend", "a1-web", fleet.OutcomeWritten}}, true, ""},
+		{"an unverified suspension", nil, []st{{"flux-suspend", "a1-web", fleet.OutcomeUnverified}}, true, ks},
+		{"a refused suspension", nil, []st{{"flux-suspend", "a1-web", fleet.OutcomeRefused}}, true, ks},
+		{"another unit's suspension", nil, []st{{"flux-suspend", "other", fleet.OutcomeWritten}}, true, ks},
+		{"suspended, then resumed", nil, []st{{"flux-suspend", "a1-web", fleet.OutcomeWritten}, {"flux-resume", "a1-web", fleet.OutcomeWritten}}, true, ks},
+		{"resumed by a lost answer", nil, []st{{"flux-resume", "a1-web", fleet.OutcomeUnverified}}, false, ks},
+		{"a refused resume", nil, []st{{"flux-resume", "a1-web", fleet.OutcomeRefused}}, false, ""},
+		{"suspended before the change", &st{"flux-suspend", "a1-web", fleet.OutcomeWritten}, nil, true, ks},
+		{"suspended when it ran", nil, nil, false, ""},
+	} {
+		sf := newStepsFixture(t, pauseWeb)
+		webF := factOf(deploysGVR, sf.web(), "r1", "t", acquisition())
+		unit := func(name string) actionFact {
+			return actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations", Namespace: "flux-system", Name: name, UID: "uid-" + name}
+		}
+		var steps []ActionStepDTO
+		var facts []actionFact
+		var reqs []string
+		add := func(s st, f actionFact) {
+			steps = append(steps, ActionStepDTO{N: len(steps) + 1, Verb: s.verb, State: stepOffered})
+			facts, reqs = append(facts, f), append(reqs, s.request)
+		}
+		if c.before != nil {
+			add(*c.before, unit(c.before.unit))
+		}
+		change := len(steps)
+		add(st{"rollout-pause", "", fleet.OutcomeWritten}, webF)
+		for _, s := range c.after {
+			add(s, unit(s.unit))
+		}
+		sf.plantPlan(steps, facts, make([]*fleet.RevisionExpect, len(steps)))
+		sf.svc.mu.Lock()
+		cv := sf.svc.convs[invKey("x")]
+		p := cv.exchanges[0].plan
+		for i, r := range reqs {
+			p.runs[i].request = r
+		}
+		p.runs[change].owner, p.runs[change].applies = ks, c.applies
+		got := incidentSubjectsLocked(cv, p)
+		sf.svc.mu.Unlock()
+		if len(got) != 1 || got[0].revertBy != c.want || (c.want == "") != (got[0].revertStep == 0) || (c.want != "" && got[0].revertStep != change+1) {
+			t.Errorf("%s: %+v", c.name, got)
+		}
+	}
+}
+
+// A run under a suspended unit records that it applies nothing: the
+// subject's recovery is counted.
+func TestARunUnderASuspendedUnitHasNoCaveat(t *testing.T) {
+	sf := newStepsFixture(t, scaleWeb)
+	sf.sc.owner = fleet.GitOpsOwnership{OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "a1-web", Basis: "flux-inventory", OwnerSuspended: true}
+	prev := verifyStepHook
+	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {}
+	t.Cleanup(func() { verifyStepHook = prev })
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	r := *p.runs[0]
+	subjects := incidentSubjectsLocked(c, p)
+	sf.svc.mu.Unlock()
+	if r.owner != "Kustomization flux-system/a1-web" || r.applies || len(subjects) != 1 || subjects[0].revertBy != "" {
+		t.Fatalf("%q %v %+v", r.owner, r.applies, subjects)
+	}
+}
+
+// Argo CD's application may revert when it syncs: no suspension of a Flux
+// unit ends that, and the reading says when.
+func TestArgoMayRevertWhenItSyncs(t *testing.T) {
+	sub := incidentSubject{fact: webFact, revertBy: "Argo CD's Application argocd/web", revertStep: 1}
+	at := fixedNow().Add(time.Second)
+	ok := func(actionFact) subjectVerdict {
+		return subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live"}, found: true, state: "ok", at: at, captured: at}
+	}
+	rows, recovered, open, _ := readSubjects(ok, []incidentSubject{sub}, fixedNow())
+	if recovered != 0 || open != 1 || rows[0].Reading != "recovered for now, but Argo CD's Application argocd/web may revert step 1's change when it syncs" {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// Who may revert is what the consequence says: the unit managing the
+// target, applying its desired state - Argo CD's application always, a
+// Flux unit while it is not suspended, followed through the plan's earlier
+// steps in order.
+func TestWhoMayRevertIsTheConsequences(t *testing.T) {
+	ks := actionFact{Kind: "Kustomization", Namespace: "flux-system", Name: "a1-web"}
+	other := actionFact{Kind: "Kustomization", Namespace: "flux-system", Name: "other"}
+	suspend := stepSnapPrior{n: 1, verb: "flux-suspend", fact: ks}
+	resume := stepSnapPrior{n: 2, verb: "flux-resume", fact: ks}
+	flux := fleet.GitOpsOwnership{OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "a1-web", Basis: "flux-inventory"}
+	suspended := flux
+	suspended.OwnerSuspended = true
+	for _, c := range []struct {
+		name    string
+		owner   fleet.GitOpsOwnership
+		earlier []stepSnapPrior
+		who     string
+		applies bool
+		line    string
+	}{
+		{"flux, not suspended", flux, nil, "Kustomization flux-system/a1-web", true, "which may revert this change"},
+		{"flux, suspended", suspended, nil, "Kustomization flux-system/a1-web", false, "is suspended"},
+		{"flux, an earlier step suspends it", flux, []stepSnapPrior{suspend}, "Kustomization flux-system/a1-web", false, "; step 1 suspends it"},
+		{"flux, suspended then resumed", flux, []stepSnapPrior{suspend, resume}, "Kustomization flux-system/a1-web", true, "; step 1 suspends it; step 2 resumes it"},
+		{"flux, another unit suspended", flux, []stepSnapPrior{{n: 1, verb: "flux-suspend", fact: other}}, "Kustomization flux-system/a1-web", true, "which may revert this change"},
+		{"argo", fleet.GitOpsOwnership{OwnerKind: "Application", OwnerNamespace: "argocd", OwnerName: "web", Basis: "argo-resources"}, nil, "Argo CD's Application argocd/web", true, "when it syncs"},
+		{"none", fleet.GitOpsOwnership{}, nil, "", false, "no GitOps unit"},
+	} {
+		f := newToolsFixture(t)
+		sc := &stepsConn{fakeChatConn: f.conn, owner: c.owner}
+		out, who, applies := f.svc.consequenceWords(context.Background(), sc, stepSnap{step: ActionStepDTO{Verb: "rollout-pause"}, earlier: c.earlier}, webFact)
+		if who != c.who || applies != c.applies || !strings.Contains(strings.Join(out, "\n"), c.line) {
+			t.Errorf("%s: %q %v %q", c.name, who, applies, out)
+		}
 	}
 }

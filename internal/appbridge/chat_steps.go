@@ -55,6 +55,15 @@ type stepRun struct {
 	effect    string // pending | established | unverified; "" until it runs
 	effectWhy string
 	ranAt     time.Time
+	// sentAt is when the request was sent: data the Observer evaluated
+	// after it may show the write (the incident's subjects, the A3 lab)
+	sentAt time.Time
+	// owner is the GitOps unit the reviewed consequence named as managing
+	// the target, as read when the step ran, and applies says it then
+	// applied its desired state (not suspended): the incident follows the
+	// unit's state through the plan's later steps (the A3 lab)
+	owner   string
+	applies bool
 }
 
 // stepReview is the latest review: its token, the digest of the facts its
@@ -254,6 +263,10 @@ type observation struct {
 	expected    string
 	observed    []StepObservedDTO
 	digest      string
+	// owner and applies: the GitOps unit the consequence names as managing
+	// the target, and whether it applies its desired state (the A3 lab)
+	owner   string
+	applies bool
 }
 
 func factGVR(f actionFact) schema.GroupVersionResource {
@@ -311,7 +324,7 @@ func (s *ChatService) observe(ctx context.Context, conn ChatConn, sn stepSnap) (
 		ob.observed = append(ob.observed, StepObservedDTO{What: fmt.Sprintf("step %d's effect still holds on %s %s", pr.n, pr.fact.Kind, pr.fact.Name), At: now})
 	}
 	ob.change = changeWords(sn, fresh)
-	ob.consequence = s.consequenceWords(ctx, conn, sn, fresh)
+	ob.consequence, ob.owner, ob.applies = s.consequenceWords(ctx, conn, sn, fresh)
 	ob.expected = expectedWords(sn) + ", within " + matrixBounds[sn.step.Verb]
 	// the words the operator confirms are digested with the facts: an owner
 	// that changed, a suspension that ended or an ownership read that is no
@@ -476,23 +489,36 @@ type replicaOwnerReader interface {
 
 // consequenceWords is the step's GitOps consequence, qualified by what the
 // ownership read shows: ownership is evidence of management, not a promise
-// that this change is reverted at the next tick (§3).
-func (s *ChatService) consequenceWords(ctx context.Context, conn ChatConn, sn stepSnap, fresh actionFact) []string {
-	var out []string
+// that this change is reverted at the next tick (§3). owner names the unit
+// those words say manages the target, and applies says it applies its
+// desired state once the plan's earlier steps ran: Argo CD's application
+// always may, a Flux unit while it is not suspended.
+func (s *ChatService) consequenceWords(ctx context.Context, conn ChatConn, sn stepSnap, fresh actionFact) (out []string, owner string, applies bool) {
 	if r, ok := conn.(ownershipReader); ok {
 		o := r.GitOpsOwnership(ctx, fresh.Group, fresh.Kind, fresh.Namespace, fresh.Name)
-		who := strings.TrimSpace(o.OwnerKind + " " + strings.TrimPrefix(o.OwnerNamespace+"/"+o.OwnerName, "/"))
+		who := unitWho(o.OwnerKind, o.OwnerNamespace, o.OwnerName)
 		switch {
 		case o.OwnerKind == "":
 		case o.Basis == "argo-resources":
 			out = append(out, fmt.Sprintf("Argo CD's %s manages it (its Argo resources): it may revert this change when it syncs; fields it ignores are not reverted", who))
+			owner, applies = "Argo CD's "+who, true
 		case o.OwnerSuspended:
 			out = append(out, fmt.Sprintf("%s manages it (its Flux inventory) and is suspended: Flux applies nothing until it is resumed", who))
+			owner = who
 		default:
 			line := fmt.Sprintf("%s manages it (its Flux inventory). While it is not suspended, Flux applies its desired state at each reconcile, which may revert this change", who)
-			for _, pr := range sn.earlier {
-				if pr.verb == "flux-suspend" && pr.fact.Kind == o.OwnerKind && pr.fact.Namespace == o.OwnerNamespace && pr.fact.Name == o.OwnerName {
+			owner, applies = who, true
+			for _, pr := range sn.earlier { // in the plan's order
+				if unitWho(pr.fact.Kind, pr.fact.Namespace, pr.fact.Name) != who {
+					continue
+				}
+				switch pr.verb {
+				case "flux-suspend":
 					line += fmt.Sprintf("; step %d suspends it", pr.n)
+					applies = false
+				case "flux-resume":
+					line += fmt.Sprintf("; step %d resumes it", pr.n)
+					applies = true
 				}
 			}
 			out = append(out, line)
@@ -537,7 +563,12 @@ func (s *ChatService) consequenceWords(ctx context.Context, conn ChatConn, sn st
 			out = append(out, "deleting the investigated pod ends what Klyx can verify about it; its replacement is shown on its own")
 		}
 	}
-	return out
+	return out, owner, applies
+}
+
+// unitWho spells a GitOps unit as the consequence names it: "Kind ns/name".
+func unitWho(kind, ns, name string) string {
+	return strings.TrimSpace(kind + " " + strings.TrimPrefix(ns+"/"+name, "/"))
 }
 
 func reviewToken() string {
@@ -664,12 +695,14 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	if err := fence(); err != nil {
 		return release(err.Error())
 	}
+	sent := s.now()
 	res := runVerb(ctx, conn, sn)
 
 	s.mu.Lock()
 	r := p.runs[n-1]
 	r.review = nil
-	r.request, r.notSent, r.errText, r.ranAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now()
+	r.request, r.notSent, r.errText, r.ranAt, r.sentAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now(), sent
+	r.owner, r.applies = capRecord(ob.owner, stepWhyMax), ob.applies
 	if res.Outcome == "" { // a verb that did not classify: never written
 		r.request = fleet.OutcomeUnverified
 	}
