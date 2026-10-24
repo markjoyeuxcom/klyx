@@ -562,3 +562,13 @@ Codex found four of the five findings resolved and the fifth's accounting sound 
 3. **P3, the bound is the serialized record.** `capRecord` caps a text by its JSON encoding as `encoding/json` writes it, counting control characters, HTML-safe escapes and invalid UTF-8 as 6 bytes, quote and backslash as 2. With the error at 512 bytes and the reason at 352, a record of the longest values serializes within 1 KiB; the test tries seven worst-case characters.
 
 **Gates:** as in §17.1. A mutation pass caught 15 of 15, after three real-row cases were added for mutations the earlier checks had masked.
+
+### 17.3 Codex's re-review 2 and the fix (2026-10-24)
+
+Codex found the native KEDA verdict and the serialized bound resolved, and asked for one more change:
+
+1. **P2, the partner must be among the Deployment's ReplicaSets.** A complete LIST by the Deployment's selector that left out the partner (its labels no longer matching) still let the direct read establish it, though the controller releases a ReplicaSet that stops matching whatever its controller reference says (the v1.34 controller reference manager). Now the read partner must match the selector, and the complete LIST must hold its UID with the same controller and template. An absent partner, or a list that disagrees with the read, is unestablished.
+
+**Codex's re-review 1 probe:** its control ReplicaSet has no labels and is in no list, which is what this finding makes unestablished. Its two counterexamples still refuse; the re-review 2 probe and the other probes pass.
+
+**Tests:** a member; relabelled; absent from a complete list; a list whose copy names another controller. A mutation pass caught 3 of 3.

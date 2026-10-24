@@ -552,7 +552,7 @@ func TestEveryPrerequisiteIsTheMatrixEffect(t *testing.T) {
 	older := subjectVerdict{v: chatVerdict{Role: "paused", Coverage: "live", Generation: 0}, found: true, state: "paused", completed: true}
 	controller := true
 	rsOf := func(uid, owner, rev string, template map[string]any) *unstructured.Unstructured {
-		r := uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": "o-4", "namespace": "n", "uid": uid, "annotations": ann("deployment.kubernetes.io/revision", rev)}, "spec": map[string]any{"template": template}})
+		r := uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": "o-4", "namespace": "n", "uid": uid, "labels": map[string]any{"app": "o"}, "annotations": ann("deployment.kubernetes.io/revision", rev)}, "spec": map[string]any{"template": template}})
 		r.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "o", UID: types.UID(owner), Controller: &controller}})
 		return r
 	}
@@ -1060,5 +1060,53 @@ func TestARecordSerializesWithinOneKiB(t *testing.T) {
 		if e, _ := json.Marshal(r.Error); len(e)-2 > stepErrMax {
 			t.Fatalf("%q: the error encodes to %d bytes", worst, len(e)-2)
 		}
+	}
+}
+
+// Stage 3 re-review 2: the partner must be among the Deployment's
+// ReplicaSets as their complete LIST by its selector reads them - the
+// controller releases one that stops matching, whatever its controller
+// reference says.
+func TestAPartnerMustBeAmongTheDeploymentsReplicaSets(t *testing.T) {
+	tmpl := map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "web"}}, "spec": map[string]any{"containers": []any{map[string]any{"name": "web", "image": "web:4"}}}}
+	dg, _ := workloads.TemplateDigest(tmpl, true)
+	controller := true
+	for _, c := range []struct {
+		name   string
+		labels map[string]string
+		listed bool
+		holds  bool
+		// listedOwner: the list's copy names another controller than the read's
+		listedOwner string
+	}{
+		{"a member", map[string]string{"app": "web"}, true, true, ""},
+		{"relabelled", map[string]string{"app": "other"}, true, false, ""},
+		{"absent from a complete list", map[string]string{"app": "web"}, false, false, ""},
+		{"the list disagrees with the read", map[string]string{"app": "web"}, true, false, "other-uid"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newToolsFixture(t)
+			d := uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "dep-uid", "generation": int64(9), "annotations": map[string]any{"deployment.kubernetes.io/revision": "8"}},
+				"spec": map[string]any{"template": tmpl, "selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}}, "status": map[string]any{"observedGeneration": int64(9)}})
+			rs := uobj(map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "metadata": map[string]any{"name": "web-r4", "namespace": "shop", "uid": "rs-uid", "annotations": map[string]any{"deployment.kubernetes.io/revision": "8"}}, "spec": map[string]any{"template": tmpl}})
+			rs.SetLabels(c.labels)
+			rs.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep-uid", Controller: &controller}})
+			f.conn.objects[key(replicaSetsGVR, "shop", "web-r4")] = rs
+			l := &unstructured.UnstructuredList{}
+			if c.listed {
+				cp := rs.DeepCopy()
+				if c.listedOwner != "" {
+					cp.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "other", UID: types.UID(c.listedOwner), Controller: &controller}})
+				}
+				l.Items = append(l.Items, *cp)
+			}
+			f.conn.lists[replicaSetsGVR.String()+"|shop"] = l
+			fact := factOf(deploysGVR, d, "r1", "t", acquisition())
+			fact.History = &historyFacts{PartnerRevision: 4, PartnerObject: "web-r4", PartnerObjectUID: "rs-uid", PartnerDigest: dg}
+			ok, why := f.svc.stateEffect(context.Background(), f.conn, ActionStepDTO{Verb: "rollout-undo"}, fact, &fleet.RevisionExpect{ObjectUID: "rs-uid", TemplateDigest: dg}, d)
+			if ok != c.holds {
+				t.Fatalf("holds=%v: %q", c.holds, why)
+			}
+		})
 	}
 }

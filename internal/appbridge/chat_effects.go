@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/workloads"
@@ -140,10 +141,13 @@ func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionS
 // currentPartner is a Deployment undo's further witness (§1): its current
 // ReplicaSet is the partner's, by A1.1's evidence rule (stage 3 re-review,
 // finding 2) - the partner, read by name, is the pinned UID, controlled by
-// this Deployment's UID, with the pinned template; no other ReplicaSet the
-// Deployment controls has that template (an ambiguity is unestablished,
-// and so is a partial read); and, corroborating, it carries the
-// Deployment's revision. Another kind's undo has none.
+// this Deployment's UID, with the pinned template, and matches its
+// selector; the complete LIST of the Deployment's ReplicaSets holds it,
+// as the controller's own candidate set does (re-review 2: a ReplicaSet
+// that stops matching is released, whatever its controller reference
+// says), and no other of them has that template (an ambiguity is
+// unestablished, and so is a partial read); and, corroborating, it
+// carries the Deployment's revision. Another kind's undo has none.
 func (s *ChatService) currentPartner(ctx context.Context, conn ChatConn, f actionFact, partner *fleet.RevisionExpect, d *unstructured.Unstructured) (bool, string) {
 	if f.Kind != "Deployment" {
 		return true, ""
@@ -175,6 +179,9 @@ func (s *ChatService) currentPartner(ctx context.Context, conn ChatConn, f actio
 	if err != nil {
 		return false, err.Error()
 	}
+	if !sel.Matches(labels.Set(rs.GetLabels())) {
+		return false, "the partner ReplicaSet no longer matches the Deployment's selector"
+	}
 	list, err := conn.ChatList(ctx, replicaSetsGVR, f.Namespace, sel.String(), chatReplicaSetsMax)
 	if err != nil {
 		return false, "the Deployment's ReplicaSets could not be read: " + chatScrub(readError(err), nil)
@@ -182,11 +189,18 @@ func (s *ChatService) currentPartner(ctx context.Context, conn ChatConn, f actio
 	if len(list.Items) >= chatReplicaSetsMax || list.GetContinue() != "" {
 		return false, "the Deployment's ReplicaSets were read only in part: Klyx cannot rule out another with the partner's template"
 	}
+	member := false
 	for i := range list.Items {
 		o := &list.Items[i]
-		if string(o.GetUID()) != partner.ObjectUID && controllerUID(o) == f.UID && digest(o) == partner.TemplateDigest {
+		switch {
+		case string(o.GetUID()) == partner.ObjectUID:
+			member = controllerUID(o) == f.UID && digest(o) == partner.TemplateDigest
+		case controllerUID(o) == f.UID && digest(o) == partner.TemplateDigest:
 			return false, "ambiguous: another ReplicaSet of this Deployment has the partner's template"
 		}
+	}
+	if !member {
+		return false, "the partner ReplicaSet is not among the Deployment's ReplicaSets, as their LIST reads them"
 	}
 	const rev = "deployment.kubernetes.io/revision"
 	if have := rs.GetAnnotations()[rev]; have == "" || have != d.GetAnnotations()[rev] {
