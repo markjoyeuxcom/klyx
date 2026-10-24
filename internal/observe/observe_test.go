@@ -558,11 +558,20 @@ func TestErrorThenRecoveryWithoutObjectChangesAdvancesVer(t *testing.T) {
 	h.eventually(h.partIs("things", "cms", live), "live")
 	p0, _ := h.sink.part("things", "cms")
 
+	// Hold the restart's list: publication is throttled, and an in-memory
+	// relist can otherwise complete within one throttle window, so the
+	// stale part is never published (correctly - a blip that recovers
+	// before the next publication is not shown).
+	gate := make(chan struct{})
+	src.mu.Lock()
+	src.listGate = gate
+	src.mu.Unlock()
 	src.liveWatcher().Error(&apierrors.NewInternalError(errors.New("etcd hiccup")).ErrStatus)
 	h.eventually(h.partIs("things", "cms", func(p Part) bool {
 		return p.Coverage == Stale && kindOf(p).LastGoodAt != nil && p.Counts.Total == 1
 	}), "stale with retained evidence")
 	p1, _ := h.sink.part("things", "cms")
+	close(gate)
 	h.eventually(h.partIs("things", "cms", live), "live after the restart's Replace")
 	p2, _ := h.sink.part("things", "cms")
 	if !(p0.Ver < p1.Ver && p1.Ver < p2.Ver) || p0.Obs != p2.Obs {
