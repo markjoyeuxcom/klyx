@@ -84,7 +84,7 @@ A context named `kind-*` and a namespace label identify nothing: a context is an
 
 The fleet, the runner's plant checks and the investigation all use the connection the preflight resolved.
 
-**E1's repository is the one source outside the cluster.** Klyx runs Git only over https and ssh (`gitcli.ValidateApprovedURL`), and Flux must fetch the same history. So E1 keeps a public fixture repository holding only the lab's manifests, fetched from GitHub by both Flux and Klyx. Today that is the A1 lab's `klyx-lab-a1`. Keeping it, or moving the fixture to a new repository, is the owner's decision before stage 1. The repository's commits are pinned in `scenario.yaml`, and a force-push changes the plant, so the run is `not-ready`.
+**E1's repository is the one source outside the cluster.** Klyx runs Git only over https and ssh (`gitcli.ValidateApprovedURL`), and Flux must fetch the same history. So E1 keeps a public fixture repository holding only the lab's manifests, fetched from GitHub by both Flux and Klyx. It is the A1 lab's `klyx-lab-a1`, which the owner decided on 2026-10-24 to keep as E1's fixture. The repository's commits are pinned in `scenario.yaml`, and a force-push changes the plant, so the run is `not-ready`.
 
 `setup.sh`, `install.sh` and `teardown.sh` run the same ownership check before any write.
 
@@ -396,7 +396,7 @@ Codex resolved the earlier findings and accepted `delivery-uncertain` as an exte
 
 ### 15.5 ACCEPT (2026-10-24)
 
-Codex accepted stage 1 at 422b8f9 (handoff f2d39393), with no remaining findings, after the review and two re-reviews, the `delivery-uncertain` extension included. At that head, from a clean build, the self-test passes 15 of 15 on the kind lab (reports under `eval-lab/out/selftest-20261024T124158`). Still owed: stage 2 (E3 and E4), the owner's fixture-repository decision and the first real-model run.
+Codex accepted stage 1 at 422b8f9 (handoff f2d39393), with no remaining findings, after the review and two re-reviews, the `delivery-uncertain` extension included. At that head, from a clean build, the self-test passes 15 of 15 on the kind lab (reports under `eval-lab/out/selftest-20261024T124158`). Still owed: stage 2 (E3 and E4) and the first real-model run. The owner has since kept `klyx-lab-a1` as E1's fixture.
 
 ## 16. As built: stage 2 (2026-10-24)
 
@@ -451,4 +451,4 @@ The plant's paths can now name a map key holding dots or slashes, such as `annot
 
 ### 16.3 ACCEPT (2026-10-24)
 
-Codex accepted stage 2 at 1563142 (handoff 26dc2826), with no remaining findings, after the review and one re-review. At that head, from a clean build, the self-test passes 19 of 19 on the kind lab with the stricter E3 and E4 plants (reports under `eval-lab/out/selftest-20261024T132315`). The eval is now ready for stage 3: the owner's fixture-repository decision, then the owner's first real-model run.
+Codex accepted stage 2 at 1563142 (handoff 26dc2826), with no remaining findings, after the review and one re-review. At that head, from a clean build, the self-test passes 19 of 19 on the kind lab with the stricter E3 and E4 plants (reports under `eval-lab/out/selftest-20261024T132315`). The eval is now ready for stage 3, the owner's first real-model run; `klyx-lab-a1` stays E1's fixture (the owner, 2026-10-24).
