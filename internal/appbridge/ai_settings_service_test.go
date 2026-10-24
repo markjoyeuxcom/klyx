@@ -405,3 +405,39 @@ func TestAISettings_ModelsListWithoutAModel(t *testing.T) {
 		t.Fatal("Save still needs a model")
 	}
 }
+
+// AI A3 §6: the panel's setting reaches the AI state, and a draft that
+// does not carry it keeps the current value.
+func TestAISettings_ProposeActions(t *testing.T) {
+	f := newSettingsFixture(t, baseFleet)
+	if f.ai.load().ProposalsOff {
+		t.Fatal("proposals are on by default")
+	}
+	off := false
+	base := AISettingsDTO{Provider: "openaiCompatible", Model: "llama3.1", BaseURL: "http://localhost:11434", KeySource: "none"}
+	if r := f.svc.SaveAISettings(base); !r.OK || f.ai.load().ProposalsOff { // a draft without the field, on
+		t.Fatalf("a draft without the setting keeps it on: %+v", r)
+	}
+	d := base
+	d.ProposeActions = &off
+	if r := f.svc.SaveAISettings(d); !r.OK {
+		t.Fatal(r)
+	}
+	if !f.ai.load().ProposalsOff || !strings.Contains(f.file(t), "proposeActions: false") {
+		t.Fatalf("off: %+v", f.ai.load())
+	}
+	if got := f.svc.GetAISettings().Persisted.ProposeActions; got == nil || *got {
+		t.Fatalf("the panel reads it back: %v", got)
+	}
+	if r := f.svc.SaveAISettings(base); !r.OK { // a draft without the field
+		t.Fatal(r)
+	}
+	if !f.ai.load().ProposalsOff {
+		t.Fatal("a draft that does not carry the setting kept it off")
+	}
+	on := true
+	d.ProposeActions = &on
+	if r := f.svc.SaveAISettings(d); !r.OK || f.ai.load().ProposalsOff {
+		t.Fatalf("on again: %+v", r)
+	}
+}

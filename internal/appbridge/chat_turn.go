@@ -158,6 +158,7 @@ func (r *turnRunner) seedRead(ctx context.Context) error {
 	}
 	res := newChatTools(gc, r.s.now).as(r.nextReadID()).getGVR(ctx, gvr, ns, name, sd.UID)
 	r.addRead(res.Read)
+	r.recordFacts(res)
 	r.evalRead(res.Read.Tool, json.RawMessage(mustJSON(map[string]any{"namespace": ns, "name": name, "resource": gvr.Resource})), res)
 	if err := r.aborted(); err != nil {
 		return err
@@ -309,6 +310,9 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 	tools := chatAITools()
 	if r.c.kind == kindInvestigation {
 		defs := []ChatToolDef{findingsToolDef()}
+		if r.proposalsOn() {
+			defs = append(defs, proposeActionsToolDef())
+		}
 		if len(r.c.members) > 0 {
 			defs = append(defs, fleetDiffToolDef())
 		}
@@ -466,8 +470,76 @@ func (r *turnRunner) toolsSystem() string {
 	sys := fmt.Sprintf(chatToolsSystem, r.c.cluster)
 	if r.c.kind == kindInvestigation {
 		sys += invToolsAddendum
+		if r.proposalsOn() {
+			sys += fmt.Sprintf(actionsToolsAddendum, strings.Join(matrixVerbs(), ", "))
+		}
 	}
 	return sys
+}
+
+// actionsToolsAddendum frames propose_actions (AI A3 §2).
+const actionsToolsAddendum = `
+- When a mitigation is warranted, you may also call propose_actions once: an ordered plan of at most 4 of Klyx's existing verbs (%s), each on an object you read by UID in this investigation. Read a target with get_resource first; an undo needs rollout_history's partner revision. Each step cites at least one read or check about its target. Klyx checks that each step is eligible to run, not that it is right; the operator reviews and confirms each step in order; you never run anything, and a proposal never makes a cause proven.`
+
+// proposalsOn: an investigation may propose actions unless Settings > AI
+// turned them off (AI A3 §6). Chat never may.
+func (r *turnRunner) proposalsOn() bool {
+	if r.c.kind != kindInvestigation {
+		return false
+	}
+	st := r.s.ai.load()
+	return st != nil && !st.ProposalsOff
+}
+
+// recordFacts keeps what an investigation's read established about its
+// objects (AI A3 §2.2), as addRead keeps the read: never after the turn
+// was stopped or the conversation cleared.
+func (r *turnRunner) recordFacts(res ChatToolResult) {
+	if r.c.kind != kindInvestigation || len(res.facts) == 0 || res.Read.Outcome == "failed" || res.Read.Outcome == "cancelled" {
+		return
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if r.s.convs[r.c.key] != r.c || r.c.active != r.turn || r.turn.stopped {
+		return
+	}
+	for _, f := range res.facts {
+		r.c.facts.add(f)
+	}
+}
+
+// proposeActions records the turn's action proposal as Klyx decides it (AI
+// A3 §2): once a turn, an invalid call answered with its error and retried
+// at most once. It is not a read: no ledger entry, no tool budget.
+func (r *turnRunner) proposeActions(call ai.ToolCall) ai.ToolResult {
+	fail := func(msg string) ai.ToolResult {
+		b, _ := json.Marshal(map[string]any{"errors": []string{msg}})
+		return ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true, Content: string(b)}
+	}
+	if !r.proposalsOn() {
+		return fail(errActionsOff.Error())
+	}
+	r.s.mu.Lock()
+	r.ex.actionCalls++
+	n, done := r.ex.actionCalls, r.ex.plan != nil
+	r.s.mu.Unlock()
+	switch {
+	case done:
+		return fail("a plan was already proposed this turn: answer briefly now")
+	case n > actionsAttemptsTurn:
+		return fail("propose_actions was already retried this turn: answer with what you have")
+	}
+	in, err := parseActions(call.Args)
+	if err != nil {
+		return fail("propose_actions: " + chatScrub(err.Error(), nil) + "; correct it and call once more")
+	}
+	r.s.mu.Lock()
+	ledger := ledgerLocked(r.c)
+	p := validatePlan(in, r.c.facts, ledger, anchorOf(r.c.anchor, ledger))
+	r.ex.plan, r.ex.proposed = &p, &in
+	r.s.version++
+	r.s.mu.Unlock()
+	return ai.ToolResult{CallID: call.ID, Name: call.Name, Content: actionsResult(p.dto)}
 }
 
 // dropCall removes a call record whose request was never sent.
@@ -493,6 +565,10 @@ func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.T
 	for i, call := range calls {
 		if call.Name == toolFindings && r.c.kind == kindInvestigation {
 			results[i] = r.reportFindings(call)
+			continue
+		}
+		if call.Name == toolActions && r.c.kind == kindInvestigation {
+			results[i] = r.proposeActions(call)
 			continue
 		}
 		reads++
@@ -524,6 +600,7 @@ func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.T
 			res := exec.as(r.nextReadID()).Run(ctx, call.Name, call.Args)
 			results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, Content: string(res.JSON), IsError: res.Read.Outcome == "failed"}
 			r.addRead(res.Read)
+			r.recordFacts(res)
 			r.evalRead(call.Name, call.Args, res)
 		}()
 	}

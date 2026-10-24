@@ -180,7 +180,9 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	checks = append(checks, current...)
 	env.Data = data
 	env.Checks = capChecks(checks)
-	return t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
+	res := t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
+	res.facts = []actionFact{factOf(gvr, raw, t.readID, env.ReadAt)}
+	return res
 }
 
 // conditionRaw is one condition's last transition, status, reason and raw

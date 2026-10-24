@@ -23,6 +23,7 @@ type aiYAML struct {
 	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"`
 	TLSSkipVerify        bool   `yaml:"tlsSkipVerify,omitempty"`
 	RefusalFallback      *bool  `yaml:"refusalFallback,omitempty"`
+	ProposeActions       *bool  `yaml:"proposeActions,omitempty"`
 }
 
 // SaveAI replaces the fleet file's top-level `ai:` block with a (or appends
@@ -57,7 +58,8 @@ func AIEqual(x, y AIConfig) bool {
 	return x.Provider == y.Provider && x.Model == y.Model && x.KeySource == y.KeySource &&
 		x.APIKeyEnv == y.APIKeyEnv && x.APIKey == y.APIKey && x.BaseURL == y.BaseURL &&
 		x.CLIPath == y.CLIPath && x.AllowProtectedEgress == y.AllowProtectedEgress &&
-		x.TLSSkipVerify == y.TLSSkipVerify && x.UsesRefusalFallback() == y.UsesRefusalFallback()
+		x.TLSSkipVerify == y.TLSSkipVerify && x.UsesRefusalFallback() == y.UsesRefusalFallback() &&
+		x.UsesProposeActions() == y.UsesProposeActions()
 }
 
 // renderAIBlock renders `ai:` plus its fields, indented two spaces, with
@@ -73,7 +75,7 @@ func renderAIBlock(a AIConfig) (string, error) {
 	if err := enc.Encode(aiYAML{
 		Provider: provider, Model: a.Model, KeySource: a.KeySource, APIKeyEnv: a.APIKeyEnv, APIKey: a.APIKey,
 		BaseURL: a.BaseURL, CLIPath: a.CLIPath, AllowProtectedEgress: a.AllowProtectedEgress,
-		TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.RefusalFallback,
+		TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.RefusalFallback, ProposeActions: a.ProposeActions,
 	}); err != nil {
 		return "", fmt.Errorf("render ai block: %w", err)
 	}

@@ -1,6 +1,6 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14); stage 1 is built (§15). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built (§16). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
 An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
@@ -450,3 +450,28 @@ Codex requested changes at 17cf776 (five P2) and accepted deviations 1 to 3 and 
 **Tests:** the review's probes as regressions: an undo with no or a partial expectation on both paths; the dialog's in-flight and cancelled-opening cases and a revision without identity; tokens under an unchanged clock, a stepped-back clock and concurrent attempts, and a lost reconcile after a handled one; exact int64 digests through all three inputs and the full undo refusal; a fence before the PATCH through a real client and an httptest server, with the forwarded-write control in `readfence`.
 
 **Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest (2,444 tests), eslint (main's four warnings). A mutation pass over the fixes caught 13 of 13; the last, the `waiting` guard behind a disabled button, after a test of Enter in the protected field.
+
+### 15.2 ACCEPT (2026-10-24)
+
+Codex accepted stage 1 at 9659602 after the review of 17cf776, with no remaining findings: the five fixes hold, and the context recorder, the Scale and typed-delete receipts, matrix-only outcomes, the conservative digest, the separate attempt record and the process-lifetime token policy are accepted. Later verification must still establish each effect with the accepted design's identity, generation and request witnesses.
+
+## 16. Stage 2 as built: the proposal (2026-10-24)
+
+**What it adds:**
+- **The action facts** (`chat_facts.go`): extracted by `factOf` as `get_resource` (the anchor's seed read included), `gitops_unit` and `rollout_history` build their results, never sent (`ChatToolResult.facts` is unexported); 64 subjects of at most 1 KiB, the oldest dropped first, an object part and a history part each replaced by a newer read of its kind. `rollout_history`'s history part pins the partner's revision object UID and its `workloads.TemplateDigest`, the digest the undo path checks.
+- **The proposal** (`chat_actions.go`): `propose_actions` (its verb an enum of the matrix) and the snapshot `actions` block, parsed strictly within 8 KiB; `validatePlan` decides each step in order with §1's and §2.3's rules, and a step refused or unsupported holds every later one. A plan's own rules (the same step twice, a contradicting pair) are decided before a step's eligibility, so a contradiction is named as one.
+- **The turn:** the tool is offered, and the prompt names it, only in an investigation with proposals on; a call is routed like `report_findings`, not a read; its result is each step's state and reason and "nothing runs". The exchange carries `ActionPlanDTO`; the plan and the proposal count in its retention bytes.
+- **The remedy** (§2.5): each part keeps 2,000 characters; `report_findings` has its 24 KiB aggregate bound, named when exceeded.
+- **The setting:** `ai.proposeActions` (default on) through the config, the panel's DTO and `AIState.ProposalsOff`. A change publishes a new AI state, which fences open conversations.
+
+**Deviations, for review:**
+1. **Eligibility needs the object's own read.** §2.3 also admits an object "reached by a UID join"; a join (an owner chain, a dependency edge) carries no facts, so such a target is refused with "read it first". The model reads it with `get_resource`.
+2. **A proposal is decided twice.** As `report_findings` is: at the call, which is what the model reads back, and again at the turn's end against the settled ledger and facts, which is what the exchange keeps. A step citing a read of its own batch can be refused at the call and offered at the end.
+3. **The facts are bounded on their own** (64 KiB), not counted in the conversation's retention bytes; the plan and proposal are counted in the exchange's.
+4. **The panel's setting is a pointer.** A draft that does not carry `proposeActions` keeps the current value, so an older panel cannot turn proposals off by saving.
+5. **Kinds match exactly.** The target's kind is compared as the API names it (`Deployment`); a lower-case kind is refused as not in the matrix, and the model can retry.
+6. **Supersession and the model's feedback of outcomes** belong with the steps' runs (stages 3 and 4): stage 2 keeps one plan per exchange.
+
+**Tests** (`chat_actions_test.go`, `ai_settings_service_test.go`, `aiwrite_test.go`): fact extraction per kind and the record's bounds; the acceptance plan and its pinned partner; every matrix, identity, parameter and §1 refusal; citations (an unknown ID, an unrelated object, the anchor); the plan as a whole (holding, duplicates, contradictions, reconcile after suspend); the input's shape; the model's result carrying no fact; the turn in tools and snapshot modes with proposals on and off; chat never offered the tool; a proposal decided against its settled turn; the remedy and the aggregate bound; the partner digest agreeing with the undo path's; facts never in an envelope; the setting's default, round trip, draft without the field and startup state.
+
+**Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 31 of 31, two after the tests and the rule order were tightened.

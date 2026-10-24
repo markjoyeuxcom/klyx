@@ -190,3 +190,32 @@ func TestOnlyAIChanged(t *testing.T) {
 		}
 	}
 }
+
+// AI A3 §6: proposeActions is on by default, round-trips when turned off,
+// and an unset value stays unset (the default) when written.
+func TestSaveAI_ProposeActions(t *testing.T) {
+	if !(&AIConfig{}).UsesProposeActions() || !(*AIConfig)(nil).UsesProposeActions() {
+		t.Fatal("on by default")
+	}
+	path := writeFleet(t, "clusters:\n  - name: a\n")
+	off := false
+	if err := SaveAI(path, AIConfig{Provider: "anthropic", KeySource: "keychain", ProposeActions: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readFleet(t, path), "proposeActions: false") {
+		t.Fatalf("written:\n%s", readFleet(t, path))
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.AI.UsesProposeActions() {
+		t.Fatalf("reload: %+v %v", cfg.AI, err)
+	}
+	if err := SaveAI(path, AIConfig{Provider: "anthropic", KeySource: "keychain"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(readFleet(t, path), "proposeActions") {
+		t.Fatal("an unset value is the default and is not written")
+	}
+	if AIEqual(AIConfig{ProposeActions: &off}, AIConfig{}) {
+		t.Fatal("the setting changes behaviour, so it counts in AIEqual")
+	}
+}

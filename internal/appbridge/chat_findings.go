@@ -29,6 +29,9 @@ const (
 	findingsMissingMax    = 10
 	findingsMissingNote   = 300
 	findingsRemedyMax     = 2000
+	// findingsArgsMax is report_findings' aggregate bound (AI A3 §2.5): an
+	// additional limit, which a report at every field's cap can exceed
+	findingsArgsMax       = 24 << 10
 	findingsAttemptsTurn  = 2 // one invalid call may be retried once
 	labelReading          = "reading"
 	labelSuspected        = "suspected"
@@ -76,7 +79,7 @@ type findingsInput struct {
 
 func parseFindings(raw json.RawMessage) (findingsInput, error) {
 	var in findingsInput
-	if err := strictArgs(raw, &in); err != nil {
+	if err := strictArgsWithin(raw, &in, findingsArgsMax); err != nil {
 		return in, err
 	}
 	if len(in.Findings) > findingsMax {
@@ -359,7 +362,8 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 		out.Missing = append(out.Missing, MissingDTO{From: "model", Text: chatScrub(m, &n)})
 	}
 	if in.Remedy != nil && (in.Remedy.Git != "" || in.Remedy.Mitigation != "") {
-		out.Remedy = &RemedyDTO{Git: chatScrub(in.Remedy.Git, &n), Mitigation: chatScrub(in.Remedy.Mitigation, &n), Label: proposedNotRun}
+		// each part at its documented 2,000, never chatScrub's 500 (AI A3 §2.5)
+		out.Remedy = &RemedyDTO{Git: chatScrubWithin(in.Remedy.Git, findingsRemedyMax, &n), Mitigation: chatScrubWithin(in.Remedy.Mitigation, findingsRemedyMax, &n), Label: proposedNotRun}
 	}
 	return out
 }

@@ -263,6 +263,9 @@ func byName(kind, ns, name string) ChatCheckSubject {
 type ChatToolResult struct {
 	JSON []byte
 	Read ChatRead
+	// facts are what Klyx read off the objects of this call, for the
+	// action proposals' eligibility (AI A3 §2.2): never sent
+	facts []actionFact
 }
 
 type chatIdentity struct {
@@ -610,12 +613,19 @@ var (
 // type and no trailing data (Codex review of aea77e7: a null or a repeated
 // member must never silently widen a read). Empty arguments are {}.
 func strictArgs(raw json.RawMessage, into any) error {
+	return strictArgsWithin(raw, into, 4096)
+}
+
+// strictArgsWithin is strictArgs within max bytes: a call whose documented
+// fields are larger than a read's arguments (report_findings,
+// propose_actions) has its own aggregate bound, named when it is exceeded.
+func strictArgsWithin(raw json.RawMessage, into any, max int) error {
 	b := bytes.TrimSpace(raw)
 	if len(b) == 0 {
 		b = []byte("{}")
 	}
-	if len(b) > 4096 {
-		return errors.New("arguments are too large")
+	if len(b) > max {
+		return fmt.Errorf("arguments are too large: at most %d bytes in all", max)
 	}
 	if err := strictShape(b); err != nil {
 		return fmt.Errorf("invalid arguments: %s", err.Error())
@@ -697,7 +707,13 @@ func walkValue(dec *json.Decoder, depth int, member string) error {
 // records - cluster text, read errors, connection reasons - adding its
 // redactions to n when n is not nil (Codex review of aea77e7).
 func chatScrub(s string, n *int) string {
-	out, c := ai.ScrubEvidence(s, chatStringMax)
+	return chatScrubWithin(s, chatStringMax, n)
+}
+
+// chatScrubWithin is chatScrub with its own cap, for a field documented
+// longer than chatStringMax (a remedy part).
+func chatScrubWithin(s string, max int, n *int) string {
+	out, c := ai.ScrubEvidence(s, max)
 	if n != nil {
 		*n += c
 	}
@@ -1621,6 +1637,7 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	if wantUID != "" && string(u.GetUID()) != wantUID {
 		return t.refuse(toolGet, gvr.Resource+" "+target, errors.New("the object was replaced since you asked about it (its UID changed); nothing about the new object was read"))
 	}
+	read := u
 	// coverage S0b §3: the sanitiser runs before the structural projection,
 	// so a registered surface never reaches a model, scrubbed or not
 	u = &unstructured.Unstructured{Object: crd.SanitizeEmbedded(gvr.Group, u.GetKind(), u.Object).Object}
@@ -1666,7 +1683,9 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	checks = append(checks, eventChecks(data.Events)...)
 	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
-	return t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
+	res := t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
+	res.facts = []actionFact{factOf(gvr, read, t.readID, env.ReadAt)}
+	return res
 }
 
 type chatLogData struct {

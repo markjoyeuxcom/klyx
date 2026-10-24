@@ -11,6 +11,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/moomora/klyx/internal/workloads"
 )
 
 // AI A1.1 (docs/superpowers/specs/2026-10-24-klyx-ai-a1-1-rollout-history.md):
@@ -424,7 +426,35 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	read := ChatRead{Tool: toolRollout, Target: target, Outcome: "completed", Redacted: p.redacted,
 		Refs:   []ChatRef{{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: uid}},
 		Detail: fmt.Sprintf("%d revisions held, %d pods listed", data.History.Held, data.Pods.Listed)}
-	return t.finish(env, read)
+	out := t.finish(env, read)
+	// AI A3 §2.2: the workload's facts, and what this read established -
+	// the desired revision and the partner an undo is pinned to
+	fact := factOf(gvr, w, t.readID, env.ReadAt)
+	fact.History = historyFactsOf(kind, desired, partner, t.readID, env.ReadAt)
+	out.facts = []actionFact{fact}
+	return out
+}
+
+// historyFactsOf is what rollout_history established for an undo: the
+// desired revision, and the partner's revision object and template digest
+// (workloads.TemplateDigest, the digest the undo's own path computes).
+func historyFactsOf(kind string, desired, partner *rolloutRev, readID, readAt string) *historyFacts {
+	h := &historyFacts{ReadID: readID, ReadAt: readAt}
+	if desired != nil {
+		h.DesiredRevision = desired.num
+	}
+	if partner != nil {
+		path := []string{"spec", "template"}
+		if kind != "Deployment" {
+			path = []string{"data", "spec", "template"}
+		}
+		if tm, ok, _ := unstructured.NestedMap(partner.obj.Object, path...); ok {
+			if d, err := workloads.TemplateDigest(tm, kind == "Deployment"); err == nil {
+				h.PartnerRevision, h.PartnerObjectUID, h.PartnerDigest = partner.num, string(partner.obj.GetUID()), d
+			}
+		}
+	}
+	return h
 }
 
 // ownedBy: a pod whose controller is a ReplicaSet in the list owned by the

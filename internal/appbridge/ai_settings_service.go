@@ -35,6 +35,9 @@ type AISettingsDTO struct {
 	TLSSkipVerify        bool   `json:"tlsSkipVerify"`
 	RefusalFallback      bool   `json:"refusalFallback"`
 	CLIPath              string `json:"cliPath"` // claudeCLI: an explicit binary; empty finds claude
+	// ProposeActions is AI A3 §6's setting; nil (a draft that does not
+	// carry it) keeps the current value, never turns proposals off
+	ProposeActions *bool `json:"proposeActions,omitempty"`
 }
 
 // AISettingsStateDTO is everything the Settings > AI panel shows. It never
@@ -119,7 +122,7 @@ func toDTO(a config.AIConfig) AISettingsDTO {
 	return AISettingsDTO{
 		Provider: a.Provider, Model: a.Model, KeySource: a.KeySource, APIKeyEnv: a.APIKeyEnv, BaseURL: a.BaseURL,
 		AllowProtectedEgress: a.AllowProtectedEgress, TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.UsesRefusalFallback(),
-		CLIPath: a.CLIPath,
+		CLIPath: a.CLIPath, ProposeActions: boolPtr(a.UsesProposeActions()),
 	}
 }
 
@@ -127,10 +130,15 @@ func toDTO(a config.AIConfig) AISettingsDTO {
 // what the panel never edits (a legacy key).
 func fromDTO(d AISettingsDTO, cur config.AIConfig) config.AIConfig {
 	fallback := d.RefusalFallback
+	propose := cur.ProposeActions
+	if d.ProposeActions != nil {
+		propose = boolPtr(*d.ProposeActions)
+	}
 	a := config.AIConfig{
 		Provider: strings.TrimSpace(d.Provider), Model: strings.TrimSpace(d.Model), KeySource: d.KeySource,
 		APIKeyEnv: strings.TrimSpace(d.APIKeyEnv), BaseURL: strings.TrimSpace(d.BaseURL), CLIPath: strings.TrimSpace(d.CLIPath),
 		AllowProtectedEgress: d.AllowProtectedEgress, TLSSkipVerify: d.TLSSkipVerify, RefusalFallback: &fallback,
+		ProposeActions: propose,
 	}
 	if a.KeySource == string(ai.KeySourceLegacy) {
 		a.APIKey = cur.APIKey
@@ -182,7 +190,9 @@ func (s *AISettingsService) apply(a config.AIConfig, requireBuild bool) error {
 	if werr := s.saveAI(s.path, a); werr != nil {
 		return werr
 	}
-	SetAIState(s.aiSvc, NewAIState(settings.Provider, b, err, a.AllowProtectedEgress))
+	st := NewAIState(settings.Provider, b, err, a.AllowProtectedEgress)
+	st.ProposalsOff = !a.UsesProposeActions()
+	SetAIState(s.aiSvc, st)
 	s.applied = a
 	return nil
 }
@@ -441,3 +451,5 @@ func (s *AISettingsService) CLIStatus(d AISettingsDTO) AICLIStatusDTO {
 	}
 	return out
 }
+
+func boolPtr(b bool) *bool { return &b }

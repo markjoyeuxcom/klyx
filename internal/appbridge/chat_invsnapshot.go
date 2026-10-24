@@ -38,6 +38,29 @@ This is an investigation of one object, the first section of <cluster-data>, pin
 
 var findingsBlock = regexp.MustCompile("(?s)```findings[ \\t]*\\r?\\n(.*?)\\r?\\n```")
 
+// actionsSnapshotAddendum frames a snapshot investigation's action
+// proposal (AI A3 §2.1): one fenced actions block after the findings.
+const actionsSnapshotAddendum = `
+- When a mitigation is warranted, you may also end with one fenced actions block, after the findings block:
+` + "```actions" + `
+{"steps":[{"verb":"one of: %s","target":{"kind":"...","namespace":"...","name":"..."},"params":{"revision":4},"cites":["r1"],"why":"..."}]}
+` + "```" + `
+- At most 4 steps, each an existing Klyx verb on an object in <cluster-data> that Klyx read by UID; params only for scale (replicas) and rollout-undo (revision: the partner revision the rollout history established). Each step cites at least one read or check about its target. Klyx checks that each step is eligible to run, not that it is right; the operator reviews and confirms each step in order; you never run anything.`
+
+var actionsBlock = regexp.MustCompile("(?s)```actions[ \\t]*\\r?\\n(.*?)\\r?\\n```")
+
+// takeActions splits a snapshot answer into its prose and its last actions
+// block.
+func takeActions(answer string) (string, string, bool) {
+	all := actionsBlock.FindAllStringSubmatchIndex(answer, -1)
+	if len(all) == 0 {
+		return answer, "", false
+	}
+	m := all[len(all)-1]
+	prose := strings.TrimSpace(answer[:m[0]] + answer[m[1]:])
+	return prose, answer[m[2]:m[3]], true
+}
+
 // takeFindings splits a snapshot answer into its prose and its last
 // findings block.
 func takeFindings(answer string) (string, string, bool) {
@@ -80,6 +103,7 @@ func (p *invPlan) step(tool, args, label string) (ChatToolResult, bool, error) {
 	p.reads++
 	res := p.exec.as(p.r.nextReadID()).Run(p.ctx, tool, json.RawMessage(args))
 	p.r.addRead(res.Read)
+	p.r.recordFacts(res)
 	p.r.evalRead(tool, json.RawMessage(args), res)
 	p.sections = append(p.sections, string(res.JSON))
 	p.included = append(p.included, res.Read.ID+" "+label+" ("+res.Read.Outcome+")")
@@ -301,7 +325,11 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 		return "", err
 	}
 	idx := r.startCall(st)
-	res, err := st.Provider.Complete(ctx, ai.Request{System: fmt.Sprintf(chatSnapshotSystem, r.c.cluster) + invSnapshotAddendum, User: doc, Purpose: ai.PurposeChat})
+	system := fmt.Sprintf(chatSnapshotSystem, r.c.cluster) + invSnapshotAddendum
+	if r.proposalsOn() {
+		system += fmt.Sprintf(actionsSnapshotAddendum, strings.Join(matrixVerbs(), ", "))
+	}
+	res, err := st.Provider.Complete(ctx, ai.Request{System: system, User: doc, Purpose: ai.PurposeChat})
 	r.evalSnapshotSent(err)
 	if err != nil {
 		r.finishCall(idx, "", nil, callOutcome(err))
@@ -309,6 +337,9 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 	}
 	r.finishCall(idx, res.ModelUsed, nil, "completed")
 	prose, block, found := takeFindings(res.Text)
+	// an actions block is taken out of the prose whether or not proposals
+	// are on; it is decided only when they are (AI A3 §6)
+	prose, ablock, afound := takeActions(prose)
 	ledger := r.ledger()
 	a := anchorOf(r.c.anchor, ledger)
 	var f FindingsDTO
@@ -333,6 +364,15 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 	}
 	f.Scope = invSnapshotNote
 	r.ex.findings = &f
+	if afound && r.proposalsOn() {
+		// the snapshot's reads are all done: its ledger and facts are settled
+		if ain, aerr := parseActions(json.RawMessage(ablock)); aerr != nil {
+			r.ex.plan = &actionPlan{dto: ActionPlanDTO{Steps: []ActionStepDTO{}, Note: "the actions could not be read: " + chatScrub(aerr.Error(), nil)}}
+		} else {
+			p := validatePlan(ain, r.c.facts, ledgerLocked(r.c), a)
+			r.ex.plan = &p
+		}
+	}
 	r.s.mu.Unlock()
 	return prose, nil
 }

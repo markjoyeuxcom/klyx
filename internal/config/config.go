@@ -93,6 +93,9 @@ type AIConfig struct {
 	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"`
 	TLSSkipVerify        bool   `yaml:"tlsSkipVerify"`   // openaiCompatible only: a self-signed local server
 	RefusalFallback      *bool  `yaml:"refusalFallback"` // anthropic: server-side refusal fallback, default on
+	// ProposeActions lets an investigation propose day-2 verbs for the
+	// operator to run (AI A3 §6), default on
+	ProposeActions *bool `yaml:"proposeActions"`
 
 	// The pre-2026-10-13 spelling, still read: backend hosted = anthropic,
 	// local = openaiCompatible; apiKey is a plain-text key (keySource legacy).
@@ -102,6 +105,12 @@ type AIConfig struct {
 
 // Enabled reports whether AI is configured to run (a non-nil, non-off backend).
 func (a *AIConfig) Enabled() bool { return a != nil && a.Provider != "" && a.Provider != "off" }
+
+// UsesProposeActions reports whether investigations may propose actions
+// (AI A3 §6, default on).
+func (a *AIConfig) UsesProposeActions() bool {
+	return a == nil || a.ProposeActions == nil || *a.ProposeActions
+}
 
 // UsesRefusalFallback reports the anthropic refusal-fallback setting (default on).
 func (a *AIConfig) UsesRefusalFallback() bool {

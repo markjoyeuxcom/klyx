@@ -15,6 +15,9 @@ export type AISettings = {
   tlsSkipVerify: boolean;
   refusalFallback: boolean;
   cliPath: string;
+  // AI A3 §6: investigations may propose actions (default on); absent in a
+  // draft, the backend keeps the current value
+  proposeActions?: boolean;
 };
 
 export type AISettingsState = {

@@ -95,6 +95,9 @@ type conversation struct {
 	// reads numbers the conversation's ledger for citation (AI A1 §2):
 	// never reset, so an ID removed by retention is never reused
 	reads int
+	// facts are what an investigation's reads established about their
+	// objects, for its action proposals (AI A3 §2.2): bounded on their own
+	facts *actionFacts
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -130,6 +133,12 @@ type exchange struct {
 	findings     *FindingsDTO
 	reported     *findingsInput
 	findingCalls int
+	// plan is an investigation turn's action proposal as Klyx decided it
+	// (AI A3 §2); proposed holds the model's until the turn ends, when it
+	// is decided again against the turn's settled ledger and facts
+	plan        *actionPlan
+	proposed    *actionsInput
+	actionCalls int
 	// a snapshot investigation's sections left out to fit (read IDs) and
 	// the plan steps its budget stopped
 	snapshotDropped []string
@@ -160,6 +169,7 @@ type ChatExchangeDTO struct {
 	Note     string             `json:"note,omitempty"`
 	At       string             `json:"at"`
 	Findings *FindingsDTO       `json:"findings,omitempty"`
+	Plan     *ActionPlanDTO     `json:"plan,omitempty"`
 }
 
 // ChatStateDTO is the drawer's whole view of a cluster's conversation.
@@ -331,7 +341,7 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if kind == kindInvestigation {
 		id = invIDPrefix + id
 	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts()}
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -428,6 +438,11 @@ func (e *exchange) dto() ChatExchangeDTO {
 	if e.findings != nil {
 		f := *e.findings // the turn never changes a recorded one; copied for the reply
 		out.Findings = &f
+	}
+	if e.plan != nil {
+		p := e.plan.dto
+		p.Steps = append([]ActionStepDTO(nil), p.Steps...)
+		out.Plan = &p
 	}
 	return out
 }
@@ -555,6 +570,13 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		f := labelFindings(*ex.reported, ledger, anchorOf(c.anchor, ledger))
 		ex.findings, ex.reported = &f, nil
 	}
+	if c.kind == kindInvestigation && ex.proposed != nil {
+		// the same for a proposal: its citations and facts settle first
+		ledger := ledgerLocked(c)
+		p := validatePlan(*ex.proposed, c.facts, ledger, anchorOf(c.anchor, ledger))
+		p.dto.Note = ex.plan.dto.Note
+		ex.plan, ex.proposed = &p, nil
+	}
 	if c.kind == kindInvestigation && ex.findings == nil && ex.outcome == "answered" {
 		// the model reported nothing: Klyx's own missing evidence still shows
 		ledger := ledgerLocked(c)
@@ -680,6 +702,15 @@ func exchangeBytes(e *exchange) int {
 	}
 	if e.reported != nil {
 		b, _ := json.Marshal(e.reported)
+		n += len(b)
+	}
+	// and its action proposal (AI A3 §2.4)
+	if e.plan != nil {
+		b, _ := json.Marshal(e.plan.dto)
+		n += len(b)
+	}
+	if e.proposed != nil {
+		b, _ := json.Marshal(e.proposed)
 		n += len(b)
 	}
 	return n
