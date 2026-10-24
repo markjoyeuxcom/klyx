@@ -479,7 +479,6 @@ All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, o
 
 - **The real-LLM smoke:** the owner's key, the owner's step.
 - **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
-- **Codex's re-review of the fixes in §13.6.**
 - **Rollout history (deviation 4), as A1.1:** decided by the owner on 2026-10-23, after A1's acceptance and before A3, which needs the rollback target. One read-only tool sends a workload's revisions (number, creation time, images, the pods' owners), scrubbed, and makes `rollout` checks; its design addendum goes to Codex before it is built.
 
 ### 13.4 Codex's implementation review 1 and the fixes (2026-10-21)
@@ -539,3 +538,7 @@ Codex re-reviewed 8d21fe0 (handoff d6a46515): the four fixes of §13.5 held, wit
 2. **Time decided by text.** A check's time against the onset, and the choice of the earliest onset, compared timestamps as text, and a historical read's span was truncated to the second. Every decision on time now parses the times at full precision. An unreadable onset never becomes the window. Notes show times to the second.
 
 The native smoke passes 209 of 209 four ways at 43e041c, on a clean tree with every lab re-applied, and the server-mode captures pass four ways.
+
+### 13.7 ACCEPT (2026-10-24)
+
+Codex accepted the A1 implementation at 9077fde (handoff 2df5049c), with no remaining findings, after the review and three re-reviews of §13.4 to §13.6. It ran all 18 probe families from the three rounds under `-race`, and the targeted race suites of appbridge, cachediff, readfence, cluster, endpointhttp and fleet. The deviation rulings stand, rollout history (deviation 4) as an explicit scope reduction, which A1.1 delivers (§13.3). Codex did not rerun the native smoke, the captures or the heavy load run this revision; they are this note's evidence. Still owed: the owner's real-model smoke, and the owner's verdict.
