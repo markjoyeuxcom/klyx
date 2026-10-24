@@ -250,6 +250,19 @@ See `docs/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-24 - AI A1 deeper investigation (untagged; spec
+`docs/superpowers/specs/2026-10-21-klyx-ai-a1-investigation.md`, as built in
+§13):**
+- Investigate from any lens inspector: findings labelled reading, suspected
+  or unsupported by Klyx from its own ledger, missing evidence, a remedy as
+  text; seven new read-only tools (Flux unit, Git render diff, alerts, Loki
+  history, metric templates, drawings, fleet comparison)
+- Every component read checks the turn's fence; one Git comparison at a
+  time fleet-wide; the §8 load test passes
+- Codex-accepted at 9077fde after a review and three re-reviews; native
+  smoke 209/209 four ways. Still owed: the owner's real-model smoke (the
+  scored eval will make it repeatable) and A1.1, rollout history
+
 **2026-10-21 - v0.15.1 (notes `docs/release-notes-0.15.1.md`), from the
 owner's first checks of v0.15.0 on their own clusters:**
 - An apply conflict names each field's manager from the server's causes and
