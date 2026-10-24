@@ -33,7 +33,7 @@ def marks(r):
     return r.get("marks") or {}
 
 
-E1, E2 = "e1-flux-crashloop", "e2-healthy-control"
+E1, E2, E3, E4 = "e1-flux-crashloop", "e2-healthy-control", "e3-keda-no-target", "e4-lb-pool-exhausted"
 
 CASES = [
     ("grounded", E1, "completed", lambda r: marks(r).get("groundedCause") and evidence(r, "e1-diff").get("established") and evidence(r, "e1-log").get("established")),
@@ -48,6 +48,10 @@ CASES = [
     ("snapshot-block", E1, "completed", lambda r: r.get("mode") == "snapshot" and r.get("fallbackToSnapshot") and evidence(r, "e1-diff").get("established")),
     ("snapshot-none", E1, "report-failure", lambda r: r["record"]["report"] == "missing"),
     ("snapshot-malformed", E1, "report-failure", lambda r: r["record"]["report"] == "malformed"),
+    ("grounded-e3", E3, "completed", lambda r: marks(r).get("groundedCause") and evidence(r, "e3-event").get("established") and evidence(r, "e3-condition").get("established") and not marks(r).get("citedLookalike")),
+    ("grounded-e4", E4, "completed", lambda r: marks(r).get("groundedCause") and evidence(r, "e4-event").get("established") and not marks(r).get("citedLookalike")),
+    ("lookalike-e3", E3, "completed", lambda r: marks(r).get("citedLookalike") and not marks(r).get("groundedCause")),
+    ("lookalike-e4", E4, "completed", lambda r: marks(r).get("citedLookalike") and not marks(r).get("groundedCause")),
     ("broken-plant", "s1-broken-plant", "not-ready", lambda r: "spec.replicas" in r.get("detail", "")),
     ("no-observer-part", "s2-no-observer-part", "sut-not-ready", lambda r: "no part for configmaps" in r.get("detail", "")),
     ("drift", "s3-drift", "drift", lambda r: "data.value" in r.get("detail", "")),

@@ -3,7 +3,8 @@
 # on the kind cluster $KLYX_EVAL_KIND (default klyx):
 #
 #   scripts/lab/klyx-eval.sh init       make the eval directory and mark the cluster as the eval's
-#   scripts/lab/klyx-eval.sh install    Flux's source and kustomize controllers for E1, pinned by digest
+#   scripts/lab/klyx-eval.sh install    the controllers the scenarios need, each pinned by digest: Flux's
+#                                       source and kustomize controllers (E1), KEDA 2.21.0 (E3), MetalLB 0.16.1 (E4)
 #   scripts/lab/klyx-eval.sh setup [s]  plant the scenarios (default all)
 #   scripts/lab/klyx-eval.sh teardown [s]   remove the scenarios' own objects (never the install's)
 #   scripts/lab/klyx-eval.sh run [s]    run the eval build on the configured provider: KLYX_EVAL_BIN, KLYX_EVAL_RUNS
@@ -23,8 +24,25 @@ source "$lab/lib.sh"
 
 cmd=${1:-}
 shift || true
-all=(e1-flux-crashloop e2-healthy-control)
+all=(e1-flux-crashloop e2-healthy-control e3-keda-no-target e4-lb-pool-exhausted)
 flux_sha256=bedc8c249ed50ff008544c96e9c904084ed472216aeeed57f3bc6528cc003ecd
+keda_url=https://github.com/kedacore/keda/releases/download/v2.21.0/keda-2.21.0.yaml
+keda_sha256=b43c89ffeef81722d7e2dd2c079d74789767a0f89cae1336cff784994814f6d7
+metallb_url=https://raw.githubusercontent.com/metallb/metallb/v0.16.1/config/manifests/metallb-native.yaml
+metallb_sha256=bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b
+
+# fetch <url> <sha256> <name>: a release manifest, into the eval directory,
+# used only when it matches its pinned digest
+fetch() {
+	local f=$dir/dl/$3
+	mkdir -p "$dir/dl"
+	[[ -f $f ]] || { curl -fsSL "$1" -o "$f.part" && mv "$f.part" "$f"; } || die "could not fetch $1"
+	[[ $(shasum -a 256 "$f" | awk '{print $1}') == "$2" ]] || {
+		rm -f "$f"
+		die "$3 does not match its pinned digest"
+	}
+	echo "$f"
+}
 repo=https://github.com/markjoyeuxcom/klyx-lab-a1
 model_port=${KLYX_EVAL_MODEL_PORT:-18791}
 
@@ -87,6 +105,13 @@ install)
 	k apply -f "$lab/flux-controllers.yaml" >/dev/null
 	k -n klyx-a1-flux rollout status deploy/source-controller --timeout=180s
 	k -n klyx-a1-flux rollout status deploy/kustomize-controller --timeout=180s
+	keda=$(fetch "$keda_url" "$keda_sha256" keda-2.21.0.yaml)
+	k apply --server-side --force-conflicts -f "$keda" >/dev/null
+	for d in keda-operator keda-admission keda-metrics-apiserver; do k -n keda rollout status deploy/$d --timeout=180s; done
+	metallb=$(fetch "$metallb_url" "$metallb_sha256" metallb-native-0.16.1.yaml)
+	k apply -f "$metallb" >/dev/null
+	k -n metallb-system rollout status deployment/controller --timeout=180s
+	k -n metallb-system rollout status daemonset/speaker --timeout=180s
 	;;
 setup | teardown)
 	owned
@@ -106,7 +131,7 @@ run)
 selftest)
 	owned
 	bin=${KLYX_EVAL_BIN:?the eval build: go build -tags eval -o <bin> ./cmd/klyx}
-	"$lab/e2-healthy-control/setup.sh"
+	for s in e2-healthy-control e3-keda-no-target e4-lb-pool-exhausted; do "$lab/$s/setup.sh"; done
 	k -n klyx-eval create configmap eval-witness --from-literal=value=one --dry-run=client -o yaml |
 		k label --local -f - "$owner_key=$(owner_id)" -o yaml | k apply -f - >/dev/null
 	log=$dir/selftest-model.log
@@ -133,6 +158,10 @@ selftest)
 	one snapshot-block eval-snapshot-block "$lab" e1-flux-crashloop
 	one snapshot-none eval-snapshot-none "$lab" e1-flux-crashloop
 	one snapshot-malformed eval-snapshot-malformed "$lab" e1-flux-crashloop
+	one grounded-e3 eval-grounded "$lab" e3-keda-no-target no
+	one grounded-e4 eval-grounded "$lab" e4-lb-pool-exhausted no
+	one lookalike-e3 eval-lookalike "$lab" e3-keda-no-target no
+	one lookalike-e4 eval-lookalike "$lab" e4-lb-pool-exhausted no
 	one broken-plant eval-grounded "$lab/selftest" s1-broken-plant no
 	one no-observer-part eval-grounded "$lab/selftest" s2-no-observer-part no
 	# drift: the witness changes while the scripted model waits

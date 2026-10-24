@@ -4,7 +4,9 @@
 // harness end to end with no key:
 //
 //   eval-grounded           E1: reads the unit, the Git changes and the previous log, and cites them;
+//                           E3 and E4: reads the anchor's events and cites them;
 //                           any other anchor: an explicit empty report
+//   eval-lookalike          E3 and E4: reads a lookalike and cites only it
 //   eval-negated            E1's reads, then a cause that negates the planted one
 //   eval-at-once            reports a cause at once, citing only the anchor's read
 //   eval-current-log        reads only a current container's log, and cites it
@@ -45,6 +47,17 @@ function anchor(msgs) {
 }
 
 const isE1 = (a) => a.kind === 'Kustomization' && a.namespace === NS_FLUX && a.name === UNIT;
+const isE3 = (a) => a.kind === 'ScaledObject' && a.namespace === 'klyx-eval-e3' && a.name === 'no-target';
+const isE4 = (a) => a.kind === 'Service' && a.namespace === 'klyx-eval-e4' && a.name === 'one-b';
+const lookalikeOf = { 'klyx-eval-e3': { kind: 'ScaledObject', name: 'bad-auth' }, 'klyx-eval-e4': { kind: 'Service', name: 'cilium-l2' } };
+
+// eventsCause is E3's and E4's grounded run: the anchor's events, then a
+// cause about the anchor citing them.
+function eventsCause(a, msgs, turns, statement) {
+  if (turns === 0) return { calls: [call('get_events', { namespace: a.namespace, kind: a.kind, name: a.name, limit: 20 })] };
+  const evs = byTool(msgs, 'get_events')[0];
+  return report([{ type: 'cause', statement, subject: { kind: a.kind, namespace: a.namespace, name: a.name }, cites: [evs?.readId ?? a.readId] }]);
+}
 const deployment = { kind: 'Deployment', namespace: NS_APP, name: 'web' };
 
 // e1Reads is E1's investigation: the unit, the Git changes, the
@@ -83,8 +96,17 @@ async function tools(script, msgs) {
     return { content: 'The findings above cite the reads they rest on.' };
   }
   switch (script) {
+    case 'eval-lookalike': {
+      const l = lookalikeOf[a.namespace];
+      if (!l) return report([]);
+      if (turns === 0) return { calls: [call('get_resource', { kind: l.kind, namespace: a.namespace, name: l.name })] };
+      const got = byTool(msgs, 'get_resource')[0];
+      return report([{ type: 'cause', statement: `The failure comes from ${l.name}'s configuration.`, subject: { kind: a.kind, namespace: a.namespace, name: a.name }, cites: [got?.readId ?? a.readId] }]);
+    }
     case 'eval-grounded':
     case 'eval-negated': {
+      if (script === 'eval-grounded' && isE3(a)) return eventsCause(a, msgs, turns, 'The ScaledObject targets a Deployment, no-such-deployment, that does not exist.');
+      if (script === 'eval-grounded' && isE4(a)) return eventsCause(a, msgs, turns, "The pool's one address is held by one-a, so MetalLB has no available IPs for one-b.");
       if (!isE1(a)) return report([]);
       const next = e1Reads(msgs, turns);
       if (next) return { calls: next };

@@ -222,8 +222,11 @@ invariants:
 
 func TestTheLabsScenariosLoad(t *testing.T) {
 	ss, err := LoadScenarios("../../scripts/lab/eval", nil)
-	if err != nil || len(ss) != 2 || ss[0].Name != "e1-flux-crashloop" || !ss[1].Control {
+	if err != nil || len(ss) != 4 || ss[0].Name != "e1-flux-crashloop" || !ss[1].Control || ss[2].Name != "e3-keda-no-target" || ss[3].Name != "e4-lb-pool-exhausted" {
 		t.Fatalf("%v %+v", err, ss)
+	}
+	if len(ss[2].Lookalikes) != 3 || len(ss[2].Predicates) != 2 || len(ss[3].Lookalikes) != 2 || len(ss[3].Predicates) != 1 {
+		t.Fatalf("%+v %+v", ss[2], ss[3])
 	}
 	if len(ss[0].Predicates) != 2 || ss[0].Repos[0] != "https://github.com/markjoyeuxcom/klyx-lab-a1" {
 		t.Fatalf("%+v", ss[0])
