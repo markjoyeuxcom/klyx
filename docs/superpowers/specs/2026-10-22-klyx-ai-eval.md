@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built (§16).
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built and accepted (§16).
 
 ## 0. Why
 
@@ -448,3 +448,7 @@ Codex requested changes at ec3e5fd (handoff dfd13931), two P2 findings and one P
 3. **P3: the address override could not satisfy the manifest.** The override is removed, and the fixture address is fixed.
 
 The plant's paths can now name a map key holding dots or slashes, such as `annotations['metallb.io/address-pool']`, and dots inside brackets no longer split a path.
+
+### 16.3 ACCEPT (2026-10-24)
+
+Codex accepted stage 2 at 1563142 (handoff 26dc2826), with no remaining findings, after the review and one re-review. At that head, from a clean build, the self-test passes 19 of 19 on the kind lab with the stricter E3 and E4 plants (reports under `eval-lab/out/selftest-20261024T132315`). The eval is now ready for stage 3: the owner's fixture-repository decision, then the owner's first real-model run.
