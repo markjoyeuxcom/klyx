@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built (§15).
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15).
 
 ## 0. Why
 
@@ -393,3 +393,7 @@ Codex resolved the earlier findings and accepted `delivery-uncertain` as an exte
 1. **A failed ownership read counted as absence.** The scripts read with `--ignore-not-found`: only the API's own not-found is absence. Any other failure (a Forbidden, a timeout) stops setup and teardown before a write, saying ownership is not established. The stand-in test covers both scripts.
 2. **The ninth establishing read lost its credit.** The record keeps every delivered establishing read and bound check. The record's own 64-read bound is the only one.
 3. **An uncertain delivery also claimed "matched, not sent".** `matchedNotSent` is set only when non-delivery is established. A matching result carried by a request of uncertain receipt sets `matchedDeliveryUncertain` instead.
+
+### 15.5 ACCEPT (2026-10-24)
+
+Codex accepted stage 1 at 422b8f9 (handoff f2d39393), with no remaining findings, after the review and two re-reviews, the `delivery-uncertain` extension included. At that head, from a clean build, the self-test passes 15 of 15 on the kind lab (reports under `eval-lab/out/selftest-20261024T124158`). Still owed: stage 2 (E3 and E4), the owner's fixture-repository decision and the first real-model run.
