@@ -669,3 +669,7 @@ Codex found the earlier findings resolved and asked for one more change:
    - The incident decides its bound before its resolution, so a reading that finishes past the bound resolves nothing. A blocked Observer read waits only the time left until the last write plus the bound.
 
 **Tests:** a 60 ms first read against a 20 ms bound; 32 deletions with their event queued past the end; an incident reading that finishes 1 ms past its bound; a blocked Observer read with 20 ms of an hour's bound left. Codex's thirteen probes pass. A mutation pass caught 4 of 4, after the last test was added.
+
+### 18.3 ACCEPT (2026-10-24)
+
+Codex accepted stage 4 at 944f55c, after the review of 3554e02 and two re-reviews, with no remaining findings. All thirteen of its probes pass unchanged, and the five deviations of §18 stand. Actual-cluster watch behaviour is stage 6's lab.
