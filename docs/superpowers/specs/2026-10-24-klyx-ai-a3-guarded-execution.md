@@ -1,6 +1,6 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
 An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
@@ -409,3 +409,9 @@ Codex requested one change, with two nonblocking notes; the six other findings a
 1. **P2, a creation witness.** A watch filtered by the owner's selector reports ADDED for an existing pod whose labels start matching it, so an old pod could pass as the replacement. The watch is now unfiltered, from an unfiltered LIST's resourceVersion, without initial events; the owner is checked locally; adoption arrives as MODIFIED and is not counted; the replacement is tracked until the effect completes; and the claim is "created after the step began", not caused by it (§5.2). Tests: the label-transition counterexample, an adoption control, a genuine creation (§8).
 2. **P3, the ASCII maxima.** An all-ASCII report at every field cap serializes to about 26 KiB. The claim that the maxima fit is dropped; the aggregate refusal is described and tested for that case too (§2.5, §8).
 3. **The deletion's wording.** A deletion is established by the intended UID's removal; after a lost answer, who removed it stays unverified (§1).
+
+## 14. ACCEPT (2026-10-24)
+
+Codex accepted the design at e1933e4, after the review of 9bde787 and two re-reviews, with no remaining findings. The owner's decisions in §11 stay open: the matrix and the setting's default.
+
+**Codex's implementation reminder, adopted:** `delete-pod` judges the deleted pod's removal and its replacement's liveness from one consistent event sequence. The unfiltered namespace watch of §5.2 carries both, so the deletion uses it instead of a separate object watch, and a replacement's DELETED event can never be missed behind the old pod's.
