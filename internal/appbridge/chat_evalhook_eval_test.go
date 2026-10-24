@@ -4,6 +4,7 @@ package appbridge
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -217,8 +218,62 @@ func TestASnapshotSectionLeftOutIsNotSent(t *testing.T) {
 	logEnv := `{"tool":"get_pod_logs","readId":"r4","truncated":false,"data":{"podUID":"uid-p1","instance":"previous","lines":1,"text":"exiting"}}`
 	r.evalRead(toolLogs, json.RawMessage(`{"namespace":"shop","pod":"web-1-a","previous":true}`), ChatToolResult{JSON: []byte(logEnv), Read: ChatRead{ID: "r4", Outcome: "completed"}})
 	r.evalSnapshotDoc([]string{`{"readId":"r1"}`, logEnv}, []string{"r4"})
-	r.evalSnapshotSent()
+	r.evalSnapshotSent(nil)
 	if o := evalOutcome(t, rec.Facts(), "log"); o.Established || o.Reason != record.NotSent {
 		t.Fatalf("the fill left r4 out: %+v", o)
+	}
+}
+
+// Codex's implementation review, finding 7: a provider that replied with a
+// status received the request; a call that failed without a response
+// leaves delivery not established.
+func TestDeliveryFollowsWhatTheProviderSaid(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"HTTP 500 after receiving the request", &ai.HTTPStatusError{Code: 500, Body: "boom"}, ""},
+		{"a transport error", errors.New("connection reset by peer"), record.DeliveryUncertain},
+	}
+	for _, c := range cases {
+		t.Run("tools: "+c.name, func(t *testing.T) {
+			fail := func(ai.ConvRequest) (ai.Turn, error) { return ai.Turn{}, c.err }
+			f := anchoredFixture(t, fail)
+			crashingPod(f)
+			inv := f.svc.StartInvestigation("x", podAnchor)
+			rec := recordFor(t, f, inv.ConversationID)
+			f.svc.Ask("x", inv.ConversationID, "", nil)
+			o := evalOutcome(t, rec.Facts(), "condition")
+			if c.want == "" && (!o.Established || o.Read != "r1") {
+				t.Fatalf("the provider received the anchor's read: %+v", o)
+			}
+			if c.want != "" && (o.Established || o.Reason != c.want) {
+				t.Fatalf("want %s, got %+v", c.want, o)
+			}
+		})
+		t.Run("snapshot: "+c.name, func(t *testing.T) {
+			p := &fakeConverser{complete: func(ai.Request) (ai.Result, error) { return ai.Result{}, c.err }}
+			f := newChatFixture(t, snapshotOnly{p})
+			f.prov = p
+			planCluster(f)
+			f.conn.logs = fleet.LogSnapshot{PodUID: "uid-p1", Container: "web", Previous: true, ReadAt: time.Now(), Text: "exiting\n"}
+			inv := f.svc.StartInvestigation("x", ksAnchor)
+			rec, err := record.New(inv.ConversationID, []record.Predicate{{ID: "log", Kind: record.KindLog, Pods: []string{"uid-p1"},
+				Reads: []record.ReadSpec{{Tool: toolLogs, Args: map[string]string{"namespace": "shop"}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			SetEvalRecorder(f.svc, rec)
+			defer SetEvalRecorder(f.svc, nil)
+			f.svc.Ask("x", inv.ConversationID, "", nil)
+			o := evalOutcome(t, rec.Facts(), "log")
+			if c.want == "" && !o.Established {
+				t.Fatalf("the provider received the document: %+v", o)
+			}
+			if c.want != "" && (o.Established || o.Reason != c.want) {
+				t.Fatalf("want %s, got %+v", c.want, o)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package evalrun
 import (
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/moomora/klyx/internal/appbridge"
 	"github.com/moomora/klyx/internal/evalrun/record"
@@ -96,10 +97,15 @@ func Score(s *Scenario, ex appbridge.ChatExchangeDTO, facts record.Facts) Marks 
 	if f == nil {
 		f = &appbridge.FindingsDTO{}
 	}
+	// every delivered read that established a predicate grounds a cause,
+	// and every check bound to it: not only the first
 	grounding := map[string]bool{}
 	for _, o := range facts.Predicates {
 		if o.Established {
 			grounding[o.Read] = true
+			for _, id := range o.Reads {
+				grounding[id] = true
+			}
 			for _, c := range o.Checks {
 				grounding[c] = true
 			}
@@ -115,7 +121,7 @@ func Score(s *Scenario, ex appbridge.ChatExchangeDTO, facts record.Facts) Marks 
 		if fd.Label == labelUnsupported {
 			m.UnsupportedFindings++
 		}
-		if early(fd) {
+		if early(fd, f.Window, ex.Reads) {
 			m.EarlyEvidence++
 		}
 		if fd.Type != typeCause {
@@ -150,18 +156,45 @@ func Score(s *Scenario, ex appbridge.ChatExchangeDTO, facts record.Facts) Marks 
 	return m
 }
 
-// early: every check a finding rests on was observed before the failure
-// was reported. Context, not an error (eval design §6).
-func early(fd appbridge.FindingDTO) bool {
-	if len(fd.Checked) == 0 {
+// early: everything a finding cites was observed before the failure was
+// reported, by A1's own rule (chat_findings.go labelFindings): a check by
+// its observation time; a whole read by its historical interval, which must
+// end before the failure; a live read, or a read whose time is unknown, is
+// never early. Context, not an error (eval design §6).
+func early(fd appbridge.FindingDTO, window string, ledger []appbridge.ChatRead) bool {
+	start, ok := parseTime(window)
+	if !ok || len(fd.Cites) == 0 {
 		return false
 	}
-	for _, c := range fd.Checked {
-		if !c.Before {
+	reads := map[string]appbridge.ChatRead{}
+	checks := map[string]string{}
+	for _, r := range ledger {
+		reads[r.ID] = r
+		for _, c := range r.Checks {
+			checks[c.ID] = c.Observed
+		}
+	}
+	for _, cite := range fd.Cites {
+		if obs, ok := checks[cite]; ok {
+			if t, ok := parseTime(obs); !ok || !t.Before(start) {
+				return false
+			}
+			continue
+		}
+		r, ok := reads[cite]
+		if !ok || r.ObservedUnknown || r.ObservedTo == "" {
+			return false
+		}
+		if t, ok := parseTime(r.ObservedTo); !ok || !t.Before(start) {
 			return false
 		}
 	}
 	return true
+}
+
+func parseTime(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	return t, err == nil
 }
 
 // about: the finding's subject is the anchor or one of the scenario's
@@ -178,32 +211,75 @@ func (s *Scenario) about(sub appbridge.ChatCheckSubject) bool {
 	return false
 }
 
-// onlyLookalikes: every citation is to a read about a lookalike.
+// onlyLookalikes: everything every citation is about is a lookalike. A
+// check is about its own subject; a whole read is about all its references
+// and all its checks' subjects, so a mixed read is not a lookalike's. A
+// citation about nothing Klyx can name is not a lookalike's either.
 func (s *Scenario) onlyLookalikes(cites []string, reads map[string]appbridge.ChatRead) bool {
 	if len(cites) == 0 || len(s.Lookalikes) == 0 {
 		return false
 	}
 	for _, c := range cites {
-		id, _, _ := strings.Cut(c, ".")
-		r, ok := reads[id]
-		if !ok || !s.isLookalike(r) {
+		subjects := citedSubjects(c, reads)
+		if len(subjects) == 0 {
 			return false
+		}
+		for _, sub := range subjects {
+			if !s.lookalike(sub) {
+				return false
+			}
 		}
 	}
 	return true
 }
 
-// isLookalike: the read is about a lookalike, by the resource and name
-// its references carry.
-func (s *Scenario) isLookalike(r appbridge.ChatRead) bool {
+// citedSubject is what a citation names: a reference by group, resource,
+// namespace and name, or a check's subject by kind, namespace and name.
+type citedSubject struct {
+	group, resource, kind, ns, name string
+	byRef                           bool
+}
+
+func citedSubjects(cite string, reads map[string]appbridge.ChatRead) []citedSubject {
+	id, _, isCheck := strings.Cut(cite, ".")
+	r, ok := reads[id]
+	if !ok {
+		return nil
+	}
+	var out []citedSubject
+	for _, c := range r.Checks {
+		if (isCheck && c.ID == cite) || !isCheck {
+			out = append(out, citedSubject{kind: c.Subject.Kind, ns: c.Subject.Namespace, name: c.Subject.Name})
+		}
+	}
+	if isCheck {
+		return out
+	}
 	for _, ref := range r.Refs {
-		for _, l := range s.Lookalikes {
-			if !strings.HasSuffix("/"+ref.GVR, "/"+l.Resource) || ref.Namespace != l.Namespace {
-				continue
-			}
-			if (l.Name != "" && ref.Name == l.Name) || (l.NamePrefix != "" && strings.HasPrefix(ref.Name, l.NamePrefix)) {
-				return true
-			}
+		parts := strings.Split(ref.GVR, "/")
+		if len(parts) < 2 {
+			continue
+		}
+		out = append(out, citedSubject{group: strings.Join(parts[:len(parts)-2], "/"), resource: parts[len(parts)-1], ns: ref.Namespace, name: ref.Name, byRef: true})
+	}
+	return out
+}
+
+// lookalike: the subject is one of the scenario's lookalikes, by its full
+// identity: a reference's group and resource, a check's kind.
+func (s *Scenario) lookalike(sub citedSubject) bool {
+	for _, l := range s.Lookalikes {
+		if sub.ns != l.Namespace {
+			continue
+		}
+		if sub.byRef && (sub.group != l.Group || sub.resource != l.Resource) {
+			continue
+		}
+		if !sub.byRef && !strings.EqualFold(sub.kind, l.Kind) {
+			continue
+		}
+		if (l.Name != "" && sub.name == l.Name) || (l.NamePrefix != "" && strings.HasPrefix(sub.name, l.NamePrefix)) {
+			return true
 		}
 	}
 	return false

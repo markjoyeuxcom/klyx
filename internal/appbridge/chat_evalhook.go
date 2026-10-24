@@ -16,8 +16,8 @@ type evalHook struct{} //nolint:unused // the eval build gives it state
 
 func (r *turnRunner) evalMode(string)                                  {}
 func (r *turnRunner) evalRead(string, json.RawMessage, ChatToolResult) {}
-func (r *turnRunner) evalSent([]ai.ConvMessage, bool)                  {}
+func (r *turnRunner) evalSent([]ai.ConvMessage, error)                 {}
 func (r *turnRunner) evalSnapshotDoc([]string, []string)               {}
-func (r *turnRunner) evalSnapshotSent()                                {}
+func (r *turnRunner) evalSnapshotSent(error)                           {}
 func (r *turnRunner) evalToolsReport(bool)                             {}
 func (r *turnRunner) evalSnapshotReport(bool, bool)                    {}

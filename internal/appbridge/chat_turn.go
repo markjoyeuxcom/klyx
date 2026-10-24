@@ -342,7 +342,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 			}()
 			if errors.Is(err, ai.ErrRequestTooLarge) {
 				r.dropCall(idx) // nothing was sent
-				r.evalSent(msgs, false)
+				r.evalSent(msgs, err)
 				if prior == 0 {
 					return "", &chatError{msg: fmt.Sprintf("this question's reads passed the %d KiB request budget; ask something narrower", chatRequestBudget>>10)}
 				}
@@ -350,6 +350,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 				continue
 			}
 			if err != nil {
+				r.evalSent(msgs, err)
 				r.finishCall(idx, "", nil, callOutcome(err))
 				if errors.Is(err, ai.ErrToolsUnsupported) && call == 0 {
 					// The server positively refused tools: snapshot mode for
@@ -365,7 +366,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 				}
 				return "", err
 			}
-			r.evalSent(msgs, true)
+			r.evalSent(msgs, nil)
 			names := make([]string, 0, len(t.Calls))
 			for _, c := range t.Calls {
 				names = append(names, c.Name)

@@ -292,12 +292,12 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 	}
 	idx := r.startCall(st)
 	res, err := st.Provider.Complete(ctx, ai.Request{System: fmt.Sprintf(chatSnapshotSystem, r.c.cluster) + invSnapshotAddendum, User: doc, Purpose: ai.PurposeChat})
+	r.evalSnapshotSent(err)
 	if err != nil {
 		r.finishCall(idx, "", nil, callOutcome(err))
 		return "", err
 	}
 	r.finishCall(idx, res.ModelUsed, nil, "completed")
-	r.evalSnapshotSent()
 	prose, block, found := takeFindings(res.Text)
 	ledger := r.ledger()
 	a := anchorOf(r.c.anchor, ledger)

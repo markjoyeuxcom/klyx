@@ -356,3 +356,56 @@ func TestAConditionWithAnotherReasonDoesNotCount(t *testing.T) {
 		t.Fatalf("the planted condition has its reason: %+v", o)
 	}
 }
+
+// Codex's implementation review, finding 5: every delivered matching read
+// grounds a cause, not only the first.
+func TestEveryDeliveredMatchIsKept(t *testing.T) {
+	r := rec(t)
+	bound := func(id string) map[string]any {
+		return map[string]any{"id": id + ".c1", "subject": map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web"}, "statement": "env[MODE], changed (not shown)"}
+	}
+	data := map[string]any{"objects": []any{map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web", "hidden": []any{map[string]any{"path": "env[MODE]"}}}}}
+	a := args(map[string]any{"kind": "Kustomization", "namespace": "klyx-a1-flux", "name": "a1-web"})
+	r.Read(conv, "git_changes", a, "r2", false, env(t, "git_changes", "r2", false, data, bound("r2")))
+	r.Read(conv, "git_changes", a, "r3", false, env(t, "git_changes", "r3", false, data, bound("r3")))
+	r.Sent(conv, []string{"r2", "r3"})
+	o := outcome(t, r.Facts(), "e1-diff")
+	if o.Read != "r2" || strings.Join(o.Reads, ",") != "r2,r3" || strings.Join(o.Checks, ",") != "r2.c1,r3.c1" {
+		t.Fatalf("%+v", o)
+	}
+}
+
+// Codex's implementation review, findings 6 and 7: delivery is decided on
+// its own. A nonmatching result never sent is not no-match, and a request
+// whose delivery is not established says so.
+func TestDeliveryIsDecidedApartFromTheMatch(t *testing.T) {
+	a := args(map[string]any{"kind": "Kustomization", "namespace": "klyx-a1-flux", "name": "a1-web"})
+	other := map[string]any{"objects": []any{map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web", "hidden": []any{map[string]any{"path": "labels[release]"}}}}}
+	cases := []struct {
+		name string
+		run  func(r *Recorder)
+		want string
+	}{
+		{"omitted from the snapshot", func(r *Recorder) { r.Mode(conv, "snapshot"); r.Omitted(conv, []string{"r2"}) }, NotSent},
+		{"refused locally", func(r *Recorder) { r.Refused(conv, []string{"r2"}) }, NotSent},
+		{"the turn ended first", func(r *Recorder) {}, TurnEnded},
+		{"dispatched, delivery not established", func(r *Recorder) { r.SentUncertain(conv, []string{"r2"}) }, DeliveryUncertain},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := rec(t)
+			r.Read(conv, "git_changes", a, "r2", false, env(t, "git_changes", "r2", true, other))
+			c.run(r)
+			o := outcome(t, r.Facts(), "e1-diff")
+			if o.Established || o.Reason != c.want || !o.Capped {
+				t.Fatalf("want %s with the cap kept, got %+v", c.want, o)
+			}
+		})
+	}
+	r := rec(t)
+	r.Read(conv, "get_events", eventsArgs, "r2", false, env(t, "get_events", "r2", false, []any{detailed()}))
+	r.SentUncertain(conv, []string{"r2"})
+	if o := outcome(t, r.Facts(), "e3-event"); o.Established || o.Reason != DeliveryUncertain || !o.Unsent {
+		t.Fatalf("a match whose delivery is not established is not established: %+v", o)
+	}
+}

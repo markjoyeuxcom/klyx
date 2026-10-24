@@ -5,6 +5,7 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,19 +45,30 @@ func (r *turnRunner) evalRead(tool string, args json.RawMessage, res ChatToolRes
 	}
 }
 
-// evalSent is a tools request: sent (a response came back) or refused
-// locally for its size (nothing was sent).
-func (r *turnRunner) evalSent(msgs []ai.ConvMessage, sent bool) {
+// evalSent is a tools request, by the provider call's error: refused
+// locally for its size (nothing was sent), received (an answer, or an HTTP
+// status the provider replied with), or dispatched with its delivery not
+// established (a call that failed without a response).
+func (r *turnRunner) evalSent(msgs []ai.ConvMessage, err error) {
 	rec := r.evalRec()
 	if rec == nil {
 		return
 	}
 	ids := carriedReads(r.ex.seedData, msgs)
-	if sent {
-		rec.Sent(r.c.id, ids)
-	} else {
+	switch {
+	case errors.Is(err, ai.ErrRequestTooLarge):
 		rec.Refused(r.c.id, ids)
+	case received(err):
+		rec.Sent(r.c.id, ids)
+	default:
+		rec.SentUncertain(r.c.id, ids)
 	}
+}
+
+// received: the provider answered, or replied with a status.
+func received(err error) bool {
+	var se *ai.HTTPStatusError
+	return err == nil || errors.As(err, &se) || errors.Is(err, ai.ErrToolsUnsupported)
 }
 
 // evalSnapshotDoc is a snapshot document as filled: its sections' reads
@@ -85,8 +97,9 @@ func (r *turnRunner) evalSnapshotDoc(sections, dropped []string) {
 	rec.Omitted(r.c.id, dropped)
 }
 
-// evalSnapshotSent is the snapshot document's request, answered.
-func (r *turnRunner) evalSnapshotSent() {
+// evalSnapshotSent is the snapshot document's request, by its call's
+// error, as evalSent.
+func (r *turnRunner) evalSnapshotSent(err error) {
 	rec := r.evalRec()
 	if rec == nil {
 		return
@@ -95,7 +108,11 @@ func (r *turnRunner) evalSnapshotSent() {
 	kept := r.s.eval.staged[r.c.id]
 	delete(r.s.eval.staged, r.c.id)
 	r.s.eval.mu.Unlock()
-	rec.Sent(r.c.id, kept)
+	if received(err) {
+		rec.Sent(r.c.id, kept)
+	} else {
+		rec.SentUncertain(r.c.id, kept)
+	}
 }
 
 func (r *turnRunner) evalToolsReport(accepted bool) {

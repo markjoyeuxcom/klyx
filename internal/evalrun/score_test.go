@@ -38,6 +38,21 @@ func exchange(window string, fs ...appbridge.FindingDTO) appbridge.ChatExchangeD
 		}}
 }
 
+// dated adds reads with times: r5 holds a diff check observed before the
+// failure, r6 a log whose time is unknown, r8 a historical log that ended
+// before it.
+func dated(ex appbridge.ChatExchangeDTO) appbridge.ChatExchangeDTO {
+	for i := range ex.Reads {
+		if ex.Reads[i].ID == "r5" {
+			ex.Reads[i].Checks = []appbridge.ChatCheck{{ID: "r5.c1", Class: "diff", Subject: deployment, Statement: "env[MODE]", Observed: "2026-10-24T10:00:00Z"}}
+		}
+	}
+	ex.Reads = append(ex.Reads,
+		appbridge.ChatRead{ID: "r6", Tool: "get_pod_logs", ObservedUnknown: true, ObservedTo: "2026-10-23T10:00:00Z"},
+		appbridge.ChatRead{ID: "r8", Tool: "get_log_history", ObservedFrom: "2026-10-23T09:00:00Z", ObservedTo: "2026-10-23T10:00:00Z"})
+	return ex
+}
+
 func TestTheCorpus(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -141,10 +156,23 @@ func TestTheCorpus(t *testing.T) {
 				}
 			}},
 		{"early evidence is counted, never as an error",
-			exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "cause", Label: "suspected", Statement: "MODE changed", Subject: deployment, Cites: []string{"r5"},
-				Checked: []appbridge.FindingCheckDTO{{ID: "r5.c1", Before: true}}}), established("r5"),
+			dated(exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "cause", Label: "suspected", Statement: "MODE changed", Subject: deployment, Cites: []string{"r5.c1"}})), established("r5", "r5.c1"),
 			func(t *testing.T, m Marks) {
 				if m.EarlyEvidence != 1 || !m.GroundedCause {
+					t.Fatalf("%+v", m)
+				}
+			}},
+		{"an early check beside a log whose time is unknown is not only early",
+			dated(exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "cause", Label: "suspected", Statement: "MODE changed", Subject: deployment, Cites: []string{"r5.c1", "r6"}})), established("r5"),
+			func(t *testing.T, m Marks) {
+				if m.EarlyEvidence != 0 {
+					t.Fatalf("%+v", m)
+				}
+			}},
+		{"a whole historical read that ended before the failure is early",
+			dated(exchange("2026-10-24T12:00:00Z", appbridge.FindingDTO{Type: "observation", Label: "reading", Statement: "it logged errors yesterday", Subject: deployment, Cites: []string{"r8"}})), established("r5"),
+			func(t *testing.T, m Marks) {
+				if m.EarlyEvidence != 1 {
 					t.Fatalf("%+v", m)
 				}
 			}},
@@ -210,5 +238,53 @@ func TestStatuses(t *testing.T) {
 				t.Fatalf("want %s, got %s (%s)", c.want, got, why)
 			}
 		})
+	}
+}
+
+// Codex's implementation review, P3: a lookalike citation is by the cited
+// check's own subject, or every subject of a whole read, with full
+// identity.
+func TestLookalikesByTheirOwnIdentity(t *testing.T) {
+	s := e1()
+	ex := exchange("2026-10-24T12:00:00Z")
+	ex.Reads = append(ex.Reads,
+		appbridge.ChatRead{ID: "r9", Tool: "get_events", Checks: []appbridge.ChatCheck{{ID: "r9.c1", Subject: appbridge.ChatCheckSubject{Kind: "ScaledObject", Namespace: "klyx-s9-lab", Name: "bad-auth"}}}},
+		appbridge.ChatRead{ID: "r10", Tool: "get_resource", Refs: []appbridge.ChatRef{{GVR: "other.example.com/v1/scaledobjects", Namespace: "klyx-s9-lab", Name: "bad-auth"}}},
+		appbridge.ChatRead{ID: "r11", Tool: "get_events", Refs: []appbridge.ChatRef{{GVR: "keda.sh/v1alpha1/scaledobjects", Namespace: "klyx-s9-lab", Name: "bad-auth"},
+			{GVR: "apps/v1/deployments", Namespace: "klyx-a1-app", Name: "web"}}})
+	reads := map[string]appbridge.ChatRead{}
+	for _, r := range ex.Reads {
+		reads[r.ID] = r
+	}
+	if !s.onlyLookalikes([]string{"r9.c1"}, reads) || !s.onlyLookalikes([]string{"r9"}, reads) {
+		t.Fatal("an events check about the lookalike is the lookalike's")
+	}
+	if s.onlyLookalikes([]string{"r10"}, reads) {
+		t.Fatal("another API group's object of that name is not the lookalike")
+	}
+	if s.onlyLookalikes([]string{"r11"}, reads) {
+		t.Fatal("a read about the lookalike and another object is not only the lookalike's")
+	}
+	if !s.onlyLookalikes([]string{"r7"}, reads) {
+		t.Fatal("a read of the lookalike alone")
+	}
+	// a read with two checks: the cited check is about its own subject
+	reads["r12"] = appbridge.ChatRead{ID: "r12", Tool: "get_events", Checks: []appbridge.ChatCheck{
+		{ID: "r12.c1", Subject: appbridge.ChatCheckSubject{Kind: "ScaledObject", Namespace: "klyx-s9-lab", Name: "bad-auth"}},
+		{ID: "r12.c2", Subject: appbridge.ChatCheckSubject{Kind: "Deployment", Namespace: "klyx-a1-app", Name: "web"}}}}
+	if !s.onlyLookalikes([]string{"r12.c1"}, reads) || s.onlyLookalikes([]string{"r12.c2"}, reads) || s.onlyLookalikes([]string{"r12"}, reads) {
+		t.Fatal("a check citation is its own subject; the whole read is mixed")
+	}
+}
+
+// Codex's implementation review, finding 5: a cause citing a later read
+// that established the predicate, or its bound check, is grounded too.
+func TestALaterEstablishingCitationGrounds(t *testing.T) {
+	facts := record.Facts{Report: record.ReportAccepted, Predicates: []record.Outcome{{Predicate: "e1-diff", Established: true,
+		Read: "r2", Reads: []string{"r2", "r5"}, Checks: []string{"r2.c1", "r5.c1"}}}}
+	for _, cite := range []string{"r5", "r5.c1", "r2"} {
+		if m := Score(e1(), exchange("2026-10-24T12:00:00Z", cause("suspected", "MODE changed", cite)), facts); !m.GroundedCause {
+			t.Errorf("citing %s: %+v", cite, m)
+		}
 	}
 }

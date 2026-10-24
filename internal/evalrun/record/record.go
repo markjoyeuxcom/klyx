@@ -33,7 +33,14 @@ const (
 	TurnEnded    = "turn-ended"
 	Capped       = "capped"
 	NoMatch      = "no-match"
+	// DeliveryUncertain: the request carrying the result was dispatched,
+	// and the provider's call failed without a response that says it was
+	// received (a transport error). Not assigned.
+	DeliveryUncertain = "delivery-uncertain"
 )
+
+// MaxGrounding bounds the establishing reads and checks kept per predicate.
+const MaxGrounding = 8
 
 // Report states: an accepted report (tools: a report_findings call Klyx
 // accepted; snapshot: a findings block that parsed), and the two ways one
@@ -83,13 +90,19 @@ type Predicate struct {
 
 // Outcome is a predicate's result for the run.
 type Outcome struct {
-	Predicate   string   `json:"predicate"`
-	Established bool     `json:"established"`
-	Read        string   `json:"read,omitempty"`   // the read that established it
-	Checks      []string `json:"checks,omitempty"` // the checks bound to it
-	Reason      string   `json:"reason,omitempty"` // why it was not established
-	Previous    bool     `json:"previous,omitempty"`
-	Capped      bool     `json:"capped,omitempty"`
+	Predicate   string `json:"predicate"`
+	Established bool   `json:"established"`
+	Read        string `json:"read,omitempty"` // the first read that established it
+	// Reads are every delivered read that established it, Checks the
+	// checks bound to it in them: a citation of any of them grounds a cause
+	Reads    []string `json:"reads,omitempty"`
+	Checks   []string `json:"checks,omitempty"`
+	Reason   string   `json:"reason,omitempty"` // why it was not established
+	Previous bool     `json:"previous,omitempty"`
+	Capped   bool     `json:"capped,omitempty"`
+	// Unsent: a result holding the planted evidence was acquired, and no
+	// request carrying it was sent
+	Unsent bool `json:"matchedNotSent,omitempty"`
 }
 
 // Facts is the record's result for one run.
@@ -113,6 +126,7 @@ type read struct {
 	acquired  bool // an envelope was produced
 	truncated bool
 	delivered bool
+	uncertain bool // dispatched; the call failed without a response
 	refused   bool // carried by a request refused locally
 	omitted   bool // left out by the snapshot fill
 	relevant  map[int]bool
@@ -221,10 +235,16 @@ func (r *Recorder) Read(conv, tool string, args json.RawMessage, readID string, 
 	}
 }
 
-// Sent records a request actually sent to the provider, with the read IDs
-// it carried.
+// Sent records a request the provider received, with the read IDs it
+// carried: it answered, or replied with an HTTP status.
 func (r *Recorder) Sent(conv string, readIDs []string) {
 	r.mark(conv, readIDs, func(rd *read) { rd.delivered = true })
+}
+
+// SentUncertain records a request dispatched to the provider whose call
+// failed without a response: whether it was received is not established.
+func (r *Recorder) SentUncertain(conv string, readIDs []string) {
+	r.mark(conv, readIDs, func(rd *read) { rd.uncertain = true })
 }
 
 // Refused records a request Klyx refused locally (for its size): nothing
@@ -323,18 +343,33 @@ func (r *Recorder) ordered() []*read {
 	return out
 }
 
-// reason ranks: the furthest a relevant read got. A matched result that was
-// never sent says more than a delivered one that did not match.
-var reasonRank = map[string]int{NotSent: 5, TurnEnded: 4, Capped: 3, NoMatch: 2, ReadFailed: 1}
+// reason ranks: the furthest a relevant read's delivery got. Delivery is
+// decided on its own, never from whether the result matched: no-match and
+// capped are for results delivered, the others for results never received.
+var reasonRank = map[string]int{NotSent: 6, DeliveryUncertain: 5, TurnEnded: 4, Capped: 3, NoMatch: 2, ReadFailed: 1}
 
 // reduce is one predicate's outcome over the ordered reads.
 func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 	o := Outcome{Predicate: p.ID}
 	for _, rd := range reads {
-		if m, ok := rd.matched[i]; ok && rd.delivered {
-			o.Established, o.Read, o.Checks, o.Previous, o.Capped = true, rd.id, m.checks, m.previous, rd.truncated
-			return o
+		m, ok := rd.matched[i]
+		if !ok || !rd.delivered {
+			continue
 		}
+		if !o.Established {
+			o.Established, o.Read, o.Previous, o.Capped = true, rd.id, m.previous, rd.truncated
+		}
+		if len(o.Reads) < MaxGrounding {
+			o.Reads = append(o.Reads, rd.id)
+		}
+		for _, c := range m.checks {
+			if len(o.Checks) < 2*MaxGrounding {
+				o.Checks = append(o.Checks, c)
+			}
+		}
+	}
+	if o.Established {
+		return o
 	}
 	best := ""
 	for _, rd := range reads {
@@ -346,14 +381,22 @@ func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 		switch {
 		case rd.failed || !rd.acquired:
 			why = ReadFailed
-		case matched && (rd.refused || rd.omitted):
-			why = NotSent
-		case matched:
-			why = TurnEnded
 		case rd.delivered && rd.truncated:
 			why = Capped
-		default:
+		case rd.delivered:
 			why = NoMatch
+		case rd.uncertain:
+			why = DeliveryUncertain
+		case rd.refused || rd.omitted:
+			why = NotSent
+		default:
+			why = TurnEnded
+		}
+		if matched && !rd.delivered {
+			o.Unsent = true
+		}
+		if rd.truncated {
+			o.Capped = true
 		}
 		if reasonRank[why] > reasonRank[best] {
 			best = why
@@ -366,7 +409,6 @@ func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 		}
 	}
 	o.Reason = best
-	o.Capped = best == Capped
 	return o
 }
 
