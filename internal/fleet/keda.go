@@ -678,12 +678,22 @@ func (c *ClusterConn) kedaServed() bool {
 // ScaledObject, 2.11 for a ScaledJob); Resume only when paused is the
 // scaler's only pause annotation.
 func (c *ClusterConn) KEDASetPaused(ctx context.Context, resource, ns, name, uid string, pause bool) error {
+	if err := c.kedaSetPaused(ctx, resource, ns, name, uid, pause); err != nil {
+		return err
+	}
+	c.signalRefresh()
+	return nil
+}
+
+// kedaSetPaused is KEDASetPaused's write; every refusal before the patch
+// is ErrNotSent (A3 §5.1).
+func (c *ClusterConn) kedaSetPaused(ctx context.Context, resource, ns, name, uid string, pause bool) error {
 	if c.dyn == nil {
-		return errors.New("dynamic client unavailable")
+		return notSent(errors.New("dynamic client unavailable"))
 	}
 	kind := map[string]string{keda.ResourceScaledObjects: keda.KindScaledObject, keda.ResourceScaledJobs: keda.KindScaledJob}[resource]
 	if kind == "" {
-		return fmt.Errorf("not a KEDA scaler: %s", resource)
+		return notSent(fmt.Errorf("not a KEDA scaler: %s", resource))
 	}
 	verb := "resume"
 	if pause {
@@ -692,47 +702,46 @@ func (c *ClusterConn) KEDASetPaused(ctx context.Context, resource, ns, name, uid
 	gvr := kedaGVR(resource)
 	u, err := c.checkArmed(ctx, gvr, kind, ns, name, uid)
 	if err != nil {
-		return fmt.Errorf("%s %w", verb, err)
+		return notSent(fmt.Errorf("%s %w", verb, err))
 	}
 	configs, cut, err := c.KEDAOperatorConfigs(ctx)
 	if err != nil {
-		return fmt.Errorf("%s is not offered: %v - nothing was written", verb, err)
+		return notSent(fmt.Errorf("%s is not offered: %v - nothing was written", verb, err))
 	}
 	h := keda.HandlerOf(configs, cut, ns, labelsOf(u), false)
 	if h.Unread {
-		return fmt.Errorf("%s is not offered: more KEDA operators run than Klyx reads (%d), so the handling operator is unverified - nothing was written", verb, kedaMaxCandidates)
+		return notSent(fmt.Errorf("%s is not offered: more KEDA operators run than Klyx reads (%d), so the handling operator is unverified - nothing was written", verb, kedaMaxCandidates))
 	}
 	if h.Handler == nil || !h.Handler.Version.Known {
-		return fmt.Errorf("%s is not offered: the handling KEDA operator or its version is unverified, so Klyx cannot prove it applies %s - nothing was written", verb, keda.AnnPaused)
+		return notSent(fmt.Errorf("%s is not offered: the handling KEDA operator or its version is unverified, so Klyx cannot prove it applies %s - nothing was written", verb, keda.AnnPaused))
 	}
 	min := 12
 	if resource == keda.ResourceScaledJobs {
 		min = 11
 	}
 	if !h.Handler.Version.AtLeast(2, min) {
-		return fmt.Errorf("%s is not offered: KEDA %s does not apply %s - nothing was written", verb, h.Handler.Version, keda.AnnPaused)
+		return notSent(fmt.Errorf("%s is not offered: KEDA %s does not apply %s - nothing was written", verb, h.Handler.Version, keda.AnnPaused))
 	}
 	ann := u.GetAnnotations()
 	var value any = "true"
 	if !pause {
 		for _, other := range []string{keda.AnnPausedReplicas, keda.AnnPausedScaleIn, keda.AnnPausedScaleOut} {
 			if _, ok := ann[other]; ok {
-				return fmt.Errorf("resume is not offered: %s is paused by %s, set outside Klyx - nothing was written", name, other)
+				return notSent(fmt.Errorf("resume is not offered: %s is paused by %s, set outside Klyx - nothing was written", name, other))
 			}
 		}
 		if _, ok := ann[keda.AnnPaused]; !ok {
-			return fmt.Errorf("resume is not offered: %s has no %s annotation - nothing was written", name, keda.AnnPaused)
+			return notSent(fmt.Errorf("resume is not offered: %s has no %s annotation - nothing was written", name, keda.AnnPaused))
 		}
 		value = nil // a merge patch's null removes the key
 	}
 	body, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{keda.AnnPaused: value}}})
 	if err != nil {
-		return err
+		return notSent(err)
 	}
 	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, body); err != nil {
 		return fmt.Errorf("%s %w", verb, err)
 	}
-	c.signalRefresh()
 	return nil
 }
 

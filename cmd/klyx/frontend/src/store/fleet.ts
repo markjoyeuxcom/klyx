@@ -409,7 +409,9 @@ export type WorkloadDTO = { kind: string; namespace: string; name: string; uid?:
 
 // Rollout history (newest first). Images may be empty when a
 // ControllerRevision's patch data carries no template - never fabricated.
-export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string };
+// objectUID/templateDigest: the revision object and its template, passed back
+// so an undo writes only this revision (A3 §4.5).
+export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string; objectUID?: string; templateDigest?: string };
 // uid/asOfUnix: the workload the history was read from, and when (§5b).
 export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; uid?: string; asOfUnix?: number; error?: string };
 

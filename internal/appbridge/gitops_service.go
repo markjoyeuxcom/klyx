@@ -91,18 +91,15 @@ const diffTimeout = 120 * time.Second
 // confirmed): only that object is written.
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.Reconcile(ctx, kind, namespace, name, uid); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doReconcile(ctx, conn, kind, namespace, name, uid)
 }
 
 func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid string) ActionResultDTO {
@@ -160,18 +157,15 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.SetSuspend(ctx, kind, namespace, name, uid, suspend); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doSetSuspend(ctx, conn, kind, namespace, name, uid, suspend)
 }
 
 // GetResourceDetail reads the detail view for one Flux resource directly

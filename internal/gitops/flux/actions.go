@@ -9,13 +9,17 @@ import (
 // out-of-band reconcile (equivalent to `flux reconcile <kind> <name>`).
 const ReconcileRequestedAtAnnotation = "reconcile.fluxcd.io/requestedAt"
 
+// ReconcileToken is the requestedAt value a reconcile at now writes: Flux
+// answers it in status.lastHandledReconcileAt.
+func ReconcileToken(now time.Time) string { return now.Format(time.RFC3339Nano) }
+
 // ReconcilePatch builds a JSON merge patch that stamps the reconcile annotation
 // with now (RFC3339Nano). Applying it makes the Flux controller re-reconcile.
 func ReconcilePatch(now time.Time) []byte {
 	body := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{
-				ReconcileRequestedAtAnnotation: now.Format(time.RFC3339Nano),
+				ReconcileRequestedAtAnnotation: ReconcileToken(now),
 			},
 		},
 	}

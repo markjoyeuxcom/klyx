@@ -223,16 +223,13 @@ func (s *KEDAService) ReplicaOwner(cluster, kind, namespace, name string) Replic
 // object's status says the pause completed.
 func (s *KEDAService) SetPaused(cluster, resource, namespace, name, uid string, pause bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.KEDASetPaused(ctx, resource, namespace, name, uid, pause); err != nil {
-		return failedScrubbed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doKEDASetPaused(ctx, conn, resource, namespace, name, uid, pause)
 }

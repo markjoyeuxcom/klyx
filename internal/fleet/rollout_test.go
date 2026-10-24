@@ -102,7 +102,7 @@ func TestRolloutUndo_DeploymentRestoresOldTemplateWithoutHashLabel(t *testing.T)
 	})
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
 
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2); err != nil {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	if patchType != types.JSONPatchType {
@@ -139,7 +139,7 @@ func TestRolloutUndo_DeploymentDropsFieldsAddedAfterTarget(t *testing.T) {
 	typed := k8sfake.NewSimpleClientset(dep, old)
 	c := &ClusterConn{typed: typed}
 
-	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err != nil {
+	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -219,7 +219,7 @@ func TestRolloutUndo_ChangeCauseResultingObject(t *testing.T) {
 			}
 			typed := k8sfake.NewSimpleClientset(dep, old)
 			c := &ClusterConn{typed: typed}
-			if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err != nil {
+			if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, nil); err != nil {
 				t.Fatal(err)
 			}
 			got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -256,7 +256,7 @@ func TestRolloutUndo_RecreatedDeploymentIsNotRolledBack(t *testing.T) {
 		return false, nil, nil
 	})
 	c := &ClusterConn{typed: typed}
-	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err == nil {
+	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, nil); err == nil {
 		t.Fatal("undo against a recreated Deployment must fail the uid precondition")
 	}
 	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -274,10 +274,10 @@ func TestRolloutUndo_RefusesCurrentAndUnknownRevisions(t *testing.T) {
 		rolloutRS("cart-3", "3", "shop/cart:v3", "", time.Unix(0, 0)),
 	)
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 3); err == nil || !strings.Contains(err.Error(), "already at revision") {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 3, nil); err == nil || !strings.Contains(err.Error(), "already at revision") {
 		t.Fatalf("undo-to-current must refuse: %v", err)
 	}
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 99); err == nil || !strings.Contains(err.Error(), "not found") {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 99, nil); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("unknown revision must refuse: %v", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestRolloutHistoryAndUndo_StatefulSetViaControllerRevisions(t *testing.T) {
 		t.Fatalf("images from revision data: %+v", hist[1])
 	}
 
-	if err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1); err != nil {
+	if err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	// kubectl semantics: the ControllerRevision data IS the patch.

@@ -142,10 +142,13 @@ func (c *ClusterConn) patchArmed(ctx context.Context, gvr schema.GroupVersionRes
 	if err != nil {
 		return err
 	}
-	_, err = c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, guarded, metav1.PatchOptions{})
+	out, err := c.dyn.Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, guarded, metav1.PatchOptions{})
 	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource, Namespace: ns}, kind, ns, name, err)
 	switch {
 	case err == nil:
+		if out != nil {
+			NoteReceipt(ctx, Receipt{UID: string(out.GetUID()), Generation: out.GetGeneration(), ResourceVersion: out.GetResourceVersion(), Token: tokenOf(ctx)})
+		}
 		return nil
 	case refusedForUID(err):
 		return fmt.Errorf("%s %s/%s: %w - its write was refused (%v)", kind, ns, name, ErrReplaced, err)
@@ -183,19 +186,21 @@ func refusedForUID(err error) bool {
 func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error {
 	gvr, err := c.gvrForKind(flux.Kind(kind))
 	if err != nil {
-		return err
+		return notSent(err)
 	}
 	if err := imagePolicyVerb(flux.Kind(kind), gvr, "reconcile", "a reconcile request could never be confirmed: its status has no lastHandledReconcileAt"); err != nil {
-		return err
+		return notSent(err)
 	}
 	if k := flux.Kind(kind); k == flux.ProviderKind || k == flux.AlertKind {
 		// S1c §5: notification-controller does not reconcile them
-		return fmt.Errorf("reconcile is not offered for a %s: it is static, and notification-controller has nothing to reconcile", kind)
+		return notSent(fmt.Errorf("reconcile is not offered for a %s: it is static, and notification-controller has nothing to reconcile", kind))
 	}
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
-		return fmt.Errorf("reconcile %w", err)
+		return notSent(fmt.Errorf("reconcile %w", err))
 	}
-	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now())); err != nil {
+	// the requestedAt token is this request's own witness (A3 §1)
+	now := c.clk.Now()
+	if err := c.patchArmed(withToken(ctx, flux.ReconcileToken(now)), gvr, kind, ns, name, uid, flux.ReconcilePatch(now)); err != nil {
 		return fmt.Errorf("reconcile %w", err)
 	}
 	return nil
@@ -285,13 +290,13 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 func (c *ClusterConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
 	gvr, err := c.gvrForKind(flux.Kind(kind))
 	if err != nil {
-		return err
+		return notSent(err)
 	}
 	if err := imagePolicyVerb(flux.Kind(kind), gvr, "suspend or resume", "its v1beta2 spec has no suspend field"); err != nil {
-		return err
+		return notSent(err)
 	}
 	if _, err := c.checkArmed(ctx, gvr, kind, ns, name, uid); err != nil {
-		return fmt.Errorf("set suspend=%v %w", suspend, err)
+		return notSent(fmt.Errorf("set suspend=%v %w", suspend, err))
 	}
 	if err := c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.SuspendPatch(suspend)); err != nil {
 		return fmt.Errorf("set suspend=%v %w", suspend, err)

@@ -4,7 +4,9 @@ import { useInspectorAlerts } from "./AlertsBlock";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO } from "../store/fleet";
+import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO, GitOpsOwnershipDTO } from "../store/fleet";
+import { gitOpsOwnership } from "../bridge/crd";
+import { undoOwnershipLine } from "./ownership";
 import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
 import { deletePod } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
@@ -93,7 +95,9 @@ type PendingRestart = { kind: "restart"; w: WorkloadDTO };
 type PendingScale = { kind: "scale"; w: WorkloadDTO; replicas: number; owner?: ReplicaOwnerDTO };
 type PendingScaleInput = { kind: "scale-input"; w: WorkloadDTO };
 type PendingDeletePod = { kind: "delete-pod"; w: WorkloadDTO; pod: PodDTO };
-type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
+// owner: the authoritative ownership read, undefined while in flight and null
+// when it failed (A3 §9 stage 1).
+type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO; owner?: GitOpsOwnershipDTO | null };
 type PendingPause = { kind: "pause"; w: WorkloadDTO; pause: boolean };
 type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod | PendingUndo | PendingPause;
 // A pending verb is pinned to the cluster it was raised on, independent of
@@ -571,7 +575,13 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
               }}
               onCompare={fleetSize > 1 ? (w) => setCompareTarget({ cluster, w }) : undefined}
-              onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
+              onUndo={(w, rev) => {
+                setPending({ kind: "undo", w, rev });
+                void gitOpsOwnership(cluster, { group: "apps", version: "v1", plural: "", kind: w.kind, scope: "Namespaced" }, { namespace: w.namespace, name: w.name }).then((owner) =>
+                  // lands only on the same pending undo: same cluster, object and revision
+                  setPinned((p) => (p && p.kind === "undo" && p.cluster === cluster && p.w.uid === w.uid && p.rev.revision === rev.revision && p.owner === undefined ? { ...p, owner } : p)),
+                );
+              }}
               onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
             />
           ) : selectedKey && mine && pin.expected && pin.gone ? (
@@ -630,13 +640,13 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           detail={
             `${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → revision ${pending.rev.revision}` +
             (pending.rev.images.length > 0 ? ` (${pending.rev.images.join(", ")})` : "") +
-            (pending.w.gitops ? ` - GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.` : "")
+            undoOwnershipLine(pending.owner, pending.w.gitops ? { kind: pending.w.gitops.kind, name: pending.w.gitops.name } : undefined)
           }
           protected={isProtected}
           danger
           confirmLabel="Roll back"
           onCancel={() => setPending(null)}
-          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutUndo(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.rev.revision)); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutUndo(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.rev.revision, p.rev.objectUID ?? "", p.rev.templateDigest ?? "")); }}
         />
       )}
       {pending?.kind === "pause" && (

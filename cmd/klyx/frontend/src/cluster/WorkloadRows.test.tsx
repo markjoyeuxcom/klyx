@@ -23,7 +23,7 @@ vi.mock("../bridge/pods", () => ({ deletePod: vi.fn(async () => {}), openPodDeta
 vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn(async () => true) }));
 vi.mock("../bridge/metrics", () => ({ getWorkloadSparklines: vi.fn(async () => ({ available: false, cpu: [], mem: [] })) }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn(async () => ({ ok: true, error: "" })) }));
-vi.mock("../bridge/crd", () => ({ copyText: vi.fn(async () => {}) }));
+vi.mock("../bridge/crd", () => ({ copyText: vi.fn(async () => {}), gitOpsOwnership: vi.fn(async () => null) }));
 vi.mock("../bridge/keda", () => ({ replicaOwner: vi.fn(async () => ({ autoscaler: "unowned", gitops: "unowned", owners: [] })) }));
 vi.mock("./LogsPane", () => ({ LogsPane: () => null }));
 vi.mock("../../bindings/github.com/moomora/klyx/internal/appbridge/index.js", () => ({}));
@@ -320,7 +320,7 @@ describe("rollout history is fenced by UID", () => {
     expect(inspector().getByText(/new-object-image:v1/)).toBeTruthy();
     fireEvent.click(inspector().getByText("undo →"));
     fireEvent.click(screen.getByText("Roll back"));
-    expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1);
+    expect(rolloutUndo).toHaveBeenCalledWith("x", "Deployment", "app", "api", "uid-api-2", 1, "", "");
   });
 
   it("a deferred reply for the earlier object never lands on the replacement once it is opened", async () => {

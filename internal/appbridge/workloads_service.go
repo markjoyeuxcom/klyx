@@ -2,7 +2,6 @@ package appbridge
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -19,22 +18,16 @@ const maxScaleReplicas = 10000
 // is the workload the verb was armed against (design §5b): a same-name
 // replacement is never scaled.
 func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name, uid string, replicas int) ActionResultDTO {
-	if replicas < 0 || replicas > maxScaleReplicas {
-		return ActionResultDTO{Error: fmt.Sprintf("replicas %d out of range [0, %d]", replicas, maxScaleReplicas)}
-	}
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.ScaleWorkload(ctx, kind, namespace, name, uid, int32(replicas)); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doScaleWorkload(ctx, conn, kind, namespace, name, uid, replicas)
 }
 
 // RolloutHistory returns a workload's revision history, newest first, with
@@ -61,6 +54,7 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 		out.Revisions = append(out.Revisions, RolloutRevisionDTO{
 			Revision: r.Revision, AgeSeconds: r.AgeSeconds, Images: images,
 			Current: r.Current, ChangeCause: r.ChangeCause,
+			ObjectUID: r.ObjectUID, TemplateDigest: r.TemplateDigest,
 		})
 	}
 	return out
@@ -69,20 +63,24 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 // RolloutUndo rolls a workload back to a prior revision. Destructive: consumes
 // the protected-cluster grant, and the frontend confirm carries the
 // GitOps-owned-will-be-reverted warning. uid is the armed workload (§5b).
-func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid string, revision int) ActionResultDTO {
+// objectUID and templateDigest are the revision the history showed (A3
+// §4.5): the undo writes only that revision object with that template, and
+// refuses before writing when it changed. Both empty is today's behaviour.
+func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid string, revision int, objectUID, templateDigest string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutUndo(ctx, kind, namespace, name, uid, int64(revision)); err != nil {
-		return failed(ctx, conn, err)
+	var expect *fleet.RevisionExpect
+	if objectUID != "" || templateDigest != "" {
+		expect = &fleet.RevisionExpect{ObjectUID: objectUID, TemplateDigest: templateDigest}
 	}
-	return ActionResultDTO{OK: true}
+	return doRolloutUndo(ctx, conn, kind, namespace, name, uid, revision, expect)
 }
 
 // RolloutPause pauses/resumes a Deployment's rollouts (spec.paused). Reversible
@@ -90,18 +88,15 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid strin
 // grant like restart/scale. uid is the armed Deployment (§5b).
 func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pause bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutPause(ctx, namespace, name, uid, pause); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doRolloutPause(ctx, conn, namespace, name, uid, pause)
 }
 
 // RolloutRestart triggers a rolling restart for a workload by patching the
@@ -109,18 +104,15 @@ func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pa
 // or DaemonSet. uid is the armed workload (§5b).
 func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name, uid string) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.RolloutRestart(ctx, kind, namespace, name, uid); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doRolloutRestart(ctx, conn, kind, namespace, name, uid)
 }
 
 const workloadsTimeout = 30 * time.Second
@@ -130,7 +122,7 @@ type WorkloadsConn interface {
 	WorkloadCompare(ctx context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error)
 	RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
 	RolloutHistory(ctx context.Context, kind, namespace, name string) ([]workloads.RolloutRevision, types.UID, error)
-	RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64) error
+	RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64, expect *fleet.RevisionExpect) error
 	RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
 	ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error
 }

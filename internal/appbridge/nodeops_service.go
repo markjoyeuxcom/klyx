@@ -70,18 +70,15 @@ func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *Nod
 // same-name replacement.
 func (s *NodeOpsService) Cordon(cluster, node, uid string, cordon bool) ActionResultDTO {
 	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	if err := conn.SetCordon(ctx, node, uid, cordon); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doCordon(ctx, conn, node, uid, cordon)
 }
 
 // drainPipe wraps a PipeReader; its Close also closes the write end so the

@@ -31,11 +31,11 @@ describe("workload verbs carry the armed UID", () => {
     }
     await rolloutRestart("homelab", "Deployment", "monitoring", "grafana", "uid-g");
     await scaleWorkload("homelab", "StatefulSet", "db", "pg", "uid-pg", 3);
-    await rolloutUndo("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2);
+    await rolloutUndo("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2, "rs-uid", "digest");
     await rolloutPause("homelab", "monitoring", "grafana", "uid-g", true);
     expect(WorkloadsService.RolloutRestart).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g");
     expect(WorkloadsService.ScaleWorkload).toHaveBeenCalledWith("homelab", "StatefulSet", "db", "pg", "uid-pg", 3);
-    expect(WorkloadsService.RolloutUndo).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2);
+    expect(WorkloadsService.RolloutUndo).toHaveBeenCalledWith("homelab", "Deployment", "monitoring", "grafana", "uid-g", 2, "rs-uid", "digest");
     expect(WorkloadsService.RolloutPause).toHaveBeenCalledWith("homelab", "monitoring", "grafana", "uid-g", true);
   });
 });

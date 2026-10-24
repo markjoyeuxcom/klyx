@@ -1,6 +1,6 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14); stage 1 is built (§15). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
 An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
@@ -415,3 +415,25 @@ Codex requested one change, with two nonblocking notes; the six other findings a
 Codex accepted the design at e1933e4, after the review of 9bde787 and two re-reviews, with no remaining findings. The owner's decisions in §11 stay open: the matrix and the setting's default.
 
 **Codex's implementation reminder, adopted:** `delete-pod` judges the deleted pod's removal and its replacement's liveness from one consistent event sequence. The unfiltered namespace watch of §5.2 carries both, so the deletion uses it instead of a separate object watch, and a replacement's DELETED event can never be missed behind the old pod's.
+
+## 15. Stage 1 as built: the manual verbs' guards and receipts (2026-10-24)
+
+**What changed in the manual verbs:**
+- **Receipts:** `fleet.Receipt` (UID, generation, resourceVersion, token, the armed read's generation), noted by each matrix verb after a write the server accepted (`internal/fleet/receipt.go`).
+- **Refusals before the write:** every return before a matrix verb's write is marked `fleet.ErrNotSent`. The wrapper keeps the refusal's own text and its chain, `ErrReplaced` included. `fleet.WriteOutcome` classifies written, refused (nothing sent, or by the server) and unverified.
+- **The shells:** each matrix verb's bridge method keeps its signature as the shell (`checkProtected`, the lookup, the context), over an inner function in `internal/appbridge/verbs.go` that stage 3's RunStep will call with the pinned connection. `ActionResultDTO` gains `outcome`, `notSent` and `receipt`.
+- **Restart's token** is RFC3339Nano, like reconcile's.
+- **Undo writes only the reviewed revision:** `ClusterConn.RolloutUndo` takes a `*RevisionExpect` (the revision object's UID and template digest) and refuses with `ErrRevisionChanged`, before writing, when the object selected by number differs. The history carries `objectUID` and `templateDigest` (`workloads.TemplateDigest`, A1.1's normalisation over one JSON round trip). The manual undo passes them back.
+- **Scale's grant order:** the count is checked after `checkProtected`, so an out-of-range count consumes the grant.
+- **The manual undo's consequence** comes from `CRDService.GitOpsOwnership`, read when the dialog opens: the managing unit and its basis, worded for a suspended Flux owner and for Argo. A failed read falls back to the labels and says so (`undoOwnershipLine`).
+
+**Deviations, for review:**
+1. **Receipts travel in the context.** The design put the receipt in the inner function, and it is there: the inner function attaches a recorder (`fleet.WithReceipts`) and the verbs note into it, so the fleet's signatures, about 170 call sites with the tests, are unchanged. A verb called without a recorder notes nothing.
+2. **A Scale carries no generation.** The scale subresource's answer has a UID and a resourceVersion only, so scale's receipt has no generation. Stage 4 reads the effect from the workload itself, as a state effect allows (§5.2).
+3. **A deletion's receipt is the precondition's UID.** A typed delete returns no object; the UID precondition guarantees the server deleted exactly that pod.
+4. **The digest is fail-safe across client versions.** A typed object drops fields newer than client-go's types, so a template carrying one digests differently from its unstructured read, and the undo is refused rather than written.
+5. **Only the matrix verbs classify.** Other write paths do not mark their refusals before the write, so they leave `outcome` unset rather than call a local refusal "unverified".
+
+**Tests:** `internal/fleet/receipt_test.go` covers the outcome classes, `ErrNotSent`'s chain, the recorder, the unique restart token and its receipt, refusals before the write (workload, Flux and KEDA verbs), each verb's receipt, the reconcile token, digest agreement between typed and unstructured reads, the expectation (the review's resampled-partner probe included), and a revision with no digest. `internal/appbridge/verbs_test.go` covers scale's grant, the request classes through a shell, and the manual undo's expectation; `ownership.test.ts` and `WorkloadsView.test.tsx` the consequence line and the passed revision.
+
+**Gates:** gofmt; vet; `go test -race ./internal/...`; golangci-lint; tsc; vitest (2,441 tests); eslint (the four warnings main already has). A mutation pass caught 28 of 28, three of them after being rewritten to compile.

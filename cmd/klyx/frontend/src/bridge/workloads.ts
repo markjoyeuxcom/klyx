@@ -41,8 +41,10 @@ export async function rolloutHistory(cluster: string, kind: string, namespace: s
   }
 }
 
-export async function rolloutUndo(cluster: string, kind: string, namespace: string, name: string, uid: string, revision: number): Promise<void> {
-  const r = (await WorkloadsService.RolloutUndo(cluster, kind, namespace, name, uid, revision)) as ActionResultDTO;
+// objectUID/templateDigest are the revision the history showed: the backend
+// refuses before writing when the revision at that number changed (A3 §4.5).
+export async function rolloutUndo(cluster: string, kind: string, namespace: string, name: string, uid: string, revision: number, objectUID: string, templateDigest: string): Promise<void> {
+  const r = (await WorkloadsService.RolloutUndo(cluster, kind, namespace, name, uid, revision, objectUID, templateDigest)) as ActionResultDTO;
   report(r, `rolled ${kind.toLowerCase()} ${namespace}/${name} back to revision ${revision}`, "Rollback failed");
 }
 
