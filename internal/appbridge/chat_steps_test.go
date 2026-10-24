@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,6 +30,7 @@ type stepsConn struct {
 	writes  []string
 	err     error
 	owner   fleet.GitOpsOwnership
+	replica fleet.ReplicaOwnership
 	getHook func()
 }
 
@@ -74,6 +76,9 @@ func (c *stepsConn) KEDASetPaused(_ context.Context, res, ns, name, uid string, 
 }
 func (c *stepsConn) GitOpsOwnership(context.Context, string, string, string, string) fleet.GitOpsOwnership {
 	return c.owner
+}
+func (c *stepsConn) ReplicaOwner(context.Context, string, string, string) fleet.ReplicaOwnership {
+	return c.replica
 }
 
 // ChatGet runs getHook after each read: a connection that changes while a
@@ -130,8 +135,8 @@ func (sf *stepsFixture) run(n int, token string) StepRunDTO {
 // for real).
 func establish(t *testing.T) {
 	prev := verifyStepHook
-	verifyStepHook = func(s *ChatService, _ *conversation, p *actionPlan, n int, _ stepSnap, _ ActionResultDTO) {
-		s.settleEffect(p, n, stepEffectEstablished, "")
+	verifyStepHook = func(s *ChatService, c *conversation, p *actionPlan, n int, _ stepSnap, _ ActionResultDTO) {
+		s.settleEffect(c, p, n, stepEffectEstablished, "")
 	}
 	t.Cleanup(func() { verifyStepHook = prev })
 }
@@ -225,6 +230,7 @@ func TestAStandingPrerequisiteIsReadAgain(t *testing.T) {
 		t.Fatal(r)
 	}
 	_ = unstructured.SetNestedField(sf.web().Object, true, "spec", "paused")
+	_ = unstructured.SetNestedField(sf.web().Object, int64(4), "status", "observedGeneration")
 	rv2 := sf.review(2)
 	if !rv2.Offered {
 		t.Fatalf("the prerequisite holds: %+v", rv2)
@@ -233,7 +239,7 @@ func TestAStandingPrerequisiteIsReadAgain(t *testing.T) {
 	if r := sf.run(2, rv2.Token); r.Ran || !strings.Contains(r.Reason, "step 1's effect no longer holds") {
 		t.Fatalf("between Review and Confirm: %+v", r)
 	}
-	if r := sf.review(2); r.Offered || !strings.Contains(r.Reason, "it was resumed") {
+	if r := sf.review(2); r.Offered || !strings.Contains(r.Reason, "spec.paused is false") {
 		t.Fatalf("and at Review: %+v", r)
 	}
 }
@@ -505,54 +511,125 @@ func TestTheConsequenceNamesTheOwnersSuspension(t *testing.T) {
 	}
 }
 
-// §4.3: every state verb's effect is read again, by its own predicate.
-func TestEveryPrerequisiteIsItsOwnPredicate(t *testing.T) {
+// §4.3: every state verb's effect is read again by the matrix's whole
+// predicate, the one verification decides it by (stage 3 review, finding
+// 3): KEDA's completed pause, an observed generation, a Deployment undo's
+// current ReplicaSet.
+func TestEveryPrerequisiteIsTheMatrixEffect(t *testing.T) {
 	two := 2
 	tmpl := map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "c", "image": "i:4"}}}}
 	d, _ := workloads.TemplateDigest(tmpl, true)
+	sd, _ := workloads.TemplateDigest(tmpl, false)
 	soGVR := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+	stsGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
+	ann := func(kv ...string) map[string]any {
+		m := map[string]any{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	ready := func(s string) map[string]any {
+		return map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": s}}}
+	}
+	observed := func(gen int64, extra map[string]any) map[string]any {
+		st := map[string]any{"observedGeneration": gen}
+		for k, v := range extra {
+			st[k] = v
+		}
+		return st
+	}
+	paused := subjectVerdict{v: chatVerdict{Kind: "paused", Coverage: "live"}, found: true}
+	ok := subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live"}, found: true}
+	stale := subjectVerdict{v: chatVerdict{Kind: "paused", Coverage: "stale"}, found: true}
+	rs := func(uid, rev string) *unstructured.Unstructured {
+		return uobj(map[string]any{"kind": "ReplicaSet", "metadata": map[string]any{"name": "o-4", "namespace": "n", "uid": uid, "annotations": ann("deployment.kubernetes.io/revision", rev)}})
+	}
 	for _, c := range []struct {
-		verb       string
-		gvr        schema.GroupVersionResource
-		kind       string
-		step       ActionStepDTO
-		holds, not map[string]any
-		want       string
+		name        string
+		verb        string
+		gvr         schema.GroupVersionResource
+		kind        string
+		step        ActionStepDTO
+		annotations map[string]any
+		spec        map[string]any
+		status      map[string]any
+		digest      string
+		rs          *unstructured.Unstructured
+		verdict     *subjectVerdict
+		holds       bool
 	}{
-		{"flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, map[string]any{"spec": map[string]any{"suspend": true}}, map[string]any{"spec": map[string]any{}}, ""},
-		{"flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, map[string]any{"spec": map[string]any{}}, map[string]any{"spec": map[string]any{"suspend": true}}, ""},
-		{"scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, map[string]any{"spec": map[string]any{"replicas": int64(2)}}, map[string]any{"spec": map[string]any{"replicas": int64(3)}}, ""},
-		{"rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, map[string]any{"spec": map[string]any{"paused": true}}, map[string]any{"spec": map[string]any{}}, ""},
-		{"rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, map[string]any{"spec": map[string]any{}}, map[string]any{"spec": map[string]any{"paused": true}}, ""},
-		{"cordon", nodesGVR, "Node", ActionStepDTO{}, map[string]any{"spec": map[string]any{"unschedulable": true}}, map[string]any{"spec": map[string]any{}}, ""},
-		{"uncordon", nodesGVR, "Node", ActionStepDTO{}, map[string]any{"spec": map[string]any{}}, map[string]any{"spec": map[string]any{"unschedulable": true}}, ""},
-		{"keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, map[string]any{"metadata": map[string]any{"annotations": map[string]any{"autoscaling.keda.sh/paused": "true"}}}, map[string]any{"metadata": map[string]any{"annotations": map[string]any{"autoscaling.keda.sh/paused": "false"}}}, ""},
-		{"keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, map[string]any{}, map[string]any{"metadata": map[string]any{"annotations": map[string]any{"autoscaling.keda.sh/paused": "true"}}}, ""},
-		{"rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, map[string]any{"spec": map[string]any{"template": tmpl}}, map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{}}}}, d},
+		{"suspended", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, true},
+		{"resumed from outside", "flux-suspend", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, false},
+		{"resumed", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, true},
+		{"suspended again", "flux-resume", ksGVR, "Kustomization", ActionStepDTO{}, nil, map[string]any{"suspend": true}, nil, "", nil, nil, false},
+		{"scaled", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(2)}), "", nil, nil, true},
+		{"count changed", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(3)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, false},
+		{"status not the count", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(1, map[string]any{"replicas": int64(3)}), "", nil, nil, false},
+		{"scale unobserved", "scale", deploysGVR, "Deployment", ActionStepDTO{Replicas: &two}, nil, map[string]any{"replicas": int64(2)}, observed(0, map[string]any{"replicas": int64(2)}), "", nil, nil, false},
+		{"paused", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, true},
+		{"pause unobserved", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(0, nil), "", nil, nil, false},
+		{"resumed from outside", "rollout-pause", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, false},
+		{"rollout resumed", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{}, observed(1, nil), "", nil, nil, true},
+		{"paused again", "rollout-resume", deploysGVR, "Deployment", ActionStepDTO{}, nil, map[string]any{"paused": true}, observed(1, nil), "", nil, nil, false},
+		{"cordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, true},
+		{"uncordoned", "cordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, false},
+		{"schedulable", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{}, nil, "", nil, nil, true},
+		{"cordoned again", "uncordon", nodesGVR, "Node", ActionStepDTO{}, nil, map[string]any{"unschedulable": true}, nil, "", nil, nil, false},
+		{"pause completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, &paused, true},
+		{"annotation false", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "false"), map[string]any{}, nil, "", nil, &paused, false},
+		// Codex's counterexample: the annotation alone, Ready False and not paused
+		{"pause not completed", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("False"), "", nil, &ok, false},
+		{"no verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, nil, "", nil, &subjectVerdict{}, false},
+		{"stale verdict", "keda-pause", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, nil, "", nil, &stale, false},
+		{"resumed and ready", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("True"), "", nil, nil, true},
+		{"paused again", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused", "true"), map[string]any{}, ready("True"), "", nil, nil, false},
+		// Codex's counterexample: another pause annotation, Ready False
+		{"another pause", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, ann("autoscaling.keda.sh/paused-replicas", "0"), map[string]any{}, ready("True"), "", nil, nil, false},
+		{"ready false", "keda-resume", soGVR, "ScaledObject", ActionStepDTO{}, nil, map[string]any{}, ready("False"), "", nil, nil, false},
+		{"reverted", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, true},
+		{"template changed", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": map[string]any{"spec": map[string]any{}}}, observed(1, nil), d, rs("rs-uid", "5"), nil, false},
+		{"undo unobserved", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(0, nil), d, rs("rs-uid", "5"), nil, false},
+		{"partner replaced", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-other", "5"), nil, false},
+		{"partner not current", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "6"), map[string]any{"template": tmpl}, observed(1, nil), d, rs("rs-uid", "5"), nil, false},
+		{"partner unread", "rollout-undo", deploysGVR, "Deployment", ActionStepDTO{}, ann("deployment.kubernetes.io/revision", "5"), map[string]any{"template": tmpl}, observed(1, nil), d, nil, nil, false},
+		{"statefulset reverted", "rollout-undo", stsGVR, "StatefulSet", ActionStepDTO{}, nil, map[string]any{"template": tmpl}, observed(1, nil), sd, nil, nil, true},
 	} {
-		for _, holds := range []bool{true, false} {
+		t.Run(c.verb+"/"+c.name, func(t *testing.T) {
 			f := newToolsFixture(t)
-			body := c.not
-			if holds {
-				body = c.holds
+			md := map[string]any{"name": "o", "namespace": "n", "uid": "u", "generation": int64(1)}
+			if c.annotations != nil {
+				md["annotations"] = c.annotations
 			}
-			obj := map[string]any{"kind": c.kind, "metadata": map[string]any{"name": "o", "namespace": "n", "uid": "u"}}
-			for k, v := range body {
-				if k == "metadata" {
-					obj["metadata"].(map[string]any)["annotations"] = v.(map[string]any)["annotations"]
-					continue
-				}
-				obj[k] = v
+			obj := map[string]any{"kind": c.kind, "metadata": md, "spec": c.spec}
+			if c.status != nil {
+				obj["status"] = c.status
 			}
 			f.conn.objects[key(c.gvr, "n", "o")] = uobj(obj)
-			fact := actionFact{Kind: c.kind, Group: c.gvr.Group, Version: c.gvr.Version, Resource: c.gvr.Resource, Namespace: "n", Name: "o", UID: "u"}
-			st := c.step
-			st.Verb = c.verb
-			_, why := f.svc.observePrior(context.Background(), f.conn, stepSnapPrior{n: 1, verb: c.verb, fact: fact, step: st, want: c.want})
-			if holds != (why == "") {
-				t.Errorf("%s holds=%v: %q", c.verb, holds, why)
+			if c.rs != nil {
+				f.conn.objects[key(replicaSetsGVR, "n", "o-4")] = c.rs
 			}
-		}
+			prev := verdictOfHook
+			verdictOfHook = func(actionFact) subjectVerdict {
+				if c.verdict == nil {
+					t.Error("the Observer was read for " + c.verb)
+					return subjectVerdict{}
+				}
+				return *c.verdict
+			}
+			t.Cleanup(func() { verdictOfHook = prev })
+			fact := actionFact{Kind: c.kind, Group: c.gvr.Group, Version: c.gvr.Version, Resource: c.gvr.Resource, Namespace: "n", Name: "o", UID: "u"}
+			var partner *fleet.RevisionExpect
+			if c.verb == "rollout-undo" {
+				fact.History = &historyFacts{PartnerRevision: 4, PartnerObject: "o-4", PartnerObjectUID: "rs-uid", PartnerDigest: c.digest}
+				partner = &fleet.RevisionExpect{ObjectUID: "rs-uid", TemplateDigest: c.digest}
+			}
+			// the prior's verb decides, not a copy in its step
+			_, why := f.svc.observePrior(context.Background(), f.conn, stepSnapPrior{n: 1, verb: c.verb, fact: fact, step: c.step, partner: partner})
+			if c.holds != (why == "") {
+				t.Errorf("holds=%v: %q", c.holds, why)
+			}
+		})
 	}
 }
 
@@ -594,5 +671,268 @@ func TestAWithdrawalSurvivesTheTurnsSettlement(t *testing.T) {
 	}
 	if r := f.svc.ReviewStep("x", inv.ConversationID, ex.ID, 1); r.Offered || !strings.Contains(r.Reason, "withdrawn") {
 		t.Fatalf("and its steps stay withdrawn: %+v", r)
+	}
+}
+
+// Stage 3 review, finding 1: the consequence the operator confirmed is part
+// of the review's digest - a changed owner, an ended suspension, an
+// incomplete ownership read or a new autoscaler needs a new review.
+func TestAChangedConsequenceNeedsANewReview(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		change func(sc *stepsConn)
+	}{
+		{"another owner", func(sc *stepsConn) { sc.owner.OwnerName = "other" }},
+		{"suspension ended", func(sc *stepsConn) { sc.owner.OwnerSuspended = false }},
+		{"ownership not fully read", func(sc *stepsConn) { sc.owner.Warnings = []string{"the inventory read failed"} }},
+		{"an autoscaler appeared", func(sc *stepsConn) { sc.replica.Owners = []string{"HorizontalPodAutoscaler shop/web"} }},
+		{"autoscaler unproven", func(sc *stepsConn) { sc.replica.Autoscaler = "unverified" }},
+		{"unchanged", func(*stepsConn) {}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sf := newStepsFixture(t, scaleWeb)
+			sf.sc.owner = fleet.GitOpsOwnership{OwnerKind: "Kustomization", OwnerNamespace: "flux-system", OwnerName: "a1-web", Basis: "flux-inventory", OwnerSuspended: true}
+			rv := sf.review(1)
+			if !rv.Offered {
+				t.Fatalf("%+v", rv)
+			}
+			c.change(sf.sc)
+			r := sf.run(1, rv.Token)
+			if c.name == "unchanged" {
+				if !r.Ran || len(sf.sc.recorded()) != 1 {
+					t.Fatalf("the control runs: %+v %v", r, sf.sc.recorded())
+				}
+				return
+			}
+			if r.Ran || len(sf.sc.recorded()) != 0 || !strings.Contains(r.Reason, "changed since you reviewed it") {
+				t.Fatalf("%+v %v", r, sf.sc.recorded())
+			}
+			if rv2 := sf.review(1); !rv2.Offered || strings.Join(rv2.Consequence, "; ") == strings.Join(rv.Consequence, "; ") {
+				t.Fatalf("the new review words the new consequence: %+v", rv2)
+			}
+		})
+	}
+}
+
+// Stage 3 review, finding 2: one step runs per conversation, whichever plan
+// holds it - through its write and through its verification.
+func TestOneStepRunsPerConversation(t *testing.T) {
+	var settle func()
+	prev := verifyStepHook
+	verifyStepHook = func(s *ChatService, c *conversation, p *actionPlan, n int, _ stepSnap, _ ActionResultDTO) {
+		settle = func() { s.settleEffect(c, p, n, stepEffectEstablished, "") }
+	}
+	t.Cleanup(func() { verifyStepHook = prev })
+	sf := newStepsFixture(t, pauseWeb)
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.prov.turns = append(sf.prov.turns, calls(ai.ToolCall{ID: "n", Name: toolActions, Args: json.RawMessage(`{"steps":[` + scaleWeb + `]}`)}), answer("another"))
+	st := sf.svc.Ask("x", sf.conv, "and then?", nil)
+	ex := st.Exchanges[len(st.Exchanges)-1].ID
+	if r := sf.svc.ReviewStep("x", sf.conv, ex, 1); r.Offered || !strings.Contains(r.Reason, "step 1 of an earlier plan is running") {
+		t.Fatalf("while the first plan's step verifies: %+v", r)
+	}
+	settle()
+	rv := sf.svc.ReviewStep("x", sf.conv, ex, 1)
+	if !rv.Offered {
+		t.Fatalf("once it settles: %+v", rv)
+	}
+	if r := sf.svc.RunStep("x", sf.conv, ex, 1, rv.Token); !r.Ran {
+		t.Fatal(r)
+	}
+}
+
+// blockingPause holds the first write until released.
+type blockingPause struct {
+	*stepsConn
+	reached, release chan struct{}
+}
+
+func (c *blockingPause) RolloutPause(_ context.Context, ns, name, uid string, pause bool) error {
+	err := c.note("pause %s/%s %s %v", ns, name, uid, pause)
+	close(c.reached)
+	<-c.release
+	return err
+}
+
+func TestNoSecondWriteWhileAWriteIsInFlight(t *testing.T) {
+	establish(t)
+	sf := newStepsFixture(t, pauseWeb)
+	bc := &blockingPause{stepsConn: sf.sc, reached: make(chan struct{}), release: make(chan struct{})}
+	sf.mu.Lock()
+	sf.cur = bc
+	sf.mu.Unlock()
+	sf.svc.mu.Lock()
+	sf.svc.convs[invKey("x")].conn = bc
+	sf.svc.mu.Unlock()
+	rv := sf.review(1)
+	done := make(chan StepRunDTO, 1)
+	go func() { done <- sf.run(1, rv.Token) }()
+	<-bc.reached
+	sf.prov.turns = append(sf.prov.turns, calls(ai.ToolCall{ID: "n", Name: toolActions, Args: json.RawMessage(`{"steps":[` + scaleWeb + `]}`)}), answer("another"))
+	st := sf.svc.Ask("x", sf.conv, "and then?", nil)
+	ex := st.Exchanges[len(st.Exchanges)-1].ID
+	r := sf.svc.ReviewStep("x", sf.conv, ex, 1)
+	close(bc.release)
+	if first := <-done; !first.Ran {
+		t.Fatal(first)
+	}
+	if r.Offered || !strings.Contains(r.Reason, "of an earlier plan is running") || len(sf.sc.recorded()) != 1 {
+		t.Fatalf("%+v %v", r, sf.sc.recorded())
+	}
+}
+
+// Stage 3 review, finding 4: a dismissal made while the proposing turn
+// runs survives its settlement.
+func TestADismissalSurvivesTheTurnsSettlement(t *testing.T) {
+	seed := ChatSeedDTO{Kind: "object", Group: "apps", Version: "v1", Plural: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}
+	reached, release := make(chan struct{}), make(chan struct{})
+	f := newToolsFixture(t, calls(ai.ToolCall{ID: "p", Name: toolActions, Args: json.RawMessage(`{"steps":[` + pauseWeb + `]}`)}), func(r ai.ConvRequest) (ai.Turn, error) {
+		close(reached)
+		<-release
+		return answer("done")(r)
+	})
+	f.conn.objects[key(deploysGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web"}, "spec": map[string]any{"replicas": int64(3)}})
+	inv := f.svc.StartInvestigation("x", seed)
+	done := make(chan ChatStateDTO, 1)
+	go func() { done <- f.svc.Ask("x", inv.ConversationID, "", nil) }()
+	<-reached
+	ex := f.svc.InvestigationState("x").Exchanges[0]
+	d := f.svc.DismissPlan("x", inv.ConversationID, ex.ID)
+	close(release)
+	st := <-done
+	if d.Plan == nil || d.Plan.Status != planStatusDeclined || st.Exchanges[0].Plan.Status != planStatusDeclined {
+		t.Fatalf("%+v %+v", d.Plan, st.Exchanges[0].Plan)
+	}
+	if r := f.svc.ReviewStep("x", inv.ConversationID, ex.ID, 1); r.Offered || !strings.Contains(r.Reason, "dismissed") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// Stage 3 review, finding 5: a step's record is at most 1 KiB and counted
+// by retention.
+func TestARunRecordIsBoundedAndCounted(t *testing.T) {
+	sf := newStepsFixture(t, pauseWeb)
+	sf.sc.err = errors.New(strings.Repeat("é", 50<<10))
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	defer sf.svc.mu.Unlock()
+	e := sf.svc.convs[invKey("x")].exchanges[0]
+	r := e.plan.runs[0]
+	b, _ := json.Marshal(StepRunStateDTO{Request: r.request, NotSent: r.notSent, Error: r.errText, Effect: r.effect, EffectWhy: r.effectWhy, RanAt: r.ranAt.UTC().Format(time.RFC3339)})
+	if len(b) > 1024 || !utf8.ValidString(r.errText) || !strings.HasSuffix(r.errText, "…") {
+		t.Fatalf("%d bytes: %q", len(b), r.errText)
+	}
+	with := exchangeBytes(e)
+	e.plan.runs[0] = &stepRun{}
+	without := exchangeBytes(e)
+	e.plan.runs[0] = r
+	if with-without != len(r.request)+len(r.errText)+len(r.effect)+len(r.effectWhy) {
+		t.Fatalf("counted %d of the record's texts", with-without)
+	}
+}
+
+func TestAConversationKeepsAtMost16StepRecords(t *testing.T) {
+	sf := newStepsFixture(t, pauseWeb)
+	sf.sc.err = apierrors.NewForbidden(deploysGVR.GroupResource(), "web", errors.New("denied"))
+	ex := sf.ex
+	for i := 0; i < 17; i++ {
+		if i > 0 {
+			sf.prov.turns = append(sf.prov.turns, calls(ai.ToolCall{ID: "again", Name: toolActions, Args: json.RawMessage(`{"steps":[` + pauseWeb + `]}`)}), answer("proposal"))
+			st := sf.svc.Ask("x", sf.conv, "again", nil)
+			ex = st.Exchanges[len(st.Exchanges)-1].ID
+		}
+		if r := sf.svc.RunStep("x", sf.conv, ex, 1, sf.svc.ReviewStep("x", sf.conv, ex, 1).Token); !r.Ran {
+			t.Fatalf("%d: %+v", i, r)
+		}
+	}
+	st := sf.svc.InvestigationState("x")
+	steps := 0
+	for _, e := range st.Exchanges {
+		if e.Plan != nil {
+			steps += len(e.Plan.Steps)
+		}
+	}
+	first, last := st.Exchanges[0], st.Exchanges[len(st.Exchanges)-1]
+	if steps != 16 || first.Plan != nil || !strings.Contains(first.Note, "at most 16 step records") || last.Plan == nil || last.ID != ex {
+		t.Fatalf("%d step records; first %+v", steps, first)
+	}
+}
+
+// Retention never drops the exchange whose plan's step is running.
+func TestRetentionKeepsTheRunningPlan(t *testing.T) {
+	running := &actionPlan{dto: ActionPlanDTO{Steps: []ActionStepDTO{{N: 1}}}, runs: []*stepRun{{}}, running: 1}
+	c := &conversation{stepRunning: running}
+	for i := 0; i <= chatRetainExchange; i++ {
+		c.exchanges = append(c.exchanges, &exchange{id: fmt.Sprint(i)})
+	}
+	c.exchanges[0].plan = running
+	(&ChatService{}).retainLocked(c)
+	if len(c.exchanges) != chatRetainExchange || c.exchanges[0].plan != running || c.exchanges[1].id != "2" {
+		t.Fatalf("%d kept, first %s, second %s", len(c.exchanges), c.exchanges[0].id, c.exchanges[1].id)
+	}
+}
+
+func TestCapRecordCutsOnARuneBoundary(t *testing.T) {
+	for _, s := range []string{strings.Repeat("a", 600), strings.Repeat("é", 300), strings.Repeat("日", 200)} {
+		got := capRecord(s, stepErrMax)
+		if len(got) > stepErrMax || !utf8.ValidString(got) || !strings.HasSuffix(got, "…") {
+			t.Fatalf("%d bytes, valid %v", len(got), utf8.ValidString(got))
+		}
+	}
+	if capRecord("short", stepErrMax) != "short" {
+		t.Fatal("a short text is kept")
+	}
+}
+
+// A run's record can take the conversation over its byte bound: retention
+// runs after the run, not only at the next question.
+func TestARunIsRetainedWithinTheBound(t *testing.T) {
+	prev := verifyStepHook
+	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {} // the effect stays pending
+	t.Cleanup(func() { verifyStepHook = prev })
+	sf := newStepsFixture(t, pauseWeb)
+	sf.sc.err = errors.New(strings.Repeat("z", 4096))
+	rv := sf.review(1)
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	size := 0
+	for _, e := range c.exchanges {
+		size += exchangeBytes(e)
+	}
+	filler := &exchange{id: "filler"}
+	filler.answer = strings.Repeat("a", chatRetainBytes-size-exchangeBytes(filler)-200)
+	c.exchanges = append([]*exchange{filler}, c.exchanges...)
+	removed := c.removed
+	sf.svc.mu.Unlock()
+	if r := sf.run(1, rv.Token); !r.Ran {
+		t.Fatal(r)
+	}
+	sf.svc.mu.Lock()
+	defer sf.svc.mu.Unlock()
+	if len(c.exchanges) != 1 || c.exchanges[0].id != sf.ex || c.removed != removed+1 {
+		t.Fatalf("%d exchanges, first %s", len(c.exchanges), c.exchanges[0].id)
+	}
+}
+
+// The step-record cap drops superseded plans only: never the current plan,
+// never the running one, whatever the count.
+func TestTheStepRecordCapKeepsTheCurrentAndRunningPlans(t *testing.T) {
+	plan := func(n int) *actionPlan {
+		p := &actionPlan{}
+		for i := 0; i < n; i++ {
+			p.dto.Steps = append(p.dto.Steps, ActionStepDTO{N: i + 1})
+			p.runs = append(p.runs, &stepRun{})
+		}
+		return p
+	}
+	old, running, current := plan(4), plan(4), plan(17)
+	c := &conversation{stepRunning: running, exchanges: []*exchange{{plan: old}, {plan: running}, {plan: current}}}
+	retainStepRecords(c, func(e *exchange) bool { return e.plan != nil && e.plan == c.stepRunning })
+	if c.exchanges[0].plan != nil || c.exchanges[1].plan != running || c.exchanges[2].plan != current {
+		t.Fatalf("%+v", c.exchanges)
 	}
 }

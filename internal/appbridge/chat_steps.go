@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,6 +38,11 @@ const (
 	planStatusWithdrawn   = "withdrawn"
 	planStatusDeclined    = "declined"
 	planStatusHeld        = "held"
+	// a step's record is at most 1 KiB (§2.4): its texts are capped, and
+	// stepRunBytes is what retention counts for the rest of it
+	stepErrMax   = 512
+	stepWhyMax   = 384
+	stepRunBytes = 128
 )
 
 // stepRun is one step's review and run, kept by its plan.
@@ -111,11 +117,11 @@ type stepSnap struct {
 
 // stepSnapPrior is an earlier step whose state effect stands (§4.3).
 type stepSnapPrior struct {
-	n    int
-	verb string
-	fact actionFact
-	step ActionStepDTO
-	want string // an undo's partner digest
+	n       int
+	verb    string
+	fact    actionFact
+	step    ActionStepDTO
+	partner *fleet.RevisionExpect // an undo's pinned revision
 }
 
 // matrixBounds are §1's bounds, in the card's words.
@@ -170,8 +176,12 @@ func (s *ChatService) offeredLocked(c *conversation, p *actionPlan, n int) strin
 		return fmt.Sprintf("the plan has no step %d", n)
 	case p.dto.Steps[n-1].State != stepOffered:
 		return fmt.Sprintf("step %d is %s: %s", n, p.dto.Steps[n-1].State, p.dto.Steps[n-1].Reason)
-	case p.running > 0:
+	case c.stepRunning == p && p.running > 0:
 		return fmt.Sprintf("step %d is running", p.running)
+	case c.stepRunning != nil:
+		// one running step per conversation, whichever plan holds it
+		// (stage 3 review, finding 2)
+		return fmt.Sprintf("step %d of an earlier plan is running", c.stepRunning.running)
 	case p.runs[n-1].request != "":
 		return fmt.Sprintf("step %d has run", n)
 	}
@@ -205,11 +215,7 @@ func snapLocked(c *conversation, p *actionPlan, n int) stepSnap {
 		if !stateVerb(st.Verb) {
 			continue
 		}
-		pr := stepSnapPrior{n: j + 1, verb: st.Verb, fact: p.facts[j], step: st}
-		if st.Verb == "rollout-undo" && p.partner[j] != nil {
-			pr.want = p.partner[j].TemplateDigest
-		}
-		sn.earlier = append(sn.earlier, pr)
+		sn.earlier = append(sn.earlier, stepSnapPrior{n: j + 1, verb: st.Verb, fact: p.facts[j], step: st, partner: p.partner[j]})
 	}
 	return sn
 }
@@ -300,12 +306,17 @@ func (s *ChatService) observe(ctx context.Context, conn ChatConn, sn stepSnap) (
 		digest = append(digest, pf)
 		ob.observed = append(ob.observed, StepObservedDTO{What: fmt.Sprintf("step %d's effect still holds on %s %s", pr.n, pr.fact.Kind, pr.fact.Name), At: now})
 	}
-	b, _ := json.Marshal(digest)
-	sum := sha256.Sum256(b)
-	ob.digest = hex.EncodeToString(sum[:])
 	ob.change = changeWords(sn, fresh)
 	ob.consequence = s.consequenceWords(ctx, conn, sn, fresh)
 	ob.expected = expectedWords(sn) + ", within " + matrixBounds[sn.step.Verb]
+	// the words the operator confirms are digested with the facts: an owner
+	// that changed, a suspension that ended or an ownership read that is no
+	// longer complete words another consequence, so it needs a new review
+	// (stage 3 review, finding 1)
+	digest = append(digest, map[string]any{"change": ob.change, "consequence": ob.consequence})
+	b, _ := json.Marshal(digest)
+	sum := sha256.Sum256(b)
+	ob.digest = hex.EncodeToString(sum[:])
 	return ob, ""
 }
 
@@ -367,33 +378,11 @@ func (s *ChatService) observePrior(ctx context.Context, conn ChatConn, pr stepSn
 	if string(u.GetUID()) != f.UID {
 		return nil, fmt.Sprintf("step %d's %s was replaced since it ran", pr.n, who)
 	}
-	o := factOf(factGVR(f), u, "", "", acquisition()).Object
-	holds := false
-	what := ""
-	switch pr.verb {
-	case "flux-suspend":
-		holds, what = o.Suspended, "it was resumed (spec.suspend false)"
-	case "flux-resume":
-		holds, what = !o.Suspended, "it was suspended again (spec.suspend true)"
-	case "scale":
-		holds, what = o.Replicas != nil && pr.step.Replicas != nil && *o.Replicas == int64(*pr.step.Replicas), "its replica count changed"
-	case "rollout-pause":
-		holds, what = o.Paused, "it was resumed (spec.paused false)"
-	case "rollout-resume":
-		holds, what = !o.Paused, "it was paused again"
-	case "cordon":
-		holds, what = o.Unschedulable, "it was uncordoned"
-	case "uncordon":
-		holds, what = !o.Unschedulable, "it was cordoned again"
-	case "keda-pause":
-		holds, what = o.kedaPausedTrue(), "its pause annotation is no longer true"
-	case "keda-resume":
-		holds, what = !o.KEDAPauseSet, "it was paused again"
-	case "rollout-undo":
-		tm, _, _ := unstructured.NestedMap(u.Object, "spec", "template")
-		d, _ := workloads.TemplateDigest(tm, f.Kind == "Deployment")
-		holds, what = d != "" && d == pr.want, "its template is no longer the reverted one"
-	}
+	// the matrix's whole effect, as verification decides it (stage 3
+	// review, finding 3)
+	st := pr.step
+	st.Verb = pr.verb
+	holds, what := s.stateEffect(ctx, conn, st, f, pr.partner, u)
 	if !holds {
 		return nil, fmt.Sprintf("step %d's effect no longer holds on %s: %s (read %s)", pr.n, who, what, s.now().UTC().Format(time.RFC3339))
 	}
@@ -626,7 +615,7 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 		return StepRunDTO{Reason: why}
 	}
 	reviewed := p.runs[n-1].review.digest
-	p.running = n
+	p.running, c.stepRunning = n, p // reserved with the check, under one lock
 	sn := snapLocked(c, p, n)
 	conn := c.conn
 	s.mu.Unlock()
@@ -636,6 +625,9 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 		defer s.mu.Unlock()
 		if p.running == n {
 			p.running = 0
+		}
+		if c.stepRunning == p {
+			c.stepRunning = nil
 		}
 		p.runs[n-1].review = nil
 		s.version++
@@ -664,7 +656,7 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	s.mu.Lock()
 	r := p.runs[n-1]
 	r.review = nil
-	r.request, r.notSent, r.errText, r.ranAt = res.Outcome, res.NotSent, res.Error, s.now()
+	r.request, r.notSent, r.errText, r.ranAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now()
 	if res.Outcome == "" { // a verb that did not classify: never written
 		r.request = fleet.OutcomeUnverified
 	}
@@ -673,10 +665,12 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	} else {
 		r.effect = stepEffectPending
 	}
-	p.running = 0
+	p.running, c.stepRunning = 0, nil
 	if r.effect == stepEffectPending {
-		p.running = n // the step runs until its effect is decided (§5.2)
+		// the step runs until its effect is decided (§5.2)
+		p.running, c.stepRunning = n, p
 	}
+	s.retainLocked(c)
 	s.version++
 	dto := planDTOLocked(c, p, true)
 	s.mu.Unlock()
@@ -696,19 +690,36 @@ func (s *ChatService) verifyStep(c *conversation, p *actionPlan, n int, sn stepS
 		verifyStepHook(s, c, p, n, sn, res)
 		return
 	}
-	s.settleEffect(p, n, stepEffectUnverified, "Klyx does not verify a step's effect yet")
+	s.settleEffect(c, p, n, stepEffectUnverified, "Klyx does not verify a step's effect yet")
 }
 
-// settleEffect records a step's effect and ends its run.
-func (s *ChatService) settleEffect(p *actionPlan, n int, effect, why string) {
+// settleEffect records a step's effect and ends its run, releasing the
+// conversation's running step.
+func (s *ChatService) settleEffect(c *conversation, p *actionPlan, n int, effect, why string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := p.runs[n-1]
-	r.effect, r.effectWhy = effect, why
+	r.effect, r.effectWhy = effect, capRecord(why, stepWhyMax)
 	if p.running == n {
 		p.running = 0
+		if c.stepRunning == p {
+			c.stepRunning = nil
+		}
 	}
+	s.retainLocked(c)
 	s.version++
+}
+
+// capRecord caps a record's text at max bytes, on a rune boundary.
+func capRecord(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // DismissPlan ends a plan as declined (§4.6): its unrun steps are not run.

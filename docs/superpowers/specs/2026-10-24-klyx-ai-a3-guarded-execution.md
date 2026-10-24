@@ -516,3 +516,30 @@ Codex found the sticky withdrawal working for a settled plan, and one residual P
 **Tests** (`chat_steps_test.go`): a step run as reviewed through the manual verb's write; the token (none, another, expired); a material change between Review and Confirm; a replaced target; a step that became a no-op; standing prerequisites at Review and between Review and Confirm, and each state verb's predicate; an unestablished or refused step holding the plan; one step at a time; the grant consumed first and needed per step; a connection changed before and during the run; superseded, dismissed and withdrawn plans; an undo's partner read again; the consequence naming the owner's suspension and Argo; the dispatch table for every verb, and an undo without its partner.
 
 **Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 19 of 19, after a table of every prerequisite was added and two mutations were rewritten to compile and to target the merged fence.
+
+### 17.1 Codex's stage 3 review and the fixes (2026-10-24)
+
+Codex requested changes: five P2 and no P1. It accepted deviations 1, 3, 4, 5, 6 and 8, accepted 2 only for status-only churn, and corrected 7's wording. Each is addressed:
+
+1. **P2, the consequence enters the digest.** The review's digest now covers the change and the consequence as worded, after the ownership reads (`GitOpsOwnership`, `ReplicaOwner`). Another owner, an ended suspension, an ownership read no longer complete, or a new or unproven autoscaler words another consequence, and RunStep refuses it ("it changed since you reviewed it"). The words are digested rather than a chosen subset of the reads, so what the operator confirmed is what runs; a warning whose text changes fails closed into a new review. Status-only churn still does not void a review.
+2. **P2, one running step per conversation.** The conversation holds the plan whose step is running (`stepRunning`), reserved under the same lock as the offer check, through the write and its verification, and released on a refusal and when the effect settles. A step of any other plan, superseded or newer, reads "step N of an earlier plan is running".
+3. **P2, a standing prerequisite is the matrix's whole effect.** One predicate per state verb (`stateEffect`, `chat_effects.go`) is the prerequisite now and verification's in stage 4:
+   - scale: `spec.replicas`, the generation observed, and `status.replicas`;
+   - pause and resume: `spec.paused` with the generation observed;
+   - undo: the partner's template digest, the generation observed and, for a Deployment, the partner ReplicaSet by UID carrying the Deployment's revision;
+   - KEDA pause: the annotation still true and the Observer's live verdict that the pause completed (S9's `PauseCompleted` or `JobPauseCompleted`, with its HPA evidence). Without a live verdict it fails closed;
+   - KEDA resume: no pause annotation of either kind, and Ready not False.
+4. **P2, a dismissal survives settlement.** The re-decision keeps `declined` as it keeps the withdrawal.
+5. **P2, run records are bounded and counted.**
+   - A run's error is capped at 512 bytes and its effect's reason at 384, on a rune boundary, so a record stays within §2.4's 1 KiB.
+   - `exchangeBytes` counts each run and review.
+   - Retention runs after a run and after its effect settles, and never drops the exchange whose step is running.
+   - Past 16 step records, the oldest superseded plan is dropped from the card, with a note on its exchange.
+
+**Deviation 7, corrected:** only a refusal after the re-observation (a read, the fence or the digest) clears the review. An earlier gate's refusal (a wrong token, a missing grant) keeps it within its TTL.
+
+**Codex's accounting probe:** its delta (`after - before >= len(errText)`) does not hold for correct accounting, because the run clears the review it was taken with (a 32-character token and a 64-character digest). The regression instead checks that `exchangeBytes` counts the record's texts exactly. Codex's other eight probes pass against the fix.
+
+**Tests:** every finding has its regression: the five consequence changes and an unchanged control; a newer plan refused while the first plan's step verifies and while its write is in flight, then offered once it settles; a dismissal during the turn; a 100 KiB error; seventeen refused runs; retention around a running plan; a rune-boundary cap; a run's record taking the conversation over its byte bound; the record cap around the current and running plans; and a table of 33 prerequisite cases, including Codex's two KEDA counterexamples.
+
+**Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 29 of 29, after four mutations were rewritten to compile and two tests were added: one for retention after a run whose effect is still pending, one for the record cap's guards.

@@ -29,9 +29,11 @@ const (
 	chatRequestBudget  = 384 * 1024
 	chatRetainExchange = 20
 	chatRetainBytes    = 1024 * 1024
-	chatMaxConvs       = 8
-	chatSnapshotMax    = 48 * 1024
-	chatSnapshotPrior  = 16 * 1024
+	// chatStepRecords is AI A3 §2.4's cap on a conversation's step records
+	chatStepRecords   = 16
+	chatMaxConvs      = 8
+	chatSnapshotMax   = 48 * 1024
+	chatSnapshotPrior = 16 * 1024
 
 	// An investigation's turn reads more (AI A1 §1).
 	invTurnDeadline  = 300 * time.Second
@@ -98,6 +100,10 @@ type conversation struct {
 	// facts are what an investigation's reads established about their
 	// objects, for its action proposals (AI A3 §2.2): bounded on their own
 	facts *actionFacts
+	// stepRunning is the plan whose step's write or verification is in
+	// progress: one per conversation, across its plans (AI A3 §4.2, §5.2;
+	// stage 3 review, finding 2)
+	stepRunning *actionPlan
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -659,9 +665,10 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		ledger := ledgerLocked(c)
 		p := validatePlan(*ex.proposed, c.facts, ledger, anchorOf(c.anchor, ledger))
 		p.dto.Note = ex.plan.dto.Note
-		// a withdrawal observed while the turn ran is irreversible: the
-		// re-decision keeps it (stage 2 re-review 2)
-		p.withdrawn = ex.plan.withdrawn
+		// a withdrawal observed while the turn ran is irreversible, and so
+		// is a dismissal: the re-decision keeps both (stage 2 re-review 2;
+		// stage 3 review, finding 4)
+		p.withdrawn, p.declined = ex.plan.withdrawn, ex.plan.declined
 		ex.plan, ex.proposed = &p, nil
 	}
 	if c.kind == kindInvestigation && ex.plan != nil {
@@ -752,18 +759,58 @@ func (s *ChatService) retainLocked(c *conversation) {
 		}
 		return n
 	}
+	// a plan whose step is running keeps its exchange until the step
+	// settles (AI A3 stage 3 review, finding 5)
+	running := func(e *exchange) bool { return e.plan != nil && e.plan == c.stepRunning }
+	dropOldest := func() bool {
+		for i, e := range c.exchanges[:len(c.exchanges)-1] {
+			if !running(e) {
+				c.exchanges = append(c.exchanges[:i:i], c.exchanges[i+1:]...)
+				c.removed++
+				return true
+			}
+		}
+		return false
+	}
 	for len(c.exchanges) > 1 && (len(c.exchanges) > chatRetainExchange || size() > chatRetainBytes) {
-		c.exchanges = c.exchanges[1:]
-		c.removed++
+		if !dropOldest() {
+			break
+		}
 	}
 	if len(c.exchanges) == 1 && size() > chatRetainBytes {
 		e := c.exchanges[0]
 		e.msgs, e.seedData, e.seed, e.noHistory = nil, "", nil, true
 		e.note = "this exchange was too large to keep for follow-ups"
-		if exchangeBytes(e) > chatRetainBytes {
+		if exchangeBytes(e) > chatRetainBytes && !running(e) {
 			c.exchanges = nil
 			c.removed++
 		}
+	}
+	retainStepRecords(c, running)
+}
+
+// retainStepRecords keeps at most chatStepRecords step records (AI A3
+// §2.4): past that, the oldest superseded plan's are dropped from the
+// card, never the current plan's or a running one's.
+func retainStepRecords(c *conversation, running func(*exchange) bool) {
+	latest := -1
+	count := 0
+	for i, e := range c.exchanges {
+		if e.plan != nil && len(e.plan.dto.Steps) > 0 {
+			latest = i
+			count += len(e.plan.dto.Steps)
+		}
+	}
+	for i, e := range c.exchanges {
+		if count <= chatStepRecords {
+			return
+		}
+		if e.plan == nil || len(e.plan.dto.Steps) == 0 || i == latest || running(e) {
+			continue
+		}
+		count -= len(e.plan.dto.Steps)
+		e.plan = nil
+		e.note = strings.TrimPrefix(e.note+"; ", "; ") + fmt.Sprintf("its superseded plan was dropped from the card: a conversation keeps at most %d step records", chatStepRecords)
 	}
 }
 
@@ -805,6 +852,14 @@ func exchangeBytes(e *exchange) int {
 		n += len(b)
 		b, _ = json.Marshal(e.plan.partner)
 		n += len(b)
+		// and its steps' reviews and runs (stage 3 review, finding 5)
+		for _, r := range e.plan.runs {
+			n += stepRunBytes
+			if r.review != nil {
+				n += len(r.review.token) + len(r.review.digest)
+			}
+			n += len(r.request) + len(r.errText) + len(r.effect) + len(r.effectWhy)
+		}
 	}
 	if e.proposed != nil {
 		b, _ := json.Marshal(e.proposed)
