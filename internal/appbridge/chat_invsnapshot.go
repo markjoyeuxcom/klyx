@@ -194,6 +194,14 @@ func (p *invPlan) run(kind, ns, name string, seed json.RawMessage) error {
 		if _, _, err := p.step(toolChanges, mustJSON(map[string]any{"kind": "Kustomization", "namespace": ns, "name": name}), "Git changes"); err != nil {
 			return err
 		}
+		// AI A1.1 §7: after git_changes, so the Git evidence keeps its place
+		for _, o := range objects {
+			if isWorkloadKind(o.kind) {
+				if _, _, err := p.step(toolRollout, mustJSON(map[string]any{"kind": o.kind, "namespace": o.ns, "name": o.name}), "rollout history of "+o.kind+" "+o.ns+"/"+o.name); err != nil {
+					return err
+				}
+			}
+		}
 		for _, o := range objects {
 			if err := alerts(o.kind, o.ns, o.name); err != nil {
 				return err
@@ -211,7 +219,9 @@ func (p *invPlan) run(kind, ns, name string, seed json.RawMessage) error {
 		if err := events(kind, name, ns); err != nil {
 			return err
 		}
-		p.skipped = append(p.skipped, "rollout history: no A1 tool reads it")
+		if _, _, err := p.step(toolRollout, mustJSON(map[string]any{"kind": kind, "namespace": ns, "name": name}), "rollout history"); err != nil {
+			return err
+		}
 		if err := alerts(kind, ns, name); err != nil {
 			return err
 		}

@@ -127,6 +127,7 @@ The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation
 
 - [Klyx AI programme: investigation, proactive reports, guarded execution](specs/2026-10-20-klyx-ai-investigations-roadmap.md) (spec)
 - [Klyx AI A1: deeper investigation](specs/2026-10-21-klyx-ai-a1-investigation.md) (spec)
+- [Klyx AI A1.1: rollout history](specs/2026-10-24-klyx-ai-a1-1-rollout-history.md) (spec)
 
 ## Next
 

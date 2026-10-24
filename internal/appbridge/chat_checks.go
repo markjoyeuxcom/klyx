@@ -18,7 +18,7 @@ import (
 // its condition began (onset), when the evidence says. A check that cannot be
 // evaluated is not made; the read stays evidence the model may read.
 
-// Check classes. A later stage adds rollout.
+// Check classes. rollout is A1.1's (chat_rollout.go).
 const (
 	checkVerdict     = "verdict"
 	checkCondition   = "condition"
@@ -28,6 +28,7 @@ const (
 	checkMetric      = "metric"
 	checkStatus      = "status"
 	checkEvent       = "event"
+	checkRollout     = "rollout"
 )
 
 // Identity strengths.
@@ -243,7 +244,7 @@ func eventChecks(evs []chatEvent) []ChatCheck {
 // condition, health-check, diff, alert, metric and event checks first, then
 // verdicts.
 func capChecks(cs []ChatCheck) []ChatCheck {
-	rank := map[string]int{checkStatus: 0, checkCondition: 1, checkHealthCheck: 2, checkDiff: 3, checkAlert: 4, checkMetric: 5, checkEvent: 6, checkVerdict: 7}
+	rank := map[string]int{checkStatus: 0, checkCondition: 1, checkHealthCheck: 2, checkDiff: 3, checkRollout: 3, checkAlert: 4, checkMetric: 5, checkEvent: 6, checkVerdict: 7}
 	sort.SliceStable(cs, func(i, j int) bool { return rank[cs[i].Class] < rank[cs[j].Class] })
 	if len(cs) > chatChecksMax {
 		cs = cs[:chatChecksMax]
