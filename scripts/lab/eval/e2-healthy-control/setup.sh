@@ -5,13 +5,16 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 source "$here/../lib.sh"
 owned
-k apply -f - <<'YAML'
+claim namespace klyx-eval
+claim -n klyx-eval deployment steady
+k apply -f - <<YAML
 apiVersion: v1
 kind: Namespace
 metadata:
   name: klyx-eval
   labels:
     klyx.dev/lab: eval
+    klyx.dev/eval-owner: "$(owner_id)"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -20,6 +23,7 @@ metadata:
   namespace: klyx-eval
   labels:
     klyx.dev/lab: eval
+    klyx.dev/eval-owner: "$(owner_id)"
 spec:
   replicas: 1
   selector:

@@ -107,7 +107,8 @@ selftest)
 	owned
 	bin=${KLYX_EVAL_BIN:?the eval build: go build -tags eval -o <bin> ./cmd/klyx}
 	"$lab/e2-healthy-control/setup.sh"
-	k -n klyx-eval create configmap eval-witness --from-literal=value=one --dry-run=client -o yaml | k apply -f - >/dev/null
+	k -n klyx-eval create configmap eval-witness --from-literal=value=one --dry-run=client -o yaml |
+		k label --local -f - "$owner_key=$(owner_id)" -o yaml | k apply -f - >/dev/null
 	log=$dir/selftest-model.log
 	node "$lab/fake-model.mjs" "$model_port" >"$log" 2>&1 &
 	model=$!

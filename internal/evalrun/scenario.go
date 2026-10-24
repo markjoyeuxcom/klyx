@@ -99,9 +99,9 @@ type PodsSpec struct {
 	// Waiting: each pod has a container waiting for this reason with at
 	// least MinRestarts restarts.
 	Waiting string `json:"waiting,omitempty"`
-	// Crashing: each pod has a container that has terminated with an error
-	// at least MinRestarts times, whatever its state at this instant (a
-	// crash loop is running, waiting or terminated in turn).
+	// Crashing: each pod is crash looping now (crashing, plant.go): not
+	// Ready, a container failed at least MinRestarts times with its last
+	// failure recent, and waiting, failed again or barely running since.
 	Crashing    bool  `json:"crashing,omitempty"`
 	MinRestarts int32 `json:"minRestarts,omitempty"`
 	// Ready: each pod is Ready with no restarts.

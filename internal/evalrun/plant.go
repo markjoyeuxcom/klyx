@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -96,9 +97,11 @@ func (c Checker) Check(ctx context.Context, s *Scenario) Plant {
 				return fail("predicate %s's subject %s: %v", pr.ID, ps.SubjectRef, err)
 			}
 			pr.Subject = record.Subject{Kind: ps.SubjectRef.Kind, Namespace: o.GetNamespace(), Name: o.GetName(), UID: string(o.GetUID())}
+			// the subject's identity is a witness too (eval design §2)
+			p.Witnesses["predicate "+pr.ID+" subject "+ps.SubjectRef.String()] = pr.Subject.UID
 		}
 		if ps.PodsOf != nil {
-			pods, err := c.newestPods(ctx, *ps.PodsOf)
+			rs, pods, err := c.newestPods(ctx, *ps.PodsOf)
 			if err != nil {
 				return fail("predicate %s's pods: %v", pr.ID, err)
 			}
@@ -109,6 +112,11 @@ func (c Checker) Check(ctx context.Context, s *Scenario) Plant {
 			if len(pr.Pods) == 0 {
 				return fail("predicate %s: %s has no pods", pr.ID, ps.PodsOf)
 			}
+			sort.Strings(pr.Pods)
+			// the newest ReplicaSet and its pods, by UID: a replacement
+			// between the two checks is drift
+			p.Witnesses["predicate "+pr.ID+" newest ReplicaSet of "+ps.PodsOf.String()] = rs
+			p.Witnesses["predicate "+pr.ID+" pods of "+ps.PodsOf.String()] = strings.Join(pr.Pods, ",")
 		}
 		p.Predicates = append(p.Predicates, pr)
 	}
@@ -133,7 +141,7 @@ func (c Checker) invariant(ctx context.Context, inv Invariant, now time.Time) er
 		}
 	}
 	if inv.Pods != nil {
-		return c.pods(ctx, inv.Object, *inv.Pods)
+		return c.pods(ctx, inv.Object, *inv.Pods, now)
 	}
 	o, err := c.get(ctx, inv.Object)
 	if err != nil {
@@ -164,16 +172,16 @@ func (c Checker) invariant(ctx context.Context, inv Invariant, now time.Time) er
 	return nil
 }
 
-// newestPods are the pods of a Deployment's newest ReplicaSet, by its
-// revision annotation, joined by controller UID.
-func (c Checker) newestPods(ctx context.Context, d Ref) ([]corev1.Pod, error) {
+// newestPods are the UID of a Deployment's newest ReplicaSet, by its
+// revision annotation, and that ReplicaSet's pods, joined by controller UID.
+func (c Checker) newestPods(ctx context.Context, d Ref) (string, []corev1.Pod, error) {
 	dep, err := c.Kube.AppsV1().Deployments(d.Namespace).Get(ctx, d.Name, metav1.GetOptions{})
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	rss, err := c.Kube.AppsV1().ReplicaSets(d.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var newest string
 	best := int64(-1)
@@ -187,11 +195,11 @@ func (c Checker) newestPods(ctx context.Context, d Ref) ([]corev1.Pod, error) {
 		}
 	}
 	if newest == "" {
-		return nil, fmt.Errorf("no ReplicaSet of %s", d)
+		return "", nil, fmt.Errorf("no ReplicaSet of %s", d)
 	}
 	pods, err := c.Kube.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var out []corev1.Pod
 	for _, pod := range pods.Items {
@@ -199,11 +207,42 @@ func (c Checker) newestPods(ctx context.Context, d Ref) ([]corev1.Pod, error) {
 			out = append(out, pod)
 		}
 	}
-	return out, nil
+	return newest, out, nil
 }
 
-func (c Checker) pods(ctx context.Context, d Ref, spec PodsSpec) error {
-	pods, err := c.newestPods(ctx, d)
+// crashWindow is how recent a crash loop's last failed termination must be:
+// past kubelet's longest back-off (five minutes) and a start.
+const crashWindow = 10 * time.Minute
+
+// crashing: the pod is crash looping now. It is not Ready, and a container
+// has failed at least min times with its last failure recent; it is waiting,
+// terminated again, or running since that failure (the brief run between
+// back-offs: a run that began after a recent failure is itself recent).
+func crashing(pod corev1.Pod, min int32, now time.Time) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return false
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		last := cs.LastTerminationState.Terminated
+		if last == nil || last.ExitCode == 0 || cs.RestartCount < min || now.Sub(last.FinishedAt.Time) > crashWindow {
+			continue
+		}
+		switch st := cs.State; {
+		case st.Waiting != nil:
+			return true
+		case st.Terminated != nil && st.Terminated.ExitCode != 0:
+			return true
+		case st.Running != nil:
+			return true
+		}
+	}
+	return false
+}
+
+func (c Checker) pods(ctx context.Context, d Ref, spec PodsSpec, now time.Time) error {
+	_, pods, err := c.newestPods(ctx, d)
 	if err != nil {
 		return err
 	}
@@ -227,14 +266,8 @@ func (c Checker) pods(ctx context.Context, d Ref, spec PodsSpec) error {
 				return fmt.Errorf("pod %s is not waiting for %s with %d restarts", pod.Name, spec.Waiting, spec.MinRestarts)
 			}
 		case spec.Crashing:
-			ok := false
-			for _, cs := range pod.Status.ContainerStatuses {
-				if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 && cs.RestartCount >= spec.MinRestarts {
-					ok = true
-				}
-			}
-			if !ok {
-				return fmt.Errorf("pod %s has not crashed %d times", pod.Name, spec.MinRestarts)
+			if !crashing(pod, spec.MinRestarts, now) {
+				return fmt.Errorf("pod %s is not crash looping now (not Ready, %d failures, the last within %s)", pod.Name, spec.MinRestarts, crashWindow)
 			}
 		case spec.Ready:
 			ready := false

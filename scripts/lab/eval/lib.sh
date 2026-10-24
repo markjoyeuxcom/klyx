@@ -44,3 +44,50 @@ wait_for() {
 		sleep 5
 	done
 }
+
+# Scenario objects are the eval directory's by its owner label, a digest of
+# its token (never the token): setup creates or claims only objects that
+# carry it, and teardown deletes only those. An object that exists without
+# it is refused, unless it is the A1 lab's (klyx.dev/lab=a1) and adoption
+# was asked for explicitly with KLYX_EVAL_ADOPT=a1: the A1 lab's objects
+# become the eval's then, and say so.
+owner_key=klyx.dev/eval-owner
+owner_id() { shasum -a 256 "$state" | cut -c1-16; }
+
+# label_of <label> <get args...>: an existing object's label, or "absent"
+label_of() {
+	local key=$1 out
+	shift
+	out=$(k get "$@" -o json 2>/dev/null) || {
+		echo absent
+		return
+	}
+	python3 -I -c 'import json,sys; d=json.loads(sys.argv[2]); print(d.get("metadata",{}).get("labels",{}).get(sys.argv[1],""))' "$key" "$out"
+}
+
+# claim <get args...>: an existing object is refused unless it is ours, or
+# the A1 lab's and adopted; an absent one is created by the caller
+claim() {
+	local owner lab
+	owner=$(label_of "$owner_key" "$@")
+	[[ $owner == absent || $owner == "$(owner_id)" ]] && return 0
+	lab=$(label_of klyx.dev/lab "$@")
+	if [[ ${KLYX_EVAL_ADOPT:-} == a1 && $lab == a1 ]]; then
+		k label --overwrite "$@" "$owner_key=$(owner_id)" >/dev/null
+		echo "klyx-eval: adopted the A1 lab's $* as this eval's"
+		return 0
+	fi
+	die "refusing: $* exists and is not this eval's (no $owner_key=$(owner_id)); the A1 lab's objects are adopted only with KLYX_EVAL_ADOPT=a1"
+}
+
+# release <get args...>: delete an object only if it is this eval's; say
+# what is left when it is not
+release() {
+	local owner
+	owner=$(label_of "$owner_key" "$@")
+	case $owner in
+	absent) ;;
+	"$(owner_id)") k delete "$@" --ignore-not-found --wait=true --timeout=180s >/dev/null ;;
+	*) echo "klyx-eval: left $* alone: it is not this eval's" ;;
+	esac
+}

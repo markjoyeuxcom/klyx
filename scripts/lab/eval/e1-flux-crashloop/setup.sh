@@ -4,11 +4,16 @@
 # whose MODE makes web's container exit at start. Flux's health check then
 # times out. The fixture repository's commits are pinned here and in
 # scenario.yaml. Needs Flux's controllers in klyx-a1-flux (klyx-eval.sh
-# install). Idempotent: a plant already in place is left as it is.
+# install). Idempotent: a plant already in place is left as it is. The
+# objects are the eval's (lib.sh claim): the A1 lab's existing ones only by
+# explicit adoption.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 source "$here/../lib.sh"
 owned
+claim namespace klyx-a1-app
+claim -n klyx-a1-flux gitrepository a1-fleet
+claim -n klyx-a1-flux kustomization a1-web
 
 repo=https://github.com/markjoyeuxcom/klyx-lab-a1
 steady=cde214ee840d9cb3f05d4f6b4b2e3bd3702900b3
@@ -39,6 +44,7 @@ metadata:
   name: klyx-a1-app
   labels:
     klyx.dev/lab: a1
+    klyx.dev/eval-owner: "$(owner_id)"
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
@@ -47,6 +53,7 @@ metadata:
   namespace: klyx-a1-flux
   labels:
     klyx.dev/lab: a1
+    klyx.dev/eval-owner: "$(owner_id)"
 spec:
   interval: 1m
   url: $repo
@@ -61,6 +68,7 @@ metadata:
   namespace: klyx-a1-flux
   labels:
     klyx.dev/lab: a1
+    klyx.dev/eval-owner: "$(owner_id)"
 spec:
   interval: 2m
   sourceRef:

@@ -56,7 +56,8 @@ func crashLab(waiting string) *kubefake.Clientset {
 			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{st}}}
 	}
 	crash := corev1.ContainerStatus{Name: "web", RestartCount: 7, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: waiting}},
-		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}}
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error",
+			FinishedAt: metav1.NewTime(time.Date(2026, 10, 24, 11, 58, 0, 0, time.UTC))}}}
 	run := corev1.ContainerStatus{Name: "web", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
 	return kubefake.NewSimpleClientset(dep, rs("web-old", "uid-web-old", "1"), rs("web-new", "uid-web-new", "2"),
 		pod("web-new-a", "uid-pod-new", "web-new", crash), pod("web-old-a", "uid-pod-old", "web-old", run))
@@ -239,5 +240,85 @@ func TestTheLabsScenariosLoad(t *testing.T) {
 	two, err := LoadScenarios("../../scripts/lab/eval/selftest", []string{"s3-drift", "s1-broken-plant"})
 	if err != nil || len(two) != 2 || two[0].Name != "s1-broken-plant" || two[1].Name != "s3-drift" {
 		t.Fatalf("%v %+v", err, two)
+	}
+}
+
+// Codex's implementation review, finding 3: a replaced ReplicaSet or pod
+// between the two checks is drift.
+func TestAReplacedReplicaSetIsDrift(t *testing.T) {
+	s := e1Plant()
+	before := checker(crashLab("CrashLoopBackOff"), kustomization("main@sha1:a9b3c81", "False", "HealthCheckFailed"), depObj()).Check(context.Background(), s)
+	kube := crashLab("CrashLoopBackOff")
+	_ = kube.AppsV1().ReplicaSets("klyx-a1-app").Delete(context.Background(), "web-new", metav1.DeleteOptions{})
+	_ = kube.CoreV1().Pods("klyx-a1-app").Delete(context.Background(), "web-new-a", metav1.DeleteOptions{})
+	ctl := true
+	_, _ = kube.AppsV1().ReplicaSets("klyx-a1-app").Create(context.Background(), &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-newer", Namespace: "klyx-a1-app", UID: "uid-web-newer",
+		Annotations:     map[string]string{"deployment.kubernetes.io/revision": "2"},
+		OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", UID: "uid-dep", Controller: &ctl}}}}, metav1.CreateOptions{})
+	_, _ = kube.CoreV1().Pods("klyx-a1-app").Create(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-newer-a", Namespace: "klyx-a1-app", UID: "uid-pod-newer",
+		OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-newer", UID: "uid-web-newer", Controller: &ctl}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "web", RestartCount: 3, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, FinishedAt: metav1.NewTime(time.Date(2026, 10, 24, 11, 59, 0, 0, time.UTC))}}}}}}, metav1.CreateOptions{})
+	after := checker(kube, kustomization("main@sha1:a9b3c81", "False", "HealthCheckFailed"), depObj()).Check(context.Background(), s)
+	if !before.OK || !after.OK {
+		t.Fatalf("both plants hold: %s / %s", before.Failed, after.Failed)
+	}
+	ch := before.Changed(after)
+	if len(ch) == 0 {
+		t.Fatal("a replaced ReplicaSet and pod are drift")
+	}
+	if got, _ := Classify(RunFacts{Before: before, Ready: true, AnchorRead: true, Outcome: "answered", Report: record.ReportAccepted, After: after}); got != StatusDrift {
+		t.Fatalf("%s %v", got, ch)
+	}
+}
+
+// A pod the ReplicaSet replaced (same ReplicaSet, new pod) is drift too.
+func TestAReplacedPodIsDrift(t *testing.T) {
+	s := e1Plant()
+	before := checker(crashLab("CrashLoopBackOff"), kustomization("main@sha1:a9b3c81", "False", "HealthCheckFailed"), depObj()).Check(context.Background(), s)
+	kube := crashLab("CrashLoopBackOff")
+	p, _ := kube.CoreV1().Pods("klyx-a1-app").Get(context.Background(), "web-new-a", metav1.GetOptions{})
+	_ = kube.CoreV1().Pods("klyx-a1-app").Delete(context.Background(), "web-new-a", metav1.DeleteOptions{})
+	p.Name, p.UID, p.ResourceVersion = "web-new-b", "uid-pod-new-b", ""
+	_, _ = kube.CoreV1().Pods("klyx-a1-app").Create(context.Background(), p, metav1.CreateOptions{})
+	after := checker(kube, kustomization("main@sha1:a9b3c81", "False", "HealthCheckFailed"), depObj()).Check(context.Background(), s)
+	if !after.OK || len(before.Changed(after)) == 0 {
+		t.Fatalf("%v %v", after.Failed, before.Changed(after))
+	}
+}
+
+// Codex's implementation review, finding 4: a recovered pod is not a crash
+// loop, whatever its history.
+func TestARecoveredPodDoesNotHoldTheCrashPlant(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	pod := func(ready bool, state corev1.ContainerState, lastFailed time.Time) corev1.Pod {
+		st := corev1.ConditionFalse
+		if ready {
+			st = corev1.ConditionTrue
+		}
+		return corev1.Pod{Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: st}},
+			ContainerStatuses: []corev1.ContainerStatus{{RestartCount: 9, State: state,
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, FinishedAt: metav1.NewTime(lastFailed)}}}}}}
+	}
+	running := func(since time.Time) corev1.ContainerState {
+		return corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(since)}}
+	}
+	waiting := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	cases := []struct {
+		name string
+		pod  corev1.Pod
+		want bool
+	}{
+		{"running and Ready for two hours, its last failure a day old", pod(true, running(now.Add(-2*time.Hour)), now.Add(-24*time.Hour)), false},
+		{"not Ready, but its last failure a day old", pod(false, waiting, now.Add(-24*time.Hour)), false},
+		{"waiting after a failure a minute ago", pod(false, waiting, now.Add(-time.Minute)), true},
+		{"the brief run between back-offs", pod(false, running(now.Add(-10*time.Second)), now.Add(-time.Minute)), true},
+		{"running for half an hour since its last failure", pod(false, running(now.Add(-30*time.Minute)), now.Add(-31*time.Minute)), false},
+		{"Ready again after a failure a minute ago", pod(true, running(now.Add(-10*time.Second)), now.Add(-time.Minute)), false},
+	}
+	for _, c := range cases {
+		if got := crashing(c.pod, 1, now); got != c.want {
+			t.Errorf("%s: want %v", c.name, c.want)
+		}
 	}
 }
