@@ -1083,39 +1083,41 @@ func TestFreshnessIsTheCapturesOwnClock(t *testing.T) {
 
 // The lab's plan case (stage 6): a capture taken after the last write is a
 // reading after it, though its part's data last changed before it - a
-// suspended unit stays quiet, and its evaluation time stops. The data must
-// still postdate the subject's own write, and no capture before the last
-// write is fresh, whatever its data's time.
+// suspended unit stays quiet, and its evaluation time stops. A subject with
+// its own step is read only once its row is at the generation that step's
+// effect was established at; no capture before the last write is fresh.
 func TestAQuietPartIsReadByItsCapture(t *testing.T) {
-	ownWrite, lastWrite := fixedNow(), fixedNow().Add(2*time.Second)
+	lastWrite := fixedNow()
 	f := newToolsFixture(t)
 	ok := workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 2, Desired: 1, Health: health.Verdict{Kind: health.OK, Label: "Ready"}}
 	look := func(fact actionFact) subjectVerdict { return f.svc.verdictOf(context.Background(), f.conn, fact, nil) }
-	quiet := func(data, captured time.Time, ws ...workloads.Workload) observe.Rows {
+	quiet := func(captured time.Time, ws ...workloads.Workload) observe.Rows {
 		if ws == nil {
 			ws = []workloads.Workload{ok}
 		}
-		r := capturedWorkloads(data, ws...)
+		r := capturedWorkloads(lastWrite.Add(-time.Hour), ws...) // its data last changed long before
 		r.CapturedAt = captured
 		return r
 	}
 	other := ok
 	other.UID, other.Name = "uid-other", "other"
+	after, before := lastWrite.Add(time.Minute), lastWrite.Add(-time.Millisecond)
 	for _, c := range []struct {
 		name    string
 		rows    observe.Rows
-		wrote   time.Time
+		sub     incidentSubject
 		reading string
 	}{
-		{"quiet since its own write", quiet(ownWrite.Add(time.Second), lastWrite.Add(time.Minute)), ownWrite, "recovered"},
-		{"quiet, no write of its own", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(time.Minute)), time.Time{}, "recovered"},
-		{"its data before its own write", quiet(ownWrite.Add(-time.Second), lastWrite.Add(time.Minute)), ownWrite, "pending: no fresh reading"},
-		{"captured before the last write", quiet(ownWrite.Add(time.Second), lastWrite.Add(-time.Millisecond)), ownWrite, "pending: no fresh reading"},
-		{"gone, its absence quiet since", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(time.Minute), other), time.Time{}, "unverified: gone"},
-		{"gone, captured before the last write", quiet(ownWrite.Add(-time.Hour), lastWrite.Add(-time.Millisecond), other), time.Time{}, "pending: no fresh reading"},
+		{"no step of its own", quiet(after), incidentSubject{fact: webFact}, "recovered"},
+		{"at its step's generation", quiet(after), incidentSubject{fact: webFact, joinStep: 1, joinGen: 2}, "recovered"},
+		{"before its step's generation", quiet(after), incidentSubject{fact: webFact, joinStep: 1, joinGen: 3}, "pending: Klyx's reading of it does not yet show step 1's write"},
+		{"its step leaves the generation", quiet(after), incidentSubject{fact: webFact, joinStep: 1}, "pending: Klyx's reading of it does not yet show step 1's write"},
+		{"captured before the last write", quiet(before), incidentSubject{fact: webFact}, "pending: no fresh reading"},
+		{"gone, its absence quiet since", quiet(after, other), incidentSubject{fact: webFact}, "unverified: gone"},
+		{"gone, captured before the last write", quiet(before, other), incidentSubject{fact: webFact}, "pending: no fresh reading"},
 	} {
 		f.conn.rows = map[string]observe.Rows{"workloads/workloads": c.rows}
-		rows, _, _, _ := readSubjects(look, []incidentSubject{{fact: webFact, wrote: c.wrote}}, lastWrite)
+		rows, _, _, _ := readSubjects(look, []incidentSubject{c.sub}, lastWrite)
 		if rows[0].Reading != c.reading {
 			t.Errorf("%s: %+v", c.name, rows[0])
 		}
@@ -1125,44 +1127,196 @@ func TestAQuietPartIsReadByItsCapture(t *testing.T) {
 	}
 }
 
-// A subject's own write is its latest step's send time.
-func TestASubjectsOwnWriteIsItsLatestStep(t *testing.T) {
-	sf := newStepsFixture(t, pauseWeb)
-	webF := factOf(deploysGVR, sf.web(), "r1", "t", acquisition())
-	ksF := actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations", Namespace: "flux-system", Name: "web", UID: "uid-ks"}
-	steps := []ActionStepDTO{{N: 1, Verb: "rollout-pause", State: stepOffered}, {N: 2, Verb: "flux-suspend", State: stepOffered}, {N: 3, Verb: "rollout-resume", State: stepOffered}}
-	sf.plantPlan(steps, []actionFact{webF, ksF, webF}, []*fleet.RevisionExpect{nil, nil, nil})
-	sf.svc.mu.Lock()
-	defer sf.svc.mu.Unlock()
-	c := sf.svc.convs[invKey("x")]
-	p := c.exchanges[0].plan
-	at := fixedNow()
-	for i, r := range p.runs {
-		r.request, r.sentAt = fleet.OutcomeWritten, at.Add(time.Duration(i)*time.Second)
+// Stage 6 review, finding 1 (Codex's probe): after a scale to zero
+// established at generation 5, a new capture still holding the informer's
+// healthy generation-4 row - the part evaluated between dispatch and the
+// write, or moved on by another row after the answer - is never a
+// recovery; the generation-5 row is the intended hold, and alone resolves
+// nothing.
+func TestAPreWriteRowIsNeverAPostWriteReading(t *testing.T) {
+	f := newToolsFixture(t)
+	answered := fixedNow().Add(2 * time.Second)
+	old := workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 4, Desired: 3, Health: health.Verdict{Kind: health.OK, Label: "Ready"}}
+	zero := 0
+	c := &conversation{anchor: &ChatSeedDTO{Name: "web", UID: "uid-web"}, facts: newActionFacts()}
+	p := &actionPlan{dto: ActionPlanDTO{Steps: []ActionStepDTO{{N: 1, Verb: "scale", Replicas: &zero, State: stepOffered}}}, facts: []actionFact{webFact},
+		runs: []*stepRun{{request: fleet.OutcomeWritten, effect: stepEffectEstablished, ranAt: answered, effectGen: 5}}}
+	subs := incidentSubjectsLocked(c, p)
+	look := func(x actionFact) subjectVerdict { return f.svc.verdictOf(context.Background(), f.conn, x, nil) }
+	held := old
+	held.Generation, held.Desired, held.Health = 5, 0, health.Verdict{Kind: health.Paused, Reason: "ScaledToZero", Label: "Scaled to 0"}
+	control := capturedWorkloads(answered.Add(time.Second), held)
+	control.CapturedAt = answered.Add(2 * time.Second)
+	f.conn.rows = map[string]observe.Rows{"workloads/workloads": control}
+	rows, recovered, open, _ := readSubjects(look, subs, answered)
+	if recovered != 0 || open != 0 || !strings.Contains(rows[0].Reading, "held by step 1") {
+		t.Fatalf("the generation-5 hold: %+v", rows)
 	}
-	got := incidentSubjectsLocked(c, p)
-	if len(got) != 1 || !got[0].wrote.Equal(at.Add(2*time.Second)) {
-		t.Fatalf("web's own latest write is step 3's: %+v", got)
+	for _, tc := range []struct {
+		name      string
+		evaluated time.Time
+	}{
+		{"the part evaluated before the write", fixedNow().Add(time.Second)},
+		{"another row moved the part after the answer", answered.Add(time.Second)},
+	} {
+		other := old
+		other.Name, other.UID, other.Generation = "other", "uid-other", 8
+		r := capturedWorkloads(tc.evaluated, old, other)
+		r.CapturedAt = answered.Add(2 * time.Second)
+		f.conn.rows = map[string]observe.Rows{"workloads/workloads": r}
+		got, rec, op, _ := readSubjects(look, subs, answered)
+		if rec != 0 || op != 1 || got[0].Reading != "pending: Klyx's reading of it does not yet show step 1's write" {
+			t.Errorf("%s: recovered %d open %d %+v", tc.name, rec, op, got)
+		}
+	}
+	// a held subject's row at its generation that does not show the hold
+	// is not a recovery either
+	notShown := old
+	notShown.Generation = 5
+	r := capturedWorkloads(answered.Add(time.Second), notShown)
+	r.CapturedAt = answered.Add(2 * time.Second)
+	f.conn.rows = map[string]observe.Rows{"workloads/workloads": r}
+	if got, rec, op, _ := readSubjects(look, subs, answered); rec != 0 || op != 1 || got[0].Reading != "pending: step 1's hold is not shown" {
+		t.Errorf("the hold not shown: recovered %d open %d %+v", rec, op, got)
 	}
 }
 
-// RunStep records when the request was sent, before its answer.
-func TestRunStepRecordsTheSendTime(t *testing.T) {
-	sf := newStepsFixture(t, pauseWeb)
-	prev := verifyStepHook
-	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {}
-	t.Cleanup(func() { verifyStepHook = prev })
-	tok := sf.review(1).Token
-	sent := sf.now
-	sf.sc.onWrite = func() { sf.now = sent.Add(time.Second) } // the answer arrives a second later
-	if r := sf.run(1, tok); !r.Ran {
-		t.Fatal(r)
+// A subject is joined to its own latest step: the generation that step's
+// effect was established at when its write changes the spec, none when it
+// does not (an annotation).
+func TestASubjectIsJoinedToItsLatestStep(t *testing.T) {
+	for _, c := range []struct {
+		last string
+		gen  int64
+	}{
+		{"flux-suspend", 9}, {"flux-resume", 9}, {"scale", 9}, {"rollout-undo", 9},
+		{"rollout-restart", 9}, {"rollout-pause", 9}, {"rollout-resume", 9},
+		{"keda-pause", 0}, {"keda-resume", 0}, {"flux-reconcile", 0}, {"cordon", 0},
+	} {
+		sf := newStepsFixture(t, pauseWeb)
+		webF := factOf(deploysGVR, sf.web(), "r1", "t", acquisition())
+		ksF := actionFact{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations", Namespace: "flux-system", Name: "web", UID: "uid-ks"}
+		steps := []ActionStepDTO{{N: 1, Verb: "rollout-pause", State: stepOffered}, {N: 2, Verb: "flux-suspend", State: stepOffered}, {N: 3, Verb: c.last, State: stepOffered}}
+		sf.plantPlan(steps, []actionFact{webF, ksF, webF}, []*fleet.RevisionExpect{nil, nil, nil})
+		sf.svc.mu.Lock()
+		cv := sf.svc.convs[invKey("x")]
+		p := cv.exchanges[0].plan
+		for i, r := range p.runs {
+			r.request, r.effectGen = fleet.OutcomeWritten, int64(7+i)
+		}
+		got := incidentSubjectsLocked(cv, p)
+		sf.svc.mu.Unlock()
+		if len(got) != 1 || got[0].joinStep != 3 || got[0].joinGen != c.gen {
+			t.Errorf("%s: %+v", c.last, got)
+		}
 	}
+}
+
+// A hold the row shows is its own join, whatever the generation: a cordon
+// or a KEDA pause leaves it. Not shown, with no generation to join, the
+// reading is not counted.
+func TestAHoldShownIsItsOwnJoin(t *testing.T) {
+	at := fixedNow().Add(time.Second)
+	sub := incidentSubject{fact: webFact, held: 1, holdStep: ActionStepDTO{N: 1, Verb: "keda-pause"}, joinStep: 1}
+	for _, c := range []struct {
+		sv      subjectVerdict
+		reading string
+	}{
+		{subjectVerdict{v: chatVerdict{Role: "paused", Coverage: "live"}, found: true, state: "paused", completed: true, captured: at}, "held by step 1, as intended"},
+		{subjectVerdict{v: chatVerdict{Role: "ok", Coverage: "live"}, found: true, state: "ok", captured: at}, "pending: Klyx's reading of it does not yet show step 1's write"},
+	} {
+		rows, _, _, _ := readSubjects(func(actionFact) subjectVerdict { return c.sv }, []incidentSubject{sub}, fixedNow())
+		if rows[0].Reading != c.reading {
+			t.Errorf("%s: %+v", c.sv.state, rows[0])
+		}
+	}
+}
+
+// A verification records the generation of the object that established
+// the effect.
+func TestAnEffectRecordsTheGenerationItWasEstablishedAt(t *testing.T) {
+	fastVerify(t, time.Second)
+	quietIncident(t)
+	sf := newStepsFixture(t, pauseWeb)
+	pinWatchConn(sf)
+	sf.conn.objects[key(deploysGVR, "shop", "web")] = deployAt("uid-web", 7, 7, map[string]any{"paused": true}, nil)
 	sf.svc.mu.Lock()
-	r := *sf.svc.convs[invKey("x")].exchanges[0].plan.runs[0]
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	p.runs[0].request, p.runs[0].effect, p.running, c.stepRunning = fleet.OutcomeWritten, stepEffectPending, 1, p
+	sn := stepSnap{n: 1, step: p.dto.Steps[0], fact: p.facts[0]}
 	sf.svc.mu.Unlock()
-	if !r.sentAt.Equal(sent) || !r.ranAt.Equal(sent.Add(time.Second)) {
-		t.Fatalf("sent %v ran %v", r.sentAt, r.ranAt)
+	sf.svc.verifyStepEffect(c, p, 1, sn, ActionResultDTO{Outcome: fleet.OutcomeWritten}, sf.now)
+	sf.svc.mu.Lock()
+	r := *p.runs[0]
+	sf.svc.mu.Unlock()
+	if r.effect != stepEffectEstablished || r.effectGen != 7 {
+		t.Fatalf("%s at %d", r.effect, r.effectGen)
+	}
+	awaitSettled(t, "the incident", func() bool {
+		sf.svc.mu.Lock()
+		defer sf.svc.mu.Unlock()
+		return p.incident == nil || p.incident.State != incidentPending
+	})
+}
+
+// Stage 6 review, finding 2 (Codex's probe): a fence that fails between
+// two readings, cancels the context and holds again before the next one
+// ends the incident with its reason - never as the bound's expiry, though
+// a fault was counted.
+type betweenReadsEmitter struct{ f func() }
+
+func (e *betweenReadsEmitter) Emit(string, any) {
+	if e.f != nil {
+		f := e.f
+		e.f = nil
+		f()
+	}
+}
+
+type seenRows struct {
+	ChatConn
+	seen context.Context
+}
+
+func (c *seenRows) HealthRowsNow(ctx context.Context, task, part string) (observe.Rows, bool) {
+	c.seen = ctx
+	return c.ChatConn.HealthRowsNow(ctx, task, part)
+}
+
+func TestABriefFenceBetweenReadingsKeepsItsReason(t *testing.T) {
+	fastVerify(t, time.Second)
+	incidentBound = time.Minute
+	sf := newStepsFixture(t, pauseWeb)
+	rc := &seenRows{ChatConn: sf.sc}
+	sf.mu.Lock()
+	sf.cur = rc
+	sf.mu.Unlock()
+	sf.conn.rows = map[string]observe.Rows{"workloads/workloads": capturedWorkloads(fixedNow().Add(time.Second), workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 4, Health: health.Verdict{Kind: health.Fault, Label: "Failure"}})}
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	c.conn = rc
+	p := c.exchanges[0].plan
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.mu.Unlock()
+	// the counted fault publishes; while its event is emitted, the fence
+	// fails, cancels the context, and holds again
+	sf.svc.em = &betweenReadsEmitter{f: func() {
+		sf.mu.Lock()
+		sf.usable = false
+		sf.mu.Unlock()
+		select {
+		case <-rc.seen.Done():
+		case <-time.After(time.Second):
+			t.Error("the fence did not cancel")
+		}
+		sf.mu.Lock()
+		sf.usable = true
+		sf.mu.Unlock()
+	}}
+	sf.svc.readIncident(c, p, []incidentSubject{{fact: webFact}}, fixedNow())
+	if p.incident.State != incidentUnverif || !strings.Contains(p.incident.Why, "disconnected") {
+		t.Fatalf("%+v", p.incident)
 	}
 }
 
@@ -1462,6 +1616,7 @@ func TestARecoveryAUnitMayRevertIsNotCounted(t *testing.T) {
 	c := sf.svc.convs[invKey("x")]
 	p := c.exchanges[0].plan
 	owner, applies := p.runs[0].owner, p.runs[0].applies
+	p.runs[0].effectGen = 3 // the scale's effect, established at generation 3
 	subjects := incidentSubjectsLocked(c, p)
 	sf.svc.mu.Unlock()
 	if owner != "Kustomization flux-system/a1-web" || !applies || len(subjects) != 1 || subjects[0].revertBy != owner || subjects[0].revertStep != 1 {
@@ -1469,7 +1624,7 @@ func TestARecoveryAUnitMayRevertIsNotCounted(t *testing.T) {
 	}
 	at := fixedNow().Add(time.Second)
 	ok := func(actionFact) subjectVerdict {
-		return subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live"}, found: true, state: "ok", at: at, captured: at}
+		return subjectVerdict{v: chatVerdict{Kind: "ok", Coverage: "live", Generation: 3}, found: true, state: "ok", at: at, captured: at}
 	}
 	rows, recovered, open, faulted := readSubjects(ok, subjects, fixedNow())
 	if recovered != 0 || open != 1 || faulted || rows[0].Reading != "recovered for now, but Kustomization flux-system/a1-web may revert step 1's change: it is not suspended" {

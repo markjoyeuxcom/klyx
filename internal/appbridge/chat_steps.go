@@ -55,9 +55,10 @@ type stepRun struct {
 	effect    string // pending | established | unverified; "" until it runs
 	effectWhy string
 	ranAt     time.Time
-	// sentAt is when the request was sent: data the Observer evaluated
-	// after it may show the write (the incident's subjects, the A3 lab)
-	sentAt time.Time
+	// effectGen is the generation of the object that established the
+	// effect: the incident reads the target only at it or later (stage 6
+	// review, finding 1)
+	effectGen int64
 	// owner is the GitOps unit the reviewed consequence named as managing
 	// the target, as read when the step ran, and applies says it then
 	// applied its desired state (not suspended): the incident follows the
@@ -695,13 +696,12 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	if err := fence(); err != nil {
 		return release(err.Error())
 	}
-	sent := s.now()
 	res := runVerb(ctx, conn, sn)
 
 	s.mu.Lock()
 	r := p.runs[n-1]
 	r.review = nil
-	r.request, r.notSent, r.errText, r.ranAt, r.sentAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now(), sent
+	r.request, r.notSent, r.errText, r.ranAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now()
 	r.owner, r.applies = capRecord(ob.owner, stepWhyMax), ob.applies
 	if res.Outcome == "" { // a verb that did not classify: never written
 		r.request = fleet.OutcomeUnverified

@@ -137,7 +137,17 @@ func TestTheA3ExpectationsHoldOnlyAsTheyShould(t *testing.T) {
 		{"plan not restored", A3Record{Case: A3Plan, Status: "completed", Steps: []A3StepRecord{established(1, "flux-suspend"), established(2, "rollout-undo")}, Incident: resolved}, false},
 		{"undo-only held", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "rollout-undo")}, Incident: &appbridge.IncidentDTO{State: "not resolved"}}, true},
 		{"undo-only resolved", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "rollout-undo")}, Incident: resolved}, false},
+		// stage 6 review, finding 3 (Codex's probe): the counterexample, or nothing
+		{"undo-only refused", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{{N: 1, Verb: "rollout-undo", State: "offered", Reviewed: true, Ran: true, Request: "refused", Error: "Forbidden"}}}, false},
+		{"undo-only pending", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "rollout-undo")}, Incident: &appbridge.IncidentDTO{State: "pending"}}, false},
+		{"undo-only never read", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "rollout-undo")}}, false},
+		{"undo-only unverified", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "rollout-undo")}, Incident: &appbridge.IncidentDTO{State: "unverified"}}, false},
+		{"undo-only lost answer", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{{N: 1, Verb: "rollout-undo", State: "offered", Reviewed: true, Ran: true, Request: "unverified", Effect: "established"}}, Incident: &appbridge.IncidentDTO{State: "not resolved"}}, false},
+		{"undo-only unestablished", A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{{N: 1, Verb: "rollout-undo", State: "offered", Reviewed: true, Ran: true, Request: "written", Effect: "unverified"}}}, false},
+		{"plan refused", A3Record{Case: A3Plan, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "flux-suspend"), {N: 2, Verb: "rollout-undo", Ran: true, Request: "refused", Effect: "established"}}, Incident: resolved}, false},
+		{"resume-between unwritten", A3Record{Case: A3ResumeBetween, Status: "completed", Restored: true, Steps: []A3StepRecord{{N: 1, Verb: "flux-suspend", Ran: true, Request: "unverified", Effect: "established"}, {N: 2, Verb: "rollout-undo", ReviewReason: "step 1's effect no longer holds on Kustomization a1-web"}}}, false},
 		{"resume-between held", A3Record{Case: A3ResumeBetween, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "flux-suspend"), {N: 2, Verb: "rollout-undo", ReviewReason: "step 1's effect no longer holds on Kustomization a1-web"}}}, true},
+		{"resume-between, another step 2", A3Record{Case: A3ResumeBetween, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "flux-suspend"), {N: 2, Verb: "scale", ReviewReason: "step 1's effect no longer holds on Kustomization a1-web"}}}, false},
 		{"resume-between offered", A3Record{Case: A3ResumeBetween, Status: "completed", Restored: true, Steps: []A3StepRecord{established(1, "flux-suspend"), established(2, "rollout-undo")}}, false},
 		{"a failed plant", A3Record{Case: A3Plan, Status: "plant-failed"}, false},
 	} {
@@ -157,5 +167,23 @@ func TestAnA3CaseStopsAtAFailedPlantOrAnEmptyPlan(t *testing.T) {
 	rec = a3Lab(chat, &a3Plant{ok: []bool{true}}, &writes).Run(context.Background(), &Scenario{}, A3Plan)
 	if rec.Status != "no-plan" || !rec.Restored || rec.Held {
 		t.Fatalf("an empty plan still restores the lab, and holds nothing: %+v", rec)
+	}
+}
+
+// An undo-only case that is not the counterexample says which evidence is
+// missing: the roll back's effect, or the incident's fault at the bound.
+func TestAnUndoOnlyCaseSaysWhatIsMissing(t *testing.T) {
+	for _, c := range []struct {
+		step     A3StepRecord
+		incident *appbridge.IncidentDTO
+		want     string
+	}{
+		{A3StepRecord{N: 1, Verb: "rollout-undo", Ran: true, Request: "written", Effect: "unverified", EffectWhy: "not established within 5m"}, nil, "the roll back's effect is unverified"},
+		{A3StepRecord{N: 1, Verb: "rollout-undo", Ran: true, Request: "written", Effect: "established"}, &appbridge.IncidentDTO{State: "unverified"}, "the incident is unverified, not a fault in force"},
+	} {
+		r := A3Record{Case: A3UndoOnly, Status: "completed", Restored: true, Steps: []A3StepRecord{c.step}, Incident: c.incident}
+		if held, why := r.expect(); held || !strings.Contains(why, c.want) {
+			t.Errorf("held=%v %q, want %q", held, why, c.want)
+		}
 	}
 }

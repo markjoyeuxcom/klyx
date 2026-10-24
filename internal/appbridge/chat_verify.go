@@ -120,6 +120,9 @@ type witness struct {
 	gen     int64  // the receipt's generation, or the first read showing this request's token
 	token   string // the attempt's token (restart, reconcile)
 	prior   int64  // the armed read's generation (restart)
+	// seen is the generation of the object last judged: once the effect
+	// is established, the object that established it
+	seen int64
 	// holds is the state verb's effect on a read (stateEffect), its own
 	// reads made under ctx
 	holds func(ctx context.Context, u *unstructured.Unstructured) (bool, string)
@@ -138,6 +141,7 @@ func (w *witness) judge(ctx context.Context, u *unstructured.Unstructured) (int,
 		return judgeFailed, "the object was replaced"
 	}
 	gen := u.GetGeneration()
+	w.seen = gen
 	observed, _, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
 	st := w.sn.step
 	switch st.Verb {
@@ -294,6 +298,12 @@ func (s *ChatService) verifyStepEffect(c *conversation, p *actionPlan, n int, sn
 			why = "the requested state, by this request or another writer"
 		}
 	}
+	// the incident reads the target at this generation or later; it starts
+	// only once every effect is established, so an unestablished one's
+	// generation is never used, and a deletion judges no object
+	s.mu.Lock()
+	p.runs[n-1].effectGen = w.seen
+	s.mu.Unlock()
 	s.settleEffect(c, p, n, effect, why)
 	s.maybeIncident(c, p)
 }
@@ -587,9 +597,23 @@ type incidentSubject struct {
 	// while it may (the A3 lab)
 	revertBy   string
 	revertStep int
-	// wrote is when its own latest step's request was sent: a reading of
-	// it must rest on data the Observer evaluated after that (the A3 lab)
-	wrote time.Time
+	// joinStep is its own latest step, and joinGen the generation that
+	// step's effect was established at when its write changes the spec: a
+	// reading of it is joined to that write by its row's generation, or by
+	// showing the step's own hold (stage 6 review, finding 1)
+	joinStep int
+	joinGen  int64
+}
+
+// writesSpec says a verb's write changes its target's spec, so its
+// generation: an annotation (a reconcile request, a KEDA pause or resume)
+// and a node's cordon do not.
+func writesSpec(verb string) bool {
+	switch verb {
+	case "flux-suspend", "flux-resume", "scale", "rollout-undo", "rollout-restart", "rollout-pause", "rollout-resume":
+		return true
+	}
+	return false
 }
 
 // maybeIncident starts the incident's reading once every offered step ran
@@ -653,7 +677,11 @@ func incidentSubjectsLocked(c *conversation, p *actionPlan) []incidentSubject {
 			if p.facts[i].UID != f.UID || p.runs[i].request == "" {
 				continue
 			}
-			sub.wrote = p.runs[i].sentAt // steps run in order: the last is the latest
+			// steps run in order: the last is the latest
+			sub.joinStep, sub.joinGen = i+1, 0
+			if writesSpec(st.Verb) {
+				sub.joinGen = p.runs[i].effectGen
+			}
 			if p.runs[i].owner != "" {
 				owner, applies, from = p.runs[i].owner, p.runs[i].applies, i+1
 			}
@@ -757,6 +785,12 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 			s.settleIncident(c, p, incidentUnverif, err.Error(), nil)
 			return
 		}
+		if f := fencedWhy(); f != "" {
+			// it failed and held again, during a reading or between two:
+			// its reason, never the bound's (stage 6 review, finding 2)
+			s.settleIncident(c, p, incidentUnverif, f, nil)
+			return
+		}
 		if !s.now().Before(deadline) || ctx.Err() != nil {
 			switch {
 			case !read:
@@ -777,13 +811,10 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 			s.settleIncident(c, p, incidentUnverif, err.Error(), nil)
 			return
 		}
-		if f := fencedWhy(); f != "" {
-			// it failed and held again: the reads it cancelled say nothing
-			s.settleIncident(c, p, incidentUnverif, f, nil)
-			return
-		}
 		if !s.now().Before(deadline) || ctx.Err() != nil {
-			continue // it ran into the bound: decided above, on the last one within it
+			// the bound or the fence ended it (fenced keeps its reason before
+			// it cancels): decided above, on the last one counted
+			continue
 		}
 		read, lastFaulted = true, faulted
 		if open == 0 && recovered > 0 {
@@ -837,10 +868,15 @@ func readSubjects(verdict func(actionFact) subjectVerdict, subjects []incidentSu
 			v, state := sv.v, sv.state
 			// a reading after the last write is a capture taken after it,
 			// not a change after it: a suspended unit stays quiet, and its
-			// part's evaluation time stops (the A3 lab). The data it rests
-			// on must still postdate the subject's own write, if it has one.
-			after := sv.captured.After(lastWrite) && (sub.wrote.IsZero() || sv.at.After(sub.wrote))
+			// part's evaluation time stops (the A3 lab)
+			after := sv.captured.After(lastWrite)
 			fresh := sv.found && v.Coverage == "live" && after
+			// and a subject with its own step is read only once its row
+			// shows that write: a new capture can still hold an informer's
+			// row from before it (stage 6 review, finding 1). Without a
+			// join - a write that leaves the generation, a hold not shown -
+			// nothing it reads is counted.
+			joined := sub.joinStep == 0 || sub.held > 0 && holdShown(sub.holdStep, sv) || sub.joinGen > 0 && v.Generation >= sub.joinGen
 			if sv.found {
 				row.Verdict, row.At = state, sv.captured.UTC().Format(time.RFC3339)
 			}
@@ -853,6 +889,13 @@ func readSubjects(verdict func(actionFact) subjectVerdict, subjects []incidentSu
 				open++
 			case !fresh:
 				row.Reading = "pending: no fresh reading"
+				open++
+			case !joined:
+				row.Reading = fmt.Sprintf("pending: Klyx's reading of it does not yet show step %d's write", sub.joinStep)
+				open++
+			case sub.held > 0 && state == "ok":
+				// an intended hold is never a recovery
+				row.Reading = fmt.Sprintf("pending: step %d's hold is not shown", sub.held)
 				open++
 			case (state == "ok" || state == "paused" && sub.held > 0 && holdShown(sub.holdStep, sv)) && sub.revertBy != "":
 				// the reading may not last: the unit the step's consequence

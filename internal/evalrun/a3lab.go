@@ -266,6 +266,8 @@ func (r A3Record) expect() (bool, string) {
 		switch {
 		case s1.Verb != "flux-suspend" || s2.Verb != "rollout-undo":
 			return false, "the plan is not suspend, then roll back"
+		case s1.Request != "written" || s2.Request != "written":
+			return false, fmt.Sprintf("a request was not written: step 1 %s, step 2 %s", orElse(s1.Request, "not run"), orElse(s2.Request, "not run"))
 		case s1.Effect != "established" || s2.Effect != "established":
 			return false, fmt.Sprintf("an effect was not established: step 1 %s (%s), step 2 %s (%s)", s1.Effect, s1.EffectWhy, s2.Effect, s2.EffectWhy)
 		case incident != "resolved":
@@ -275,17 +277,28 @@ func (r A3Record) expect() (bool, string) {
 	case A3UndoOnly:
 		s1 := step(1)
 		switch {
-		case s1.Verb != "rollout-undo" || !s1.Ran:
-			return false, "the roll back did not run"
+		// the counterexample is the roll back taking its effect and Flux
+		// reapplying the failing revision, so a fault in force at the
+		// bound. §7 also allows the effect not established, which this
+		// record cannot tell from a failed verification: not held, for the
+		// owner to read (stage 6 review, finding 3)
+		case s1.Verb != "rollout-undo" || s1.Request != "written":
+			return false, "the roll back was not written: " + orElse(s1.Request, "not run")
+		case s1.Effect != "established":
+			return false, fmt.Sprintf("the roll back's effect is %s (%s): not the counterexample this record can show", orElse(s1.Effect, "not read"), s1.EffectWhy)
 		case incident == "resolved":
 			return false, "the incident was resolved although Flux reapplies the failing revision"
+		case incident != "not resolved":
+			return false, "the incident is " + orElse(incident, "not read") + ", not a fault in force at the bound"
 		}
 		return true, ""
 	case A3ResumeBetween:
 		s1, s2 := step(1), step(2)
 		switch {
-		case s1.Effect != "established":
-			return false, "step 1's suspension was not established"
+		case s1.Verb != "flux-suspend" || s1.Request != "written" || s1.Effect != "established":
+			return false, fmt.Sprintf("step 1's suspension was not written and established: %s %s", orElse(s1.Request, "not run"), orElse(s1.Effect, "not read"))
+		case s2.Verb != "rollout-undo":
+			return false, "step 2 is not the roll back"
 		case s2.Reviewed || s2.Ran:
 			return false, "step 2 was offered after a1-web was resumed"
 		case !strings.Contains(s2.ReviewReason, "step 1's effect no longer holds"):

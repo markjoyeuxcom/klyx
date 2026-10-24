@@ -37,16 +37,12 @@ type stepsConn struct {
 	owner   fleet.GitOpsOwnership
 	replica fleet.ReplicaOwnership
 	getHook func()
-	onWrite func() // runs as each write is recorded
 }
 
 func (c *stepsConn) note(format string, a ...any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.writes = append(c.writes, fmt.Sprintf(format, a...))
-	if c.onWrite != nil {
-		c.onWrite()
-	}
 	return c.err
 }
 
