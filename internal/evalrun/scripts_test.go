@@ -32,9 +32,11 @@ case "${args[0]}" in
 config) echo "$FAKE_SERVER" ;;
 get)
 	if [[ "${args[*]}" == *"configmap klyx-eval-owner"* ]]; then cat "$FAKE/token"; exit 0; fi
-	key=$(printf '%s_' "${args[@]:1}" | sed 's/_-o_json_$//; s/[^A-Za-z0-9_.-]/_/g')
-	[[ -f "$FAKE/obj/$key" ]] || exit 1
-	cat "$FAKE/obj/$key" ;;
+	[[ -n "${FAKE_GET_FAIL:-}" ]] && { echo 'Error from server (Forbidden)' >&2; exit 1; }
+	key=$(printf '%s_' "${args[@]:1}" | sed 's/_--ignore-not-found_$/_/; s/_-o_json_$//; s/[^A-Za-z0-9_.-]/_/g')
+	if [[ -f "$FAKE/obj/$key" ]]; then cat "$FAKE/obj/$key"; exit 0; fi
+	[[ "${args[*]}" == *--ignore-not-found* ]] && exit 0
+	exit 1 ;;
 apply) cat >/dev/null; [[ -z "${FAKE_APPLY_FAIL:-}" ]] ;;
 *) ;;
 esac
@@ -99,6 +101,12 @@ func (l *scriptLab) run(script string, extra ...string) (string, string, error) 
 	return string(out), string(calls), err
 }
 
+// runFailingGets runs a script whose object reads all fail (a Forbidden):
+// the ownership marker's read still answers.
+func (l *scriptLab) runFailingGets(script string) (string, string, error) {
+	return l.run(script, "FAKE_GET_FAIL=1")
+}
+
 func ownerID(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])[:16]
@@ -149,6 +157,20 @@ func TestSetupRefusesWhatIsNotTheEvals(t *testing.T) {
 	l.object("namespace klyx-a1-app", map[string]string{"team": "someone-else"})
 	if out, calls, err := l.run("e1-flux-crashloop/setup.sh", "KLYX_EVAL_ADOPT=a1", "FAKE_APPLY_FAIL=1"); err == nil || strings.Contains(calls, "label") {
 		t.Fatalf("%v %s %s", err, out, calls)
+	}
+}
+
+// Codex's re-review, finding 1: a read that fails, other than not found,
+// establishes nothing: setup and teardown stop before any write.
+func TestAFailedOwnershipReadStopsTheScripts(t *testing.T) {
+	l := newScriptLab(t)
+	l.object("namespace klyx-eval", map[string]string{"team": "someone-else"})
+	// the ownership marker is read first; only the scenario objects' reads fail
+	for _, script := range []string{"e2-healthy-control/setup.sh", "e2-healthy-control/teardown.sh"} {
+		out, calls, err := l.runFailingGets(script)
+		if err == nil || strings.Contains(calls, "apply") || strings.Contains(calls, "delete") || !strings.Contains(out, "is not established") {
+			t.Fatalf("%s: %v %s %s", script, err, out, calls)
+		}
 	}
 }
 

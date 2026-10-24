@@ -2,6 +2,7 @@ package record
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -375,6 +376,26 @@ func TestEveryDeliveredMatchIsKept(t *testing.T) {
 	}
 }
 
+// Codex's re-review, finding 2: no establishing read is dropped, the ninth
+// included.
+func TestNoEstablishingReadIsDropped(t *testing.T) {
+	r := rec(t)
+	a := args(map[string]any{"kind": "Kustomization", "namespace": "klyx-a1-flux", "name": "a1-web"})
+	data := map[string]any{"objects": []any{map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web", "hidden": []any{map[string]any{"path": "env[MODE]"}}}}}
+	var ids []string
+	for i := 2; i <= 20; i++ {
+		id := fmt.Sprintf("r%d", i)
+		ids = append(ids, id)
+		bound := map[string]any{"id": id + ".c1", "subject": map[string]any{"kind": "Deployment", "namespace": "klyx-a1-app", "name": "web"}, "statement": "env[MODE]"}
+		r.Read(conv, "git_changes", a, id, false, env(t, "git_changes", id, false, data, bound))
+	}
+	r.Sent(conv, ids)
+	o := outcome(t, r.Facts(), "e1-diff")
+	if len(o.Reads) != 19 || len(o.Checks) != 19 || o.Reads[18] != "r20" {
+		t.Fatalf("%d reads, %d checks: %+v", len(o.Reads), len(o.Checks), o)
+	}
+}
+
 // Codex's implementation review, findings 6 and 7: delivery is decided on
 // its own. A nonmatching result never sent is not no-match, and a request
 // whose delivery is not established says so.
@@ -405,7 +426,7 @@ func TestDeliveryIsDecidedApartFromTheMatch(t *testing.T) {
 	r := rec(t)
 	r.Read(conv, "get_events", eventsArgs, "r2", false, env(t, "get_events", "r2", false, []any{detailed()}))
 	r.SentUncertain(conv, []string{"r2"})
-	if o := outcome(t, r.Facts(), "e3-event"); o.Established || o.Reason != DeliveryUncertain || !o.Unsent {
-		t.Fatalf("a match whose delivery is not established is not established: %+v", o)
+	if o := outcome(t, r.Facts(), "e3-event"); o.Established || o.Reason != DeliveryUncertain || o.Unsent || !o.UncertainMatch {
+		t.Fatalf("a match whose delivery is not established is neither established nor proven unsent: %+v", o)
 	}
 }

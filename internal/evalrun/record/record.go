@@ -39,9 +39,6 @@ const (
 	DeliveryUncertain = "delivery-uncertain"
 )
 
-// MaxGrounding bounds the establishing reads and checks kept per predicate.
-const MaxGrounding = 8
-
 // Report states: an accepted report (tools: a report_findings call Klyx
 // accepted; snapshot: a findings block that parsed), and the two ways one
 // is missing (eval design §4).
@@ -94,15 +91,19 @@ type Outcome struct {
 	Established bool   `json:"established"`
 	Read        string `json:"read,omitempty"` // the first read that established it
 	// Reads are every delivered read that established it, Checks the
-	// checks bound to it in them: a citation of any of them grounds a cause
+	// checks bound to it in them: a citation of any of them grounds a cause.
+	// They are bounded by the record's own MaxReads, never cut further.
 	Reads    []string `json:"reads,omitempty"`
 	Checks   []string `json:"checks,omitempty"`
 	Reason   string   `json:"reason,omitempty"` // why it was not established
 	Previous bool     `json:"previous,omitempty"`
 	Capped   bool     `json:"capped,omitempty"`
 	// Unsent: a result holding the planted evidence was acquired, and no
-	// request carrying it was sent
+	// request carrying it was sent (refused, omitted, or the turn ended)
 	Unsent bool `json:"matchedNotSent,omitempty"`
+	// UncertainMatch: a result holding it was carried by a request whose
+	// receipt is not established
+	UncertainMatch bool `json:"matchedDeliveryUncertain,omitempty"`
 }
 
 // Facts is the record's result for one run.
@@ -359,14 +360,8 @@ func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 		if !o.Established {
 			o.Established, o.Read, o.Previous, o.Capped = true, rd.id, m.previous, rd.truncated
 		}
-		if len(o.Reads) < MaxGrounding {
-			o.Reads = append(o.Reads, rd.id)
-		}
-		for _, c := range m.checks {
-			if len(o.Checks) < 2*MaxGrounding {
-				o.Checks = append(o.Checks, c)
-			}
-		}
+		o.Reads = append(o.Reads, rd.id)
+		o.Checks = append(o.Checks, m.checks...)
 	}
 	if o.Established {
 		return o
@@ -392,7 +387,10 @@ func reduce(reads []*read, i int, p compiled, mode string) Outcome {
 		default:
 			why = TurnEnded
 		}
-		if matched && !rd.delivered {
+		switch {
+		case matched && rd.uncertain && !rd.delivered:
+			o.UncertainMatch = true
+		case matched && !rd.delivered:
 			o.Unsent = true
 		}
 		if rd.truncated {

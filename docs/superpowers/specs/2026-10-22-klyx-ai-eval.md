@@ -160,10 +160,11 @@ It keeps no tool body, no message, no log line and no hidden value; at most 64 e
 | `read-failed` | The read was asked for or planned, and failed or was refused | not assigned: the read's own detail is shown |
 | `not-sent` | The result was acquired, but the request carrying it was refused locally, or the snapshot fill left the section out | Klyx's coverage gap |
 | `turn-ended` | The result was acquired, but the turn ended before any request carried it | not assigned: the turn's outcome is shown |
+| `delivery-uncertain` | A request carrying the result was dispatched, and the provider's call failed without a response that says it was received. Added in review (§15.3, §15.4). | not assigned: no grounded-cause credit from it |
 | `capped` | The result was clipped by its cap, and the predicate did not match what remained | Klyx's coverage gap, "possibly removed by the cap" |
 | `no-match` | The result was delivered whole, and did not establish the predicate | not assigned: no reason is assumed |
 
-A completed run with no established predicate cannot earn the grounded-cause mark. It stays in the completed denominator when its report was accepted, and its cause statements are still adjudicated. Only `not-planned`, `not-sent` and `capped` are reported as Klyx coverage gaps.
+A completed run with no established predicate cannot earn the grounded-cause mark. It stays in the completed denominator when its report was accepted, and its cause statements are still adjudicated. Only `not-planned`, `not-sent` and `capped` are reported as Klyx coverage gaps. A request counts as received when the provider answered, or replied with an HTTP status (a positive refusal of tools included).
 
 ## 6. Scoring
 
@@ -384,3 +385,11 @@ P3, the lookalikes: a cited check is about its own subject. A whole read is abou
 - The race suite passes in CI's scope, and with `-tags eval` for appbridge and evalrun. Lint is clean in both variants.
 - A mutation pass over the fixes catches 17 of 17, after four survivors were closed with tests: a Ready pod after a recent failure, a pod replaced inside its ReplicaSet, a cited check in a read of two, and an unknown-time read with an interval.
 - One equivalent mutant (a run's length after a recent failure, already bounded by the recency) was removed from the code.
+
+### 15.4 Codex's re-review 1 and the fixes (2026-10-24)
+
+Codex resolved the earlier findings and accepted `delivery-uncertain` as an extension to §5, now in its table. It requested changes for three residual P2 findings (handoff 185df6a3), taken:
+
+1. **A failed ownership read counted as absence.** The scripts read with `--ignore-not-found`: only the API's own not-found is absence. Any other failure (a Forbidden, a timeout) stops setup and teardown before a write, saying ownership is not established. The stand-in test covers both scripts.
+2. **The ninth establishing read lost its credit.** The record keeps every delivered establishing read and bound check. The record's own 64-read bound is the only one.
+3. **An uncertain delivery also claimed "matched, not sent".** `matchedNotSent` is set only when non-delivery is established. A matching result carried by a request of uncertain receipt sets `matchedDeliveryUncertain` instead.
