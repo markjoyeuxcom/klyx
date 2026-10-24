@@ -186,6 +186,9 @@ type actionPlan struct {
 	runs     []*stepRun
 	running  int
 	declined bool
+	// withdrawn is the fence that withdrew the plan's unrun steps, kept
+	// once observed (stage 2 re-review)
+	withdrawn string
 }
 
 // validatePlan is Klyx's decision on every step (§2.3), in order. A step

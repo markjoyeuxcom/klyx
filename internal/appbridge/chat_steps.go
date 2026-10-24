@@ -156,8 +156,9 @@ func (s *ChatService) planLocked(cluster, conversationID, exchangeID string) (*c
 // fenced investigation's unrun steps are withdrawn (stage 2 review,
 // finding 1) before anything else is decided.
 func (s *ChatService) offeredLocked(c *conversation, p *actionPlan, n int) string {
-	if fence := s.planFenceLocked(c); fence != "" {
-		return "withdrawn: " + fence
+	s.withdrawFencedLocked(c)
+	if p.withdrawn != "" {
+		return "withdrawn: " + p.withdrawn
 	}
 	switch {
 	case p.declined:

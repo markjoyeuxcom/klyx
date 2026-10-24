@@ -407,13 +407,12 @@ func (s *ChatService) obsoleteLocked(cluster, key, msg string) ChatStateDTO {
 }
 
 func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
+	// a fence observed now withdraws the plans for good, under a new
+	// version, before the reply is built (stage 2 re-review)
+	s.withdrawFencedLocked(c)
 	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Kind: c.kind, Anchor: c.anchor, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
 		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{},
 		Version: s.version}
-	fence := ""
-	if c.kind == kindInvestigation {
-		fence = s.planFenceLocked(c)
-	}
 	// the latest proposal is the current plan; an earlier one is superseded
 	// (AI A3 §2.4)
 	latest := -1
@@ -426,8 +425,8 @@ func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 		d := e.dto()
 		if e.plan != nil {
 			p := planDTOLocked(c, e.plan, i == latest || latest < 0)
-			if fence != "" {
-				withdraw(&p, fence)
+			if e.plan.withdrawn != "" {
+				withdraw(&p, e.plan.withdrawn)
 			}
 			d.Plan = &p
 		}
@@ -458,6 +457,37 @@ func (s *ChatService) planFenceLocked(c *conversation) string {
 		return "the cluster disconnected"
 	}
 	return ""
+}
+
+// withdrawFencedLocked records a failed fence on every plan of the
+// investigation that is not withdrawn yet: the withdrawal is canonical and
+// sticky - a connection that recovers never offers the plan again - and a
+// change to what is shown publishes a new version, so an older reply can
+// never restore the offer (stage 2 re-review).
+func (s *ChatService) withdrawFencedLocked(c *conversation) {
+	if c.kind != kindInvestigation {
+		return
+	}
+	fence := s.planFenceLocked(c)
+	if fence == "" {
+		return
+	}
+	changed := false
+	for _, e := range c.exchanges {
+		p := e.plan
+		if p == nil || p.withdrawn != "" {
+			continue
+		}
+		p.withdrawn = fence
+		for i, st := range p.dto.Steps {
+			if st.State == stepOffered && (i >= len(p.runs) || p.runs[i].request == "") {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		s.version++
+	}
 }
 
 // withdraw shows a fenced plan's offered steps as withdrawn, with why: the

@@ -487,6 +487,10 @@ Codex requested changes at e9bffad (four P2, one P3) and accepted the six deviat
 
 **Tests:** the review's probes as regressions: a fence during the final call (a replaced connection, proposals turned off), a completed turn's offer, a model's failure, a retained plan after a settings change; an older read completing late, at the same and at a lower generation, and the history part; a snapshot follow-up proposing on its own read; KEDA's true, false and missing values and another pause annotation, for both kinds; the pins in the retention bytes. A mutation pass over the fixes caught 9 of 9, after a same-generation case was added.
 
+### 16.2 Codex's re-review 1 and the fix (2026-10-24)
+
+Codex found the other four fixes resolved and one residual P2 at 30fbea6: the withdrawal changed only the reply, not the plan, and published no new version, so a delayed older reply could restore the offer, and a connection that recovered offered the plan again. Now `withdrawFencedLocked`, run before every state reply and in every step's offer check, records the failed fence on each plan not yet withdrawn (`actionPlan.withdrawn`, sticky), and publishes a new version once when that hides an offer; a plan's reply shows the recorded withdrawal, never a live recomputation. Tests: the version advances once and a second read publishes nothing; a recovered connection keeps the plan withdrawn; an earlier retained plan is withdrawn with the latest; the chat store keeps the withdrawn reply when an older offered one arrives late. A mutation pass caught 5 of 5. The fix is on top of stage 3 (6997ed7), whose offer check uses the recorded withdrawal.
+
 ## 17. Stage 3 as built: execution (2026-10-24)
 
 **What it adds** (`chat_steps.go`):

@@ -701,3 +701,44 @@ func TestRetentionCountsAPlansPins(t *testing.T) {
 		t.Fatalf("the pins are counted: %d vs %d (pins %d)", with, without, len(pins))
 	}
 }
+
+// Stage 2 re-review: a withdrawal is canonical and sticky, and publishes a
+// new version once; a retained earlier plan is withdrawn with the latest.
+func TestAWithdrawalIsStickyAndVersioned(t *testing.T) {
+	seed := ChatSeedDTO{Kind: "object", Group: "apps", Version: "v1", Plural: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}
+	propose := ai.ToolCall{ID: "a1", Name: toolActions, Args: json.RawMessage(`{"steps":[` + step("rollout-pause", "Deployment", "shop", "web", "", "r1") + `]}`)}
+	again := ai.ToolCall{ID: "a2", Name: toolActions, Args: json.RawMessage(`{"steps":[` + step("scale", "Deployment", "shop", "web", `{"replicas":1}`, "r1") + `]}`)}
+	f := newToolsFixture(t, calls(propose), answer("one"), calls(again), answer("two"))
+	f.conn.objects[key(deploysGVR, "shop", "web")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web"}, "spec": map[string]any{"replicas": int64(3)}})
+	inv := f.svc.StartInvestigation("x", seed)
+	f.svc.Ask("x", inv.ConversationID, "", nil)
+	before := f.svc.Ask("x", inv.ConversationID, "and scale?", nil)
+	if before.Exchanges[0].Plan.Steps[0].State != stepOffered || before.Exchanges[1].Plan.Steps[0].State != stepOffered {
+		t.Fatalf("both offered before the fence: %+v", before.Exchanges)
+	}
+	if again := f.svc.InvestigationState("x"); again.Version != before.Version {
+		t.Fatalf("a read without a fence publishes nothing new: %d vs %d", again.Version, before.Version)
+	}
+	f.mu.Lock()
+	f.usable = false // the pinned connection fails
+	f.mu.Unlock()
+	fenced := f.svc.InvestigationState("x")
+	if fenced.Version <= before.Version {
+		t.Fatalf("the withdrawal publishes a new version: %d vs %d", fenced.Version, before.Version)
+	}
+	for i, ex := range fenced.Exchanges {
+		if ex.Plan.Steps[0].State != stepWithdrawn {
+			t.Fatalf("plan %d withdrawn: %+v", i, ex.Plan)
+		}
+	}
+	if again := f.svc.InvestigationState("x"); again.Version != fenced.Version {
+		t.Fatal("a second read publishes nothing new")
+	}
+	f.mu.Lock()
+	f.usable = true // it recovers
+	f.mu.Unlock()
+	if back := f.svc.InvestigationState("x"); back.Exchanges[1].Plan.Steps[0].State != stepWithdrawn {
+		t.Fatalf("a withdrawn plan is never offered again: %+v", back.Exchanges[1].Plan)
+	}
+}
