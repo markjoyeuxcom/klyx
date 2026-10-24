@@ -3,6 +3,7 @@ package evalrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,5 +213,67 @@ func TestAnAnchorReadUnderAnotherUIDIsNotTheAnchor(t *testing.T) {
 	rep := controlRunner(chat, true).Run(context.Background(), []*Scenario{controlScenario()})
 	if rep.Runs[0].Status != StatusSUTFailure {
 		t.Fatalf("%+v", rep.Runs[0])
+	}
+}
+
+// Codex's implementation review, finding 9: every readiness attempt is
+// bounded by the allowance, so a stalled Observer read ends with
+// sut-not-ready.
+func TestAStalledReadinessReadEndsAtTheAllowance(t *testing.T) {
+	chat := &fakeChat{ex: anchoredExchange(windowNoFailure)}
+	r := controlRunner(chat, true)
+	r.Runs, r.Now, r.FirstAllowance = 1, time.Now, 50*time.Millisecond
+	r.Ready = func(ctx context.Context, _ *Scenario, _ string, _ time.Time) (bool, string) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("a readiness attempt without a deadline")
+			return false, "no deadline"
+		}
+		<-ctx.Done() // the Observer never answers
+		return false, ""
+	}
+	start := time.Now()
+	rep := r.Run(context.Background(), []*Scenario{controlScenario()})
+	if rep.Runs[0].Status != StatusSUTNotReady || !strings.Contains(rep.Runs[0].Detail, "did not answer") || time.Since(start) > 5*time.Second {
+		t.Fatalf("%+v after %s", rep.Runs[0], time.Since(start))
+	}
+}
+
+// Codex's implementation review, finding 1: a change to the files the
+// preflight checked stops the eval.
+func TestAChangedBoundaryStopsTheEval(t *testing.T) {
+	chat := &fakeChat{ex: anchoredExchange(windowNoFailure)}
+	r := controlRunner(chat, true)
+	r.Runs = 3
+	n := 0
+	r.Boundary = func() error {
+		if n++; n == 2 {
+			return errors.New("fleet.yaml changed after the preflight")
+		}
+		return nil
+	}
+	rep := r.Run(context.Background(), []*Scenario{controlScenario()})
+	if len(rep.Runs) != 2 || rep.Runs[1].Status != StatusNotReady || !strings.Contains(rep.Stopped, "changed after the preflight") || len(chat.started) != 1 {
+		t.Fatalf("%+v %q", rep.Runs, rep.Stopped)
+	}
+	if !strings.Contains(rep.Markdown(), "The runs after it were not made") {
+		t.Fatal("the report says the eval stopped")
+	}
+}
+
+func TestTheLabsFilesAreDigested(t *testing.T) {
+	l := newLab(t, oneCluster, "")
+	lab, err := l.preflight().Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lab.Unchanged(); err != nil {
+		t.Fatal(err)
+	}
+	kc := filepath.Join(l.dir, "kubeconfig")
+	if err := os.WriteFile(kc, []byte(strings.Replace(kubeconfigFmt, "%s", "https://api.production.example.invalid:6443", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lab.Unchanged(); err == nil || !strings.Contains(err.Error(), "changed after the preflight") {
+		t.Fatalf("%v", err)
 	}
 }

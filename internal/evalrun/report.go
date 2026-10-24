@@ -38,7 +38,9 @@ type Report struct {
 	Provenance Provenance        `json:"provenance"`
 	Summary    []ScenarioSummary `json:"summary"`
 	Runs       []RunRecord       `json:"runs"`
-	Omitted    []string          `json:"omitted,omitempty"`
+	// Stopped says why the eval stopped before its last run
+	Stopped string   `json:"stopped,omitempty"`
+	Omitted []string `json:"omitted,omitempty"`
 }
 
 // Provenance is what produced the report.
@@ -301,6 +303,9 @@ func (r *Report) Markdown() string {
 	fmt.Fprintf(&b, "# Klyx AI eval report\n\n")
 	fmt.Fprintf(&b, "Scorer %s, build %s%s, %s. Provider %s, model %s.\n\n", r.Scorer, short(p.Commit), map[bool]string{true: " (dirty)", false: ""}[p.Dirty], p.Go, orNone(p.Provider), orNone(p.Model))
 	fmt.Fprintf(&b, "The marks verify citations, not diagnoses. Diagnosis accuracy exists only once the owner has adjudicated the cause statements below.\n\n")
+	if r.Stopped != "" {
+		fmt.Fprintf(&b, "**%s.** The runs after it were not made.\n\n", r.Stopped)
+	}
 	b.WriteString("| Scenario | Requested | Completed | Statuses | Grounded cause | Cited a lookalike | Unsupported causes | Control | Proxy: cause | Proxy: lookalike |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, s := range r.Summary {
 		var st []string

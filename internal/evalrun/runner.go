@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"time"
 
@@ -33,7 +34,10 @@ type Runner struct {
 	Ready func(ctx context.Context, s *Scenario, uid string, since time.Time) (bool, string)
 	// Record points chat's eval hooks at a run's record (nil clears it).
 	Record func(*record.Recorder)
-	Runs   int
+	// Boundary is checked before each repetition: an error stops the eval
+	// (the preflight's files changed).
+	Boundary func() error
+	Runs     int
 	// FirstAllowance and Allowance bound the wait for Klyx's readiness:
 	// the first repetition after start, and every later one.
 	FirstAllowance, Allowance time.Duration
@@ -57,8 +61,16 @@ func (r *Runner) Run(ctx context.Context, scenarios []*Scenario) *Report {
 	for _, s := range scenarios {
 		sp := ScenarioProvenance{Name: s.Name, Manifest: manifestHash(s)}
 		for i := 1; i <= runs; i++ {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || rep.Stopped != "" {
 				break
+			}
+			if r.Boundary != nil {
+				if err := r.Boundary(); err != nil {
+					rep.Stopped = "the eval stopped: " + err.Error()
+					rep.Runs = append(rep.Runs, RunRecord{Scenario: s.Name, Repetition: i, Status: StatusNotReady, Detail: rep.Stopped})
+					r.log("eval: %s", rep.Stopped)
+					break
+				}
 			}
 			run := r.one(ctx, s, i, first)
 			first = false
@@ -82,7 +94,7 @@ func (r *Runner) one(ctx context.Context, s *Scenario, rep int, first bool) RunR
 	start := r.now()()
 	run := RunRecord{Scenario: s.Name, Repetition: rep}
 	var f RunFacts
-	f.Before = r.Plant.Check(ctx, s)
+	f.Before = r.plant(ctx, s)
 	run.AnchorUID, run.Witnesses = f.Before.AnchorUID, f.Before.Witnesses
 	var ex appbridge.ChatExchangeDTO
 	var facts record.Facts
@@ -121,7 +133,7 @@ func (r *Runner) one(ctx context.Context, s *Scenario, rep int, first bool) RunR
 				r.Chat.Clear(r.Cluster, st.ConversationID)
 			}
 		}
-		f.After = r.Plant.Check(ctx, s)
+		f.After = r.plant(ctx, s)
 	} else {
 		f.After = f.Before
 	}
@@ -141,7 +153,18 @@ func (r *Runner) one(ctx context.Context, s *Scenario, rep int, first bool) RunR
 	return run
 }
 
+// plantBound bounds one plant check, whatever the client's own timeout.
+const plantBound = 2 * time.Minute
+
+func (r *Runner) plant(ctx context.Context, s *Scenario) Plant {
+	pctx, cancel := context.WithTimeout(ctx, plantBound)
+	defer cancel()
+	return r.Plant.Check(pctx, s)
+}
+
 // waitReady polls Klyx's readiness with backoff within the allowance.
+// Every attempt runs under a context bounded by what is left of it, so a
+// stalled Observer read ends at the allowance with sut-not-ready.
 func (r *Runner) waitReady(ctx context.Context, s *Scenario, p Plant, allowance time.Duration) (bool, string) {
 	sleep := r.sleep
 	if sleep == nil {
@@ -150,11 +173,17 @@ func (r *Runner) waitReady(ctx context.Context, s *Scenario, p Plant, allowance 
 	deadline := r.now()().Add(allowance)
 	wait := time.Second
 	for {
-		ok, why := r.Ready(ctx, s, p.AnchorUID, p.At)
+		actx, cancel := context.WithDeadline(ctx, deadline)
+		ok, why := r.Ready(actx, s, p.AnchorUID, p.At)
+		timedOut := actx.Err() != nil
+		cancel()
 		if ok {
 			return true, ""
 		}
-		if ctx.Err() != nil || !r.now()().Add(wait).Before(deadline) {
+		if timedOut && why == "" {
+			why = fmt.Sprintf("Klyx's Observer did not answer within %s", allowance)
+		}
+		if ctx.Err() != nil || timedOut || !r.now()().Add(wait).Before(deadline) {
 			return false, why
 		}
 		sleep(wait)

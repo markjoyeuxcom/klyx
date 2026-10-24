@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/url"
@@ -53,6 +54,21 @@ type Lab struct {
 	Cluster config.ClusterConfig
 	REST    *rest.Config
 	Server  string
+	// digests are the checked files' contents: the config and the kubeconfig
+	digests map[string][32]byte
+}
+
+// Unchanged says the files the preflight checked still hold what it read:
+// the fleet runs on the checked configuration and connection, and a change
+// to either file stops the eval.
+func (l Lab) Unchanged() error {
+	for path, want := range l.digests {
+		b, err := os.ReadFile(path)
+		if err != nil || sha256.Sum256(b) != want {
+			return fmt.Errorf("%s changed after the preflight", path)
+		}
+	}
+	return nil
 }
 
 // Run refuses unless KLYX_CONFIG names exactly the owned kind lab: one
@@ -76,10 +92,15 @@ func (p Preflight) Run(ctx context.Context) (Lab, error) {
 	if _, err := os.Stat(filepath.Join(dir, DirMarker)); err != nil {
 		return lab, fmt.Errorf("refusing: %s is not an eval directory (no %s)", dir, DirMarker)
 	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return lab, fmt.Errorf("refusing: %w", err)
+	}
 	cfg, err := config.Load(abs)
 	if err != nil {
 		return lab, fmt.Errorf("refusing: %w", err)
 	}
+	lab.digests = map[string][32]byte{abs: sha256.Sum256(raw)}
 	lab.Config = cfg
 	if len(cfg.Clusters) != 1 {
 		return lab, fmt.Errorf("refusing: the eval config names %d clusters; it must name exactly the lab", len(cfg.Clusters))
@@ -89,8 +110,17 @@ func (p Preflight) Run(ctx context.Context) (Lab, error) {
 	if err := inDir(dir, cc.Kubeconfig); err != nil {
 		return lab, err
 	}
+	kraw, err := os.ReadFile(cc.Kubeconfig)
+	if err != nil {
+		return lab, fmt.Errorf("refusing: %w", err)
+	}
+	lab.digests[cc.Kubeconfig] = sha256.Sum256(kraw)
 	rc, err := cluster.RESTConfig(cc)
 	if err != nil {
+		return lab, fmt.Errorf("refusing: %w", err)
+	}
+	// what was parsed and resolved is what was digested
+	if err := lab.Unchanged(); err != nil {
 		return lab, fmt.Errorf("refusing: %w", err)
 	}
 	lab.REST, lab.Server = rc, rc.Host
