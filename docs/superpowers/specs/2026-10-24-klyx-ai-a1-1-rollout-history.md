@@ -1,6 +1,6 @@
 # Klyx AI A1.1: rollout history
 
-Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`), accepted (§12); nothing is built.
+Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`), accepted (§12) and built (§13).
 
 ## 0. Why
 
@@ -196,3 +196,39 @@ Also from the notes:
 ## 12. ACCEPT (2026-10-24)
 
 Codex accepted the design at 3a0f9d3 (handoff 353d3d44), with no remaining findings, after the review and two re-reviews. The implementation is reviewed on its own.
+
+## 13. As built (2026-10-24)
+
+**What was built, on `feat/ai-a1-1`:**
+- `internal/appbridge/chat_rollout.go` (4750aef, 7c3f10c): `rollout_history`, its three checks and its bounded shrink.
+- The wiring:
+  - the tool's definition and strict arguments (`chat_tools.go`);
+  - the investigation's anchor on the tool executor, for the replacement rule (`chat_turn.go`);
+  - the `rollout` class, ranked with `diff` in `capChecks` (`chat_checks.go`);
+  - a shared `selectorOf` (`chat_workload.go`);
+  - the two snapshot steps (`chat_invsnapshot.go`).
+- `chat_rollout_test.go` covers §9 (4750aef, e05b141), and A1's load test carries the tool at its full shape.
+
+**Evidence:**
+- The appbridge race suite passes, and lint is clean.
+- A mutation pass over the tool catches 25 of 26. The survivor is equivalent: `compare`'s own bound, which the loop's bound already holds.
+- A1's load test, with each of its eight investigations also reading `rollout_history` at the full admitted shape, passes within every bound. With `KLYX_A1_LOAD=1` its worst shape peaks at 443 MiB of heap in use. A1 measured 375 MiB without this tool (A1 §13.4).
+  - The tool's largest result is 15,478 bytes, under the 16 KiB bound.
+  - Reads in flight stay at 48, the bound; comparisons and builds stay at 1.
+- **The lab check.** The eval build with this branch merged in a local scratch branch, and a scripted model that read the A1 lab's crash-looping `web` (Deployment `klyx-a1-app/web`):
+  - revision 4 was established by template equality on the controller's own objects (defaults and the hash label as Kubernetes writes them), with revision 3 its partner;
+  - the difference was `spec.template.spec.containers[web].env[MODE]`, changed (not shown);
+  - the failing pod was in revision 4, and the partner's two checks were dated at the pod read and the verdict capture, two seconds apart;
+  - the result was 3,733 bytes.
+
+### 13.1 Deviations, for review
+
+1. **A refused call reports `failed` with its reason as the detail**, as every chat tool's refusal does; the tests assert the reason.
+2. **The shrink keeps the pinned rows,** dropping first the unpinned rows' changes, then the unpinned rows. Past that, the pinned rows lose their changes and images, and the result says the pinned data could not fit. The rows themselves (numbers, objects, pods) are always kept.
+3. **The heap peak rose by 68 MiB at A1's worst shape,** from eight concurrent full-shape history reads. It is measured and reported here rather than bounded further.
+
+### 13.2 Not done yet
+
+- The native smoke and the captures, four ways, on the kind lab.
+- Codex's implementation review.
+- Counting the change check as E1 evidence, which is the eval's addendum once this is merged.
