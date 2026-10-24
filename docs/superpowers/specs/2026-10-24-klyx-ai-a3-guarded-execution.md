@@ -1,6 +1,6 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`; revision 1 the same day (§12). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
 An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
@@ -60,7 +60,7 @@ A3 offers these verbs, and only with these kinds and parameters. Each has its ow
 
 **Two kinds of effect:**
 - **A state effect** is a requested state on the UID, whoever wrote it: the suspension, the count, the pause, the cordon, the reverted template. A later read showing that state establishes it, said as "the requested state, by this request or another writer" when this request's own answer was lost.
-- **An event effect** happened because of this request: a restart, a reconcile, a deletion. Only this request's own witness establishes it: its token, or its pod's UID gone. Another request's token, or a post-call generation, never substitutes for it.
+- **An event effect** is a restart, a reconcile or a deletion. A restart or a reconcile is established only by this request's own token, never by another request's token or a post-call generation. A deletion is established by the intended UID's removal, observed; when the request's answer was lost, who removed it stays unverified ("the pod was removed; by this request or another actor").
 
 | Verb | Kinds | Parameters | Effect | Bound |
 |---|---|---|---|---|
@@ -141,7 +141,7 @@ A proposal never changes a finding's label, and a finding never makes a step pro
 ### 2.5 The remedy (A1's defect)
 
 - `report_findings`' `remedy` keeps its two text parts, `git` and `mitigation`, each scrubbed and capped at 2,000 characters, as A1 §4 states. Today `chatScrub` cuts each at 500.
-- `report_findings` gets its own aggregate bound, 24 KiB, instead of `strictArgs`' 4 KiB. The field caps count characters, so the aggregate is an additional limit: the documented maxima fit in ASCII (about 20 KiB with JSON's overhead), and a report whose fields are each within their caps but whose whole exceeds 24 KiB (long non-ASCII text, for example) is refused with the bound named, and may be retried once as today.
+- `report_findings` gets its own aggregate bound, 24 KiB, instead of `strictArgs`' 4 KiB. The field caps count characters, so the aggregate is an additional limit that a report at every field's cap can exceed, in ASCII too (with long subjects and citations). Such a report is refused with the bound named, and may be retried once as today; no claim is made that every combination of field maxima fits.
 - The text remedy stays "proposed, not run". The action card is the structured mitigation beside it.
 
 ## 3. The action card
@@ -264,12 +264,14 @@ Established, or unverified with its reason (not established within the bound; th
 
 A third party's write in the window, such as Flux reapplying, can make the effect fail: it then reads "not established", never "established".
 
-**`delete-pod`'s replacement, without a membership baseline:**
-- before the delete, a LIST of the owner's pods by its selector with `limit=1` gives a collection resourceVersion;
-- after the delete, a watch from that resourceVersion reports the pods added since;
-- the first one whose controller owner is the owner's UID, and whose UID is not the deleted one, is the replacement: "a pod of that owner, created after the step began".
+**`delete-pod`'s replacement: a creation witness, without a membership baseline** (revision 2):
+- before the delete, an **unfiltered** LIST of the namespace's pods with `limit=1` gives a collection resourceVersion R;
+- after the delete, an **unfiltered** watch of the namespace's pods from R, with no label or field selector and without initial events. The API server reports ADDED for an existing object that starts matching a filtered watch (`cache_watcher.go`); with no filter there is nothing to start matching, so an ADDED event is a creation after R;
+- each event's controller owner is checked locally: the first ADDED pod whose controller owner is the owner's UID, and whose UID is not the deleted one, is the replacement. A pod adopted by the owner after R arrives as MODIFIED, and is never counted;
+- the same watch tracks that pod: the effect is established only while it has not been deleted, so a replacement removed again before the deletion's own effect completes is not presented as present;
+- the claim is modest: "a new pod of that owner was created after the step began", never that this deletion caused it.
 
-No set of existing pods is kept, so a large owner cannot make an old pod look new. A `410 Gone` on the watch, or the bound, leaves the replacement unverified.
+No set of existing pods is kept, so neither a large owner nor a label change can make an old pod look new. A `410 Gone` or a failed watch is never followed by a relist that would treat existing pods as new: the replacement stays unverified. The watch reads at most 10,000 events within the bound; past that, the replacement is unverified ("the namespace was too busy to verify").
 
 **Bounds:** one running step per conversation, so at most eight verifications fleet-wide; each holds at most two watches (the object and the replacement); events are decoded one at a time and kept only as their predicate's result.
 
@@ -346,10 +348,10 @@ The roadmap's §6.1 scenario runs on the kind lab on E1's fixture: the Kustomiza
 - the request: written with a receipt; refused, nothing sent (KEDA's version gate, a failed arming); refused by the server (4xx, `ErrReplaced`, an attributed admission refusal); unverified (5xx, a deadline, a transport loss). Scale's out-of-range count consumes the grant;
 - the witness: a lost answer with no commit (a fully rolled-out Deployment stays unrestarted: unverified, the review's counterexample); a late commit (the token appears: established); a superseding write (another reconcile token handled: unverified); a same-second restart (distinct tokens since stage 1; and a receipt with no new generation: unverified);
 - each verb's effect holding; the UID replaced mid-watch; the bound running out; a third party's write reverting the field; DaemonSet undo by template digest;
-- `delete-pod`: a replacement from a large owner (above any list cap), a Job's pod, a pod without an owner, and a `410 Gone`;
+- `delete-pod`: a genuinely created replacement; an existing pod of that owner whose labels change to match its selector after R, never counted (the re-review's counterexample); a pod adopted by the owner after R (MODIFIED), never counted; a replacement deleted again before the effect completes; a large owner; a Job's pod; a pod without an owner; a `410 Gone`; the event cap; and a lost DELETE answer with the UID removed (established, the actor unverified);
 - the incident: every row of §5.3's table; a degraded subject never counted as recovered; a scale to zero held, not recovered; a suspended anchor held only when the plan suspended it; a deleted pod anchor unverified with its replacement shown apart.
 
-**Bounds:** full-shape tests at the action facts' cap (64 subjects of 1 KiB) and the step records' cap (16, through repeated and superseded plans), and the `report_findings` aggregate: the ASCII maxima admitted, a non-ASCII report within its field caps but above 24 KiB refused with the bound named.
+**Bounds:** full-shape tests at the action facts' cap (64 subjects of 1 KiB) and the step records' cap (16, through repeated and superseded plans), and the `report_findings` aggregate: a typical report admitted; a report within every field cap but above 24 KiB refused with the bound named, both an all-ASCII one (20 findings of 500 characters, 10 citations each, a 253-character Pod name and a 63-character namespace) and a non-ASCII one.
 
 **Egress:** literal needles (env values, the template difference's hidden values, annotation values, a Secret's name read only by the card) never appear in the model's feedback, the proposal's echo or any send.
 
@@ -396,6 +398,14 @@ Codex requested changes (six P2, one P3, and guidance), with four probes against
 4. **P2, DaemonSet undo.** DaemonSet has no `updateRevision`. Undo's effect is now the template digest at an observed generation for all three kinds, with the Deployment's partner ReplicaSet as an addition. Restart's vacuous cases (paused, `OnDelete`, a partition, no desired pods) and undo of a paused Deployment are refused (§1).
 5. **P2, an exhaustive incident table.** Degraded, progressing, unknown and paused readings, and removed or replaced subjects, each have a stated contribution, and a deleted pod anchor cannot establish resolution (§5.3). The delete card promises recreation only for owners that keep a count (§1, §3).
 6. **P2, bound the new evidence and reads.** The action facts are a bounded record extracted from Klyx's own reads (§2.2); step records are capped (§2.4); verifications and their watches are bounded (§5.2); `delete-pod`'s replacement needs no baseline set, so a cap cannot make an old pod look new (§5.2).
-7. **P3, 24 KiB and the documented maxima.** It is now an aggregate limit on top of the character caps: the ASCII maxima fit, a larger whole is refused with the bound named, and tested (§2.5).
+7. **P3, 24 KiB and the documented maxima.** It is now an aggregate limit on top of the character caps; a larger whole is refused with the bound named, and tested (§2.5). Revision 2 drops the claim that the ASCII maxima fit (§13).
 
 **Guidance, adopted:** the header says Klyx checked eligibility, not the remedy (§3); the pinned connection binds every request of the verb and its verification through a run fence (§4.4); KEDA's effect is S9's completed pause (§1); the consequence is qualified by the ownership read's own fields and state (§3); Klyx's own pre-write refusals are "refused, nothing sent" (§5.1).
+
+## 13. Revision 2: Codex's re-review of 44c1661
+
+Codex requested one change, with two nonblocking notes; the six other findings are addressed.
+
+1. **P2, a creation witness.** A watch filtered by the owner's selector reports ADDED for an existing pod whose labels start matching it, so an old pod could pass as the replacement. The watch is now unfiltered, from an unfiltered LIST's resourceVersion, without initial events; the owner is checked locally; adoption arrives as MODIFIED and is not counted; the replacement is tracked until the effect completes; and the claim is "created after the step began", not caused by it (§5.2). Tests: the label-transition counterexample, an adoption control, a genuine creation (§8).
+2. **P3, the ASCII maxima.** An all-ASCII report at every field cap serializes to about 26 KiB. The claim that the maxima fit is dropped; the aggregate refusal is described and tested for that case too (§2.5, §8).
+3. **The deletion's wording.** A deletion is established by the intended UID's removal; after a lost answer, who removed it stays unverified (§1).
