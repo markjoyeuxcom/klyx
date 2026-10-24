@@ -628,9 +628,9 @@ func rolloutChecks(t *chatTools, data *chatRolloutData, revs []*rolloutRev, desi
 			continue
 		}
 		fails++
-		st := fmt.Sprintf("%d of the %d listed pods of %s's revision %d (%s %s) are failing by Klyx's verdict", c.CurrentFailing, c.Listed, who, r.num, histObj, r.obj.GetName())
+		st := fmt.Sprintf("%d of the %d listed pods of %s's revision %d (%s %s) %s failing by Klyx's verdict", c.CurrentFailing, c.Listed, who, r.num, histObj, r.obj.GetName(), plural(c.CurrentFailing, "is", "are"))
 		if c.Missing > 0 {
-			st += fmt.Sprintf("; %d have no verdict", c.Missing)
+			st += fmt.Sprintf("; %d %s no verdict", c.Missing, plural(c.Missing, "has", "have"))
 		}
 		switch {
 		case r.desired:
@@ -688,6 +688,13 @@ func rolloutChecks(t *chatTools, data *chatRolloutData, revs []*rolloutRev, desi
 				who, desired.num, partner.num, diff, desired.num, partial)})
 	}
 	return out
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // shrinkRollout keeps the result within budget: the unpinned revisions'

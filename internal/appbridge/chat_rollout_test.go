@@ -412,8 +412,7 @@ func TestPodHealthIsCurrentRetainedOrMissing(t *testing.T) {
 		if r4.Pods.RetainedFailing != 1 || r4.Pods.RetainedNotFailing != 1 || r4.Pods.CurrentFailing != 0 || r.data.Pods.VerdictsLive {
 			t.Fatalf("%+v", r4.Pods)
 		}
-		r.noCheck(t, "are failing by Klyx's verdict")
-		r.noCheck(t, "is failing by Klyx's verdict")
+		r.noCheck(t, "failing by Klyx's verdict")
 		r.check(t, "all Ready") // readiness is the pod list's, read now
 	})
 	t.Run("a pod without a verdict", func(t *testing.T) {
@@ -424,7 +423,7 @@ func TestPodHealthIsCurrentRetainedOrMissing(t *testing.T) {
 		if r.rev(t, 4).Pods.Missing != 1 || r.rev(t, 3).Pods.Missing != 1 {
 			t.Fatalf("%+v", r.data.Revisions)
 		}
-		r.check(t, "1 of the 2 listed pods of Deployment shop/web's revision 4 (ReplicaSet web-new) are failing by Klyx's verdict; 1 have no verdict")
+		r.check(t, "1 of the 2 listed pods of Deployment shop/web's revision 4 (ReplicaSet web-new) is failing by Klyx's verdict; 1 has no verdict")
 		r.noCheck(t, "none of the 2 listed pods")
 	})
 	t.Run("no capture at all", func(t *testing.T) {
