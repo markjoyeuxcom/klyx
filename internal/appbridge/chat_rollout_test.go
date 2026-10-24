@@ -142,8 +142,28 @@ func runRollout(t *testing.T, tools *chatTools, kind, name string) rolloutResult
 	if err := json.Unmarshal(res.JSON, &env); err != nil {
 		t.Fatal(err)
 	}
-	if len(env.Errors) > 0 {
-		t.Fatalf("%v", env.Errors)
+	// the only error a read of these fixtures carries is a verdict source
+	// that is not current, said in the ledger (A1.1 §4)
+	for _, e := range env.Errors {
+		if !strings.HasPrefix(e, "Klyx's pod verdicts are not current") {
+			t.Fatalf("%v", env.Errors)
+		}
+	}
+	return rolloutResult{res: res, data: env.Data, checks: env.Checks, note: env.Note}
+}
+
+// runRolloutAllowingErrors is runRollout for a result that carries its
+// sources' errors.
+func runRolloutAllowingErrors(t *testing.T, tools *chatTools, kind, name string) rolloutResult {
+	t.Helper()
+	res := tools.as("r1").Run(context.Background(), toolRollout, json.RawMessage(fmt.Sprintf(`{"kind":%q,"namespace":"shop","name":%q}`, kind, name)))
+	var env struct {
+		Data   chatRolloutData `json:"data"`
+		Checks []ChatCheck     `json:"checks"`
+		Note   string          `json:"note"`
+	}
+	if err := json.Unmarshal(res.JSON, &env); err != nil {
+		t.Fatal(err)
 	}
 	return rolloutResult{res: res, data: env.Data, checks: env.Checks, note: env.Note}
 }
@@ -520,7 +540,7 @@ func TestTheShrinkKeepsThePinnedRows(t *testing.T) {
 		}
 		d.Revisions = append(d.Revisions, row)
 	}
-	shrinkRollout(d, 12*1024)
+	shrinkRollout(d, func() bool { b, _ := json.Marshal(d); return len(b) <= 12*1024 })
 	b, _ := json.Marshal(d)
 	if len(b) > 12*1024 {
 		t.Fatalf("%d bytes", len(b))
@@ -535,7 +555,7 @@ func TestTheShrinkKeepsThePinnedRows(t *testing.T) {
 		t.Fatalf("the pinned rows stay: %+v", d.Revisions)
 	}
 	tiny := &chatRolloutData{Revisions: []chatRolloutRevision{{Revision: 2, Desired: true, Changes: &chatRolloutChange{Hidden: []chatHiddenChange{{Path: strings.Repeat("q", 4000)}}}}}}
-	shrinkRollout(tiny, 1024)
+	shrinkRollout(tiny, func() bool { b, _ := json.Marshal(tiny); return len(b) <= 1024 })
 	if !tiny.PinnedNotFit || tiny.Revisions[0].Changes != nil {
 		t.Fatalf("pinned data that cannot fit is said, not claimed: %+v", tiny)
 	}
@@ -664,7 +684,7 @@ func TestTheCapsOnImagesComparisonsAndDegradedPods(t *testing.T) {
 		items = append(items, rsObj(fmt.Sprintf("web-%d", n), fmt.Sprintf("uid-rs%d", n), fmt.Sprint(n), withHash(tm, fmt.Sprint(n)), "uid-d", "2026-10-10T08:00:00Z", 0, 0))
 	}
 	cur, _, _ := unstructured.NestedMap(items[0].Object, "spec", "template")
-	_ = unstructured.SetNestedField(f.objects[key(deployGVR, "shop", "web")].Object, normTemplate(cur), "spec", "template")
+	_ = unstructured.SetNestedField(f.objects[key(deployGVR, "shop", "web")].Object, normTemplate(cur, true), "spec", "template")
 	f.lists[replicaSetsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: items}
 	f.lists[podsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: []unstructured.Unstructured{rolloutPod("web-6-a", "uid-6a", "ReplicaSet", "uid-rs6", false, nil)}}
 	f.rows[healthsrc.TaskPods+"/pods"] = rolloutPodRows(fixedNow(), observe.Live, map[string]health.Kind{"uid-6a": health.Degraded})
@@ -684,5 +704,149 @@ func TestTheCapsOnImagesComparisonsAndDegradedPods(t *testing.T) {
 	}
 	if r6.Pods.CurrentFailing != 1 {
 		t.Fatalf("a degraded verdict is failing: %+v", r6.Pods)
+	}
+}
+
+// Codex's implementation review, finding 1: the revision marker is cluster
+// text, scrubbed before it reaches the model.
+func TestTheMarkerIsScrubbed(t *testing.T) {
+	bearer, arn := "Bearer zq81abcdefghijklmnopqrstuvwxyz0123456789", "arn:aws:iam::123456789012:role/zq81-secret-role"
+	f := newToolsFixture(t, calls(ai.ToolCall{ID: "r", Name: toolRollout, Args: json.RawMessage(`{"kind":"Deployment","namespace":"shop","name":"web"}`)}), answer("done"))
+	lab := deploymentLab()
+	lab.summary = f.conn.summary
+	lab.objects[key(deployGVR, "shop", "web")].SetAnnotations(map[string]string{"deployment.kubernetes.io/revision": bearer + " " + arn})
+	f.mu.Lock()
+	f.conn, f.cur = lab, lab
+	f.mu.Unlock()
+	st := f.svc.Start("x")
+	f.svc.Ask("x", st.ConversationID, "what changed in web?", nil)
+	if len(f.prov.reqs) != 2 {
+		t.Fatalf("%d requests", len(f.prov.reqs))
+	}
+	sent, _ := json.Marshal(f.prov.reqs[1])
+	for _, needle := range []string{"zq81abcdefghijklmnopqrstuvwxyz0123456789", "123456789012:role"} {
+		if strings.Contains(string(sent), needle) {
+			t.Fatalf("%q reached the model", needle)
+		}
+	}
+	// the control: an ordinary marker is sent as it is
+	r := runRollout(t, newChatTools(deploymentLab(), fixedNow), "Deployment", "web")
+	if r.data.Markers[0].Names != "revision 4" {
+		t.Fatalf("%+v", r.data.Markers)
+	}
+}
+
+// Codex's implementation review, finding 2: pod-template-hash is the
+// Deployment controller's; on a StatefulSet or DaemonSet it is the user's.
+func TestAUsersHashLabelIsCompared(t *testing.T) {
+	for _, kind := range []string{"StatefulSet", "DaemonSet"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFakeChat()
+			gvr := rolloutSTSGVR
+			if kind == "DaemonSet" {
+				gvr = rolloutDSGVR
+			}
+			want := podTemplate("registry/db:2", "a")
+			want["metadata"].(map[string]any)["labels"].(map[string]any)["pod-template-hash"] = "desired-user-label"
+			held := podTemplate("registry/db:2", "a")
+			held["metadata"].(map[string]any)["labels"].(map[string]any)["pod-template-hash"] = "older-user-label"
+			f.objects[key(gvr, "shop", "db")] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": kind,
+				"metadata": map[string]any{"name": "db", "namespace": "shop", "uid": "uid-s", "generation": int64(2)},
+				"spec":     map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}, "template": want},
+				"status":   map[string]any{"observedGeneration": int64(2)}})
+			f.lists[controllerRevisionsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: []unstructured.Unstructured{{Object: map[string]any{
+				"apiVersion": "apps/v1", "kind": "ControllerRevision",
+				"metadata": map[string]any{"name": "db-1", "namespace": "shop", "uid": "uid-cr1", "labels": map[string]any{"app": "web"},
+					"ownerReferences": []any{map[string]any{"apiVersion": "apps/v1", "kind": kind, "name": "db", "uid": "uid-s", "controller": true}}},
+				"revision": int64(1), "data": map[string]any{"spec": map[string]any{"template": held}}}}}}
+			r := runRollout(t, newChatTools(f, fixedNow), kind, "db")
+			if r.data.Desired.Revision != 0 || r.data.Desired.NotEstablished == "" {
+				t.Fatalf("the user's label differs: no revision matches: %+v", r.data.Desired)
+			}
+		})
+	}
+	// the control: a Deployment's ReplicaSets add the hash, which is ignored
+	if r := runRollout(t, newChatTools(deploymentLab(), fixedNow), "Deployment", "web"); r.data.Desired.Revision != 4 {
+		t.Fatalf("%+v", r.data.Desired)
+	}
+}
+
+// Codex's implementation review, findings 3 and 4: a capped capture's
+// verdicts are retained, not current, and a source that is not current is
+// in Klyx's missing evidence.
+func TestAVerdictSourceThatIsNotCurrentIsSaid(t *testing.T) {
+	cases := []struct {
+		name string
+		rows func(f *fakeChatConn)
+	}{
+		{"a capped capture", func(f *fakeChatConn) {
+			rows := f.rows[healthsrc.TaskPods+"/pods"]
+			rows.Part.Kinds = []observe.KindCoverage{{Kind: "Pod", Objects: 17, Truncated: true}}
+			f.rows[healthsrc.TaskPods+"/pods"] = rows
+		}},
+		{"a stale capture", func(f *fakeChatConn) {
+			rows := f.rows[healthsrc.TaskPods+"/pods"]
+			rows.Part.Coverage = observe.Stale
+			f.rows[healthsrc.TaskPods+"/pods"] = rows
+		}},
+		{"no capture", func(f *fakeChatConn) { f.rows = nil }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := deploymentLab()
+			c.rows(f)
+			r := runRolloutAllowingErrors(t, newChatTools(f, fixedNow), "Deployment", "web")
+			if r.data.Pods.VerdictsLive || r.rev(t, 4).Pods.CurrentFailing != 0 || r.data.Pods.VerdictsNote == "" {
+				t.Fatalf("%+v %+v", r.data.Pods, r.rev(t, 4).Pods)
+			}
+			r.noCheck(t, "failing by Klyx's verdict")
+			if len(r.res.Read.Gaps) == 0 {
+				t.Fatalf("the ledger has no gap: %+v", r.res.Read)
+			}
+			fd := labelFindings(findingsInput{}, []ChatRead{r.res.Read}, anchorFacts{})
+			if len(fd.Missing) == 0 {
+				t.Fatal("Klyx's missing evidence names the verdict source")
+			}
+		})
+	}
+}
+
+// Codex's implementation review, finding 5: the whole envelope fits, with
+// the pinned rows kept.
+func TestTheWholeEnvelopeFitsWithThePinnedRows(t *testing.T) {
+	f := newFakeChat()
+	long := strings.Repeat("w", 253)
+	img := func(n int) map[string]any {
+		var cs []any
+		for c := 0; c < 8; c++ {
+			im := strings.Repeat("i", 300) + ":1"
+			if c == 0 {
+				im = fmt.Sprintf("%s:%d", strings.Repeat("i", 300), n)
+			}
+			cs = append(cs, map[string]any{"name": fmt.Sprintf("%s-%d", strings.Repeat("c", 60), c), "image": im})
+		}
+		return map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "web"}}, "spec": map[string]any{"containers": cs}}
+	}
+	f.objects[key(deployGVR, "shop", long)] = uobj(map[string]any{"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": long, "namespace": "shop", "uid": "uid-d", "generation": int64(12), "annotations": map[string]any{"deployment.kubernetes.io/revision": "12"}},
+		"spec":     map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}}, "template": img(12)},
+		"status":   map[string]any{"observedGeneration": int64(12)}})
+	var items []unstructured.Unstructured
+	for n := 12; n >= 1; n-- {
+		rs := rsObj(fmt.Sprintf("%s-%02d", long[:240], n), fmt.Sprintf("uid-rs%d", n), fmt.Sprint(n), withHash(img(n), fmt.Sprint(n)), "uid-d", "2026-10-10T08:00:00Z", 1, 1)
+		items = append(items, rs)
+	}
+	f.lists[replicaSetsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: items}
+	r := runRollout(t, newChatTools(f, fixedNow), "Deployment", long)
+	if len(r.res.JSON) > chatResultMax {
+		t.Fatalf("%d bytes", len(r.res.JSON))
+	}
+	var desired, partner bool
+	for _, rv := range r.data.Revisions {
+		desired = desired || (rv.Desired && rv.Revision == 12)
+		partner = partner || (rv.Partner && rv.Revision == 11)
+	}
+	if !desired || !partner {
+		t.Fatalf("the pinned rows are kept: %+v (pinned data not fit %v)", r.data.Revisions, r.data.PinnedNotFit)
 	}
 }

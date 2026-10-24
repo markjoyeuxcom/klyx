@@ -160,6 +160,7 @@ type chatRolloutChange struct {
 type rolloutRev struct {
 	num     int64
 	obj     *unstructured.Unstructured
+	name    string         // the object's name as it may be sent: scrubbed and bounded
 	tmpl    map[string]any // the pod template, normalised; nil when unreadable
 	hash    string         // a ControllerRevision's own hash label
 	pods    []*unstructured.Unstructured
@@ -190,7 +191,10 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	}
 	sel := selector.String()
 	wtmpl, _, _ := unstructured.NestedMap(w.Object, "spec", "template")
-	wtmpl = normTemplate(wtmpl)
+	// a Deployment's ReplicaSets add pod-template-hash; a StatefulSet's or
+	// DaemonSet's template keeps any label of that name as the user's
+	dropHash := kind == "Deployment"
+	wtmpl = normTemplate(wtmpl, dropHash)
 
 	// the revisions: one page, kept by controller UID
 	histGVR, histObj := replicaSetsGVR, "ReplicaSet"
@@ -208,7 +212,7 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 		if controllerUID(o) != uid {
 			continue
 		}
-		r := &rolloutRev{obj: o}
+		r := &rolloutRev{obj: o, name: p.str(o.GetName(), chatStringMax)}
 		if kind == "Deployment" {
 			n, perr := strconv.ParseInt(o.GetAnnotations()[rolloutRevisionAnn], 10, 64)
 			if perr != nil {
@@ -217,13 +221,13 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 			}
 			r.num = n
 			if tm, ok, _ := unstructured.NestedMap(o.Object, "spec", "template"); ok {
-				r.tmpl = normTemplate(tm)
+				r.tmpl = normTemplate(tm, true)
 			}
 		} else {
 			r.num, _, _ = unstructured.NestedInt64(o.Object, "revision")
 			r.hash = o.GetLabels()[rolloutRevHash]
 			if tm, ok, _ := unstructured.NestedMap(o.Object, "data", "spec", "template"); ok {
-				r.tmpl = normTemplate(tm)
+				r.tmpl = normTemplate(tm, false)
 			}
 		}
 		revs = append(revs, r)
@@ -291,8 +295,16 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	case verdicts.byUID == nil:
 		data.Pods.VerdictsNote = verdicts.problem
 	default:
-		data.Pods.VerdictsLive = verdicts.problem == ""
-		data.Pods.VerdictsNote = verdicts.problem
+		// a capture that is not live, or a capped one, holds retained
+		// verdicts only (A1.1 §4)
+		data.Pods.VerdictsLive = verdicts.problem == "" && verdicts.capped == ""
+		var notes []string
+		for _, n := range []string{verdicts.problem, verdicts.capped} {
+			if n != "" {
+				notes = append(notes, n)
+			}
+		}
+		data.Pods.VerdictsNote = strings.Join(notes, "; ")
 		for _, v := range verdicts.byUID {
 			if v.EvaluatedAt > data.Pods.VerdictsAt {
 				data.Pods.VerdictsAt = v.EvaluatedAt
@@ -301,7 +313,7 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	}
 
 	// markers, as markers
-	markers(kind, w, revs, &data)
+	markers(kind, w, revs, &data, p)
 
 	// the desired template, by equality only
 	var desired, partner *rolloutRev
@@ -320,7 +332,7 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 	case 1:
 		desired = matches[0]
 		desired.desired = true
-		data.Desired = chatRolloutPick{Revision: desired.num, Object: histObj + " " + desired.obj.GetName(), How: "its pod template equals the workload's"}
+		data.Desired = chatRolloutPick{Revision: desired.num, Object: histObj + " " + desired.name, How: "its pod template equals the workload's"}
 	default:
 		data.Desired.NotEstablished = fmt.Sprintf("ambiguous: %d revisions held have the workload's pod template", len(matches))
 	}
@@ -335,7 +347,7 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 			data.Partner.NotEstablished = "no lower revision is held in this read"
 		} else {
 			partner.partner = true
-			data.Partner = chatRolloutPick{Revision: partner.num, Object: histObj + " " + partner.obj.GetName(), How: "the nearest lower revision retained in this read"}
+			data.Partner = chatRolloutPick{Revision: partner.num, Object: histObj + " " + partner.name, How: "the nearest lower revision retained in this read"}
 			if partner.num != desired.num-1 {
 				data.Partner.Gap = "the revisions between them are not held in this history read; why they are absent is not established"
 			}
@@ -393,10 +405,22 @@ func (t *chatTools) rollout(ctx context.Context, kind, ns, name string) ChatTool
 		checks = nil
 		note = "possibly a replacement: this " + kind + " is not the investigated one (its UID differs); no rollout check is made. " + note
 	}
-	shrinkRollout(&data, chatResultMax-2048)
 	env := chatEnvelope{Tool: toolRollout, Source: "api", ReadAt: t.stamp(), Complete: !data.History.Partial && !data.Pods.Partial,
 		Identity: &chatIdentity{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: uid, Generation: data.Generation},
-		Data:     data, Checks: capChecks(checks), Note: note}
+		Checks:   capChecks(checks), Note: note}
+	if !data.Pods.VerdictsLive {
+		// Klyx knows its own source is not current: the ledger says so, so
+		// missing evidence does too
+		env.Errors = append(env.Errors, "Klyx's pod verdicts are not current: "+data.Pods.VerdictsNote)
+	}
+	// the whole envelope fits, checks and all, before chat's generic cut
+	// could drop the data (and its pinned rows) at once
+	shrinkRollout(&data, func() bool {
+		env.Data = data
+		b, _ := json.Marshal(env)
+		return len(b) <= chatResultMax-512
+	})
+	env.Data = data
 	read := ChatRead{Tool: toolRollout, Target: target, Outcome: "completed", Redacted: p.redacted,
 		Refs:   []ChatRef{{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: uid}},
 		Detail: fmt.Sprintf("%d revisions held, %d pods listed", data.History.Held, data.Pods.Listed)}
@@ -416,17 +440,18 @@ func ownedBy(pod *unstructured.Unstructured, list *unstructured.UnstructuredList
 	return owner, true
 }
 
-// normTemplate is a pod template as compared: without the Deployment
-// controller's hash label, a ControllerRevision's patch directive, or a
-// null creation time.
-func normTemplate(tm map[string]any) map[string]any {
+// normTemplate is a pod template as compared: without a ControllerRevision's
+// patch directive or a null creation time, and, for a Deployment and its
+// ReplicaSets only (dropHash), without the controller's pod-template-hash
+// label.
+func normTemplate(tm map[string]any, dropHash bool) map[string]any {
 	if tm == nil {
 		return nil
 	}
 	c := runtimeDeepCopy(tm)
 	delete(c, "$patch")
 	if md, ok := c["metadata"].(map[string]any); ok {
-		if l, ok := md["labels"].(map[string]any); ok {
+		if l, ok := md["labels"].(map[string]any); ok && dropHash {
 			delete(l, rolloutHashLabel)
 			if len(l) == 0 {
 				delete(md, "labels")
@@ -448,7 +473,7 @@ func runtimeDeepCopy(m map[string]any) map[string]any {
 
 // markers reports the controller's own revision markers, and the revision
 // each names in this read.
-func markers(kind string, w *unstructured.Unstructured, revs []*rolloutRev, data *chatRolloutData) {
+func markers(kind string, w *unstructured.Unstructured, revs []*rolloutRev, data *chatRolloutData, p *projector) {
 	find := func(match func(*rolloutRev) bool) *rolloutRev {
 		for _, r := range revs {
 			if match(r) {
@@ -458,7 +483,8 @@ func markers(kind string, w *unstructured.Unstructured, revs []*rolloutRev, data
 		return nil
 	}
 	add := func(marker, names string, r *rolloutRev, tag string) {
-		m := chatRolloutMarker{Marker: marker, Names: names}
+		// the marker's value is cluster text: scrubbed and bounded
+		m := chatRolloutMarker{Marker: marker, Names: p.str(names, chatStringMax)}
 		if r == nil {
 			m.Note = "not in the history read"
 		} else {
@@ -521,7 +547,7 @@ func templateChanges(older, newer *rolloutRev, ns string, p *projector) *chatRol
 }
 
 func revisionRow(r *rolloutRev, histObj string, verdicts *chatVerdicts, p *projector) chatRolloutRevision {
-	row := chatRolloutRevision{Revision: r.num, Object: histObj + " " + p.str(r.obj.GetName(), chatStringMax), UID: string(r.obj.GetUID()),
+	row := chatRolloutRevision{Revision: r.num, Object: histObj + " " + r.name, UID: string(r.obj.GetUID()),
 		Markers: r.markers, Desired: r.desired, Partner: r.partner, Changes: r.changes, TemplateUnreadable: r.tmpl == nil}
 	if ts := r.obj.GetCreationTimestamp(); !ts.IsZero() {
 		row.Created = ts.UTC().Format("2006-01-02T15:04:05Z")
@@ -565,7 +591,7 @@ func revisionRow(r *rolloutRev, histObj string, verdicts *chatVerdicts, p *proje
 // verdict evidence Klyx holds for each.
 func podCounts(r *rolloutRev, verdicts *chatVerdicts, p *projector) chatRolloutRevPods {
 	var c chatRolloutRevPods
-	live := verdicts != nil && verdicts.byUID != nil && verdicts.problem == ""
+	live := verdicts != nil && verdicts.byUID != nil && verdicts.problem == "" && verdicts.capped == ""
 	for _, pod := range r.pods {
 		c.Listed++
 		if podReady(pod) {
@@ -628,7 +654,7 @@ func rolloutChecks(t *chatTools, data *chatRolloutData, revs []*rolloutRev, desi
 			continue
 		}
 		fails++
-		st := fmt.Sprintf("%d of the %d listed pods of %s's revision %d (%s %s) %s failing by Klyx's verdict", c.CurrentFailing, c.Listed, who, r.num, histObj, r.obj.GetName(), plural(c.CurrentFailing, "is", "are"))
+		st := fmt.Sprintf("%d of the %d listed pods of %s's revision %d (%s %s) %s failing by Klyx's verdict", c.CurrentFailing, c.Listed, who, r.num, histObj, r.name, plural(c.CurrentFailing, "is", "are"))
 		if c.Missing > 0 {
 			st += fmt.Sprintf("; %d %s no verdict", c.Missing, plural(c.Missing, "has", "have"))
 		}
@@ -648,11 +674,11 @@ func rolloutChecks(t *chatTools, data *chatRolloutData, revs []*rolloutRev, desi
 		}
 		if c.Listed > 0 && c.Ready == c.Listed {
 			out = append(out, ChatCheck{Class: checkRollout, Subject: subj, Observed: data.Pods.ReadAt, Coverage: podCov,
-				Statement: fmt.Sprintf("%s's revision %d (%s %s), the nearest lower retained revision, has %d listed pods, all Ready%s", who, partner.num, histObj, partner.obj.GetName(), c.Listed, partial)})
+				Statement: fmt.Sprintf("%s's revision %d (%s %s), the nearest lower retained revision, has %d listed pods, all Ready%s", who, partner.num, histObj, partner.name, c.Listed, partial)})
 		}
 		if c.Listed > 0 && c.CurrentNotFailing == c.Listed && data.Pods.VerdictsAt != "" {
 			out = append(out, ChatCheck{Class: checkRollout, Subject: subj, Observed: data.Pods.VerdictsAt, Coverage: "live",
-				Statement: fmt.Sprintf("none of the %d listed pods of %s's revision %d (%s %s) is failing by Klyx's verdict%s", c.Listed, who, partner.num, histObj, partner.obj.GetName(), partial)})
+				Statement: fmt.Sprintf("none of the %d listed pods of %s's revision %d (%s %s) is failing by Klyx's verdict%s", c.Listed, who, partner.num, histObj, partner.name, partial)})
 		}
 	}
 	if desired != nil && partner != nil && desired.changes != nil {
@@ -697,31 +723,30 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// shrinkRollout keeps the result within budget: the unpinned revisions'
-// changes go first, then the unpinned revisions, oldest first. When the
-// pinned rows still do not fit, their changes go and the result says so.
-func shrinkRollout(d *chatRolloutData, budget int) {
-	size := func() int {
-		b, _ := json.Marshal(d)
-		return len(b)
-	}
-	if size() <= budget {
+// shrinkRollout keeps the result within budget (fits, on the whole
+// envelope): the unpinned revisions' changes go first, then the unpinned
+// revisions, oldest first. When the pinned rows still do not fit, their
+// optional data goes (changes, images, replicas, failing pods' names,
+// markers) and the result says so; the rows themselves, their numbers,
+// objects and pod counts, stay.
+func shrinkRollout(d *chatRolloutData, fits func() bool) {
+	if fits() {
 		return
 	}
-	for i := len(d.Revisions) - 1; i >= 0 && size() > budget; i-- {
+	for i := len(d.Revisions) - 1; i >= 0 && !fits(); i-- {
 		if !d.Revisions[i].Desired && !d.Revisions[i].Partner {
 			d.Revisions[i].Changes = nil
 		}
 	}
-	for i := len(d.Revisions) - 1; i >= 0 && size() > budget; i-- {
+	for i := len(d.Revisions) - 1; i >= 0 && !fits(); i-- {
 		if !d.Revisions[i].Desired && !d.Revisions[i].Partner {
 			d.Revisions = append(d.Revisions[:i], d.Revisions[i+1:]...)
 		}
 	}
-	if size() > budget {
+	if !fits() {
 		for i := range d.Revisions {
-			d.Revisions[i].Changes = nil
-			d.Revisions[i].Images, d.Revisions[i].ImagesMore = nil, 0
+			r := &d.Revisions[i]
+			r.Changes, r.Images, r.ImagesMore, r.Replicas, r.Markers, r.Pods.Failing = nil, nil, 0, nil, nil, nil
 		}
 		d.PinnedNotFit = true
 	}

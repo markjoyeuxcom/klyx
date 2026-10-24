@@ -224,12 +224,23 @@ Codex accepted the design at 3a0f9d3 (handoff 353d3d44), with no remaining findi
 ### 13.1 Deviations, for review
 
 1. **A refused call reports `failed` with its reason as the detail**, as every chat tool's refusal does; the tests assert the reason.
-2. **The shrink keeps the pinned rows,** dropping first the unpinned rows' changes, then the unpinned rows. Past that, the pinned rows lose their changes and images, and the result says the pinned data could not fit. The rows themselves (numbers, objects, pods) are always kept.
+2. **The shrink keeps the pinned rows,** dropping first the unpinned rows' changes, then the unpinned rows. Past that, the pinned rows lose their optional data (changes, images, replicas, markers, failing pods' names), and the result says the pinned data could not fit. The rows themselves (numbers, objects, pods) are always kept. Since review 1 this holds on the whole serialized envelope (§13.3).
 3. **The heap peak rose by 68 MiB at A1's worst shape,** from eight concurrent full-shape history reads. It is measured and reported here rather than bounded further.
 
 - **The native smoke** passes 209 of 209 four ways at 8c71d41, from a clean tree with every lab re-applied. **The server-mode captures** pass four ways.
 
 ### 13.2 Not done yet
 
-- Codex's implementation review.
 - Counting the change check as E1 evidence, which is the eval's addendum once this is merged.
+
+### 13.3 Codex's implementation review 1 and the fixes (2026-10-24)
+
+Codex requested changes at cd4308e (handoff b2875ce4): one P1 and four P2 findings, each with a counterexample. It accepted deviations 1 and 3; finding 5 disproved deviation 2 as stated. All are taken:
+
+1. **P1: the revision marker bypassed the scrubber.** A Deployment's revision annotation is cluster text, and its raw value reached the model. Every marker value now passes through the projector (`ScrubEvidence` and the string bound). So does every revision object's name, wherever it is used: rows, picks and check statements. A test asserts that a Bearer token and an ARN are absent from the request the model receives, with an ordinary marker as the control.
+2. **The hash label was ignored for every kind.** Ignoring `pod-template-hash` is the Deployment controller's rule. `normTemplate` now drops it only for a Deployment and its ReplicaSets. On a StatefulSet or DaemonSet, a user's label of that name is compared, and a difference means no revision matches.
+3. **A capped capture counted as current.** `verdictsFor` now reports a capture's capped kinds. A capped capture, like a stale one, holds retained verdicts only, never current ones, and its note says so.
+4. **A verdict source that was not current was missing from Klyx's ledger.** When the capture is unavailable, stale or capped, the envelope carries the error. The read's gaps and the findings' missing evidence then name it, while the history and the pod list stay usable.
+5. **The final cut could drop both pinned rows.** The shrink now fits the whole serialized envelope, checks and all, before chat's generic cut could drop the data. A test with 253-character names and eight 300-character images per revision keeps desired revision 12 and partner 11.
+
+A mutation pass over the fixes catches 7 of 7; the appbridge race suite passes and lint is clean.

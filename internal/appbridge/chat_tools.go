@@ -1372,6 +1372,9 @@ type chatVerdict struct {
 type chatVerdicts struct {
 	byUID   map[string]chatVerdict
 	problem string
+	// capped names a capture's kinds that are capped snapshots: their
+	// verdicts may be missing even in a live part (A1.1 §4)
+	capped string
 }
 
 func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
@@ -1468,6 +1471,13 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
 	out := &chatVerdicts{byUID: map[string]chatVerdict{}, problem: partProblem(tp[0], rows)}
+	var capped []string
+	for _, k := range rows.Part.Kinds {
+		if k.Truncated {
+			capped = append(capped, fmt.Sprintf("%s/%s: %s is a capped snapshot of %d objects; Klyx's verdicts may be missing", tp[0], rows.Part.ID, k.Kind, k.Objects))
+		}
+	}
+	out.capped = strings.Join(capped, "; ")
 	forEachRow(rows.Rows, func(r capturedRow) {
 		if v, ok := verdictOf(rows, r, n); ok {
 			out.byUID[r.ref.UID] = v
