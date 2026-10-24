@@ -499,10 +499,14 @@ func TestAReplacedAnchorMakesNoRolloutCheck(t *testing.T) {
 
 func TestRolloutRefusals(t *testing.T) {
 	tools := newChatTools(deploymentLab(), fixedNow)
-	for _, args := range []string{`{"kind":"Job","namespace":"shop","name":"web"}`, `{"kind":"Deployment","name":"web"}`, `{"kind":"Deployment","namespace":"shop","name":"web","extra":1}`} {
+	for args, why := range map[string]string{
+		`{"kind":"Job","namespace":"shop","name":"web"}`:                  "kind must be Deployment, StatefulSet or DaemonSet",
+		`{"kind":"Deployment","name":"web"}`:                              "namespace",
+		`{"kind":"Deployment","namespace":"shop","name":"web","extra":1}`: "extra",
+	} {
 		res := tools.as("r1").Run(context.Background(), toolRollout, json.RawMessage(args))
-		if res.Read.Outcome != "refused" && res.Read.Outcome != "failed" {
-			t.Fatalf("%s: %+v", args, res.Read)
+		if res.Read.Outcome != "failed" || !strings.Contains(res.Read.Detail, why) {
+			t.Fatalf("refused before any read, saying why: %s: %+v", args, res.Read)
 		}
 	}
 }
@@ -646,5 +650,40 @@ func TestACappedHistoryIsPartial(t *testing.T) {
 	}
 	if r.data.Desired.Revision != 0 || !strings.Contains(r.data.Desired.NotEstablished, "partial") {
 		t.Fatalf("the current revision outside the page is not established: %+v", r.data.Desired)
+	}
+}
+
+func TestTheCapsOnImagesComparisonsAndDegradedPods(t *testing.T) {
+	f := deploymentLab()
+	var cs []any
+	for c := 0; c < rolloutImagesMax+3; c++ {
+		cs = append(cs, map[string]any{"name": fmt.Sprintf("c%d", c), "image": fmt.Sprintf("img:%d", c)})
+	}
+	items := []unstructured.Unstructured{}
+	for n := 6; n >= 1; n-- {
+		tm := map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "web"}}, "spec": map[string]any{"containers": append([]any{map[string]any{"name": "web", "image": fmt.Sprintf("web:%d", n)}}, cs...)}}
+		items = append(items, rsObj(fmt.Sprintf("web-%d", n), fmt.Sprintf("uid-rs%d", n), fmt.Sprint(n), withHash(tm, fmt.Sprint(n)), "uid-d", "2026-10-10T08:00:00Z", 0, 0))
+	}
+	cur, _, _ := unstructured.NestedMap(items[0].Object, "spec", "template")
+	_ = unstructured.SetNestedField(f.objects[key(deployGVR, "shop", "web")].Object, normTemplate(cur), "spec", "template")
+	f.lists[replicaSetsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: items}
+	f.lists[podsGVR.String()+"|shop"] = &unstructured.UnstructuredList{Items: []unstructured.Unstructured{rolloutPod("web-6-a", "uid-6a", "ReplicaSet", "uid-rs6", false, nil)}}
+	f.rows[healthsrc.TaskPods+"/pods"] = rolloutPodRows(fixedNow(), observe.Live, map[string]health.Kind{"uid-6a": health.Degraded})
+	r := runRollout(t, newChatTools(f, fixedNow), "Deployment", "web")
+	r6 := r.rev(t, 6)
+	if len(r6.Images) != rolloutImagesMax || r6.ImagesMore != 4 {
+		t.Fatalf("%d images, %d more", len(r6.Images), r6.ImagesMore)
+	}
+	compared := 0
+	for _, rv := range r.data.Revisions {
+		if rv.Changes != nil {
+			compared++
+		}
+	}
+	if compared != rolloutCompareMax {
+		t.Fatalf("%d comparisons", compared)
+	}
+	if r6.Pods.CurrentFailing != 1 {
+		t.Fatalf("a degraded verdict is failing: %+v", r6.Pods)
 	}
 }
