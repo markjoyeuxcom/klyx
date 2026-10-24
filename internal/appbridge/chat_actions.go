@@ -173,6 +173,8 @@ type ActionPlanDTO struct {
 	// declined or held, with StatusWhy (AI A3 §2.4, §4.6)
 	Status    string `json:"status,omitempty"`
 	StatusWhy string `json:"statusWhy,omitempty"`
+	// Incident is the plan's incident, once its steps took their effects
+	Incident *IncidentDTO `json:"incident,omitempty"`
 }
 
 // actionPlan is a proposal with what Klyx pinned for each offered step:
@@ -192,6 +194,9 @@ type actionPlan struct {
 	// settled: the turn that proposed it has ended, so its decision is the
 	// settled one; no step is offered before
 	settled bool
+	// incident is read once every offered step's effect is established
+	// (AI A3 §5.3)
+	incident *IncidentDTO
 }
 
 // validatePlan is Klyx's decision on every step (§2.3), in order. A step

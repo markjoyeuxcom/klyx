@@ -11,7 +11,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/metrics"
@@ -117,6 +119,25 @@ func (c *ClusterConn) ChatGet(ctx context.Context, gvr schema.GroupVersionResour
 		return c.dyn.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
 	}
 	return c.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
+// ChatWatch watches one object (name) or, with name "", every object of a
+// kind in a namespace, from resourceVersion, without initial events (AI A3
+// §5.2). A namespace-wide watch has no selector: an ADDED event is a
+// creation after resourceVersion, never an existing object that starts
+// matching a filter.
+func (c *ClusterConn) ChatWatch(ctx context.Context, gvr schema.GroupVersionResource, ns, name, resourceVersion string) (watch.Interface, error) {
+	if c.dyn == nil {
+		return nil, errors.New("dynamic client unavailable")
+	}
+	opts := metav1.ListOptions{ResourceVersion: resourceVersion}
+	if name != "" {
+		opts.FieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
+	}
+	if ns == "" {
+		return c.dyn.Resource(gvr).Watch(ctx, opts)
+	}
+	return c.dyn.Resource(gvr).Namespace(ns).Watch(ctx, opts)
 }
 
 // ChatList reads ONE page of a kind: limit objects at most. The continue

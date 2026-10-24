@@ -1390,7 +1390,12 @@ type chatVerdicts struct {
 	// completed is a KEDA scaler row's own evidence of a completed full
 	// pause (keda.Verdict.Completed), by UID (AI A3 stage 3 re-review)
 	completed map[string]bool
-	problem   string
+	// byName is every row's UID by resource, namespace and name, and
+	// complete says the part is live with no capped kind: a UID absent from
+	// it is gone (AI A3 §5.3)
+	byName   map[string]string
+	complete bool
+	problem  string
 	// capped names a capture's kinds that are capped snapshots: their
 	// verdicts may be missing even in a live part (A1.1 §4)
 	capped string
@@ -1489,15 +1494,17 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 	if !ok {
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
-	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, problem: partProblem(tp[0], rows)}
+	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, byName: map[string]string{}, complete: rows.Part.Coverage == observe.Live, problem: partProblem(tp[0], rows)}
 	var capped []string
 	for _, k := range rows.Part.Kinds {
 		if k.Truncated {
 			capped = append(capped, fmt.Sprintf("%s/%s: %s is a capped snapshot of %d objects; Klyx's verdicts may be missing", tp[0], rows.Part.ID, k.Kind, k.Objects))
+			out.complete = false
 		}
 	}
 	out.capped = strings.Join(capped, "; ")
 	forEachRow(rows.Rows, func(r capturedRow) {
+		out.byName[rowName(r.ref.GVR, r.ref.Namespace, r.ref.Name)] = r.ref.UID
 		if v, ok := verdictOf(rows, r, n); ok {
 			out.byUID[r.ref.UID] = v
 		}
@@ -1509,6 +1516,12 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 		}
 	})
 	return out
+}
+
+// rowName keys a row by its resource (a GVR's last segment), namespace and
+// name.
+func rowName(gvr, ns, name string) string {
+	return gvr[strings.LastIndex(gvr, "/")+1:] + "|" + ns + "/" + name
 }
 
 // forEachRow walks a part's healthsrc.RowSet[T] (any T).

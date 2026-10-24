@@ -173,10 +173,20 @@ func (r *turnRunner) seedRead(ctx context.Context) error {
 // userText is what an exchange's question carries to the model: the
 // question, then any seeded object as a delimited data block.
 func userText(e *exchange) string {
+	q := e.question + planRecordBlock(e)
 	if e.seedData == "" {
-		return e.question
+		return q
 	}
-	return e.question + "\n\n<seeded-object>\n" + e.seedData + "\n</seeded-object>"
+	return q + "\n\n<seeded-object>\n" + e.seedData + "\n</seeded-object>"
+}
+
+// planRecordBlock is Klyx's own record of the plan's runs, delimited (AI A3
+// §5.4).
+func planRecordBlock(e *exchange) string {
+	if e.planRecord == "" {
+		return ""
+	}
+	return "\n\n<klyx-plan-record>\n" + e.planRecord + "\n</klyx-plan-record>"
 }
 
 // guard runs before every read and every model call (spec §5.3): the
@@ -789,6 +799,7 @@ func (r *turnRunner) snapshotDoc(sections, ambiguous []string) string {
 		}
 		b.WriteString("Question: ")
 		b.WriteString(r.ex.question)
+		b.WriteString(planRecordBlock(r.ex))
 		return b.String()
 	}
 	secs := append([]string(nil), sections...)

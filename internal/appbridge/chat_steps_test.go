@@ -252,6 +252,11 @@ func TestAStandingPrerequisiteIsReadAgain(t *testing.T) {
 // Until its effect is established, a step holds the next one; stage 3's
 // own verification never establishes one.
 func TestAnUnverifiedEffectHoldsThePlan(t *testing.T) {
+	prev := verifyStepHook
+	verifyStepHook = func(s *ChatService, c *conversation, p *actionPlan, n int, _ stepSnap, _ ActionResultDTO) {
+		s.settleEffect(c, p, n, stepEffectUnverified, "not established within 30s")
+	}
+	t.Cleanup(func() { verifyStepHook = prev })
 	sf := newStepsFixture(t, pauseWeb, scaleWeb)
 	rv := sf.review(1)
 	if r := sf.run(1, rv.Token); !r.Ran {
@@ -1103,7 +1108,7 @@ func TestAPartnerMustBeAmongTheDeploymentsReplicaSets(t *testing.T) {
 			f.conn.lists[replicaSetsGVR.String()+"|shop"] = l
 			fact := factOf(deploysGVR, d, "r1", "t", acquisition())
 			fact.History = &historyFacts{PartnerRevision: 4, PartnerObject: "web-r4", PartnerObjectUID: "rs-uid", PartnerDigest: dg}
-			ok, why := f.svc.stateEffect(context.Background(), f.conn, ActionStepDTO{Verb: "rollout-undo"}, fact, &fleet.RevisionExpect{ObjectUID: "rs-uid", TemplateDigest: dg}, d)
+			ok, why := f.svc.stateEffect(context.Background(), f.conn, ActionStepDTO{Verb: "rollout-undo"}, fact, &fleet.RevisionExpect{ObjectUID: "rs-uid", TemplateDigest: dg}, d, time.Time{})
 			if ok != c.holds {
 				t.Fatalf("holds=%v: %q", c.holds, why)
 			}

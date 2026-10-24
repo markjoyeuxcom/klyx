@@ -576,3 +576,50 @@ Codex found the native KEDA verdict and the serialized bound resolved, and asked
 ### 17.4 ACCEPT (2026-10-24)
 
 Codex accepted stage 3 at 74d87c4, after the review of 0c645d8 and three re-reviews, with no remaining findings. Its re-review 1 probe needed the matching labels, selector and LIST membership the contract requires; with those, its control and both counterexamples pass, and so do all thirteen of its probes. The deviation rulings of §17.1 stand. The unverified-effect stub is accepted as the stage boundary; stage 4 replaces it.
+
+## 18. Stage 4 as built: verification (2026-10-24)
+
+**What it adds** (`chat_verify.go`, with `stateEffect` in `chat_effects.go`, and `fleet.ChatWatch`):
+- **The witness, by verb** (§1, §5.2):
+  - a state verb's effect is the predicate its prerequisite reads (`stateEffect`, accepted with stage 3), judged only at or past a written request's receipt generation;
+  - a reconcile's effect is this request's token handled. Another handled token supersedes it when it is a later RFC3339Nano time, or, after a written request, any other token;
+  - a restart's effect is its token on the template, at a generation above the armed read's, observed by the controller, with the kind's rollout counters. A receipt with no new generation is unverified.
+- **The reads:**
+  - a GET by name, then a watch of that one object (a field selector on its name) from the GET's resourceVersion;
+  - a watch the server closes is followed by a fresh GET and a new watch from it;
+  - a replaced UID, a deleted object, an error event (a 410) and the 10,000-event cap each end it unverified, with their reason;
+  - each tick checks the fence, and the bound is §1's (a Deployment's progress deadline for a restart).
+- **A KEDA pause** completes in the Observer's verdict, which no event of the object announces, so each tick reads it again from memory. Only a verdict evaluated after the write counts.
+- **delete-pod:**
+  - RunStep LISTs the namespace's pods (`limit=1`) before the delete; the witness is one unfiltered watch of them from that resourceVersion;
+  - the pod's UID DELETED establishes the deletion. For a ReplicaSet, StatefulSet or DaemonSet owner, it also needs the first ADDED pod with that controller UID, tracked until the effect completes; MODIFIED, adoption included, never counts;
+  - a Job's pod is established by its removal ("its Job's recreation is not established"), and so is an ownerless one ("no controller owns it: it is not recreated").
+- **A lost answer**, once established, reads "the requested state, by this request or another writer" for a state verb, and "the pod was removed; by this request or another actor" for a deletion.
+- **The fence** (§2.4): the investigation cleared or ended, its settings or proposals changed, or its pinned connection changed or disconnected. The verification then ends unverified with that reason, and the conversation's running step is released.
+- **The incident** (§5.3):
+  - it starts once every offered step ran with its effect established;
+  - its subjects are the anchor and each step's target that Klyx's checks found failing, by UID, with a step's hold or removal recorded on its subject;
+  - every 2 seconds for 10 minutes, it reads each subject's verdict from the Observer by UID: a native part's state from its Role, and gone or replaced only from a live, complete capture;
+  - it settles resolved, not resolved or unverified as the table says, and only a changed reading publishes a new version.
+- **What the model learns** (§5.4): each question of an investigation carries a delimited `<klyx-plan-record>`. It names, for each step run in any retained plan, its turn, number, verb and target with the request and effect words, plus the incident's state. Errors and reasons are never sent.
+
+**Deviations, for review:**
+1. **A cordon holds its node.** A cordoned node reads paused, as a scale to zero does, so the incident counts it held by its step. §5.3's list names a suspension, a scale to zero, a pause and a KEDA pause.
+2. **The plan record covers every retained plan's runs**, by turn, not only the latest plan's, so a superseded plan's runs stay known to the model.
+3. **The incident's readings are timed**, every 2 seconds from the Observer's capture in memory, not driven by its change notifications. No API read is made.
+4. **A Deployment undo's witness reads its partner** (a GET and a LIST) on each Deployment event at the reverted template, as `stateEffect` does. These are reads on events, not a poll.
+5. **A lost reconcile's supersession needs a later time.** Another token that is not an RFC3339Nano time stays pending until the bound, and reads "not established".
+
+**Tests** (`chat_verify_test.go`, a fake watch and short bounds):
+- **witnesses:** 22 cases of the witness by verb: the receipt's generation, a lost suspension, a third party's revert, the reconcile tokens (handled, superseded, no commit, a late commit, lost then superseded), the restart cases (no new template, the review's rolled-out counterexample, a late commit, another restart's token, unobserved, old pods remaining) and a DaemonSet undo by digest;
+- **the object watch:** established at once, by an event, replaced, deleted, a 410, the bound, a third party's revert, and a watch closed then read or watched again;
+- **bounds:** the fence on a quiet watch, the event cap, and a connection that cannot watch;
+- **a KEDA pause:** its verdict evaluated after and before the write;
+- **the deletion:** a replacement created, before or after the old pod goes; the relabelled counterexample; adoption; another owner's pod; a replacement deleted again, then another created; a pod not deleted; a Job's pod; an ownerless pod; a 410; the cap; the fence; no LIST;
+- **end to end:** a written step and a lost answer verified in the background; a lost DELETE through RunStep's LIST; a fence ending a running verification;
+- **the incident:** every row of §5.3's table, its outcomes (held only, a degraded subject, no fresh reading, fenced), its subjects, and that it waits for every offered step;
+- **the capture:** gone and replaced told apart by a live, complete capture;
+- **the record:** it reaches the next question, and the needles in an error and a reason never do.
+- **a lost answer's token:** a late commit of its attempt's reconcile token establishes the effect, and an older handled token does not.
+
+**Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 52 of 52, after five mutations were rewritten to compile, one test was added (the attempt's token) and one assertion tightened (a failure's reason leads, never the bound's).

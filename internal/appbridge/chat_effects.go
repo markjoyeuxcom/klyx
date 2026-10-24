@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -30,6 +31,9 @@ type subjectVerdict struct {
 	found     bool
 	state     string
 	completed bool
+	// gone: the capture is live and complete and holds no row of this UID;
+	// replaced: another UID holds its name (§5.3)
+	gone, replaced bool
 }
 
 // verdictOf is Klyx's verdict for one subject by UID, from the Observer's
@@ -51,14 +55,26 @@ func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*c
 	if vs == nil || vs.byUID == nil {
 		return subjectVerdict{}
 	}
-	v, ok := vs.byUID[f.UID]
-	return subjectVerdict{v: v, found: ok, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID]}
+	if v, ok := vs.byUID[f.UID]; ok {
+		return subjectVerdict{v: v, found: true, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID]}
+	}
+	if !vs.complete {
+		return subjectVerdict{}
+	}
+	for _, uid := range vs.byName {
+		if uid == f.UID {
+			return subjectVerdict{} // its row holds no verdict: not gone
+		}
+	}
+	other := vs.byName[rowName(f.Resource, f.Namespace, f.Name)]
+	return subjectVerdict{gone: other == "", replaced: other != ""}
 }
 
 // stateEffect says whether a state verb's effect holds on u, its target as
 // just read (the UID already checked), and why not. partner is an undo's
-// pinned revision.
-func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionStepDTO, f actionFact, partner *fleet.RevisionExpect, u *unstructured.Unstructured) (bool, string) {
+// pinned revision; after, when set, is the write a verification follows:
+// the Observer's verdict must be evaluated after it.
+func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionStepDTO, f actionFact, partner *fleet.RevisionExpect, u *unstructured.Unstructured, after time.Time) (bool, string) {
 	o := factOf(factGVR(f), u, "", "", 0).Object
 	gen := u.GetGeneration()
 	observed, _, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
@@ -118,6 +134,8 @@ func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionS
 		switch {
 		case !sv.found || sv.v.Coverage != "live":
 			return false, "Klyx holds no live verdict that its pause completed"
+		case !after.IsZero() && !evaluatedAfter(sv.v.EvaluatedAt, after):
+			return false, "Klyx's verdict was evaluated before the write"
 		case sv.v.Generation != u.GetGeneration():
 			return false, fmt.Sprintf("Klyx's verdict describes generation %d, not the read's %d", sv.v.Generation, u.GetGeneration())
 		case !sv.completed:

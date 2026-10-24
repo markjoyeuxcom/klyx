@@ -108,6 +108,9 @@ type StepRunDTO struct {
 
 // stepSnap is what a review or run needs of its plan, copied under the lock.
 type stepSnap struct {
+	// podsRV is delete-pod's collection resourceVersion, read before the
+	// delete (§5.2)
+	podsRV  string
 	n       int
 	step    ActionStepDTO
 	fact    actionFact
@@ -383,7 +386,7 @@ func (s *ChatService) observePrior(ctx context.Context, conn ChatConn, pr stepSn
 	// review, finding 3)
 	st := pr.step
 	st.Verb = pr.verb
-	holds, what := s.stateEffect(ctx, conn, st, f, pr.partner, u)
+	holds, what := s.stateEffect(ctx, conn, st, f, pr.partner, u, time.Time{})
 	if !holds {
 		return nil, fmt.Sprintf("step %d's effect no longer holds on %s: %s (read %s)", pr.n, who, what, s.now().UTC().Format(time.RFC3339))
 	}
@@ -647,6 +650,15 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	case ob.digest != reviewed:
 		return release("it changed since you reviewed it: review it again")
 	}
+	// delete-pod's witness needs the namespace's collection resourceVersion
+	// from before the delete (§5.2): without it, nothing is sent
+	if sn.step.Verb == "delete-pod" {
+		l, err := conn.ChatList(ctx, podsGVRv1, sn.fact.Namespace, "", 1)
+		if err != nil {
+			return release("Klyx could not prepare the deletion's verification: " + chatScrub(readError(err), nil))
+		}
+		sn.podsRV = l.GetResourceVersion()
+	}
 	// the fence again before the write: a client without the transport
 	// fence (a stand-in) never writes on a connection that changed
 	if err := fence(); err != nil {
@@ -673,25 +685,27 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	}
 	s.retainLocked(c)
 	s.version++
+	ranAt := r.ranAt
 	dto := planDTOLocked(c, p, true)
 	s.mu.Unlock()
 	if r.effect == stepEffectPending {
-		s.verifyStep(c, p, n, sn, res)
+		s.verifyStep(c, p, n, sn, res, ranAt)
 	}
 	return StepRunDTO{Ran: true, Result: &res, Plan: &dto}
 }
 
-// verifyStep decides a run step's effect (§5.2). Until verification is
-// built (stage 4), an effect is never established: it is unverified, and
-// the plan holds.
+// verifyStepHook replaces the verification in a test.
 var verifyStepHook func(s *ChatService, c *conversation, p *actionPlan, n int, sn stepSnap, res ActionResultDTO)
 
-func (s *ChatService) verifyStep(c *conversation, p *actionPlan, n int, sn stepSnap, res ActionResultDTO) {
+// verifyStep decides a run step's effect in the background (§5.2): RunStep
+// answers with the request's outcome, and the plan's state carries the
+// effect when it settles.
+func (s *ChatService) verifyStep(c *conversation, p *actionPlan, n int, sn stepSnap, res ActionResultDTO, ranAt time.Time) {
 	if verifyStepHook != nil {
 		verifyStepHook(s, c, p, n, sn, res)
 		return
 	}
-	s.settleEffect(c, p, n, stepEffectUnverified, "Klyx does not verify a step's effect yet")
+	safeGo("investigation-verify", func() { s.verifyStepEffect(c, p, n, sn, res, ranAt) })
 }
 
 // settleEffect records a step's effect and ends its run, releasing the
@@ -833,6 +847,11 @@ func planDTOLocked(c *conversation, p *actionPlan, current bool) ActionPlanDTO {
 			held = i + 1
 		}
 	}
+	if p.incident != nil {
+		inc := *p.incident
+		inc.Subjects = append([]IncidentSubjectDTO(nil), p.incident.Subjects...)
+		dto.Incident = &inc
+	}
 	switch {
 	case p.declined:
 		dto.Status, dto.StatusWhy = planStatusDeclined, "the plan was dismissed"
@@ -854,4 +873,40 @@ func holdWhy(r *stepRun) string {
 		return "its effect is unverified (" + r.effectWhy + ")"
 	}
 	return "its request is unverified"
+}
+
+// planRecordLocked is Klyx's record of the current plan's runs for the next
+// question (§5.4): each run step's verb, its target as the ledger names it,
+// and the outcomes in these words. No reason, UID or read is sent: the
+// model reads what it needs through its tools, fenced as ever.
+func planRecordLocked(c *conversation) string {
+	var lines []string
+	for i, e := range c.exchanges {
+		p := e.plan
+		if p == nil {
+			continue
+		}
+		turn := c.removed + i + 1
+		ran := false
+		for j, st := range p.dto.Steps {
+			r := p.runs[j]
+			if r.request == "" {
+				continue
+			}
+			ran = true
+			who := st.Target.Kind + " " + strings.TrimPrefix(st.Target.Namespace+"/"+st.Target.Name, "/")
+			line := fmt.Sprintf("turn %d's plan, step %d, %s %s: request %s", turn, st.N, st.Verb, who, r.request)
+			if r.effect != "" {
+				line += "; effect " + r.effect
+			}
+			lines = append(lines, line)
+		}
+		if ran && p.incident != nil {
+			lines = append(lines, fmt.Sprintf("turn %d's plan, incident: %s", turn, p.incident.State))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "Klyx's record of the steps the operator ran (you ran nothing):\n" + strings.Join(lines, "\n")
 }

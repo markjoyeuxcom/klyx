@@ -145,6 +145,9 @@ type exchange struct {
 	plan        *actionPlan
 	proposed    *actionsInput
 	actionCalls int
+	// planRecord is Klyx's record of the steps the operator ran, sent with
+	// the next question (AI A3 §5.4): outcome words and ledger names only
+	planRecord string
 	// a snapshot investigation's sections left out to fit (read IDs) and
 	// the plan steps its budget stopped
 	snapshotDropped []string
@@ -611,6 +614,9 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
 	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed}
+	if c.kind == kindInvestigation {
+		ex.planRecord = planRecordLocked(c)
+	}
 	c.exchanges = append(c.exchanges, ex)
 	s.version++
 	s.mu.Unlock()
