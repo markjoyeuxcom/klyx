@@ -729,3 +729,7 @@ Codex requested changes: two P2 and two P3. It found the ordinary path sound: Re
 - each hold's reminder.
 
 A mutation pass caught 9 of 9.
+
+### 19.2 ACCEPT (2026-10-24)
+
+Codex accepted stage 5 at 7bf25e4, after the review of 19b1704 and one re-review, with no remaining findings. It accepted the commitment point as the remedy it had offered, adapting its probe to that contract. It also checked a plan withdrawn while a confirmed arm is pending: the dialog closes, the committed continuation dispatches once, and the backend consumes the grant before refusing the withdrawn plan.
