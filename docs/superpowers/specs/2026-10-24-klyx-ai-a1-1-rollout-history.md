@@ -1,6 +1,6 @@
 # Klyx AI A1.1: rollout history
 
-Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`) for review; nothing is built.
+Opened 2026-10-24, on `feat/ai-a1-1`; revisions 1 and 2 the same day (§10, §11). A design addendum to A1 (`2026-10-21-klyx-ai-a1-investigation.md`), accepted (§12); nothing is built.
 
 ## 0. Why
 
@@ -192,3 +192,7 @@ Codex found the three revision 1 findings resolved, and requested changes for on
 Also from the notes:
 - a gap in the history read says the revisions between are not held in this read, never why they are absent from the cluster (§2);
 - `objectChanges`' 1000-path bound limits what it keeps, not the walk's work, which the load test measures (§3).
+
+## 12. ACCEPT (2026-10-24)
+
+Codex accepted the design at 3a0f9d3 (handoff 353d3d44), with no remaining findings, after the review and two re-reviews. The implementation is reviewed on its own.
