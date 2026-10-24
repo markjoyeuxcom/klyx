@@ -658,3 +658,14 @@ Codex requested changes: six P2 and one P3, no P1. It accepted the five deviatio
 - a record whose turn 1 plan outlived turn 2.
 
 **Gates:** as in §18. A mutation pass caught 19 of 19; the runner now gives each run a Go test timeout, since an unbounded first read hangs its test.
+
+### 18.2 Codex's re-review 1 and the fix (2026-10-24)
+
+Codex found the earlier findings resolved and asked for one more change:
+
+1. **P2, every positive result lands inside its bound, measured from its start.**
+   - `verifyObject` measures the object's own bound from before its first read, the same start as the ceiling, so a slow read earns no time back.
+   - `verifyObject` and `verifyDeletion` establish an effect only if it was observed before that end. A deletion event that wins the race against an expired context is past the end, and stays unverified.
+   - The incident decides its bound before its resolution, so a reading that finishes past the bound resolves nothing. A blocked Observer read waits only the time left until the last write plus the bound.
+
+**Tests:** a 60 ms first read against a 20 ms bound; 32 deletions with their event queued past the end; an incident reading that finishes 1 ms past its bound; a blocked Observer read with 20 ms of an hour's bound left. Codex's thirteen probes pass. A mutation pass caught 4 of 4, after the last test was added.

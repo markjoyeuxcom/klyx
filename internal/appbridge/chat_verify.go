@@ -291,12 +291,15 @@ func joinWhy(a, b string) string {
 
 // verifyObject is the fresh read and the single-object watch: bounded
 // from before the first read by the most the verb's bound can be, then by
-// its bound for the object as read. An effect is established only within
-// the bound and while the fence holds.
+// its bound for the object as read - both measured from the same start, so
+// a slow read never earns its time back (stage 4 re-review). An effect is
+// established only if it was read before the end, and while the fence
+// holds.
 func (s *ChatService) verifyObject(ctx context.Context, conn ChatConn, w *witness, fence func() error) (string, string) {
 	f := w.sn.fact
 	gvr := factGVR(f)
-	ctx, cancelAll := context.WithTimeout(ctx, effectBoundFor(w.sn.step.Verb, nil))
+	started := time.Now()
+	ctx, cancelAll := context.WithDeadline(ctx, started.Add(effectBoundFor(w.sn.step.Verb, nil)))
 	defer cancelAll()
 	first, err := conn.ChatGet(ctx, gvr, f.Namespace, f.Name)
 	if err != nil {
@@ -306,15 +309,16 @@ func (s *ChatService) verifyObject(ctx context.Context, conn ChatConn, w *witnes
 		return stepEffectUnverified, notWithin(ctx, effectBoundFor(w.sn.step.Verb, nil), "", "the read failed: "+chatScrub(readError(err), nil))
 	}
 	bound := effectBoundFor(w.sn.step.Verb, first)
-	ctx, cancel := context.WithTimeout(ctx, bound)
+	end := started.Add(bound)
+	ctx, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
-	// established holds only if it was read within the bound, and the
-	// fence held through the read
+	// established holds only if it was read before the end, and the fence
+	// held through the read
 	established := func(last string) (string, string) {
 		if err := fence(); err != nil {
 			return stepEffectUnverified, err.Error()
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || !time.Now().Before(end) {
 			return stepEffectUnverified, notWithin(ctx, bound, last, "")
 		}
 		return stepEffectEstablished, ""
@@ -452,7 +456,8 @@ func (s *ChatService) verifyDeletion(ctx context.Context, conn ChatConn, sn step
 		return stepEffectUnverified, "Klyx cannot watch the pod's namespace"
 	}
 	bound := effectBoundFor("delete-pod", nil)
-	ctx, cancel := context.WithTimeout(ctx, bound)
+	end := time.Now().Add(bound)
+	ctx, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
 	ownerKind, ownerUID := "", ""
 	if f.Object != nil {
@@ -475,6 +480,10 @@ func (s *ChatService) verifyDeletion(ctx context.Context, conn ChatConn, sn step
 		if deleted && (!counting || replacement != "") {
 			if err := fence(); err != nil {
 				return stepEffectUnverified, err.Error()
+			}
+			// an event that won the race against the end is past it
+			if ctx.Err() != nil || !time.Now().Before(end) {
+				return stepEffectUnverified, fmt.Sprintf("not established within %s", bound)
 			}
 			if !counting {
 				return stepEffectEstablished, removedOnly
@@ -676,7 +685,8 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 	// context's own timeout ends a blocked read by the wall clock
 	deadline := lastWrite.Add(incidentBound)
 	fence := s.verifyFence(c)
-	ctx, cancel := context.WithTimeout(context.Background(), incidentBound)
+	// a blocked read waits only the time left until the bound
+	ctx, cancel := context.WithTimeout(context.Background(), deadline.Sub(s.now()))
 	defer cancel()
 	ctx, stop := fenced(ctx, fence)
 	defer stop()
@@ -694,16 +704,18 @@ func (s *ChatService) readIncident(c *conversation, p *actionPlan, subjects []in
 			s.settleIncident(c, p, incidentUnverif, err.Error(), rows)
 			return
 		}
+		// a reading that finished past the bound resolves nothing (stage 4
+		// re-review): the bound is decided first
 		switch {
-		case open == 0 && recovered > 0:
-			s.settleIncident(c, p, incidentResolved, "every subject recovered or is held as intended", rows)
-			return
 		case !s.now().Before(deadline) || ctx.Err() != nil:
 			if faulted {
 				s.settleIncident(c, p, incidentNot, fmt.Sprintf("a subject is not recovered %s after the last step", incidentBound), rows)
 			} else {
-				s.settleIncident(c, p, incidentUnverif, "Klyx holds no fresh reading that resolves every subject", rows)
+				s.settleIncident(c, p, incidentUnverif, "Klyx holds no fresh reading that resolves every subject within the bound", rows)
 			}
+			return
+		case open == 0 && recovered > 0:
+			s.settleIncident(c, p, incidentResolved, "every subject recovered or is held as intended", rows)
 			return
 		}
 		s.mu.Lock()

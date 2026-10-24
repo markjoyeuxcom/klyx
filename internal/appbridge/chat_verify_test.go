@@ -599,7 +599,12 @@ func TestTheIncidentsOutcome(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fastVerify(t, time.Second)
-			incidentBound = 0 // the first reading is at the bound
+			// a resolution needs the bound still open; the other outcomes
+			// are read at it
+			incidentBound = 0
+			if c.want == incidentResolved {
+				incidentBound = time.Hour
+			}
 			sf := newStepsFixture(t, pauseWeb)
 			prev := verdictOfHook
 			verdictOfHook = func(f actionFact) subjectVerdict {
@@ -1071,5 +1076,88 @@ func TestTheRecordKeepsItsTurn(t *testing.T) {
 	}
 	if rec := planRecordLocked(c); !strings.Contains(rec, "turn 1's plan, step 1") {
 		t.Fatalf("%s", rec)
+	}
+}
+
+// Stage 4 re-review: every positive result lands inside its bound,
+// measured from the start - a slow first read, a deletion event that wins
+// the race against the end, an incident reading that finishes past it.
+func TestEveryPositiveResultLandsInsideItsBound(t *testing.T) {
+	fastVerify(t, time.Second)
+	effectBoundFor = func(_ string, u *unstructured.Unstructured) time.Duration {
+		if u == nil {
+			return time.Second // the ceiling before the read
+		}
+		return 20 * time.Millisecond // the object's own bound
+	}
+	wc, f := newWatchConn(t)
+	f.conn.objects[key(deploysGVR, "shop", "web")] = deployAt("uid-web", 5, 5, map[string]any{"paused": true}, nil)
+	wc.getHook = func() { time.Sleep(60 * time.Millisecond) } // a slow read
+	w := witnessOf(f.svc, wc, ActionStepDTO{Verb: "rollout-pause"}, webFact, nil)
+	if effect, why := f.svc.verifyObject(context.Background(), wc, w, func() error { return nil }); effect != stepEffectUnverified || !strings.HasPrefix(why, "not established within 20ms") {
+		t.Fatalf("a slow read earns no time back: %s %q", effect, why)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the end has passed, with the deletion's event queued
+	wd, fd := newWatchConn(t)
+	pod := uobj(map[string]any{"kind": "Pod", "metadata": map[string]any{"name": "p", "namespace": "shop", "uid": "old"}})
+	wd.watches = []*watch.FakeWatcher{events(false, watch.Event{Type: watch.Deleted, Object: pod})}
+	for i := 0; i < 32; i++ {
+		wd.watches = append(wd.watches, events(false, watch.Event{Type: watch.Deleted, Object: pod}))
+		effect, _ := fd.svc.verifyDeletion(ctx, wd, stepSnap{step: ActionStepDTO{Verb: "delete-pod"}, fact: actionFact{Kind: "Pod", Namespace: "shop", Name: "p", UID: "old"}, podsRV: "1"}, func() error { return nil })
+		if effect == stepEffectEstablished {
+			t.Fatalf("run %d: a deletion established past its end", i)
+		}
+	}
+
+	incidentBound = 20 * time.Millisecond
+	sf := newStepsFixture(t, pauseWeb)
+	last := sf.now
+	prev := verdictOfHook
+	verdictOfHook = func(actionFact) subjectVerdict {
+		sf.mu.Lock()
+		sf.now = last.Add(21 * time.Millisecond) // the reading finishes past the bound
+		sf.mu.Unlock()
+		return subjectVerdict{v: chatVerdict{Role: "ok", Coverage: "live"}, found: true, state: "ok", at: last.Add(21 * time.Millisecond)}
+	}
+	t.Cleanup(func() { verdictOfHook = prev })
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.mu.Unlock()
+	sf.svc.readIncident(c, p, []incidentSubject{{fact: webFact}}, last)
+	if p.incident.State == incidentResolved {
+		t.Fatalf("%+v", p.incident)
+	}
+}
+
+// Stage 4 re-review: a blocked Observer read waits only the time left
+// until the last write's bound, never a full bound from when reading began.
+func TestAnIncidentWaitsOnlyTheTimeLeft(t *testing.T) {
+	fastVerify(t, time.Second)
+	incidentBound = time.Hour
+	sf := newStepsFixture(t, pauseWeb)
+	br := &blockingRows{ChatConn: sf.sc, entered: make(chan context.Context, 1)}
+	sf.mu.Lock()
+	sf.cur = br
+	sf.mu.Unlock()
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	c.conn = br
+	p := c.exchanges[0].plan
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.mu.Unlock()
+	lastWrite := sf.now.Add(-time.Hour + 20*time.Millisecond) // 20ms of the bound left
+	done := make(chan struct{})
+	go func() { sf.svc.readIncident(c, p, []incidentSubject{{fact: webFact}}, lastWrite); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the incident waited past the time left in its bound")
+	}
+	if p.incident.State != incidentUnverif {
+		t.Fatalf("%+v", p.incident)
 	}
 }
