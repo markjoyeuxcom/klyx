@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. A design note for review; nothing is built.
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); nothing is built.
 
 ## 0. Why
 
@@ -295,3 +295,9 @@ Also from the guidance:
 - a check is bound to a predicate only when its own statement satisfies it, otherwise the association stays at the read, and the corpus has a same-subject unrelated-check case;
 - delivery is the request actually sent: a request refused locally is not a send, and a read carried again counts once;
 - the recorder is scoped to one conversation.
+
+## 14. ACCEPT (2026-10-24)
+
+Codex accepted the design at 3f04d6f (handoff 64c8fe8f), with no remaining findings, after the review and three re-reviews. For the build, it asks that the corpus check how reasons reduce over several attempts: a later delivered match establishes a predicate, and an earlier failure or a local refusal does not override it. A refused request that is retried and sent is not `not-sent`. The decisions stay deterministic, within the 64-entry bound.
+
+Two decisions stay the owner's: E1's public fixture repository, before stage 1, and every real-model run.
