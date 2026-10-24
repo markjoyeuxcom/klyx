@@ -414,6 +414,7 @@ Stages 1 to 8 are built on `feat/ai-a1`, with the fixes from Codex's implementat
 | R1 | 665b751 | A finding's notes are bounded, once per read and qualification (found reviewing 999a0af) |
 | R2 | 4f9e073 | Input discovery checks the fence before each read and acquisition (re-review 1, finding 1) |
 | R2 | 689e183 | The current stage, live verdicts and historical time decide the labels (re-review 1, findings 2-4) |
+| R3 | 43e041c | A stale condition is not in force, and time decides as time (re-review 2, findings 1-2) |
 
 **How §1's bound of 6 reads at once is met, fan-out included.** An investigation dispatches its tool calls on 6 read workers. Every tool's own fan-out is sequential inside its worker: a drawing's reads, the workload-to-pods join, `currentOf`'s reads, the member reads, the Git fetches and renders (a comparison's two revisions render one after the other, 5b71d8f). None of those paths starts a goroutine (checked in `internal/fleet`, `internal/gitops/depgraph`, `internal/routemetrics` and the chat tools). So at most 6 cluster, Git, Loki or Prometheus reads are in flight at once, counted as §11's guidance asks. A snapshot investigation's plan runs one read at a time. The load test (§13.4) measured at most 48 reads in flight across eight investigations, their bound.
 
@@ -478,7 +479,7 @@ All four runs (night and day, 1440 and 1024) pass 209 of 209 steps at c2d4909, o
 
 - **The real-LLM smoke:** the owner's key, the owner's step.
 - **§8's "a cloud resource ID in a condition message, redacted before clipping"** relies on `ScrubEvidence`'s existing behaviour; A1 adds no test of its own for it.
-- **Codex's re-review of the fixes in §13.5.**
+- **Codex's re-review of the fixes in §13.6.**
 - **Rollout history (deviation 4), as A1.1:** decided by the owner on 2026-10-23, after A1's acceptance and before A3, which needs the rollback target. One read-only tool sends a workload's revisions (number, creation time, images, the pods' owners), scrubbed, and makes `rollout` checks; its design addendum goes to Codex before it is built.
 
 ### 13.4 Codex's implementation review 1 and the fixes (2026-10-21)
@@ -529,3 +530,12 @@ Codex re-reviewed 2ebd8fa (handoff 536fad47): the P1 and findings 2 and 7 to 11 
 4. **Historical reads lost their time.** A read now keeps when its evidence describes the world: Loki's lines, or with none the window it searched, and a metric window, as `observedFrom` and `observedTo`. A pod's log has no timestamps, so its time is marked as not known. A finding citing such a read is qualified as observed before the failure, partly before it, or of unknown time, never by when Klyx fetched it, and a finding resting only on earlier evidence says so (689e183).
 
 The native smoke passes 209 of 209 four ways at 689e183, on a clean tree with every lab re-applied, and the server-mode captures pass four ways. The lab re-apply now also keeps the base lab's cert-manager fixture dates relative to now: one fixture had passed its written expiry, sorted first as expired, and hid the issuance chain the smoke draws.
+
+### 13.6 Codex's re-review 2 and the fixes (2026-10-24)
+
+Codex re-reviewed 8d21fe0 (handoff d6a46515): the four fixes of §13.5 held, with two residual P2s, both fixed in 43e041c. Its probes are adapted as regression tests, and the fix had a mutation pass.
+
+1. **A stale condition read as a failure in force.** The health-check path no longer revived an old failure, but the generic condition check still made an older Healthy=False a failing check beside Ready=True. A condition that observed an earlier generation than its object's now stays a fact, dated "as of generation N", and is not a failure in force.
+2. **Time decided by text.** A check's time against the onset, and the choice of the earliest onset, compared timestamps as text, and a historical read's span was truncated to the second. Every decision on time now parses the times at full precision. An unreadable onset never becomes the window. Notes show times to the second.
+
+The native smoke passes 209 of 209 four ways at 43e041c, on a clean tree with every lab re-applied, and the server-mode captures pass four ways.
