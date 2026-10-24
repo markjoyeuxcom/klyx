@@ -378,3 +378,9 @@ Codex requested changes at aeeb39e (handoff 607ac265): nine P2 findings and one 
 P3, the lookalikes: a cited check is about its own subject. A whole read is about all its references and all its checks' subjects, so a mixed read is not a lookalike's. References match by group, resource, namespace and name; check subjects by kind.
 
 **Also found, by the self-test.** One self-test run stalled in a single case for its whole bound. Run alone, the case finished correctly. The runner's own API reads had no deadline, so they are now bounded: 30 s per request, and two minutes per plant check. The eval binary also has a watchdog: past its runs' bound, it logs every goroutine's stack and exits.
+
+**Evidence for the fixes:**
+- The self-test passes 15 of 15 on the kind lab, from a clean build at dd7ee91 (reports under `eval-lab/out/selftest-20261024T121242`), with E1's objects adopted once from the A1 lab.
+- The race suite passes in CI's scope, and with `-tags eval` for appbridge and evalrun. Lint is clean in both variants.
+- A mutation pass over the fixes catches 17 of 17, after four survivors were closed with tests: a Ready pod after a recent failure, a pod replaced inside its ReplicaSet, a cited check in a read of two, and an unknown-time read with an interval.
+- One equivalent mutant (a run's length after a recent failure, already bounded by the recency) was removed from the code.
