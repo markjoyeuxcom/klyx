@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revision 1 (§11) and revision 2 (§12) on 2026-10-24. A design note for review; nothing is built.
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. A design note for review; nothing is built.
 
 ## 0. Why
 
@@ -128,30 +128,42 @@ An accepted report with no findings is an explicit empty report, and counts as o
 
 The structural marks need to know what the model actually received, after projection, scrubbing and caps. A1's ledger cannot say: a read is metadata and checks, an event check aggregates by reason without the message, and a log read does not record whether it was the previous container. A fresh lab read proves what the fixture holds now, not what the model was given.
 
-**The recorder.** An eval-only, in-memory observer inside `internal/appbridge`, compiled only with `-tags eval`. In other builds its hooks are empty functions with no state. It sees:
-- **each tool result as delivered:** the final envelope, after projection, `ScrubEvidence` and the result cap. A result counts as delivered once a model call carrying it is sent;
-- **each snapshot section as delivered:** the sections the 96 KiB fill kept. The sections it left out are recorded as omitted;
+**The recorder.** An eval-only, in-memory observer inside `internal/appbridge`, compiled only with `-tags eval`. In other builds its hooks are empty functions with no state. It is scoped to one conversation: a cleared investigation's facts never reach a later repetition. It sees:
+- **each read requested or planned:** its tool, arguments and subject, and its outcome, including a failure or a fence refusal;
+- **each tool result as delivered:** the final envelope, after projection, `ScrubEvidence` and the result cap. A result counts as delivered only once a model request carrying it is actually sent to the provider. A request refused locally, for its size or by `guard()`, is not a send;
+- **each snapshot section as delivered:** the sections the 96 KiB fill kept, once the snapshot's request is sent. The sections it left out are recorded as omitted;
 - **each report:** a `report_findings` call accepted or rejected, and a snapshot block found, parsed or not.
 
-**What it evaluates.** The runner registers the scenario's predicates before the run. Each predicate is evaluated on the delivered envelope's own JSON, at the moment of delivery:
+A read carried again in later requests of the turn counts once.
+
+**What it evaluates.** The runner registers the scenario's predicates before the run. Each predicate names the reads that can deliver it: a tool and a subject, the anchor's own read among them where it holds the evidence (E3's condition). It is evaluated on the delivered envelope's own JSON, at the moment of delivery:
 - **`event`:** an event about the subject, by UID, whose message matches the scenario's pattern. E3: `deployments.apps "no-such-deployment" not found`. E4: `AllocationFailed`, no available IPs, about `one-b`.
 - **`condition`:** the subject's condition with the given type, status and reason, whose message matches. E3: Ready=False, `ScaledObjectCheckFailed`, naming `no-such-deployment`.
 - **`log`:** a `get_pod_logs` result for a pod in the plant's recorded set (E1: `web`'s pods of the crashing ReplicaSet, by UID), read as the previous container, with at least one delivered line.
 - **`diff`:** a `git_changes` result listing Deployment `klyx-a1-app/web` with a changed path matching `env[MODE]`, shown or a "changed (not shown)" marker.
 
-**What it keeps, per established predicate:**
-- the predicate's ID;
-- the read ID and the IDs of that read's checks about the subject;
+**What it keeps, per predicate:**
+- the predicate's ID, and whether it was established;
+- the read ID that established it, or the reason it was not (below);
+- the checks bound to it: a check is bound only when its own statement satisfies the predicate, on the same subject. Most cannot be: an event check aggregates a reason without the message, and a condition check names its reason, not its message. The association then stays at the read;
 - the subject's identity;
 - flags: previous instance, pattern matched, result capped.
 
 It keeps no tool body, no message, no log line and no hidden value; at most 64 entries per run. Nothing in A1's ledger, labels or results changes.
 
-**Not established.** A predicate is not established when:
-- its evidence was acquired but never delivered: an omitted snapshot section, or a turn that ended before the result was carried;
-- or the cap clipped the matching item away.
+**Not established, and why.** Each predicate that was not established gets one reason, from the recorder's own record:
 
-The report says which, per predicate, as "planted evidence not delivered". A completed run in which no predicate was established cannot earn the grounded-cause mark. The report then shows a Klyx coverage gap, never a model miss.
+| Reason | When | Whose |
+|---|---|---|
+| `not-requested` | Tools mode: the model never asked for any read that can deliver it | the model's acquisition choice |
+| `not-planned` | Snapshot mode: Klyx's plan has no step that reads it | Klyx's plan |
+| `read-failed` | The read was asked for or planned, and failed or was refused | not assigned: the read's own detail is shown |
+| `not-sent` | The result was acquired, but the request carrying it was refused locally, or the snapshot fill left the section out | Klyx's coverage gap |
+| `turn-ended` | The result was acquired, but the turn ended before any request carried it | not assigned: the turn's outcome is shown |
+| `capped` | The result was clipped by its cap, and the predicate did not match what remained | Klyx's coverage gap, "possibly removed by the cap" |
+| `no-match` | The result was delivered whole, and did not establish the predicate | not assigned: no reason is assumed |
+
+A completed run with no established predicate cannot earn the grounded-cause mark. It stays in the completed denominator when its report was accepted, and its cause statements are still adjudicated. Only `not-planned`, `not-sent` and `capped` are reported as Klyx coverage gaps.
 
 ## 6. Scoring
 
@@ -159,8 +171,8 @@ The report says which, per predicate, as "planted evidence not delivered". A com
 
 | Mark | Verifies |
 |---|---|
-| **planted evidence delivered** | Per predicate: established, or not delivered and why (§5) |
-| **grounded cause** | A finding of type cause, labelled suspected by Klyx, about one of the scenario's subjects, that cites a read or check carrying an established predicate |
+| **planted evidence delivered** | Per predicate: established, or the reason it was not (§5) |
+| **grounded cause** | A finding of type cause, labelled suspected by Klyx, about one of the scenario's subjects, that cites the read which established a predicate, or a check bound to it. Citing another check of that read is not enough. |
 | **cited a lookalike** | A cause finding citing only a lookalike's evidence: E3's `bad-auth` or `ghost-auth` reads, E4's `cilium-l2` or `svclb-demo` reads. E1's lookalike shares the planted object and its diff, so it cannot be told apart by citation and is left to adjudication. |
 | **unsupported causes** | The count of cause findings Klyx labelled unsupported: their support is missing, which does not make them false |
 | **unsupported findings** | The count of all findings Klyx labelled unsupported |
@@ -179,7 +191,9 @@ The report says which, per predicate, as "planted evidence not delivered". A com
 **The scorer's own tests.** A fixed corpus of synthetic exchanges, through the real A1 labeller and the recorder:
 - **cause statements:** an expected cause stated as negated; a correct diagnosis that rejects the lookalike; an answer that says "no cause is proven";
 - **citations:** an irrelevant diff of the planted object; a cause citing a failed read; a cause citing a real but unrelated read ID;
-- **delivery:** two events under one reason, only one with the planted message; a current-container log beside a previous one; a planted item dropped by the result cap; an omitted snapshot section;
+- **delivery:** two events under one reason, only one with the planted message; a current-container log beside a previous one; a planted item dropped by the result cap; an omitted snapshot section; a request refused locally for its size;
+- **acquisition:** a model that reports at once without reading the planted evidence (`not-requested`); a requested read whose valid result does not match (`no-match`); a failed read (`read-failed`);
+- **binding:** a cause citing an unrelated check about the same subject, in the read that established the predicate;
 - **reports:** a tools turn with no accepted report; a snapshot answer with no block; a malformed block; a valid empty report in the control;
 - **control:** a failed turn whose empty report would satisfy it; an unsupported cause in it.
 
@@ -216,7 +230,7 @@ Tools mode is the primary measurement. A provider without tools runs A1's snapsh
 - for E2: the anchor;
 - for E3 and E4: the anchor, its events and its dependencies.
 
-The report records the mode, and a fallback, per run. A planted predicate the mode did not deliver shows as "planted evidence not delivered" (§5), never as a wrong diagnosis.
+The report records the mode, and a fallback, per run. A predicate the run did not establish shows with its reason (§5), never as a wrong diagnosis. A skipped step has a different owner in each mode: in tools mode the model chose its reads, in snapshot mode Klyx's plan did.
 
 ## 9. The scripted model
 
@@ -227,7 +241,9 @@ The report records the mode, and a fallback, per run. A planted predicate the mo
 - an answer with no accepted report, and a malformed snapshot block;
 - an empty report followed by a failure;
 - an unsupported cause in the control;
-- an answer saying no cause is proven.
+- an answer saying no cause is proven;
+- a report at once, citing only the anchor's read, without the planted evidence;
+- a requested read whose result does not establish the predicate.
 
 With fixtures broken on purpose, it also produces the other statuses:
 - `not-ready`: a broken plant;
@@ -268,3 +284,14 @@ Also from the guidance:
 - "no findings" is now "explicit empty report";
 - drift coverage is stated as boundary checks with identity witnesses, and ordinary churn is not drift (§2);
 - a capped report says what it left out (§7).
+
+## 13. Revision 3: Codex's re-review of 76ad5e8
+
+Codex found the three revision 1 findings resolved, and requested changes for one P2 (handoff a5aa523f), taken:
+
+1. **A model that never asked for the planted evidence was reported as a Klyx coverage gap.** Each predicate not established now gets one reason from the recorder (§5): `not-requested`, `not-planned`, `read-failed`, `not-sent`, `turn-ended`, `capped` or `no-match`. Only `not-planned`, `not-sent` and `capped` are Klyx coverage gaps. A `not-requested` predicate is the model's acquisition choice: the run stays completed and adjudicated, and cannot earn the grounded-cause mark. The corpus and the scripted model add the no-request case and a requested read that does not match (§6, §9).
+
+Also from the guidance:
+- a check is bound to a predicate only when its own statement satisfies it, otherwise the association stays at the read, and the corpus has a same-subject unrelated-check case;
+- delivery is the request actually sent: a request refused locally is not a send, and a read carried again counts once;
+- the recorder is scoped to one conversation.
