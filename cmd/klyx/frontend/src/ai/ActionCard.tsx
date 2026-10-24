@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { dismissPlan, reviewStep, runStep, type ActionPlan, type ActionStep, type ChatCheckSubject, type StepReview } from "../bridge/chat";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
@@ -129,8 +129,16 @@ export function ActionCard({ cluster, conversationId, exchangeId, plan, protecte
   const [review, setReview] = useState<StepReview | null>(null);
   const [busy, setBusy] = useState<number | "dismiss" | null>(null);
   const [notes, setNotes] = useState<Record<number, string>>({});
-  if (plan.steps.length === 0 && !plan.note) return null;
+  // the plan as it now stands, for replies that arrive later: a review is
+  // shown only while its step is still the plan's next (stage 5 review,
+  // finding 3), and an open one closes when it no longer is
+  const latest = useRef(plan);
+  latest.current = plan;
   const next = nextStep(plan);
+  useEffect(() => {
+    if (review && next !== review.n) setReview(null);
+  }, [review, next]);
+  if (plan.steps.length === 0 && !plan.note) return null;
   const running = plan.steps.some((s) => s.run?.effect === "pending");
   const unrun = plan.steps.some((s) => s.state === "offered" && !s.run);
   const note = (n: number, text: string) => setNotes((m) => ({ ...m, [n]: text }));
@@ -140,7 +148,8 @@ export function ActionCard({ cluster, conversationId, exchangeId, plan, protecte
     note(st.n, "");
     try {
       const r = await reviewStep(cluster, conversationId, exchangeId, st.n);
-      if (r.offered && r.token) setReview(r);
+      if (r.offered && r.token && nextStep(latest.current) === r.n) setReview(r);
+      else if (r.offered) note(st.n, "the plan changed while Klyx read the step: review it again if it is still offered");
       else {
         note(st.n, r.reason || "Klyx did not offer the step");
         onChanged();
@@ -171,7 +180,12 @@ export function ActionCard({ cluster, conversationId, exchangeId, plan, protecte
         activity({ kind: "error", message: `${what} on ${cluster} - from an investigation's plan, step ${r.n}: not run: ${why}` });
       }
     } catch (e) {
-      note(r.n, `Klyx could not run the step: ${String(e)}`);
+      // the bridge lost RunStep's answer: the step may have run, so it is
+      // recorded as unverified, never as not run, and the plan's state
+      // read back says what happened (stage 5 review, finding 2)
+      const why = `request unverified: Klyx lost RunStep's answer (${String(e)}); the plan shows whether it ran`;
+      note(r.n, why);
+      activity({ kind: "error", message: `${what} on ${cluster} - from an investigation's plan, step ${r.n}: ${why}` });
     } finally {
       setBusy(null);
       onChanged();
@@ -254,7 +268,7 @@ export function ActionCard({ cluster, conversationId, exchangeId, plan, protecte
       )}
       {plan.note && <div className="chat-small" data-testid="act-plan-note">{plan.note}</div>}
       {steps.length > 0 && <Rail label="The plan's steps, in order" steps={steps} />}
-      {plan.incident && <IncidentRows incident={plan.incident} />}
+      {plan.incident && <IncidentRows incident={plan.incident} steps={plan.steps} />}
       {notes[0] && <div className="chat-small act-note" role="status">{notes[0]}</div>}
       <div className="act-foot">
         {isCurrent(plan) || plan.status === "held" ? (
@@ -304,7 +318,29 @@ const INCIDENT_TONE: Record<string, "checked" | "suspected" | "unsupported" | "p
   resolved: "checked", "not resolved": "unsupported", unverified: "suspected", pending: "proposed",
 };
 
-function IncidentRows({ incident }: { incident: NonNullable<ActionPlan["incident"]> }) {
+// holdReminder says how a subject held by a step of the plan stays, in its
+// verb's own words (stage 5 review, finding 4).
+function holdReminder(subject: string, verb: string | undefined): string {
+  switch (verb) {
+    case "flux-suspend":
+      return `${subject} stays suspended until the Git fix lands and it is resumed.`;
+    case "cordon":
+      return `${subject} stays cordoned until it is uncordoned.`;
+    case "scale":
+      return `${subject} stays at zero replicas until it is scaled back.`;
+    case "keda-pause":
+      return `${subject} stays paused until its autoscaling is resumed.`;
+  }
+  return `${subject} stays held by the plan until it is released.`;
+}
+
+function IncidentRows({ incident, steps }: { incident: NonNullable<ActionPlan["incident"]>; steps: ActionStep[] }) {
+  const held = incident.subjects.flatMap((s) => {
+    const m = /^held by step (\d+)/.exec(s.reading);
+    if (!m) return [];
+    const st = steps.find((x) => x.n === Number(m[1]));
+    return [holdReminder(objectText({ kind: s.kind, namespace: s.namespace, name: s.name, identity: "uid" }), st?.verb)];
+  });
   return (
     <div className="act-incident" data-testid="act-incident">
       <div>
@@ -322,9 +358,7 @@ function IncidentRows({ incident }: { incident: NonNullable<ActionPlan["incident
           ))}
         </ul>
       )}
-      {incident.state === "resolved" && incident.subjects.some((s) => s.reading.startsWith("held")) && (
-        <div className="chat-small">A held unit stays suspended until the Git fix lands and it is resumed.</div>
-      )}
+      {incident.state === "resolved" && held.map((h) => <div key={h} className="chat-small" data-testid="act-held">{h}</div>)}
     </div>
   );
 }

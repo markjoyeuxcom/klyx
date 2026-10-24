@@ -230,7 +230,7 @@ describe("ActionCard", () => {
     const rows = getAllByTestId("act-incident-subject").map((r) => r.textContent);
     expect(rows[0]).toContain("Deployment shop/web: recovered");
     expect(rows[1]).toContain("held by step 1, as intended");
-    expect(getByTestId("act-incident").textContent).toContain("A held unit stays suspended until the Git fix lands");
+    expect(getByTestId("act-held").textContent).toBe("Kustomization flux-system/a1-web stays suspended until the Git fix lands and it is resumed.");
   });
 
   it("reminds of a held unit only when one is held", () => {
@@ -238,7 +238,7 @@ describe("ActionCard", () => {
       steps: [step({ run: { request: "written", effect: "established" } })],
       incident: { state: "resolved", subjects: [{ kind: "Deployment", namespace: "shop", name: "web", uid: "uid-web", reading: "recovered" }] },
     });
-    expect(getByTestId("act-incident").textContent).not.toContain("held unit");
+    expect(getByTestId("act-incident").textContent).not.toContain("stays");
   });
 
   it("shows a plan's note when it holds no steps, and nothing when it holds neither", () => {
@@ -246,5 +246,80 @@ describe("ActionCard", () => {
     expect(a.getByTestId("act-plan-note").textContent).toContain("proposals are off");
     a.unmount();
     expect(card({ steps: [] }).container.querySelector('[data-testid="act-card"]')).toBeNull();
+  });
+  // Stage 5 review, finding 1: once the protected confirmation is
+  // committed, Cancel waits for the arm, and the step runs once.
+  it("runs a committed protected confirmation once, and Cancel waits for its arm", async () => {
+    let answer: (r: { ok: boolean; error: string }) => void = () => {};
+    cfg.armProtected.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    bridge.reviewStep.mockResolvedValue(reviewed);
+    bridge.runStep.mockResolvedValue({ ran: true, result: { ok: true, outcome: "written" } });
+    const { getByTestId, findByRole, getByPlaceholderText, getByRole, findByText } = card(twoSteps(), { protected: true });
+    fireEvent.click(getByTestId("act-review"));
+    await findByRole("dialog");
+    fireEvent.change(getByPlaceholderText("kind-klyx"), { target: { value: "kind-klyx" } });
+    fireEvent.click(getByRole("button", { name: "Suspend" }));
+    await findByText("Arming…");
+    fireEvent.click(getByRole("button", { name: "Cancel" }));
+    expect(getByRole("dialog")).toBeTruthy();
+    expect(bridge.runStep).not.toHaveBeenCalled();
+    answer({ ok: true, error: "" });
+    await waitFor(() => expect(bridge.runStep).toHaveBeenCalledTimes(1));
+  });
+
+  // Stage 5 review, finding 2: a lost RunStep answer is recorded, as
+  // unverified, never as not run.
+  it("records a lost RunStep answer as unverified", async () => {
+    bridge.reviewStep.mockResolvedValue(reviewed);
+    bridge.runStep.mockRejectedValue(new Error("the bridge closed"));
+    const { getByTestId, findByRole, getByRole, findByTestId, onChanged } = card(twoSteps());
+    fireEvent.click(getByTestId("act-review"));
+    await findByRole("dialog");
+    fireEvent.click(getByRole("button", { name: "Suspend" }));
+    expect((await findByTestId("act-note")).textContent).toContain("request unverified: Klyx lost RunStep's answer");
+    const log = useFleet.getState().actionLog[0];
+    expect(log.message).toContain("from an investigation's plan, step 1: request unverified: Klyx lost RunStep's answer");
+    expect(log.message).not.toContain("not run");
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  // Stage 5 review, finding 3: a review is shown only while its step is
+  // still the plan's next.
+  it("opens no confirmation from a review that arrives after the plan changed, and closes an open one", async () => {
+    let answer: (r: StepReview) => void = () => {};
+    bridge.reviewStep.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const plan = twoSteps();
+    const withdrawn: ActionPlan = { ...plan, status: "withdrawn", statusWhy: "its unrun steps are withdrawn: the cluster disconnected" };
+    const { getByTestId, queryByRole, rerender, findByTestId, findByRole } = card(plan);
+    fireEvent.click(getByTestId("act-review"));
+    rerender(<ActionCard cluster="kind-klyx" conversationId="c1" exchangeId="e1" plan={withdrawn} protected={false} onChanged={() => {}} />);
+    answer(reviewed);
+    expect((await findByTestId("act-note")).textContent).toContain("the plan changed while Klyx read the step");
+    expect(queryByRole("dialog")).toBeNull();
+
+    bridge.reviewStep.mockResolvedValue(reviewed);
+    rerender(<ActionCard cluster="kind-klyx" conversationId="c1" exchangeId="e1" plan={plan} protected={false} onChanged={() => {}} />);
+    fireEvent.click(getByTestId("act-review"));
+    await findByRole("dialog");
+    rerender(<ActionCard cluster="kind-klyx" conversationId="c1" exchangeId="e1" plan={withdrawn} protected={false} onChanged={() => {}} />);
+    await waitFor(() => expect(queryByRole("dialog")).toBeNull());
+    expect(bridge.runStep).not.toHaveBeenCalled();
+  });
+
+  // Stage 5 review, finding 4: each hold in its verb's words.
+  it("reminds of each hold in its own verb's words", () => {
+    const { getAllByTestId } = card({
+      steps: [step({ n: 1, verb: "cordon", target: target("Node", "", "worker-1", "uid-node"), run: { request: "written", effect: "established" } }),
+        step({ n: 2, verb: "scale", replicas: 0, target: target("Deployment", "shop", "batch", "uid-batch"), run: { request: "written", effect: "established" } })],
+      incident: { state: "resolved", subjects: [
+        { kind: "Node", name: "worker-1", uid: "uid-node", reading: "held by step 1, as intended" },
+        { kind: "Deployment", namespace: "shop", name: "batch", uid: "uid-batch", reading: "held by step 2, as intended" },
+        { kind: "Deployment", namespace: "shop", name: "web", uid: "uid-web", reading: "recovered" },
+      ] },
+    });
+    expect(getAllByTestId("act-held").map((h) => h.textContent)).toEqual([
+      "Node worker-1 stays cordoned until it is uncordoned.",
+      "Deployment shop/batch stays at zero replicas until it is scaled back.",
+    ]);
   });
 });

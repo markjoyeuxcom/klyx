@@ -71,6 +71,45 @@ describe("ConfirmDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  // AI A3 stage 5 review, finding 1: Confirm is the commitment point. While
+  // the grant arms, nothing closes the dialog; the action follows the arm's
+  // answer, once.
+  it("protected: once confirmed, Cancel, Escape and the scrim wait for the arm", async () => {
+    let answer: (r: { ok: boolean; error: string }) => void = () => {};
+    vi.mocked(armProtected).mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { getByText, getByPlaceholderText, getByRole, container } = render(
+      <ConfirmDialog title="Suspend" cluster="prd-we" detail="x" protected={true} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.change(getByPlaceholderText("prd-we"), { target: { value: "prd-we" } });
+    fireEvent.click(getByText("Confirm"));
+    await waitFor(() => expect(getByText("Arming…")).toBeTruthy());
+    const cancel = getByText("Cancel") as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(container.firstChild as HTMLElement);
+    expect(onCancel).not.toHaveBeenCalled();
+    answer({ ok: true, error: "" });
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+  });
+
+  it("protected: a thrown arm ends the commitment, and nothing runs", async () => {
+    vi.mocked(armProtected).mockImplementationOnce(async () => { throw new Error("bridge down"); });
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { getByText, getByPlaceholderText, findByText } = render(
+      <ConfirmDialog title="Suspend" cluster="prd-we" detail="x" protected={true} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.change(getByPlaceholderText("prd-we"), { target: { value: "prd-we" } });
+    fireEvent.click(getByText("Confirm"));
+    expect((await findByText(/could not arm protected action: Error: bridge down/)).textContent).toBeTruthy();
+    expect(onConfirm).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Cancel"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("cancel fires onCancel", () => {
     const onCancel = vi.fn();
     const { getByText } = render(

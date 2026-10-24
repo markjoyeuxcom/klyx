@@ -706,3 +706,26 @@ Codex accepted stage 4 at 944f55c, after the review of 3554e02 and two re-review
 - Go: the step's API in the plan; the plan events for a settled effect, the incident's start and its settling.
 
 **Gates:** as before, with 2464 frontend tests. A mutation pass caught 19 of 19 on the frontend, after two redundant guards were removed (`nextStep` already withholds Review while a step runs; a refused request never carries an effect), two mutations were rewritten to change behaviour, and three tests were added.
+
+### 19.1 Codex's stage 5 review and the fixes (2026-10-24)
+
+Codex requested changes: two P2 and two P3. It found the ordinary path sound: Review, the dialog and RunStep with the review's token, one grant, the backend's gating, the setting, the step's API kept local, and the visuals. Each finding is addressed:
+
+1. **P2, Confirm is the commitment point.** The shared ConfirmDialog awaited the grant's arming and then ran its action, even if Cancel, Escape or the scrim had closed it meanwhile. Klyx has no way to revoke an armed grant, so the confirmation is now committed once the operator confirms:
+   - while the grant arms, the button reads "Arming…" and Cancel, Escape and the scrim wait for the arm's answer;
+   - the action follows that answer once;
+   - a failed or thrown arm ends the commitment, and nothing runs. A thrown arm previously left the dialog arming forever.
+
+   This holds for every caller of the dialog. Codex's probe for this finding asserts the other remedy it offered (Cancel closes the dialog during arming), so it fails by design. Its other four probes pass.
+2. **P2, a lost RunStep answer is recorded as unverified.** The step's note and an Activity entry say "request unverified: Klyx lost RunStep's answer", never that it did not run, and the plan is read back without retrying.
+3. **P3, a review only for the plan's next step.** A review that arrives after the plan moved on opens no dialog, and says so; an open dialog closes when its step is no longer next. The backend refused such a run anyway; now the card offers nothing it would refuse.
+4. **P3, each hold in its verb's words.** A resolved incident reminds of each held subject in its own terms: a Flux unit suspended until the Git fix lands, a node cordoned until it is uncordoned, a workload at zero replicas until it is scaled back, a scaler's autoscaling paused until it is resumed.
+
+**Tests:**
+- the dialog's commitment, and a thrown arm;
+- the card's committed protected run, run once;
+- a lost answer's note and Activity entry;
+- a late review, and an open review closing;
+- each hold's reminder.
+
+A mutation pass caught 9 of 9.

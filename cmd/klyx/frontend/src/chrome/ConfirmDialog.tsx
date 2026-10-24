@@ -82,11 +82,21 @@ export function ConfirmDialog({
   // On a protected cluster, register the typed confirmation with the backend
   // before dispatching: destructive verbs there consume a one-shot grant and
   // refuse without it (defense in depth over the UI-side gate).
+  // Confirm is the commitment point: once the operator confirms, the grant
+  // is being armed and the action follows its answer, so Cancel, Escape and
+  // the scrim wait for that answer rather than close a dialog whose action
+  // would still run (AI A3 stage 5 review, finding 1). A failed or thrown
+  // arm ends the commitment, and nothing runs.
   const confirm = async () => {
-    if (waiting) return;
+    if (waiting || arming) return;
     if (isProtected) {
       setArming(true);
-      const r = await (arm ? arm(typed) : armProtected(cluster, typed));
+      let r: { ok: boolean; error: string };
+      try {
+        r = await (arm ? arm(typed) : armProtected(cluster, typed));
+      } catch (e) {
+        r = { ok: false, error: `could not arm protected action: ${String(e)}` };
+      }
       setArming(false);
       if (!r.ok) {
         setArmError(r.error || "could not arm protected action");
@@ -96,6 +106,9 @@ export function ConfirmDialog({
     if (onConfirmTyped) onConfirmTyped(typed);
     else onConfirm();
   };
+  const cancel = () => {
+    if (!arming) onCancel();
+  };
 
   // Modal key handling: swallow keys at the dialog boundary so window-level
   // list navigation (useListKeys) never acts behind the overlay. Escape
@@ -104,7 +117,7 @@ export function ConfirmDialog({
   const onDialogKeyDown = (e: React.KeyboardEvent) => {
     e.stopPropagation();
     if (e.key === "Escape") {
-      onCancel();
+      cancel();
     } else {
       trapTab(e, dialogRef.current);
     }
@@ -112,7 +125,7 @@ export function ConfirmDialog({
 
   return (
     <div
-      onClick={onCancel}
+      onClick={cancel}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
     >
       <div
@@ -162,8 +175,8 @@ export function ConfirmDialog({
           <div style={{ color: "var(--color-text-danger)", fontSize: 12, marginBottom: 10 }}>{armError}</div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0 }}>
-          <button ref={cancelRef} onClick={onCancel} style={btnStyle(false, false)}>Cancel</button>
-          <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming || !!waiting} title={waiting} style={btnStyle(true, danger, !armed || arming || !!waiting)}>{confirmLabel}</button>
+          <button ref={cancelRef} onClick={cancel} disabled={arming} style={btnStyle(false, false, arming)}>Cancel</button>
+          <button ref={confirmRef} onClick={() => void confirm()} disabled={!armed || arming || !!waiting} title={waiting} aria-busy={arming} style={btnStyle(true, danger, !armed || arming || !!waiting)}>{arming ? "Arming…" : confirmLabel}</button>
         </div>
       </div>
     </div>
