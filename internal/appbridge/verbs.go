@@ -78,7 +78,39 @@ func notConnected(cluster string) ActionResultDTO {
 	return refusedNotSent("cluster not connected: " + cluster)
 }
 
-func doRolloutRestart(ctx context.Context, conn WorkloadsConn, kind, namespace, name, uid string) ActionResultDTO {
+// Each inner function needs only its own write: the manual shells pass
+// their full connections, an investigation's RunStep its pinned one.
+type (
+	restarter interface {
+		RolloutRestart(ctx context.Context, kind, namespace, name, uid string) error
+	}
+	scaler interface {
+		ScaleWorkload(ctx context.Context, kind, namespace, name, uid string, replicas int32) error
+	}
+	undoer interface {
+		RolloutUndo(ctx context.Context, kind, namespace, name, uid string, revision int64, expect *fleet.RevisionExpect) error
+	}
+	pauser interface {
+		RolloutPause(ctx context.Context, namespace, name, uid string, pause bool) error
+	}
+	podDeleter interface {
+		DeletePod(ctx context.Context, namespace, name, uid string) error
+	}
+	cordoner interface {
+		SetCordon(ctx context.Context, node, uid string, cordon bool) error
+	}
+	reconciler interface {
+		Reconcile(ctx context.Context, kind, namespace, name, uid string) error
+	}
+	suspender interface {
+		SetSuspend(ctx context.Context, kind, namespace, name, uid string, suspend bool) error
+	}
+	kedaPauser interface {
+		KEDASetPaused(ctx context.Context, resource, namespace, name, uid string, pause bool) error
+	}
+)
+
+func doRolloutRestart(ctx context.Context, conn restarter, kind, namespace, name, uid string) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.RolloutRestart(ctx, kind, namespace, name, uid); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -88,7 +120,7 @@ func doRolloutRestart(ctx context.Context, conn WorkloadsConn, kind, namespace, 
 
 // doScaleWorkload checks the count after the shell's checkProtected, so an
 // out-of-range count consumes the grant like any other armed call (A3 §0).
-func doScaleWorkload(ctx context.Context, conn WorkloadsConn, kind, namespace, name, uid string, replicas int) ActionResultDTO {
+func doScaleWorkload(ctx context.Context, conn scaler, kind, namespace, name, uid string, replicas int) ActionResultDTO {
 	if replicas < 0 || replicas > maxScaleReplicas {
 		return refusedNotSent(fmt.Sprintf("replicas %d out of range [0, %d]", replicas, maxScaleReplicas))
 	}
@@ -99,7 +131,7 @@ func doScaleWorkload(ctx context.Context, conn WorkloadsConn, kind, namespace, n
 	return wrote(rec, uid)
 }
 
-func doRolloutUndo(ctx context.Context, conn WorkloadsConn, kind, namespace, name, uid string, revision int, expect *fleet.RevisionExpect) ActionResultDTO {
+func doRolloutUndo(ctx context.Context, conn undoer, kind, namespace, name, uid string, revision int, expect *fleet.RevisionExpect) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.RolloutUndo(ctx, kind, namespace, name, uid, int64(revision), expect); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -107,7 +139,7 @@ func doRolloutUndo(ctx context.Context, conn WorkloadsConn, kind, namespace, nam
 	return wrote(rec, uid)
 }
 
-func doRolloutPause(ctx context.Context, conn WorkloadsConn, namespace, name, uid string, pause bool) ActionResultDTO {
+func doRolloutPause(ctx context.Context, conn pauser, namespace, name, uid string, pause bool) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.RolloutPause(ctx, namespace, name, uid, pause); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -115,7 +147,7 @@ func doRolloutPause(ctx context.Context, conn WorkloadsConn, namespace, name, ui
 	return wrote(rec, uid)
 }
 
-func doDeletePod(ctx context.Context, conn PodsConn, namespace, name, uid string) ActionResultDTO {
+func doDeletePod(ctx context.Context, conn podDeleter, namespace, name, uid string) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.DeletePod(ctx, namespace, name, uid); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -123,7 +155,7 @@ func doDeletePod(ctx context.Context, conn PodsConn, namespace, name, uid string
 	return wrote(rec, uid)
 }
 
-func doCordon(ctx context.Context, conn NodeOpsConn, node, uid string, cordon bool) ActionResultDTO {
+func doCordon(ctx context.Context, conn cordoner, node, uid string, cordon bool) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.SetCordon(ctx, node, uid, cordon); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -131,7 +163,7 @@ func doCordon(ctx context.Context, conn NodeOpsConn, node, uid string, cordon bo
 	return wrote(rec, uid)
 }
 
-func doReconcile(ctx context.Context, conn GitOpsConn, kind, namespace, name, uid string) ActionResultDTO {
+func doReconcile(ctx context.Context, conn reconciler, kind, namespace, name, uid string) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.Reconcile(ctx, kind, namespace, name, uid); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -139,7 +171,7 @@ func doReconcile(ctx context.Context, conn GitOpsConn, kind, namespace, name, ui
 	return wrote(rec, uid)
 }
 
-func doSetSuspend(ctx context.Context, conn GitOpsConn, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
+func doSetSuspend(ctx context.Context, conn suspender, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.SetSuspend(ctx, kind, namespace, name, uid, suspend); err != nil {
 		return verbFailed(ctx, conn, err, false, rec, uid)
@@ -147,7 +179,7 @@ func doSetSuspend(ctx context.Context, conn GitOpsConn, kind, namespace, name, u
 	return wrote(rec, uid)
 }
 
-func doKEDASetPaused(ctx context.Context, conn KEDAConn, resource, namespace, name, uid string, pause bool) ActionResultDTO {
+func doKEDASetPaused(ctx context.Context, conn kedaPauser, resource, namespace, name, uid string, pause bool) ActionResultDTO {
 	ctx, rec := fleet.WithReceipts(ctx)
 	if err := conn.KEDASetPaused(ctx, resource, namespace, name, uid, pause); err != nil {
 		return verbFailed(ctx, conn, err, true, rec, uid)

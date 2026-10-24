@@ -1,6 +1,6 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built (§16). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revisions 1 and 2 the same day (§12, §13); the design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built (§16); stage 3 is built (§17). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
 An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
@@ -486,3 +486,25 @@ Codex requested changes at e9bffad (four P2, one P3) and accepted the six deviat
 5. **Retention counts a plan's pins:** the exchange's bytes include the facts and partners its plan pins.
 
 **Tests:** the review's probes as regressions: a fence during the final call (a replaced connection, proposals turned off), a completed turn's offer, a model's failure, a retained plan after a settings change; an older read completing late, at the same and at a lower generation, and the history part; a snapshot follow-up proposing on its own read; KEDA's true, false and missing values and another pause annotation, for both kinds; the pins in the retention bytes. A mutation pass over the fixes caught 9 of 9, after a same-generation case was added.
+
+## 17. Stage 3 as built: execution (2026-10-24)
+
+**What it adds** (`chat_steps.go`):
+- **The run state:** each plan keeps its steps' reviews and runs, the step running (its write, then its verification), and whether it was dismissed. A plan's DTO carries each step's run (request, effect, why, when) and the plan's status: superseded, withdrawn, declined or held, with why.
+- **When a step is offered:** the investigation's fence holds (§16.1), its plan is the latest proposal, not dismissed, the step itself was offered and has not run, no step is running, and every earlier step ran with its effect established.
+- **`ReviewStep`:** checks the fence, then reads again, through the pinned connection with the run fence, the target by its recorded API (the UID must match, and the step's §1 and §2.3 rules are decided again on the fresh read), an undo's partner revision object by name (its UID and template digest must match), and every earlier state effect by its own predicate. It words the change, the consequence (`GitOpsOwnership`, worded for a Flux unit, a suspended one, Argo, and an earlier step suspending the owner; `ReplicaOwner` for scale; recreation for delete-pod by its owner's kind) and the expected result with §1's bound, lists each read with its time, and returns a token valid for 2 minutes, kept with the digest of those facts.
+- **`RunStep`:** consumes the protected grant first, then requires an offered step and its unexpired token, reads the same again and refuses a digest that changed, checks the fence again before the write, and calls the verb's inner function through the dispatch table, with the pinned UID, the validated parameters and an undo's pinned partner. It records the request's outcome; a written or unverified request's effect is pending until verified (§5.2, stage 4). A refused or unverified step holds the plan. `DismissPlan` declines a plan that is not running.
+
+**Deviations, for review:**
+1. **On `ChatService`.** `ReviewStep`, `RunStep` and `DismissPlan` are methods of the chat service that holds investigations, not a separate `InvestigationService`.
+2. **The review's digest covers the target's generation and the fields the step reads, not its resourceVersion.** A workload's status changes the resourceVersion many times a minute during an incident; a digest over it would void almost every review before Confirm. The spec fields the change and consequence rest on, the generation, an undo's partner and each prerequisite's predicate are covered.
+3. **Until stage 4, an effect is never established.** `verifyStep` settles it unverified ("Klyx does not verify a step's effect yet"), so a plan holds after its first step; stage 4 replaces it.
+4. **The fence is also checked explicitly,** before the reads and again before the write, besides the transport fence a real client carries, so a stand-in or a change during the reads never carries a write.
+5. **The inner functions take one-method interfaces** (`suspender`, `undoer`...), narrowing stage 1's: the manual shells pass their full connections unchanged.
+6. **The latest parsed proposal is the current plan,** even one whose every step was refused; an earlier plan's unrun steps are superseded.
+7. **A refusal in `RunStep` clears the review:** the operator reviews again.
+8. **Undo's change names the revisions and the partner's object,** not the template difference's paths: A1.1's comparison is in its `rollout_history` read, which the card can cite.
+
+**Tests** (`chat_steps_test.go`): a step run as reviewed through the manual verb's write; the token (none, another, expired); a material change between Review and Confirm; a replaced target; a step that became a no-op; standing prerequisites at Review and between Review and Confirm, and each state verb's predicate; an unestablished or refused step holding the plan; one step at a time; the grant consumed first and needed per step; a connection changed before and during the run; superseded, dismissed and withdrawn plans; an undo's partner read again; the consequence naming the owner's suspension and Argo; the dispatch table for every verb, and an undo without its partner.
+
+**Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 19 of 19, after a table of every prerequisite was added and two mutations were rewritten to compile and to target the merged fence.

@@ -414,10 +414,22 @@ func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 	if c.kind == kindInvestigation {
 		fence = s.planFenceLocked(c)
 	}
-	for _, e := range c.exchanges {
+	// the latest proposal is the current plan; an earlier one is superseded
+	// (AI A3 §2.4)
+	latest := -1
+	for i, e := range c.exchanges {
+		if e.plan != nil && len(e.plan.dto.Steps) > 0 {
+			latest = i
+		}
+	}
+	for i, e := range c.exchanges {
 		d := e.dto()
-		if d.Plan != nil && fence != "" {
-			withdraw(d.Plan, fence)
+		if e.plan != nil {
+			p := planDTOLocked(c, e.plan, i == latest || latest < 0)
+			if fence != "" {
+				withdraw(&p, fence)
+			}
+			d.Plan = &p
 		}
 		out.Exchanges = append(out.Exchanges, d)
 	}
@@ -452,9 +464,12 @@ func (s *ChatService) planFenceLocked(c *conversation) string {
 // proposal stays readable, and nothing of it is offered.
 func withdraw(p *ActionPlanDTO, why string) {
 	for i := range p.Steps {
-		if p.Steps[i].State == stepOffered {
+		if p.Steps[i].State == stepOffered && p.Steps[i].Run == nil {
 			p.Steps[i].State, p.Steps[i].Reason = stepWithdrawn, "withdrawn: "+why
 		}
+	}
+	if p.Status != planStatusDeclined && p.Status != planStatusSuperseded {
+		p.Status, p.StatusWhy = planStatusWithdrawn, "its unrun steps are withdrawn: "+why
 	}
 }
 

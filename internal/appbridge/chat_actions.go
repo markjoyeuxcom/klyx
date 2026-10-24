@@ -158,6 +158,8 @@ type ActionStepDTO struct {
 	State    string           `json:"state"`
 	Reason   string           `json:"reason,omitempty"`
 	Danger   bool             `json:"danger,omitempty"`
+	// Run is the step's run, once it ran (AI A3 §4, §5)
+	Run *StepRunStateDTO `json:"run,omitempty"`
 	// FactsRead and FactsAt are the read the step's eligibility rests on
 	FactsRead string `json:"factsRead,omitempty"`
 	FactsAt   string `json:"factsAt,omitempty"`
@@ -167,6 +169,10 @@ type ActionStepDTO struct {
 type ActionPlanDTO struct {
 	Steps []ActionStepDTO `json:"steps"`
 	Note  string          `json:"note,omitempty"`
+	// Status is "" for the current plan, or superseded, withdrawn,
+	// declined or held, with StatusWhy (AI A3 §2.4, §4.6)
+	Status    string `json:"status,omitempty"`
+	StatusWhy string `json:"statusWhy,omitempty"`
 }
 
 // actionPlan is a proposal with what Klyx pinned for each offered step:
@@ -175,6 +181,11 @@ type actionPlan struct {
 	dto     ActionPlanDTO
 	facts   []actionFact
 	partner []*fleet.RevisionExpect
+	// runs are the steps' reviews and runs; running is the step whose
+	// write or verification is in progress (0: none); declined, dismissed
+	runs     []*stepRun
+	running  int
+	declined bool
 }
 
 // validatePlan is Klyx's decision on every step (§2.3), in order. A step
@@ -251,6 +262,7 @@ func validatePlan(in actionsInput, facts *actionFacts, ledger []ChatRead, a anch
 		plan.dto.Steps = append(plan.dto.Steps, st)
 		plan.facts = append(plan.facts, fact)
 		plan.partner = append(plan.partner, partner)
+		plan.runs = append(plan.runs, &stepRun{})
 	}
 	return plan
 }

@@ -453,6 +453,7 @@ func historyFactsOf(kind string, desired, partner *rolloutRev, readID, readAt st
 		if tm, ok, _ := unstructured.NestedMap(partner.obj.Object, path...); ok {
 			if d, err := workloads.TemplateDigest(tm, kind == "Deployment"); err == nil {
 				h.PartnerRevision, h.PartnerObjectUID, h.PartnerDigest = partner.num, string(partner.obj.GetUID()), d
+				h.PartnerObject = partner.obj.GetName()
 			}
 		}
 	}

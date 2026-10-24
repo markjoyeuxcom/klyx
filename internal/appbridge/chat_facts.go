@@ -21,8 +21,12 @@ const (
 
 // actionFact is one subject's record, by UID.
 type actionFact struct {
-	Kind      string `json:"kind"`
-	Group     string `json:"group,omitempty"`
+	Kind  string `json:"kind"`
+	Group string `json:"group,omitempty"`
+	// Version and Resource are the API Klyx read it through, so a step's
+	// review and run read the same object again (AI A3 §4)
+	Version   string `json:"version,omitempty"`
+	Resource  string `json:"resource,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
 	UID       string `json:"uid"`
@@ -86,13 +90,14 @@ type historyFacts struct {
 	DesiredRevision  int64  `json:"desiredRevision,omitempty"`
 	PartnerRevision  int64  `json:"partnerRevision,omitempty"`
 	PartnerObjectUID string `json:"partnerObjectUid,omitempty"`
+	PartnerObject    string `json:"partnerObject,omitempty"` // its name
 	PartnerDigest    string `json:"partnerDigest,omitempty"`
 }
 
 // factOf extracts an object's facts from Klyx's read of it, by its GVR. A
 // kind no matrix verb acts on carries its identity only.
 func factOf(gvr schema.GroupVersionResource, u *unstructured.Unstructured, readID, readAt string, acquired uint64) actionFact {
-	f := actionFact{Kind: u.GetKind(), Group: gvr.Group, Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())}
+	f := actionFact{Kind: u.GetKind(), Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource, Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID())}
 	o := &objectFacts{ReadID: readID, ReadAt: readAt, Generation: u.GetGeneration(), acquired: acquired}
 	obj := u.Object
 	switch gvr.Group + "/" + gvr.Resource {
@@ -172,6 +177,9 @@ func (a *actionFacts) add(f actionFact) {
 	}
 	merged := *cur
 	merged.Kind, merged.Group, merged.Namespace, merged.Name, merged.UID = f.Kind, f.Group, f.Namespace, f.Name, f.UID
+	if f.Resource != "" {
+		merged.Version, merged.Resource = f.Version, f.Resource
+	}
 	if f.Object != nil && newerObject(f.Object, cur.Object) {
 		merged.Object = f.Object
 	}
