@@ -1,10 +1,10 @@
 # Klyx AI A3: guarded execution
 
-Opened 2026-10-24, on `feat/ai-a3`. The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
+Opened 2026-10-24, on `feat/ai-a3`; revision 1 the same day (§12). The AI programme's third phase (`2026-10-20-klyx-ai-investigations-roadmap.md` §4). The roadmap orders A1, then A2 and A3. A3 comes first here: A2 waits on two of the owner's decisions (roadmap §7, decisions 2 and 4), while A3's own, decision 3, has a default in the roadmap (day-2 verbs only, no Git writes). This note assumes that default (§11).
 
-An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the same service method the manual verb uses, with the same guards. After each step Klyx reads the step's effect; after the last one, the incident's verdicts.
+An investigation (A1) can end with an action proposal: an ordered plan of at most four existing day-2 verbs, each on an object the investigation read by UID. Klyx validates the plan against a fixed verb matrix and renders it as an action card. A step runs only when the operator confirms it, through the manual verb's own code and guards. After each step Klyx establishes the step's effect from this request's own witness; after the last one, the incident's verdicts.
 
-The programme contracts A-C1 to A-C5 apply as the roadmap states them. The model proposes; Klyx validates and renders; the human confirms; the verb runs unchanged (A-C5).
+The programme contracts A-C1 to A-C5 apply as the roadmap states them. The model proposes; Klyx checks that a step is eligible to run (never that it is the right remedy) and renders it; the human confirms; the verb runs through its unchanged guards (A-C5).
 
 ## 0. What exists, read from the code
 
@@ -25,7 +25,11 @@ The programme contracts A-C1 to A-C5 apply as the roadmap states them. The model
 | KEDA pause / resume | `KEDAService.SetPaused` | ScaledObject, ScaledJob | armed, then the operator-version gates |
 | Helm rollback | `HelmService.HelmRollback` | a release | none: a release name and a revision |
 
-No verb has a generation or resourceVersion precondition: every fence is the UID.
+- **No verb has a generation or resourceVersion precondition:** every fence is the UID.
+- **No verb returns a receipt:** the PATCH responses are discarded (`podactions.go:72`, `gitopsactions.go:145`). Restart's `restartedAt` token has second precision (`podactions.go:48`); reconcile's `requestedAt` token is RFC3339Nano (`flux/actions.go:18`).
+- **Rollout undo re-selects by number:** it reads the history, then lists ReplicaSets (or ControllerRevisions) again and selects by revision number (`rollout.go:150`, `:193`, `:281`). It never receives the partner's identity or template. The manual history DTO (`RolloutRevisionDTO`) carries no revision object UID.
+- **Each service method looks its connection up by cluster name** and builds a `context.Background()` with `actionTimeout` (`workloads_service.go:76`). Nothing binds a write to a particular connection.
+- **Pre-write refusals are plain errors:** KEDA's version and annotation gates (`keda.go:698`), Flux's "not offered" checks, a failed arming. Nothing tells them from a write whose answer was lost.
 
 **The grant.** `ProtectGuard.Arm` checks that the typed text is the cluster's name and records a one-shot grant for 30 s, keyed by cluster only. `checkProtected` consumes it whether it passes or fails. `ConfirmDialog` arms, then calls `onConfirm` (or `onConfirmTyped`, which bulk delete uses to re-arm before each further call). Two verbs break the rule that every armed call consumes its grant: scale returns on an out-of-range count before `checkProtected`, and an Argo dry-run sync skips it.
 
@@ -40,35 +44,47 @@ No verb has a generation or resourceVersion precondition: every fence is the UID
 - Rollout undo's "Flux will revert this" line reads Flux labels only, and misses Argo.
 - Restart, delete pod, cordon and pause show no consequence.
 
-**Verification.** None. The bridges say "no re-read follows a verb"; KEDA and Flux Operator verbs nudge a refresh.
+**Verification.** None. The bridges say "no re-read follows a verb"; KEDA and Flux Operator verbs nudge a refresh. S9 defines a completed KEDA pause (`keda.PauseCompleted`, `JobPauseCompleted`: the version-specific condition, Ready not False, and for a ScaledObject no HPA it controls in a current, complete read).
+
+**Verdicts** (`internal/health`): fault, degraded, unknown, progressing, paused, ok. Fault and degraded are failures in force (`Attention`); a suspended Flux unit and a workload scaled to zero read paused.
 
 **Investigations** (A1, A1.1).
 - `report_findings` carries a text remedy, `{git, mitigation}`, labelled "proposed, not run". It has no subject, UID or citations.
-- Each remedy part is cut to 500 runes by `chatScrub`, although `parseFindings` and A1 §4 allow 2,000. `strictArgs` bounds the whole report at 4 KiB, so the documented maxima cannot fit. This is an A1 defect, fixed here (§2.4).
+- Each remedy part is cut to 500 runes by `chatScrub`, although `parseFindings` and A1 §4 allow 2,000. `strictArgs` bounds the whole report at 4 KiB. This is an A1 defect, fixed here (§2.5).
 - `rollout_history` (A1.1) establishes a workload's desired-template revision and its nearest lower retained partner, each with its identity (A1.1 §8).
+- The ledger (`ChatRead`) keeps names and checks, not result content, and `rollout_history`'s retained reference is the workload only (`chat_rollout.go:424`). Nothing retains the facts a proposal would need (§2.2).
 
 ## 1. The verb matrix
 
-A3 offers these verbs, and only with these kinds and parameters. Each has its own postcondition, the step's "effect observed" (§5), and a bound within which it must hold.
+A3 offers these verbs, and only with these kinds and parameters. Each has its own effect, established as §5 says, and a bound within which it must hold.
 
-| Verb | Kinds | Parameters | Effect observed | Bound |
+**Two kinds of effect:**
+- **A state effect** is a requested state on the UID, whoever wrote it: the suspension, the count, the pause, the cordon, the reverted template. A later read showing that state establishes it, said as "the requested state, by this request or another writer" when this request's own answer was lost.
+- **An event effect** happened because of this request: a restart, a reconcile, a deletion. Only this request's own witness establishes it: its token, or its pod's UID gone. Another request's token, or a post-call generation, never substitutes for it.
+
+| Verb | Kinds | Parameters | Effect | Bound |
 |---|---|---|---|---|
-| `flux-suspend`, `flux-resume` | Kustomization, HelmRelease | none | `spec.suspend` recorded as requested. A suspension's postcondition is the suspension recorded, not proof that the controller is idle | 30 s |
-| `flux-reconcile` | Kustomization, HelmRelease | none | `status.lastHandledReconcileAt` equals the `reconcile.fluxcd.io/requestedAt` value read after the write: Flux's own handshake | 2 min |
-| `rollout-restart` | Deployment, StatefulSet, DaemonSet | none | the new pods replaced the old: `observedGeneration` at least the write's generation, and Deployment `updatedReplicas = replicas = status.replicas`; StatefulSet `currentRevision = updateRevision` and `updatedReplicas = replicas`; DaemonSet `updatedNumberScheduled = desiredNumberScheduled` | the Deployment's `progressDeadlineSeconds`, else 10 min, at most 10 min |
-| `scale` | Deployment, StatefulSet | `replicas`, 0 to 10,000, not the current value | `spec.replicas` and `status.replicas` equal the requested count at an `observedGeneration` at least the write's | 5 min |
-| `rollout-undo` | Deployment, StatefulSet, DaemonSet | `revision`: only the partner revision `rollout_history` established for this workload's UID in this investigation | the partner revision is current: for a Deployment, the current ReplicaSet (A1.1's template equality) is the partner's ReplicaSet by UID; for a StatefulSet or DaemonSet, `status.updateRevision` names the partner's ControllerRevision, by UID. Both at an `observedGeneration` at least the write's. The rollout completing belongs to the incident (§5) | 2 min |
-| `rollout-pause`, `rollout-resume` | Deployment | none | `spec.paused` recorded at an `observedGeneration` at least the write's | 30 s |
-| `delete-pod` | Pod | none | no pod with that UID at that name; and, for a pod with a controller owner, a pod of the same owner UID that was not among the owner's pods read just before the write (never a creation-time comparison: the server's clock is not this machine's). A pod without one is "not recreated", said before the confirmation | 2 min |
-| `cordon`, `uncordon` | Node | none | `spec.unschedulable` recorded as requested | 30 s |
-| `keda-pause`, `keda-resume` | ScaledObject, ScaledJob | none | the `autoscaling.keda.sh/paused` annotation recorded as requested, and KEDA's `Paused` condition agreeing | 1 min |
+| `flux-suspend`, `flux-resume` | Kustomization, HelmRelease | none | state: `spec.suspend` as requested. A suspension's effect is the suspension recorded, not proof that the controller is idle | 30 s |
+| `flux-reconcile` | Kustomization, HelmRelease | none | event: `status.lastHandledReconcileAt` equals the token this request wrote to `reconcile.fluxcd.io/requestedAt` (RFC3339Nano, unique). A later token handled instead reads "superseded by another reconcile request", unverified | 2 min |
+| `rollout-restart` | Deployment, StatefulSet, DaemonSet | none | event: the template carries this request's `kubectl.kubernetes.io/restartedAt` token (made unique, §9 stage 1) at a generation G above the armed read's, and then the controller replaced the old pods at an `observedGeneration` of at least G: Deployment `updatedReplicas = spec.replicas = status.replicas`; StatefulSet `updatedReplicas = spec.replicas` and `currentRevision = updateRevision`; DaemonSet `updatedNumberScheduled = desiredNumberScheduled` | the Deployment's `progressDeadlineSeconds`, else 10 min, at most 10 min |
+| `scale` | Deployment, StatefulSet | `replicas`, 0 to 10,000, not the current value | state: `spec.replicas` equals the count at generation G, then `status.replicas` equals it at an `observedGeneration` of at least G | 5 min |
+| `rollout-undo` | Deployment, StatefulSet, DaemonSet | `revision`: only the partner revision `rollout_history` established for this workload's UID | state: the workload's canonical template (A1.1's normalisation) has the pinned partner's template digest at generation G, observed by the controller (`observedGeneration` at least G). For a Deployment, also: its current ReplicaSet is the partner's, by UID. The template being selected is the effect; the rollout completing belongs to the incident (§5.3) | 2 min |
+| `rollout-pause`, `rollout-resume` | Deployment | none | state: `spec.paused` as requested at generation G, observed at an `observedGeneration` of at least G | 30 s |
+| `delete-pod` | Pod | none | event: no pod with that UID at that name. For a pod whose controller owner maintains a count (a ReplicaSet, StatefulSet or DaemonSet), also its replacement, by the watch witness of §5.2. A Job's pod: "recreation is not established". A pod without a controller owner: "NOT recreated", said before the confirmation | 2 min |
+| `cordon`, `uncordon` | Node | none | state: `spec.unschedulable` as requested | 30 s |
+| `keda-pause`, `keda-resume` | ScaledObject, ScaledJob | none | state: S9's own completed pause (`PauseCompleted`, `JobPauseCompleted`, version-specific), or for resume the pause annotation gone and Ready not False. A Paused condition alone is never presented as scaling stopped | 1 min |
+
+**Refused at validation, as a step that could not take its effect:**
+- `rollout-restart` of a paused Deployment, a StatefulSet or DaemonSet with the `OnDelete` update strategy, a StatefulSet with a partition above zero, or a workload with no desired pods: no automatic replacement would follow, or the counters would hold vacuously. A template write is never presented as proof that old pods were replaced.
+- `rollout-undo` of a paused Deployment: the reverted template would not roll out.
+- `flux-reconcile` of a unit that is suspended, or that an earlier step suspends: Flux skips the request and its handshake never completes.
 
 **Not in the matrix, and why:**
 - **Drain:** kubectl takes a name, so a gap remains between Klyx's UID check and kubectl's own cordon. It evicts across tenants, and its outcome is a stream that is never classified.
 - **Helm rollback:** no UID fence (a release name and a revision) and no outcome classification. It joins when it has a fence; the roadmap's HelmRelease variant of §6.1 needs it.
 - **Reconcile with source:** the source is patched by name, not UID-guarded. Plain `flux-reconcile` is in.
-- **Argo refresh and sync:** with the Argo-parity work, where the roadmap's §6.2 needs them, and where their postconditions would read `operationState`, which Klyx does not read yet.
-- **Flux Operator verbs, and Flux kinds beyond Kustomization and HelmRelease:** no scenario needs them yet. They can join with their own postconditions.
+- **Argo refresh and sync:** with the Argo-parity work, where the roadmap's §6.2 needs them, and where their effects would read `operationState`, which Klyx does not read yet.
+- **Flux Operator verbs, and Flux kinds beyond Kustomization and HelmRelease:** no scenario needs them yet. They can join with their own effects.
 - **Bulk pod delete:** not a verb. A plan may hold several `delete-pod` steps within its four.
 - **Anything that is not a day-2 verb:** the YAML editor's apply, deploy yaml, debug pods. Never.
 
@@ -87,43 +103,52 @@ A3 offers these verbs, and only with these kinds and parameters. Each has its ow
     - `why`: at most 300 characters, scrubbed.
 - **No cluster and no UID in the input.** The cluster is the conversation's; the UID is Klyx's, from its own reads.
 
-### 2.2 What Klyx decides, for each step
+### 2.2 The action facts: what Klyx retains to decide
 
-1. **The matrix:** the verb, the kind and the parameters are valid for each other (§1).
-2. **The target's identity, from the ledger:**
+The ledger keeps names and checks, not results (§0). A3 adds a bounded, per-conversation record of **action facts**, extracted by Klyx from its own reads as each tool result is built, never from model text, and never sent:
+- **For every object read by UID:** kind, namespace, name, UID, the read's ID and time, its generation, and the fields a verb needs: a workload's `spec.replicas`, `paused`, update strategy, partition and desired count; a Flux unit's `suspend` and interval; a pod's controller owner (kind, name, UID); a node's `unschedulable`; a KEDA object's pause intent and its operator-version facts.
+- **From `rollout_history`:** the desired and partner revision numbers, each revision object's UID, and each one's canonical template digest (SHA-256 over A1.1's normalised template).
+- **Bounds:** at most 64 subjects per conversation, at most 1 KiB each (64 KiB). A newer read of a UID replaces its older record; past 64, the oldest is dropped. The record lives with the conversation, in memory, and counts toward its retention bounds.
+
+A step is eligible only on a subject with a record. A proposal on a subject whose record was dropped is refused: "Klyx no longer holds what it read about Deployment web; read it again".
+
+### 2.3 What Klyx decides, for each step
+
+1. **The matrix:** the verb, the kind and the parameters are valid for each other (§1), and the step is not one §1 refuses.
+2. **The target's identity, from the action facts:**
    - the target must be an object this investigation read by UID: the anchor, an object a tool read by UID, or one reached by a UID join (the owner chain, a dependency edge read by UID);
-   - its UID comes from that read, never from the model;
+   - its UID comes from that record, never from the model;
    - a name-only correlation (an inventory entry, a rendered Git object, a health-check entry) is not enough: "Klyx has not read Deployment web by UID in this investigation". The model can read it first.
 3. **The home cluster only:** the target resolves through the conversation's pinned connection, and nothing else is resolvable.
-4. **The parameters, against Klyx's reads:**
-   - `rollout-undo`'s revision must be the partner revision `rollout_history` established for that UID in this investigation;
-   - `scale`'s count must differ from the `spec.replicas` read;
-   - a step that would change nothing is refused as "no change": suspending a suspended unit, resuming an active one, cordoning a cordoned node, pausing a paused Deployment;
-   - a step that could have no effect is refused: `flux-reconcile` of a unit that is suspended, or that an earlier step suspends, since Flux skips the request and its handshake never completes.
+4. **The parameters, against the action facts:**
+   - `rollout-undo`'s revision must be the partner `rollout_history` established for that UID; its revision object's UID and template digest are pinned from the record;
+   - `scale`'s count must differ from the recorded `spec.replicas`;
+   - a step that would change nothing is refused as "no change": suspending a suspended unit, resuming an active one, cordoning a cordoned node, pausing a paused Deployment.
 5. **The citations** (A-C1): provenance and subject as A1 §4. At least one cited read or check must be about the target by UID, or about the anchor. Otherwise the step is shown as "unsupported" and is not offered.
 6. **The plan as a whole:** the same verb on the same target twice is refused, as is a contradictory pair on one target (suspend, then resume).
 
-A step refused at validation is shown with its reason and never offered. The steps after it are shown as "not offered: step N was refused", since each step needs the one before it (§4). The steps before it stay offered.
+A step refused at validation is shown with its reason and never offered. The steps after it are shown as "not offered: step N was refused", since each step needs the ones before it (§4). The steps before it stay offered.
 
 A proposal never changes a finding's label, and a finding never makes a step proven. The step's "why" is the model's, labelled as its reading.
 
-### 2.3 One plan at a time
+### 2.4 One plan at a time
 
 - A later valid proposal in the same conversation supersedes the unrun steps of the earlier one ("superseded by turn N's proposal"). Steps already run keep their records.
 - A conversation that is fenced (a disconnect, a settings change, the anchor replaced) withdraws its unrun steps. A step being verified ends "unverified" with that reason.
-- Nothing about a plan is persisted beyond the conversation, which lives in memory as chat does. The Activity log keeps each run step's outcome, as it does for the manual verbs (§4).
+- **Bounds:** a step's record is at most 1 KiB; a conversation keeps at most 16 step records, and past that the oldest superseded plan's are dropped from the card (the Activity log keeps them, §4.4).
+- Nothing about a plan is persisted beyond the conversation, which lives in memory as chat does.
 
-### 2.4 The remedy (A1's defect)
+### 2.5 The remedy (A1's defect)
 
 - `report_findings`' `remedy` keeps its two text parts, `git` and `mitigation`, each scrubbed and capped at 2,000 characters, as A1 §4 states. Today `chatScrub` cuts each at 500.
-- `report_findings` gets its own argument bound, 24 KiB, which holds its documented maxima (20 findings of 500 characters, 10 missing notes of 300, two remedy parts of 2,000), instead of `strictArgs`' 4 KiB.
+- `report_findings` gets its own aggregate bound, 24 KiB, instead of `strictArgs`' 4 KiB. The field caps count characters, so the aggregate is an additional limit: the documented maxima fit in ASCII (about 20 KiB with JSON's overhead), and a report whose fields are each within their caps but whose whole exceeds 24 KiB (long non-ASCII text, for example) is refused with the bound named, and may be retried once as today.
 - The text remedy stays "proposed, not run". The action card is the structured mitigation beside it.
 
 ## 3. The action card
 
 The card is rendered in the findings panel, under the proposed remedy.
 
-**The header:** "Proposed by the model, checked by Klyx, run only by you", the cluster and its protection, and the number of steps.
+**The header:** "Proposed by the model. Klyx checked that each step is eligible to run, not that it is the right remedy. A step runs only when you confirm it." Then the cluster and its protection, and the number of steps.
 
 **Each step, in Klyx's words from Klyx's reads,** never the model's prose:
 - **The verb and the object,** with its UID; the chip opens the object.
@@ -131,78 +156,159 @@ The card is rendered in the findings panel, under the proposed remedy.
   - `spec.suspend: false → true`;
   - `replicas 3 → 1`;
   - `revision 5 → 4`, with the template difference as A1.1 reports it: paths, values hidden;
-  - `pod web-7d9c-x2 deleted; ReplicaSet web-7d9c recreates it`, or "a pod without a controller: it is NOT recreated".
-- **The GitOps consequence,** from the authoritative ownership check (`GitOpsOwnership`), never from labels:
-  - "Flux's Kustomization a1-web owns this Deployment and reapplies it at its next reconcile (every 1m) unless suspended";
+  - `pod web-7d9c-x2 deleted; ReplicaSet web-7d9c keeps 3 pods, so it creates a replacement`; for a Job's pod "recreation is not established"; for a pod without a controller owner "it is NOT recreated".
+- **The GitOps consequence,** from the authoritative ownership check (`GitOpsOwnership`), never from labels, and qualified by what that read shows. Ownership is evidence of management, not a promise that this field is reverted at the next tick:
+  - "Kustomization a1-web manages this Deployment (its inventory, complete, read 15:01). While it is not suspended, Flux applies its desired state at each reconcile (every 1m), which may revert this change";
   - when an earlier step suspends that unit: "step 1 suspends it";
+  - for an Argo Application: whether it auto-syncs, and that fields it ignores are not reverted;
+  - a suspended owner: "suspended: Flux applies nothing until it is resumed";
   - when the ownership read was incomplete, its warning;
   - for `scale`, also the replica owner the manual popover reads (`ReplicaOwner`: an HPA or a KEDA ScaledObject that would override the count).
 - **The expected result and its bound:** "effect: spec.suspend true, within 30 s".
 - **The model's why,** labelled as its reading, with its citations as chips.
+- **Each fact with the time it was observed.**
 - **Its state:** offered, waiting for step N, not offered (with the reason), running, then its outcomes (§5).
 
 **Danger has a shape,** as the manual verb's: suspend, undo, restart, scale down, delete pod, cordon and KEDA pause carry the danger treatment of the design rules.
 
 ## 4. Execution
 
-**Review.** "Review…" on an offered step re-reads its target by UID (a fresh GET) and recomputes the change and the consequence. A replaced target (another UID at the name), or a precondition that no longer holds (now suspended; the partner revision no longer retained), makes the step "not offered", with the reason. Nothing is sent.
+### 4.1 Review
+
+`InvestigationService.ReviewStep(conversation, plan, step)`, called by "Review…" on an offered step:
+- re-reads the target by UID (a fresh GET), and each **standing prerequisite** (§4.3);
+- computes the change, the consequence and the expected result from those reads;
+- returns them with a **review token**: a digest of the facts they were computed from (the target's UID, generation, resourceVersion and the fields its change and consequence use; each prerequisite's UID, generation and predicate), valid for 2 minutes.
+
+A replaced target (another UID at the name), a precondition that no longer holds (now suspended; the partner revision gone or changed), or a prerequisite that no longer holds makes the step "not offered", with the reason. Nothing is sent.
+
+### 4.2 Confirm and run
 
 **The ConfirmDialog,** always, including for a scale the manual popover would allow:
 - the title "Run step N of the investigation's plan";
-- the change, the consequence and the expected result;
+- the change, the consequence and the expected result, as reviewed;
 - danger as the manual verb's;
 - on a protected cluster, the typed confirmation, which arms one grant.
 
-**Confirm calls `InvestigationService.RunStep(conversation, plan, step)`.** RunStep:
-1. refuses unless the step is offered: its plan is current, every earlier step's effect was observed, the conversation is not fenced, no other step of the conversation is running;
-2. calls the verb's own service method, the same Go method the manual bridge calls (for `flux-suspend`, `GitOpsService.SetSuspend(cluster, kind, namespace, name, uid, true)`), with the pinned UID and the validated parameters. The guards are unchanged: `checkProtected` consumes the grant, the UID arming, the admission attribution;
-3. records the request's outcome (§5) and starts the verification;
-4. never retries and never compensates.
+**Confirm calls `InvestigationService.RunStep(conversation, plan, step, token)`.** RunStep:
+1. refuses unless the step is offered: its plan is current, every earlier step's effect was established, the conversation is not fenced, no other step of the conversation is running, and the token is valid;
+2. re-reads what the token covers and refuses if any fact differs: "changed since you reviewed it; review again". A standing prerequisite that no longer holds refuses too (§4.3);
+3. runs the verb (§4.4) with the pinned UID and the validated parameters, and, for `rollout-undo`, the pinned partner (§4.5);
+4. records the request's outcome (§5.1) and starts the verification;
+5. never retries and never compensates.
 
-**The grant is never left armed.** The dialog arms the grant before RunStep is called, so a refusal in step 1, before the verb runs, consumes it as `checkProtected` would. Every armed call consumes its grant (§0), RunStep's own refusals included.
+**The grant is never left armed.** The dialog arms the grant before RunStep is called, so a refusal in steps 1 or 2, before the verb runs, consumes it as `checkProtected` would. Every armed call consumes its grant (§0), RunStep's own refusals included.
 
-RunStep is the backend's so that the gating and the records are the backend's: a stale or duplicated frontend state cannot run a step out of order. The verb's guards are the same either way. The dispatch table from matrix verb to service method is fixed in code, one entry per verb, and tested against the manual bridges' bindings.
+**What remains racy, said on the card:** between RunStep's re-read and the write, and across objects. Klyx promises no atomicity across a plan's objects; each fact is shown with the time it was observed.
 
-**The Activity log** records every run step as the manual verbs' do, marked "from an investigation's plan".
+RunStep is the backend's so that the gating and the records are the backend's: a stale or duplicated frontend state cannot run a step out of order.
 
-**The plan stops** at a step that is refused, unverified (its request or its effect) or declined:
+### 4.3 Standing prerequisites
+
+- **What they are:** the state effects of a plan's earlier steps (§1): a suspension, a count, a pause, a cordon, a KEDA pause, a reverted template. Every later step depends on them; a step's consequence ("step 1 suspends it") is computed from them.
+- **When they are re-read:** at Review, and again in RunStep before the write. Each is read by its UID and its predicate checked.
+- **A changed, missing or unreadable prerequisite** stops the dependent step, and the plan holds with the reason: "step 1's suspension no longer holds: a1-web was resumed (spec.suspend false, read 15:02)".
+- **Event effects** (a restart, a reconcile, a deletion) happened; they are history, and are not re-checked.
+
+### 4.4 The verb's own code, bound to the conversation's connection
+
+- **The same code:** each manual service method is split into its shell and an inner function. The shell is what the manual bridge calls today: `checkProtected`, a lookup by cluster name, a `Background` context with `actionTimeout`, then the inner function. The inner function takes the connection and the context, and holds everything else: the arming, the write, the admission attribution, the receipt.
+- **RunStep** calls the same `checkProtected`, then the same inner function with:
+  - the conversation's **pinned connection**, never a fresh lookup by name;
+  - a context carrying the run fence (`readfence.With`): the pinned connection's identity, checked before every request the verb and its verification make, discovery included. A disconnect or a reconnect between dispatch and any request fails that request; it is never retargeted to a new connection.
+- **Not fenced on AI settings:** they govern egress, and this write is the operator's, confirmed. A settings change still fences the conversation (§2.4), so a running verification ends unverified.
+- **The dispatch table** from matrix verb to inner function is fixed in code, one entry per verb, and tested: each entry makes the same request as the manual method against a recording fake.
+- **The Activity log** records every run step as the manual verbs' do, marked "from an investigation's plan".
+
+### 4.5 Rollout undo writes only the reviewed partner
+
+The shared undo path (`ClusterConn.RolloutUndo`, the manual verb's too) gains an expectation: the revision object's UID and its canonical template digest.
+- After selecting the revision object by number, it refuses before writing if either differs: "revision 4 is no longer the one reviewed". It never re-resolves the number to another object.
+- The workload's UID guard stays.
+- A3 always passes the expectation, pinned from the action facts. The manual undo passes the one its history now carries: `RolloutRevisionDTO` gains the revision object's UID and template digest, so the manual verb also writes only the revision it showed.
+- **What remains:** between the template check and the patch. A ReplicaSet's or ControllerRevision's template is not changed by its controller; a direct edit in that window is not caught.
+
+### 4.6 The plan stops
+
+At a step that is refused, unverified (its request or its effect) or declined:
 - Cancel in the dialog leaves the step offered;
 - "Dismiss plan" ends it as declined;
 - the card then says which step held the plan, and lists what was left not run.
 
 ## 5. Outcomes and verification
 
-Three outcomes, kept apart and said in these words (roadmap §4):
+Three outcomes, kept apart and said in these words (roadmap §4).
 
-**1. The request:**
-- **written:** the verb returned `ok`;
-- **refused:** a definite refusal (`definiteRefusal`, or `ErrReplaced` for the UID), with the admission finding when the server attributes it;
-- **unverified:** anything else: the write may have landed.
+### 5.1 The request
 
-`ActionResultDTO` gains `outcome` (`written`, `refused`, `unverified`), set by `failed` and by the success paths. The classification is then structured, and `patchArmed`'s verbs say "unverified" for a lost answer. The manual verbs' toasts can adopt it; A3 does not change their wording.
+- **written:** the verb returned `ok`, with its **receipt**: the written object's UID, generation and resourceVersion from the server's response (for a deletion, the deleted object's UID when the response carries it), and the token this request wrote (restart, reconcile);
+- **refused, nothing sent:** Klyx refused before any write was sent (the arming, a version gate, "not offered", no change). Each such return in the inner functions is marked with a typed error (`ErrNotSent`);
+- **refused by the server:** a definite refusal (`definiteRefusal`, or `ErrReplaced` for the UID), with the admission finding when the server attributes it;
+- **unverified:** a write was sent and its answer lost: it may have landed, or landed later.
 
-**2. The effect:** observed, or unverified with its reason (not observed within the bound; the object was replaced; the read failed).
-- It is checked after a request written or unverified, never after one refused. A lost answer whose effect is observed reads "request unverified, effect observed".
-- **The read:**
-  - a fresh GET by name after the call returns, checked for the pinned UID. Its `metadata.generation` G is at least the write's, since a read after the write sees it;
-  - then a watch of that one object from the GET's resourceVersion: watch-based, never polled;
-  - each event is checked for the UID and the postcondition, at an `observedGeneration` of at least G where the postcondition names one, until it holds, the UID changes or the bound ends.
-- A third party's write in the window, such as Flux reapplying, can make the postcondition fail: it then reads "not observed", never "observed".
-- `delete-pod` also watches its namespace's pods matching the owner's selector, for the replacement.
+`ActionResultDTO` gains `outcome` (`written`, `refused`, `unverified`), `notSent` for Klyx's own refusals, and `receipt`. The manual verbs' toasts can adopt them; A3 does not change their wording.
 
-**3. The incident:** resolved, or not, or unverified, read after the last step's effect is observed.
-- **Its objects:** the anchor, and each step's target that Klyx's checks found failing in this investigation, by UID.
-- **Resolved:** each, read fresh after the last write, has a non-fault verdict: healthy, or suspended for a unit the plan suspended. The card then says the unit stays suspended until the Git fix lands and it is resumed.
-- **Not resolved:** a fresh read shows a fault at the bound, said with its verdict and time.
-- **Unverified:** missing or stale evidence, never "resolved" and never "still failing".
-- **Bound:** 10 minutes after the last write.
+### 5.2 The effect
 
-**What the model learns.** The next turn's input carries Klyx's record of each step: verb, target (kind, namespace, name), and the three outcomes in these words. No read the verification made is sent; the model reads what it needs through its tools, fenced as ever.
+Established, or unverified with its reason (not established within the bound; the object was replaced; the read failed; superseded). It is checked after a request written or unverified, never after one refused.
+
+**The witness, by kind of effect** (§1):
+- **written, with a receipt:** G is the receipt's generation. The effect is checked only on reads of that UID at a generation of at least G.
+- **unverified, an event effect:** established only by a read that shows this request's own witness: its token in the template or `requestedAt` (a late commit), or its pod's UID gone. Otherwise it stays unverified for the bound: Klyx never substitutes a post-call generation or another request's token. A restart whose receipt shows no generation above the armed read's wrote no new template, and is unverified.
+- **unverified, a state effect:** established by a read after the call that shows the requested state, said as "the requested state, by this request or another writer". G is that read's generation.
+
+**The reads:**
+- a fresh GET by name after the call returns, checked for the pinned UID;
+- then a watch of that one object from the GET's resourceVersion: watch-based, never polled;
+- each event checked for the UID and the effect, until it holds, the UID changes or the bound ends.
+
+A third party's write in the window, such as Flux reapplying, can make the effect fail: it then reads "not established", never "established".
+
+**`delete-pod`'s replacement, without a membership baseline:**
+- before the delete, a LIST of the owner's pods by its selector with `limit=1` gives a collection resourceVersion;
+- after the delete, a watch from that resourceVersion reports the pods added since;
+- the first one whose controller owner is the owner's UID, and whose UID is not the deleted one, is the replacement: "a pod of that owner, created after the step began".
+
+No set of existing pods is kept, so a large owner cannot make an old pod look new. A `410 Gone` on the watch, or the bound, leaves the replacement unverified.
+
+**Bounds:** one running step per conversation, so at most eight verifications fleet-wide; each holds at most two watches (the object and the replacement); events are decoded one at a time and kept only as their predicate's result.
+
+### 5.3 The incident
+
+Read after the last step's effect is established.
+
+**Its subjects:** the anchor, and each step's target that Klyx's checks found failing in this investigation, by UID.
+
+**Each subject's reading,** from the Observer's verdict by UID, fresh (observed after the last write), and never a new API read:
+
+| Reading | The subject is |
+|---|---|
+| ok | recovered |
+| paused, caused by a step of this plan on it (a suspension, a scale to zero, a pause, a KEDA pause) | held by step N, as intended |
+| paused, not caused by this plan | unverified: "paused outside this plan" |
+| progressing | pending; at the bound, not resolved: "still progressing" |
+| fault or degraded | pending; at the bound, not resolved, with its verdict and time. Degraded is a failure in force, never recovery |
+| unknown, stale, unreadable, or no fresh reading | pending; at the bound, unverified |
+| removed by a step of this plan (`delete-pod`) | removed by step N. It cannot itself recover; its replacement, another UID, is shown as itself and never counted as the subject |
+| gone or replaced otherwise | unverified: "gone" or "replaced" |
+
+**The incident's outcome:**
+- **resolved,** as soon as every subject is recovered or held, and at least one is recovered. The card then reminds that a held unit stays suspended until the Git fix lands and it is resumed;
+- **not resolved,** at the bound, when a subject is not resolved on fresh evidence;
+- **unverified,** at the bound otherwise: missing or stale evidence, a subject outside the plan's reach, or a removed anchor. Never "resolved" and never "still failing" without a fresh reading.
+
+**A pod anchor deleted by the plan cannot establish resolution,** and the card says so before the confirmation: "deleting this pod ends what Klyx can verify about it; its replacement is shown on its own".
+
+**Bound:** 10 minutes after the last write.
+
+### 5.4 What the model learns
+
+The next turn's input carries Klyx's record of each step: verb, target (kind, namespace, name), and the three outcomes in these words. No read the verification made is sent; the model reads what it needs through its tools, fenced as ever.
 
 ## 6. Egress, protection and the setting
 
 - **The proposal is model output:** nothing new leaves Klyx to produce it.
-- **The card is local:** the change and the consequence never reach the model.
+- **The card and the action facts are local:** the change, the consequence and the facts never reach the model.
 - **The model's feedback** carries outcome words and names already in the ledger; literal-needle tests cover it (§8).
 - **Protected clusters:** proposals are made and shown as anywhere; each step needs its own typed grant; `allowProtectedEgress` governs the investigation as before.
 - **The setting:** Settings > AI gains "Propose actions in investigations", on by default. Off removes the tool, the snapshot instruction and the card; the text remedy stays.
@@ -212,41 +318,55 @@ Three outcomes, kept apart and said in these words (roadmap §4):
 
 The roadmap's §6.1 scenario runs on the kind lab on E1's fixture: the Kustomization `a1-web` failing `HealthCheckFailed` on Deployment `web` (crash commit `a9b3c81`), with the steady revision retained as the partner.
 
-- **The scripted model** proposes `flux-suspend a1-web`, then `rollout-undo web` to the partner revision. The lab check confirms both. It sees the effect observed for each, then the incident resolved: `web` at the partner's template, its pods ready, `a1-web` suspended. It then restores the lab: it resumes `a1-web`, Flux reapplies the crash commit, and E1's setup sees its plant again.
-- **A counterexample on the lab:** `rollout-undo` without the suspension. Flux reapplies within its interval, and the card says what it read: the effect not observed, or the incident not resolved.
+- **The scripted model** proposes `flux-suspend a1-web`, then `rollout-undo web` to the partner revision. The lab check confirms both. It sees each effect established, then the incident resolved: `web` recovered at the partner's template with its pods ready, `a1-web` held by step 1. It then restores the lab: it resumes `a1-web`, Flux reapplies the crash commit, and E1's setup sees its plant again.
+- **The counterexamples on the lab:** `rollout-undo` without the suspension, where Flux reapplies within its interval and the card says what it read (the effect not established, or the incident not resolved); and a resume of `a1-web` from outside between the two steps, where step 2 stops with the prerequisite's reason.
 - **The owner's real-model run:** the §6.1 sentence as the first question, end to end, on a real model. This is the programme's acceptance (roadmap §6.1).
 - **The native smoke:** the card renders from the scripted model; a step's Review opens the ConfirmDialog, and Cancel sends nothing.
 
 ## 8. Tests
 
 **Validation:**
-- every matrix rule: an unknown verb; a kind outside the verb's; unknown parameters; an out-of-range count; an undo to the current revision, to a revision `rollout_history` did not establish in this investigation, and to another workload's partner;
-- identity: a target read only by name (an inventory entry, a Git render); a target absent from the ledger; a name that matches a ledger object now replaced. All refused, never offered;
+- every matrix rule: an unknown verb; a kind outside the verb's; unknown parameters; an out-of-range count; an undo to the current revision, to a revision `rollout_history` did not establish, and to another workload's partner;
+- §1's refusals: restart of a paused Deployment, of an `OnDelete` StatefulSet and DaemonSet, of a partitioned StatefulSet and of a workload with no desired pods; undo of a paused Deployment; reconcile of a suspended unit and of one an earlier step suspends;
+- identity: a target read only by name (an inventory entry, a Git render); a target with no action facts, or whose facts were dropped at the cap; a name that matches a recorded object now replaced. All refused, never offered;
 - citations: a step citing only a real read of an unrelated object is unsupported and not offered (the A-C1 counterexample);
 - injection (A-C4): a pod log asking to delete every pod in `kube-system` yields a proposal on pods never read by UID, which is refused; a proposal naming another cluster's object cannot resolve;
 - five steps; duplicates; a contradictory pair; no-ops.
 
 **Execution:**
-- RunStep refuses a step not offered, a superseded plan, a fenced conversation and a concurrent run;
-- on a protected cluster, a step without a grant is refused by the verb's own check, a second step cannot use the first one's grant, and a RunStep refusal after the dialog armed consumes the grant;
-- the dispatch table maps each verb to exactly the method the manual bridge binds;
+- RunStep refuses a step not offered, a superseded plan, a fenced conversation, a concurrent run, an expired token, and a token whose facts changed (a same-UID material change while the dialog was open);
+- prerequisites: suspension established, then resumed or replaced from outside before step 2's Review, and again between Review and Confirm, each stopping step 2; the unchanged prerequisite as the control;
+- the grant: a step without one is refused by the verb's own check; a second step cannot use the first one's; a RunStep refusal after the dialog armed consumes it;
+- the connection: a disconnect, and a reconnect, between dispatch and the verb's first request and between two of its requests (discovery included) fail the request and never retarget it;
+- the dispatch table: each entry makes the same request as the manual method;
+- undo's partner: the revision object changed between the history read and the selection (the review's counterexample) is refused before writing; the manual undo with its new expectation;
 - no retry after "unverified"; no compensation after a refused second step.
 
 **Outcomes and verification** (a fake clientset with watches, a fake clock):
-- each verb's postcondition holding (observed); the UID replaced mid-watch (unverified); the bound running out (unverified); a third party's write reverting the field (not observed); a lost answer with the effect observed;
-- the incident resolved on fresh verdicts; a stale verdict unverified; a suspended anchor counted as non-fault only when the plan suspended it;
-- `outcome` on every verb A3 calls: written; refused (4xx, `ErrReplaced`, an attributed admission refusal); unverified (5xx, a deadline, a transport loss). Scale's out-of-range count consumes the grant.
+- the request: written with a receipt; refused, nothing sent (KEDA's version gate, a failed arming); refused by the server (4xx, `ErrReplaced`, an attributed admission refusal); unverified (5xx, a deadline, a transport loss). Scale's out-of-range count consumes the grant;
+- the witness: a lost answer with no commit (a fully rolled-out Deployment stays unrestarted: unverified, the review's counterexample); a late commit (the token appears: established); a superseding write (another reconcile token handled: unverified); a same-second restart (distinct tokens since stage 1; and a receipt with no new generation: unverified);
+- each verb's effect holding; the UID replaced mid-watch; the bound running out; a third party's write reverting the field; DaemonSet undo by template digest;
+- `delete-pod`: a replacement from a large owner (above any list cap), a Job's pod, a pod without an owner, and a `410 Gone`;
+- the incident: every row of §5.3's table; a degraded subject never counted as recovered; a scale to zero held, not recovered; a suspended anchor held only when the plan suspended it; a deleted pod anchor unverified with its replacement shown apart.
+
+**Bounds:** full-shape tests at the action facts' cap (64 subjects of 1 KiB) and the step records' cap (16, through repeated and superseded plans), and the `report_findings` aggregate: the ASCII maxima admitted, a non-ASCII report within its field caps but above 24 KiB refused with the bound named.
 
 **Egress:** literal needles (env values, the template difference's hidden values, annotation values, a Secret's name read only by the card) never appear in the model's feedback, the proposal's echo or any send.
 
-**Frontend:** the card's states; danger shapes; Review's re-read; one arming per step; dismiss; supersession; withdrawal on a fence; the Activity log entry.
+**Frontend:** the card's states; danger shapes; Review and its token; one arming per step; dismiss; supersession; withdrawal on a fence; the Activity log entry.
 
 ## 9. Stages
 
-1. **Outcomes and the guards A3 relies on:** `ActionResultDTO.outcome` for the matrix verbs; scale's grant order; the manual rollout undo's consequence line from the authoritative ownership check, since it misses Argo today. Each is useful on its own.
-2. **The proposal:** `propose_actions` and the `actions` block, the matrix, the validation and labels, and the remedy fix (§2.4).
-3. **Execution:** `InvestigationService.RunStep`, the dispatch table, the gating and the records.
-4. **Verification:** the postconditions, the single-object watch, and the incident.
+1. **The manual verbs' guards and receipts, each useful on its own:**
+   - each matrix verb split into its shell and inner function (§4.4);
+   - `outcome`, `notSent` and `receipt` on `ActionResultDTO`;
+   - restart's token made unique (RFC3339Nano, as reconcile's already is);
+   - undo's partner expectation (§4.5), with the history DTO carrying the revision object's UID and digest;
+   - scale's grant order;
+   - the manual rollout undo's consequence line from the authoritative ownership check (it misses Argo today).
+2. **The proposal:** the action facts, `propose_actions` and the `actions` block, the matrix and its refusals, the validation and labels, and the remedy fix (§2.5).
+3. **Execution:** `ReviewStep` and its token, `RunStep`, the standing prerequisites, the pinned connection and run fence, the dispatch table and the records.
+4. **Verification:** the witnesses, the single-object watch, `delete-pod`'s replacement watch and the incident table.
 5. **The frontend:** the card, Review and the ConfirmDialog, the Activity log, the setting.
 6. **The lab, the smoke, captures, the owner's real-model run, and the as-built notes.**
 
@@ -255,8 +375,9 @@ The roadmap's §6.1 scenario runs on the kind lab on E1's fixture: the Kustomiza
 - Writing to Git (decision 3, §11).
 - Argo's verbs (with Argo parity), Helm rollback (it needs a UID fence), drain, reconcile with source, and the Flux Operator verbs (§1).
 - Anything unattended. A2's reports may carry a proposal, which runs only from the card, under these rules.
-- A causal-proof rule: no proposal makes a cause proven.
+- A causal-proof rule: no proposal makes a cause proven, and no established effect makes the model's mitigation right.
 - Retries, compensation, an automatic resume.
+- Atomicity across a plan's objects (§4.2).
 - A new verb.
 
 ## 11. The recorded crossing and the owner's decisions
@@ -264,3 +385,17 @@ The roadmap's §6.1 scenario runs on the kind lab on E1's fixture: the Kustomiza
 - **The crossing.** CLAUDE.md's editable-surface crossing says AI Suggest-fix proposes Git changes only and never applies them. A3 crosses that for the existing day-2 verbs only, behind the same human confirmation and guards as the manual verbs, under the 2026-06-17 directive. Git remains the source of truth for desired state.
 - **Decision 3, A3's reach:** this note assumes day-2 verbs only, the roadmap's default. Pull requests would be a later addendum.
 - **For the owner to confirm:** the matrix (§1: cordon and KEDA pause in, drain and Helm rollback out), and the setting on by default (§6).
+
+## 12. Revision 1: Codex's design review of 9bde787
+
+Codex requested changes (six P2, one P3, and guidance), with four probes against the current manual paths. Each is addressed:
+
+1. **P2, identify the attempted write before calling its effect observed.** A lost answer let a later GET's generation, or whichever reconcile token it held, stand in for the write; an unrestarted, rolled-out Deployment met the restart counters. Now: receipts from the server's response (§5.1), effects split into state and event kinds (§1), and an event effect established only by this request's own witness, never a post-call generation or another request's token (§5.2). Restart's token is made unique (§9 stage 1). Tests: no commit, a late commit, a superseding write, a same-second restart (§8).
+2. **P2, fence rollback's partner through the write path.** The undo path re-selected the revision by number, so a changed partner was written unreviewed. Now the shared path takes the revision object's UID and template digest and refuses a change before writing, the manual undo included (§4.5).
+3. **P2, revalidate prerequisites.** A suspension established, then resumed from outside, left undo offered with a stale consequence. Now standing prerequisites are re-read at Review and in RunStep, and a review token refuses a material change between Review and Confirm; the remaining race is stated (§4.1 to §4.3).
+4. **P2, DaemonSet undo.** DaemonSet has no `updateRevision`. Undo's effect is now the template digest at an observed generation for all three kinds, with the Deployment's partner ReplicaSet as an addition. Restart's vacuous cases (paused, `OnDelete`, a partition, no desired pods) and undo of a paused Deployment are refused (§1).
+5. **P2, an exhaustive incident table.** Degraded, progressing, unknown and paused readings, and removed or replaced subjects, each have a stated contribution, and a deleted pod anchor cannot establish resolution (§5.3). The delete card promises recreation only for owners that keep a count (§1, §3).
+6. **P2, bound the new evidence and reads.** The action facts are a bounded record extracted from Klyx's own reads (§2.2); step records are capped (§2.4); verifications and their watches are bounded (§5.2); `delete-pod`'s replacement needs no baseline set, so a cap cannot make an old pod look new (§5.2).
+7. **P3, 24 KiB and the documented maxima.** It is now an aggregate limit on top of the character caps: the ASCII maxima fit, a larger whole is refused with the bound named, and tested (§2.5).
+
+**Guidance, adopted:** the header says Klyx checked eligibility, not the remedy (§3); the pinned connection binds every request of the verb and its verification through a run fence (§4.4); KEDA's effect is S9's completed pause (§1); the consequence is qualified by the ownership read's own fields and state (§3); Klyx's own pre-write refusals are "refused, nothing sent" (§5.1).
