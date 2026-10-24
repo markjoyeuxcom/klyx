@@ -96,7 +96,10 @@ real-cluster smoke is on the v1.0.0 gate below.
       Done so far (2026-10-14): one chat question on an Anthropic key (Haiku
       5.5, tools mode: overview and attention reads), which found the chip
       defects fixed in v0.13.1. After v0.13.1, the Claude Code Test also
-      admits the auto-updated build (2.1.300 passes the offline contract)
+      admits the auto-updated build (2.1.300 passes the offline contract).
+      Done 2026-10-24: the first investigation on a real model, the eval's
+      E1 on an Anthropic key (Sonnet 5.5, tools mode), cause grounded
+      (eval spec §17); the other providers and the CLI are still owed
 - [ ] **Live-cluster smoke of the write paths** (nothing destructive committed
       blind): a Force:false apply against a Flux-owned object should 409 naming
       kustomize-controller; a create into a namespace a pruning unit deploys into should state that the unit leaves an untracked object alone (amber; red only for an object carrying the Argo app's tracking metadata - semantics corrected in the 2026-10-03 review remediation);
@@ -250,6 +253,21 @@ See `docs/history/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-24 - AI A1.1 rollout history and the scored eval (untagged; specs
+`docs/superpowers/specs/2026-10-24-klyx-ai-a1-1-rollout-history.md` §13 and
+`docs/superpowers/specs/2026-10-22-klyx-ai-eval.md` §15-§17):**
+- `rollout_history`: the desired revision by template equality, compared with
+  the nearest lower retained one through the projector; rollout checks for
+  the failing pods' revision, readiness and the template difference.
+  Codex-accepted at b3ff5bb; native smoke 209/209 four ways
+- The eval (`-tags eval`, `scripts/lab/klyx-eval.sh`): four planted
+  scenarios on the kind lab behind a lab-pinning preflight, a record of
+  the evidence delivered, scores with owner adjudication. Stages 1-2
+  Codex-accepted at 1563142; self-test 19/19 on the lab
+- The owner's first run (E1, Sonnet 5.5, tools mode) was A1's real-model
+  smoke: completed, cause grounded, no unsupported finding. More
+  scenarios, repetitions and models are the owner's call
+
 **2026-10-24 - AI A1 deeper investigation (untagged; spec
 `docs/superpowers/specs/2026-10-21-klyx-ai-a1-investigation.md`, as built in
 §13):**
@@ -260,8 +278,7 @@ Merged to `main` — do not re-add to the backlog:
 - Every component read checks the turn's fence; one Git comparison at a
   time fleet-wide; the §8 load test passes
 - Codex-accepted at 9077fde after a review and three re-reviews; native
-  smoke 209/209 four ways. Still owed: the owner's real-model smoke (the
-  scored eval will make it repeatable) and A1.1, rollout history
+  smoke 209/209 four ways. A1.1 and the eval followed the same day (above)
 
 **2026-10-21 - v0.15.1 (notes `docs/releases/release-notes-0.15.1.md`), from the
 owner's first checks of v0.15.0 on their own clusters:**

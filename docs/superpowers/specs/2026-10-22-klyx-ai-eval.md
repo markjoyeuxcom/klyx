@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built and accepted (§16).
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built and accepted (§16); the owner's first real-model run is §17.
 
 ## 0. Why
 

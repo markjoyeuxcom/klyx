@@ -123,11 +123,12 @@ Shipped in v0.15.0 (2026-10-21); the roadmap lists each slice.
 
 ## The AI investigations programme (2026-10-20 onward)
 
-The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation) was merged on 2026-10-24, untagged; its spec carries the as-built record and the review.
+The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation) was merged on 2026-10-24, untagged; its spec carries the as-built record and the review. A1.1 (rollout history) and the scored eval, whose first real-model run was A1's smoke, followed the same day.
 
 - [Klyx AI programme: investigation, proactive reports, guarded execution](specs/2026-10-20-klyx-ai-investigations-roadmap.md) (spec)
 - [Klyx AI A1: deeper investigation](specs/2026-10-21-klyx-ai-a1-investigation.md) (spec)
 - [Klyx AI A1.1: rollout history](specs/2026-10-24-klyx-ai-a1-1-rollout-history.md) (spec)
+- [Klyx AI eval: scored investigations on the kind lab](specs/2026-10-22-klyx-ai-eval.md) (spec)
 
 ## Next
 
