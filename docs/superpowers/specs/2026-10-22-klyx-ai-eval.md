@@ -1,6 +1,6 @@
 # Klyx AI eval: scored investigations on the kind lab
 
-Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15).
+Opened 2026-10-22, on `feat/ai-eval`; revisions 1 to 3 (§11 to §13) on 2026-10-24. The design is accepted (§14); stage 1 is built and accepted (§15); stage 2 is built (§16).
 
 ## 0. Why
 
@@ -397,3 +397,30 @@ Codex resolved the earlier findings and accepted `delivery-uncertain` as an exte
 ### 15.5 ACCEPT (2026-10-24)
 
 Codex accepted stage 1 at 422b8f9 (handoff f2d39393), with no remaining findings, after the review and two re-reviews, the `delivery-uncertain` extension included. At that head, from a clean build, the self-test passes 15 of 15 on the kind lab (reports under `eval-lab/out/selftest-20261024T124158`). Still owed: stage 2 (E3 and E4), the owner's fixture-repository decision and the first real-model run.
+
+## 16. As built: stage 2 (2026-10-24)
+
+**What was built (1ecd4b0):** E3 and E4, each in the eval's own namespace, every object under the eval directory's owner label.
+- **E3, `keda-no-target`,** in `klyx-eval-e3`:
+  - the planted fault: ScaledObject `no-target`, whose `scaleTargetRef` names a Deployment that does not exist;
+  - the lookalikes, failing with the same condition reason for another cause: `bad-auth` (a TriggerAuthentication naming a missing Secret) and `ghost-auth` (a missing TriggerAuthentication);
+  - the predicates: KEDA's event naming the missing Deployment, and the Ready condition's message naming it.
+- **E4, `lb-pool-exhausted`,** in `klyx-eval-e4`:
+  - the planted fault: a one-address MetalLB pool, `klyx-eval-one` in `metallb-system` (the eval's own), held by `one-a`, so MetalLB refuses `one-b`;
+  - the lookalikes: `cilium-l2`, of a Cilium class with Cilium's own "No more IPs available" condition written as Cilium would, and `wrong-pool`, refused with the same `AllocationFailed` reason for an unknown pool;
+  - the predicate: MetalLB's `AllocationFailed` event, "no available IPs in pool klyx-eval-one".
+
+  MetalLB writes that event only when it reconciles `one-b`, so setup renews it by annotating `one-b`.
+- **`install`** now also fetches KEDA 2.21.0 and MetalLB 0.16.1 by their release URLs, and applies each only when it matches its pinned digest.
+- **The scripted model** plays a grounded run and a lookalike run for each.
+
+**Evidence:** the self-test passes 19 of 19 on the kind lab, from a clean build at 1ecd4b0. In the four new cases:
+- the grounded runs establish their predicates and earn grounded cause;
+- each lookalike run is marked as citing only a lookalike, without grounded cause.
+
+### 16.1 Deviations, for review
+
+1. **E3 and E4 have their own namespaces and objects,** not the S9 and S4 labs'. The scenarios do not depend on, or adopt, the coverage labs' state; the S9 and S4 labs keep serving the native smoke.
+2. **E4's second lookalike is `wrong-pool`, not the S4 lab's `svclb-demo`.** That stand-in DaemonSet is a fabricated k3s fixture. `wrong-pool` is refused by MetalLB itself with the same reason, `AllocationFailed`, for another cause.
+3. **E4's pool address is `192.168.97.230/32` by default**, beside the S4 lab's pools; `KLYX_EVAL_E4_ADDRESS` overrides it.
+4. **Cilium's condition on `cilium-l2` is written by setup,** as the S4 lab writes it: Cilium is not the lab's CNI. A Service has no generation, so the condition names none.
