@@ -121,9 +121,15 @@ Shipped in v0.15.0 (2026-10-21); the roadmap lists each slice.
 - [Coverage S11b: dynamic resource allocation (DRA)](specs/2026-10-20-klyx-coverage-s11b-dra.md) (spec)
 - [Coverage S3b: proven admission attribution](specs/2026-10-20-klyx-coverage-s3b-admission-attribution.md) (spec)
 
+## The AI investigations programme (2026-10-20 onward)
+
+The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation) was merged on 2026-10-24, untagged; its spec carries the as-built record and the review.
+
+- [Klyx AI programme: investigation, proactive reports, guarded execution](specs/2026-10-20-klyx-ai-investigations-roadmap.md) (spec)
+- [Klyx AI A1: deeper investigation](specs/2026-10-21-klyx-ai-a1-investigation.md) (spec)
+
 ## Next
 
-The AI investigations programme (A1 in progress on `feat/ai-a1`, its design in that branch) and the extensions research, not yet built.
+The extensions research, not yet built.
 
 - [Klyx extensions: research and recommendation](specs/2026-10-16-klyx-extensions-research.md) (spec)
-- [Klyx AI programme: investigation, proactive reports, guarded execution](specs/2026-10-20-klyx-ai-investigations-roadmap.md) (spec)
