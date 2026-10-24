@@ -109,9 +109,13 @@ var (
 )
 
 // conditionChecks reads an object's failing conditions: type, status and
-// reason, with the last transition as the onset; never the message.
+// reason, with the last transition as the onset; never the message. A
+// condition that observed an earlier generation than the object's describes
+// an earlier spec: its check says so and is not a failure in force, though
+// another condition reads the current one (AI A1 re-review 2, finding 1).
 func conditionChecks(u *unstructured.Unstructured, subj ChatCheckSubject, readAt string, p *projector) []ChatCheck {
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	gen := u.GetGeneration()
 	var out []ChatCheck
 	for _, c := range conds {
 		m, ok := c.(map[string]any)
@@ -127,8 +131,13 @@ func conditionChecks(u *unstructured.Unstructured, subj ChatCheckSubject, readAt
 		if reason, _ := m["reason"].(string); reason != "" {
 			st += ", reason " + checkText(reason, p)
 		}
+		failing := true
+		if og, ok := m["observedGeneration"].(int64); ok && gen > 0 && og < gen {
+			failing = false
+			st += fmt.Sprintf(" (as of generation %d; the object is at %d)", og, gen)
+		}
 		onset, _ := m["lastTransitionTime"].(string)
-		out = append(out, ChatCheck{Class: checkCondition, Subject: subj, Statement: st, Observed: readAt, Onset: onset, Coverage: "live", Failing: true})
+		out = append(out, ChatCheck{Class: checkCondition, Subject: subj, Statement: st, Observed: readAt, Onset: onset, Coverage: "live", Failing: failing})
 	}
 	return out
 }

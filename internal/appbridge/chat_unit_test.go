@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -469,6 +470,57 @@ func TestUnitADifferentCurrentFailureKeepsTheHealthCheckHistorical(t *testing.T)
 		if got := unitData(t, env).HealthCheck != nil; got != tc.want {
 			t.Fatalf("%s: a current health-check failure %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// AI A1 re-review 2, finding 1: a condition that observed an earlier
+// generation describes an earlier spec. A recovered unit at generation 3,
+// Ready=True, with Healthy=False left from generation 2 and a live OK
+// verdict, has no failure in force; the stale condition stays a fact that
+// says its generation.
+func TestUnitAStaleConditionIsNotAFailure(t *testing.T) {
+	u := unitObj("")
+	st := u.Object["status"].(map[string]any)
+	healthy := map[string]any{"type": "Healthy", "status": "False", "reason": "HealthCheckFailed", "observedGeneration": int64(2), "lastTransitionTime": "2026-10-21T12:40:00Z",
+		"message": "health check failed: timeout waiting for: [Deployment/shop/web status: 'InProgress']"}
+	st["conditions"] = []any{
+		map[string]any{"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded", "observedGeneration": int64(3), "lastTransitionTime": "2026-10-21T12:50:00Z"},
+		healthy,
+	}
+	f := unitChat(u)
+	for key, rows := range f.rows {
+		rs := rows.Rows.(healthsrc.RowSet[flux.Resource])
+		for i := range rs.Rows {
+			rs.Rows[i].Eval = health.NativeEval{Included: true, Role: health.OK, Label: "Ready"}
+			rs.Rows[i].Ref.Generation = 3
+		}
+		rows.Rows = rs
+		f.rows[key] = rows
+	}
+	read := func() (chatEnvelope, ChatRead) {
+		r := newChatTools(f, fixedNow).as("r1").Run(context.Background(), toolUnit, json.RawMessage(`{"kind":"Kustomization","namespace":"flux-system","name":"app"}`))
+		var env chatEnvelope
+		if err := json.Unmarshal(r.JSON, &env); err != nil {
+			t.Fatal(err)
+		}
+		return env, r.Read
+	}
+	env, rd := read()
+	seed := &ChatSeedDTO{UID: "uid-ks", Namespace: "flux-system", Name: "app"}
+	if a := anchorOf(seed, []ChatRead{rd}); a.failing || unitData(t, env).HealthCheck != nil {
+		t.Fatalf("a recovered unit has no failure in force: %+v %+v", a, rd.Checks)
+	}
+	stale := false
+	for _, c := range rd.Checks {
+		stale = stale || (c.Class == checkCondition && strings.Contains(c.Statement, "Healthy=False") && strings.Contains(c.Statement, "(as of generation 2; the object is at 3)") && !c.Failing)
+	}
+	if !stale {
+		t.Fatalf("the stale condition stays a fact, dated by its generation: %+v", rd.Checks)
+	}
+	// the control: the same condition at the current generation is in force
+	healthy["observedGeneration"] = int64(3)
+	if _, rd := read(); !anchorOf(seed, []ChatRead{rd}).failing {
+		t.Fatalf("a current Healthy=False is a failure: %+v", rd.Checks)
 	}
 }
 

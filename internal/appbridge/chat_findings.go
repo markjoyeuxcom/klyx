@@ -189,7 +189,7 @@ func anchorOf(anchor *ChatSeedDTO, ledger []ChatRead) anchorFacts {
 			// revision first failed its health check: an upper bound on when
 			// it began
 			ready := c.Class == checkCondition && strings.Contains(c.Statement, "Ready=False")
-			if (ready || c.Class == checkHealthCheck) && c.Onset != "" && (a.start == "" || c.Onset < a.start) {
+			if (ready || c.Class == checkHealthCheck) && parsesAsTime(c.Onset) && (a.start == "" || timeBefore(c.Onset, a.start)) {
 				a.start = c.Onset
 			}
 		}
@@ -237,7 +237,7 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 			if b, ok := shown[c.ID]; ok {
 				return b
 			}
-			b := a.failing && a.start != "" && c.Observed != "" && c.Observed < a.start
+			b := a.failing && a.start != "" && timeBefore(c.Observed, a.start)
 			shown[c.ID] = b
 			if len(fd.Checked) < findingCheckedMax {
 				fd.Checked = append(fd.Checked, FindingCheckDTO{ID: c.ID, Class: c.Class, Statement: c.Statement, Observed: c.Observed, Before: b})
@@ -272,9 +272,9 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose evidence's time is not known", id))
 			case a.failing && a.start != "" && r.ObservedTo != "" && timeBefore(r.ObservedTo, a.start):
 				before++
-				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose evidence was observed before the failure was reported (%s to %s)", id, r.ObservedFrom, r.ObservedTo))
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, whose evidence was observed before the failure was reported (%s to %s)", id, shownTime(r.ObservedFrom), shownTime(r.ObservedTo)))
 			case a.failing && a.start != "" && r.ObservedFrom != "" && timeBefore(r.ObservedFrom, a.start):
-				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, part of whose evidence was observed before the failure was reported (from %s)", id, r.ObservedFrom))
+				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, part of whose evidence was observed before the failure was reported (from %s)", id, shownTime(r.ObservedFrom)))
 			}
 			if r.Outcome != "completed" {
 				citeNotes = append(citeNotes, fmt.Sprintf("cites %s, a read that %s", id, map[string]string{"failed": "failed", "truncated": "was truncated", "cancelled": "was cancelled"}[r.Outcome]))
@@ -364,12 +364,28 @@ func labelFindings(in findingsInput, ledger []ChatRead, a anchorFacts) FindingsD
 	return out
 }
 
-// timeBefore says whether RFC 3339 time a is before b; an unreadable time
-// is never before.
+// timeBefore says whether RFC 3339 time a is before b, as times, to the
+// nanosecond; an unreadable time is never before. Every decision on time
+// goes through it, never through the text (AI A1 re-review 2, finding 2).
 func timeBefore(a, b string) bool {
 	ta, errA := time.Parse(time.RFC3339Nano, a)
 	tb, errB := time.Parse(time.RFC3339Nano, b)
 	return errA == nil && errB == nil && ta.Before(tb)
+}
+
+func parsesAsTime(s string) bool {
+	_, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil
+}
+
+// shownTime is a time as a note shows it, to the second; the decision was
+// made on the full time.
+func shownTime(s string) string {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return s
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // qualifiedCoverage is a check's coverage that qualifies what rests on it.

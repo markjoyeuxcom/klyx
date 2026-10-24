@@ -224,8 +224,9 @@ type ChatRead struct {
 	ObservedUnknown bool   `json:"observedUnknown,omitempty"`
 }
 
-// observedSpan is the earliest and latest of times, RFC 3339 to the
-// second; ok is false when none parses.
+// observedSpan is the earliest and latest of times, RFC 3339 at their full
+// precision (a Loki line's nanoseconds decide its order against an onset);
+// ok is false when none parses.
 func observedSpan(times []string) (from, to string, ok bool) {
 	var lo, hi time.Time
 	for _, s := range times {
@@ -244,7 +245,7 @@ func observedSpan(times []string) (from, to string, ok bool) {
 	if !ok {
 		return "", "", false
 	}
-	return lo.UTC().Truncate(time.Second).Format(time.RFC3339), hi.UTC().Truncate(time.Second).Format(time.RFC3339), true
+	return lo.UTC().Format(time.RFC3339Nano), hi.UTC().Format(time.RFC3339Nano), true
 }
 
 // byName is a read's subject held by name only.

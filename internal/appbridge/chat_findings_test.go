@@ -347,6 +347,47 @@ func TestFindingsAHistoricalReadKeepsItsObservationTime(t *testing.T) {
 	}
 }
 
+// AI A1 re-review 2, finding 2: every decision on time is made on parsed
+// times at full precision - a check observed after an onset written with an
+// offset, the earliest onset among several, and a Loki line a fraction of a
+// second after the failure - and a note shows times to the second.
+func TestFindingsTimeIsChronologyNotText(t *testing.T) {
+	ledger := ledgerFixture()
+	ledger[0].Checks[1].Onset = "2026-10-21T13:05:00+01:00" // 12:05Z
+	ledger[0].Checks[0].Observed = "2026-10-21T12:06:00Z"
+	in, _ := parseFindings(json.RawMessage(`{"findings":[` + finding("observation", "Pod", "shop", "web", "the container is waiting", "r1.c1") + `]}`))
+	if f := labelFindings(in, ledger, anchorOf(&podAnchor, ledger)).Findings[0]; f.Checked[0].Before {
+		t.Fatalf("12:06Z is after 13:05+01:00: %+v", f)
+	}
+	c := ledger[0].Checks[1]
+	c.ID, c.Class, c.Onset = "r1.c4", checkHealthCheck, "2026-10-21T12:30:00Z"
+	ledger[0].Checks = append(ledger[0].Checks, c)
+	if a := anchorOf(&podAnchor, ledger); !timeBefore(a.start, "2026-10-21T12:05:01Z") || timeBefore(a.start, "2026-10-21T12:04:59Z") {
+		t.Fatalf("the earliest onset is 12:05Z: %q", a.start)
+	}
+	// an onset that is not a time never becomes the window, wherever it
+	// comes in the ledger
+	garbled := ledgerFixture()
+	g := garbled[0].Checks[1]
+	g.ID, g.Class, g.Onset = "r1.c0", checkHealthCheck, "recently"
+	garbled[0].Checks = append([]ChatCheck{g}, garbled[0].Checks...)
+	if a := anchorOf(&podAnchor, garbled); a.start != "2026-10-21T12:05:00Z" {
+		t.Fatalf("the window comes from a time: %q", a.start)
+	}
+	tools := newChatTools(newFakeChat(), func() time.Time { return time.Date(2026, 10, 21, 12, 10, 0, 0, time.UTC) })
+	tools.history = linesHistory{mode: "name", lines: []string{"2026-10-21T12:05:00.900Z"}}
+	rd := tools.as("r8").Run(context.Background(), toolLogHistory, json.RawMessage(`{"namespace":"shop","pod":"web","window":"1h"}`)).Read
+	precise := append(ledgerFixture(), rd)
+	precise[0].Checks[1].Onset = "2026-10-21T12:05:00.500Z"
+	in, _ = parseFindings(json.RawMessage(`{"findings":[` + finding("observation", "Pod", "shop", "web", "the container logged an exit", "r8") + `]}`))
+	if f := labelFindings(in, precise, anchorOf(&podAnchor, precise)).Findings[0]; strings.Contains(strings.Join(f.Notes, ";"), "before the failure") {
+		t.Fatalf(".900 is after .500: %+v (read %+v)", f, rd)
+	}
+	if rd.ObservedFrom != "2026-10-21T12:05:00.9Z" || shownTime(rd.ObservedFrom) != "2026-10-21T12:05:00Z" {
+		t.Fatalf("kept at full precision, shown to the second: %q", rd.ObservedFrom)
+	}
+}
+
 // timeBefore reads the times, so an offset or fractional seconds never
 // order them by their text.
 func TestTimeBefore(t *testing.T) {
