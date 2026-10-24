@@ -714,6 +714,12 @@ func (s *ChatService) settleEffect(c *conversation, p *actionPlan, n int, effect
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := p.runs[n-1]
+	if effect == stepEffectEstablished {
+		// recorded only while the fence holds (stage 4 review, finding 2)
+		if f := s.verifyFenceLocked(c); f != "" {
+			effect, why = stepEffectUnverified, f
+		}
+	}
 	r.effect, r.effectWhy = effect, capRecord(why, stepWhyMax)
 	if p.running == n {
 		p.running = 0
@@ -881,12 +887,12 @@ func holdWhy(r *stepRun) string {
 // model reads what it needs through its tools, fenced as ever.
 func planRecordLocked(c *conversation) string {
 	var lines []string
-	for i, e := range c.exchanges {
+	for _, e := range c.exchanges {
 		p := e.plan
 		if p == nil {
 			continue
 		}
-		turn := c.removed + i + 1
+		turn := e.turn
 		ran := false
 		for j, st := range p.dto.Steps {
 			r := p.runs[j]

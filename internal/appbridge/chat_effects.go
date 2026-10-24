@@ -34,12 +34,16 @@ type subjectVerdict struct {
 	// gone: the capture is live and complete and holds no row of this UID;
 	// replaced: another UID holds its name (§5.3)
 	gone, replaced bool
+	// at is when the capture this reading comes from was evaluated, for a
+	// verdict and an absence alike (stage 4 review, finding 3)
+	at time.Time
 }
 
 // verdictOf is Klyx's verdict for one subject by UID, from the Observer's
-// capture: an in-memory read, never an API call. cache keeps one reading's
-// parts, so several subjects of one part classify it once.
-func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*chatVerdicts) subjectVerdict {
+// capture: an in-memory read, never an API call, waited for under ctx (a
+// verification's bound and fence). cache keeps one reading's parts, so
+// several subjects of one part classify it once.
+func (s *ChatService) verdictOf(ctx context.Context, conn ChatConn, f actionFact, cache map[string]*chatVerdicts) subjectVerdict {
 	if verdictOfHook != nil {
 		return verdictOfHook(f)
 	}
@@ -47,7 +51,7 @@ func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*c
 	vs, ok := cache[gvr.String()]
 	if !ok {
 		n := 0
-		vs = newChatTools(conn, s.now).verdictsFor(context.Background(), gvr, &n)
+		vs = newChatTools(conn, s.now).verdictsFor(ctx, gvr, &n)
 		if cache != nil {
 			cache[gvr.String()] = vs
 		}
@@ -56,7 +60,7 @@ func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*c
 		return subjectVerdict{}
 	}
 	if v, ok := vs.byUID[f.UID]; ok {
-		return subjectVerdict{v: v, found: true, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID]}
+		return subjectVerdict{v: v, found: true, state: orText(v.Kind, v.Role), completed: vs.completed[f.UID], at: v.at}
 	}
 	if !vs.complete {
 		return subjectVerdict{}
@@ -67,7 +71,7 @@ func (s *ChatService) verdictOf(conn ChatConn, f actionFact, cache map[string]*c
 		}
 	}
 	other := vs.byName[rowName(f.Resource, f.Namespace, f.Name)]
-	return subjectVerdict{gone: other == "", replaced: other != ""}
+	return subjectVerdict{gone: other == "", replaced: other != "", at: vs.at}
 }
 
 // stateEffect says whether a state verb's effect holds on u, its target as
@@ -130,11 +134,11 @@ func (s *ChatService) stateEffect(ctx context.Context, conn ChatConn, st ActionS
 		case condStatus(u, "Ready") == "False":
 			return false, "Ready is False"
 		}
-		sv := s.verdictOf(conn, f, nil)
+		sv := s.verdictOf(ctx, conn, f, nil)
 		switch {
 		case !sv.found || sv.v.Coverage != "live":
 			return false, "Klyx holds no live verdict that its pause completed"
-		case !after.IsZero() && !evaluatedAfter(sv.v.EvaluatedAt, after):
+		case !after.IsZero() && !sv.at.After(after):
 			return false, "Klyx's verdict was evaluated before the write"
 		case sv.v.Generation != u.GetGeneration():
 			return false, fmt.Sprintf("Klyx's verdict describes generation %d, not the read's %d", sv.v.Generation, u.GetGeneration())

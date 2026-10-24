@@ -18,6 +18,8 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/health"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -95,8 +97,8 @@ var webFact = actionFact{Kind: "Deployment", Group: "apps", Version: "v1", Resou
 
 func witnessOf(s *ChatService, conn ChatConn, st ActionStepDTO, f actionFact, partner *fleet.RevisionExpect) *witness {
 	w := &witness{sn: stepSnap{step: st, fact: f, partner: partner}}
-	w.holds = func(u *unstructured.Unstructured) (bool, string) {
-		return s.stateEffect(context.Background(), conn, st, f, partner, u, time.Time{})
+	w.holds = func(ctx context.Context, u *unstructured.Unstructured) (bool, string) {
+		return s.stateEffect(ctx, conn, st, f, partner, u, time.Time{})
 	}
 	return w
 }
@@ -179,7 +181,7 @@ func TestTheWitnessByVerb(t *testing.T) {
 			}
 			w := witnessOf(s, nil, st, f, partner)
 			w.written, w.gen, w.prior, w.token = c.written, c.gen, c.prior, c.token
-			got, why := w.judge(c.read)
+			got, why := w.judge(context.Background(), c.read)
 			if got != c.want || !strings.Contains(why, c.why) {
 				t.Fatalf("got %d %q", got, why)
 			}
@@ -290,13 +292,13 @@ func TestAKEDAPauseIsVerifiedFromTheObserver(t *testing.T) {
 				defer mu.Unlock()
 				reads++
 				v := chatVerdict{Role: "paused", Coverage: "live", Generation: 2, EvaluatedAt: c.at.UTC().Format(time.RFC3339)}
-				return subjectVerdict{v: v, found: true, state: "paused", completed: reads > 2} // completes a few ticks later
+				return subjectVerdict{v: v, found: true, state: "paused", completed: reads > 2, at: c.at} // completes a few ticks later
 			}
 			t.Cleanup(func() { verdictOfHook = prev })
 			st := ActionStepDTO{Verb: "keda-pause"}
 			w := &witness{sn: stepSnap{step: st, fact: fact}, written: true}
-			w.holds = func(u *unstructured.Unstructured) (bool, string) {
-				return f.svc.stateEffect(context.Background(), wc, st, fact, nil, u, ranAt)
+			w.holds = func(ctx context.Context, u *unstructured.Unstructured) (bool, string) {
+				return f.svc.stateEffect(ctx, wc, st, fact, nil, u, ranAt)
 			}
 			effect, why := f.svc.verifyObject(context.Background(), wc, w, func() error { return nil })
 			if effect != c.effect {
@@ -415,10 +417,10 @@ func (sf *stepsFixture) step(n int) ActionStepDTO {
 // quietIncident makes a plan's incident settle at its first reading, from
 // no verdicts, so no reading outlives its test.
 func quietIncident(t *testing.T) {
+	prevBound, prev := incidentBound, verdictOfHook
 	incidentBound = 0
-	prev := verdictOfHook
 	verdictOfHook = func(actionFact) subjectVerdict { return subjectVerdict{} }
-	t.Cleanup(func() { verdictOfHook = prev })
+	t.Cleanup(func() { incidentBound, verdictOfHook = prevBound, prev })
 }
 
 // incidentSettled: the plan's incident is read and ended.
@@ -517,19 +519,26 @@ func TestADeletionListsItsNamespaceFirst(t *testing.T) {
 // §5.3's table, row by row, from the Observer's verdicts by UID.
 func TestTheIncidentTable(t *testing.T) {
 	last := fixedNow()
-	fresh := last.Add(time.Second).UTC().Format(time.RFC3339)
-	stale := last.Add(-time.Second).UTC().Format(time.RFC3339)
+	fresh, stale := last.Add(500*time.Millisecond), last.Add(-time.Second)
+	zero := 0
 	sub := func(uid string, held, removed int) incidentSubject {
-		return incidentSubject{fact: actionFact{Kind: "Deployment", Resource: "deployments", Namespace: "shop", Name: uid, UID: uid}, held: held, removedBy: removed}
+		s := incidentSubject{fact: actionFact{Kind: "Deployment", Resource: "deployments", Namespace: "shop", Name: uid, UID: uid}, held: held, removedBy: removed}
+		if held > 0 {
+			s.holdStep = ActionStepDTO{N: held, Verb: "scale", Replicas: &zero}
+		}
+		return s
 	}
-	v := func(state, at, coverage string) subjectVerdict {
-		return subjectVerdict{v: chatVerdict{Role: state, EvaluatedAt: at, Coverage: coverage}, found: true, state: state}
+	v := func(state string, at time.Time, coverage string) subjectVerdict {
+		return subjectVerdict{v: chatVerdict{Role: state, EvaluatedAt: at.UTC().Format(time.RFC3339), Coverage: coverage}, found: true, state: state, at: at}
 	}
+	scaledToZero := v("paused", fresh, "live")
+	scaledToZero.v.Reason = "ScaledToZero"
 	verdicts := map[string]subjectVerdict{
-		"ok": v("ok", fresh, "live"), "held": v("paused", fresh, "live"), "paused": v("paused", fresh, "live"),
+		"ok": v("ok", fresh, "live"), "held": scaledToZero, "paused": v("paused", fresh, "live"), "held otherwise": v("paused", fresh, "live"),
 		"progressing": v("progressing", fresh, "live"), "fault": v("fault", fresh, "live"), "degraded": v("degraded", fresh, "live"),
 		"unknown": v("unknown", fresh, "live"), "stale": v("ok", stale, "live"), "coverage": v("ok", fresh, "stale"),
-		"gone": {gone: true}, "replaced": {replaced: true}, "removed": v("ok", fresh, "live"),
+		"gone": {gone: true, at: fresh}, "replaced": {replaced: true, at: fresh}, "gone before": {gone: true, at: stale}, "replaced before": {replaced: true, at: stale},
+		"removed": v("ok", fresh, "live"),
 	}
 	look := func(f actionFact) subjectVerdict { return verdicts[f.UID] }
 	for _, c := range []struct {
@@ -540,6 +549,8 @@ func TestTheIncidentTable(t *testing.T) {
 	}{
 		{sub("ok", 0, 0), "recovered", false, false},
 		{sub("held", 2, 0), "held by step 2, as intended", false, false},
+		// stage 4 review, finding 5: a pause that is not the step's own hold
+		{sub("held otherwise", 2, 0), "unverified: paused outside this plan", true, false},
 		{sub("paused", 0, 0), "unverified: paused outside this plan", true, false},
 		{sub("progressing", 0, 0), "pending: still progressing", true, true},
 		{sub("fault", 0, 0), "pending: fault, a failure in force", true, true},
@@ -550,7 +561,12 @@ func TestTheIncidentTable(t *testing.T) {
 		{sub("missing", 0, 0), "pending: no fresh reading", true, false},
 		{sub("gone", 0, 0), "unverified: gone", true, false},
 		{sub("replaced", 0, 0), "unverified: replaced", true, false},
+		// stage 4 review, finding 3: an absence from before the write is no
+		// fresh reading
+		{sub("gone before", 0, 0), "pending: no fresh reading", true, false},
+		{sub("replaced before", 0, 0), "pending: no fresh reading", true, false},
 		{sub("removed", 0, 1), "removed by step 1: it cannot itself recover; its replacement is shown on its own", true, false},
+		{incidentSubject{fact: actionFact{Kind: "Pod", Resource: "pods", UID: "removed"}, removedBy: 1, removedLost: true}, "removed, by step 1's request or another actor: it cannot itself recover; its replacement is shown on its own", true, false},
 		{incidentSubject{fact: actionFact{Kind: "the investigated object", UID: "x"}}, "unverified: Klyx holds no read of it", true, false},
 	} {
 		rows, recovered, open, faulted := readSubjects(look, []incidentSubject{c.sub}, last)
@@ -591,14 +607,19 @@ func TestTheIncidentsOutcome(t *testing.T) {
 				if st == "" {
 					return subjectVerdict{}
 				}
-				return subjectVerdict{v: chatVerdict{Role: st, EvaluatedAt: fresh, Coverage: "live"}, found: true, state: st}
+				sv := subjectVerdict{v: chatVerdict{Role: st, EvaluatedAt: fresh, Coverage: "live"}, found: true, state: st, at: last.Add(time.Second)}
+				if st == "paused" {
+					sv.v.Reason = "ScaledToZero"
+				}
+				return sv
 			}
 			t.Cleanup(func() { verdictOfHook = prev })
 			var subjects []incidentSubject
 			for uid := range c.states {
 				s := incidentSubject{fact: actionFact{Kind: "Deployment", Resource: "deployments", Namespace: "shop", Name: uid, UID: uid}}
 				if uid == c.held {
-					s.held = 1
+					zero := 0
+					s.held, s.holdStep = 1, ActionStepDTO{N: 1, Verb: "scale", Replicas: &zero}
 				}
 				subjects = append(subjects, s)
 			}
@@ -756,7 +777,7 @@ func TestTheCaptureTellsGoneFromReplaced(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newToolsFixture(t)
 			f.conn.rows = map[string]observe.Rows{"pods/pods": c.rows}
-			sv := f.svc.verdictOf(f.conn, c.f, nil)
+			sv := f.svc.verdictOf(context.Background(), f.conn, c.f, nil)
 			if sv.found != c.found || sv.gone != c.gone || sv.replaced != c.repl {
 				t.Fatalf("%+v", sv)
 			}
@@ -814,5 +835,241 @@ func TestALostAnswerIsWitnessedByItsAttemptsToken(t *testing.T) {
 				return p.incident == nil || p.incident.State != incidentPending
 			})
 		})
+	}
+}
+
+// ---- stage 4 review: the regressions ----
+
+// capturedWorkloads is a live workloads capture evaluated at at.
+func capturedWorkloads(at time.Time, ws ...workloads.Workload) observe.Rows {
+	r := observe.Rows{Task: "workloads", EvaluatedAt: at, Part: observe.Part{ID: "workloads", Classifier: "verdict", Coverage: observe.Live}}
+	var rows []healthsrc.Row[workloads.Workload]
+	for _, w := range ws {
+		rows = append(rows, healthsrc.Row[workloads.Workload]{Ref: healthsrc.RowRef{UID: string(w.UID), GVR: "apps/v1/deployments", Namespace: w.Namespace, Name: w.Name, Generation: w.Generation}, Data: w})
+	}
+	r.Rows = healthsrc.RowSet[workloads.Workload]{Rows: rows}
+	return r
+}
+
+// blockingGet holds every read until its context ends.
+type blockingGet struct {
+	ChatConn
+	entered chan context.Context
+}
+
+func (c *blockingGet) ChatGet(ctx context.Context, _ schema.GroupVersionResource, _, _ string) (*unstructured.Unstructured, error) {
+	select {
+	case c.entered <- ctx:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// blockingRows holds the Observer's capture until its context ends.
+type blockingRows struct {
+	ChatConn
+	entered chan context.Context
+}
+
+func (c *blockingRows) HealthRowsNow(ctx context.Context, _, _ string) (observe.Rows, bool) {
+	select {
+	case c.entered <- ctx:
+	default:
+	}
+	<-ctx.Done()
+	return observe.Rows{}, false
+}
+
+// Finding 1: every read waits under the verification's bound, from before
+// the first one, and a cleared conversation ends a blocked Observer read.
+func TestEveryReadIsBoundedAndEndsWithTheConversation(t *testing.T) {
+	fastVerify(t, 30*time.Millisecond)
+	wc, f := newWatchConn(t)
+	bg := &blockingGet{ChatConn: wc, entered: make(chan context.Context, 1)}
+	w := witnessOf(f.svc, bg, ActionStepDTO{Verb: "rollout-pause"}, webFact, nil)
+	start := time.Now()
+	effect, why := f.svc.verifyObject(context.Background(), bg, w, func() error { return nil })
+	ctx := <-bg.entered
+	if _, ok := ctx.Deadline(); !ok || effect != stepEffectUnverified || !strings.HasPrefix(why, "not established within") || time.Since(start) > time.Second {
+		t.Fatalf("%s %q after %s", effect, why, time.Since(start))
+	}
+
+	sf := newStepsFixture(t, pauseWeb)
+	br := &blockingRows{ChatConn: sf.sc, entered: make(chan context.Context, 1)}
+	sf.mu.Lock()
+	sf.cur = br
+	sf.mu.Unlock()
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	c.conn = br
+	p := c.exchanges[0].plan
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.mu.Unlock()
+	done := make(chan struct{})
+	go func() { sf.svc.readIncident(c, p, []incidentSubject{{fact: webFact}}, sf.now); close(done) }()
+	read := <-br.entered
+	sf.svc.Clear("x", sf.conv)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a cleared conversation still waits on the Observer")
+	}
+	if read.Err() == nil || p.incident.State != incidentUnverif || !strings.Contains(p.incident.Why, "cleared") {
+		t.Fatalf("%v %+v", read.Err(), p.incident)
+	}
+}
+
+// Finding 2: a fence that fails during a successful read publishes
+// nothing positive, and a settle under a failed fence is unverified.
+func TestAFenceDuringASuccessfulReadPublishesNothing(t *testing.T) {
+	fastVerify(t, time.Second)
+	wc, f := newWatchConn(t)
+	f.conn.objects[key(deploysGVR, "shop", "web")] = deployAt("uid-web", 5, 5, map[string]any{"paused": true}, nil)
+	valid := true
+	wc.getHook = func() { valid = false }
+	w := witnessOf(f.svc, wc, ActionStepDTO{Verb: "rollout-pause"}, webFact, nil)
+	fence := func() error {
+		if !valid {
+			return errors.New("the cluster disconnected")
+		}
+		return nil
+	}
+	if effect, why := f.svc.verifyObject(context.Background(), wc, w, fence); effect != stepEffectUnverified || why != "the cluster disconnected" {
+		t.Fatalf("%s %q", effect, why)
+	}
+
+	sf := newStepsFixture(t, pauseWeb)
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	p := c.exchanges[0].plan
+	p.runs[0].request, p.running, c.stepRunning = fleet.OutcomeWritten, 1, p
+	sf.svc.mu.Unlock()
+	sf.mu.Lock()
+	sf.usable = false
+	sf.mu.Unlock()
+	sf.svc.settleEffect(c, p, 1, stepEffectEstablished, "")
+	sf.svc.mu.Lock()
+	r := *p.runs[0]
+	sf.svc.mu.Unlock()
+	if r.effect != stepEffectUnverified || !strings.Contains(r.effectWhy, "disconnected") {
+		t.Fatalf("%+v", r)
+	}
+	p.incident = &IncidentDTO{State: incidentPending}
+	sf.svc.settleIncident(c, p, incidentResolved, "every subject recovered", nil)
+	if p.incident.State != incidentUnverif {
+		t.Fatalf("%+v", p.incident)
+	}
+}
+
+// Finding 3: a capture evaluated a fraction of a second after the write is
+// fresh, by its own clock; an absence from a capture before the write is
+// no fresh reading.
+func TestFreshnessIsTheCapturesOwnClock(t *testing.T) {
+	write := fixedNow().Add(100 * time.Millisecond)
+	f := newToolsFixture(t)
+	ok := workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 2, Desired: 1, Health: health.Verdict{Kind: health.OK, Label: "Ready"}}
+	look := func(fact actionFact) subjectVerdict { return f.svc.verdictOf(context.Background(), f.conn, fact, nil) }
+	for _, c := range []struct {
+		name    string
+		rows    observe.Rows
+		reading string
+	}{
+		{"half a second after", capturedWorkloads(fixedNow().Add(500*time.Millisecond), ok), "recovered"},
+		{"before the write", capturedWorkloads(fixedNow(), ok), "pending: no fresh reading"},
+		{"gone, after", capturedWorkloads(fixedNow().Add(500 * time.Millisecond)), "unverified: gone"},
+		{"gone, before", capturedWorkloads(fixedNow()), "pending: no fresh reading"},
+	} {
+		f.conn.rows = map[string]observe.Rows{"workloads/workloads": c.rows}
+		rows, _, _, _ := readSubjects(look, []incidentSubject{{fact: webFact}}, write)
+		if rows[0].Reading != c.reading {
+			t.Errorf("%s: %+v", c.name, rows[0])
+		}
+	}
+}
+
+// Finding 4: a restart is never established by a count scaled to zero
+// after it, whatever the kind.
+func TestARestartNeedsADesiredPod(t *testing.T) {
+	tok := "2026-10-14T12:00:00.000000002Z"
+	tm := map[string]any{"metadata": map[string]any{"annotations": map[string]any{"kubectl.kubernetes.io/restartedAt": tok}}, "spec": map[string]any{}}
+	for kind, status := range map[string]map[string]any{
+		"Deployment":  {"replicas": int64(0), "updatedReplicas": int64(0)},
+		"StatefulSet": {"updatedReplicas": int64(0), "currentRevision": "r2", "updateRevision": "r2"},
+		"DaemonSet":   {"updatedNumberScheduled": int64(0), "desiredNumberScheduled": int64(0)},
+	} {
+		st := map[string]any{"observedGeneration": int64(7)}
+		for k, v := range status {
+			st[k] = v
+		}
+		u := uobj(map[string]any{"kind": kind, "metadata": map[string]any{"name": "web", "namespace": "shop", "uid": "uid-web", "generation": int64(7)}, "spec": map[string]any{"replicas": int64(0), "template": tm}, "status": st})
+		w := &witness{sn: stepSnap{step: ActionStepDTO{Verb: "rollout-restart"}, fact: actionFact{Kind: kind, UID: "uid-web"}}, written: true, gen: 6, prior: 5, token: tok}
+		if got, why := w.judge(context.Background(), u); got != judgePending || !strings.Contains(why, "no pods are desired") {
+			t.Errorf("%s: %d %q", kind, got, why)
+		}
+	}
+}
+
+// Finding 5: a pause that is not the step's own hold, read from a real
+// capture, is not attributed to the plan.
+func TestAHoldIsReadFromItsEvidence(t *testing.T) {
+	f := newToolsFixture(t)
+	zero := 0
+	scaled := workloads.Workload{Kind: "Deployment", Namespace: "shop", Name: "web", UID: "uid-web", Generation: 6, Health: health.Verdict{Kind: health.Paused, Label: "Scaled to 0", Reason: "ScaledToZero", Rule: "workload.scaled-to-zero"}}
+	f.conn.rows = map[string]observe.Rows{"workloads/workloads": capturedWorkloads(fixedNow().Add(time.Second), scaled)}
+	look := func(fact actionFact) subjectVerdict { return f.svc.verdictOf(context.Background(), f.conn, fact, nil) }
+	for _, c := range []struct {
+		step    ActionStepDTO
+		reading string
+	}{
+		{ActionStepDTO{N: 1, Verb: "scale", Replicas: &zero}, "held by step 1, as intended"},
+		{ActionStepDTO{N: 1, Verb: "flux-suspend"}, "unverified: paused outside this plan"},
+		{ActionStepDTO{N: 1, Verb: "cordon"}, "unverified: paused outside this plan"},
+	} {
+		rows, _, _, _ := readSubjects(look, []incidentSubject{{fact: webFact, held: 1, holdStep: c.step}}, fixedNow())
+		if rows[0].Reading != c.reading {
+			t.Errorf("%s: %+v", c.step.Verb, rows[0])
+		}
+	}
+}
+
+// Finding 6: retention counts the plan record and the incident.
+func TestRetentionCountsTheRecordAndTheIncident(t *testing.T) {
+	sf := newStepsFixture(t, pauseWeb)
+	sf.svc.mu.Lock()
+	defer sf.svc.mu.Unlock()
+	e := sf.svc.convs[invKey("x")].exchanges[0]
+	before := exchangeBytes(e)
+	e.planRecord = strings.Repeat("r", 1200)
+	e.plan.incident = &IncidentDTO{State: incidentPending, Subjects: []IncidentSubjectDTO{{Kind: "Deployment", Name: "web", UID: "uid-web", Reading: strings.Repeat("p", 500)}}}
+	b, _ := json.Marshal(e.plan.incident)
+	if got := exchangeBytes(e) - before; got != 1200+len(b) {
+		t.Fatalf("counted %d", got)
+	}
+}
+
+// Finding 7: the record names the turn a plan was proposed in, whatever
+// retention dropped since.
+func TestTheRecordKeepsItsTurn(t *testing.T) {
+	quietIncident(t)
+	prev := verifyStepHook
+	verifyStepHook = func(*ChatService, *conversation, *actionPlan, int, stepSnap, ActionResultDTO) {} // turn 1's step stays running
+	t.Cleanup(func() { verifyStepHook = prev })
+	sf := newStepsFixture(t, pauseWeb)
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatal(r)
+	}
+	for i := 0; i < chatRetainExchange; i++ {
+		sf.prov.turns = append(sf.prov.turns, answer("noted"))
+		sf.svc.Ask("x", sf.conv, "and?", nil)
+	}
+	sf.svc.mu.Lock()
+	defer sf.svc.mu.Unlock()
+	c := sf.svc.convs[invKey("x")]
+	if c.exchanges[0].id != sf.ex || c.exchanges[1].turn == 2 {
+		t.Fatal("retention kept turn 1's running plan and dropped turn 2")
+	}
+	if rec := planRecordLocked(c); !strings.Contains(rec, "turn 1's plan, step 1") {
+		t.Fatalf("%s", rec)
 	}
 }

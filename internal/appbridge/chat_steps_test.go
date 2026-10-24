@@ -1038,7 +1038,7 @@ func TestARealCompletedKEDAPauseStands(t *testing.T) {
 			get := obj(c.get)
 			f.conn.objects[key(gvr, "shop", "q")] = get
 			fact := factOf(gvr, get, "r1", "now", acquisition())
-			if sv := f.svc.verdictOf(f.conn, fact, nil); !sv.found || sv.v.Kind != "" || sv.state == "" || sv.state != role {
+			if sv := f.svc.verdictOf(context.Background(), f.conn, fact, nil); !sv.found || sv.v.Kind != "" || sv.state == "" || sv.state != role {
 				t.Fatalf("a native verdict's state is its Role: %+v (role %q)", sv, role)
 			}
 			_, why := f.svc.observePrior(context.Background(), f.conn, stepSnapPrior{n: 1, verb: "keda-pause", fact: fact})

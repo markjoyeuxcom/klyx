@@ -623,3 +623,38 @@ Codex accepted stage 3 at 74d87c4, after the review of 0c645d8 and three re-revi
 - **a lost answer's token:** a late commit of its attempt's reconcile token establishes the effect, and an older handled token does not.
 
 **Gates:** gofmt, vet, `go test -race ./internal/...`, golangci-lint, tsc, vitest, eslint. A mutation pass caught 52 of 52, after five mutations were rewritten to compile, one test was added (the attempt's token) and one assertion tightened (a failure's reason leads, never the bound's).
+
+### 18.1 Codex's stage 4 review and the fixes (2026-10-24)
+
+Codex requested changes: six P2 and one P3, no P1. It accepted the five deviations of §18, with conditions the findings carry. Each is addressed:
+
+1. **P2, one bounded, conversation-bound context for every read.**
+   - `verifyObject` bounds itself from before its first read, by the most the verb's bound can be, then narrows to the bound for the object as read. `verifyDeletion` is bounded before its watch.
+   - The context is cancelled when the conversation's fence fails, checked each tick (`fenced`). A call blocked on the cluster or on the Observer therefore ends with the bound or with the conversation.
+   - The witness predicates (an undo's partner GET and LIST) and the Observer lookups (`verdictOf`) wait under that same context, never `Background`.
+   - The incident's reading has the same fenced context, with a wall-clock timeout of its bound. The bound itself stays measured on the service's clock, which stamped the write. A fence that fails during a reading settles the incident with the fence's reason.
+2. **P2, a positive result only while the fence holds.**
+   - `verifyObject` and `verifyDeletion` check the fence, and `verifyObject` the deadline, before returning established. `verifyStepEffect` checks the fence again after either.
+   - `settleEffect` and `settleIncident` check it a last time under the service lock, so an established effect or a resolution is recorded only while it holds.
+3. **P2, freshness by the capture's own clock.** A verdict keeps its capture's full evaluation time (`chatVerdict.at`, never sent), and a capture keeps its own (`chatVerdicts.at`), so an absence is dated too. A reading, gone and replaced included, is fresh only if its capture was evaluated after the last write. KEDA's after-write check uses the same time.
+4. **P2, a restart needs a desired pod.** A Deployment's `spec.replicas`, a StatefulSet's `spec.replicas` and a DaemonSet's `desiredNumberScheduled` must each be above zero when judged. A count scaled to zero after the restart reads "no pods are desired" and stays unverified.
+5. **P2, a hold is read from its evidence, and a lost deletion keeps its actor unknown.**
+   - A subject is "held by step N" only when the fresh capture shows that step's own hold: a Flux unit's Suspended, a workload's ScaledToZero, a node's Cordoned, or a KEDA scaler's completed pause. Any other pause reads "paused outside this plan".
+   - A rollout pause never reads paused, so it no longer counts as a hold.
+   - A subject removed by a lost DELETE reads "removed, by step N's request or another actor".
+6. **P2, retention counts the record and the incident.** `exchangeBytes` counts the plan record and the plan's incident. Retention runs when the incident starts, when a reading changes and when it settles.
+7. **P3, the record keeps its turn.** An exchange takes its ordinal when it is asked (`conversation.turns`, never reused), and the record names it, whatever retention dropped since.
+
+**Codex's probes:** all pass after an adaptation of signatures only (the context on `verdictOf` and `judge`). The exception is the turn probe: it builds exchanges by hand, without the ordinal Ask assigns. The regression goes through Ask instead.
+
+**Tests:**
+- a read blocked until its context ends, which returns at the bound with a deadline;
+- a cleared conversation ending a blocked Observer read, with the fence's reason;
+- a fence failing inside a successful GET, and settles under a failed fence;
+- a workload capture half a second after the write, one before it, and absences from each;
+- a restart scaled to zero, for each kind;
+- holds read from a real ScaledToZero capture;
+- retention's count;
+- a record whose turn 1 plan outlived turn 2.
+
+**Gates:** as in §18. A mutation pass caught 19 of 19; the runner now gives each run a Go test timeout, since an unbounded first read hangs its test.

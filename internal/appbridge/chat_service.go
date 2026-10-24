@@ -104,6 +104,8 @@ type conversation struct {
 	// progress: one per conversation, across its plans (AI A3 §4.2, §5.2;
 	// stage 3 review, finding 2)
 	stepRunning *actionPlan
+	// turns numbers its exchanges as they are asked, never reused
+	turns int
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -148,6 +150,10 @@ type exchange struct {
 	// planRecord is Klyx's record of the steps the operator ran, sent with
 	// the next question (AI A3 §5.4): outcome words and ledger names only
 	planRecord string
+	// turn is the exchange's ordinal in its conversation, fixed when it is
+	// asked: retention can leave holes, so it is never derived from a
+	// position (AI A3 stage 4 review, finding 7)
+	turn int
 	// a snapshot investigation's sections left out to fit (read IDs) and
 	// the plan steps its budget stopped
 	snapshotDropped []string
@@ -613,7 +619,8 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	ctx, cancel := context.WithTimeout(context.Background(), lim.deadline)
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
-	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed}
+	c.turns++
+	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed, turn: c.turns}
 	if c.kind == kindInvestigation {
 		ex.planRecord = planRecordLocked(c)
 	}
@@ -821,7 +828,7 @@ func retainStepRecords(c *conversation, running func(*exchange) bool) {
 }
 
 func exchangeBytes(e *exchange) int {
-	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note) + len(e.seedData)
+	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note) + len(e.seedData) + len(e.planRecord)
 	if e.seed != nil {
 		b, _ := json.Marshal(e.seed)
 		n += len(b)
@@ -858,6 +865,11 @@ func exchangeBytes(e *exchange) int {
 		n += len(b)
 		b, _ = json.Marshal(e.plan.partner)
 		n += len(b)
+		// its incident, read in the background (stage 4 review, finding 6)
+		if e.plan.incident != nil {
+			b, _ := json.Marshal(e.plan.incident)
+			n += len(b)
+		}
 		// and its steps' reviews and runs (stage 3 review, finding 5)
 		for _, r := range e.plan.runs {
 			n += stepRunBytes
