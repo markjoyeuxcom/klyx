@@ -1,0 +1,8 @@
+# Self-test: a plant that does not hold is the lab's, not-ready.
+name: s1-broken-plant
+control: true
+anchor: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+invariants:
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+    path: spec.replicas
+    matches: '^7$'

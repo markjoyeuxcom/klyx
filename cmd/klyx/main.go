@@ -75,6 +75,11 @@ func main() {
 		log.Printf("warn: could not load fleet config (%v); starting with empty fleet", err)
 		cfg = &config.Config{}
 	}
+	// The AI eval (eval design §3) runs on the configuration its preflight
+	// checked, never on a second read of the file.
+	if evalRun != nil {
+		cfg = evalRun.Config()
+	}
 	for _, w := range cfg.Warnings() {
 		log.Printf("config warning: %s", w)
 	}
@@ -91,7 +96,12 @@ func main() {
 	// External endpoints' credentials (coverage C5): the OS keychain, and
 	// the in-memory revisions Settings > Endpoints moves.
 	endpointCreds := fleet.Credentials{Store: secretstore.OS{}, Revisions: endpointcred.NewRegistry()}
-	reg := fleet.NewRegistry(cfg, fleet.DefaultConnFactory(clock.Real{}, endpointCreds))
+	factory := fleet.DefaultConnFactory(clock.Real{}, endpointCreds)
+	if evalRun != nil {
+		// the connection the preflight resolved, and no other
+		factory = fleet.ResolvingConnFactory(clock.Real{}, endpointCreds, evalRun.Resolve)
+	}
+	reg := fleet.NewRegistry(cfg, factory)
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer
@@ -650,6 +660,28 @@ func main() {
 		application.NewService(notifySvc),
 		application.NewService(shellSvc),
 	}
+	// The AI eval (eval design §1) takes over here, once every service is
+	// wired, before any app or window exists. Only the eval build sets it.
+	if evalRun != nil {
+		os.Exit(evalRun.Run(ctx, evalDeps{chat: chatSvc, conn: func(name string) (appbridge.ChatConn, string) {
+			c, ok := reg.Conn(name)
+			if !ok {
+				return nil, "the lab cluster has no connection"
+			}
+			cc, ok := c.(appbridge.ChatConn)
+			if !ok {
+				return nil, "the lab cluster's connection cannot serve chat"
+			}
+			// the states chat's own lookup accepts, above
+			switch st := c.Snapshot().State; st {
+			case fleet.Synced, fleet.Degraded, fleet.Stale:
+				return cc, ""
+			default:
+				return nil, "the lab cluster's connection is " + st.String()
+			}
+		}}))
+	}
+
 	// The native smoke (The Line slice 12b) is its own app: its own
 	// single-instance key and its bound service, only under the smoke tag.
 	uniqueID := "com.moomora.klyx"

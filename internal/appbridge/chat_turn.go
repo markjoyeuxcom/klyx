@@ -99,6 +99,7 @@ func (r *turnRunner) run(ctx context.Context) (string, error) {
 	// every component read of the turn, inside composites too, checks the
 	// turn's fence first (A1 implementation review, finding 3)
 	ctx = readfence.With(ctx, r.check)
+	r.evalMode(r.c.mode)
 	if err := r.seedRead(ctx); err != nil {
 		return "", err
 	}
@@ -157,6 +158,7 @@ func (r *turnRunner) seedRead(ctx context.Context) error {
 	}
 	res := newChatTools(gc, r.s.now).as(r.nextReadID()).getGVR(ctx, gvr, ns, name, sd.UID)
 	r.addRead(res.Read)
+	r.evalRead(res.Read.Tool, json.RawMessage(mustJSON(map[string]any{"namespace": ns, "name": name, "resource": gvr.Resource})), res)
 	if err := r.aborted(); err != nil {
 		return err
 	}
@@ -340,6 +342,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 			}()
 			if errors.Is(err, ai.ErrRequestTooLarge) {
 				r.dropCall(idx) // nothing was sent
+				r.evalSent(msgs, err)
 				if prior == 0 {
 					return "", &chatError{msg: fmt.Sprintf("this question's reads passed the %d KiB request budget; ask something narrower", chatRequestBudget>>10)}
 				}
@@ -347,6 +350,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 				continue
 			}
 			if err != nil {
+				r.evalSent(msgs, err)
 				r.finishCall(idx, "", nil, callOutcome(err))
 				if errors.Is(err, ai.ErrToolsUnsupported) && call == 0 {
 					// The server positively refused tools: snapshot mode for
@@ -354,6 +358,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 					r.s.mu.Lock()
 					r.c.mode = "snapshot"
 					r.s.mu.Unlock()
+					r.evalMode("snapshot")
 					r.addRead(ChatRead{Tool: "mode", Outcome: "completed", Detail: "this server does not support tools; switched to snapshot mode"})
 					// an investigation keeps its own plan and findings (A1
 					// implementation review, finding 9)
@@ -361,6 +366,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 				}
 				return "", err
 			}
+			r.evalSent(msgs, nil)
 			names := make([]string, 0, len(t.Calls))
 			for _, c := range t.Calls {
 				names = append(names, c.Name)
@@ -419,12 +425,15 @@ func (r *turnRunner) reportFindings(call ai.ToolCall) ai.ToolResult {
 	case done:
 		return fail("findings were already reported this turn: answer briefly now")
 	case n > findingsAttemptsTurn:
+		r.evalToolsReport(false)
 		return fail("report_findings was already retried this turn: answer with what you have")
 	}
 	in, err := parseFindings(call.Args)
 	if err != nil {
+		r.evalToolsReport(false)
 		return fail("report_findings: " + chatScrub(err.Error(), nil) + "; correct it and call once more")
 	}
+	r.evalToolsReport(true)
 	ledger := r.ledger()
 	dto := labelFindings(in, ledger, anchorOf(r.c.anchor, ledger))
 	r.s.mu.Lock()
@@ -491,6 +500,7 @@ func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.T
 			results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true,
 				Content: `{"errors":["tool budget for this question used up: answer with what you have"]}`}
 			r.addRead(ChatRead{Tool: call.Name, Outcome: "failed", Detail: "tool budget used up"})
+			r.evalRead(call.Name, call.Args, ChatToolResult{Read: ChatRead{Outcome: "failed"}})
 			continue
 		}
 		wg.Add(1)
@@ -501,17 +511,20 @@ func (r *turnRunner) dispatch(ctx context.Context, exec *chatTools, calls []ai.T
 			case <-ctx.Done():
 				results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true, Content: `{"errors":["cancelled"]}`}
 				r.addRead(ChatRead{Tool: call.Name, Outcome: "cancelled"})
+				r.evalRead(call.Name, call.Args, ChatToolResult{Read: ChatRead{Outcome: "cancelled"}})
 				return
 			}
 			defer func() { <-sem }()
 			if err := r.check(); err != nil {
 				results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, IsError: true, Content: `{"errors":["not read"]}`}
 				r.addRead(ChatRead{Tool: call.Name, Outcome: "cancelled", Detail: "not read: " + err.Error()})
+				r.evalRead(call.Name, call.Args, ChatToolResult{Read: ChatRead{Outcome: "cancelled"}})
 				return
 			}
 			res := exec.as(r.nextReadID()).Run(ctx, call.Name, call.Args)
 			results[i] = ai.ToolResult{CallID: call.ID, Name: call.Name, Content: string(res.JSON), IsError: res.Read.Outcome == "failed"}
 			r.addRead(res.Read)
+			r.evalRead(call.Name, call.Args, res)
 		}()
 	}
 	wg.Wait()

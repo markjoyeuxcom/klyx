@@ -6,6 +6,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/rest"
 
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
@@ -27,8 +28,15 @@ type Credentials struct {
 
 // DefaultConnFactory returns a ConnFactory that builds real client-go clients.
 func DefaultConnFactory(clk clock.Clock, creds Credentials) ConnFactory {
+	return ResolvingConnFactory(clk, creds, cluster.RESTConfig)
+}
+
+// ResolvingConnFactory is DefaultConnFactory with each cluster's REST
+// config from resolve: the AI eval's build pins the one its preflight
+// checked, and refuses every other cluster.
+func ResolvingConnFactory(clk clock.Clock, creds Credentials, resolve func(config.ClusterConfig) (*rest.Config, error)) ConnFactory {
 	return func(cc config.ClusterConfig) (Conn, error) {
-		rc, err := cluster.RESTConfig(cc)
+		rc, err := resolve(cc)
 		if err != nil {
 			return nil, err
 		}

@@ -1,0 +1,47 @@
+# E1 flux-crashloop (eval design §2): the A1 lab at commit 4. Nothing here is
+# ever sent to the model.
+name: e1-flux-crashloop
+anchor: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+repos: [https://github.com/markjoyeuxcom/klyx-lab-a1]
+subjects:
+  - {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-a1-app, name: web}
+  - {group: apps, version: v1, resource: replicasets, kind: ReplicaSet, namespace: klyx-a1-app, namePrefix: web-}
+  - {version: v1, resource: pods, kind: Pod, namespace: klyx-a1-app, namePrefix: web-}
+invariants:
+  - object: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+    path: status.lastAttemptedRevision
+    matches: '^main@sha1:a9b3c819bc2d9de4231862daa21fe0c97122b980$'
+  - object: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+    path: status.lastAppliedRevision
+    matches: '^main@sha1:cde214ee840d9cb3f05d4f6b4b2e3bd3702900b3$'
+  # status.history, not the Ready condition: while Flux retries the health
+  # check (90 s of every interval), Ready reads Unknown/Progressing
+  - object: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+    path: status.history[0].lastReconciledStatus
+    matches: '^HealthCheckFailed$'
+  - object: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+    path: status.history[0].metadata.revision
+    matches: '^main@sha1:a9b3c819bc2d9de4231862daa21fe0c97122b980$'
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-a1-app, name: web}
+    pods: {crashing: true, minRestarts: 1}
+witnesses:
+  - object: {group: kustomize.toolkit.fluxcd.io, version: v1, resource: kustomizations, kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}
+    path: status.lastAttemptedRevision
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-a1-app, name: web}
+    path: metadata.uid
+predicates:
+  - id: e1-diff
+    kind: diff
+    pattern: 'env\[MODE\]'
+    subjectRef: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-a1-app, name: web}
+    reads:
+      - {tool: git_changes, args: {kind: Kustomization, namespace: klyx-a1-flux, name: a1-web}}
+  - id: e1-log
+    kind: log
+    podsOf: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-a1-app, name: web}
+    reads:
+      - {tool: get_pod_logs, args: {namespace: klyx-a1-app}}
+      - {tool: get_log_history, args: {namespace: klyx-a1-app}}
+proxies:
+  cause: '\bMODE\b'
+  lookalike: '\brelease\b'

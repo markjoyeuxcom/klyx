@@ -1,0 +1,13 @@
+# E2 healthy-control (eval design §2): nothing is planted. The control passes
+# only when the model reports no cause at all.
+name: e2-healthy-control
+control: true
+anchor: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+invariants:
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+    condition: {type: Available, status: "True"}
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+    pods: {ready: true}
+witnesses:
+  - object: {group: apps, version: v1, resource: deployments, kind: Deployment, namespace: klyx-eval, name: steady}
+    path: metadata.uid
