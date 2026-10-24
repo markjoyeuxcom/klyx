@@ -6,6 +6,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -60,14 +61,9 @@ func (t *chatTools) workloadPods(ctx context.Context, k fleet.ChatKind, ns, name
 		return w, err
 	}
 	w.Object = obj
-	raw, _, _ := unstructured.NestedMap(obj.Object, "spec", "selector")
-	var ls metav1.LabelSelector
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &ls); err != nil {
-		return w, fmt.Errorf("the workload's selector could not be read: %w", err)
-	}
-	sel, err := metav1.LabelSelectorAsSelector(&ls)
-	if err != nil || sel.Empty() {
-		return w, fmt.Errorf("the workload has no usable selector")
+	sel, err := selectorOf(obj)
+	if err != nil {
+		return w, err
 	}
 	owners := map[string]bool{string(obj.GetUID()): true}
 	if k.GVR.Group == "apps" && k.Kind == "Deployment" {
@@ -102,3 +98,18 @@ func (t *chatTools) workloadPods(ctx context.Context, k fleet.ChatKind, ns, name
 }
 
 var podsGVRv1 = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+
+// selectorOf is a workload's pod selector; one that is empty or does not
+// parse is refused, never read as "everything".
+func selectorOf(obj *unstructured.Unstructured) (labels.Selector, error) {
+	raw, _, _ := unstructured.NestedMap(obj.Object, "spec", "selector")
+	var ls metav1.LabelSelector
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &ls); err != nil {
+		return nil, fmt.Errorf("the workload's selector could not be read: %w", err)
+	}
+	sel, err := metav1.LabelSelectorAsSelector(&ls)
+	if err != nil || sel.Empty() {
+		return nil, fmt.Errorf("the workload has no usable selector")
+	}
+	return sel, nil
+}

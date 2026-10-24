@@ -59,7 +59,8 @@ func TestSnapshotInvestigationRunsKlyxsPlanFromItsOwnLinks(t *testing.T) {
 	for _, r := range ex.Reads {
 		steps = append(steps, r.ID+":"+r.Tool)
 	}
-	want := "r1:get_resource,r2:gitops_unit,r3:get_resource,r4:get_pod_logs,r5:get_events,r6:get_events,r7:git_changes,r8:get_alerts,r9:get_dependencies"
+	// AI A1.1 §7: the joined workload's rollout history after git_changes
+	want := "r1:get_resource,r2:gitops_unit,r3:get_resource,r4:get_pod_logs,r5:get_events,r6:get_events,r7:git_changes,r8:rollout_history,r9:get_alerts,r10:get_dependencies"
 	if strings.Join(steps, ",") != want {
 		t.Fatalf("the plan, in order, following only the joined entry and its own failing pod:\n%s\n%s", strings.Join(steps, ","), want)
 	}
@@ -81,7 +82,7 @@ func TestSnapshotInvestigationRunsKlyxsPlanFromItsOwnLinks(t *testing.T) {
 	// the anchor's two reads' gap (the fixture serves no verdicts), the
 	// unjoined Widget entry, the alerts no snapshot answered, and the
 	// model's own note
-	if strings.Join(missing, ",") != "klyx:r1,klyx:r2,klyx:r2.c3,klyx:r8,model:" {
+	if strings.Join(missing, ",") != "klyx:r1,klyx:r2,klyx:r2.c3,klyx:r9,model:" {
 		t.Fatalf("%v %+v", missing, fd.Missing)
 	}
 }
@@ -170,14 +171,16 @@ func TestSnapshotInvestigationOfAWorkloadFollowsItsFluxOwnerByLabels(t *testing.
 		steps = append(steps, r.Tool+" "+r.Target)
 	}
 	got := strings.Join(steps, "; ")
-	if !strings.Contains(got, "git_changes Kustomization flux-system/app") || !strings.Contains(got, "get_pod_logs shop/web-1-a") {
+	if !strings.Contains(got, "git_changes Kustomization flux-system/app") || !strings.Contains(got, "get_pod_logs shop/web-1-a") ||
+		!strings.Contains(got, "rollout_history Deployment shop/web") {
 		t.Fatalf("%s", got)
 	}
 	var notes []string
 	for _, m := range st.Exchanges[0].Findings.Missing {
 		notes = append(notes, m.Text)
 	}
-	if !strings.Contains(strings.Join(notes, ";"), "rollout history: no A1 tool reads it") {
+	// AI A1.1 §7: the plan reads the rollout history now
+	if strings.Contains(strings.Join(notes, ";"), "rollout history") {
 		t.Fatalf("%v", notes)
 	}
 }
