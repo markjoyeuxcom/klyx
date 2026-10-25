@@ -356,7 +356,7 @@ Built in bee1d3f, with c04ee37: the fences, §1-§4.
 | §4 AI | `admitNow` at a conversation's start, `epochProblem` in the turn guard and the member check; `callFence` for Explain and Suggest-fix; `readfence.Transport` in `ai.Harden`; the CLI's release fenced; a write tracker on each send, and `modelError`'s "nothing was sent" or "may have been sent" |
 
 **Where the build differs or adds:**
-- **The guard's precedence.** The grant is consumed first, on every path. A cluster that is Applying or Held is then refused as such, before an unarmed or stale grant, because that is the more useful reason.
+- **The guard's precedence.** On a protected cluster the grant is consumed first; an unprotected or unknown cluster has none to consume. A cluster that is Applying or Held is then refused as such, before an unarmed or stale grant, because that is the more useful reason.
 - **Offers are pinned through their conversation.** An investigation is pinned to one cluster, so its epoch, captured at the start, is every offer's. A review also records its own epoch, which `RunStep` compares. That check is redundant with the plan fence, and is kept as defence in depth: its mutant survives a test only because the plan fence refuses first.
 - **Grants are invalidated lazily,** by the epoch they recorded, at `Guard`. Nothing deletes them on a move, so a publication never takes the guard's lock.
 - **An unknown cluster** is refused at every admission. `ConfigService.IsProtected` keeps today's false for one, for display only.
@@ -398,3 +398,29 @@ Built in bee1d3f, with c04ee37: the fences, §1-§4.
 Every Go suite and golangci-lint pass. The native smoke passed 211/211 at bee1d3f, night and day at 1440 and 1024; c04ee37 adds only the outcome fields of a fence refusal and tests.
 
 **Mutation pass:** 24 mutants of the registry, the incarnation, the guard and tickets, `RunStep`, the plan fence, the AI start, turn and member checks, `callFence`, the receipt-less outcome, the drain's start check, the AI transport, the CLI release and the helm runner: 24 caught. One mutant was left out on purpose: removing the debug terminal's `StartCLI` would make a test open a real terminal. The AST scan covers that site instead.
+
+## 13. F1 revision 1: Codex's implementation review (2026-10-25)
+
+Codex requested changes on 0563872: six P2. It accepted §12's guard precedence (with the qualification now in §12), the offers' pinning through their conversation, lazy grant invalidation, unknown clusters, and `Seed` and the incarnation as F1's producers. It found the receipt-less outcomes incomplete (F6) and the fake-client coverage insufficient (F2-F4), and its probes through the real clients over a fake round tripper are now regression tests.
+
+| Finding | Change |
+|---|---|
+| **F1:** Explain decided egress before pinning the epoch, so an old permission could pass under a newer epoch; Suggest-fix the same | `precheck` pins the epoch (`callFence`) before it decides egress, so a protection change after the pin moves the epoch the fence holds. A conversation's start and a comparison member pin before their egress decision too; their turn-time checks already caught the race, and the order now makes the start coherent |
+| **F2:** manual discovery dropped the ticket's context | `gvrForKind`, `sourceServedGVR`, the generator's version check and the composer's `resolveGVKIn` read discovery under the call's context (`discoveryFor`), a cached answer included. `servedVersion` and `servedResourceAmong` return a fence refusal as their error and never fall back past it; the composer reports it as itself, never "not served" |
+| **F3:** the diagnostic namespace and pod shared one tracker | each create gets its own; a pod not sent after a created namespace says so, and says the namespace was created |
+| **F4:** a composite's not-sent step read as unverified | `fleet.Step.NotSent` (with `Refused`), `StepDTO.notSent` and "not sent - …" in the step wording; the source's error wording has a not-sent case; a composite's top-level outcome is left to its steps, so a not-sent target never says "nothing was sent" beside a written source |
+| **F5:** the AST scan accepted a constructor taken as a value and an ignored `StartCLI` | a closed set of forms: a constructor is only ever called inside the ticket's `Write` or on an "unfenced:" line; every context a call receives has a tracked provenance (the ticket's `Write`, a `context.With*`, `readfence` or `fenced` wrapper of one, or a variable assigned only those, to a fixpoint), and a context field, a context parameter, or a context-named variable of unknown origin is refused; a child start must directly follow `if err := t.StartCLI(); err != nil { … return }`; across the package, a function returning a context outside three reviewed ones, and a package-level root context, are refused |
+| **F6:** known pre-write refusals were classified as possibly sent | `readfence.Check` marks a refusal `ErrNotForwarded` when its context tracks a write and nothing of it was forwarded yet, so a refused GET before a write is not sent; `readfence.Send` checks before a send that is not HTTP (the CLI's prompt handoff, the helm child's start) and records it as forwarded. A refusal after a forwarded attempt stays unverified |
+
+**Tests added:** Codex's eight probes, adopted (`fleet/f1fence_test.go`, `appbridge/ai_fence_test.go`, `appbridge/guardscan_test.go`, `ai/fence_test.go`), and beside them:
+- discovery cold and warm, a fence moving between the group read and a version's, the source's discovery after the target's read, and an ArtifactGenerator verb;
+- the diagnostic pod after an existing namespace, and its own lost answer, which stays unverified;
+- a source stopped before its write, and a composite's top-level outcome;
+- the chat's start and a comparison member under a preempted protection read, and an unchanged unprotected Explain and Suggest-fix, which go ahead;
+- `Send` and `Check`'s marking, and a read refused after a forwarded write, which is not marked;
+- the step wording;
+- fourteen negative scan fixtures, each asserting its own finding.
+
+**Mutation pass:** 41 mutants of the fixes - `Check`'s and `Send`'s marking, the helm and CLI sends, every discovery fallback and binding, the step's not-sent outcome through the bridge, the DTO and the wording, the diagnostic pod's trackers, the admission order of Explain, Suggest-fix, a chat's start and a member, and fourteen of the scan's rules - 41 caught. §12's 24, rerun on this revision: 22 still apply and are caught; the CLI release's and the helm runner's are re-specified above.
+
+Every Go suite, the race suites of the touched packages, golangci-lint (with and without the eval tag), tsc and the frontend suite pass. The native smoke passed 211/211, night and day at 1440 and 1024, on this revision before its commit.
