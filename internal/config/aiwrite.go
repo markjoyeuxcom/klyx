@@ -35,16 +35,24 @@ type aiYAML struct {
 // AppendClusters and refuses to overwrite an edit made on disk meanwhile
 // (spec 2026-10-13 §2.3).
 func SaveAI(path string, a AIConfig) error {
+	_, err := SaveAIAt(path, "", a)
+	return err
+}
+
+// SaveAIAt is SaveAI from a plan: version is the file version it was made
+// from (ErrFileChanged for any other; "" checks none), and it returns the
+// written file's version (Settings slice F §5).
+func SaveAIAt(path, version string, a AIConfig) (string, error) {
 	if a.KeySource != "legacy" {
 		a.APIKey = "" // only a legacy source keeps a key in the file
 	}
 	block, err := renderAIBlock(a)
 	if err != nil {
-		return err
+		return "", err
 	}
 	want := a
 	want.applyDefaults()
-	return saveTopLevelBlock(path, "ai", block, "AI settings", nil, func(got *Config) error {
+	return saveTopLevelBlock(path, "ai", block, "AI settings", version, nil, func(got *Config) error {
 		if got.AI == nil || !AIEqual(*got.AI, want) {
 			return errors.New("the written AI block does not read back as intended (file unchanged)")
 		}

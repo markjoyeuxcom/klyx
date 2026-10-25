@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { AISettingsState } from "../bridge/aiSettings";
+import type { Plan } from "../bridge/plan";
 
 const bridge = vi.hoisted(() => ({
   getAISettings: vi.fn(),
-  saveAISettings: vi.fn(),
+  planAI: vi.fn(),
+  planAIFromFile: vi.fn(),
+  planAIRevert: vi.fn(),
+  applyAI: vi.fn(),
+  applyAIQuiet: vi.fn(),
+  retryAI: vi.fn(),
   setAPIKey: vi.fn(),
   clearAPIKey: vi.fn(),
   moveKeyToKeychain: vi.fn(),
-  armAIEgress: vi.fn(),
   listAIModels: vi.fn(),
   testAIProvider: vi.fn(),
   getCLIStatus: vi.fn(),
@@ -33,13 +38,24 @@ function state(over: Partial<AISettingsState> = {}): AISettingsState {
 
 const ok = { ok: true, error: "" };
 
+function aPlan(over: Partial<Plan> = {}): Plan {
+  return { section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true, ...over };
+}
+
+// Review and apply, then Apply (Settings slice F §6)
+async function reviewAndApply() {
+  fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+}
+
 beforeEach(() => {
   for (const f of Object.values(bridge)) f.mockReset();
-  bridge.saveAISettings.mockResolvedValue(ok);
+  bridge.planAI.mockResolvedValue(aPlan());
+  bridge.applyAI.mockResolvedValue(ok);
+  bridge.applyAIQuiet.mockResolvedValue(ok);
   bridge.setAPIKey.mockResolvedValue(ok);
   bridge.clearAPIKey.mockResolvedValue(ok);
   bridge.moveKeyToKeychain.mockResolvedValue(ok);
-  bridge.armAIEgress.mockResolvedValue(ok);
 });
 
 describe("AISettingsPanel", () => {
@@ -58,8 +74,9 @@ describe("AISettingsPanel", () => {
     // The key field empties at once; the key never stays on the page.
     expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic", keySource: "keychain" })));
+    await reviewAndApply();
+    expect(bridge.planAI).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic", keySource: "keychain" }));
+    await waitFor(() => expect(bridge.applyAI).toHaveBeenCalledWith("d1", ""));
   });
 
   it("states exactly where prompts go, and why AI is unavailable", async () => {
@@ -81,21 +98,25 @@ describe("AISettingsPanel", () => {
     await waitFor(() => expect(bridge.moveKeyToKeychain).toHaveBeenCalled());
   });
 
-  it("turns protected egress on only through the typed confirmation, then saves", async () => {
+  it("turns protected egress on only through the plan's typed interlock (Settings slice F §5)", async () => {
     bridge.getAISettings.mockResolvedValue(state({
       persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" },
       keysStored: { anthropic: true },
       active: { backend: "anthropic", ready: true, model: "claude-opus-5-5", origin: "https://api.anthropic.com" },
     }));
+    bridge.planAI.mockResolvedValue(aPlan({ interlock: { phrase: "allow protected egress", why: "Protected clusters will send their state to Claude." } }));
     render(<AISettingsPanel />);
     fireEvent.click(await screen.findByLabelText("Allow protected-cluster egress"));
-    expect(bridge.saveAISettings).not.toHaveBeenCalled();
-    const confirm = screen.getByRole("button", { name: "Allow and save" });
+    fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+    expect((await screen.findByTestId("plan-interlock")).textContent).toContain("Protected clusters will send");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    const confirm = screen.getByRole("button", { name: "Confirm and apply" });
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(bridge.applyAI).not.toHaveBeenCalled();
     fireEvent.change(screen.getByPlaceholderText("allow protected egress"), { target: { value: "allow protected egress" } });
     fireEvent.click(confirm);
-    await waitFor(() => expect(bridge.armAIEgress).toHaveBeenCalledWith("allow protected egress"));
-    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ allowProtectedEgress: true })));
+    await waitFor(() => expect(bridge.applyAI).toHaveBeenCalledWith("d1", "allow protected egress"));
+    expect(bridge.planAI).toHaveBeenCalledWith(expect.objectContaining({ allowProtectedEgress: true }));
   });
 
   // AI A3 §6: on by default; turning it off is saved like any setting.
@@ -110,8 +131,8 @@ describe("AISettingsPanel", () => {
     const box = (await screen.findByLabelText("Propose actions in investigations")) as HTMLInputElement;
     expect(box.checked).toBe(true);
     fireEvent.click(box);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ proposeActions: false })));
+    await reviewAndApply();
+    expect(bridge.planAI).toHaveBeenCalledWith(expect.objectContaining({ proposeActions: false }));
     view.unmount();
     bridge.getAISettings.mockResolvedValue({ ...on, persisted: { ...on.persisted, proposeActions: false } });
     const off = render(<AISettingsPanel />);
@@ -143,10 +164,11 @@ describe("AISettingsPanel", () => {
     expect(bridge.listAIModels).toHaveBeenCalledWith(expect.objectContaining({ provider: "openai" }));
     fireEvent.click(screen.getByRole("button", { name: "Test" }));
     expect((await screen.findByTestId("ai-test-result")).textContent).toContain("Test answered via https://api.openai.com · gpt-x: “ready”");
-    expect(bridge.saveAISettings).not.toHaveBeenCalled();
+    expect(bridge.planAI).not.toHaveBeenCalled();
+    expect(bridge.applyAI).not.toHaveBeenCalled();
   });
 
-  it("says a chosen provider is unsaved until Save applies it (UI review 2026-10-13)", async () => {
+  it("says a chosen provider is unsaved until it is applied (UI review 2026-10-13)", async () => {
     const saved = state({ persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" } });
     bridge.getAISettings.mockResolvedValueOnce(state()).mockResolvedValue(saved);
     render(<AISettingsPanel />);
@@ -155,22 +177,23 @@ describe("AISettingsPanel", () => {
 
     fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "anthropic" } });
     const notice = screen.getByTestId("ai-unsaved");
-    expect(notice.textContent).toContain("Unsaved changes - Save to apply Claude");
+    expect(notice.textContent).toContain("Unsaved changes - Review and apply to use Claude");
     expect(notice.textContent).toContain("Test checks the draft without saving it");
     // The status line still names what is in use, never the draft.
     expect(screen.getByTestId("ai-status").textContent).toContain("AI is off");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     await waitFor(() => expect(screen.queryByTestId("ai-unsaved")).toBeNull());
   });
 
-  it("shows a save failure and keeps the draft", async () => {
+  it("shows a plan that cannot be applied, and keeps the draft", async () => {
     bridge.getAISettings.mockResolvedValue(state());
-    bridge.saveAISettings.mockResolvedValue({ ok: false, error: "No API key is stored for this provider. Add one in Settings > AI." });
+    bridge.planAI.mockResolvedValue(aPlan({ digest: "", refused: "No API key is stored for this provider. Add one in Settings > AI." }));
     render(<AISettingsPanel />);
     fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "gemini" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((await screen.findByTestId("ai-message")).textContent).toContain("No API key is stored");
+    fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+    expect((await screen.findByTestId("plan-refused")).textContent).toContain("No API key is stored");
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
     expect((screen.getByLabelText("AI provider") as HTMLInputElement).value).toBe("gemini");
   });
 
@@ -256,8 +279,8 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     expect(screen.getByTestId("ai-settings").textContent).toContain("asks Claude Code to read a file and run a command");
 
     fireEvent.change(screen.getByLabelText("Claude Code path"), { target: { value: "/opt/claude" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(bridge.saveAISettings).toHaveBeenCalledWith(expect.objectContaining({ provider: "claudeCLI", keySource: "none", cliPath: "/opt/claude", baseUrl: "" })));
+    await reviewAndApply();
+    expect(bridge.planAI).toHaveBeenCalledWith(expect.objectContaining({ provider: "claudeCLI", keySource: "none", cliPath: "/opt/claude", baseUrl: "" }));
   });
 
   it("after a revocation, says only Test admits it", async () => {
@@ -318,11 +341,11 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     const saved = { ...state().persisted, provider: "openai", keySource: "keychain", model: "model-1" };
     bridge.getAISettings.mockResolvedValueOnce(state({ persisted: saved }));
     let release: (v: typeof ok) => void = () => {};
-    bridge.saveAISettings.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    bridge.applyAI.mockImplementationOnce(() => new Promise((r) => (release = r)));
     render(<AISettingsPanel />);
     await screen.findByTestId("ai-status");
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3-unsaved" } });
     bridge.getAISettings.mockResolvedValueOnce(state({ persisted: { ...saved, model: "model-2" } }));
     release(ok);
@@ -337,7 +360,7 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     await screen.findByTestId("ai-status");
     fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "openai" } });
     bridge.getAISettings.mockResolvedValueOnce(null);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     expect(await screen.findByTestId("ai-reread-failed")).toBeTruthy();
     expect(screen.getByTestId("ai-status").textContent).toContain("In use, as last read:");
   });
@@ -363,7 +386,7 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     await screen.findByTestId("ai-status");
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
     bridge.getAISettings.mockImplementationOnce(() => new Promise((r) => (readBack = r)));
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     await waitFor(() => expect(bridge.getAISettings).toHaveBeenCalledTimes(2)); // the readback is in flight
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3-unsaved" } });
     readBack(state({ persisted: { ...saved, model: "model-2" } }));
@@ -379,10 +402,10 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     render(<AISettingsPanel />);
     await screen.findByTestId("ai-status");
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     await waitFor(() => expect(reads).toHaveLength(1));
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await reviewAndApply();
     await waitFor(() => expect(reads).toHaveLength(2));
     reads[1](state({ persisted: { ...saved, model: "model-3" } })); // the newer read lands first
     await waitFor(() => expect(screen.queryByTestId("ai-unsaved")).toBeNull());
@@ -390,5 +413,71 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByTestId("ai-unsaved")).toBeNull();
     expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("model-3");
+  });
+});
+
+// Settings slice F §5, §6: plans, their replacements, drift and
+// saved-not-active.
+describe("AISettingsPanel: plans", () => {
+  const running = () => state({
+    persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" },
+    keysStored: { anthropic: true },
+    active: { backend: "anthropic", ready: true, model: "claude-opus-5-5", origin: "https://api.anthropic.com" },
+  });
+
+  it("shows what changes and what ends, and an edit voids the plan", async () => {
+    bridge.getAISettings.mockResolvedValue(running());
+    bridge.planAI.mockResolvedValue(aPlan({ ends: [{ id: "conv:c1", kind: "investigation", cluster: "lab", started: "2026-10-25T10:42:00Z", what: "an investigation on lab" }] }));
+    render(<AISettingsPanel />);
+    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "claude-sonnet-5-5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+    expect((await screen.findByTestId("plan-changes")).textContent).toContain("Model: a → b");
+    expect(screen.getByTestId("plan-ends").textContent).toContain("an investigation on lab, started");
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-haiku-5-5" } });
+    expect(screen.queryByTestId("settings-plan")).toBeNull();
+    expect(bridge.applyAI).not.toHaveBeenCalled();
+  });
+
+  it("shows a replacement plan unconfirmed: the typed phrase never carries over", async () => {
+    bridge.getAISettings.mockResolvedValue(running());
+    const interlock = { phrase: "allow protected egress", why: "Protected clusters will send their state to Claude." };
+    bridge.planAI.mockResolvedValue(aPlan({ interlock }));
+    bridge.applyAI.mockResolvedValue({ ok: false, error: "Something changed since this was planned: review the new plan.", plan: aPlan({ digest: "d2", interlock, ends: [{ id: "turn:t1", kind: "turn", cluster: "lab", what: "a question being answered on lab" }] }) });
+    render(<AISettingsPanel />);
+    fireEvent.click(await screen.findByLabelText("Allow protected-cluster egress"));
+    fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    fireEvent.change(screen.getByPlaceholderText("allow protected egress"), { target: { value: "allow protected egress" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and apply" }));
+    await waitFor(() => expect(screen.getByTestId("settings-plan").getAttribute("data-plan-digest")).toBe("d2"));
+    expect(screen.queryByPlaceholderText("allow protected egress")).toBeNull(); // the dialog closed
+    expect(screen.getByTestId("plan-ends").textContent).toContain("a question being answered on lab");
+    expect(screen.getByTestId("ai-message").textContent).toContain("review the new plan");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect((screen.getByPlaceholderText("allow protected egress") as HTMLInputElement).value).toBe("");
+  });
+
+  it("offers the file's values on drift, as a plan that writes nothing", async () => {
+    bridge.getAISettings.mockResolvedValue({ ...running(), diverged: true });
+    bridge.planAIFromFile.mockResolvedValue(aPlan({ kind: "file", writes: false, digest: "f1" }));
+    render(<AISettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Use the file's values" }));
+    expect((await screen.findByTestId("settings-plan")).textContent).toContain("fleet.yaml already says this");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(bridge.applyAI).toHaveBeenCalledWith("f1", ""));
+  });
+
+  it("says saved, not active, with Retry and Revert", async () => {
+    bridge.getAISettings.mockResolvedValue({ ...running(), savedNotActive: "keychain unavailable: locked", active: { backend: "anthropic", ready: false, problem: "Saved, not active: keychain unavailable: locked" } });
+    bridge.retryAI.mockResolvedValue({ ok: false, savedNotActive: "keychain unavailable: still locked" });
+    bridge.planAIRevert.mockResolvedValue(aPlan({ kind: "revert", digest: "r1" }));
+    render(<AISettingsPanel />);
+    expect((await screen.findByTestId("ai-saved-not-active")).textContent).toContain("Saved, not active: keychain unavailable: locked");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByTestId("ai-message").textContent).toContain("Saved, not active: keychain unavailable: still locked"));
+    fireEvent.click(screen.getByRole("button", { name: "Revert" }));
+    expect((await screen.findByTestId("settings-plan")).textContent).toContain("Reverting writes the settings last in use");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(bridge.applyAI).toHaveBeenCalledWith("r1", ""));
   });
 });

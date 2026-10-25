@@ -16,6 +16,11 @@ import (
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/readfence"
+	"sort"
+
+	"sync"
+
+	"time"
 )
 
 const (
@@ -56,6 +61,73 @@ type AIService struct {
 	rev          atomic.Uint64
 	isProtected  func(string) bool
 	capabilities func(string) capability.Set // per-cluster operator health; may be nil
+
+	// The AI section's Applying state and its in-flight calls (Settings
+	// slice F §5): while an Apply decides, no new AI work starts, and an
+	// Explain or a Suggest-fix is work it names until it returns.
+	gateMu   sync.Mutex
+	applying bool
+	calls    map[uint64]PlanWorkDTO
+	callSeq  uint64
+}
+
+// aiApplying refuses new AI work while an Apply of the AI settings decides.
+const aiApplying = "AI settings are being applied; try again in a moment"
+
+// beginApply enters the AI section's Applying state: new work is refused
+// until endApply. Running work is not touched: an Apply refused before its
+// write changes nothing (Settings slice F §11).
+func (s *AIService) beginApply() {
+	s.gateMu.Lock()
+	s.applying = true
+	s.gateMu.Unlock()
+}
+
+func (s *AIService) endApply() {
+	s.gateMu.Lock()
+	s.applying = false
+	s.gateMu.Unlock()
+}
+
+func (s *AIService) applyingNow() bool {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	return s.applying
+}
+
+// admitCall registers an Explain's or a Suggest-fix's call as work, unless
+// an Apply is deciding: atomically, so an Apply's plan either names the
+// call or refused it.
+func (s *AIService) admitCall(kind, cluster string) (func(), string) {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	if s.applying {
+		return nil, aiApplying
+	}
+	if s.calls == nil {
+		s.calls = map[uint64]PlanWorkDTO{}
+	}
+	s.callSeq++
+	id := s.callSeq
+	what := map[string]string{"explain": "an Explain", "suggest-fix": "a Suggest-fix"}[kind]
+	s.calls[id] = PlanWorkDTO{ID: fmt.Sprintf("%s:%d", kind, id), Kind: kind, Cluster: cluster, Started: time.Now().UTC().Format(time.RFC3339), What: what + " on " + cluster}
+	return func() {
+		s.gateMu.Lock()
+		delete(s.calls, id)
+		s.gateMu.Unlock()
+	}, ""
+}
+
+// callsWork is the in-flight Explain and Suggest-fix calls, by identity.
+func (s *AIService) callsWork() []PlanWorkDTO {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	out := make([]PlanWorkDTO, 0, len(s.calls))
+	for _, w := range s.calls {
+		out = append(out, w)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // NewAIService wires the read-only AI surface with its first snapshot.
@@ -274,6 +346,11 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
+	done, refusal := s.admitCall("suggest-fix", cluster)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
+	}
+	defer done()
 	if uid == "" {
 		return AIResultDTO{Error: "the selected object has no identity yet; nothing was sent"}
 	}

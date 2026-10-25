@@ -16,6 +16,8 @@ const b = vi.hoisted(() => ({
   getEndpoints: vi.fn(),
   getAISettings: vi.fn(),
   saveAISettings: vi.fn(),
+  planAI: vi.fn(),
+  applyAI: vi.fn(),
   getCLIStatus: vi.fn(),
   getGitSettings: vi.fn(),
   getNotificationSettings: vi.fn(),
@@ -31,7 +33,7 @@ vi.mock("../bridge/configsvc", () => ({
   openTerminal: vi.fn(),
 }));
 vi.mock("../bridge/endpoints", () => ({ getEndpoints: () => b.getEndpoints(), setCredential: vi.fn(), removeCredential: vi.fn(), moveToKeychain: vi.fn(), testEndpoint: vi.fn() }));
-vi.mock("../bridge/aiSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/aiSettings")>()), getAISettings: () => b.getAISettings(), saveAISettings: (d: unknown) => b.saveAISettings(d), getCLIStatus: () => b.getCLIStatus() }));
+vi.mock("../bridge/aiSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/aiSettings")>()), getAISettings: () => b.getAISettings(), applyAIQuiet: (d: unknown) => b.saveAISettings(d), planAI: (d: unknown) => b.planAI(d), applyAI: (digest: string, typed: string) => b.applyAI(digest, typed), getCLIStatus: () => b.getCLIStatus() }));
 vi.mock("../bridge/gitSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/gitSettings")>()), getGitSettings: () => b.getGitSettings() }));
 vi.mock("../bridge/notifications", async (orig) => ({ ...(await orig<typeof import("../bridge/notifications")>()), getNotificationSettings: () => b.getNotificationSettings() }));
 vi.mock("../bridge/settings", () => ({ getDiagnostics: () => b.getDiagnostics(), checkVersions: () => b.checkVersions(), getIndexSettings: () => b.getIndexSettings() }));
@@ -109,7 +111,11 @@ beforeEach(() => {
   b.getFleetConfig.mockResolvedValue(cfg);
   b.getEndpoints.mockResolvedValue({ rows: [endpoint({}), endpoint({ kind: "loki", source: "https://loki.example", authType: "basic" }), endpoint({ cluster: "aks-we-dev", kind: "metrics" })] });
   b.getAISettings.mockResolvedValue(aiState());
+  // Save and leave is the quiet Apply (Settings slice F §6); Review and
+  // apply plans, then applies by digest
   b.saveAISettings.mockResolvedValue({ ok: true, error: "" });
+  b.planAI.mockResolvedValue({ section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true });
+  b.applyAI.mockImplementation(() => b.saveAISettings());
   b.getCLIStatus.mockResolvedValue({ path: "/usr/local/bin/claude", tested: false, admitted: false });
   b.getGitSettings.mockResolvedValue(git);
   b.getNotificationSettings.mockResolvedValue({ enabled: true, scope: "protected", recoveries: false });
@@ -387,6 +393,17 @@ describe("the draft guard (S1 §1)", () => {
     expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("claude-sonnet-5-5");
   });
 
+  // Settings slice F §6: Save and leave applies only a plan that ends
+  // nothing and needs no interlock; otherwise the person stays with it
+  it("Save and leave stays, showing the plan, when applying would end work", async () => {
+    await editModel();
+    b.saveAISettings.mockResolvedValue({ ok: false, plan: { section: "ai", kind: "save", digest: "d2", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "claude-sonnet-5-5" }], ends: [{ id: "conv:c1", kind: "investigation", cluster: "lab", what: "an investigation on lab" }], continues: [], writes: true } });
+    useFleet.getState().openSettings("data");
+    fireEvent.click(await screen.findByRole("button", { name: "Save and leave" }));
+    expect((await screen.findByTestId("plan-ends")).textContent).toContain("an investigation on lab");
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai" });
+  });
+
   it("discard leaves without saving", async () => {
     await editModel();
     useFleet.getState().openFleet(); // leaving Settings, from anywhere
@@ -448,7 +465,8 @@ describe("the draft guard (S1 §1)", () => {
     await editModel();
     let readBack: (v: AISettingsState) => void = () => {};
     b.getAISettings.mockImplementationOnce(() => new Promise((r) => (readBack = r)));
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review and apply" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
     await waitFor(() => expect(b.saveAISettings).toHaveBeenCalled());
     useFleet.getState().openSettings("git");
     expect(screen.queryByTestId("settings-leave")).toBeNull(); // waiting for the readback

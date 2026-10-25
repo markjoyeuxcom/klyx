@@ -1,4 +1,5 @@
 import { AISettingsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
+import { refusedPlan, type ApplyResult, type Plan } from "./plan";
 
 // Settings > AI (spec 2026-10-13 §2). A key goes in through setAPIKey and
 // never comes back: the state says only whether one is stored, and where.
@@ -29,7 +30,10 @@ export type AISettingsState = {
   keychainError?: string;
   active: { backend: string; ready: boolean; model?: string; origin?: string; problem?: string };
   activeRev: number;
+  // fleet.yaml's block is not what runs: "Use the file's values" plans it
   diverged: boolean;
+  // saved, and its activation failed, with why: Retry and Revert
+  savedNotActive?: string;
 };
 
 export type AIModel = { id: string; displayName?: string };
@@ -38,7 +42,7 @@ export type AITest = { ok: boolean; model?: string; origin?: string; reply?: str
 // What Settings knows about an installed CLI without running it.
 export type AICLIStatus = { path: string; version: string; sha256: string; tested: boolean; admitted: boolean; checkedAt?: string; problem?: string };
 
-// The phrase the backend's one-shot egress grant expects.
+// The phrase the AI plan's egress interlock expects.
 export const AI_EGRESS_PHRASE = "allow protected egress";
 
 function failed(e: unknown): ActionResult {
@@ -54,13 +58,33 @@ export async function getAISettings(): Promise<AISettingsState | null> {
   }
 }
 
-export async function saveAISettings(s: AISettings): Promise<ActionResult> {
+// Settings slice F §5: a change is a plan from what runs, applied by its
+// digest.
+async function plan(call: () => Promise<unknown>, kind: Plan["kind"]): Promise<Plan> {
   try {
-    return (await AISettingsService.SaveAISettings(s)) as ActionResult;
+    return (await call()) as Plan;
   } catch (e) {
-    return failed(e);
+    return refusedPlan("ai", kind, failed(e).error);
   }
 }
+
+async function applied(call: () => Promise<unknown>): Promise<ApplyResult> {
+  try {
+    return (await call()) as ApplyResult;
+  } catch (e) {
+    return { ok: false, error: failed(e).error };
+  }
+}
+
+export const planAI = (d: AISettings) => plan(() => AISettingsService.PlanAI(d), "save");
+// "Use the file's values": the file's block, from what runs, writing nothing
+export const planAIFromFile = () => plan(() => AISettingsService.PlanAIFromFile(), "file");
+export const planAIRevert = () => plan(() => AISettingsService.PlanAIRevert(), "revert");
+export const applyAI = (digest: string, typed: string) => applied(() => AISettingsService.ApplyAI(digest, typed));
+// Save and leave: applied only if it ends nothing and needs no interlock;
+// otherwise the plan comes back
+export const applyAIQuiet = (d: AISettings) => applied(() => AISettingsService.ApplyAIQuiet(d));
+export const retryAI = () => applied(() => AISettingsService.RetryAI());
 
 export async function setAPIKey(provider: string, key: string): Promise<ActionResult> {
   try {
@@ -81,14 +105,6 @@ export async function clearAPIKey(provider: string): Promise<ActionResult> {
 export async function moveKeyToKeychain(): Promise<ActionResult> {
   try {
     return (await AISettingsService.MoveKeyToKeychain()) as ActionResult;
-  } catch (e) {
-    return failed(e);
-  }
-}
-
-export async function armAIEgress(typed: string): Promise<ActionResult> {
-  try {
-    return (await AISettingsService.ArmAIEgress(typed)) as ActionResult;
   } catch (e) {
     return failed(e);
   }

@@ -32,12 +32,13 @@ func SaveGit(path string, g GitConfig) error {
 	if err != nil {
 		return err
 	}
-	return saveTopLevelBlock(path, "git", block, "Git settings", nil, func(got *Config) error {
+	_, err = saveTopLevelBlock(path, "git", block, "Git settings", "", nil, func(got *Config) error {
 		if got.Git == nil || !gitReposEqual(got.Git.Repos, g.Repos) {
 			return errors.New("the written git block does not read back as intended (file unchanged)")
 		}
 		return nil
 	})
+	return err
 }
 
 func renderGitBlock(g GitConfig) (string, error) {

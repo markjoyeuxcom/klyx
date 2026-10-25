@@ -62,6 +62,8 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		return notice("the comparison set is fixed once the investigation has begun")
 	case len(members) > chatComparisonMax:
 		return notice(fmt.Sprintf("at most %d clusters to compare", chatComparisonMax))
+	case s.ai.applyingNow():
+		return notice(aiApplying)
 	}
 	st := s.ai.load()
 	if st.Rev != c.rev {

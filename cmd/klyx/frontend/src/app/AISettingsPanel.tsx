@@ -1,15 +1,17 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
-import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import {
-  AI_EGRESS_PHRASE,
-  armAIEgress,
+  applyAI,
+  applyAIQuiet,
   clearAPIKey,
   getAISettings,
   getCLIStatus,
   listAIModels,
   moveKeyToKeychain,
-  saveAISettings,
+  planAI,
+  planAIFromFile,
+  planAIRevert,
+  retryAI,
   setAPIKey,
   testAIProvider,
   type AICLIStatus,
@@ -18,15 +20,18 @@ import {
   type AITest,
   type AIModel,
 } from "../bridge/aiSettings";
+import type { ApplyResult, Plan } from "../bridge/plan";
 import { SettingField } from "../settings/SettingField";
+import { PlanView } from "../settings/PlanView";
 import { setSectionDraft } from "../settings/navGuard";
 
 // AISettingsPanel is Settings > AI (spec 2026-10-13 §2.4). It edits a draft of
 // fleet.yaml's ai block and shows exactly where prompts go. A key goes in
-// through the keychain and never comes back to the page. Every change is
-// applied by the backend only after the provider builds and fleet.yaml is
-// written, so what the status line says is what chat, Explain, Suggest-fix
-// and investigations use.
+// through the keychain and never comes back to the page. A change is a plan
+// from what runs (Settings slice F §5, §6): Review and apply shows what
+// changes, what it ends and the interlock, and the backend applies it by
+// its digest - written, then built and published - so what the status line
+// says is what chat, Explain, Suggest-fix and investigations use.
 
 export const PROVIDERS: { id: string; label: string; keyed: boolean; defaultOrigin?: string }[] = [
   { id: "off", label: "Off", keyed: false },
@@ -59,7 +64,9 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [test, setTest] = useState<AITest | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmEgress, setConfirmEgress] = useState(false);
+  // the plan under review: it belongs to the draft it was planned from, and
+  // any edit voids it
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [cli, setCli] = useState<AICLIStatus | null>(null);
   const [cliCheck, setCliCheck] = useState(0); // bumped to re-read the CLI status
@@ -173,6 +180,7 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
     draftGen.current++;
     setDraft({ ...draft, ...patch });
     setTest(null);
+    setPlan(null);
     // A list belongs to one provider, origin and key: any change voids it.
     if ("provider" in patch || "baseUrl" in patch || "keySource" in patch || "apiKeyEnv" in patch) setModels([]);
     // and a typed key belongs to the provider and origin it was typed for:
@@ -191,8 +199,48 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
       cliPath: same ? state.persisted.cliPath : "",
     });
   };
-  const save = (d: AISettings) => run(() => saveAISettings(d), "Saved. Chat, Explain, Suggest-fix and investigations now use these settings.");
-  saveRef.current = () => save(draft);
+  // applyWith runs an Apply and says its outcome: applied, and read back;
+  // saved, not active; or refused with the plan that replaced it, shown
+  // unconfirmed (keyed by its digest)
+  const applyWith = async (call: () => Promise<ApplyResult>, okText: string): Promise<boolean> => {
+    const gen = draftGen.current;
+    setBusy(true);
+    const work = (async () => {
+      const r = await call();
+      setBusy(false);
+      if (r.ok) {
+        setPlan(null);
+        setMessage({ kind: "ok", text: okText });
+        return await load(gen !== draftGen.current);
+      }
+      if (r.savedNotActive) {
+        setPlan(null);
+        setMessage({ kind: "error", text: `Saved, not active: ${r.savedNotActive}` });
+        await load(true);
+        return false;
+      }
+      if (r.plan) setPlan(r.plan);
+      setMessage({ kind: "error", text: r.error || "Applying this ends running work or needs your confirmation: review it below." });
+      return false;
+    })();
+    saving.current = work;
+    try {
+      return await work;
+    } finally {
+      if (saving.current === work) saving.current = null;
+    }
+  };
+  const inUse = "Applied. Chat, Explain, Suggest-fix and investigations now use these settings.";
+  const showPlan = async (get: () => Promise<Plan>) => {
+    const gen = draftGen.current;
+    setBusy(true);
+    const p = await get();
+    setBusy(false);
+    if (gen === draftGen.current) setPlan(p); // else the draft changed meanwhile
+  };
+  // Save and leave (§6): applied only when it ends nothing and needs no
+  // interlock; otherwise the plan is shown and the person stays
+  saveRef.current = () => applyWith(() => applyAIQuiet(draft), inUse);
 
   const a = state.active;
   const customOrigin = provider.defaultOrigin && draft.baseUrl ? draft.baseUrl : "";
@@ -223,12 +271,22 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
       )}
       {dirty && (
         <div data-testid="ai-unsaved" role="status" style={{ fontSize: 11, marginBottom: 8, color: "var(--color-text-warning)" }}>
-          Unsaved changes - Save to apply {providerLabel(draft.provider)}{draft.model ? ` · ${draft.model}` : ""}. Test checks the draft without saving it.
+          Unsaved changes - Review and apply to use {providerLabel(draft.provider)}{draft.model ? ` · ${draft.model}` : ""}. Test checks the draft without saving it.
         </div>
       )}
 
+      {state.savedNotActive && (
+        <Notice testId="ai-saved-not-active">
+          Saved, not active: {state.savedNotActive}. Nothing uses AI until this is retried or reverted.{" "}
+          <button className="l-btn" disabled={busy} onClick={() => void applyWith(retryAI, inUse)}>Retry</button>
+          <button className="l-btn" disabled={busy} onClick={() => void showPlan(planAIRevert)}>Revert</button>
+        </Notice>
+      )}
       {state.diverged && (
-        <Notice testId="ai-diverged">The AI settings in fleet.yaml differ from the ones in use. Save to apply them, or check the file.</Notice>
+        <Notice testId="ai-diverged">
+          The AI settings in fleet.yaml differ from the ones in use.{" "}
+          <button className="l-btn" disabled={busy} onClick={() => void showPlan(planAIFromFile)}>Use the file's values</button>
+        </Notice>
       )}
       {state.persistedError && <Notice testId="ai-persisted-error">fleet.yaml cannot be read: {state.persistedError}</Notice>}
       {state.keychainError && <Notice testId="ai-keychain-error">{state.keychainError}</Notice>}
@@ -407,10 +465,8 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
                 aria-describedby={ids.describedBy}
                 type="checkbox"
                 checked={draft.allowProtectedEgress}
-                onChange={(e) => {
-                  if (e.target.checked && !state.persisted.allowProtectedEgress) setConfirmEgress(true);
-                  else update({ allowProtectedEgress: e.target.checked });
-                }}
+                // turning it on is the plan's interlock (§5), typed at Apply
+                onChange={(e) => update({ allowProtectedEgress: e.target.checked })}
               />
             )}
           </SettingField>
@@ -424,7 +480,7 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
       )}
 
       <div style={{ ...row, marginTop: 8 }}>
-        <button className="l-btn l-btn-primary" disabled={busy} onClick={() => void save(draft)}>Save</button>
+        <button className="l-btn l-btn-primary" disabled={busy} onClick={() => void showPlan(() => planAI(draft))}>Review and apply</button>
         {provider.id !== "off" && (
           <button
             className="l-btn"
@@ -443,6 +499,20 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
         )}
         {busy && <span style={hint}>working…</span>}
       </div>
+      {plan && (
+        <PlanView
+          key={plan.digest || plan.refused}
+          plan={plan}
+          busy={busy}
+          interlockTitle="Allow protected-cluster context to leave this machine?"
+          onApply={async (typed) => {
+            let result: ApplyResult = { ok: false };
+            await applyWith(async () => (result = await applyAI(plan.digest, typed)), inUse);
+            return result;
+          }}
+          onCancel={() => setPlan(null)}
+        />
+      )}
       {test && (
         <div data-testid="ai-test-result" style={{ fontSize: 11, color: test.ok ? "var(--color-text-primary)" : "var(--color-text-danger)" }}>
           {test.ok ? <>Test answered via {test.origin} · <span style={{ fontFamily: "var(--font-mono)" }}>{test.model}</span>: “{test.reply}”</> : <>Test failed: {test.error}</>}
@@ -457,29 +527,9 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
         {provider.id === "claudeCLI"
           ? "Test re-checks the Claude Code build, sign-in and policy, then sends one short prompt with no cluster data on your Claude sign-in. The prompt asks Claude Code to read a file and run a command; an answer that shows it could fails the Test and revokes the CLI. A passing Test admits this Claude Code build until it changes."
           : "Test sends one short prompt with no cluster data."}{" "}
-        Saving writes the ai block of fleet.yaml; keys stay in the keychain.
+        Applying writes the ai block of fleet.yaml; keys stay in the keychain.
       </div>
 
-      {confirmEgress && (
-        <ConfirmDialog
-          title="Allow protected-cluster context to leave this machine?"
-          detail={`Chat, Explain, Suggest-fix and investigations on protected clusters will send their resolved state to ${providerLabel(draft.provider)}${draft.baseUrl ? ` at ${draft.baseUrl}` : ""}. The permission stays on if you later change the provider or origin: turn it off first if the new destination should not receive it. This saves the settings now.`}
-          cluster={AI_EGRESS_PHRASE}
-          protected
-          danger
-          lockName="egress lock"
-          showScope={false}
-          confirmLabel="Allow and save"
-          arm={armAIEgress}
-          onCancel={() => setConfirmEgress(false)}
-          onConfirm={() => {
-            setConfirmEgress(false);
-            const next = { ...draft, allowProtectedEgress: true };
-            setDraft(next);
-            void save(next);
-          }}
-        />
-      )}
     </div>
   );
 }

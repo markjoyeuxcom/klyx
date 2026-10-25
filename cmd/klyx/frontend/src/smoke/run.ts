@@ -1145,11 +1145,10 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     typeInto(search, "protection");
     (await within(4000, "the Protection result", () => $<HTMLButtonElement>("[data-result='clusters[].protected']"))).click();
     const marks = () => document.querySelectorAll("[data-setting='clusters[].protected'][data-anchored]").length;
-    try {
-      await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected");
-    } catch (e) {
-      // what the page did, so a failure says whether the anchor applied
-      throw new Error(`${e instanceof Error ? e.message : e}: ${marks()} marked, focus on ${document.activeElement?.outerHTML.slice(0, 100) ?? "nothing"}, route ${JSON.stringify(useFleet.getState().route)}, notice ${$("[data-testid='settings-notice']")?.textContent ?? "none"}`);
+    // what the page did, so a failure says whether the anchor applied
+    const missed = await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected").then(() => null, (e: unknown) => e);
+    if (missed) {
+      throw new Error(`${missed instanceof Error ? missed.message : missed}: ${marks()} marked, focus on ${document.activeElement?.outerHTML.slice(0, 100) ?? "nothing"}, route ${JSON.stringify(useFleet.getState().route)}, notice ${$("[data-testid='settings-notice']")?.textContent ?? "none"}`);
     }
     const marked = marks();
     typeInto(search, "");
@@ -1276,6 +1275,28 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (drawer !== narrow) throw new Error(`the inspector is ${drawer ? "a drawer" : "split"} at ${settings.width}px`);
     if (drawer && !$(".lens-drawer")?.contains(document.activeElement)) throw new Error("focus did not move into the drawer");
     return { drawer };
+  });
+
+  // ---- Settings slice F §7: the AI section's Review and apply, on the
+  // lab: the plan shown, then applied, and the setting restored. Last in
+  // the walk: an applied AI change ends the conversations open now. ----
+  await step(steps, "Settings > AI: Review and apply", async () => {
+    useFleet.getState().openSettings("ai");
+    const box = () => $<HTMLInputElement>("[data-setting='ai.proposeActions'] input[type='checkbox']");
+    const before = (await within(8000, "the propose-actions setting", box)).checked;
+    const apply = async (want: boolean) => {
+      box()!.click();
+      (await within(4000, "Review and apply", () => byText<HTMLElement>("[data-testid='ai-settings'] button", /^Review and apply$/))).click();
+      const plan = await within(8000, "the plan", () => $("[data-testid='settings-plan']"));
+      const changes = await within(4000, "the plan's change", () => byText<HTMLElement>("[data-testid='plan-changes'] li", /^Propose actions: /));
+      const ends = plan.querySelectorAll("[data-testid='plan-ends'] li").length;
+      (await within(4000, "Apply", () => byText<HTMLElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
+      await within(15_000, "the applied setting, read back", () => !$("[data-testid='settings-plan']") && !$("[data-testid='ai-unsaved']") && box()?.checked === want && /Applied/.test($("[data-testid='ai-message']")?.textContent ?? ""));
+      return { change: changes.textContent, ends };
+    };
+    const off = await apply(!before);
+    const back = await apply(before);
+    return { off: off.change, ends: off.ends, back: back.change };
   });
   return steps;
 }

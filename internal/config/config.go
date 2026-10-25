@@ -266,6 +266,23 @@ func Load(path string) (*Config, error) {
 	return c, nil
 }
 
+// LoadVersioned is Load with the file version of the bytes it decoded
+// (FileVersion): a plan reads its block and the version it writes against
+// from one read (Settings slice F §5). The version is set whenever the file
+// was read, so a file that does not decode still has one.
+func LoadVersioned(path string) (*Config, string, error) {
+	raw, err := readFleetFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read config %q: %w", path, err)
+	}
+	version := versionOf(raw)
+	c, err := decode(raw)
+	if err != nil {
+		return nil, version, fmt.Errorf("invalid config %q: %w", path, err)
+	}
+	return c, version, nil
+}
+
 func (c *Config) applyDefaults() {
 	for i := range c.Clusters {
 		if c.Clusters[i].Context == "" {

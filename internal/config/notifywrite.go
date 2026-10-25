@@ -37,10 +37,11 @@ func SaveNotifications(path string, n, prev NotificationsConfig) error {
 		}
 		return nil
 	}
-	return saveTopLevelBlock(path, "notifications", block, "notification settings", pre, func(got *Config) error {
+	_, err := saveTopLevelBlock(path, "notifications", block, "notification settings", "", pre, func(got *Config) error {
 		if got.Notifications == nil || *got.Notifications != n {
 			return errors.New("the written notifications block does not read back as intended (file unchanged)")
 		}
 		return nil
 	})
+	return err
 }

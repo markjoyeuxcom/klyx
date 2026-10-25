@@ -62,6 +62,11 @@ func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
+	done, refusal := s.admitCall("explain", cluster)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
+	}
+	defer done()
 	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 

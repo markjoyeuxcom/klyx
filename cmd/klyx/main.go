@@ -554,6 +554,8 @@ func main() {
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
 	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, envread.Dynamic(envread.AIKey), aiSvc, cfg.AI)
+	// Settings slice F §5: an AI plan names the chat's work it ends
+	appbridge.WireAIWork(aiSettingsSvc, chatSvc)
 
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {
 		c, ok := reg.Conn(name)

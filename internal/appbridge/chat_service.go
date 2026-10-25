@@ -109,6 +109,9 @@ type conversation struct {
 	stepRunning *actionPlan
 	// turns numbers its exchanges as they are asked, never reused
 	turns int
+	// started is when it began: a plan names the work it ends by it
+	// (Settings slice F §5)
+	started time.Time
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -351,6 +354,10 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if notAdmitted != "" {
 		return refuse(notAdmitted)
 	}
+	if s.ai.applyingNow() {
+		// slice F §5: no new work while an AI Apply decides
+		return refuse(aiApplying)
+	}
 	conn, usable := s.state(cluster)
 	if conn == nil || !usable {
 		return refuse("the cluster is not connected")
@@ -366,7 +373,7 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if kind == kindInvestigation {
 		id = invIDPrefix + id
 	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts()}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -616,6 +623,10 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		return notice("this conversation has ended; start a new one")
 	case c.active != nil:
 		return notice("a question is already being answered; stop it or wait")
+	case s.ai.applyingNow():
+		// slice F §5: no new turn while an AI Apply decides; checked under
+		// the lock the turn registers under, so an Apply's plan names it
+		return notice(aiApplying)
 	case question == "":
 		return notice("ask a question")
 	case len(question) > chatQuestionMax:

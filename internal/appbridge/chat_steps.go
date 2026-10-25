@@ -182,6 +182,11 @@ func (s *ChatService) offeredLocked(c *conversation, p *actionPlan, n int) strin
 	if p.withdrawn != "" {
 		return "withdrawn: " + p.withdrawn
 	}
+	if s.ai.applyingNow() {
+		// slice F §5: no review or run starts while an AI Apply decides;
+		// a run reserves its step under this lock, so the plan names it
+		return aiApplying
+	}
 	if !p.settled {
 		return "the turn that proposed the plan is still running"
 	}
