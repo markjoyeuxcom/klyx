@@ -136,6 +136,7 @@ The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation
 Claude and Codex reviewed the Settings page and its coverage, independently and then against each other. Slice 0 fixes what the review found wrong; a redesign spec follows, reviewed before it is built, and A2's settings come with it.
 
 - [Klyx Settings slice 0: correctness before the redesign](specs/2026-10-25-klyx-settings-slice0.md) (spec)
+- [Klyx Settings: the redesign](specs/2026-10-25-klyx-settings-redesign.md) (spec, for review)
 
 ## Next
 
