@@ -289,6 +289,20 @@ describe("anchors and repeated rows", () => {
     await waitFor(() => expect(useSettingsNotice.getState().notice).toMatch(/Protection for aks-gone is no longer there/));
   });
 
+  // the native smoke found it: a section switch on a mounted page, its data
+  // already read, applies the anchor (child effects run before the page's)
+  it("applies an anchor after a section switch on a mounted page", async () => {
+    await show("fleet");
+    act(() => { useFleet.getState().openSettings("ai"); });
+    await settled();
+    await settled();
+    act(() => { useFleet.getState().openSettings("fleet", "clusters[].protected@aks-we-dev"); });
+    await settled();
+    await settled();
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('[data-anchor="clusters[].protected@aks-we-dev"]')));
+    expect(await screen.findByTestId("settings-sentence")).toBeTruthy();
+  });
+
   it("gives two repositories' fields unique control ids", async () => {
     await show("git");
     const ids = Array.from(document.querySelectorAll('[data-setting="git.repos[].matches"] input')).map((el) => el.id);

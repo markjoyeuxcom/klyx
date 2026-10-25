@@ -56,10 +56,17 @@ export function SettingsView() {
   const notice = useSettingsNotice((s) => s.notice);
   const [cfg, setCfg] = useState<FleetConfigDTO | null>(null);
   const [loading, setLoading] = useState(true);
-  const [sentence, setSentence] = useState("");
-  const [readyFor, setReadyFor] = useState<SettingsSection | null>(null);
   const page = useRef<HTMLDivElement | null>(null);
   const shown = useRef<SettingsSection | null>(null);
+  // Each showing of a section is a generation. A section's sentence and its
+  // readiness count only for the generation that said them: a child's
+  // effects run before this component's, so nothing is reset here after a
+  // child spoke (the native smoke found a reset clearing a ready Fleet).
+  const generation = useRef({ section: null as SettingsSection | null, n: 0 });
+  if (generation.current.section !== section) generation.current = { section, n: generation.current.n + 1 };
+  const gen = generation.current.n;
+  const [sentence, setSentence] = useState<{ gen: number; text: string }>({ gen: 0, text: "" });
+  const [readyGen, setReadyGen] = useState(0);
 
   const load = async () => {
     setLoading(true);
@@ -75,16 +82,16 @@ export function SettingsView() {
   useEffect(() => {
     if (shown.current !== null && shown.current !== section) sayInSettings(null);
     shown.current = section;
-    setSentence("");
-    setReadyFor(null);
   }, [section]);
-  const say = useCallback((s: string) => setSentence(s), []);
-  const ready = useCallback(() => setReadyFor(section), [section]);
+  // the same sentence keeps the same state, or a section that says it on
+  // every render would render forever
+  const say = useCallback((text: string) => setSentence((cur) => (cur.gen === gen && cur.text === text ? cur : { gen, text })), [gen]);
+  const ready = useCallback(() => setReadyGen(gen), [gen]);
 
   // an anchor applies once its section has rendered what it can name, and
   // then leaves the route (it is where in the section, not a place)
   useEffect(() => {
-    if (!anchor || readyFor !== section || !page.current) return;
+    if (!anchor || readyGen !== gen || !page.current) return;
     const root = page.current;
     const id = requestAnimationFrame(() => {
       const missing = applyAnchor(root, anchor);
@@ -92,10 +99,10 @@ export function SettingsView() {
       useFleet.setState((s) => (s.route.name === "settings" && s.route.anchor === anchor ? { route: { name: "settings", section } } : {}));
     });
     return () => cancelAnimationFrame(id);
-  }, [anchor, readyFor, section]);
+  }, [anchor, readyGen, gen, section]);
 
   const fleetSentence = cfg ? sentenceForFleet(cfg) : "";
-  const summary = section === "fleet" ? fleetSentence : sentence;
+  const summary = section === "fleet" ? fleetSentence : sentence.gen === gen ? sentence.text : "";
   const content = (() => {
     switch (section) {
       case "fleet":
