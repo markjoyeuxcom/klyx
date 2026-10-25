@@ -46,7 +46,7 @@ import { saveRoute, restoreRouteOnBoot } from "../store/persist";
 import { LeaveDialog } from "./LeaveDialog";
 import { _resetNavGuardForTest } from "./navGuard";
 import { useSettingsNotice } from "./notice";
-import { ENTRIES, SETTINGS_SECTIONS, isRegistered, searchSettings, type SettingsSection } from "./registry";
+import { ENTRIES, SETTINGS_SECTIONS, isRegistered, searchSettings, settingDomId, type SettingsSection } from "./registry";
 import { SettingField } from "./SettingField";
 import { EndpointSettingsLink } from "./EndpointSettingsLink";
 import { buildCommands } from "../chrome/commands";
@@ -458,7 +458,79 @@ describe("the draft guard (S1 §1)", () => {
   });
 });
 
+// Codex's S1 implementation review, R1, R6 and R7, as tests.
+describe("the draft guard after review", () => {
+  it("R1: Stay while Save and leave runs keeps the person, and newer edits, here", async () => {
+    await show("ai");
+    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "claude-sonnet-5-5" } });
+    let finish: (v: { ok: boolean; error: string }) => void = () => {};
+    b.saveAISettings.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    useFleet.getState().openSettings("git");
+    fireEvent.click(await screen.findByRole("button", { name: "Save and leave" }));
+    await waitFor(() => expect(b.saveAISettings).toHaveBeenCalled());
+    fireEvent.keyDown(screen.getByTestId("settings-leave"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("settings-leave")).toBeNull());
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-newer" } });
+    b.getAISettings.mockResolvedValueOnce(aiState({ model: "claude-sonnet-5-5" }));
+    await act(async () => { finish({ ok: true, error: "" }); });
+    await settled();
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai" });
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("claude-newer");
+  });
+
+  it("R6: a typed Git alias asks before its section leaves; Save is not offered", async () => {
+    await show("git");
+    fireEvent.change(screen.getByLabelText("Also serves (github.com/acme/fleet)"), { target: { value: "git.example/acme/fleet" } });
+    useFleet.getState().openSettings("ai");
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "git" });
+    const dialog = await screen.findByTestId("settings-leave");
+    expect(dialog.textContent).toContain("an alias not yet added to github.com/acme/fleet");
+    expect(screen.queryByRole("button", { name: "Save and leave" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai" }));
+  });
+
+  it("R6: a typed approval asks too", async () => {
+    await show("git");
+    fireEvent.click(await screen.findByRole("button", { name: /^Approve/ }));
+    fireEvent.change(screen.getByLabelText("Open in Git link"), { target: { value: "https://git.example/acme/tools" } });
+    useFleet.getState().openSettings("data");
+    expect((await screen.findByTestId("settings-leave")).textContent).toContain("an approval of github.com/acme/tools not yet confirmed");
+  });
+
+  it("R7: a Save whose readback fails keeps the person in AI, saying so", async () => {
+    await show("ai");
+    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "claude-sonnet-5-5" } });
+    b.getAISettings.mockResolvedValueOnce(null);
+    useFleet.getState().openSettings("git");
+    fireEvent.click(await screen.findByRole("button", { name: "Save and leave" }));
+    await waitFor(() => expect(screen.queryByTestId("settings-leave")).toBeNull());
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai" });
+    expect(screen.getByTestId("ai-reread-failed")).toBeTruthy();
+  });
+});
+
 describe("SettingField (S1 §4)", () => {
+  it("R5: lookalike instances keep their own ids, labels and descriptions", () => {
+    render(<div>
+      <SettingField id="credential.endpoint" instance="a/b/metrics" label="a/b metrics token">{(ids) => <input id={ids.id} aria-describedby={ids.describedBy} />}</SettingField>
+      <SettingField id="credential.endpoint" instance="a_2Fb/metrics" label="a_2Fb metrics token">{(ids) => <input id={ids.id} aria-describedby={ids.describedBy} />}</SettingField>
+    </div>);
+    const first = screen.getByLabelText("a/b metrics token");
+    const second = screen.getByLabelText("a_2Fb metrics token");
+    expect(first).not.toBe(second);
+    expect(first.id).not.toBe(second.id);
+    expect(first.getAttribute("aria-describedby")).not.toBe(second.getAttribute("aria-describedby"));
+    const ids = ["a/b", "a_2Fb", "a%2Fb", "a-row", "a"].map((i) => settingDomId("credential.endpoint", i));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id) => !ids.some((o) => o !== id && (id + "-row" === o || id + "-effect" === o)))).toBe(true);
+  });
+
+  it("R8: an effective store is not called file only", () => {
+    render(<SettingField id="store.klyx-route" value="kept" />);
+    expect(screen.queryByText("file only")).toBeNull();
+  });
+
   it("associates the label, describes the control by its effect, and shows the chips and the default", () => {
     render(<SettingField id="ai.model" source="file">{(ids) => <input id={ids.id} aria-describedby={ids.describedBy} />}</SettingField>);
     const input = screen.getByLabelText("Model");

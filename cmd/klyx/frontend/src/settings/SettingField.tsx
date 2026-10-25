@@ -58,7 +58,9 @@ export function SettingField({ id, instance, label, source, group, children, val
     <span className="setting-chips">
       {source && <span className="setting-chip" title="where the value in use comes from">{source}</span>}
       {TAKES_EFFECT[e.takesEffect] && <span className="setting-chip" title="when a change takes effect">{TAKES_EFFECT[e.takesEffect]}</span>}
-      {readOnly && e.disposition !== "editable" && <span className="setting-chip">{e.disposition === "fixed" ? "fixed" : e.disposition === "deferred" ? "not yet editable" : "file only"}</span>}
+      {readOnly && (e.disposition === "fixed" || e.disposition === "deferred" || e.disposition === "effective-file-only") && (
+        <span className="setting-chip">{e.disposition === "fixed" ? "fixed" : e.disposition === "deferred" ? "not yet editable" : "file only"}</span>
+      )}
     </span>
   );
   const body = (

@@ -4,6 +4,7 @@ import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { OperationDialog } from "../chrome/OperationDialog";
 import { SettingField } from "../settings/SettingField";
 import { anchorOf } from "../settings/registry";
+import { setSectionDraft } from "../settings/navGuard";
 import {
   approveGitRepo,
   clearGitCache,
@@ -214,6 +215,12 @@ function ApprovedRepo({ repo: r, busy, gitOn, onFetch, onClear, onRemove, onMatc
   onMatch: (key: string, on: boolean) => void;
 }) {
   const [newKey, setNewKey] = useState("");
+  // a typed alias is a draft Save does not apply: Add does (Codex's S1
+  // implementation review, R6); leaving the section asks first
+  useEffect(() => {
+    setSectionDraft(`git-match:${r.key}`, newKey.trim() === "" ? null : { settings: false, credentials: [], unsaved: [`an alias not yet added to ${r.key}`], discard: () => setNewKey("") });
+  }, [newKey, r.key]);
+  useEffect(() => () => setSectionDraft(`git-match:${r.key}`, null), [r.key]);
   const h = historyLine(r);
   return (
     <div data-testid="git-repo" data-anchor={anchorOf("git.repos[].url", r.key)} tabIndex={-1} style={{ padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
@@ -296,6 +303,15 @@ function Sources({ sources, inline = false }: { sources: GitSource[]; inline?: b
 function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onCancel: () => void; onApprove: (url: string, web: string) => void }) {
   const [url, setUrl] = useState(item.suggest ?? "");
   const [web, setWeb] = useState("");
+  // what is typed here is a draft Approve applies, never Save (R6)
+  useEffect(() => {
+    const typed = url.trim() !== (item.suggest ?? "").trim() || web.trim() !== "";
+    setSectionDraft(`git-approve:${item.key}`, !typed ? null : {
+      settings: false, credentials: [], unsaved: [`an approval of ${item.key} not yet confirmed`],
+      discard: () => { setUrl(item.suggest ?? ""); setWeb(""); },
+    });
+  }, [url, web, item.key, item.suggest]);
+  useEffect(() => () => setSectionDraft(`git-approve:${item.key}`, null), [item.key]);
   return (
     <OperationDialog
       title="Approve a Git repository"

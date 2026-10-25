@@ -2,5 +2,5 @@ package fixture
 
 import "path/filepath"
 
-// a clean file: filepath.Dir of something that is not the fleet path
-func parent(gitDir string) string { return filepath.Dir(gitDir) }
+// a clean file: a path built under a directory it was given
+func under(dir string) string { return filepath.Join(dir, "x.yaml") }

@@ -79,16 +79,19 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
   const saveRef = useRef<() => Promise<boolean>>(async () => false);
   const saving = useRef<Promise<unknown> | null>(null);
 
-  const load = async (keepDraft = false) => {
+  // load reports whether the read succeeded (a newer read on its way counts:
+  // it is the one that lands)
+  const load = async (keepDraft = false): Promise<boolean> => {
     const seq = ++loadSeq.current;
     const gen = draftGen.current;
     const s = await getAISettings();
-    if (seq !== loadSeq.current) return; // a newer read is on its way
+    if (seq !== loadSeq.current) return true; // a newer read is on its way
     setLoadFailed(s === null);
-    if (!s) return;
+    if (!s) return false;
     setState(s);
     onState?.(s);
     if (!draft || (!keepDraft && gen === draftGen.current)) setDraft(s.persisted);
+    return true;
   };
   useEffect(() => {
     void load();
@@ -156,8 +159,8 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
       const r = await fn();
       setBusy(false);
       setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
-      if (r.ok) await load(keepDraft || gen !== draftGen.current);
-      return r.ok;
+      // saved and read back: a failed reread is not a verified save (R7)
+      return r.ok && (await load(keepDraft || gen !== draftGen.current));
     })();
     saving.current = work;
     try {

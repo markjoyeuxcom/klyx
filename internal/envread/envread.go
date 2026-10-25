@@ -219,17 +219,20 @@ func Walk(f Family) []string {
 
 // ForChild is a child process's environment for the family, with extra
 // entries last (os/exec keeps the last of a duplicated key, so they win).
-// For an inherit-all family with no extra it is nil, which os/exec reads
-// as "inherit the parent unchanged" - today's behaviour for kubectl, helm
-// and flux. An undeclared family gives only the extras.
+// Only a declared inherit-all family with no extra gives nil, which os/exec
+// reads as "inherit the parent unchanged" - today's behaviour for kubectl,
+// helm and flux. Everything else is never nil, because nil would inherit
+// everything (Codex's S1 implementation review, R2): an undeclared family
+// gives only the extras, and an allowlist that admits nothing gives an
+// empty environment.
 func ForChild(f Family, extra []string) []string {
 	if !f.valid() {
-		return append([]string(nil), extra...)
+		return append([]string{}, extra...)
 	}
 	if f.f.inheritAll && len(extra) == 0 {
 		return nil
 	}
-	return append(Walk(f), extra...)
+	return append(append([]string{}, Walk(f)...), extra...)
 }
 
 // Dynamic is a reader for variables whose names come from configuration,

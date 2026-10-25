@@ -61,10 +61,13 @@ export function anchorOf(id: string, instance?: string): string {
   return instance === undefined ? id : `${id}@${instance}`;
 }
 
-// A control's DOM id, from its registry id and instance key, so a repeated
-// field's are unique and valid as an id.
+// A control's DOM id, from its registry id and instance key: the anchor's
+// UTF-8 bytes in hex, so every pair has its own id and no instance can
+// collide with another's, or with a suffix ("-row", "-effect") another
+// adds (Codex's S1 implementation review, R5: % replaced by _ was not).
+const utf8 = new TextEncoder();
 export function settingDomId(id: string, instance?: string): string {
-  return `setting-${encodeURIComponent(anchorOf(id, instance)).replace(/%/g, "_")}`;
+  return `setting-${Array.from(utf8.encode(anchorOf(id, instance)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
 export function repeated(id: string): boolean {

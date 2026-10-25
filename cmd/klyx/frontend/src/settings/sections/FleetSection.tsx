@@ -20,6 +20,7 @@ const FIELDS: { id: string; head: string }[] = [
   { id: "clusters[].protected", head: "protected" },
 ];
 const DESCRIBED = ["clusters[].name", "clusters[].context", "clusters[].kubeconfig", "clusters[].tags", "clusters[].group", "clusters[].environment", "clusters[].protected"];
+const IN_TABLE = new Set(FIELDS.map((f) => f.id));
 const GRID = "minmax(0,1fr) minmax(0,1.3fr) 80px 80px 90px 70px";
 
 export function sentenceForFleet(cfg: FleetConfigDTO): string {
@@ -111,7 +112,7 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
 
       <Group title="Each cluster's fields">
         <p className="settings-group-note">What each field of a cluster entry does. In this version they are changed in fleet.yaml; the table above shows each cluster's value in use.</p>
-        {DESCRIBED.map((id) => <SettingField key={id} id={id} source="file" value="per cluster, in the table above" />)}
+        {DESCRIBED.map((id) => <SettingField key={id} id={id} source="file" value={IN_TABLE.has(id) ? "per cluster, in the table above" : "per cluster, in fleet.yaml; not shown here in this version"} />)}
       </Group>
 
       <Group title="The line's comparison source">

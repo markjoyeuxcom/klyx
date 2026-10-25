@@ -9,17 +9,17 @@ import { trapTab } from "../chrome/modalFocus";
 export function LeaveDialog() {
   const request = useLeaveRequest((s) => s.request);
   if (!request) return null;
-  return <Open settings={request.settings} credentials={request.credentials} canSave={request.canSave} />;
+  return <Open settings={request.settings} credentials={request.credentials} unsaved={request.unsaved} canSave={request.canSave} />;
 }
 
-function Open({ settings, credentials, canSave }: { settings: boolean; credentials: string[]; canSave: boolean }) {
+function Open({ settings, credentials, unsaved, canSave }: { settings: boolean; credentials: string[]; unsaved: string[]; canSave: boolean }) {
   useRestoreFocus();
   const saving = useLeaveRequest((s) => s.saving);
   const ref = useRef<HTMLDivElement | null>(null);
   const stayRef = useRef<HTMLButtonElement | null>(null);
   const titleId = useId();
   useEffect(() => { stayRef.current?.focus(); }, []);
-  const what = [settings ? "unsaved settings in this section" : null, ...credentials].filter(Boolean) as string[];
+  const what = [settings ? "unsaved settings in this section" : null, ...unsaved, ...credentials].filter(Boolean) as string[];
   return (
     <div className="leave-scrim" onClick={() => void resolveLeave("stay")}>
       <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} className="leave-dialog" data-testid="settings-leave"
@@ -30,11 +30,15 @@ function Open({ settings, credentials, canSave }: { settings: boolean; credentia
         }}>
         <h2 id={titleId} className="leave-title">Leave with {what.length === 1 ? what[0] : "unsaved changes"}?</h2>
         {what.length > 1 && <ul className="leave-list">{what.map((w) => <li key={w}>{w}</li>)}</ul>}
+        {unsaved.length > 0 && (
+          <p className="leave-note">Save does not add an alias or approve a repository; leaving discards what is typed there.</p>
+        )}
+        {saving && <p className="leave-note" role="status">Saving. Stay keeps you here, and the save still finishes.</p>}
         {credentials.length > 0 && (
           <p className="leave-note">{credentials.length === 1 ? "A typed credential is" : "Typed credentials are"} never saved by Save: leaving discards {credentials.length === 1 ? "it" : "them"}. Store {credentials.length === 1 ? "it" : "them"} first to keep {credentials.length === 1 ? "it" : "them"}.</p>
         )}
         <div className="leave-actions">
-          <button ref={stayRef} type="button" className="l-btn" disabled={saving} onClick={() => void resolveLeave("stay")}>Stay</button>
+          <button ref={stayRef} type="button" className="l-btn" onClick={() => void resolveLeave("stay")}>Stay</button>
           <button type="button" className="l-btn" disabled={saving} onClick={() => void resolveLeave("discard")}>Discard and leave</button>
           {canSave && <button type="button" className="l-btn l-btn-primary" disabled={saving} onClick={() => void resolveLeave("save")}>{saving ? "Saving…" : "Save and leave"}</button>}
         </div>

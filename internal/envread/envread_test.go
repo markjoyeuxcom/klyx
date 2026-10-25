@@ -1,6 +1,8 @@
 package envread
 
 import (
+	"os"
+	"os/exec"
 	"reflect"
 	"testing"
 
@@ -115,4 +117,39 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// Codex's S1 implementation review, R2: nil is the inherit-everything
+// sentinel, so a refused family and an allowlist that admits nothing are
+// never nil.
+func TestOnlyNativeToolsInheritEverything(t *testing.T) {
+	withEnv(t, map[string]string{"HOME": "/h", "AWS_PROFILE": "p"})
+	if got := ForChild(Family{}, nil); got == nil || len(got) != 0 {
+		t.Fatalf("a zero family: %#v", got)
+	}
+	if got := ForChild(Family{&family{id: "forged", inheritAll: true}}, nil); got == nil || len(got) != 0 {
+		t.Fatalf("a forged inherit-all family: %#v", got)
+	}
+	if got := ForChild(GitLocale, nil); got == nil || len(got) != 0 {
+		t.Fatalf("an allowlist that admits nothing: %#v", got)
+	}
+	if ForChild(NativeTools, nil) != nil {
+		t.Fatal("native tools still inherit (nil)")
+	}
+}
+
+// And in a real child: a refused family's process sees none of the parent.
+func TestARefusedFamilysChildSeesNothing(t *testing.T) {
+	if os.Getenv("KLYX_ENVREAD_CHILD") == "1" {
+		if os.Getenv("KLYX_ENVREAD_MARKER") != "" {
+			os.Exit(3)
+		}
+		os.Exit(0)
+	}
+	t.Setenv("KLYX_ENVREAD_MARKER", "inherited")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestARefusedFamilysChildSeesNothing$")
+	cmd.Env = append(ForChild(Family{}, nil), "KLYX_ENVREAD_CHILD=1")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("the child saw the parent: %v", err)
+	}
 }

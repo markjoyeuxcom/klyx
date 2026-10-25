@@ -12,6 +12,9 @@ export type SectionDraft = {
   settings: boolean;
   // typed credentials, by what the person would call them ("an unsaved API key")
   credentials: string[];
+  // other drafts Save does not apply, because an explicit action does (an
+  // alias not yet added, an approval not yet confirmed)
+  unsaved?: string[];
   // saves the settings draft; resolves true once it is saved and read back
   save?: () => Promise<boolean>;
   // drops the settings draft and the typed credentials
@@ -22,14 +25,19 @@ export type SectionDraft = {
 
 const drafts = new Map<string, SectionDraft>();
 let bypass = 0;
-let pending: (() => void) | null = null;
+// The open question: its navigation, and its number. A Save and leave
+// resolves only the request it answered: Stay, Escape or the scrim while it
+// saves ends that request, and the save then neither discards nor leaves
+// (Codex's S1 implementation review, R1).
+let pending: { action: () => void; seq: number } | null = null;
+let seq = 0;
 
-export type LeaveRequest = { settings: boolean; credentials: string[]; canSave: boolean };
+export type LeaveRequest = { settings: boolean; credentials: string[]; unsaved: string[]; canSave: boolean };
 export const useLeaveRequest = create<{ request: LeaveRequest | null; saving: boolean }>(() => ({ request: null, saving: false }));
 
 // setSectionDraft registers (or, with null, clears) a mounted panel's draft.
 export function setSectionDraft(owner: string, d: SectionDraft | null): void {
-  if (d && (d.settings || d.credentials.length > 0 || d.settling?.())) drafts.set(owner, d);
+  if (d && (d.settings || d.credentials.length > 0 || (d.unsaved?.length ?? 0) > 0 || d.settling?.())) drafts.set(owner, d);
   else drafts.delete(owner);
 }
 
@@ -47,7 +55,7 @@ function settlingNow(): Promise<unknown> | null {
 
 // mustAsk reports whether leaving now would lose a draft.
 export function mustAsk(): boolean {
-  return bypass === 0 && current().some((d) => d.settings || d.credentials.length > 0 || !!d.settling?.());
+  return bypass === 0 && current().some((d) => d.settings || d.credentials.length > 0 || (d.unsaved?.length ?? 0) > 0 || !!d.settling?.());
 }
 
 // runLeaving runs an approved navigation without asking again.
@@ -74,11 +82,12 @@ export function requestLeave(action: () => void): void {
     return;
   }
   const ds = current();
-  pending = action;
+  pending = { action, seq: ++seq };
   useLeaveRequest.setState({
     request: {
       settings: ds.some((d) => d.settings),
       credentials: ds.flatMap((d) => d.credentials),
+      unsaved: ds.flatMap((d) => d.unsaved ?? []),
       canSave: ds.some((d) => d.settings && !!d.save),
     },
   });
@@ -87,27 +96,33 @@ export function requestLeave(action: () => void): void {
 // resolveLeave answers the question. Save stores the settings draft (never a
 // typed credential) and leaves once it is read back; a failed save stays.
 export async function resolveLeave(choice: "save" | "discard" | "stay"): Promise<void> {
-  const action = pending;
-  if (choice === "stay" || !action) {
+  const req = pending;
+  if (choice === "stay" || !req) {
     pending = null;
     useLeaveRequest.setState({ request: null, saving: false });
     return;
   }
   if (choice === "save") {
+    if (useLeaveRequest.getState().saving) return; // one Save per question
     useLeaveRequest.setState({ saving: true });
     for (const d of current()) {
       if (d.settings && d.save && !(await d.save())) {
-        pending = null;
-        useLeaveRequest.setState({ request: null, saving: false });
-        return; // the panel says why; the person stays
+        // not saved, or saved but not read back: the panel says which, and
+        // the person stays to see it (R7)
+        if (pending === req) {
+          pending = null;
+          useLeaveRequest.setState({ request: null, saving: false });
+        }
+        return;
       }
     }
+    if (pending !== req) return; // the person chose to stay while it saved
   }
   for (const d of current()) d.discard();
   drafts.clear();
   pending = null;
   useLeaveRequest.setState({ request: null, saving: false });
-  runLeaving(action);
+  runLeaving(req.action);
 }
 
 /** Tests only. */
