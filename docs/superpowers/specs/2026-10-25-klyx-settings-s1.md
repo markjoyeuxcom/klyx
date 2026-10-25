@@ -405,3 +405,11 @@ Built on `feat/settings-s0` in five commits: the facades (a24f265, with the §3.
   - the endpoint link.
 
   The whole suite is 2,500+ tests.
+
+**The native smoke found two bugs.** Applying an anchor after a section switch on a mounted page failed in two ways:
+- a child's effects run before the page's, so the page's section-change reset cleared what the newly shown section had just said (b206587: each showing of a section is a generation, and nothing is reset);
+- the anchor waited for an animation frame, which a hidden or background window may not run (4e43a7b: it applies in the effect).
+
+The smoke's step now reports what it found when it times out. Night and day at 1440 and 1024 then passed 211/211 at f71512c.
+
+**Mutation pass:** 39 mutants of the facades, the scans, the registry, Diagnostics, the storage facade, the guard, the route and the anchors. Every mutant that changes behaviour is caught. One is equivalent: `ForChild`'s nil branch, seen from `execenv`, whose `Environ` returns nil itself when there is no extra; `envread`'s own test catches it.
