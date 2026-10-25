@@ -440,3 +440,11 @@ Codex ruled R1-R3 and R5-R8 resolved at 3c3388a, R4 partly. One P2 remained, RR1
 | **RR1, P2:** reviewed sites were whole functions, and a dot import produced no site | A site is one occurrence: its kind, file, function and its own source text, numbered when a function repeats it. A new derivation in a reviewed function is a new site, whether its text is new or repeated, and a removed one leaves a stale entry. A dot import of `path/filepath`, `path` or `envread` is refused. The tests cover Codex's real-file case and a same-text repeat in `AppendClusters` itself, plus a dot-import fixture. |
 
 This change is test-only, so the smoke at 3c3388a still stands for the product.
+
+## 15. ACCEPT (2026-10-25)
+
+Codex accepted S1's implementation at 8ad6f36, after the review of 36f3c60 and two re-reviews (R1-R8, then RR1), with no remaining findings.
+- Its RR1 probes pass: a new derivation in a reviewed function, a same-text repeat, removal, and dot imports of all three packages.
+- Its real-source `AppendClusters` mutation now fails the unchanged coverage suite.
+
+The native smoke passed at 3c3388a, the last product change: night and day, at 1440 and 1024, 211/211.
