@@ -340,3 +340,61 @@ Codex accepted the design at revision 1 (51d4daa), after the review of 8f1129b, 
 - **Work tracking follows the affected operations.** Explain, Suggest-fix and A3 count as well as chat turns, and the displayed consequences come from that state.
 - **The CLI release fence is final.** The containment and evidence-on-stdin contract stays. A failed release is never followed by another, unfenced handoff, and the transport carrying retries and redirects is the fenced one.
 - **One tracker per logical write.** `t.Write` keeps the receipt recorder and allocates a fresh forwarding tracker per logical write, never per retry.
+
+## 12. F1 as built (2026-10-25)
+
+Built in bee1d3f, with c04ee37: the fences, §1-§4.
+
+| Contract | Code |
+|---|---|
+| §1 the registry | `internal/policy` (Snapshot, Epoch, Seed, Begin, Publish, Hold, Release, ConnUp); seeded in `main` from the running clusters before any connects, and by `AddClusters`; `ConfigService.IsProtected` returns its value for a known cluster |
+| §1 the incarnation | `fleet.ClusterConn.moveLocked`, the one way the state changes, telling `Registry.SetOnUsable`'s hook before the new state is visible |
+| §2 tickets | `appbridge/protectguard.go`: `Guard`, `Ticket.Valid`, `Ticket.Write`, `Ticket.StartCLI`, `guardFor`; the 21 methods converted |
+| §2 per-write tracking | `t.Write`'s tracker; each step of `ReconcileWithSourceSteps` and each document of `CreateResourceYAML` gets its own |
+| §2 CLI starts | the drain and the debug terminal check `StartCLI` at the start; the helm runner checks the context's fence before its child |
+| §3 A3 | the conversation's pinned epoch in `planFenceLocked` (offers and verification), the review's epoch in `RunStep`, the ticket in `RunStep`'s fence |
+| §4 AI | `admitNow` at a conversation's start, `epochProblem` in the turn guard and the member check; `callFence` for Explain and Suggest-fix; `readfence.Transport` in `ai.Harden`; the CLI's release fenced; a write tracker on each send, and `modelError`'s "nothing was sent" or "may have been sent" |
+
+**Where the build differs or adds:**
+- **The guard's precedence.** The grant is consumed first, on every path. A cluster that is Applying or Held is then refused as such, before an unarmed or stale grant, because that is the more useful reason.
+- **Offers are pinned through their conversation.** An investigation is pinned to one cluster, so its epoch, captured at the start, is every offer's. A review also records its own epoch, which `RunStep` compares. That check is redundant with the plan fence, and is kept as defence in depth: its mutant survives a test only because the plan fence refuses first.
+- **Grants are invalidated lazily,** by the epoch they recorded, at `Guard`. Nothing deletes them on a move, so a publication never takes the guard's lock.
+- **An unknown cluster** is refused at every admission. `ConfigService.IsProtected` keeps today's false for one, for display only.
+- **Receipt-less verbs report a fence refusal's outcome** (c04ee37): `failed` sets not sent or unverified, as a matrix verb's reply does.
+- **The production producers in F1** are `Seed` and the incarnation. `Begin`, `Publish`, `Hold` and `Release` are exercised by tests until S2's Apply uses them.
+- **A gap in unit coverage:** fleet's per-write trackers sit below the fake dynamic clients, which do not go through the HTTP transport. They are covered by the appbridge fakes, which route each write through the real `readfence.Transport`, and by review.
+
+**Tests:**
+- the registry;
+- the incarnation;
+- the guard:
+  - epoch binding;
+  - a mismatched arm;
+  - Applying, Held and Release;
+  - zero tickets, unknown clusters and no guard;
+  - a race test;
+- a table over the 20 manual guarded methods, each refused and not sent after a move, and each writing without one (except the three that start a child);
+- per-write tracking:
+  - a lost answer, which is unverified;
+  - two writes under one ticket;
+  - a receipt-less verb;
+- A3:
+  - a tightening between the guard and the write;
+  - a reconnect withdrawing the offer and its review;
+  - a hold, whose release revives nothing;
+  - verification;
+- AI:
+  - a start while applying;
+  - a turn ended by a move;
+  - a comparison member's move;
+  - Explain's revision and epoch;
+  - the redirect probe;
+  - a refusal before any send;
+  - a move during the CLI's preflight;
+  - the wording of each;
+- the helm runner's start check;
+- the AST scan of every guarded method, with four negative fixtures.
+
+Every Go suite and golangci-lint pass. The native smoke passed 211/211 at bee1d3f, night and day at 1440 and 1024; c04ee37 adds only the outcome fields of a fence refusal and tests.
+
+**Mutation pass:** 24 mutants of the registry, the incarnation, the guard and tickets, `RunStep`, the plan fence, the AI start, turn and member checks, `callFence`, the receipt-less outcome, the drain's start check, the AI transport, the CLI release and the helm runner: 24 caught. One mutant was left out on purpose: removing the debug terminal's `StartCLI` would make a test open a real terminal. The AST scan covers that site instead.
