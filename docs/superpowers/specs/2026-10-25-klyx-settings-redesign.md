@@ -1,6 +1,6 @@
 # Klyx Settings: the redesign
 
-Opened 2026-10-25, on `feat/settings-s0`, after slice 0 (`2026-10-25-klyx-settings-slice0.md`, accepted at 2a985ad); revision 1 the same day, after Codex's review (§18). The owner asked for considerable enhancements to the Settings page (2026-10-25):
+Opened 2026-10-25, on `feat/settings-s0`, after slice 0 (`2026-10-25-klyx-settings-slice0.md`, accepted at 2a985ad); revisions 1 and 2 the same day, after Codex's review and re-review (§18, §19). The owner asked for considerable enhancements to the Settings page (2026-10-25):
 - every setting described by its effect;
 - AI roadmap decision 2: the user chooses the default model for unattended, opt-in proactive runs;
 - decision 4: the user sets report retention;
@@ -201,14 +201,24 @@ sources:
     serves: [{group: we}]        # groups, or clusters by name
 ```
 
+Each kind is its own installation, even when one LGTM deployment serves them all:
+
+```yaml
+  - id: lgtm-we-logs
+    kind: loki
+    host: aks-we-prd
+    serviceRef: {namespace: monitoring, name: loki-gateway, port: http}
+    serves: [{group: we}]
+```
+
 **A subscription** is a cluster's use of an installation for one kind: the installation, a tenant and a scope. It is implied for each cluster the installation serves, and written under the cluster when it differs:
 
 ```yaml
 clusters:
   - name: aks-we-stg
-    loki: {source: lgtm-we, tenant: stg-logs, scope: tenant}   # its own tenant, nothing else in it
+    loki: {source: lgtm-we-logs, tenant: stg-logs, scope: tenant}  # its own tenant, nothing else in it
   - name: aks-we-dev
-    alertmanager: {source: lgtm-we, match: {cluster: dev-we}}  # the label's value differs from the name
+    alertmanager: {source: lgtm-we, match: {cluster: dev-we}}      # the label's value differs from the name
 ```
 
 ### 6.2 Resolution and validation
@@ -321,7 +331,7 @@ clusters:
   - the terms it was granted under, persisted with it: the provider, the canonical resolved origin, whether TLS is verified, and the egress policy's version.
 
   A grant applies only while the profile's current resolved terms equal its own. This is checked at load, at Apply and before every send, so a provider change at the same origin, a TLS weakening or a hand edit made while Klyx was closed leaves the profile without a grant. Deleting a profile deletes its grants. A profile re-created with the same id gets a new `uid`, and no old grant.
-- **Local-only clusters:** `localOnly` is a persisted per-cluster policy, enforced from the resolved endpoint (a loopback origin or the CLI on this machine), never from a profile's name.
+- **Local-only clusters:** `localOnly` is a persisted per-cluster policy, enforced from the provider's resolved on-machine classification: a loopback OpenAI-compatible endpoint, today's `OnMachine`. It is never enforced from a profile's name. The Claude Code CLI is off-machine, since it sends prompts to Anthropic through the person's sign-in, so it never satisfies a local-only cluster. Any future truly local CLI provider would need its own reviewed destination classification.
 - **Investigations:** proposing actions, as A3 built it, with what turning it off does to offered plans.
 - **Fixed bounds** (budgets, slots, sizes) are listed, not offered (§3).
 
@@ -338,9 +348,10 @@ The owner's decisions 2 and 4, with the roadmap's §3 consent model. A2's own sp
 - **Consent** is per cluster and per trigger, off by default, and persisted with its terms as a grant is (§7):
   - the profile's `uid`, provider, canonical origin, TLS verification and the egress policy's version;
   - the cluster's local-only policy;
+  - the cluster's protection when consent was given, and whether the protected interlock was completed;
   - the time.
 
-  A protected cluster needs its own consent, with the interlock. A change that widens a consent's terms pauses the affected work as "needs consent again", said, never skipped silently. Group membership and notifications never imply consent.
+  A protected cluster needs its own consent, given with the interlock. A consent given while the cluster was unprotected does not cover it once it is protected: when protection tightens, through any of its inputs, in Settings or by a hand edit found at load, the consent becomes "needs consent again" until the person completes the interlock. This is checked at load, before a queued or fresh run, at Apply and before every send. A protected-egress grant for interactive use (§7) never stands in for it. A consent given under protection and its interlock stays usable across an ordinary restart. A change that widens a consent's terms pauses the affected work as "needs consent again", said, never skipped silently. Group membership and notifications never imply consent.
 - **Triggers,** each described with an example:
   - a new fault episode;
   - a degraded episode;
@@ -356,7 +367,10 @@ The owner's decisions 2 and 4, with the roadmap's §3 consent model. A2's own sp
 - **Retention** (owner decision 4), fleet-wide:
   - reports kept by count and by age, both user-set (at least one report, at least one day);
   - a size limit, user-set up to an absolute ceiling Klyx keeps (512 MiB);
-  - pruning runs when a report is written and at start;
+  - pruning runs at start, before the reports are listed; when a report is written; when a retention limit is applied; and while Klyx runs, on a schedule (every fifteen minutes), so a report past its age goes within that interval;
+  - Settings says that while Klyx is not running nothing is removed, and that a report past its age goes at the next start;
+  - a deletion that fails is said, with the report it left, never counted as enforced;
+  - a report and its audit are deleted together, on one path;
   - current usage, and what lowering a limit would delete, confirmed before it does;
   - delete one, delete all.
 - **The report and its audit:** a report keeps the sanitized result and a minimal audit, never raw reads, a reusable continuation or a secret. The audit records:
@@ -484,12 +498,16 @@ Each slice is reviewed by Codex before and after it is built, and its as-built n
   - an installation changing;
   - recovery after a fence ended the old work.
 - **R5:**
+  - local-only with an admitted Claude Code CLI (interactive, snapshot and A2), refused; a loopback model, allowed;
+  - a consent given unprotected: a pending turn ends when protection tightens, a later episode cannot use it, a queued run is held, the same change made while Klyx was closed is found at load; a consent given under the interlock survives a restart;
   - a provider change at the same origin;
   - a cold-start hand edit;
   - a deleted and re-created profile id;
   - a local-only cluster resolving to a remote endpoint;
   - a stale grant after a policy change;
   - the legacy migration with AI off or unresolvable.
+
+- **Retention:** the clock past a report's age with no start and no new report; a limit lowered on an idle store; a deletion that fails.
 
 **The native smoke** gains a Settings walk: every section opens by its address, search finds a setting by its effect, and a subscription's sentence names its host.
 
@@ -514,6 +532,27 @@ Each slice is reviewed by Codex before and after it is built, and its as-built n
 - Remote bases for the cache diff.
 - Federated reads across tenants.
 
+## 17a. Implementation notes from the review
+
+These are acceptance details for the slices, from Codex's re-review.
+
+**Epochs and A3's guards (slice F):**
+- The policy epoch is captured at the guard, an unprotected pass included, and compared at the write. A3's one-shot `checkProtected` stays consumed at entry, on refused paths too; the epoch check spends no second grant.
+- "Saved, not active" blocks new work as well as old: a new operation never pins a new epoch while using an old service.
+- A write refused before it is forwarded stays refused and not sent. A request already forwarded keeps its written or unverified outcome, since ending verification undoes nothing. A failed or reverted activation never makes a withdrawn plan or a stale arm usable again.
+
+**Buckets and S8a (S3a):**
+- Only resolved subscriptions are read: a shadowed configuration creates no reader.
+- S8a's single fleet-wide limiter of four, its deadline (which includes limiter wait and discovery) and its single flight across re-keys stay as they are. Buckets add no slots.
+- Alerts and groups take the same bucket filter. Mute reduction stays complete. Identity and matching facts are split before member rows are projected, and the opaque identity carries the installation, tenant and revision.
+- §6.4's cap is S8a's 5,000-entry truncation, a lower bound. Its 8 MiB response limit and 20,000 group appearances stay whole-read failures, keeping the prior rows stale or unreadable.
+- Retained bucket data and per-member rows are measured at the admitted shapes; no full copy is retained per member.
+
+**Existing per-cluster blocks (S3a):**
+- `alertmanager: {tenant: ..., match: ...}` with no locator means local discovery with that scope today. A group installation never takes it over, and S3a's resolution table spells it out as a legacy mode.
+- Empty discovery-only blocks, a source-less Loki, a block with both endpoint and serviceRef (the endpoint wins, with a warning) and unscoped direct blocks are each handled deliberately. The new installation rules neither merge nor reject them.
+- A direct endpoint with no host has no host connection to check: it keeps C5's endpoint and credential revision fences, plus the member, installation and subscription lineage. §6.6's host check applies to hosted transports.
+
 ## 18. Revision 1: Codex's review (2026-10-25)
 
 Codex requested changes: five P2 and one P3, all on contracts the first draft left open. It found the field contract, navigation, the scope sentence and separate proactive consent sound, and ruled the four owner decisions reasonable with the conditions now in §16. Each finding is addressed:
@@ -534,3 +573,16 @@ Codex requested changes: five P2 and one P3, all on contracts the first draft le
 - the retention ceiling, zero semantics and queue expiry (§8, §16);
 - per-item scope for Data and storage, and legacy secrets kept until migration (§10);
 - the named acceptance tests (§15).
+
+## 19. Revision 2: Codex's re-review (2026-10-25)
+
+Codex ruled revision 1's six fixes resolved as design contracts, and requested changes: three P2 and one P3.
+
+| Finding | Change |
+|---|---|
+| **RR1, P2:** local-only accepted the Claude Code CLI, which sends prompts to Anthropic | §7: local-only follows the provider's on-machine classification (`OnMachine`, a loopback endpoint); the CLI is off-machine and never satisfies it. |
+| **RR2, P2:** a consent given while unprotected could authorize a protected run | §8: a consent records the cluster's protection and whether its interlock was completed. Tightening, from any input, makes it "needs consent again", checked at load, before queued and fresh runs, at Apply and before sends. |
+| **RR3, P2:** age retention unenforced in an idle session | §8: pruning at start, on write, on a retention Apply and every fifteen minutes while running; a failed deletion is said; what a stopped app cannot do is said. |
+| **RR4, P3:** an example subscribed Loki to an Alertmanager installation | §6.1: a Loki installation of its own; each kind is its own installation. |
+
+The re-review's implementation details on epochs, S8a buckets and existing per-cluster blocks are §17a's acceptance notes. The tests for RR1 to RR3 are in §15.
