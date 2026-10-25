@@ -413,3 +413,20 @@ Built on `feat/settings-s0` in five commits: the facades (a24f265, with the §3.
 The smoke's step now reports what it found when it times out. Night and day at 1440 and 1024 then passed 211/211 at f71512c.
 
 **Mutation pass:** 39 mutants of the facades, the scans, the registry, Diagnostics, the storage facade, the guard, the route and the anchors. Every mutant that changes behaviour is caught. One is equivalent: `ForChild`'s nil branch, seen from `execenv`, whose `Environ` returns nil itself when there is no extra; `envread`'s own test catches it.
+
+## 13. Revision 1: Codex's implementation review (2026-10-25)
+
+Codex reviewed 36f3c60 (handoff f21e11c1) and requested changes: six P2 and two P3, no P1. It accepted §12's other additions. All eight are fixed in 0254e90, each with a test that fails without its fix.
+
+| Finding | Change |
+|---|---|
+| **R1, P2:** Escape or the scrim during Save and leave closed the dialog, but the save then discarded and left anyway | A Save and leave resolves only the question it answered. Stay, Escape or the scrim while it saves ends that request; the save finishes, then neither discards nor leaves. |
+| **R2, P2:** `ForChild` returned nil, which inherits everything, for a refused family or an empty allowlist | Only a declared inherit-all family with no extra returns nil. A refused family gives only its extras, and an empty allowlist gives an empty environment; a real child process confirms it. |
+| **R3, P2:** the storage scan missed computed access such as `window[key]` with `key = "localStorage"` | Any string naming `localStorage` or `sessionStorage` fails the scan, and a type-aware pass fails any `Storage`-typed expression outside the facade. An expression typed `any` escapes the type check (indexing `Window` by `keyof Window` is `any`), which is a review matter. |
+| **R4, P2:** the name-based fleet-path scan let a renamed path and a new store pass | The boundary no longer depends on names. Every parent-directory derivation (`Dir`, `Split`, a `..` segment) and every reference to `KLYX_CONFIG` sits on a reviewed list with its reason; a new one fails, and so does a stale entry. |
+| **R5, P2:** `%` replaced by `_` made lookalike instances (`a/b`, `a_2Fb`) share a DOM id | A control's id is its anchor's UTF-8 bytes in hex. It is collision-free, and safe from the `-row` and `-effect` suffixes. |
+| **R6, P2:** Git's alias input and the approve dialog's fields were drafts the guard never saw | Both register as drafts that Save does not apply. The question names them and offers only Stay or Discard. |
+| **R7, P3:** Save and leave treated a failed readback as a verified save | Such a save stays, and the panel says the reread failed. |
+| **R8, P3:** the new `effective` disposition showed "file only" | No disposition chip for an effective store. |
+
+**Also from the review:** the Fleet section's field descriptions said every value was in the table; kubeconfig and tags now say they are not shown in this version.
