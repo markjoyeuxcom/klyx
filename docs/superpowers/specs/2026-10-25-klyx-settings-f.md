@@ -443,3 +443,48 @@ Every Go suite, the race suites of the touched packages, golangci-lint (with and
 ## 15. F1 ACCEPT (2026-10-25)
 
 Codex accepted F1 at d07f37f, after the review of 0563872 and two re-reviews, with no remaining findings. It ruled the typed scan's `go list -export -deps` subprocess acceptable test infrastructure: a fixed invocation of the trusted toolchain from the package under test, run once per test process, whose errors fail the test. "The standard library only" in §14 describes the scan's implementation; the export data it reads covers every build dependency of the package. F2 builds next.
+
+## 16. F2a as built (2026-10-25)
+
+F2 is built in two parts, each leaving a working app and each reviewed on its own: **F2a**, the plan engine and the AI section, here; **F2b**, notifications and Git's running copy.
+
+| Contract | Code |
+|---|---|
+| §5 the plan | `appbridge/plan.go`: `PlanDTO` with its changes, ends, continues, interlock, file version and runtime revisions, sealed by `seal` over all of it and what the candidate binds; `ApplyResultDTO` |
+| §5 the candidate cache | `planCache`: 16 entries, 1 MiB, 5 minutes, consumed by a successful Apply; it holds no key |
+| §5 file versions | `config.FileVersion`, `config.LoadVersioned` (a block and its version from one read), `saveTopLevelBlock`'s version and `config.SaveAIAt`; any other version is `config.ErrFileChanged` |
+| §5 AI plans | `AISettingsService.PlanAI`, `PlanAIFromFile` ("Use the file's values", writing nothing), `PlanAIRevert`; `planLocked` compares with what runs, and the egress interlock with the running grant |
+| §5 Apply | `ApplyAI(digest, typed)`: under the AI section's Applying state, re-planned from what runs, refused with the new plan when the digest moved, the interlock checked, written against the plan's file version, then built and published; `ApplyAIQuiet` for Save and leave |
+| §5 saved, not active | `activateLocked`: a failed build publishes AI unavailable with "Saved, not active: …" and records the candidate, its file version and the revision its failure published; `RetryAI`, and `PlanAIRevert`'s plan |
+| §5 the Applying state and work | `AIService.beginApply`/`endApply`, `admitCall` (Explain and Suggest-fix as work), `callsWork`; `ChatService.aiWork`; `WireAIWork` in `main` |
+| §5 the credential actions | `SetAPIKey`, `MoveKeyToKeychain` on the running terms; `ClearAPIKey` immediate; each under the Applying state, moving the AI revision |
+| §6 the frontend | `settings/PlanView.tsx`; `AISettingsPanel`'s Review and apply, "Use the file's values", the saved-not-active banner with Retry and Revert, and Save and leave through `applyAIQuiet` |
+
+**Where the build differs or adds:**
+- **The egress grant is gone.** `ArmAIEgress` and `SaveAISettings` are removed: the typed phrase goes to `ApplyAI` with the plan's digest and is checked there. No grant outlives an Apply, so none needs invalidating.
+- **The work version is the identities of the work** a plan names, not a counter. A turn, an investigation, an offer or a step starting or ending changes it. A turn that starts and ends between the plan and its Apply leaves it unchanged, and the plan's list is then still what ends.
+- **What an AI Apply ends:** each open conversation under the running revision, its question being answered, its current offer and its running step, and each Explain and Suggest-fix in flight. A conversation from an earlier revision is already ended for new turns, so it is not named again.
+- **The Applying state refuses new work only:** a conversation, a turn, a comparison set, a step's review and run, an Explain and a Suggest-fix. Each checks it under the lock its work registers under, and Apply reads the work under those locks after entering the state, so a plan either names a start or the start was refused. Running work's own checks never consult it, so an Apply refused before its write changes nothing (§11). A running turn's offer during the state is withdrawn by the revision move, and its turn is in the plan.
+- **Revert compares with the running grant,** which is none while nothing is active: reverting to terms with egress on takes the interlock.
+- **The credential actions:** `SetAPIKey` writes fleet.yaml only when its block is the running one apart from the key, and otherwise activates the running terms and leaves the drift. While the section is saved, not active, `SetAPIKey` only stores the key and `MoveKeyToKeychain` refuses. `ClearAPIKey` publishes the running terms without their key as unavailable ("No API key…"), which is not saved, not active.
+- **No key in a plan:** the cache and the digest hold whether a legacy key is present, never the key; Apply re-reads it from the file, whose version the plan binds.
+- **Activation uses the `build` seam,** as Test already did.
+- **Also fixed:** an S1 smoke step rethrew inside its catch (eslint's `preserve-caught-error`); it now throws after it.
+
+**Tests:**
+- the file version: a write under another version refuses and leaves the file;
+- the plan from what runs: a hand edit turning egress on, then "Use the file's values", takes the interlock and writes nothing;
+- the interlock: refused without the phrase or with a wrong one, applied with it, consumed, and taken again each time egress is turned on;
+- a move while a plan is open, refused with a new plan: the file, the revision, and the work (a turn from a second window), where Save and leave stays; Save and leave never takes an interlock;
+- an edit between the re-plan and the write;
+- a plan naming its work, and a plan that activates nothing ending nothing;
+- activation failing after the write: saved, not active, AI refused everywhere; Retry with unchanged terms, Retry after a file edit widening egress (a fresh plan with its interlock), Retry after the revision moved, and Revert;
+- a refusal before the write changing nothing;
+- the Applying state: refused at every entry point, during an Apply's write, and released after;
+- the credential actions with a divergent file: `SetAPIKey` activates the running terms, not the edited egress, and leaves the file; `MoveKeyToKeychain` refuses; an in-flight call is refused after the move;
+- the candidate cache's bounds, expiry and consumption, and no key in a plan or the cache;
+- the frontend: the plan's changes and ends, an edit voiding it, a replacement plan shown unconfirmed, "Use the file's values", saved, not active with Retry and Revert, and Save and leave staying with the plan.
+
+**Mutation pass:** 35 mutants of the interlock's comparison, the digest, the typed phrase, Save and leave's condition, the write's version, "Use the file's values" and Revert writing, the Applying state and its release, saved, not active and Retry's two checks, the work a plan names (the chat's, the calls', a conversation), the key kept out of the cache, the credential actions' drift checks and revision move, every entry point's refusal, the config write's version, and the frontend's voided plan, quiet Save and leave, replacement plan and interlock dialog - 34 caught. The one that survives, a refused plan applied, is equivalent: a refused plan is never cached, and its refusal is in its digest, so the digest check refuses first; the branch is kept, said so.
+
+Every Go suite, the race suites of `appbridge` and `config`, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit, with a new last step: Settings > AI's Review and apply turns proposing actions off and on again, each time showing the plan (its change, and the one investigation it ends) and applying it. The smoke's scratch fleet.yaml now holds its ai block in Klyx's own form, the same settings.
