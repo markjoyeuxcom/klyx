@@ -349,4 +349,44 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     expect((await screen.findByTestId("ai-tls-off")).textContent).toContain("certificate not verified");
     expect(screen.getByLabelText("Skip certificate verification").closest("label")?.textContent).toContain("insecure");
   });
+
+  // Codex's review of slice 0, finding 1: an edit made while the successful
+  // Save is being read back survives that read, and only the latest read
+  // lands.
+  it("keeps an edit made while a Save is being read back", async () => {
+    const saved = { ...state().persisted, provider: "openai", keySource: "keychain", model: "model-1" };
+    bridge.getAISettings.mockResolvedValueOnce(state({ persisted: saved }));
+    let readBack: (v: AISettingsState) => void = () => {};
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
+    bridge.getAISettings.mockImplementationOnce(() => new Promise((r) => (readBack = r)));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bridge.getAISettings).toHaveBeenCalledTimes(2)); // the readback is in flight
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3-unsaved" } });
+    readBack(state({ persisted: { ...saved, model: "model-2" } }));
+    await waitFor(() => expect(screen.getByTestId("ai-unsaved").textContent).toContain("model-3-unsaved"));
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("model-3-unsaved");
+  });
+
+  it("never lets an older readback replace a newer one", async () => {
+    const saved = { ...state().persisted, provider: "openai", keySource: "keychain", model: "model-1" };
+    bridge.getAISettings.mockResolvedValueOnce(state({ persisted: saved }));
+    const reads: ((v: AISettingsState) => void)[] = [];
+    bridge.getAISettings.mockImplementation(() => new Promise((r) => reads.push(r)));
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(reads).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(reads).toHaveLength(2));
+    reads[1](state({ persisted: { ...saved, model: "model-3" } })); // the newer read lands first
+    await waitFor(() => expect(screen.queryByTestId("ai-unsaved")).toBeNull());
+    reads[0](state({ persisted: { ...saved, model: "model-2" } })); // then the older one
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("ai-unsaved")).toBeNull();
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("model-3");
+  });
 });

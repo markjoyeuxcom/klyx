@@ -73,7 +73,7 @@ func saveTopLevelBlock(path, key, block, what string, pre, check func(*Config) e
 	if err := check(got); err != nil {
 		return err
 	}
-	return replaceUnchanged(path, target, tmpPath, original, true)
+	return replaceUnchanged(path, target, mode, tmpPath, original, true)
 }
 
 // replaceTopLevelBlock swaps the top-level key block in doc for block, or

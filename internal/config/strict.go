@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -28,11 +29,11 @@ const maxUnknownListed = 8
 func decode(raw []byte) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(raw, &c); err != nil {
-		return nil, err
+		return nil, shown(err)
 	}
 	nested, top, err := unknownKeys(raw)
 	if err != nil {
-		return nil, err
+		return nil, shown(err)
 	}
 	if len(nested) > 0 {
 		shown := nested
@@ -48,10 +49,21 @@ func decode(raw []byte) (*Config, error) {
 	c.unknownTop = top
 	c.applyDefaults()
 	if err := c.validate(); err != nil {
-		return nil, err
+		return nil, shown(err)
 	}
 	return &c, nil
 }
+
+// shownError is a decoding error whose message is already as Klyx shows
+// it (DisplayError): every consumer - Settings, the panels, a writer's
+// refusal, the log - gets it without the value it echoed (Codex's review of
+// slice 0, finding 5).
+type shownError struct{ err error }
+
+func (e shownError) Error() string { return DisplayError(e.err) }
+func (e shownError) Unwrap() error { return e.err }
+
+func shown(err error) error { return shownError{err} }
 
 func plural(n int) string {
 	if n == 1 {
@@ -78,7 +90,11 @@ func unknownKeys(raw []byte) (nested, top []string, err error) {
 
 type keyWalk struct {
 	nested, top []string
-	seen        map[*yaml.Node]bool // an alias walked once
+	// walking are the aliases on the path being walked: every use of an
+	// alias is checked against the schema it is used in - one read as a
+	// free map certifies nothing about a struct (Codex's review of slice 0,
+	// finding 2) - and only a cycle stops the walk
+	walking map[*yaml.Node]bool
 }
 
 func (w *keyWalk) walk(n *yaml.Node, t reflect.Type, path string) {
@@ -86,13 +102,14 @@ func (w *keyWalk) walk(n *yaml.Node, t reflect.Type, path string) {
 		t = t.Elem()
 	}
 	if n.Kind == yaml.AliasNode {
-		if w.seen == nil {
-			w.seen = map[*yaml.Node]bool{}
+		if n.Alias == nil || w.walking[n.Alias] {
+			return // a cycle, which the decoder refuses
 		}
-		if n.Alias == nil || w.seen[n.Alias] {
-			return
+		if w.walking == nil {
+			w.walking = map[*yaml.Node]bool{}
 		}
-		w.seen[n.Alias] = true
+		w.walking[n.Alias] = true
+		defer delete(w.walking, n.Alias)
 		n = n.Alias
 	}
 	switch t.Kind() {
@@ -103,7 +120,10 @@ func (w *keyWalk) walk(n *yaml.Node, t reflect.Type, path string) {
 		fields := yamlFields(t)
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
-			if k.Value == "<<" { // a merge key: the merged mappings are this struct's
+			// a merge key: the merged mappings are this struct's. Only a plain
+			// << is one; a quoted '<<' is a string key the decoder ignores
+			// (Codex's review of slice 0, finding 3)
+			if k.Kind == yaml.ScalarNode && k.ShortTag() == "!!merge" {
 				w.merge(v, t, path)
 				continue
 			}
@@ -182,7 +202,11 @@ func itemPath(path string, i int, item *yaml.Node) string {
 }
 
 func unknownAt(path string, k *yaml.Node, fields map[string]reflect.Type) string {
-	s := fmt.Sprintf("%s: %q at line %d", path, clip(k.Value, 64), k.Line)
+	name := fmt.Sprintf("%q", k.Value)
+	if n := len([]rune(k.Value)); n >= 25 { // no field is this long: perhaps a pasted value
+		name = fmt.Sprintf("a key of %d characters", n)
+	}
+	s := fmt.Sprintf("%s: %s at line %d", path, name, k.Line)
 	if near := nearest(k.Value, fields); near != "" {
 		s += fmt.Sprintf(" (did you mean %q?)", near)
 	}
@@ -232,10 +256,11 @@ func clip(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// echoedValue is a value an error echoes back, long and unbroken enough to
-// be a credential pasted into the wrong field: a YAML type error quotes it
-// in backticks, a validation error as (got "...").
-var echoedValue = regexp.MustCompile("`[^`\\s]{25,}`|\\(got \"[^\"\\s]{25,}\"\\)")
+// echoedValue is a value an error echoes back: a YAML type error quotes it
+// in backticks, a validation error as (got "..."), escaped. A long one may
+// be a credential pasted into the wrong field - "Bearer <key>" included -
+// so it is withheld, spaces and all.
+var echoedValue = regexp.MustCompile("`[^`]{25,}`|\\(got \"(?:[^\"\\\\]|\\\\.){25,}\"\\)")
 
 // DisplayError is a fleet-file error as Klyx shows it: an echoed long value
 // is withheld, so a key pasted into the wrong field is never put on screen;
@@ -248,10 +273,23 @@ func DisplayError(err error) string {
 		if strings.HasPrefix(m, "`") {
 			return fmt.Sprintf("`a value of %d characters, withheld`", len([]rune(m))-2)
 		}
-		return fmt.Sprintf(`(got a value of %d characters, withheld)`, len([]rune(m))-len(`(got "")`))
+		return fmt.Sprintf("(got a value of %d characters, withheld)", len([]rune(m))-len(`(got "")`))
 	})
 }
 
 // IsMissing reports a fleet file that does not exist yet: a first run, not
 // an error.
 func IsMissing(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
+// readFleetFile reads the fleet file. Only an absent path is a first run: a
+// symlink whose target is gone is an error, said like any other (Codex's
+// review of slice 0, finding 6).
+func readFleetFile(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("it is a symlink whose target does not exist")
+		}
+	}
+	return b, err
+}

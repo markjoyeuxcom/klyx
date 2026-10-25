@@ -6,7 +6,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 )
@@ -256,7 +255,7 @@ func (c *Config) Summary() string {
 
 // Load reads, parses, defaults, and validates a fleet config file.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readFleetFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}

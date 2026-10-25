@@ -77,9 +77,11 @@ func fleetTemp(target string, mode os.FileMode) (*os.File, error) {
 // original (or still does not exist when it did not before) and still
 // resolves to target. An edit made on disk - by another tool or an editor -
 // since the writer read the file is refused, not overwritten, and so is a
-// link repointed meanwhile. A narrow window remains between this check and
-// the rename; the in-process lock covers Klyx's own writers.
-func replaceUnchanged(path, target, tmpPath string, original []byte, existed bool) error {
+// link repointed meanwhile, or its permissions changed (Codex's review of
+// slice 0, finding 4): the temp file carries the mode read with the
+// content. A narrow window remains between this check and the rename; the
+// in-process lock covers Klyx's own writers.
+func replaceUnchanged(path, target string, mode os.FileMode, tmpPath string, original []byte, existed bool) error {
 	if beforeReplace != nil {
 		beforeReplace()
 	}
@@ -92,7 +94,7 @@ func replaceUnchanged(path, target, tmpPath string, original []byte, existed boo
 	case err != nil && existed:
 		return ErrFleetChangedOnDisk // deleted meanwhile
 	}
-	if now, _, _, err := fleetTarget(path); err != nil || now != target {
+	if now, nowMode, _, err := fleetTarget(path); err != nil || now != target || existed && nowMode != mode {
 		return ErrFleetChangedOnDisk
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
@@ -225,7 +227,7 @@ func AppendClusters(path string, contexts []string) error {
 			return fmt.Errorf("appended config does not list cluster %q (file unchanged)", entry.Name)
 		}
 	}
-	return replaceUnchanged(path, target, tmpPath, original, exists)
+	return replaceUnchanged(path, target, mode, tmpPath, original, exists)
 }
 
 // insertClusters inserts entries into the top-level clusters list of an

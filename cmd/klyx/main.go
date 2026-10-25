@@ -74,7 +74,7 @@ func main() {
 	if loadErr != nil {
 		// a missing file is a first run; any other failure is kept, and
 		// Settings and the fleet say it (Settings review slice 0)
-		log.Printf("warn: could not load fleet config (%v); starting with empty fleet", loadErr)
+		log.Printf("warn: could not load fleet config (%s); starting with empty fleet", config.DisplayError(loadErr))
 		cfg = &config.Config{}
 	}
 	// The AI eval (eval design §3) runs on the configuration its preflight

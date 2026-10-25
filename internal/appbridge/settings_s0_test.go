@@ -170,3 +170,21 @@ func TestANotificationToggleNeverOverwritesAHandEdit(t *testing.T) {
 		t.Fatalf("a refused save applied: %+v", got)
 	}
 }
+
+// Codex's review of slice 0, finding 6, through Settings: a broken link is
+// said at startup and now, not taken for a first run.
+func TestABrokenFleetLinkIsSaidInSettings(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "fleet.yaml")
+	if err := os.Symlink(filepath.Join(dir, "gone.yaml"), link); err != nil {
+		t.Fatal(err)
+	}
+	s := NewConfigService(link, &config.Config{}, func(config.ClusterConfig) error { return nil })
+	s.kubeconfigPath = func() string { return "/tmp/kubeconfig" }
+	s.kubeContexts = func(string) ([]string, error) { return nil, nil }
+	_, err := config.Load(link)
+	WithConfigLoadError(s, err)
+	if dto := s.GetFleetConfig(); !strings.Contains(dto.LoadError, "symlink whose target does not exist") || !strings.Contains(dto.FileError, "symlink whose target does not exist") {
+		t.Fatalf("%+v", dto)
+	}
+}

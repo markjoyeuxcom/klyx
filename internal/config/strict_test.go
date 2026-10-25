@@ -214,3 +214,132 @@ func TestTheTokenMoveRefusesARepointedLink(t *testing.T) {
 		}
 	}
 }
+
+// Codex's review of slice 0, finding 2: every use of an alias is checked
+// against the schema it is used in; one read as a free map, or as another
+// block, certifies nothing about a cluster.
+func TestAnAliasIsCheckedAtEveryUse(t *testing.T) {
+	for _, c := range []struct {
+		name, doc, err string
+	}{
+		{"read as tags, merged into a cluster", "common: &common {protcted: true}\nclusters:\n  - name: a\n    tags: *common\n    <<: *common\n", `"protcted"`},
+		{"read as the ai block, merged into a cluster", "ai: &common {provider: off}\nclusters:\n  - name: a\n    <<: *common\n", `"provider"`},
+		{"a valid alias reused for two clusters", "base: &base {context: ctx}\nclusters:\n  - name: a\n    <<: *base\n  - name: b\n    <<: *base\n", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fleet.yaml")
+			if err := os.WriteFile(path, []byte(c.doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if c.err == "" && err != nil || c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)) {
+				t.Fatalf("want %q, got %v", c.err, err)
+			}
+		})
+	}
+}
+
+// Finding 3: a quoted '<<' is a string key, not a merge - the decoder
+// ignores it - so it is an unknown field; a plain << merges.
+func TestAQuotedMergeKeyIsNoMerge(t *testing.T) {
+	dir := t.TempDir()
+	quoted, plain := filepath.Join(dir, "q.yaml"), filepath.Join(dir, "p.yaml")
+	_ = os.WriteFile(quoted, []byte("clusters:\n  - name: a\n    '<<': {protected: true}\n"), 0o600)
+	_ = os.WriteFile(plain, []byte("clusters:\n  - name: a\n    <<: {protected: true}\n"), 0o600)
+	if _, err := Load(quoted); err == nil || !strings.Contains(err.Error(), `"<<"`) {
+		t.Fatalf("quoted: %v", err)
+	}
+	c, err := Load(plain)
+	if err != nil || !c.Clusters[0].Protected {
+		t.Fatalf("plain: %+v %v", c, err)
+	}
+}
+
+// Finding 4: a permission change made while a writer prepares its file is
+// refused like a content change; the file keeps its new mode and content.
+func TestAWriterRefusesAPermissionChange(t *testing.T) {
+	base := "clusters:\n  - name: a\n    context: a\n"
+	writers := map[string]func(path string) error{
+		"add clusters": func(p string) error { return AppendClusters(p, []string{"b"}) },
+		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
+		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
+		"notifications": func(p string) error {
+			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+		},
+	}
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fleet.yaml")
+			if err := os.WriteFile(path, []byte(base), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			beforeReplace = func() { _ = os.Chmod(path, 0o600) }
+			defer func() { beforeReplace = nil }()
+			if err := write(path); !errors.Is(err, ErrFleetChangedOnDisk) {
+				t.Fatal(err)
+			}
+			st, _ := os.Stat(path)
+			if b, _ := os.ReadFile(path); string(b) != base || st.Mode().Perm() != 0o600 {
+				t.Fatalf("%v %q", st.Mode().Perm(), b)
+			}
+		})
+	}
+}
+
+// Finding 5: a long echoed value is withheld spaces and all - "Bearer
+// <key>" pasted into an enum field - and the error Load returns is already
+// as shown, so no consumer gets the value.
+func TestAPastedValueWithSpacesIsWithheld(t *testing.T) {
+	key := "sk-synthetic-0123456789abcdefghijklmnop"
+	for _, v := range []string{"Bearer " + key, "pasted " + key + " value"} {
+		got := DisplayError(errors.New(`ai.provider must be off or anthropic (got "` + v + `"); line 3: cannot unmarshal !!str ` + "`" + v + "`" + ` into bool`))
+		if strings.Contains(got, key) || !strings.Contains(got, "withheld") {
+			t.Fatalf("%q: %s", v, got)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: a\nai:\n  provider: Bearer "+key+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "withheld") {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(path); err == nil || strings.Contains(err.Error(), key) {
+		t.Fatal(err)
+	}
+	// a YAML type error echoes it in backticks, which yaml.v3 itself
+	// shortens: it never reaches the message either way
+	typed := filepath.Join(t.TempDir(), "fleet.yaml")
+	_ = os.WriteFile(typed, []byte("clusters:\n  - name: a\n    protected: Bearer "+key+"\n"), 0o600)
+	if _, err := Load(typed); err == nil || strings.Contains(err.Error(), key) {
+		t.Fatal(err)
+	}
+	if got := DisplayError(errors.New(`clusters[0] (a): "` + key + `" at line 3`)); strings.Contains(got, "withheld") {
+		t.Fatalf("a quoted key name is not an echoed value: %s", got)
+	}
+	long := filepath.Join(t.TempDir(), "fleet.yaml")
+	_ = os.WriteFile(long, []byte("clusters:\n  - name: a\n    "+key+": true\n"), 0o600)
+	if _, err := Load(long); err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "a key of 39 characters") {
+		t.Fatal(err)
+	}
+}
+
+// Finding 6: a fleet.yaml symlink whose target is gone is an error, not a
+// first run; an absent path still is one.
+func TestABrokenFleetLinkIsNotAFirstRun(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "fleet.yaml")
+	if err := os.Symlink(filepath.Join(dir, "gone.yaml"), link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(link)
+	if err == nil || IsMissing(err) || !strings.Contains(err.Error(), "symlink whose target does not exist") {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(link); err == nil || IsMissing(err) {
+		t.Fatal(err)
+	}
+	if _, err := Load(filepath.Join(dir, "absent.yaml")); !IsMissing(err) {
+		t.Fatal(err)
+	}
+}

@@ -83,6 +83,20 @@ Claude and Codex reviewed Settings independently at `feat/ai-a3-lab` 6639a55, th
 
 **Gates:** `go test -race ./internal/...`, vet, golangci-lint (with the eval tag too), `tsc`, eslint, and 2481 frontend tests. One run hit the known `internal/observe` rekey flake, which passes on rerun; this slice does not touch that package. A mutation pass caught 43 of 44 mutants, once four were rewritten to compile and a test was added for the metrics-token move's repointed link. The 44th was equivalent: a check for a missing file that the read after it already made, now removed.
 
+### 2.1 Codex's review and the fixes (2026-10-25)
+
+Codex requested changes: six P2, all residual cases of the slice's own fixes. It judged refusing unknown nested keys right. Its check of 90 configurations in the repository that loaded before found no unexpected rejection: the seven now refused are this slice's own negative tests. The release notes must call the refusal out. Each finding is addressed:
+1. **An edit made during Save's readback survives it.** Only the latest read's reply lands, and it replaces the draft only when nothing was edited while it was on its way.
+2. **Every use of an alias is checked against the schema it is used in.** An alias read as a free map, or as another block, certified nothing about a cluster it was merged into; the walk now stops only at a cycle.
+3. **Only a plain `<<` merges.** A quoted `'<<'` is a string key the decoder ignores, so it is now an unknown field rather than a merge the validator trusted.
+4. **A permission change during a write is refused** like a content change, for every writer; the metrics-token move already refused one.
+5. **A long echoed value is withheld spaces and all,** so `Bearer <key>` pasted into an enum field never reaches the screen. Decoding errors are redacted where they are made, so every consumer gets them redacted: Settings, the panels, a writer's refusal and the startup log. A key of 25 or more characters, which no field name is, is named by its length.
+6. **A fleet.yaml symlink whose target is gone is an error,** said in Settings and on the empty fleet. Only an absent path is a first run.
+
+**Tests:** Codex's six probes as regressions, and two more found by the mutation pass's reasoning: an older readback landing after a newer one, and a YAML type error echoing a pasted key (yaml.v3 shortens such values itself; Klyx's redaction there is a second guard).
+
+**Gates:** as before, with 2483 frontend tests. A mutation pass over the fixes caught 10 of 10. The native smoke passed 210/210 four ways on 829c55e from a clean tree, the slice before these fixes; the fixes are covered by the tests above.
+
 ## 3. Next: the redesign spec
 
 A spec for the redesign, reviewed by Codex before it is built:

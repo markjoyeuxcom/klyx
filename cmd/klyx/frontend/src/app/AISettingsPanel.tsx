@@ -61,13 +61,20 @@ export function AISettingsPanel() {
   // provider or origin must never land against the current draft (Codex
   // review of c488e34).
   const draftGen = useRef(0);
+  // Only the latest read's reply lands, and it replaces the draft only when
+  // nothing was edited while it was on its way (Codex's review of Settings
+  // slice 0, finding 1).
+  const loadSeq = useRef(0);
 
   const load = async (keepDraft = false) => {
+    const seq = ++loadSeq.current;
+    const gen = draftGen.current;
     const s = await getAISettings();
+    if (seq !== loadSeq.current) return; // a newer read is on its way
     setLoadFailed(s === null);
     if (!s) return;
     setState(s);
-    if (!keepDraft || !draft) setDraft(s.persisted);
+    if (!draft || (!keepDraft && gen === draftGen.current)) setDraft(s.persisted);
   };
   useEffect(() => {
     void load();

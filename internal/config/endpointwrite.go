@@ -39,7 +39,7 @@ type Snapshot struct {
 
 // ReadSnapshot reads the fleet file once.
 func ReadSnapshot(path string) (Snapshot, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFleetFile(path)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read fleet config %q: %w", path, err)
 	}
