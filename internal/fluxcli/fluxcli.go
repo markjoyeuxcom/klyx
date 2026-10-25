@@ -43,6 +43,9 @@ var fluxBin = clibin.Binary{
 	FallbackPaths: defaultFluxFallbackPaths,
 }
 
+// Binary is how Klyx resolves flux, for Settings > Diagnostics.
+func Binary() clibin.Binary { return fluxBin }
+
 func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, error) {
 	bin, ok := Resolve()
 	if !ok {

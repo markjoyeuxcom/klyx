@@ -262,6 +262,16 @@ type DeclaredName struct {
 	Kind string
 }
 
+// PurposeIDs are the declared dynamic purposes' ids, sorted.
+func PurposeIDs() []string {
+	var out []string
+	for p := range purposes {
+		out = append(out, p.id)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // FamilyIDs are the declared families' ids, sorted.
 func FamilyIDs() []string {
 	var out []string

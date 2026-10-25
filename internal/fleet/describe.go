@@ -39,6 +39,9 @@ var kubectlBin = clibin.Binary{
 	FallbackPaths: defaultKubectlFallbackPaths,
 }
 
+// KubectlBinary is how Klyx resolves kubectl, for Settings > Diagnostics.
+func KubectlBinary() clibin.Binary { return kubectlBin }
+
 func defaultKubectlFallbackPaths() []string {
 	switch runtime.GOOS {
 	case "darwin":

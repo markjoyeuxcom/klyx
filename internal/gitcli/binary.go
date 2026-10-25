@@ -68,6 +68,9 @@ type Git struct {
 
 var gitBin = clibin.Binary{Name: "git", Override: envread.KlyxGitPath, FallbackPaths: defaultGitFallbackPaths}
 
+// Binary is how Klyx resolves git, for Settings > Diagnostics.
+func Binary() clibin.Binary { return gitBin }
+
 func defaultGitFallbackPaths() []string {
 	switch runtime.GOOS {
 	case "darwin":

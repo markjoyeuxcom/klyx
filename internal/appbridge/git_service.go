@@ -199,6 +199,17 @@ type GitUnapprovedDTO struct {
 	Refused string `json:"refused,omitempty"`
 }
 
+// BinaryState is the binary line alone, for Settings > Diagnostics.
+func (s *GitService) BinaryState() GitBinaryDTO {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := GitBinaryDTO{Ready: s.ready, Off: s.off}
+	if s.ready && s.off == "" {
+		b.Path, b.Version = s.git.Path, s.git.Version.Raw
+	}
+	return b
+}
+
 // GetGitSettings reads fleet.yaml's git block, the caches and the clusters'
 // Git sources.
 func (s *GitService) GetGitSettings() GitSettingsDTO {

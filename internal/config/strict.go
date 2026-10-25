@@ -164,20 +164,61 @@ func (w *keyWalk) merge(v *yaml.Node, t reflect.Type, path string) {
 func yamlFields(t reflect.Type) map[string]reflect.Type {
 	out := map[string]reflect.Type{}
 	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
+		if name, ok := yamlName(t.Field(i)); ok {
+			out[name] = t.Field(i).Type
 		}
-		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
-		switch name {
-		case "-":
-			continue
-		case "":
-			name = strings.ToLower(f.Name)
-		}
-		out[name] = f.Type
 	}
 	return out
+}
+
+func yamlName(f reflect.StructField) (string, bool) {
+	if !f.IsExported() {
+		return "", false
+	}
+	name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+	switch name {
+	case "-":
+		return "", false
+	case "":
+		name = strings.ToLower(f.Name)
+	}
+	return name, true
+}
+
+// SchemaPaths is every YAML path of Config, named as the key check names
+// them (Settings S1 §3): fields by their YAML names, a list of structs as
+// "[]", and a map, a scalar or a list of scalars as its own leaf. In field
+// order.
+func SchemaPaths() []string {
+	var out []string
+	var walk func(t reflect.Type, path string)
+	walk = func(t reflect.Type, path string) {
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		switch {
+		case t.Kind() == reflect.Struct:
+			for i := 0; i < t.NumField(); i++ {
+				if name, ok := yamlName(t.Field(i)); ok {
+					walk(t.Field(i).Type, joinPath(path, name))
+				}
+			}
+		case t.Kind() == reflect.Slice && elemStruct(t):
+			walk(t.Elem(), path+"[]")
+		default:
+			out = append(out, path)
+		}
+	}
+	walk(reflect.TypeOf(Config{}), "")
+	return out
+}
+
+func elemStruct(t reflect.Type) bool {
+	e := t.Elem()
+	for e.Kind() == reflect.Pointer {
+		e = e.Elem()
+	}
+	return e.Kind() == reflect.Struct
 }
 
 func joinPath(path, key string) string {

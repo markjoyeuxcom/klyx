@@ -44,6 +44,9 @@ var helmBin = clibin.Binary{
 	FallbackPaths: defaultHelmFallbackPaths,
 }
 
+// Binary is how Klyx resolves helm, for Settings > Diagnostics.
+func Binary() clibin.Binary { return helmBin }
+
 // Run executes helm with the given args. If helm exits non-zero it returns an
 // error whose message includes the combined stderr text.
 func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {

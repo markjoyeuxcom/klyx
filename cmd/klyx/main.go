@@ -653,6 +653,7 @@ func main() {
 		application.NewService(helmSvc),
 		application.NewService(windowsSvc),
 		application.NewService(configSvc),
+		application.NewService(appbridge.NewSettingsService(configSvc, gitSvc)),
 		application.NewService(argoSvc),
 		application.NewService(rbacSvc),
 		application.NewService(promotionSvc),
