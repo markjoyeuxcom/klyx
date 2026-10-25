@@ -464,6 +464,15 @@ Nothing new is written with a secret in it. A legacy plaintext token or key alre
 
 Each slice is reviewed by Codex before and after it is built, and its as-built note lives in its own spec. The accumulated slice 0 probes stay in every gate.
 
+**Sequencing (owner, 2026-10-25):** after S4, the one investigation workflow comes before S5 + A2. The order is:
+1. S1, F, S2, S3a, S3b, S4;
+2. the investigation workflow (AI roadmap §5);
+3. the onboarding milestone: an unfamiliar platform engineer configures Klyx and resolves a representative incident unaided;
+4. S5 + A2;
+5. S6, which may follow A2.
+
+The table's dependencies are unchanged: A2 still builds on this redesign's consent, model, limits and retention foundation.
+
 ## 15. Tests
 
 **Every slice:**

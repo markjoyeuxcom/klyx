@@ -167,6 +167,8 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 - **Option 2:** A1 right after S10. It reuses chat's contract and needs the evidence S8a, S8b and S9 just added. A2 and A3 follow the coverage programme.
 - **Either way,** §6.1's Flux scenario needs only the A1-A3 machinery and one health-check parser. §6.2's Argo scenario also needs the Argo-parity work's hook results and any new Argo verbs.
 
+**Decided (owner, 2026-10-25):** A1 and A3 are built. One investigation workflow comes before A2. It joins what exists into one path, so an operator follows a failure without hunting through views: failure, then the affected workload and its dependencies, then the relevant Git or rollout change, then the evidence, then a reviewed A3 action, then the observed outcome. Then comes the onboarding milestone (an unfamiliar platform engineer configures Klyx and resolves a representative incident unaided), and then Settings S5 with A2 (Settings redesign §14). Codex's competitive-priorities note gives the reasoning (Prax `5d6d148c`). A2's contracts do not change, only its place.
+
 **Each phase's definition of done:**
 - its note with Codex review before and after;
 - the gates;
