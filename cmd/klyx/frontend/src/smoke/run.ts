@@ -1144,8 +1144,14 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const search = await within(4000, "the settings search", () => $<HTMLInputElement>(".lens-index input[aria-label='Search settings']"));
     typeInto(search, "protection");
     (await within(4000, "the Protection result", () => $<HTMLButtonElement>("[data-result='clusters[].protected']"))).click();
-    await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected");
-    const marked = document.querySelectorAll("[data-setting='clusters[].protected'][data-anchored]").length;
+    const marks = () => document.querySelectorAll("[data-setting='clusters[].protected'][data-anchored]").length;
+    try {
+      await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected");
+    } catch (e) {
+      // what the page did, so a failure says whether the anchor applied
+      throw new Error(`${e instanceof Error ? e.message : e}: ${marks()} marked, focus on ${document.activeElement?.outerHTML.slice(0, 100) ?? "nothing"}, route ${JSON.stringify(useFleet.getState().route)}, notice ${$("[data-testid='settings-notice']")?.textContent ?? "none"}`);
+    }
+    const marked = marks();
     typeInto(search, "");
     return { sections: SETTINGS_SECTIONS.length, marked };
   });

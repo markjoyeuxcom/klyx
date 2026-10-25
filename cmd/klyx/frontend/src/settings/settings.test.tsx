@@ -353,7 +353,11 @@ describe("the rail and search", () => {
     const result = document.querySelector<HTMLButtonElement>('[data-result="clusters[].protected"]');
     expect(result).toBeTruthy();
     fireEvent.click(result!);
-    expect(useFleet.getState().route).toEqual({ name: "settings", section: "fleet", anchor: "clusters[].protected" });
+    // Fleet opens at it: focus on a protection row, every one marked, and
+    // the anchor gone from the route once applied
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-setting")).toBe("clusters[].protected"));
+    expect(document.querySelectorAll('[data-setting="clusters[].protected"][data-anchored]').length).toBe(3);
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "fleet" });
   });
 
   it("lists every section and each settable entry in the console", () => {

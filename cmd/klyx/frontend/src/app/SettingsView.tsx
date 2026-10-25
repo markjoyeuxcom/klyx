@@ -92,13 +92,12 @@ export function SettingsView() {
   // then leaves the route (it is where in the section, not a place)
   useEffect(() => {
     if (!anchor || readyGen !== gen || !page.current) return;
-    const root = page.current;
-    const id = requestAnimationFrame(() => {
-      const missing = applyAnchor(root, anchor);
-      if (missing) sayInSettings(missing);
-      useFleet.setState((s) => (s.route.name === "settings" && s.route.anchor === anchor ? { route: { name: "settings", section } } : {}));
-    });
-    return () => cancelAnimationFrame(id);
+    // applied in the effect itself, after the commit: never on an animation
+    // frame, which a hidden or background window may not run (the native
+    // smoke's window is hidden)
+    const missing = applyAnchor(page.current, anchor);
+    if (missing) sayInSettings(missing);
+    useFleet.setState((s) => (s.route.name === "settings" && s.route.anchor === anchor ? { route: { name: "settings", section } } : {}));
   }, [anchor, readyGen, gen, section]);
 
   const fleetSentence = cfg ? sentenceForFleet(cfg) : "";
