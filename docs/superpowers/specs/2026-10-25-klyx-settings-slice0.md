@@ -1,6 +1,6 @@
 # Klyx Settings slice 0: correctness before the redesign
 
-Opened 2026-10-25, on `feat/settings-s0` (from `feat/ai-a3-lab`, which also changes Settings). The owner asked for a review of the Settings page and its coverage (2026-10-25), alongside AI roadmap decisions 2 and 4 (§4). Slice 0 fixes what the review found wrong; the redesign follows in its own spec, reviewed before it is built.
+Opened 2026-10-25, on `feat/settings-s0`; built and accepted (§2.5) (from `feat/ai-a3-lab`, which also changes Settings). The owner asked for a review of the Settings page and its coverage (2026-10-25), alongside AI roadmap decisions 2 and 4 (§4). Slice 0 fixes what the review found wrong; the redesign follows in its own spec, reviewed before it is built.
 
 ## 1. The review
 
@@ -131,6 +131,14 @@ The boundary (`yamlerrors.go`) is now an allowlist, not a list of the forms seen
 - **Withheld with its line:** anything else, including an error that is not YAML's.
 
 A form not reviewed is therefore withheld, never shown. A regression covers the tagged scalar at Load and ReadSnapshot (a backtick inside included), all five writers (each leaving the file unchanged), the Settings payload and an AI Save, and the allowlist itself. A mutation pass caught 8 of 8.
+
+### 2.5 ACCEPT (2026-10-25)
+
+Codex accepted slice 0 at 2a985ad, after the review of 829c55e and four re-reviews, with no remaining findings.
+- Its independent extraction from yaml.v3 v3.0.1's sources matches the 51-message allowlist exactly.
+- It found no listed message that carries content, and no omission that hurts repair: real malformed files keep their specific messages (a missing colon, an invalid escape, tab indentation, an unfinished list, invalid base64, an invalid merge).
+- Every accumulated probe passes.
+- Its corpus check of 106 configurations that loaded before found no unexpected refusal.
 
 ## 3. Next: the redesign spec
 
