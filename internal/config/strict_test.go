@@ -438,3 +438,77 @@ func TestAnUnknownYAMLIssueIsNotPassedOn(t *testing.T) {
 		}
 	}
 }
+
+// Codex's third re-review of slice 0: a tagged scalar its tag cannot hold
+// (yaml.v3's resolver quotes it in full) is withheld everywhere - the
+// loader, with a backtick inside the value too, and all five writers.
+func TestATaggedScalarIsWithheld(t *testing.T) {
+	key := "sk-synthetic-0123456789abcdefghijklmnop"
+	write := func(t *testing.T, doc string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "fleet.yaml")
+		if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	ticked := "sk-synthetic-012345`6789abcdefghijklmnop"
+	for _, v := range []string{key, ticked} {
+		path := write(t, "clusters:\n  - name: a\n    protected: !!int '"+v+"'\n")
+		for _, err := range []error{func() error { _, err := Load(path); return err }(), func() error { _, err := ReadSnapshot(path); return err }()} {
+			if err == nil || strings.Contains(err.Error(), "6789abcdefghijklmnop") || !strings.Contains(err.Error(), "a value tagged !!int is not one (its value is withheld)") {
+				t.Fatalf("%q: %v", v, err)
+			}
+		}
+	}
+	extra := "clusters:\n  - name: a\n    context: a\n    metrics:\n      endpoint: https://m.example\n      token: tok\nextra: !!int " + key + "\n"
+	for name, w := range map[string]func(p string) error{
+		"add clusters": func(p string) error { return AppendClusters(p, []string{"b"}) },
+		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
+		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
+		"notifications": func(p string) error {
+			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+		},
+		"metrics token": func(p string) error {
+			snap, err := ReadSnapshot(p)
+			if err != nil {
+				return err
+			}
+			_, err = MoveMetricsTokenToAuth(snap, "a")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := write(t, extra)
+			if _, err := Load(path); err != nil {
+				t.Fatalf("the file loads: %v", err)
+			}
+			if err := w(path); err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "its value is withheld") {
+				t.Fatalf("%v", err)
+			}
+			if b, _ := os.ReadFile(path); string(b) != extra {
+				t.Fatal("the file changed")
+			}
+		})
+	}
+}
+
+// The boundary is an allowlist: yaml.v3's fixed problems and content-free
+// decoder messages pass, a form not reviewed is withheld with its line,
+// and an error that is not YAML's is withheld too.
+func TestTheYAMLBoundaryIsAnAllowlist(t *testing.T) {
+	for in, want := range map[string]string{
+		"yaml: line 3: did not find expected key":                             "yaml: line 3: did not find expected key",
+		"yaml: mapping values are not allowed in this context":                "yaml: mapping values are not allowed in this context",
+		"yaml: line 9: exceeded max depth of 10000":                           "yaml: line 9: exceeded max depth of 10000",
+		"yaml: document contains excessive aliasing":                          "yaml: document contains excessive aliasing",
+		"yaml: line 4: something new about sk-synthetic-0123456789abcd":       "yaml: line 4: " + withheldYAML,
+		"yaml: a new form quoting sk-synthetic-0123456789abcd":                "yaml: " + withheldYAML,
+		"not a yaml error at all: sk-synthetic-0123456789abcd":                withheldYAML,
+		"yaml: cannot decode !!str `sk-synthetic-0123456789abcd` as a !weird": "yaml: a tagged value its tag cannot hold (its value is withheld)",
+	} {
+		if got := readableYAML(errors.New(in)); got.Error() != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}

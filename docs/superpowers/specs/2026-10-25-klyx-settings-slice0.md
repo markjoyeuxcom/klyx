@@ -121,6 +121,17 @@ The boundary is now one call: every decode of the fleet file, the loader's, the 
 
 yaml.v3's parser and scanner messages are fixed strings and pass unchanged, as does a type error with a standard tag (yaml.v3 already cuts its value to seven characters). An issue in any other form passes on as its line alone. The rewrite was reviewed against yaml.v3 v3.0.1's producers, and a version change re-reviews it. The changed-field guard uses `describeKey`. A regression covers each form at Load and ReadSnapshot, all five writers' refusals (each leaving the file unchanged), the add guard, the Settings payload and an AI Save, with a parser error and a standard type error as controls. A mutation pass caught 8 of 8, once the fallback had its own test. A branch for an error the schema cannot produce was removed.
 
+### 2.4 Codex's third re-review (2026-10-25)
+
+R2's paths were fixed. One P2 remained: yaml.v3's resolver quotes a tagged scalar its tag cannot hold in full (`resolve.go`). That error fell through the boundary unchanged, reaching all five writers' refusals and, for a value with a backtick inside, the loader and Settings. §2.3's claim that any other form passes on as its line alone was true only of type errors.
+
+The boundary (`yamlerrors.go`) is now an allowlist, not a list of the forms seen:
+- **Passed on:** yaml.v3's parser, scanner and reader problems, which are fixed strings extracted from v3.0.1's sources (51), its dynamic content-free messages (depth limits, event names, counts) and the decoder's fixed messages.
+- **Rewritten to their kind and line:** the forms that carry content (anchors, a list or map as a key, a tagged scalar).
+- **Withheld with its line:** anything else, including an error that is not YAML's.
+
+A form not reviewed is therefore withheld, never shown. A regression covers the tagged scalar at Load and ReadSnapshot (a backtick inside included), all five writers (each leaving the file unchanged), the Settings payload and an AI Save, and the allowlist itself. A mutation pass caught 8 of 8.
+
 ## 3. Next: the redesign spec
 
 A spec for the redesign, reviewed by Codex before it is built:

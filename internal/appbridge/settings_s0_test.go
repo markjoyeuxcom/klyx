@@ -256,3 +256,21 @@ func TestNoYAMLErrorCrossesSettings(t *testing.T) {
 		t.Fatalf("SaveAI: %v", err)
 	}
 }
+
+// Through Settings and an AI Save: a tagged scalar's value never crosses.
+func TestATaggedScalarNeverCrossesSettings(t *testing.T) {
+	ticked := "sk-synthetic-012345`6789abcdefghijklmnop"
+	s := configServiceAt(t, "clusters:\n  - name: a\n    protected: !!int '"+ticked+"'\n", &config.Config{Clusters: []config.ClusterConfig{{Name: "a", Context: "a"}}})
+	_, err := config.Load(s.path)
+	WithConfigLoadError(s, err)
+	if b, _ := json.Marshal(s.GetFleetConfig()); strings.Contains(string(b), "6789abcdefghijklmnop") || !strings.Contains(string(b), "withheld") {
+		t.Fatalf("Settings: %s", b)
+	}
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: a\nextra: !!int sk-synthetic-0123456789abcdefghijklmnop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveAI(path, config.AIConfig{Provider: "off"}); err == nil || strings.Contains(err.Error(), "0123456789abcdefghijklmnop") {
+		t.Fatalf("SaveAI: %v", err)
+	}
+}
