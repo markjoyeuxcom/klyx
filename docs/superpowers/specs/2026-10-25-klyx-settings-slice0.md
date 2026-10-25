@@ -106,6 +106,21 @@ Codex found the six fixes sound, with one residual P2. A long pasted key was des
 
 Every diagnostic that names a key the file holds now uses one rule (`describeKey`): quoted, or, at 25 characters or more (longer than any field or label Klyx reads), by its length. YAML's duplicate-key error is rewritten the same way. A regression covers all three, in Load's and ReadSnapshot's strings and in Settings' serialized payload, with a short key still named. A mutation pass caught 4 of 4.
 
+### 2.3 Codex's second re-review (2026-10-25)
+
+R1 was fixed, but the diagnostic boundary was still incomplete: one P2 with three paths.
+- The writers' round-trip checks decoded the file with raw yaml.v3 errors, so a list used as a key in an ignored extension block named its content in any writer's refusal.
+- The add guard named a changed top-level key in full.
+- yaml.v3's unknown-anchor message and its type error's custom tag carried file content past the patterns.
+
+The boundary is now one call: every decode of the fleet file, the loader's, the key walk's and each writer's round-trip check, goes through `unmarshalFleet`, which rewrites the content-bearing yaml.v3 forms to their kind and line:
+- an unknown or self-containing anchor;
+- a list or map used as a key;
+- a custom tag;
+- a key given twice (its key by `describeKey`).
+
+yaml.v3's parser and scanner messages are fixed strings and pass unchanged, as does a type error with a standard tag (yaml.v3 already cuts its value to seven characters). An issue in any other form passes on as its line alone. The rewrite was reviewed against yaml.v3 v3.0.1's producers, and a version change re-reviews it. The changed-field guard uses `describeKey`. A regression covers each form at Load and ReadSnapshot, all five writers' refusals (each leaving the file unchanged), the add guard, the Settings payload and an AI Save, with a parser error and a standard type error as controls. A mutation pass caught 8 of 8, once the fallback had its own test. A branch for an error the schema cannot produce was removed.
+
 ## 3. Next: the redesign spec
 
 A spec for the redesign, reviewed by Codex before it is built:

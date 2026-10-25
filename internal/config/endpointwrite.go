@@ -159,7 +159,7 @@ func MoveMetricsTokenToAuth(snap Snapshot, cluster string) (*Config, error) {
 // other shape is left for the person to edit by hand.
 func tokenLineEdit(doc []byte, cluster string) ([]byte, error) {
 	var root yaml.Node
-	if err := yaml.Unmarshal(doc, &root); err != nil {
+	if err := unmarshalFleet(doc, &root); err != nil {
 		return nil, err
 	}
 	metrics := clusterMetricsNode(&root, cluster)
@@ -235,10 +235,10 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 // metrics.token gone and metrics.auth set to bearer.
 func onlyTokenMoved(before, after []byte, cluster string) error {
 	var a, b map[string]any
-	if err := yaml.Unmarshal(before, &a); err != nil {
+	if err := unmarshalFleet(before, &a); err != nil {
 		return fmt.Errorf("decode current config: %w", err)
 	}
-	if err := yaml.Unmarshal(after, &b); err != nil {
+	if err := unmarshalFleet(after, &b); err != nil {
 		return fmt.Errorf("decode new config: %w", err)
 	}
 	cls, _ := a["clusters"].([]any)

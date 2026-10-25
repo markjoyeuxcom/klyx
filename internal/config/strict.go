@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -28,7 +29,7 @@ const maxUnknownListed = 8
 // bytes: the one decoding both Load and a snapshot use.
 func decode(raw []byte) (*Config, error) {
 	var c Config
-	if err := yaml.Unmarshal(raw, &c); err != nil {
+	if err := unmarshalFleet(raw, &c); err != nil {
 		return nil, shown(err)
 	}
 	nested, top, err := unknownKeys(raw)
@@ -77,7 +78,7 @@ func plural(n int) string {
 // meaning; top the unknown top-level keys, for a warning.
 func unknownKeys(raw []byte) (nested, top []string, err error) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	if err := unmarshalFleet(raw, &doc); err != nil {
 		return nil, nil, err
 	}
 	if len(doc.Content) == 0 {
@@ -210,8 +211,8 @@ func unknownAt(path string, k *yaml.Node, fields map[string]reflect.Type) string
 }
 
 // describeKey names a key in a diagnostic: quoted, or, at 25 characters or
-// more - longer than any field or label Klyx reads, so perhaps a pasted
-// value - by its length alone. Every diagnostic that names a key the file
+// more, by its length alone - a choice of what a diagnostic shows, not a
+// limit on what the file may hold: a key that long may be a pasted value. Every diagnostic that names a key the file
 // holds uses it (Codex's re-review of slice 0).
 func describeKey(k string) string {
 	if n := len([]rune(k)); n >= 25 {
@@ -269,10 +270,6 @@ func clip(s string, n int) string {
 // so it is withheld, spaces and all.
 var echoedValue = regexp.MustCompile("`[^`]{25,}`|\\(got \"(?:[^\"\\\\]|\\\\.){25,}\"\\)")
 
-// duplicateKey is YAML's own error for a key given twice, which names the
-// key before Klyx's walk can (Codex's re-review of slice 0).
-var duplicateKey = regexp.MustCompile("mapping key \"((?:[^\"\\\\]|\\\\.){25,})\" already defined")
-
 // DisplayError is a fleet-file error as Klyx shows it: an echoed long value
 // is withheld, so a key pasted into the wrong field is never put on screen;
 // a short one (a typo of an enum) and the file's path stay, to be fixed.
@@ -280,15 +277,81 @@ func DisplayError(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := echoedValue.ReplaceAllStringFunc(err.Error(), func(m string) string {
+	return echoedValue.ReplaceAllStringFunc(err.Error(), func(m string) string {
 		if strings.HasPrefix(m, "`") {
 			return fmt.Sprintf("`a value of %d characters, withheld`", len([]rune(m))-2)
 		}
 		return fmt.Sprintf("(got a value of %d characters, withheld)", len([]rune(m))-len(`(got "")`))
 	})
-	return duplicateKey.ReplaceAllStringFunc(s, func(m string) string {
-		return fmt.Sprintf("mapping key, %s, already defined", describeKey(duplicateKey.FindStringSubmatch(m)[1]))
-	})
+}
+
+// unmarshalFleet decodes the fleet file's bytes: every decode of it - the
+// loader's, the key walk's and each writer's round-trip check - goes
+// through here, so a YAML error reaches no one with the file's content in
+// it (Codex's second re-review of slice 0).
+func unmarshalFleet(b []byte, v any) error {
+	return readableYAML(yaml.Unmarshal(b, v))
+}
+
+// readableYAML is a YAML error as Klyx passes it on. yaml.v3's parser and
+// scanner messages are fixed strings and pass unchanged. The decoder's few
+// messages that carry the file's content - an anchor's name, a list or map
+// used as a key, a custom tag, a key given twice - are rewritten to their
+// kind and line, the key by describeKey. Reviewed against yaml.v3 v3.0.1's
+// producers (decode.go); a version change re-reviews them.
+func readableYAML(err error) error {
+	if err == nil {
+		return nil
+	}
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		issues := make([]string, len(te.Errors))
+		for i, e := range te.Errors {
+			issues[i] = readableIssue(e)
+		}
+		return errors.New("yaml: unmarshal errors:\n  " + strings.Join(issues, "\n  "))
+	}
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "yaml: unknown anchor "):
+		return errors.New("yaml: an alias names an anchor the file does not define")
+	case strings.HasPrefix(msg, "yaml: anchor ") && strings.HasSuffix(msg, " value contains itself"):
+		return errors.New("yaml: an anchor's value contains itself")
+	case strings.HasPrefix(msg, "yaml: invalid map key:"):
+		return errors.New("yaml: a key is a list or a map, which a fleet file cannot use")
+	}
+	return err
+}
+
+var (
+	issueLine    = regexp.MustCompile(`^line (\d+): `)
+	issueDupKey  = regexp.MustCompile(`^line (\d+): mapping key ("(?:[^"\\]|\\.)*") already defined at line (\d+)$`)
+	issueUnmarsh = regexp.MustCompile(`^line (\d+): cannot unmarshal (\S+)( .*)? into (.+)$`)
+)
+
+// standardTags are YAML's own tags: a type error naming one names nothing
+// of the file's beyond a value yaml.v3 already cut to seven characters.
+var standardTags = map[string]bool{"!!str": true, "!!int": true, "!!bool": true, "!!float": true, "!!null": true,
+	"!!map": true, "!!seq": true, "!!timestamp": true, "!!binary": true, "!!merge": true}
+
+func readableIssue(e string) string {
+	if m := issueDupKey.FindStringSubmatch(e); m != nil {
+		k, err := strconv.Unquote(m[2])
+		if err != nil {
+			k = m[2]
+		}
+		return fmt.Sprintf("line %s: mapping key %s already defined at line %s", m[1], describeKey(k), m[3])
+	}
+	if m := issueUnmarsh.FindStringSubmatch(e); m != nil {
+		if standardTags[m[2]] {
+			return e
+		}
+		return fmt.Sprintf("line %s: cannot unmarshal a value with a custom tag into %s", m[1], m[4])
+	}
+	if m := issueLine.FindStringSubmatch(e); m != nil {
+		return fmt.Sprintf("line %s: a value Klyx cannot read", m[1])
+	}
+	return "a value Klyx cannot read"
 }
 
 // IsMissing reports a fleet file that does not exist yet: a first run, not

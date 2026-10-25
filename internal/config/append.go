@@ -245,7 +245,7 @@ func AppendClusters(path string, contexts []string) error {
 //     rewriting it would reformat the user's file.
 func insertClusters(original string, entries []ClusterConfig) (string, error) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(original), &doc); err != nil {
+	if err := unmarshalFleet([]byte(original), &doc); err != nil {
 		return "", fmt.Errorf("parse: %w", err)
 	}
 	lines := strings.SplitAfter(original, "\n")
@@ -344,10 +344,10 @@ func insertClusters(original string, entries []ClusterConfig) (string, error) {
 // R1: a block scalar lost content and still loaded).
 func onlyClustersAdded(original, candidate []byte, added int) error {
 	var before, after map[string]interface{}
-	if err := yaml.Unmarshal(original, &before); err != nil {
+	if err := unmarshalFleet(original, &before); err != nil {
 		return err
 	}
-	if err := yaml.Unmarshal(candidate, &after); err != nil {
+	if err := unmarshalFleet(candidate, &after); err != nil {
 		return err
 	}
 	if len(after) != len(before) && !(len(after) == len(before)+1 && before["clusters"] == nil) {
@@ -358,7 +358,7 @@ func onlyClustersAdded(original, candidate []byte, added int) error {
 			continue
 		}
 		if !reflect.DeepEqual(v, after[k]) {
-			return fmt.Errorf("field %q changed", k)
+			return fmt.Errorf("field %s changed", describeKey(k))
 		}
 	}
 	old, _ := before["clusters"].([]interface{})

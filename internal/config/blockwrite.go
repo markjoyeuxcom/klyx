@@ -6,8 +6,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // saveTopLevelBlock replaces the fleet file's top-level key block with block
@@ -129,10 +127,10 @@ func isTopLevelKey(line, name string) bool {
 // identical before and after.
 func onlyKeyChanged(before, after []byte, key string) error {
 	var a, b map[string]any
-	if err := yaml.Unmarshal(before, &a); err != nil {
+	if err := unmarshalFleet(before, &a); err != nil {
 		return fmt.Errorf("decode current config: %w", err)
 	}
-	if err := yaml.Unmarshal(after, &b); err != nil {
+	if err := unmarshalFleet(after, &b); err != nil {
 		return fmt.Errorf("decode new config: %w", err)
 	}
 	delete(a, key)

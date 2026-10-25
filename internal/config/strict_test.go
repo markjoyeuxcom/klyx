@@ -343,3 +343,98 @@ func TestABrokenFleetLinkIsNotAFirstRun(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Codex's second re-review of slice 0: no YAML error carries the file's
+// content, from the loader or any writer's round-trip check; parser
+// messages and ordinary type errors still read as YAML gave them.
+func TestNoYAMLErrorCarriesTheFilesContent(t *testing.T) {
+	key := "sk-synthetic-0123456789abcdefghijklmnop"
+	write := func(t *testing.T, doc string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "fleet.yaml")
+		if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, c := range []struct{ name, doc, want string }{
+		{"an unknown anchor", "clusters:\n  - name: a\n    protected: *" + key + "\n", "an alias names an anchor the file does not define"},
+		{"a custom tag", "clusters:\n  - name: a\n    protected: !" + key + " true\n", "cannot unmarshal a value with a custom tag into bool"},
+		{"a key given twice", "clusters:\n  - name: a\n    " + key + ": 1\n    " + key + ": 2\n", "a key of 39 characters already defined at line 3"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := write(t, c.doc)
+			for _, err := range []error{func() error { _, err := Load(path); return err }(), func() error { _, err := ReadSnapshot(path); return err }()} {
+				if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("%v", err)
+				}
+			}
+		})
+	}
+	// a valid file whose ignored extension uses a list as a key: every
+	// writer's round-trip check refuses, without the key, and the file stays
+	extra := "clusters:\n  - name: a\n    context: a\n    metrics:\n      endpoint: https://m.example\n      token: tok\nextra:\n  ? [" + key + "]\n  : ignored\n"
+	writers := map[string]func(p string) error{
+		"add clusters": func(p string) error { return AppendClusters(p, []string{"b"}) },
+		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
+		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
+		"notifications": func(p string) error {
+			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+		},
+		"metrics token": func(p string) error {
+			snap, err := ReadSnapshot(p)
+			if err != nil {
+				return err
+			}
+			_, err = MoveMetricsTokenToAuth(snap, "a")
+			return err
+		},
+	}
+	for name, w := range writers {
+		t.Run(name, func(t *testing.T) {
+			path := write(t, extra)
+			if _, err := Load(path); err != nil {
+				t.Fatalf("the file loads: %v", err)
+			}
+			err := w(path)
+			if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "a key is a list or a map") {
+				t.Fatalf("%v", err)
+			}
+			if b, _ := os.ReadFile(path); string(b) != extra {
+				t.Fatal("the file changed")
+			}
+		})
+	}
+	// an anchor containing itself, which only an untyped decode - a writer's
+	// round-trip - reaches
+	var m map[string]any
+	if err := unmarshalFleet([]byte("extra: &"+key+" {x: *"+key+"}\n"), &m); err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "an anchor's value contains itself") {
+		t.Fatalf("self anchor: %v", err)
+	}
+	// an aliased top-level extension that adding a cluster would change
+	aliased := write(t, "clusters: &members\n  - name: a\n"+key+": *members\n")
+	if err := AppendClusters(aliased, []string{"b"}); err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "field a key of 39 characters changed") {
+		t.Fatalf("%v", err)
+	}
+	// controls: a parser message and a standard type error read as YAML gave them
+	if _, err := Load(write(t, "clusters:\n  - name: a\n  context: [\n")); err == nil || !strings.Contains(err.Error(), "line ") || strings.Contains(err.Error(), "cannot read") {
+		t.Fatalf("parser: %v", err)
+	}
+	if _, err := Load(write(t, "clusters:\n  - name: a\n    protected: maybe\n")); err == nil || !strings.Contains(err.Error(), "cannot unmarshal !!str `maybe` into bool") {
+		t.Fatalf("type: %v", err)
+	}
+}
+
+// An issue in a form yaml.v3 v3.0.1 does not produce for this schema is
+// passed on as its kind and line alone, whatever it holds.
+func TestAnUnknownYAMLIssueIsNotPassedOn(t *testing.T) {
+	for in, want := range map[string]string{
+		"line 4: something new about sk-synthetic-0123456789abcdefghijklmnop": "line 4: a value Klyx cannot read",
+		"no line at all, sk-synthetic-0123456789abcdefghijklmnop":             "a value Klyx cannot read",
+		"line 2: cannot unmarshal !!int `12` into bool":                       "line 2: cannot unmarshal !!int `12` into bool",
+	} {
+		if got := readableIssue(in); got != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}

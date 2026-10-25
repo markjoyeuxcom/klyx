@@ -230,3 +230,29 @@ func TestALongPastedKeyNeverReachesADiagnostic(t *testing.T) {
 		t.Fatalf("a short key is named: %v", err)
 	}
 }
+
+// Through Settings: an anchor or a custom tag never crosses the payload,
+// nor a writer's refusal into an AI Save's answer.
+func TestNoYAMLErrorCrossesSettings(t *testing.T) {
+	key := "sk-synthetic-0123456789abcdefghijklmnop"
+	for _, doc := range []string{
+		"clusters:\n  - name: a\n    protected: *" + key + "\n",
+		"clusters:\n  - name: a\n    protected: !" + key + " true\n",
+	} {
+		s := configServiceAt(t, doc, &config.Config{Clusters: []config.ClusterConfig{{Name: "a", Context: "a"}}})
+		_, err := config.Load(s.path)
+		WithConfigLoadError(s, err)
+		b, _ := json.Marshal(s.GetFleetConfig())
+		if strings.Contains(string(b), key) || !strings.Contains(string(b), "loadError") {
+			t.Fatalf("Settings: %s", b)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	doc := "clusters:\n  - name: a\nextra:\n  ? [" + key + "]\n  : ignored\n"
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveAI(path, config.AIConfig{Provider: "off"}); err == nil || strings.Contains(err.Error(), key) {
+		t.Fatalf("SaveAI: %v", err)
+	}
+}
