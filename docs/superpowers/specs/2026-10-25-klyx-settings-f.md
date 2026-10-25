@@ -331,3 +331,12 @@ Codex requested changes on 8f1129b: six P2 and one P3. It found the direction so
 - digest-keyed confirmation state;
 - the four negative AST fixtures;
 - the coverage table naming the 21 methods.
+
+## 11. ACCEPT (2026-10-25)
+
+Codex accepted the design at revision 1 (51d4daa), after the review of 8f1129b, with no remaining findings. Its implementation checkpoints are acceptance details for the build:
+- **One AI activation boundary.** Apply and the credential actions share one serialization and admission boundary, so a concurrent clear is never undone by an older publication. Storing a credential for an inactive provider stays apart from activating the running provider.
+- **A pre-write refusal changes nothing.** A re-plan or file-version refusal before the write releases the Applying gate without publishing and without becoming saved-not-active. The comparison uses the reviewed runtime state and does not invalidate itself by entering its own gate.
+- **Work tracking follows the affected operations.** Explain, Suggest-fix and A3 count as well as chat turns, and the displayed consequences come from that state.
+- **The CLI release fence is final.** The containment and evidence-on-stdin contract stays. A failed release is never followed by another, unfenced handoff, and the transport carrying retries and redirects is the fenced one.
+- **One tracker per logical write.** `t.Write` keeps the receipt recorder and allocates a fresh forwarding tracker per logical write, never per retry.
