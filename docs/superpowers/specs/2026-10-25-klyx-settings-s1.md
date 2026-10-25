@@ -6,7 +6,7 @@ Opened 2026-10-25, on `feat/settings-s0`, after the redesign was accepted and it
 - the coverage tests that make an undescribed setting a failure;
 - Diagnostics' read-only parts.
 
-S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§8 to §10).
+S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§8 to §10); the design is accepted (§11).
 
 ## 1. Addressing and navigation
 
@@ -332,3 +332,11 @@ Codex ruled the raw-reference bans, the walk families, the storage scan and the 
 **Also from the re-review:**
 - §3.3 records the behaviour the facades must preserve, with old-versus-new fixture comparisons: native tools inheriting the whole environment, Git's and the CLI's allowlists, read timing and injection, storage formats and lifetimes, and native locations kept apart from the fleet file writers' symlink target;
 - the old "nothing writes" sentence in §5 now agrees with the version check's scratch kubeconfig.
+
+## 11. ACCEPT (2026-10-25)
+
+Codex accepted the S1 design at revision 3 (83d047b), after the review of 8b92319 and three re-reviews, with no remaining findings.
+- **The handles:** its cross-package prototype rejects every argument form of R2-1 at compile time, and refuses zero and non-member handles before any simulated access.
+- **§3.3:** a faithful record of its preservation requirements.
+
+The accepted contracts are acceptance requirements for the build: the coverage tests, the facades and their scans, the rendered-control coverage, instance anchors, the draft guard, Diagnostics' passive resolution and contained version check, and §3.3's old-versus-new comparisons.

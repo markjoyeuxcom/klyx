@@ -137,7 +137,7 @@ Claude and Codex reviewed the Settings page and its coverage, independently and 
 
 - [Klyx Settings slice 0: correctness before the redesign](specs/2026-10-25-klyx-settings-slice0.md) (spec)
 - [Klyx Settings: the redesign](specs/2026-10-25-klyx-settings-redesign.md) (spec, accepted)
-- [Klyx Settings S1: sections, the registry and its coverage](specs/2026-10-25-klyx-settings-s1.md) (spec, for review)
+- [Klyx Settings S1: sections, the registry and its coverage](specs/2026-10-25-klyx-settings-s1.md) (spec, design accepted, being built)
 
 ## Next
 
