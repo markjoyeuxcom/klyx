@@ -1,4 +1,5 @@
 import { replicaOwner, type ReplicaOwnerDTO } from "../bridge/keda";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { useDescribe } from "../chrome/describe/useDescribe";
@@ -893,6 +894,7 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
     return (
       <div style={{ padding: "0 8px 6px 32px", background: "var(--color-background-secondary)", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
         sparklines unavailable{spark.message ? `: ${spark.message}` : ""}
+        <EndpointSettingsLink text={spark.message} cluster={cluster} kind="metrics" />
       </div>
     );
   }

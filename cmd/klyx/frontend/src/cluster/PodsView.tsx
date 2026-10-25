@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { IconExternalLink, IconX, IconAlertTriangle, IconTerminal2, IconCircleDot } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
@@ -793,7 +794,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
 
         <InspectorBlock title="Containers" count={p.containers.length}>
           {ctUsage !== null && !ctUsage.available && (
-            <div className="t-secondary">Live usage unavailable - {(ctUsage.message || "no metrics source").replace(/^metrics unavailable:\s*/, "")}</div>
+            <div className="t-secondary">Live usage unavailable - {(ctUsage.message || "no metrics source").replace(/^metrics unavailable:\s*/, "")}<EndpointSettingsLink text={ctUsage.message} cluster={cluster} kind="metrics" /></div>
           )}
           {p.containers.map((c) => <ContainerBlock key={c.name} c={c} d={detailContainers.get(c.name)} detailState={detailState} u={usageByContainer.get(c.name)} />)}
         </InspectorBlock>

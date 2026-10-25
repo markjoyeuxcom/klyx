@@ -48,6 +48,7 @@ import { _resetNavGuardForTest } from "./navGuard";
 import { useSettingsNotice } from "./notice";
 import { ENTRIES, SETTINGS_SECTIONS, isRegistered, searchSettings, type SettingsSection } from "./registry";
 import { SettingField } from "./SettingField";
+import { EndpointSettingsLink } from "./EndpointSettingsLink";
 import { buildCommands } from "../chrome/commands";
 import snapshot from "./registry.snapshot.json";
 
@@ -301,6 +302,24 @@ describe("anchors and repeated rows", () => {
     await settled();
     await settled();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Model")));
+  });
+});
+
+describe("endpoint credential prompts (S1 §1)", () => {
+  it("link only a reason that names Observability, and open the cluster's endpoint with its credential focused", async () => {
+    const { container } = render(<div>
+      <EndpointSettingsLink text="no credential is stored for it - set one in Settings > Observability" cluster="aks-we-prd" kind="alertmanager" />
+      <EndpointSettingsLink text="the read timed out" cluster="aks-we-prd" kind="alertmanager" />
+    </div>);
+    const links = container.querySelectorAll("[data-endpoint-link]");
+    expect(links).toHaveLength(1);
+    fireEvent.click(links[0]);
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "observability", anchor: "clusters[].alertmanager.endpoint@aks-we-prd" });
+    cleanup();
+    page();
+    await settled();
+    await settled();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("aks-we-prd alertmanager token")));
   });
 });
 

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { useCertManagerRows } from "../health/useCertManagerRows";
 import { IconAlertTriangle, IconRoute } from "@tabler/icons-react";
@@ -597,7 +598,7 @@ function RouteInspector({ cluster, route, gone, unproven, gateway, listeners, no
         </InspectorBlock>}
         <InspectorBlock title="Observed traffic">
           {!httpMetricsApply(route) ? <div className="t-secondary" data-testid="no-http-metrics">{noHttpMetricsText(route)}.</div>
-            : metricsObs.state === "unavailable" ? <div className="t-secondary">Unavailable{metricsObs.message ? ` - ${metricsObs.message}` : ""}.</div>
+            : metricsObs.state === "unavailable" ? <div className="t-secondary">Unavailable{metricsObs.message ? ` - ${metricsObs.message}` : ""}.<EndpointSettingsLink text={metricsObs.message} cluster={cluster} kind="metrics" /></div>
             : !metric ? <div className="t-secondary">{metricsObs.state === "reading" ? "Reading…" : "No traffic series for this route in the window."}</div>
             : (
               <>

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { mentionsObservability, openEndpointSettings } from "../settings/EndpointSettingsLink";
 import { IconBellRinging } from "@tabler/icons-react";
 import { Age, absoluteTime } from "../chrome/Age";
 import { EmptyState } from "../chrome/EmptyState";
@@ -150,7 +151,8 @@ export function AlertsView({ cluster }: { cluster: string }) {
   else if (visible.length === 0) state = "no-match";
   const clearFilters = () => { setStateF("all"); setSevF("all"); setSearch(""); };
   const stateView = state === "loading" ? <SkeletonRows rows={6} label="reading alerts" />
-    : state === "unreadable" ? <EmptyState icon={icon} title="Could not read alerts." hint={lr.error ?? kind?.error ?? undefined} />
+    : state === "unreadable" ? <EmptyState icon={icon} title="Could not read alerts." hint={lr.error ?? kind?.error ?? undefined}
+      action={mentionsObservability(lr.error ?? kind?.error) ? { label: "Open Settings > Observability", onClick: () => openEndpointSettings(cluster, "alertmanager") } : undefined} />
     : absent ? <EmptyState icon={icon} title="No Alertmanager is configured or found on this cluster." hint="Set alertmanager in fleet.yaml, or install the Prometheus Operator's Alertmanager. Klyx reads alerts and never manages them." />
     // an empty set of rows behind the cluster is historical, never a current "no alerts"
     : state === "empty" && outdated ? <EmptyState icon={icon} title="No alerts in the rows held; they are behind the cluster summary."

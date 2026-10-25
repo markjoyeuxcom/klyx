@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { IconCopy } from "@tabler/icons-react";
 import { VirtualList, type VirtualListHandle } from "../chrome/VirtualList";
 import { closeHistoryView, readPodHistory, type HistoryMarker, type HistoryPage, type PodHistoryRequest } from "../bridge/logHistory";
@@ -141,7 +142,7 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
         </div>
       )}
       {notice && <div role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{notice}</div>}
-      {page?.error && <div role="alert" data-testid="history-error" style={{ color: "var(--color-text-danger)" }}>▲ {page.error}{held.lines.length ? " - the lines below are the last read, not refreshed" : ""}</div>}
+      {page?.error && <div role="alert" data-testid="history-error" style={{ color: "var(--color-text-danger)" }}>▲ {page.error}{held.lines.length ? " - the lines below are the last read, not refreshed" : ""}<EndpointSettingsLink text={page.error} cluster={cluster} kind="loki" /></div>}
       {page?.noStreams && <div role="status" data-testid="history-nostreams" className="t-secondary">{page.noStreams}. Nothing is claimed about this pod's lines.</div>}
       {held.newerDropped > 0 && (
         <div role="status" className="t-secondary" data-testid="history-cap">
