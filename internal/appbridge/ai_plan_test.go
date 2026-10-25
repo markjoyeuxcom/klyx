@@ -79,7 +79,7 @@ func TestAMoveWhileAPlanIsOpenRefusesItsApply(t *testing.T) {
 	t.Run("the work", func(t *testing.T) {
 		f := newSettingsFixture(t, localFleet)
 		var work []PlanWorkDTO
-		f.svc.work = func() []PlanWorkDTO { return work }
+		f.svc.work = func() aiWorkList { return aiWorkList{ends: work} }
 		p := f.svc.PlanAI(d)
 		if len(p.Ends) != 0 {
 			t.Fatalf("control: %+v", p.Ends)
@@ -114,8 +114,8 @@ func TestAMoveWhileAPlanIsOpenRefusesItsApply(t *testing.T) {
 // nothing ends nothing.
 func TestAPlanNamesTheWorkItEnds(t *testing.T) {
 	f := newSettingsFixture(t, localFleet)
-	f.svc.work = func() []PlanWorkDTO {
-		return []PlanWorkDTO{{ID: "conv:c1", Kind: "investigation", Cluster: "a", What: "an investigation on a"}}
+	f.svc.work = func() aiWorkList {
+		return aiWorkList{ends: []PlanWorkDTO{{ID: "conv:c1", Kind: "investigation", Cluster: "a", What: "an investigation on a"}}}
 	}
 	done, why := f.ai.admitCall("explain", "a")
 	if why != "" {
@@ -259,7 +259,7 @@ func TestNoNewWorkStartsWhileAnApplyDecides(t *testing.T) {
 	}
 	cf.aiSvc.endApply()
 	// the chat names its conversation as work
-	work := cf.svc.aiWork()
+	work := cf.svc.aiWork().ends
 	if len(work) != 1 || work[0].ID != "conv:"+st.ConversationID || work[0].Started == "" {
 		t.Fatalf("work: %+v", work)
 	}

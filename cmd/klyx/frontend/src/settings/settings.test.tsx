@@ -114,7 +114,7 @@ beforeEach(() => {
   // Save and leave is the quiet Apply (Settings slice F §6); Review and
   // apply plans, then applies by digest
   b.saveAISettings.mockResolvedValue({ ok: true, error: "" });
-  b.planAI.mockResolvedValue({ section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true });
+  b.planAI.mockResolvedValue({ section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true, activates: true });
   b.applyAI.mockImplementation(() => b.saveAISettings());
   b.getCLIStatus.mockResolvedValue({ path: "/usr/local/bin/claude", tested: false, admitted: false });
   b.getGitSettings.mockResolvedValue(git);
@@ -397,7 +397,7 @@ describe("the draft guard (S1 §1)", () => {
   // nothing and needs no interlock; otherwise the person stays with it
   it("Save and leave stays, showing the plan, when applying would end work", async () => {
     await editModel();
-    b.saveAISettings.mockResolvedValue({ ok: false, plan: { section: "ai", kind: "save", digest: "d2", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "claude-sonnet-5-5" }], ends: [{ id: "conv:c1", kind: "investigation", cluster: "lab", what: "an investigation on lab" }], continues: [], writes: true } });
+    b.saveAISettings.mockResolvedValue({ ok: false, plan: { section: "ai", kind: "save", digest: "d2", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "claude-sonnet-5-5" }], ends: [{ id: "conv:c1", kind: "investigation", cluster: "lab", what: "an investigation on lab" }], continues: [], writes: true, activates: true } });
     useFleet.getState().openSettings("data");
     fireEvent.click(await screen.findByRole("button", { name: "Save and leave" }));
     expect((await screen.findByTestId("plan-ends")).textContent).toContain("an investigation on lab");

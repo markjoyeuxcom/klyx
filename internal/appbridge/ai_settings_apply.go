@@ -85,6 +85,7 @@ func (s *AISettingsService) activatesLocked(cand config.AIConfig) bool {
 func (s *AISettingsService) planLocked(kind string, cand config.AIConfig, version string, writes bool, file config.AIConfig) PlanDTO {
 	p := PlanDTO{Section: "ai", Kind: kind, FileVersion: version, Writes: writes, Changes: []PlanChangeDTO{}, Ends: []PlanWorkDTO{}, Continues: []PlanWorkDTO{}}
 	activates := s.activatesLocked(cand)
+	p.Activates = activates
 	if writes && !activates && config.AIEqual(file, cand) {
 		p.Writes = false // the file already says so, and it runs
 	}
@@ -93,7 +94,8 @@ func (s *AISettingsService) planLocked(kind string, cand config.AIConfig, versio
 		if _, err := s.build(AISettingsFromConfig(&cand), s.keys, s.getenv); err != nil {
 			p.Refused = aiProblem(err)
 		}
-		p.Ends = s.workNow()
+		w := s.workNow()
+		p.Ends, p.Continues = w.ends, w.continues
 	}
 	granted := s.notActive == nil && s.applied.AllowProtectedEgress
 	if cand.AllowProtectedEgress && !granted && cand.Provider != "" && cand.Provider != string(ai.ProviderOff) {
@@ -103,7 +105,7 @@ func (s *AISettingsService) planLocked(kind string, cand config.AIConfig, versio
 		}
 		p.Interlock = &InterlockDTO{Phrase: aiEgressPhrase, Why: "Chat, Explain, Suggest-fix and investigations on protected clusters will send their resolved state to " + dest + "."}
 	}
-	p.Runtime = map[string]string{"ai": strconv.FormatUint(s.aiSvc.load().Rev, 10), "work": workVersion(p.Ends)}
+	p.Runtime = map[string]string{"ai": strconv.FormatUint(s.aiSvc.load().Rev, 10), "work": workVersion(append(append([]PlanWorkDTO{}, p.Ends...), p.Continues...))}
 	stored, legacy := withoutKey(cand)
 	c := aiCandidate{Kind: kind, Cand: stored, LegacyKey: legacy, Writes: p.Writes}
 	bind, _ := json.Marshal(c)
@@ -114,19 +116,50 @@ func (s *AISettingsService) planLocked(kind string, cand config.AIConfig, versio
 	return p
 }
 
-// workNow is the AI work an activation ends: the chat's and the in-flight
-// calls, by identity.
-func (s *AISettingsService) workNow() []PlanWorkDTO {
-	var out []PlanWorkDTO
+// aiWorkList is the AI work an activation affects, by identity: what it
+// ends, and what continues - a confirmed step's request, which an AI
+// change does not stop (A3 §4.4; F2a review, R4).
+type aiWorkList struct {
+	ends, continues []PlanWorkDTO
+}
+
+// workNow is the chat's work and the in-flight calls.
+func (s *AISettingsService) workNow() aiWorkList {
+	var w aiWorkList
 	if s.work != nil {
-		out = append(out, s.work()...)
+		w = s.work()
 	}
-	out = append(out, s.aiSvc.callsWork()...)
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	if out == nil {
-		out = []PlanWorkDTO{}
+	w.ends = append(w.ends, s.aiSvc.callsWork()...)
+	for _, l := range []*[]PlanWorkDTO{&w.ends, &w.continues} {
+		sort.Slice(*l, func(i, j int) bool { return (*l)[i].ID < (*l)[j].ID })
+		if *l == nil {
+			*l = []PlanWorkDTO{}
+		}
 	}
-	return out
+	return w
+}
+
+// candidateLocked is c's candidate as it stands now, resolved afresh under
+// the Applying state (F2a review, R1-R2): "Use the file's values" adopts
+// the file as it is; Revert is the last active terms - their own legacy
+// key included - and only while a failed activation is there to revert; a
+// draft is its own, its legacy key from the file whose version the plan
+// binds.
+func (s *AISettingsService) candidateLocked(c aiCandidate, file config.AIConfig) (config.AIConfig, string) {
+	switch c.Kind {
+	case planFile:
+		return file, ""
+	case planRevert:
+		if s.notActive == nil {
+			return config.AIConfig{}, "the AI settings in use are active: there is nothing to revert"
+		}
+		return s.applied, ""
+	}
+	cand := c.Cand
+	if c.LegacyKey {
+		cand.APIKey = file.APIKey
+	}
+	return cand, ""
 }
 
 // ApplyAI applies the plan with digest: re-planned from what runs under the
@@ -171,9 +204,9 @@ func (s *AISettingsService) applyLocked(digest, typed string, quiet bool) ApplyR
 		return ApplyResultDTO{Error: "fleet.yaml cannot be read, so nothing was applied: " + ai.Scrub(err.Error())}
 	}
 	file := normalizedAI(cur)
-	cand := c.Cand
-	if c.LegacyKey {
-		cand.APIKey = file.APIKey // the version the plan binds holds it
+	cand, why := s.candidateLocked(c, file)
+	if why != "" {
+		return ApplyResultDTO{Error: why}
 	}
 	re := s.planLocked(c.Kind, cand, version, c.Writes, file)
 	switch {
@@ -220,11 +253,10 @@ func (s *AISettingsService) replanLocked(c aiCandidate) *PlanDTO {
 		return &p
 	}
 	file := normalizedAI(cur)
-	cand := c.Cand
-	if c.Kind == planFile {
-		cand = file
-	} else if c.LegacyKey {
-		cand.APIKey = file.APIKey
+	cand, why := s.candidateLocked(c, file)
+	if why != "" {
+		p := refusedPlan(c.Kind, why)
+		return &p
 	}
 	p := s.planLocked(c.Kind, cand, version, c.Writes, file)
 	return &p

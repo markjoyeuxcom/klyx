@@ -39,7 +39,7 @@ function state(over: Partial<AISettingsState> = {}): AISettingsState {
 const ok = { ok: true, error: "" };
 
 function aPlan(over: Partial<Plan> = {}): Plan {
-  return { section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true, ...over };
+  return { section: "ai", kind: "save", digest: "d1", fileVersion: "v1", runtime: {}, changes: [{ id: "ai.model", label: "Model", from: "a", to: "b" }], ends: [], continues: [], writes: true, activates: true, ...over };
 }
 
 // Review and apply, then Apply (Settings slice F §6)
@@ -479,5 +479,29 @@ describe("AISettingsPanel: plans", () => {
     expect((await screen.findByTestId("settings-plan")).textContent).toContain("Reverting writes the settings last in use");
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(bridge.applyAI).toHaveBeenCalledWith("r1", ""));
+  });
+});
+
+// The F2a implementation review, R6 (Codex's probe, adopted): a
+// replacement plan for a draft edited away while its Apply ran is not
+// shown again.
+describe("AISettingsPanel: a late replacement", () => {
+  it("does not restore a plan for an older, edited-away draft", async () => {
+    bridge.getAISettings.mockResolvedValue(state({ persisted: { ...state().persisted, provider: "openaiCompatible", model: "m", baseUrl: "http://localhost:11434" }, active: { backend: "openaiCompatible", ready: true, model: "m", origin: "http://localhost:11434" } }));
+    const p = aPlan({ digest: "old-draft", changes: [{ id: "ai.model", label: "Model", from: "m", to: "first-edit" }] });
+    bridge.planAI.mockResolvedValue(p);
+    let finish!: (v: unknown) => void;
+    bridge.applyAI.mockReturnValue(new Promise((r) => { finish = r; }));
+    render(<AISettingsPanel />);
+    const input = await screen.findByLabelText("Model");
+    fireEvent.change(input, { target: { value: "first-edit" } });
+    await reviewAndApply();
+    fireEvent.change(input, { target: { value: "newer-edit" } });
+    expect(screen.queryByTestId("settings-plan")).toBeNull();
+    await waitFor(() => expect(bridge.applyAI).toHaveBeenCalled());
+    finish({ ok: false, error: "work changed", plan: { ...p, digest: "replan-old-draft" } });
+    await waitFor(() => expect(screen.getByTestId("ai-message").textContent).toContain("The draft changed while this was being applied"));
+    expect((input as HTMLInputElement).value).toBe("newer-edit");
+    expect(screen.queryByTestId("settings-plan")).toBeNull();
   });
 });

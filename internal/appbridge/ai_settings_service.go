@@ -89,7 +89,7 @@ type AISettingsService struct {
 	saveAI func(path, version string, a config.AIConfig) (string, error)          // seam: config.SaveAIAt
 	loadAI func(string) (*config.AIConfig, string, error)                         // seam: the block and its file version
 	build  func(ai.Settings, ai.KeyStore, func(string) string) (*ai.Built, error) // seam: ai.Build
-	work   func() []PlanWorkDTO                                                   // the chat's AI work (WireAIWork); nil: none
+	work   func() aiWorkList                                                      // the chat's AI work (WireAIWork); nil: none
 	cache  *planCache
 
 	mu      sync.Mutex
@@ -312,7 +312,7 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 		}
 	}
 
-	cur, _, err := s.loadAI(s.path)
+	cur, version, err := s.loadAI(s.path)
 	if err != nil {
 		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml cannot be read: " + ai.Scrub(err.Error())}
 	}
@@ -322,7 +322,11 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	}
 	next := curN
 	next.KeySource = string(ai.KeySourceNone)
-	if _, err := s.saveAI(s.path, "", next); err != nil {
+	// written against the version it was read from: an edit made since is
+	// left as it is, and the revocation above holds (F2a review, R3)
+	if _, err := s.saveAI(s.path, version, next); errors.Is(err, config.ErrFileChanged) {
+		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml changed meanwhile, so it was left as it is: check its AI settings."}
+	} else if err != nil {
 		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml was not updated: " + err.Error()}
 	}
 	if s.notActive == nil && keyOnlyDiffers(next, s.applied) {

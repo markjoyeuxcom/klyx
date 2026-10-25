@@ -219,6 +219,12 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
         await load(true);
         return false;
       }
+      // a replacement belongs to the draft it was planned for: an edit made
+      // since voided it (F2a review, R6)
+      if (r.plan && gen !== draftGen.current) {
+        setMessage({ kind: "error", text: "The draft changed while this was being applied, so nothing was applied: review and apply the current draft." });
+        return false;
+      }
       if (r.plan) setPlan(r.plan);
       setMessage({ kind: "error", text: r.error || "Applying this ends running work or needs your confirmation: review it below." });
       return false;

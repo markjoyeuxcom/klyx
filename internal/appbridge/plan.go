@@ -37,6 +37,10 @@ type PlanDTO struct {
 	// Writes: the Apply writes fleet.yaml; false for "Use the file's
 	// values", which only checks the file is still the version planned from
 	Writes bool `json:"writes"`
+	// Activates: the Apply builds and publishes what it plans - the
+	// revision moves - even when nothing differs from the settings shown
+	// as in use (a saved block whose activation failed: F2a review, R5)
+	Activates bool `json:"activates"`
 	// Refused: a candidate that cannot be applied, and why; nothing is
 	// written
 	Refused string `json:"refused,omitempty"`

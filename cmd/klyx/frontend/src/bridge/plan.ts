@@ -18,6 +18,9 @@ export type Plan = {
   continues: PlanWork[];
   interlock?: Interlock;
   writes: boolean;
+  // the Apply builds and publishes what it plans, even when nothing shown
+  // as in use differs (a saved block whose activation failed)
+  activates: boolean;
   refused?: string;
 };
 
@@ -25,5 +28,5 @@ export type Plan = {
 export type ApplyResult = { ok: boolean; error?: string; plan?: Plan; savedNotActive?: string };
 
 export function refusedPlan(section: string, kind: Plan["kind"], why: string): Plan {
-  return { section, kind, digest: "", fileVersion: "", runtime: {}, changes: [], ends: [], continues: [], writes: false, refused: why };
+  return { section, kind, digest: "", fileVersion: "", runtime: {}, changes: [], ends: [], continues: [], writes: false, activates: false, refused: why };
 }

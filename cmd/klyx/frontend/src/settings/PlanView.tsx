@@ -50,7 +50,9 @@ export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyL
   applyLabel?: string;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const nothing = plan.changes.length === 0 && plan.ends.length === 0 && !plan.writes;
+  // the backend says whether applying does anything: a plan with nothing
+  // to show can still start what is saved (F2a review, R5)
+  const nothing = !plan.activates && !plan.writes;
   return (
     <div data-testid="settings-plan" data-plan-digest={plan.digest} style={box} role="region" aria-label="Review the changes">
       {plan.refused ? (
@@ -60,6 +62,9 @@ export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyL
       ) : (
         <>
           <div style={{ color: "var(--color-text-secondary)" }}>{nothing ? "Nothing changes: these are the settings in use." : KIND_LINE[plan.kind]}</div>
+          {plan.activates && plan.changes.length === 0 && (
+            <div data-testid="plan-activates" style={{ color: "var(--color-text-secondary)" }}>The settings in fleet.yaml are not in use: applying starts them.</div>
+          )}
           {plan.changes.length > 0 && (
             <>
               <div style={head}>Changes in what runs</div>
