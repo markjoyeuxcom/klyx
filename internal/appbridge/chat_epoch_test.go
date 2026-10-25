@@ -112,3 +112,32 @@ func TestAChatStartsOnlyWhenActiveAndAMoveEndsIt(t *testing.T) {
 		t.Fatalf("a move ends the turn: %v", err)
 	}
 }
+
+// §4: a comparison member is pinned to its own epoch; its move ends the
+// investigation's turn.
+func TestAMembersMoveEndsTheTurn(t *testing.T) {
+	reg := installRegistry(t, false, "x", "stg", "dev")
+	f := newFleetFixture(t, answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"stg"}); st.Notice != "" {
+		t.Fatalf("%+v", st)
+	}
+	f.svc.mu.Lock()
+	c := f.svc.convs[invKey("x")]
+	m := c.members[0]
+	f.svc.mu.Unlock()
+	st := f.svc.ai.load()
+	if p := f.svc.memberProblem(st, m); p != "" {
+		t.Fatalf("before the move: %s", p)
+	}
+	tighten(t, reg, "stg")
+	if p := f.svc.memberProblem(st, m); !strings.Contains(p, "comparison cluster stg: its policy changed") {
+		t.Fatalf("after the move: %q", p)
+	}
+	if _, err := reg.Begin("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"dev"}); !strings.Contains(st.Notice, "being applied") {
+		t.Fatalf("a member being applied: %+v", st)
+	}
+}

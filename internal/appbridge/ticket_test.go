@@ -422,6 +422,16 @@ func TestEveryGuardedMethodFencesItsWrite(t *testing.T) {
 	}
 }
 
+// A verb without receipts says it too: its fenced write was not sent.
+func TestAReceiptlessVerbSaysNotSent(t *testing.T) {
+	reg := installRegistry(t, false, "c")
+	w := &wire{move: func() { tighten(t, reg, "c") }}
+	r := NewArgoService(func(string) (ArgoConn, bool) { return argoFake{w: w}, true }).RefreshApp("c", "ns", "n", "u")
+	if r.OK || r.Outcome != fleet.OutcomeRefused || !r.NotSent {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // A matrix verb's fenced write says it was not sent; a lost answer after
 // forwarding is unverified (§2, R3).
 func TestAFencedWriteIsNotSentAndALostAnswerUnverified(t *testing.T) {

@@ -9,8 +9,10 @@ import (
 
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/scrub"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
@@ -372,10 +374,17 @@ type stepOutcome struct {
 	err              error
 }
 
-// failed is a write path's failed result (coverage S3b §5).
+// failed is a write path's failed result (coverage S3b §5). A fence's
+// refusal also says what reached the cluster (Settings slice F §2): not
+// sent when nothing of the write was forwarded, else unverified - for a
+// verb that records no receipts too.
 func failed(ctx context.Context, conn any, err error) ActionResultDTO {
 	text, f := writeError(ctx, conn, err)
-	return ActionResultDTO{Error: text, Admission: f}
+	r := ActionResultDTO{Error: text, Admission: f}
+	if readfence.Failed(err) {
+		r.Outcome, r.NotSent = fleet.WriteOutcome(err)
+	}
+	return r
 }
 
 // failedScrubbed is failed for a path whose text passes the URL rule.
