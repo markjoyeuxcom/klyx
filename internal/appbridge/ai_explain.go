@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // ExplainTargetDTO names what to explain (spec 2026-10-13 §4.1):
@@ -61,7 +62,11 @@ func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
+	fence, notAdmitted := s.callFence(st, cluster)
+	if notAdmitted != "" {
+		return AIResultDTO{Error: notAdmitted}
+	}
+	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 
 	var (

@@ -8,10 +8,10 @@ import (
 )
 
 // The A3 matrix verbs below their shells (A3 §4.4). A shell is the manual
-// bridge method: checkProtected, the lookup by cluster name, a Background
+// bridge method: guardFor's ticket, the lookup by cluster name, a Background
 // context with actionTimeout, then the inner function here, which holds
 // everything else - the arming, the write, the admission attribution and
-// the receipt. An investigation's RunStep calls the same checkProtected and
+// the receipt. An investigation's RunStep calls the same guardFor and
 // the same inner function, with the conversation's pinned connection and
 // its run fence. Only these verbs classify their outcome: their refusals
 // before any write are marked fleet.ErrNotSent, so an unmarked failure is
@@ -118,7 +118,7 @@ func doRolloutRestart(ctx context.Context, conn restarter, kind, namespace, name
 	return wrote(rec, uid)
 }
 
-// doScaleWorkload checks the count after the shell's checkProtected, so an
+// doScaleWorkload checks the count after the shell's guard, so an
 // out-of-range count consumes the grant like any other armed call (A3 §0).
 func doScaleWorkload(ctx context.Context, conn scaler, kind, namespace, name, uid string, replicas int) ActionResultDTO {
 	if replicas < 0 || replicas > maxScaleReplicas {

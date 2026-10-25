@@ -30,6 +30,7 @@ type Registry struct {
 	entries    []entry
 	healthSink observe.Sink
 	index      *fleetindex.Index
+	onUsable   func(cluster string)
 }
 
 func NewRegistry(cfg *config.Config, factory ConnFactory) *Registry {
@@ -107,7 +108,18 @@ func (r *Registry) SetIndex(ix *fleetindex.Index) {
 
 // wireHealth hands a conn the sink and the index before it starts. Caller
 // holds r.mu.
+// SetOnUsable gives every conn the incarnation hook (Settings slice F §1).
+// Call before Start; conns added later get it too.
+func (r *Registry) SetOnUsable(f func(cluster string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onUsable = f
+}
+
 func (r *Registry) wireHealth(conn Conn) {
+	if ou, ok := conn.(interface{ SetOnUsable(func(string)) }); ok && r.onUsable != nil {
+		ou.SetOnUsable(r.onUsable)
+	}
 	if hs, ok := conn.(interface{ SetHealthSink(observe.Sink) }); ok && r.healthSink != nil {
 		hs.SetHealthSink(r.healthSink)
 	}

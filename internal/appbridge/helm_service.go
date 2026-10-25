@@ -184,7 +184,8 @@ type RollbackOptionsDTO struct {
 
 // HelmRollback rolls back a release to the specified revision.
 func (s *HelmService) HelmRollback(cluster, namespace, release string, revision int, opts RollbackOptionsDTO) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
@@ -198,7 +199,9 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 	// (cross-review C), and no derived budget is safe either - hook deletion
 	// and readiness each get their own timeout, per hook (batch-3 review R1).
 	// Killing helm mid-operation strands the release in pending-rollback.
-	if err := conn.HelmRollback(context.Background(), namespace, release, revision, ro); err != nil {
+	// slice F §2: the helm runner checks the ticket at the child's actual
+	// start; a started rollback is not stopped by a later move
+	if err := conn.HelmRollback(t.Write(context.Background()), namespace, release, revision, ro); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

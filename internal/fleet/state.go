@@ -43,6 +43,11 @@ const (
 	EvCapHealthy
 )
 
+// Usable reports whether reads can work on a connection in this state:
+// Synced, Degraded or Stale. Crossing into it from a state that is not is a
+// new incarnation (Settings slice F §1).
+func (s ConnState) Usable() bool { return s == Synced || s == Degraded || s == Stale }
+
 // Transition returns the next state and whether the transition is legal.
 // Illegal transitions return the original state and false.
 func Transition(from ConnState, ev Event) (ConnState, bool) {

@@ -308,7 +308,7 @@ func TestRunStepConsumesTheGrant(t *testing.T) {
 	establish(t)
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "x" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "x" }, time.Now))
 	sf := newStepsFixture(t, pauseWeb, scaleWeb)
 	rv := sf.review(1)
 	if r := sf.run(1, rv.Token); r.Ran || r.Result == nil || !r.Result.NotSent {

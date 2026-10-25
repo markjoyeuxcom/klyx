@@ -69,14 +69,15 @@ func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *Nod
 // node object the verb was armed against (uid; design §5b) - never a
 // same-name replacement.
 func (s *NodeOpsService) Cordon(cluster, node, uid string, cordon bool) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doCordon(ctx, conn, node, uid, cordon)
 }
@@ -116,7 +117,8 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	if err := validStreamID(streamID); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
@@ -133,7 +135,7 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	if err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-	checkCtx, checkCancel := context.WithTimeout(context.Background(), actionTimeout)
+	checkCtx, checkCancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	err = conn.CheckNodeArmed(checkCtx, node, uid)
 	checkCancel()
 	if err != nil {
@@ -149,7 +151,7 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	cmd.Stderr = pw
 	rc := &drainPipe{PipeReader: pr, pw: pw}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) // unfenced: the drain stream's lifetime, no cluster request
 	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{}), node: node}
 
 	// Reserve the slot before starting the process: the cap check and the add
@@ -171,6 +173,14 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	s.order = append(s.order, streamID)
 	s.mu.Unlock()
 
+	// slice F §2: checked at the child's actual start, after the slot is
+	// reserved; a started drain is not stopped by a later move
+	if err := t.StartCLI(); err != nil {
+		s.deregister(streamID)
+		cancel()
+		_ = rc.Close()
+		return OpenLogStreamResultDTO{Error: "drain not started: " + err.Error()}
+	}
 	if err := cmd.Start(); err != nil {
 		s.deregister(streamID)
 		cancel()

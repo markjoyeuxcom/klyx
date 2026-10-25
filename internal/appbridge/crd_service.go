@@ -255,17 +255,21 @@ func managerDTOs(ms []crd.FieldManager) []FieldManagerDTO {
 // currently open in the generic resource detail. dryRun=true asks the apiserver
 // to validate/admit without persisting.
 func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, scope, namespace, name, expectedUID, yaml string, dryRun bool) ActionResultDTO {
-	// Dry-run mutates nothing; only a real apply consumes the protection grant.
+	// Dry-run mutates nothing; only a real apply consumes the protection grant
+	// and writes under its ticket.
+	base := context.Background() // unfenced: a dry run writes nothing
 	if !dryRun {
-		if err := checkProtected(cluster); err != nil {
+		t, err := guardFor(cluster)
+		if err != nil {
 			return ActionResultDTO{Error: err.Error()}
 		}
+		base = t.Write(base)
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	ctx, cancel := context.WithTimeout(base, crdTimeout)
 	defer cancel()
 	if err := conn.ApplyResourceYAML(ctx, group, version, plural, kind, scope, namespace, name, expectedUID, yaml, dryRun); err != nil {
 		r := failed(ctx, conn, err)
@@ -284,16 +288,21 @@ func (s *CRDService) ApplyResourceYAML(cluster, group, version, plural, kind, sc
 // real create on a protected cluster consumes the one-shot typed-confirmation
 // grant, exactly like ApplyResourceYAML; dry-run never does.
 func (s *CRDService) CreateResourceYAML(cluster, yaml string, dryRun bool) []AdhocResultDTO {
+	base := context.Background() // unfenced: a dry run writes nothing
 	if !dryRun {
-		if err := checkProtected(cluster); err != nil {
+		t, err := guardFor(cluster)
+		if err != nil {
 			return []AdhocResultDTO{{Error: err.Error()}}
 		}
+		// one ticket; each document's create gets its own forwarding
+		// tracker (fleet.CreateResourceYAML)
+		base = t.Write(base)
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return []AdhocResultDTO{{Error: "cluster not connected: " + cluster}}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	ctx, cancel := context.WithTimeout(base, crdTimeout)
 	defer cancel()
 	rs := conn.CreateResourceYAML(ctx, yaml, dryRun)
 	out := make([]AdhocResultDTO, 0, len(rs))
@@ -339,14 +348,15 @@ func (s *CRDService) ListAdhocObjects(cluster string) AdhocInventoryDTO {
 // not create, nor a replacement under the same name) and consumes the
 // protected-cluster grant like every destructive verb.
 func (s *CRDService) DeleteAdhocObject(cluster, group, version, plural, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), crdTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), crdTimeout)
 	defer cancel()
 	if err := conn.DeleteAdhocObject(ctx, group, version, plural, namespace, name, uid); err != nil {
 		return failed(ctx, conn, err)

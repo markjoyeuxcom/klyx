@@ -222,14 +222,15 @@ func (s *KEDAService) ReplicaOwner(cluster, kind, namespace, name string) Replic
 // the typed-confirmation grant first. It reports "requested"; only the
 // object's status says the pause completed.
 func (s *KEDAService) SetPaused(cluster, resource, namespace, name, uid string, pause bool) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doKEDASetPaused(ctx, conn, resource, namespace, name, uid, pause)
 }

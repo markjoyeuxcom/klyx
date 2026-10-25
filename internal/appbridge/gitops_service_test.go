@@ -266,7 +266,7 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 	now := time.Now()
 	g := newTestGuard("prd-cluster", &now)
 	SetProtectGuard(g)
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	conn := &fakeGitOpsConn{}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)

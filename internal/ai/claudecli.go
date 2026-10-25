@@ -21,6 +21,7 @@ import (
 
 	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/procrun"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // ClaudeCLIOrigin is where a Claude Code call's prompt goes, as Settings and
@@ -967,6 +968,12 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 				return err
 			}
 			return p.store.release(t, func() error {
+				// Settings slice F §4: the call's fence, immediately before
+				// the prompt goes on stdin; a refusal here sends nothing, and
+				// nothing hands the prompt over again
+				if err := readfence.Check(ctx); err != nil {
+					return err
+				}
 				if err := write(); err != nil {
 					return &CLIDiscardedError{Reason: fmt.Sprintf("Klyx could not finish handing the prompt to Claude Code: %v", err), Partial: true}
 				}

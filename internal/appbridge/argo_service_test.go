@@ -97,7 +97,7 @@ func TestSyncApp_ProtectedGrant(t *testing.T) {
 	now := time.Now()
 	g := newTestGuard("prd-cluster", &now)
 	SetProtectGuard(g)
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	conn := &fakeArgoConn{}
 	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })
@@ -146,7 +146,7 @@ func TestRefreshApp_ProtectedGrant(t *testing.T) {
 	now := time.Now()
 	g := newTestGuard("prd-cluster", &now)
 	SetProtectGuard(g)
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	conn := &fakeArgoConn{}
 	s := NewArgoService(func(string) (ArgoConn, bool) { return conn, true })

@@ -112,7 +112,7 @@ func TestKEDASetPaused_ProtectedGrant(t *testing.T) {
 	now := time.Now()
 	g := newTestGuard("prd-cluster", &now)
 	SetProtectGuard(g)
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 	conn := &fakeKEDAConn{}
 	s := NewKEDAService(func(string) (KEDAConn, bool) { return conn, true })
 	if r := s.SetPaused("prd-cluster", "scaledobjects", "team", "web", "so-1", true); r.OK || r.Error == "" {

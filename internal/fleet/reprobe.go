@@ -113,7 +113,8 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 	switch {
 	case set.Network.Tier == capability.Degraded:
 		if next, ok := Transition(c.state, EvCapUnhealthy); ok {
-			c.state, c.reason = next, capabilityReason(c.caps)
+			c.moveLocked(next)
+			c.reason = capabilityReason(c.caps)
 		} else if c.state == Degraded {
 			c.reason = capabilityReason(c.caps)
 		}
@@ -123,7 +124,8 @@ func (c *ClusterConn) applyReprobe(set capability.Set) {
 		}
 	default:
 		if next, ok := Transition(c.state, EvCapHealthy); ok {
-			c.state, c.reason = next, ""
+			c.moveLocked(next)
+			c.reason = ""
 		}
 	}
 }

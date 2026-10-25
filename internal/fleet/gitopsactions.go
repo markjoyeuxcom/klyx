@@ -15,6 +15,7 @@ import (
 
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // fluxGroupForKind returns the API group + fallback preferred version for a Flux
@@ -263,7 +264,9 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
 			body := flux.ReconcilePatch(c.clk.Now())
 			what := fmt.Sprintf("its source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
-			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
+			// each logical write tracks its own forwarding (Settings slice F
+			// §2): the source's patch, then the target's
+			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(readfence.WithWriteTracker(ctx), ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 			err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: sgvr.Group, Version: sgvr.Version, Resource: sgvr.Resource, Namespace: ref.Namespace},
 				ref.Kind, ref.Namespace, ref.Name, err)
 			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: stepRefused(err), Err: err})
@@ -277,7 +280,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 			}
 		}
 	}
-	err = c.patchArmed(ctx, gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
+	err = c.patchArmed(readfence.WithWriteTracker(ctx), gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
 	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: stepRefused(err), Err: err})
 	if err != nil {
 		if source != "" {

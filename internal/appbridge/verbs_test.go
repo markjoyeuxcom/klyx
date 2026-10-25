@@ -17,7 +17,7 @@ import (
 func TestScaleOutOfRangeConsumesTheGrant(t *testing.T) {
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)
 
@@ -91,7 +91,7 @@ func TestUndoPassesTheShownRevision(t *testing.T) {
 	// the refusal comes after the grant: it consumes it
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 	if err := activeProtectGuard.Load().Arm("prd", "prd"); err != nil {
 		t.Fatal(err)
 	}

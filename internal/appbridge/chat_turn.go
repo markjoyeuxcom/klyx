@@ -198,6 +198,11 @@ func (r *turnRunner) guard() (*AIState, error) {
 	if conn == nil || conn != r.c.conn || !usable {
 		return nil, &endError{reason: "the cluster disconnected; start a new conversation"}
 	}
+	// Settings slice F §4: the cluster's policy and connection are the
+	// ones the conversation started under
+	if p := epochProblem(r.c.cluster, r.c.epoch); p != "" {
+		return nil, &endError{reason: p + "; start a new conversation"}
+	}
 	st := r.s.ai.load()
 	if st.Rev != r.c.rev {
 		return nil, &endError{reason: "AI settings changed; start a new conversation"}
@@ -352,7 +357,7 @@ func (r *turnRunner) tools(ctx context.Context) (string, error) {
 			idx := -1
 			t, err = func() (ai.Turn, error) {
 				idx = r.startCall(st)
-				return conv.Converse(ctx, req)
+				return conv.Converse(readfence.WithWriteTracker(ctx), req) // one send, tracked (slice F §4)
 			}()
 			if errors.Is(err, ai.ErrRequestTooLarge) {
 				r.dropCall(idx) // nothing was sent
@@ -755,7 +760,7 @@ func (r *turnRunner) snapshot(ctx context.Context) (string, error) {
 		return r.completeInvestigation(ctx, doc)
 	}
 	idx := r.startCall(st)
-	res, err := st.Provider.Complete(ctx, ai.Request{System: fmt.Sprintf(chatSnapshotSystem, r.c.cluster), User: doc, Purpose: ai.PurposeChat})
+	res, err := st.Provider.Complete(readfence.WithWriteTracker(ctx), ai.Request{System: fmt.Sprintf(chatSnapshotSystem, r.c.cluster), User: doc, Purpose: ai.PurposeChat})
 	if err != nil {
 		r.finishCall(idx, "", nil, callOutcome(err))
 		return "", err

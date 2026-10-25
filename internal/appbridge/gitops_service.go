@@ -90,27 +90,29 @@ const diffTimeout = 120 * time.Second
 // uid is the object the verb was armed against (the row the operator
 // confirmed): only that object is written.
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doReconcile(ctx, conn, kind, namespace, name, uid)
 }
 
 func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	// coverage S3b §2.3: each step's outcome, the refused source's kept
 	// even when the target is written
@@ -156,14 +158,15 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 }
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doSetSuspend(ctx, conn, kind, namespace, name, uid, suspend)
 }
@@ -302,14 +305,15 @@ func (s *GitOpsService) ResolveGitLink(cluster, kind, namespace, name string) Gi
 // the typed-confirmation grant first, as every Flux verb does. A verb
 // reports "requested"; only the object's status says it was evaluated.
 func (s *GitOpsService) FluxOpAct(cluster, kind, namespace, name, uid, verb string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	if err := conn.FluxOpAct(ctx, kind, namespace, name, uid, verb); err != nil {
 		return failedScrubbed(ctx, conn, err)

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/policy"
 	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -73,6 +74,7 @@ type stepReview struct {
 	token   string
 	digest  string
 	expires time.Time
+	epoch   policy.Epoch // the cluster's when reviewed (Settings slice F §3)
 }
 
 // StepRunStateDTO is a step's run as the card shows it.
@@ -594,10 +596,17 @@ func (s *ChatService) ReviewStep(cluster, conversationID, exchangeID string, n i
 	conn := c.conn
 	s.mu.Unlock()
 
+	out := StepReviewDTO{N: n, Verb: sn.step.Verb, Target: sn.step.Target, Danger: sn.step.Danger}
+	// the review records the epoch it was made under; a run under another
+	// one needs a new review (Settings slice F §3)
+	epoch, notAdmitted := admitNow(cluster)
+	if notAdmitted != "" {
+		out.Reason = notAdmitted
+		return out
+	}
 	fence := s.runFence(c)
 	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), actionTimeout)
 	defer cancel()
-	out := StepReviewDTO{N: n, Verb: sn.step.Verb, Target: sn.step.Target, Danger: sn.step.Danger}
 	if err := fence(); err != nil {
 		out.Reason = err.Error()
 		return out
@@ -618,7 +627,11 @@ func (s *ChatService) ReviewStep(cluster, conversationID, exchangeID string, n i
 		out.Reason = why
 		return out
 	}
-	p.runs[n-1].review = &stepReview{token: token, digest: ob.digest, expires: expires}
+	if p := epochProblem(cluster, epoch); p != "" {
+		out.Reason = p + " while it was reviewed: review it again"
+		return out
+	}
+	p.runs[n-1].review = &stepReview{token: token, digest: ob.digest, expires: expires, epoch: epoch}
 	out.Offered, out.Token, out.ExpiresAt = true, token, expires.UTC().Format(time.RFC3339)
 	out.Change, out.Consequence, out.Expected, out.Observed = ob.change, ob.consequence, ob.expected, ob.observed
 	return out
@@ -626,9 +639,14 @@ func (s *ChatService) ReviewStep(cluster, conversationID, exchangeID string, n i
 
 // RunStep runs step n of the plan exchangeID proposed, as reviewed with
 // token (§4.2). It consumes the protected grant first, so a refusal after
-// the dialog armed one never leaves it armed.
+// the dialog armed one never leaves it armed. Its ticket (Settings slice F
+// §3) captures the cluster's epoch at that guard, an unprotected pass
+// included, and is checked with the pinned connection before and during
+// the write, so a tightening between the guard and the write is refused at
+// the write without spending a second grant.
 func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int, token string) StepRunDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		r := refusedNotSent(err.Error())
 		return StepRunDTO{Reason: err.Error(), Result: &r}
 	}
@@ -644,6 +662,9 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 			why = "review the step first"
 		case !s.now().Before(rv.expires):
 			why = "the review expired: review the step again"
+		case rv.epoch != t.epoch:
+			// slice F §3: a review made under another epoch needs a new one
+			why = cluster + "'s policy or connection changed since you reviewed it: review the step again"
 		}
 	}
 	if why != "" {
@@ -669,8 +690,14 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 		s.version++
 		return StepRunDTO{Reason: reason}
 	}
-	fence := s.runFence(c)
-	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), actionTimeout)
+	conns := s.runFence(c)
+	fence := func() error {
+		if err := conns(); err != nil {
+			return err
+		}
+		return t.Valid()
+	}
+	ctx, cancel := context.WithTimeout(t.Write(readfence.With(context.Background(), conns)), actionTimeout)
 	defer cancel()
 	if err := fence(); err != nil {
 		return release(err.Error())

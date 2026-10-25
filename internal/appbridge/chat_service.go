@@ -13,6 +13,7 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/bounds"
+	"github.com/moomora/klyx/internal/policy"
 )
 
 // ChatService is the cluster chat (spec 2026-10-14 §5): one conversation per
@@ -84,6 +85,7 @@ type conversation struct {
 	members     []member
 	membersRead bool
 	conn        ChatConn
+	epoch       policy.Epoch // the cluster's, pinned at start (Settings slice F §4)
 	rev         uint64
 	provider    ai.ProviderID
 	model       string
@@ -346,6 +348,12 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if conn == nil || !usable {
 		return refuse("the cluster is not connected")
 	}
+	// Settings slice F §4: a conversation starts only on an Active cluster,
+	// and pins its epoch beside the settings revision
+	epoch, notAdmitted := admitNow(cluster)
+	if notAdmitted != "" {
+		return refuse(notAdmitted)
+	}
 	if len(s.convs) >= chatMaxConvs && s.convs[key] == nil {
 		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))
 	}
@@ -357,7 +365,7 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if kind == kindInvestigation {
 		id = invIDPrefix + id
 	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts()}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts()}
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -471,6 +479,10 @@ func (s *ChatService) planFenceLocked(c *conversation) string {
 	}
 	if conn, usable := s.state(c.cluster); conn == nil || conn != c.conn || !usable {
 		return "the cluster disconnected"
+	}
+	// slice F §3: an offer stands only under the epoch it was made in
+	if p := epochProblem(c.cluster, c.epoch); p != "" {
+		return p
 	}
 	return ""
 }

@@ -286,7 +286,7 @@ func TestRolloutHistoryMapsToDTO(t *testing.T) {
 func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)
@@ -318,7 +318,7 @@ func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 func TestRolloutPausePassesThroughAndGates(t *testing.T) {
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)

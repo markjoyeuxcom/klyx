@@ -18,14 +18,15 @@ const maxScaleReplicas = 10000
 // is the workload the verb was armed against (design §5b): a same-name
 // replacement is never scaled.
 func (s *WorkloadsService) ScaleWorkload(cluster, kind, namespace, name, uid string, replicas int) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doScaleWorkload(ctx, conn, kind, namespace, name, uid, replicas)
 }
@@ -68,17 +69,18 @@ func (s *WorkloadsService) RolloutHistory(cluster, kind, namespace, name string)
 // that template, and refuses before writing when either is missing or the
 // revision changed.
 func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid string, revision int, objectUID, templateDigest string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	if objectUID == "" || templateDigest == "" {
-		// after checkProtected: the refusal consumes the grant like any armed call
+		// after the guard: the refusal consumes the grant like any armed call
 		return refusedNotSent(fleet.ErrNoRevisionExpectation.Error())
 	}
 	return doRolloutUndo(ctx, conn, kind, namespace, name, uid, revision, &fleet.RevisionExpect{ObjectUID: objectUID, TemplateDigest: templateDigest})
@@ -88,14 +90,15 @@ func (s *WorkloadsService) RolloutUndo(cluster, kind, namespace, name, uid strin
 // but still a spec mutation on a possibly-protected cluster, so it consumes the
 // grant like restart/scale. uid is the armed Deployment (§5b).
 func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pause bool) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doRolloutPause(ctx, conn, namespace, name, uid, pause)
 }
@@ -104,14 +107,15 @@ func (s *WorkloadsService) RolloutPause(cluster, namespace, name, uid string, pa
 // pod-template restartedAt annotation. kind must be Deployment, StatefulSet,
 // or DaemonSet. uid is the armed workload (§5b).
 func (s *WorkloadsService) RolloutRestart(cluster, kind, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	return doRolloutRestart(ctx, conn, kind, namespace, name, uid)
 }

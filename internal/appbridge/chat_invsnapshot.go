@@ -9,6 +9,7 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/bounds"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // AI A1 §1.1: a provider without tools cannot ask for reads, so an
@@ -330,7 +331,7 @@ func (r *turnRunner) completeInvestigation(ctx context.Context, doc string) (str
 	if r.proposalsOn() {
 		system += fmt.Sprintf(actionsSnapshotAddendum, strings.Join(matrixVerbs(), ", "))
 	}
-	res, err := st.Provider.Complete(ctx, ai.Request{System: system, User: doc, Purpose: ai.PurposeChat})
+	res, err := st.Provider.Complete(readfence.WithWriteTracker(ctx), ai.Request{System: system, User: doc, Purpose: ai.PurposeChat})
 	r.evalSnapshotSent(err)
 	if err != nil {
 		r.finishCall(idx, "", nil, callOutcome(err))

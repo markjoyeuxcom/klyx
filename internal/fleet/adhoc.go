@@ -21,6 +21,7 @@ import (
 
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // Ad-hoc create: the deliberately-non-GitOps path for scratch/diagnostic
@@ -92,7 +93,8 @@ func (c *ClusterConn) CreateResourceYAML(ctx context.Context, yamlDocs string, d
 		if strings.TrimSpace(doc) == "" {
 			continue
 		}
-		r := c.applyAdhocDoc(ctx, doc, dryRun)
+		// each document is its own logical write (Settings slice F §2)
+		r := c.applyAdhocDoc(readfence.WithWriteTracker(ctx), doc, dryRun)
 		if r.OK && !dryRun {
 			applied = true
 		}

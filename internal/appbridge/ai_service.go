@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 const (
@@ -139,6 +140,35 @@ func (s *AIService) protected(cluster string) bool {
 	return s.isProtected != nil && s.isProtected(cluster)
 }
 
+// fenceReason is a fence refusal's own reason, without its wrapping.
+func fenceReason(err error) string {
+	var fe *readfence.Error
+	if errors.As(err, &fe) {
+		return fe.Err.Error()
+	}
+	return err.Error()
+}
+
+// callFence pins an Explain or a Suggest-fix to the AI settings revision and
+// the cluster's epoch at its start (Settings slice F §4): the call starts
+// only on an Active cluster, and its fence refuses every later cluster read
+// and every send once either moves. "" refusal when admitted.
+func (s *AIService) callFence(st *AIState, cluster string) (func() error, string) {
+	epoch, notAdmitted := admitNow(cluster)
+	if notAdmitted != "" {
+		return nil, notAdmitted
+	}
+	return func() error {
+		if cur := s.load(); cur == nil || cur.Rev != st.Rev {
+			return errors.New("the AI settings changed")
+		}
+		if p := epochProblem(cluster, epoch); p != "" {
+			return errors.New(p)
+		}
+		return nil
+	}, ""
+}
+
 // precheck is the shared gate: a provider exists, the cluster's context may
 // go to it, and the cluster is connected. It reads only the given snapshot.
 func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
@@ -165,7 +195,9 @@ func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
 // outcome into a DTO: a refusal, a truncation or tool output is an error,
 // never an explanation (spec §1.2).
 func complete(ctx context.Context, st *AIState, req ai.Request, grounded string, redacted int) AIResultDTO {
-	res, err := st.Provider.Complete(ctx, req)
+	// one send, tracked: a fence refusal before any attempt was forwarded
+	// says nothing was sent (Settings slice F §4)
+	res, err := st.Provider.Complete(readfence.WithWriteTracker(ctx), req)
 	if err != nil {
 		return AIResultDTO{Error: modelError(err), Backend: string(st.ProviderID), Origin: st.Origin}
 	}
@@ -186,6 +218,12 @@ func modelError(err error) string {
 	var cli *ai.CLIRefusedError
 	var discarded *ai.CLIDiscardedError
 	switch {
+	case readfence.Failed(err) && errors.Is(err, readfence.ErrNotForwarded):
+		return "Nothing was sent: " + fenceReason(err) + "."
+	case readfence.Failed(err):
+		// an earlier attempt of this send was forwarded (a redirect, a
+		// retry): it may have reached the model
+		return "The request may have been sent before Klyx stopped it: " + fenceReason(err) + "."
 	case errors.As(err, &refused):
 		return "The model declined to answer" + refusalDetail(refused) + "."
 	case errors.As(err, &discarded):
@@ -240,7 +278,11 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 		// selector IDs; no manifest of one is sent
 		return AIResultDTO{Error: "Suggest fix is not available for a Karpenter NodeClass: its spec holds the role, the instance profile and cloud IDs, which Klyx never sends to AI; nothing was sent"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeFix))
+	fence, notAdmitted := s.callFence(st, cluster)
+	if notAdmitted != "" {
+		return AIResultDTO{Error: notAdmitted}
+	}
+	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
 	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/policy"
 )
 
 // AI A1 §3.7 and A-C2: an investigation may compare its workload across an
@@ -35,6 +36,7 @@ func fleetDiffToolDef() ChatToolDef {
 type member struct {
 	cluster string
 	conn    ChatConn
+	epoch   policy.Epoch // pinned with the set (Settings slice F §4)
 }
 
 // SetComparison fixes an investigation's comparison set before its first
@@ -82,7 +84,11 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		if conn == nil || !usable {
 			return notice(m + " is not connected")
 		}
-		set = append(set, member{cluster: m, conn: conn})
+		epoch, notAdmitted := admitNow(m)
+		if notAdmitted != "" {
+			return notice(notAdmitted)
+		}
+		set = append(set, member{cluster: m, conn: conn, epoch: epoch})
 	}
 	c.members = set
 	s.version++
@@ -96,6 +102,9 @@ func (s *ChatService) memberProblem(st *AIState, m member) string {
 	conn, usable := s.state(m.cluster)
 	if conn == nil || conn != m.conn || !usable {
 		return "the comparison cluster " + m.cluster + " disconnected; start a new investigation"
+	}
+	if p := epochProblem(m.cluster, m.epoch); p != "" {
+		return "the comparison cluster " + p + "; start a new investigation"
 	}
 	if refusal := s.refusal(st, m.cluster); refusal != "" {
 		return "the comparison cluster " + m.cluster + ": " + refusal

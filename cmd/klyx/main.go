@@ -25,6 +25,7 @@ import (
 	"github.com/moomora/klyx/internal/line"
 	"github.com/moomora/klyx/internal/localstore"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/policy"
 	"github.com/moomora/klyx/internal/secretstore"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -109,6 +110,14 @@ func main() {
 		factory = fleet.ResolvingConnFactory(clock.Real{}, endpointCreds, evalRun.Resolve)
 	}
 	reg := fleet.NewRegistry(cfg, factory)
+	// Settings slice F §1: each cluster's published admission state -
+	// protection, epoch, Active - seeded before any cluster connects, and
+	// a new connection incarnation each time one becomes usable again.
+	policyReg := policy.New()
+	for _, c := range cfg.Clusters {
+		policyReg.Seed(c.Name, c.IsProtected())
+	}
+	reg.SetOnUsable(policyReg.ConnUp)
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer
@@ -173,6 +182,7 @@ func main() {
 		}
 		return err
 	}), loadErr)
+	appbridge.WithPolicy(configSvc, policyReg)
 	liveConfig.Store(configSvc)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
@@ -489,7 +499,7 @@ func main() {
 	// mid-session through Settings is gated immediately rather than fail-open
 	// until a restart. Installed here, after configSvc exists; the guard is not
 	// consulted until a destructive verb runs at request time.
-	appbridge.SetProtectGuard(appbridge.NewProtectGuard(configSvc.IsProtected, time.Now))
+	appbridge.SetProtectGuard(appbridge.NewProtectGuard(policyReg, time.Now))
 
 	// AI-assist (read-only Explain and Suggest-fix). Off unless fleet.yaml
 	// configures a provider. The snapshot is built once from the startup config:

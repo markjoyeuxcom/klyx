@@ -17,6 +17,7 @@ import (
 
 	"github.com/moomora/klyx/internal/clibin"
 	"github.com/moomora/klyx/internal/envread"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // Runner executes a helm invocation and returns stdout. The real runner shells
@@ -61,6 +62,12 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Settings slice F §2: the context's fence (a write's ticket) is
+	// checked at the child's actual start; a started helm is not stopped by
+	// a later move. A read's context has no fence and passes.
+	if err := readfence.Check(ctx); err != nil {
+		return nil, err
+	}
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {

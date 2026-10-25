@@ -36,6 +36,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
 		os.Exit(cachediff.RunChild(os.Stdin, os.Stdout, os.Stderr))
 	}
+	// Settings slice F §2: without a guard nothing is admitted, so the
+	// package's tests run under an open one
+	SetProtectGuard(defaultTestGuard)
 	os.Exit(m.Run())
 }
 

@@ -222,6 +222,11 @@ type ClusterConn struct {
 	lbServicesSeen bool                      // S4: a LoadBalancer Service exists (the lens's gate)
 	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
+	// onUsable is told each time the connection becomes usable from not
+	// usable - a new incarnation (Settings slice F §1) - under c.mu, before
+	// the new state is visible. Set before Start; nil in tests.
+	onUsable func(cluster string)
+
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
 	// concurrent callers on the same conn, which also single-flights duplicate
@@ -349,7 +354,7 @@ func (c *ClusterConn) setState(ev Event, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if next, ok := Transition(c.state, ev); ok {
-		c.state = next
+		c.moveLocked(next)
 		c.reason = reason
 		c.overlayLocked()
 	}
@@ -367,7 +372,8 @@ func (c *ClusterConn) overlayLocked() {
 	}
 	if c.caps.GitOps.Tier == capability.Degraded || c.caps.Network.Tier == capability.Degraded {
 		if next, ok := Transition(c.state, EvCapUnhealthy); ok {
-			c.state, c.reason = next, capabilityReason(c.caps)
+			c.moveLocked(next)
+			c.reason = capabilityReason(c.caps)
 		}
 	}
 }
@@ -392,7 +398,7 @@ func (c *ClusterConn) onWatchError(err error) {
 	st := c.state
 	if st == Synced || st == Degraded {
 		if next, ok := Transition(c.state, EvWatchDrop); ok {
-			c.state = next
+			c.moveLocked(next)
 			c.reason = "watch error: " + msg
 		}
 		return
@@ -561,7 +567,8 @@ func (c *ClusterConn) commitSynced(from ...ConnState) bool {
 	if !ok {
 		return false
 	}
-	c.state, c.reason = next, ""
+	c.moveLocked(next)
+	c.reason = ""
 	c.overlayLocked()
 	return true
 }
@@ -716,7 +723,7 @@ func (c *ClusterConn) applyGitOpsHealth(g capability.GitOpsCapability) {
 		return
 	}
 	if next, ok := Transition(c.state, ev); ok {
-		c.state = next
+		c.moveLocked(next)
 		c.reason = g.Reason
 	}
 }
@@ -828,6 +835,23 @@ func (c *ClusterConn) setLBServicesSeen(seen bool) {
 	c.mu.Lock()
 	c.lbServicesSeen = seen
 	c.mu.Unlock()
+}
+
+// SetOnUsable sets the incarnation hook (slice F §1). Call before Start.
+func (c *ClusterConn) SetOnUsable(f func(cluster string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onUsable = f
+}
+
+// moveLocked is the one way the connection's state changes: crossing into
+// a usable state from one that is not is a new incarnation, told to
+// onUsable before any reader can see the state. Caller holds c.mu.
+func (c *ClusterConn) moveLocked(next ConnState) {
+	if !c.state.Usable() && next.Usable() && c.onUsable != nil {
+		c.onUsable(c.name)
+	}
+	c.state = next
 }
 
 // SetHealthSink gives the conn its health publication sink; it must be called

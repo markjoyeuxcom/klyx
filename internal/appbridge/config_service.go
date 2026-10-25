@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/policy"
 )
 
 // FleetClusterDTO is one configured fleet entry as Settings shows it.
@@ -63,8 +64,9 @@ type FleetConfigDTO struct {
 // The startup config itself is never mutated (other services hold the same
 // pointer); session additions live in the guarded added slice.
 type ConfigService struct {
-	path string
-	cfg  *config.Config
+	path   string
+	cfg    *config.Config
+	policy *policy.Registry // slice F §1; nil in tests that need none
 
 	// addMu serialises AddClusters end to end (fleet.yaml read-modify-write and
 	// the slow connects). It is deliberately NOT mu: protection checks and the
@@ -127,11 +129,32 @@ func (s *ConfigService) LoadError() string { return s.loadErr }
 // config order let an earlier cluster whose context happens to equal a
 // protected cluster's name answer for it - fail-open on the prd guard while
 // the destructive verb (which resolves by name) hit the protected cluster.
+//
+// Settings slice F §1: with a policy registry, a known cluster's protection
+// is the registry's published value, so every reader agrees with what the
+// guard admits under; the registry is seeded from this same configuration.
 func (s *ConfigService) IsProtected(cluster string) bool {
-	if c, ok := s.clusterConfig(cluster); ok {
-		return c.IsProtected()
+	c, ok := s.clusterConfig(cluster)
+	if !ok {
+		return false
 	}
-	return false
+	if s.policy != nil {
+		if snap, ok := s.policy.Snapshot(c.Name); ok {
+			return snap.Protected
+		}
+	}
+	return c.IsProtected()
+}
+
+// WithPolicy publishes the running fleet's protection through reg (slice F
+// §1): every running cluster is seeded, and AddClusters seeds a new one
+// before it connects. Call once at startup, before any cluster connects.
+func WithPolicy(s *ConfigService, reg *policy.Registry) *ConfigService {
+	s.policy = reg
+	for _, c := range s.fleetClusters() {
+		reg.Seed(c.Name, c.IsProtected())
+	}
+	return s
 }
 
 // clusterConfig resolves a cluster in the live fleet: exact fleet name first,
@@ -250,7 +273,7 @@ func (s *ConfigService) NewContextCount() int {
 // ArmProtected records the user's typed confirmation for a protected cluster,
 // unlocking exactly one destructive backend verb for the next 30 seconds. The
 // ConfirmDialog (and the custom confirm modals) call this on confirm; the
-// destructive service methods consume the grant via checkProtected. Arming an
+// destructive service methods consume the grant via guardFor. Arming an
 // unprotected cluster is a no-op success, so the frontend calls this
 // unconditionally.
 func (s *ConfigService) ArmProtected(cluster, typed string) ActionResultDTO {
@@ -295,6 +318,9 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 		s.mu.Lock()
 		s.added = append(s.added, cc)
 		s.mu.Unlock()
+		if s.policy != nil {
+			s.policy.Seed(cc.Name, cc.IsProtected())
+		}
 		if s.connect != nil {
 			if err := s.connect(cc); err != nil {
 				s.dropAdded(cc.Name)
