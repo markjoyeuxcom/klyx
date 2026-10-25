@@ -95,4 +95,26 @@ describe("a draft belongs to the endpoint as reviewed", () => {
     fireEvent.click(screen.getByRole("button", { name: "Store the prd Metrics credential" }));
     expect(setCredential).not.toHaveBeenCalled();
   });
+
+  // Settings review slice 0: a row shows an unverified certificate and its
+  // scope; a failed reread qualifies the rows.
+  it("shows an unverified certificate and each endpoint's scope", async () => {
+    getEndpoints.mockResolvedValue(fleet([
+      base({ kind: "alertmanager", source: "https://am.example", tlsOff: true, scope: "cluster=prd" }),
+      base({ cluster: "dev", kind: "alertmanager", source: "https://am.example", unscoped: true }),
+    ]));
+    render(<EndpointsPanel />);
+    expect((await screen.findByTestId("endpoint-tls-off")).textContent).toContain("not verified");
+    const scopes = screen.getAllByTestId("endpoint-scope").map((e) => e.textContent);
+    expect(scopes[0]).toContain("cluster=prd");
+    expect(scopes[1]).toContain("no match: everything this Alertmanager holds is read as dev's");
+  });
+
+  it("qualifies the rows when a reread fails", async () => {
+    getEndpoints.mockResolvedValueOnce(fleet([base({})])).mockResolvedValueOnce(null);
+    testEndpoint.mockResolvedValue({ ok: true, message: "reachable" });
+    render(<EndpointsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /Test the prd Metrics endpoint/ }));
+    expect((await screen.findByTestId("endpoints-reread-failed")).textContent).toContain("as last read");
+  });
 });

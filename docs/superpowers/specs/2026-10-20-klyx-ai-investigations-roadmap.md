@@ -224,9 +224,9 @@ What it needs beyond §6.1:
 ## 7. Open owner decisions
 
 1. ~~**Sequencing:** §5's option 1 or 2.~~ Decided 2026-10-21 (§5): A1 now, then A2 and A3. The decisions below gate A2 and A3, not A1.
-2. **Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.
+2. ~~**Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.~~ Decided 2026-10-25 (owner): allowed, opt-in (§3's consent model), and the user chooses the default model for proactive runs, local or a provider, in Settings.
 3. **A3's reach:** day-2 verbs only, or Git pull requests too (§4, and §6's approval step).
-4. **Report retention:** how many reports, and for how long.
+4. ~~**Report retention:** how many reports, and for how long.~~ Decided 2026-10-25 (owner): the user sets both in Settings, which describes what each setting does. The Settings work comes first (`2026-10-25-klyx-settings-slice0.md`).
 
 ## 8. Revision 1: Codex's review of 671c6b0
 

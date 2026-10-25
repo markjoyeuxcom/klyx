@@ -131,6 +131,12 @@ The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation
 - [Klyx AI eval: scored investigations on the kind lab](specs/2026-10-22-klyx-ai-eval.md) (spec)
 - [Klyx AI A3: guarded execution](specs/2026-10-24-klyx-ai-a3-guarded-execution.md) (spec)
 
+## Settings (2026-10-25 onward)
+
+Claude and Codex reviewed the Settings page and its coverage, independently and then against each other. Slice 0 fixes what the review found wrong; a redesign spec follows, reviewed before it is built, and A2's settings come with it.
+
+- [Klyx Settings slice 0: correctness before the redesign](specs/2026-10-25-klyx-settings-slice0.md) (spec)
+
 ## Next
 
 The extensions research, not yet built.

@@ -184,7 +184,10 @@ func (s *NotificationsService) SetSettings(d NotificationSettingsDTO) ActionResu
 		c.Scope = "protected"
 	}
 	s.setMu.Lock()
-	if err := saveNotifications(s.path, c); err != nil {
+	s.mu.Lock()
+	prev := s.settings
+	s.mu.Unlock()
+	if err := saveNotifications(s.path, c, prev); err != nil {
 		s.setMu.Unlock()
 		return ActionResultDTO{OK: false, Error: err.Error()}
 	}

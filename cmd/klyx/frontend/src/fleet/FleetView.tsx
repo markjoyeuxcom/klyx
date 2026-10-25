@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { IconLayoutGrid } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
 import { useLine } from "../store/line";
 import { useLineGitFor } from "../store/lineGit";
 import { fetchDue } from "../bridge/lineGit";
+import { configLoadError } from "../bridge/configsvc";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
 import { LensLayout } from "../layout/LensLayout";
@@ -27,6 +28,19 @@ export function FleetView() {
     const t = setInterval(fetchDue, 5 * 60 * 1000);
     return () => clearInterval(t);
   }, []);
+  // an empty fleet because fleet.yaml did not load says so (Settings review
+  // slice 0)
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    if (clusters.length > 0) return;
+    let live = true;
+    void configLoadError().then((e) => {
+      if (live) setLoadError(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, [clusters.length]);
   const models = useFleetAttention();
   const nodes = clusters.reduce((n, c) => n + c.nodesTotal, 0);
   // Unknown counts are never summed as zero: the total says how many are out.
@@ -51,12 +65,21 @@ export function FleetView() {
       headerEnd={clusters.length === 0 ? undefined : <span className="t-secondary">{nodes} node{nodes === 1 ? "" : "s"} · {pods} pod{pods === 1 ? "" : "s"}{podsUnknown > 0 ? ` (${podsUnknown} cluster${podsUnknown === 1 ? "" : "s"} unknown)` : ""}</span>}
       state={clusters.length === 0 ? "empty" : "ready"}
       stateView={
-        <EmptyState
-          icon={<IconLayoutGrid size={28} stroke={1.2} />}
-          title="No clusters connected yet."
-          hint="Klyx reads standard kubeconfig contexts - add or enable them in Settings."
-          action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
-        />
+        loadError ? (
+          <EmptyState
+            icon={<IconLayoutGrid size={28} stroke={1.2} />}
+            title="fleet.yaml did not load, so no cluster is connected."
+            hint={`${loadError} - fix the file in an editor, then restart Klyx.`}
+            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
+          />
+        ) : (
+          <EmptyState
+            icon={<IconLayoutGrid size={28} stroke={1.2} />}
+            title="No clusters connected yet."
+            hint="Klyx reads standard kubeconfig contexts - add or enable them in Settings."
+            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
+          />
+        )
       }
       body={
         <div className="ov-page fleet-screen" data-testid="fleet-board">

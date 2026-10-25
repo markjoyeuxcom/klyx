@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ func TestSaveNotifications(t *testing.T) {
 	if err != nil || c.Notifications != nil {
 		t.Fatalf("absent: %+v %v", c.Notifications, err)
 	}
-	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "nonsense", Recoveries: true}); err != nil {
+	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "nonsense", Recoveries: true}, NotificationsConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	c, err = Load(path)
@@ -30,11 +31,30 @@ func TestSaveNotifications(t *testing.T) {
 	if !strings.HasPrefix(string(b), orig) {
 		t.Fatalf("other content changed:\n%s", b)
 	}
-	if err := SaveNotifications(path, NotificationsConfig{Enabled: false, Scope: "all"}); err != nil {
+	if err := SaveNotifications(path, NotificationsConfig{Enabled: false, Scope: "all"}, NotificationsConfig{Enabled: true, Recoveries: true}); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = Load(path)
 	if *c.Notifications != (NotificationsConfig{Scope: "all"}) || strings.Count(string(mustRead(t, path)), "notifications:") != 1 {
 		t.Fatalf("replaced: %+v", c.Notifications)
+	}
+}
+
+// Settings review slice 0 (Codex's cross-check probe): a save made from an
+// earlier read refuses a block edited by hand since, and writes nothing.
+func TestANotificationsSaveNeverOverwritesAHandEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	edited := "clusters:\n  - name: prd\n    context: prd\nnotifications:\n  enabled: false\n  scope: all\n  recoveries: true\n"
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Klyx read the block before the edit: absent, so off and protected
+	err := SaveNotifications(path, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+	if !errors.Is(err, ErrNotificationsEdited) || string(mustRead(t, path)) != edited {
+		t.Fatalf("%v\n%s", err, mustRead(t, path))
+	}
+	// from the file's own block, the save goes ahead
+	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "all", Recoveries: true}, NotificationsConfig{Scope: "all", Recoveries: true}); err != nil {
+		t.Fatal(err)
 	}
 }

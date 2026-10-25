@@ -9,8 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -22,6 +20,9 @@ type Config struct {
 	// Notifications are the health notifications (The Line slice 10): only
 	// Settings > Notifications writes them.
 	Notifications *NotificationsConfig `yaml:"notifications"`
+
+	// unknownTop are the unknown top-level keys, for Warnings (strict.go)
+	unknownTop []string
 }
 
 // NotificationsConfig is the notifications block. Absent, notifications
@@ -208,7 +209,7 @@ var reservedTagKeys = map[string]bool{
 // Warnings returns non-fatal config problems worth surfacing at startup, chiefly
 // tag keys that shadow a real cluster field. Deterministically ordered.
 func (c *Config) Warnings() []string {
-	var w []string
+	w := append([]string(nil), c.unknownTop...)
 	for _, cl := range c.Clusters {
 		shadowed := make([]string, 0, len(cl.Tags))
 		for k := range cl.Tags {
@@ -259,15 +260,11 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
-	var c Config
-	if err := yaml.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", path, err)
-	}
-	c.applyDefaults()
-	if err := c.validate(); err != nil {
+	c, err := decode(raw)
+	if err != nil {
 		return nil, fmt.Errorf("invalid config %q: %w", path, err)
 	}
-	return &c, nil
+	return c, nil
 }
 
 func (c *Config) applyDefaults() {

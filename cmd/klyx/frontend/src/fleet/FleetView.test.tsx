@@ -11,6 +11,8 @@ const scans = vi.hoisted(() => ({ byCluster: {} as Record<string, unknown> }));
 vi.mock("../bridge/expiry", () => ({
   getExpiryScan: vi.fn(async (cluster: string) => (scans.byCluster[cluster] ?? { items: [], warnings: [] }) as ExpiryScanResultDTO),
 }));
+const loadErr = vi.hoisted(() => ({ value: "" }));
+vi.mock("../bridge/configsvc", async (orig) => ({ ...(await orig<typeof import("../bridge/configsvc")>()), configLoadError: vi.fn(async () => loadErr.value) }));
 import { FleetView } from "./FleetView";
 
 // The Line slice 5a: the fleet screen is the line's verdict and the board,
@@ -40,6 +42,16 @@ describe("the fleet screen (slice 5a)", () => {
     render(<FleetView />);
     expect(screen.getByText("No clusters connected yet.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Settings" })).toBeTruthy();
+  });
+
+  // Settings review slice 0: an empty fleet because fleet.yaml did not load
+  // says so, and how to recover.
+  it("no clusters because fleet.yaml did not load: says why", async () => {
+    loadErr.value = "invalid config: unknown field: clusters[0] (a): \"protcted\" at line 3 (did you mean \"protected\"?)";
+    render(<FleetView />);
+    expect(await screen.findByText("fleet.yaml did not load, so no cluster is connected.")).toBeTruthy();
+    expect(screen.getByText(/did you mean "protected"\?\) - fix the file in an editor, then restart Klyx\./)).toBeTruthy();
+    loadErr.value = "";
   });
 
   it("before the first LineDTO the board is reading, never empty or quiet", () => {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -105,10 +106,17 @@ func NewEndpointsService(path string, store secretstore.Store, revs *endpointcre
 // EndpointRowDTO is one configured endpoint and its credential's state. It
 // carries no secret.
 type EndpointRowDTO struct {
-	Cluster  string `json:"cluster"`
-	Kind     string `json:"kind"`
-	Source   string `json:"source"`
-	Tenant   string `json:"tenant,omitempty"`
+	Cluster string `json:"cluster"`
+	Kind    string `json:"kind"`
+	Source  string `json:"source"`
+	Tenant  string `json:"tenant,omitempty"`
+	// TLSOff: the endpoint's certificate is not verified (tlsSkipVerify).
+	// Scope is its match, in words; Unscoped says an Alertmanager or Loki
+	// has none, so everything there is read as this cluster's (Settings
+	// review slice 0).
+	TLSOff   bool   `json:"tlsOff,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+	Unscoped bool   `json:"unscoped,omitempty"`
 	AuthType string `json:"authType,omitempty"`
 	Username string `json:"username,omitempty"`
 	State    string `json:"state"`
@@ -164,8 +172,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 		legacy = cl.Metrics.Token
 	}
 	cred := endpointcred.Resolve(s.store, endpointcred.Input{Cluster: cl.Name, Kind: ne.Kind, Spec: ne.Spec, LegacyToken: legacy, Revoked: s.revs.Revoked(cl.Name, ne.Kind)})
-	r := EndpointRowDTO{Cluster: cl.Name, Kind: ne.Kind, Source: endpointSource(ne.Spec), Tenant: ne.Spec.Tenant,
-		State: string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
+	r := EndpointRowDTO{Cluster: cl.Name, Kind: ne.Kind, Source: endpointSource(ne.Kind, ne.Spec), Tenant: ne.Spec.Tenant,
+		TLSOff: ne.Spec.TLSSkipVerify && ne.Spec.Endpoint != "", Scope: matchWords(ne.Spec.Match),
+		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0,
+		State:    string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
 		Revision: snap.EndpointRevision(cl.Name, ne.Kind)}
 	if a := ne.Spec.Auth; a != nil {
 		r.AuthType, r.Username = a.Type, a.Username
@@ -185,8 +195,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	return r
 }
 
-// endpointSource is where the endpoint is, without any credentials.
-func endpointSource(e config.EndpointConfig) string {
+// endpointSource is where the endpoint is, without any credentials: a
+// Service's scheme and path too, and never "discovered" for Loki, which is
+// not (Settings review slice 0).
+func endpointSource(kind string, e config.EndpointConfig) string {
 	switch {
 	case e.Endpoint != "":
 		u, err := url.Parse(e.Endpoint)
@@ -196,9 +208,36 @@ func endpointSource(e config.EndpointConfig) string {
 		u.User = nil
 		return strings.TrimRight(u.String(), "/")
 	case e.ServiceRef != nil:
-		return "Service " + e.ServiceRef.Namespace + "/" + e.ServiceRef.Name + ":" + e.ServiceRef.Port + " (through the API server)"
+		r := e.ServiceRef
+		s := "Service " + r.Namespace + "/" + r.Name + ":" + r.Port
+		var how []string
+		if r.Scheme == "https" {
+			how = append(how, "https")
+		}
+		if r.Path != "" {
+			how = append(how, "path "+r.Path)
+		}
+		how = append(how, "through the API server")
+		return s + " (" + strings.Join(how, ", ") + ")"
+	case kind == config.EndpointLoki:
+		return "no endpoint or serviceRef: Klyx does not discover Loki, so no log history is read"
 	}
 	return "discovered in the cluster (through the API server)"
+}
+
+// matchWords is an endpoint's match as Settings shows it: label=value,
+// sorted.
+func matchWords(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // reviewed takes the action lock's snapshot and checks the endpoint is the

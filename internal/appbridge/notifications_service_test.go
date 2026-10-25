@@ -269,9 +269,11 @@ func TestNotificationSettingsChangesAreSerialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	paused, release := make(chan struct{}), make(chan struct{})
-	defer func(f func(string, config.NotificationsConfig) error) { saveNotifications = f }(saveNotifications)
-	saveNotifications = func(p string, c config.NotificationsConfig) error {
-		err := config.SaveNotifications(p, c)
+	defer func(f func(string, config.NotificationsConfig, config.NotificationsConfig) error) {
+		saveNotifications = f
+	}(saveNotifications)
+	saveNotifications = func(p string, c, prev config.NotificationsConfig) error {
+		err := config.SaveNotifications(p, c, prev)
 		if c.Enabled {
 			close(paused)
 			<-release

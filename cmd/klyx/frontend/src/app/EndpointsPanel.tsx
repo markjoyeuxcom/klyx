@@ -81,8 +81,16 @@ export function EndpointsPanel() {
   return (
     <div data-testid="endpoints-settings">
       <div style={{ ...hint, marginBottom: 8 }}>
-        Endpoints are set in fleet.yaml (metrics, alertmanager, loki under a cluster). A credential is kept in the keychain for the endpoint's origin only, and is sent nowhere else.
+        Endpoints are set in fleet.yaml (metrics, alertmanager, loki under a cluster), and this list reads the file as it is now. A cluster takes an edited endpoint when you Test it or change its credential here, or when Klyx restarts. A credential is kept in the keychain for the endpoint's origin only, and is sent nowhere else.
       </div>
+      {loadFailed && (
+        // a reread after an action failed: the rows are as last read
+        // (Settings review slice 0)
+        <div role="status" data-testid="endpoints-reread-failed" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>
+          Klyx could not read the endpoints again: these rows are as last read and may be out of date.{" "}
+          <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
       {state.error && <div role="status" data-testid="endpoints-error" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>fleet.yaml cannot be read: {state.error}</div>}
       {message && (
         <div role="status" data-testid="endpoints-message" style={{ fontSize: 11, marginBottom: 8, color: message.ok ? "var(--color-text-primary)" : "var(--color-text-warning)" }}>{message.text}</div>
@@ -100,7 +108,17 @@ export function EndpointsPanel() {
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>{r.source}</span>
               {r.tenant && <span style={hint}>tenant {r.tenant}</span>}
               {r.authType && <span style={hint}>{r.authType}{r.username ? ` as ${r.username}` : ""}</span>}
+              {r.tlsOff && <span data-testid="endpoint-tls-off" style={{ fontSize: 11, color: "var(--color-text-warning)" }}>certificate not verified (tlsSkipVerify)</span>}
             </div>
+            {(r.scope || r.unscoped) && (
+              <div style={row}>
+                <span data-testid="endpoint-scope" style={{ fontSize: 11, color: r.unscoped ? "var(--color-text-tertiary)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>
+                  {r.scope
+                    ? <>this cluster's {r.kind === "loki" ? "streams" : "alerts"}: <span style={{ fontFamily: "var(--font-mono)" }}>{r.scope}</span></>
+                    : `no match: everything this ${KIND_LABEL[r.kind] ?? r.kind} holds is read as ${r.cluster}'s; set match when other clusters share it`}
+                </span>
+              </div>
+            )}
             <div style={row}>
               <span data-testid="endpoint-state" style={{ fontSize: 11, color: st.warn ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{st.text}</span>
             </div>

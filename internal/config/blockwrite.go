@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -19,11 +18,17 @@ import (
 // (reading back exactly the intended settings) before it replaces the file.
 // It shares the fleet write lock with AppendClusters and refuses to
 // overwrite an edit made on disk meanwhile (spec 2026-10-13 §2.3). SaveAI
-// and SaveGit write through it (The Line slice 6 note §5.1).
-func saveTopLevelBlock(path, key, block, what string, check func(*Config) error) error {
+// and SaveGit write through it (The Line slice 6 note §5.1). pre, when set,
+// checks the file as it is before the write: a writer whose block came from
+// an earlier read refuses an edit made since (Settings review slice 0).
+func saveTopLevelBlock(path, key, block, what string, pre, check func(*Config) error) error {
 	fleetWriteMu.Lock()
 	defer fleetWriteMu.Unlock()
 
+	target, mode, _, err := fleetTarget(path)
+	if err != nil {
+		return err
+	}
 	original, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -31,12 +36,21 @@ func saveTopLevelBlock(path, key, block, what string, check func(*Config) error)
 		}
 		return fmt.Errorf("read fleet config %q: %w", path, err)
 	}
+	if pre != nil {
+		cur, err := decode(original)
+		if err != nil {
+			return fmt.Errorf("fleet config %q does not load, so the %s were not saved: %w", path, what, err)
+		}
+		if err := pre(cur); err != nil {
+			return err
+		}
+	}
 	candidate, err := replaceTopLevelBlock(string(original), key, block)
 	if err != nil {
 		return fmt.Errorf("fleet config %q: %w", path, err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
+	tmp, err := fleetTemp(target, mode)
 	if err != nil {
 		return fmt.Errorf("create temp config: %w", err)
 	}
@@ -59,7 +73,7 @@ func saveTopLevelBlock(path, key, block, what string, check func(*Config) error)
 	if err := check(got); err != nil {
 		return err
 	}
-	return replaceUnchanged(path, tmpPath, original, true)
+	return replaceUnchanged(path, target, tmpPath, original, true)
 }
 
 // replaceTopLevelBlock swaps the top-level key block in doc for block, or

@@ -296,4 +296,57 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     await waitFor(() => expect(bridge.getCLIStatus.mock.calls.length).toBeGreaterThan(calls));
     expect(screen.getByTestId("ai-test-result").textContent).toContain("I cannot access files.");
   });
+
+  // Settings review slice 0 (Codex's probes): a typed key belongs to its
+  // provider; a late Save reply keeps newer edits; a failed reread qualifies
+  // what is in use.
+  it("never moves a typed key to another provider", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "anthropic" } });
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "anthropic-only-needle" } });
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "openai" } });
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("button", { name: "Save key" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "anthropic" } });
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+    expect(bridge.setAPIKey).not.toHaveBeenCalled();
+  });
+
+  it("keeps an edit made while a Save was pending", async () => {
+    const saved = { ...state().persisted, provider: "openai", keySource: "keychain", model: "model-1" };
+    bridge.getAISettings.mockResolvedValueOnce(state({ persisted: saved }));
+    let release: (v: typeof ok) => void = () => {};
+    bridge.saveAISettings.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-3-unsaved" } });
+    bridge.getAISettings.mockResolvedValueOnce(state({ persisted: { ...saved, model: "model-2" } }));
+    release(ok);
+    await waitFor(() => expect(bridge.getAISettings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("model-3-unsaved"));
+    expect(screen.getByTestId("ai-unsaved").textContent).toContain("model-3-unsaved");
+  });
+
+  it("qualifies what is in use when the reread after a Save fails", async () => {
+    bridge.getAISettings.mockResolvedValueOnce(state({ persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" }, active: { backend: "anthropic", ready: true, model: "claude-opus-5-5", origin: "https://api.anthropic.com" } }));
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "openai" } });
+    bridge.getAISettings.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByTestId("ai-reread-failed")).toBeTruthy();
+    expect(screen.getByTestId("ai-status").textContent).toContain("In use, as last read:");
+  });
+
+  it("says skipping verification is insecure, and shows it in use", async () => {
+    const local = { ...state().persisted, provider: "openaiCompatible", keySource: "none", baseUrl: "https://llm.lan:8443", tlsSkipVerify: true, model: "m" };
+    bridge.getAISettings.mockResolvedValue(state({ persisted: local, active: { backend: "openaiCompatible", ready: true, model: "m", origin: "https://llm.lan:8443" } }));
+    render(<AISettingsPanel />);
+    expect((await screen.findByTestId("ai-tls-off")).textContent).toContain("certificate not verified");
+    expect(screen.getByLabelText("Skip certificate verification").closest("label")?.textContent).toContain("insecure");
+  });
 });

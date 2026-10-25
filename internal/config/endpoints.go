@@ -45,6 +45,12 @@ type EndpointConfig struct {
 	Match map[string]string `yaml:"match"`
 }
 
+// Located says the endpoint names where it is: a URL or a Service. An
+// Alertmanager or metrics block without either is discovered in the
+// cluster; Loki is never discovered, so its block needs one (Settings
+// review slice 0).
+func (e EndpointConfig) Located() bool { return e.Endpoint != "" || e.ServiceRef != nil }
+
 // Spec is the metrics endpoint in the shared shape.
 func (m MetricsConfig) Spec() EndpointConfig {
 	return EndpointConfig{Endpoint: m.Endpoint, TLSSkipVerify: m.TLSSkipVerify, ServiceRef: m.ServiceRef, Auth: m.Auth, Tenant: m.Tenant}
@@ -162,6 +168,9 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	}
 	if p := EndpointURLProblem(e.Endpoint); p != "" {
 		w = append(w, fmt.Sprintf("cluster %q: %s: %s", cluster, prefix, p))
+	}
+	if prefix == EndpointLoki && !e.Located() {
+		w = append(w, fmt.Sprintf("cluster %q: loki has no endpoint or serviceRef: Klyx does not discover Loki, so it reads no log history for this cluster", cluster))
 	}
 	return w
 }

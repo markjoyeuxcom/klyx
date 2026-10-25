@@ -12,6 +12,9 @@ import { AppearancePanel } from "./AppearancePanel";
 import { GitSettingsPanel } from "./GitSettingsPanel";
 import { NotificationSettingsPanel } from "./NotificationSettingsPanel";
 
+// a configuration problem, said before anything else on the page
+const problem: React.CSSProperties = { display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, padding: "8px 10px", marginBottom: 12, border: "0.5px solid currentColor", borderRadius: "var(--border-radius-md)" };
+
 // SettingsView is the fleet-configuration surface: the loaded fleet.yaml
 // (path, clusters, load warnings) and a fresh kubeconfig context scan with
 // one-click "add to fleet", and the app's appearance. Adds append to the file
@@ -58,7 +61,7 @@ export function SettingsView() {
       label="Settings"
       title="Settings"
       summary={summary}
-      headerEnd={<button className="l-btn" onClick={() => void load()} disabled={loading}>{loading ? "Reading…" : "Re-scan"}</button>}
+      headerEnd={<button className="l-btn" onClick={() => void load()} disabled={loading}>{loading ? "Reading…" : "Re-scan kubeconfig contexts"}</button>}
       notice={banner ? (
         <div data-testid="settings-banner" role="status" className="t-body" style={{ color: banner.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
           {banner.kind === "error" ? "▲ " : ""}{banner.text}
@@ -78,6 +81,27 @@ export function SettingsView() {
   return frame("ready", null, (
     <div className="ov-page" style={{ fontSize: 12, maxWidth: 900 }}>
 
+      {cfg.loadError && (
+        // Settings review slice 0: never an empty fleet without saying why
+        <div data-testid="settings-load-error" role="alert" style={{ ...problem, color: "var(--color-text-danger)" }}>
+          <IconAlertTriangle size={13} stroke={1.7} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
+          <div>
+            <div style={{ fontWeight: 600 }}>fleet.yaml did not load when Klyx started, so Klyx connected no cluster.</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere", margin: "4px 0" }}>{cfg.loadError}</div>
+            <div>Fix the file in an editor, then restart Klyx. Settings cannot repair it, and adding clusters waits until it loads.</div>
+          </div>
+        </div>
+      )}
+      {!cfg.loadError && cfg.fileError && (
+        <div data-testid="settings-file-error" role="status" style={{ ...problem, color: "var(--color-text-warning)" }}>
+          <IconAlertTriangle size={13} stroke={1.7} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
+          <div>
+            fleet.yaml does not load as it is now, so Klyx keeps running the fleet it read at startup. Fix it before Klyx restarts:{" "}
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>{cfg.fileError}</span>
+          </div>
+        </div>
+      )}
+
       <Section title="Appearance">
         <AppearancePanel />
       </Section>
@@ -85,8 +109,13 @@ export function SettingsView() {
       <Section title="Fleet configuration">
         <PathRow label="file" path={cfg.path} />
         <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 8 }}>
-          Cluster identity, tags, protection, and metrics endpoints live here. Klyx writes this file in four places only: it appends clusters you add below, Settings &gt; AI saves the ai block, Settings &gt; Git saves the git block (comments inside those two blocks are not kept), and External endpoints replaces a cluster's plaintext metrics token line with auth when you move it to the keychain. Your cluster entries and every other line stay as you wrote them; edit the file directly for anything else.
+          The clusters below are the ones Klyx is running. It reads their identity, tags, protection and endpoints from fleet.yaml when it starts, so an edit to a cluster entry takes effect when Klyx restarts (an edited endpoint also when you Test it under External endpoints); a row says when the file differs. Klyx writes the file in five places only: it appends the clusters you add below; Settings &gt; AI, Git and Notifications each rewrite their own block (comments inside that block are not kept); and External endpoints replaces a cluster&apos;s plaintext metrics token line with auth when you move it to the keychain. Every other line stays as you wrote it; edit the file directly for anything else.
         </div>
+        {cfg.fileOnly && cfg.fileOnly.length > 0 && (
+          <div data-testid="settings-file-only" role="status" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>
+            In fleet.yaml but not running: <span style={{ fontFamily: "var(--font-mono)" }}>{cfg.fileOnly.join(", ")}</span>. Klyx connects {cfg.fileOnly.length === 1 ? "it" : "them"} when it restarts.
+          </div>
+        )}
         {cfg.warnings.length > 0 && (
           <div style={{ marginBottom: 8 }}>
             {cfg.warnings.map((w, i) => (
@@ -110,6 +139,9 @@ export function SettingsView() {
               {c.protected ? (c.protectedInferred ? "inferred" : "yes") : "no"}
             </span>
             <span style={{ color: "var(--color-text-tertiary)" }}>{c.hasMetrics ? "yes" : "—"}</span>
+            {c.drift && (
+              <span data-testid="settings-drift" style={{ gridColumn: "1 / -1", fontFamily: "var(--font-body)", color: "var(--color-text-warning)", fontSize: 11 }}>{c.drift}</span>
+            )}
           </div>
         ))}
       </Section>
@@ -162,7 +194,10 @@ export function SettingsView() {
                 )}
               </div>
             ))}
-            {newContexts.length > 0 && (
+            {newContexts.length > 0 && cfg.loadError && (
+              <div style={{ marginTop: 10, fontSize: 11, color: "var(--color-text-tertiary)" }}>Adding clusters waits until fleet.yaml loads.</div>
+            )}
+            {newContexts.length > 0 && !cfg.loadError && (
               <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
                 <button
                   onClick={() => void onAdd()}
@@ -181,7 +216,7 @@ export function SettingsView() {
   ), (
     <>
       <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{cfg.clusters.length}</span>
-      <span className="t-secondary">cluster{cfg.clusters.length === 1 ? "" : "s"} in fleet.yaml</span>
+      <span className="t-secondary">cluster{cfg.clusters.length === 1 ? "" : "s"} running{cfg.loadError ? " · fleet.yaml did not load" : ""}</span>
       {newContexts.length > 0 && <span className="t-secondary">{newContexts.length} kubeconfig context{newContexts.length === 1 ? "" : "s"} not in the fleet</span>}
     </>
   ));

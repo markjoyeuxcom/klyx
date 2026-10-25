@@ -168,4 +168,13 @@ describe("GitSettingsPanel without a repository key", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(bridge.approveGitRepo).toHaveBeenCalledWith("git@github.com:acme/x.git", "", ""));
   });
+
+  // Settings review slice 0: a failed reread qualifies what is shown.
+  it("qualifies what is shown when a reread fails", async () => {
+    bridge.getGitSettings.mockResolvedValueOnce(state()).mockResolvedValue(null);
+    bridge.fetchGitRepo.mockResolvedValue(ok);
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Fetch now" }));
+    expect((await screen.findByTestId("git-reread-failed")).textContent).toContain("as last read");
+  });
 });

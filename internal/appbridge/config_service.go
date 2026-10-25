@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,10 @@ type FleetClusterDTO struct {
 	Protected         bool `json:"protected"`
 	ProtectedInferred bool `json:"protectedInferred"`
 	HasMetrics        bool `json:"hasMetrics"`
+	// Drift says how fleet.yaml now differs from this running entry, which
+	// a cluster's settings take only at a restart (Settings review slice 0);
+	// "" when they agree.
+	Drift string `json:"drift,omitempty"`
 }
 
 // KubeContextDTO is one kubeconfig context with its fleet membership.
@@ -42,6 +47,13 @@ type FleetConfigDTO struct {
 	ScanError      string            `json:"scanError,omitempty"`
 	Clusters       []FleetClusterDTO `json:"clusters"`
 	Contexts       []KubeContextDTO  `json:"contexts"`
+	// LoadError: fleet.yaml did not load when Klyx started, so it connected
+	// no cluster (Settings review slice 0). FileError: the file does not load
+	// now. FileOnly: clusters in the file that are not running, until a
+	// restart.
+	LoadError string   `json:"loadError,omitempty"`
+	FileError string   `json:"fileError,omitempty"`
+	FileOnly  []string `json:"fileOnly,omitempty"`
 }
 
 // ConfigService exposes the fleet configuration to Settings. It reads the
@@ -63,11 +75,16 @@ type ConfigService struct {
 	mu    sync.Mutex
 	added []config.ClusterConfig // hot-added this session, connect succeeded
 
+	// loadErr is why fleet.yaml did not load at startup, as shown; "" when
+	// it loaded, or did not exist yet (a first run)
+	loadErr string
+
 	// seams for tests
 	kubeconfigPath func() string
 	kubeContexts   func(string) ([]string, error)
 	appendClusters func(string, []string) error
 	connect        func(config.ClusterConfig) error // adds to the running registry
+	readSnapshot   func(string) (config.Snapshot, error)
 }
 
 func NewConfigService(path string, cfg *config.Config, connect func(config.ClusterConfig) error) *ConfigService {
@@ -78,8 +95,24 @@ func NewConfigService(path string, cfg *config.Config, connect func(config.Clust
 		kubeContexts:   config.KubeContexts,
 		appendClusters: config.AppendClusters,
 		connect:        connect,
+		readSnapshot:   config.ReadSnapshot,
 	}
 }
+
+// WithConfigLoadError records why fleet.yaml did not load at startup (main
+// then starts with an empty fleet): Settings and the fleet's empty state say
+// so, and adding clusters is refused until the file is fixed. A missing
+// file is a first run, not an error.
+func WithConfigLoadError(s *ConfigService, err error) *ConfigService {
+	if err != nil && !config.IsMissing(err) {
+		s.loadErr = config.DisplayError(err)
+	}
+	return s
+}
+
+// LoadError is why fleet.yaml did not load when Klyx started; "" when it
+// did, or there was none yet.
+func (s *ConfigService) LoadError() string { return s.loadErr }
 
 // IsProtected reports whether the named cluster is protected, consulting the
 // LIVE fleet (startup config plus this session's hot-added clusters) so a prd
@@ -150,16 +183,26 @@ func (s *ConfigService) fleetClusters() []config.ClusterConfig {
 // GetFleetConfig returns the fleet file state plus a fresh kubeconfig context
 // scan. Scan failure is reported in ScanError, never fabricated as "no
 // contexts".
-func (s *ConfigService) GetFleetConfig() FleetConfigDTO {
+func (s *ConfigService) GetFleetConfig() FleetConfigDTO { return s.fleetConfig(true) }
+
+// fleetConfig is GetFleetConfig; withFile also reads fleet.yaml for how it
+// now differs from the running fleet.
+func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 	dto := FleetConfigDTO{
 		Path:           s.path,
 		KubeconfigPath: s.kubeconfigPath(),
 		Warnings:       s.cfg.Warnings(),
 		Clusters:       []FleetClusterDTO{},
 		Contexts:       []KubeContextDTO{},
+		LoadError:      s.loadErr,
+	}
+	running := s.fleetClusters()
+	var disk map[string]config.ClusterConfig
+	if withFile {
+		disk = s.fileDrift(&dto, running)
 	}
 	inFleet := map[string]bool{}
-	for _, c := range s.fleetClusters() {
+	for _, c := range running {
 		inFleet[c.Name] = true
 		inFleet[c.Context] = true
 		tags := c.EffectiveTags()
@@ -175,6 +218,7 @@ func (s *ConfigService) GetFleetConfig() FleetConfigDTO {
 			// Inferred = locked by a prd/prod/production token, not the flag.
 			ProtectedInferred: c.IsProtected() && !c.Protected,
 			HasMetrics:        c.Metrics != nil,
+			Drift:             clusterDrift(c, disk),
 		})
 	}
 	sort.Slice(dto.Clusters, func(a, b int) bool { return dto.Clusters[a].Name < dto.Clusters[b].Name })
@@ -195,7 +239,7 @@ func (s *ConfigService) GetFleetConfig() FleetConfigDTO {
 // data it could not read; Settings shows the error).
 func (s *ConfigService) NewContextCount() int {
 	n := 0
-	for _, c := range s.GetFleetConfig().Contexts {
+	for _, c := range s.fleetConfig(false).Contexts {
 		if !c.InFleet {
 			n++
 		}
@@ -234,6 +278,9 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	// and one would silently lose the other's entries. addMu, not mu: the
 	// connects below can take tens of seconds, and protection checks / the
 	// fleet push must not wait behind them.
+	if s.loadErr != "" {
+		return ActionResultDTO{Error: "fleet.yaml did not load when Klyx started, so nothing was added: fix the file in an editor and restart Klyx (" + s.loadErr + ")"}
+	}
 	s.addMu.Lock()
 	defer s.addMu.Unlock()
 	if err := s.appendClusters(s.path, contexts); err != nil {
@@ -273,4 +320,74 @@ func (s *ConfigService) dropAdded(name string) {
 			return
 		}
 	}
+}
+
+// fileDrift reads fleet.yaml as it is now, for how it differs from the
+// running fleet (Settings review slice 0): a cluster's identity, placement
+// and protection are taken at startup, so a hand edit waits for a restart,
+// and Settings says so. (Its endpoints are not compared: External endpoints
+// reads them from the file, and Test adopts an edited one.) It returns
+// the file's clusters by name, or nil when the file does not load.
+func (s *ConfigService) fileDrift(dto *FleetConfigDTO, running []config.ClusterConfig) map[string]config.ClusterConfig {
+	snap, err := s.readSnapshot(s.path)
+	if err != nil {
+		if !(config.IsMissing(err) && len(running) == 0) {
+			dto.FileError = config.DisplayError(err)
+		}
+		return nil
+	}
+	disk := map[string]config.ClusterConfig{}
+	for _, c := range snap.Config.Clusters {
+		disk[c.Name] = c
+	}
+	inRun := map[string]bool{}
+	for _, c := range running {
+		inRun[c.Name] = true
+	}
+	for _, c := range snap.Config.Clusters {
+		if !inRun[c.Name] {
+			dto.FileOnly = append(dto.FileOnly, c.Name)
+		}
+	}
+	sort.Strings(dto.FileOnly)
+	return disk
+}
+
+// clusterDrift says how the file's entry for a running cluster differs from
+// it, in the fields a restart applies; "" when they agree or the file was
+// not read.
+func clusterDrift(run config.ClusterConfig, disk map[string]config.ClusterConfig) string {
+	if disk == nil {
+		return ""
+	}
+	f, ok := disk[run.Name]
+	if !ok {
+		return "not in fleet.yaml any more: it stays connected until Klyx restarts"
+	}
+	var changed []string
+	if f.IsProtected() != run.IsProtected() {
+		if f.IsProtected() {
+			changed = append(changed, "protection (the file protects it; it is not protected until Klyx restarts)")
+		} else {
+			changed = append(changed, "protection (the file no longer protects it; it stays protected until Klyx restarts)")
+		}
+	}
+	for _, d := range []struct {
+		name string
+		same bool
+	}{
+		{"context", f.Context == run.Context},
+		{"kubeconfig", f.Kubeconfig == run.Kubeconfig},
+		{"group", f.Group == run.Group},
+		{"environment", f.Environment == run.Environment},
+		{"tags", reflect.DeepEqual(f.EffectiveTags(), run.EffectiveTags())},
+	} {
+		if !d.same {
+			changed = append(changed, d.name)
+		}
+	}
+	if len(changed) == 0 {
+		return ""
+	}
+	return "fleet.yaml now differs (" + strings.Join(changed, ", ") + "): Klyx applies it at a restart"
 }

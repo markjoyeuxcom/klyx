@@ -23,7 +23,8 @@ import {
 // fleet.yaml's ai block and shows exactly where prompts go. A key goes in
 // through the keychain and never comes back to the page. Every change is
 // applied by the backend only after the provider builds and fleet.yaml is
-// written, so what the status line says is what Explain uses.
+// written, so what the status line says is what chat, Explain, Suggest-fix
+// and investigations use.
 
 export const PROVIDERS: { id: string; label: string; keyed: boolean; defaultOrigin?: string }[] = [
   { id: "off", label: "Off", keyed: false },
@@ -105,11 +106,14 @@ export function AISettingsPanel() {
   const provider = PROVIDERS.find((p) => p.id === draft.provider) ?? PROVIDERS[0];
   const keyStored = !!state.keysStored[draft.provider];
   const run = async (fn: () => Promise<{ ok: boolean; error: string }>, okText: string, keepDraft = false) => {
+    // an edit made while this runs is newer than its reply: the reload keeps
+    // it (Settings review slice 0)
+    const gen = draftGen.current;
     setBusy(true);
     const r = await fn();
     setBusy(false);
     setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
-    if (r.ok) await load(keepDraft);
+    if (r.ok) await load(keepDraft || gen !== draftGen.current);
   };
   const update = (patch: Partial<AISettings>) => {
     draftGen.current++;
@@ -117,6 +121,9 @@ export function AISettingsPanel() {
     setTest(null);
     // A list belongs to one provider, origin and key: any change voids it.
     if ("provider" in patch || "baseUrl" in patch || "keySource" in patch || "apiKeyEnv" in patch) setModels([]);
+    // and a typed key belongs to the provider and origin it was typed for:
+    // it never moves to another (Settings review slice 0)
+    if ("provider" in patch || "baseUrl" in patch || "keySource" in patch) setKeyInput("");
   };
   const chooseProvider = (id: string) => {
     const same = id === state.persisted.provider;
@@ -130,7 +137,7 @@ export function AISettingsPanel() {
       cliPath: same ? state.persisted.cliPath : "",
     });
   };
-  const save = (d: AISettings) => run(() => saveAISettings(d), "Saved. Explain and Suggest-fix now use these settings.");
+  const save = (d: AISettings) => run(() => saveAISettings(d), "Saved. Chat, Explain, Suggest-fix and investigations now use these settings.");
 
   const a = state.active;
   const customOrigin = provider.defaultOrigin && draft.baseUrl ? draft.baseUrl : "";
@@ -138,17 +145,27 @@ export function AISettingsPanel() {
   // settings says so, so a chosen provider never reads as applied (UI review
   // 2026-10-13: "AI is off" sat beside a chosen, unsaved Claude Code).
   const dirty = (Object.keys(draft) as (keyof AISettings)[]).some((k) => (draft[k] ?? "") !== (state.persisted[k] ?? ""));
+  // the saved settings are the ones in use unless they diverged (its notice)
+  const unverified = !state.diverged && a.backend === "openaiCompatible" && state.persisted.tlsSkipVerify;
 
   return (
     <div data-testid="ai-settings">
       <div data-testid="ai-status" role="status" style={{ fontSize: 12, marginBottom: 8, color: a.problem ? "var(--color-text-warning)" : "var(--color-text-primary)" }}>
-        <span className="t-secondary">In use: </span>
+        <span className="t-secondary">{loadFailed ? "In use, as last read: " : "In use: "}</span>
         {a.backend === "off" || !a.backend
-          ? "AI is off. Choose a provider to enable Explain and Suggest-fix."
+          ? "AI is off. Choose a provider to enable chat, Explain, Suggest-fix and investigations."
           : a.ready
-            ? <>Prompts go to <span style={{ fontFamily: "var(--font-mono)" }}>{a.origin}</span> · {providerLabel(a.backend)} · <span style={{ fontFamily: "var(--font-mono)" }}>{a.model}</span></>
+            ? <>Prompts go to <span style={{ fontFamily: "var(--font-mono)" }}>{a.origin}</span> · {providerLabel(a.backend)} · <span style={{ fontFamily: "var(--font-mono)" }}>{a.model}</span>{unverified && <span data-testid="ai-tls-off" style={{ color: "var(--color-text-warning)" }}> · certificate not verified</span>}</>
             : <>AI is unavailable: {a.problem}</>}
       </div>
+      {loadFailed && (
+        // a reread after a change failed: what is in use is no longer known
+        // (Settings review slice 0)
+        <Notice testId="ai-reread-failed">
+          Klyx could not read the AI settings again, so what is in use may have changed since.{" "}
+          <button className="l-btn" disabled={busy} onClick={() => void load(true)}>Retry</button>
+        </Notice>
+      )}
       {dirty && (
         <div data-testid="ai-unsaved" role="status" style={{ fontSize: 11, marginBottom: 8, color: "var(--color-text-warning)" }}>
           Unsaved changes - Save to apply {providerLabel(draft.provider)}{draft.model ? ` · ${draft.model}` : ""}. Test checks the draft without saving it.
@@ -316,8 +333,10 @@ export function AISettingsPanel() {
           {provider.id === "openaiCompatible" && (
             <label style={{ ...row, cursor: "pointer" }}>
               <span style={labelStyle}>TLS</span>
-              <input type="checkbox" checked={draft.tlsSkipVerify} onChange={(e) => update({ tlsSkipVerify: e.target.checked })} />
-              <span style={{ fontSize: 11 }}>Accept a self-signed certificate</span>
+              <input type="checkbox" aria-label="Skip certificate verification" checked={draft.tlsSkipVerify} onChange={(e) => update({ tlsSkipVerify: e.target.checked })} />
+              <span style={{ fontSize: 11 }}>
+                Skip certificate verification (insecure): Klyx accepts any certificate this server presents, for any host name, so the connection is encrypted but the server is not authenticated. Use it only for a server on a network you trust; prompts and the key go to whoever answers.
+              </span>
             </label>
           )}
 
@@ -332,7 +351,9 @@ export function AISettingsPanel() {
                 else update({ allowProtectedEgress: e.target.checked });
               }}
             />
-            <span style={{ fontSize: 11 }}>Send protected (prd) clusters' context to this provider. Off: Explain stays disabled there unless the model runs on this Mac.</span>
+            <span style={{ fontSize: 11 }}>
+              Send protected (prd) clusters' context to the AI in use. One permission for chat, Explain, Suggest-fix and investigations, and it follows whichever provider and origin are in use: it stays on if you change them later. Off: AI stays unavailable on protected clusters unless the model runs on this machine.
+            </span>
           </label>
 
           {/* AI A3 §6: on by default; off removes the tool, the snapshot
@@ -389,8 +410,8 @@ export function AISettingsPanel() {
 
       {confirmEgress && (
         <ConfirmDialog
-          title="Allow protected-cluster context to leave this Mac?"
-          detail={`Explain and Suggest-fix on protected clusters will send their resolved state to ${providerLabel(draft.provider)}${draft.baseUrl ? ` at ${draft.baseUrl}` : ""}. This saves the settings now.`}
+          title="Allow protected-cluster context to leave this machine?"
+          detail={`Chat, Explain, Suggest-fix and investigations on protected clusters will send their resolved state to ${providerLabel(draft.provider)}${draft.baseUrl ? ` at ${draft.baseUrl}` : ""}. The permission stays on if you later change the provider or origin: turn it off first if the new destination should not receive it. This saves the settings now.`}
           cluster={AI_EGRESS_PHRASE}
           protected
           danger

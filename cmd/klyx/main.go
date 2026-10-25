@@ -70,9 +70,11 @@ func main() {
 	}
 	execenv.ApplyDesktopToolPath()
 
-	cfg, err := config.Load(configPath())
-	if err != nil {
-		log.Printf("warn: could not load fleet config (%v); starting with empty fleet", err)
+	cfg, loadErr := config.Load(configPath())
+	if loadErr != nil {
+		// a missing file is a first run; any other failure is kept, and
+		// Settings and the fleet say it (Settings review slice 0)
+		log.Printf("warn: could not load fleet config (%v); starting with empty fleet", loadErr)
 		cfg = &config.Config{}
 	}
 	// The AI eval (eval design §3) runs on the configuration its preflight
@@ -159,13 +161,13 @@ func main() {
 	// cluster's config (env, group, EFFECTIVE protection) from its live fleet,
 	// which includes clusters hot-added through Settings.
 	var lineSvc *appbridge.LineService // set below; a hot-add rescans the line at once
-	configSvc := appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
+	configSvc := appbridge.WithConfigLoadError(appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
 		err := reg.Add(ctx, cc)
 		if lineSvc != nil {
 			lineSvc.Rescan()
 		}
 		return err
-	})
+	}), loadErr)
 	liveConfig.Store(configSvc)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)

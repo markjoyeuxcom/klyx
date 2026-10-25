@@ -106,6 +106,14 @@ export function GitSettingsPanel() {
           </>
         )}
       </div>
+      {loadFailed && (
+        // a reread after an action failed: what is shown is as last read
+        // (Settings review slice 0)
+        <div role="status" data-testid="git-reread-failed" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 6 }}>
+          Klyx could not read the Git settings again: what is shown is as last read and may be out of date.{" "}
+          <button className="l-btn" disabled={busy !== null} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
       <div style={{ ...hint, marginBottom: 8, lineHeight: 1.5 }}>
         Read-only: Klyx fetches commits and trees for the line&apos;s tracked refs and never writes to a repository. It runs only the URLs
         approved here, exactly as written, with your SSH agent and ~/.ssh/config
@@ -175,7 +183,7 @@ export function GitSettingsPanel() {
           cluster=""
           showScope={false}
           protected={false}
-          detail={`Klyx stops fetching ${removing.url} and deletes its cache${removing.size ? ` (${sizeText(removing.size)})` : ""}. Every other line of fleet.yaml stays as it is.`}
+          detail={`Klyx stops fetching ${removing.url} and deletes its cache${removing.size ? ` (${sizeText(removing.size)})` : ""}. Klyx rewrites fleet.yaml's git block without this entry (comments inside that block are not kept); every line outside it stays as it is.`}
           confirmLabel="Remove"
           onCancel={() => setRemoving(null)}
           onConfirm={() => {

@@ -44,7 +44,7 @@ func SaveAI(path string, a AIConfig) error {
 	}
 	want := a
 	want.applyDefaults()
-	return saveTopLevelBlock(path, "ai", block, "AI settings", func(got *Config) error {
+	return saveTopLevelBlock(path, "ai", block, "AI settings", nil, func(got *Config) error {
 		if got.AI == nil || !AIEqual(*got.AI, want) {
 			return errors.New("the written AI block does not read back as intended (file unchanged)")
 		}
