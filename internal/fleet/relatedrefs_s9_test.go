@@ -55,8 +55,8 @@ func TestRefForResolvesThroughDiscovery(t *testing.T) {
 		{"a same-named kind in another group is never apps'", "example.com/v1", "Deployment", false, "", "", ""},
 		{"a malformed apiVersion", "a/b/c", "Deployment", false, "", "", ""},
 	} {
-		ref, ok := c.refFor(tc.api, tc.kind, "team", "web", "owner")
-		if ok != tc.ok || ref.Group != tc.group || ref.Plural != tc.plural || ref.Namespace != tc.ns {
+		ref, ok, err := c.refFor(context.Background(), tc.api, tc.kind, "team", "web", "owner")
+		if err != nil || ok != tc.ok || ref.Group != tc.group || ref.Plural != tc.plural || ref.Namespace != tc.ns {
 			t.Errorf("%s: %v %+v", tc.name, ok, ref)
 		}
 	}
@@ -85,7 +85,11 @@ func TestRelatedRefsKEDA(t *testing.T) {
 			map[string]any{"type": "prometheus", "authenticationRef": map[string]any{"name": "cta", "kind": "ClusterTriggerAuthentication"}},
 		}}}}
 	got := map[string]string{}
-	for _, r := range c.relatedRefs(context.Background(), "keda.sh", "v1alpha1", "scaledobjects", "team", "web", so) {
+	refs, err := c.relatedRefs(context.Background(), "keda.sh", "v1alpha1", "scaledobjects", "team", "web", so)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range refs {
 		got[r.Relation+" "+r.Kind+" "+r.Name] = r.Namespace
 	}
 	for k, ns := range map[string]string{"scale target Deployment web": "team", "HPA HorizontalPodAutoscaler custom-name": "team",
@@ -103,7 +107,11 @@ func TestRelatedRefsKEDA(t *testing.T) {
 			map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ScaledObject", "name": "web", "uid": "so-1", "controller": true}}},
 		"spec": map[string]any{"scaleTargetRef": map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "name": "web"}}}}
 	got = map[string]string{}
-	for _, r := range c.relatedRefs(context.Background(), "autoscaling", "v2", "horizontalpodautoscalers", "team", "custom-name", hpa) {
+	refs, err = c.relatedRefs(context.Background(), "autoscaling", "v2", "horizontalpodautoscalers", "team", "custom-name", hpa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range refs {
 		got[r.Relation+" "+r.Group+" "+r.Kind+" "+r.Name] = r.Plural
 	}
 	if got["owner keda.sh ScaledObject web"] != "scaledobjects" || got["scale target argoproj.io Rollout web"] != "rollouts" {

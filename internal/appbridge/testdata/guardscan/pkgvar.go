@@ -2,8 +2,8 @@ package fixture
 
 import "context"
 
-// a package-level root context
-var root = context.Background()
+// a package-level context
+var root = pick()
 
 func restart(c string) error {
 	t, err := guardFor(c)

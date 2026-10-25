@@ -24,6 +24,7 @@ import (
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/keda"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/urlscrub"
 	"github.com/moomora/klyx/internal/workloads"
 )
@@ -1328,6 +1329,13 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		}
 	}
 
+	// a related reference resolved through discovery under ctx's fence; a
+	// refusal ends the read, never a core-kind guess (Settings F1
+	// re-review, RR1)
+	related, err := c.relatedRefs(ctx, group, version, plural, ns, name, u)
+	if err != nil {
+		return crd.InstanceDetail{}, err
+	}
 	y, _ := crd.ToYAML(obj)
 	d := crd.InstanceDetail{
 		Kind:           u.GetKind(),
@@ -1343,7 +1351,7 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 		SecretKeys:     secretKeys,
 		ServiceBacking: serviceBacking,
 		HPAScaling:     hpaScaling,
-		Related:        c.relatedRefs(ctx, group, version, plural, ns, name, u),
+		Related:        related,
 		// Facts are built from the sanitised object (masked for Secrets), so no
 		// secret value can reach a fact even via a future buggy builder.
 		Facts: crd.BuildFacts(group, plural, sanitised),
@@ -1377,6 +1385,12 @@ func (c *ClusterConn) GetInstanceDetail(ctx context.Context, group, version, plu
 	}
 	d.Managers = crd.ManagersOf(obj)
 	d.FieldsJSON, d.FieldsOmitted = crd.FieldsJSONOf(obj, group == "" && version == "v1" && plural == "secrets")
+	// A component read above degrades to nothing when it fails, a fence's
+	// refusal included; under a fence that no longer holds the detail is
+	// the refusal, never a partial answer (RR1).
+	if err := readfence.Check(ctx); err != nil {
+		return crd.InstanceDetail{}, err
+	}
 	return d, nil
 }
 
@@ -1401,8 +1415,17 @@ func (c *ClusterConn) objectWithSummary(ctx context.Context, gvr schema.GroupVer
 	return u, summary
 }
 
-func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, ns, name string, u *unstructured.Unstructured) []crd.RelatedRef {
+// relatedRefs are the object's related references. A discovery read its
+// fence refused is the error, beside the references resolved before it.
+func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, ns, name string, u *unstructured.Unstructured) ([]crd.RelatedRef, error) {
 	out := []crd.RelatedRef{}
+	var fenced error
+	refused := func(err error) bool {
+		if err != nil && fenced == nil {
+			fenced = err
+		}
+		return err != nil
+	}
 	add := func(ref crd.RelatedRef) {
 		if ref.Name == "" || ref.Kind == "" || ref.Plural == "" {
 			return
@@ -1416,7 +1439,9 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		out = append(out, ref)
 	}
 
-	for _, owner := range c.ownerRefs(ns, u) {
+	owners, err := c.ownerRefs(ctx, ns, u)
+	refused(err)
+	for _, owner := range owners {
 		add(owner)
 	}
 
@@ -1435,7 +1460,7 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		api := nestedString(u.Object, "spec", "scaleTargetRef", "apiVersion")
 		kind := nestedString(u.Object, "spec", "scaleTargetRef", "kind")
 		target := nestedString(u.Object, "spec", "scaleTargetRef", "name")
-		if ref, ok := c.refFor(api, kind, ns, target, "scale target"); ok {
+		if ref, ok, err := c.refFor(ctx, api, kind, ns, target, "scale target"); !refused(err) && ok {
 			add(ref)
 		}
 	case group == keda.Group && plural == keda.ResourceScaledObjects:
@@ -1448,17 +1473,21 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		if kind == "" {
 			kind = "Deployment"
 		}
-		if ref, ok := c.refFor(api, kind, ns, nestedString(u.Object, "spec", "scaleTargetRef", "name"), "scale target"); ok {
+		if ref, ok, err := c.refFor(ctx, api, kind, ns, nestedString(u.Object, "spec", "scaleTargetRef", "name"), "scale target"); !refused(err) && ok {
 			add(ref)
 		}
 		for _, ref := range c.kedaHPARefs(ctx, ns, string(u.GetUID())) {
 			add(ref)
 		}
-		for _, ref := range c.kedaAuthRefs(u, ns) {
+		auth, err := c.kedaAuthRefs(ctx, u, ns)
+		refused(err)
+		for _, ref := range auth {
 			add(ref)
 		}
 	case group == keda.Group && plural == keda.ResourceScaledJobs:
-		for _, ref := range c.kedaAuthRefs(u, ns) {
+		auth, err := c.kedaAuthRefs(ctx, u, ns)
+		refused(err)
+		for _, ref := range auth {
 			add(ref)
 		}
 	case group == "cert-manager.io" && plural == "certificates":
@@ -1543,7 +1572,7 @@ func (c *ClusterConn) relatedRefs(ctx context.Context, group, version, plural, n
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out
+	return out, fenced
 }
 
 func resourceRef(kind, namespace, name, group, version, plural, scope, relation string) crd.RelatedRef {
@@ -1560,20 +1589,28 @@ func resourceRef(kind, namespace, name, group, version, plural, scope, relation 
 // without one. The core switch is only the fallback for a core kind whose
 // apiVersion names its own group, when discovery cannot answer; anything
 // else is unresolved and renders as plain text, never a guessed plural.
-func (c *ClusterConn) refFor(apiVersion, kind, namespace, name, relation string) (crd.RelatedRef, bool) {
+//
+// Discovery is read under ctx's fence (discoveryFor); a refusal is the
+// error, never the core-kind fallback (Settings F1 re-review, RR1).
+func (c *ClusterConn) refFor(ctx context.Context, apiVersion, kind, namespace, name, relation string) (crd.RelatedRef, bool, error) {
 	if apiVersion == "" || kind == "" || name == "" {
-		return crd.RelatedRef{}, false
+		return crd.RelatedRef{}, false, nil
 	}
 	if c.typed != nil {
-		if gvr, res, err := c.resolveGVK(apiVersion, kind); err == nil {
+		gvr, res, err := c.resolveGVKIn(c.discoveryFor(ctx), apiVersion, kind)
+		if readfence.Failed(err) {
+			return crd.RelatedRef{}, false, err
+		}
+		if err == nil {
 			scope, ns := "Cluster", ""
 			if res.Namespaced {
 				scope, ns = "Namespaced", namespace
 			}
-			return resourceRef(kind, ns, name, gvr.Group, gvr.Version, gvr.Resource, scope, relation), true
+			return resourceRef(kind, ns, name, gvr.Group, gvr.Version, gvr.Resource, scope, relation), true, nil
 		}
 	}
-	return coreKindRef(apiVersion, kind, namespace, name, relation)
+	ref, ok := coreKindRef(apiVersion, kind, namespace, name, relation)
+	return ref, ok, nil
 }
 
 // coreKindRef is the core kinds' fallback: only when the apiVersion's group
@@ -1616,15 +1653,19 @@ func kindResourceRef(kind, namespace, name, relation string) (crd.RelatedRef, bo
 
 // ownerRefs resolves each owner reference with its own apiVersion (S9 §7):
 // an HPA links to its ScaledObject, a Job to its ScaledJob.
-func (c *ClusterConn) ownerRefs(namespace string, u *unstructured.Unstructured) []crd.RelatedRef {
+func (c *ClusterConn) ownerRefs(ctx context.Context, namespace string, u *unstructured.Unstructured) ([]crd.RelatedRef, error) {
 	owners := u.GetOwnerReferences()
 	out := make([]crd.RelatedRef, 0, len(owners))
 	for _, owner := range owners {
-		if ref, ok := c.refFor(owner.APIVersion, owner.Kind, namespace, owner.Name, "owner"); ok {
+		ref, ok, err := c.refFor(ctx, owner.APIVersion, owner.Kind, namespace, owner.Name, "owner")
+		if err != nil {
+			return out, err
+		}
+		if ok {
 			out = append(out, ref)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // kedaHPARefs are the HPAs a ScaledObject controls: by controller UID,
@@ -1650,7 +1691,7 @@ func (c *ClusterConn) kedaHPARefs(ctx context.Context, ns, uid string) []crd.Rel
 
 // kedaAuthRefs are a scaler's authentication references, resolved
 // through discovery (a ClusterTriggerAuthentication is cluster-scoped).
-func (c *ClusterConn) kedaAuthRefs(u *unstructured.Unstructured, ns string) []crd.RelatedRef {
+func (c *ClusterConn) kedaAuthRefs(ctx context.Context, u *unstructured.Unstructured, ns string) ([]crd.RelatedRef, error) {
 	triggers, _, _ := unstructured.NestedSlice(u.Object, "spec", "triggers")
 	var out []crd.RelatedRef
 	for _, t := range triggers {
@@ -1667,11 +1708,15 @@ func (c *ClusterConn) kedaAuthRefs(u *unstructured.Unstructured, ns string) []cr
 		if kind != keda.KindClusterTriggerAuth {
 			kind = keda.KindTriggerAuth
 		}
-		if ref, ok := c.refFor(keda.Group+"/"+keda.APIVersion, kind, ns, name, "authentication"); ok {
+		ref, ok, err := c.refFor(ctx, keda.Group+"/"+keda.APIVersion, kind, ns, name, "authentication")
+		if err != nil {
+			return out, err
+		}
+		if ok {
 			out = append(out, ref)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (c *ClusterConn) serviceRelatedRefs(ctx context.Context, ns, name string) []crd.RelatedRef {

@@ -42,5 +42,6 @@ func apply(c string, dryRun bool, conns func() error) error {
 	defer cancel()
 	vctx, vcancel, _ := fenced(ctx, conns)
 	defer vcancel()
-	return write(vctx)
+	// a further fence and a tracker on a context already known
+	return write(readfence.WithWriteTracker(readfence.With(vctx, conns)))
 }

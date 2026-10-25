@@ -710,20 +710,13 @@ func (c *ClusterConn) DeleteAdhocObject(ctx context.Context, group, version, plu
 	return nil
 }
 
-// resolveGVK maps the document's own apiVersion+kind to the served GVR + scope
-// via the TTL-cached discovery. The doc declares its version, so this is exact -
-// no preferred-version guessing. A miss names the likely causes (typo, CRD not
-// installed, or discovery cache staleness for a just-installed CRD).
-func (c *ClusterConn) resolveGVK(apiVersion, kind string) (schema.GroupVersionResource, metav1.APIResource, error) {
-	if c.typed == nil {
-		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("discovery unavailable: no cluster connection")
-	}
-	return c.resolveGVKIn(c.discovery(), apiVersion, kind)
-}
-
-// resolveGVKIn is resolveGVK through disc: a write passes its
-// context-bound discovery (discoveryFor), whose fence refusal is returned
-// as itself, never as "not served" (Settings F1 review, finding F2).
+// resolveGVKIn maps a document's own apiVersion+kind to the served GVR +
+// scope through disc, the TTL-cached discovery bound to the caller's
+// context (discoveryFor). The doc declares its version, so this is exact -
+// no preferred-version guessing. A miss names the likely causes (typo, CRD
+// not installed, or discovery cache staleness for a just-installed CRD); a
+// fence refusal is returned as itself, never as "not served" (Settings F1
+// review, finding F2).
 func (c *ClusterConn) resolveGVKIn(disc discoveryLike, apiVersion, kind string) (schema.GroupVersionResource, metav1.APIResource, error) {
 	if c.typed == nil {
 		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("discovery unavailable: no cluster connection")

@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/readfence"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -394,5 +395,143 @@ func TestAGeneratorVerbsVersionCheckCarriesItsFence(t *testing.T) {
 	}
 	if out, notSent := WriteOutcome(err); out != OutcomeRefused || !notSent {
 		t.Fatalf("classified %s notSent=%v", out, notSent)
+	}
+}
+
+// f1HPA is an HPA whose scale target resolves through discovery.
+func f1HPA() map[string]any {
+	return map[string]any{"apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler",
+		"metadata": map[string]any{"name": "scale", "namespace": "ns", "uid": "hpa-id",
+			"ownerReferences": []any{map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ScaledObject", "name": "so", "uid": "so-id"}}},
+		"spec": map[string]any{"scaleTargetRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web"}}}
+}
+
+// Settings F1 re-review, RR1 (Codex's probe, adopted, with a warm
+// control): an instance detail's related references resolve through
+// discovery under the read's fence. A move after the root read stops the
+// detail - no discovery request, cached or not, and never a core-kind guess
+// - and the detail is the fence's refusal.
+func TestAnInstanceDetailsRelatedDiscoveryKeepsItsFence(t *testing.T) {
+	const root = "/apis/autoscaling/v2/namespaces/ns/horizontalpodautoscalers/scale"
+	for _, warm := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cold", true: "warm"}[warm], func(t *testing.T) {
+			f := &f1Fence{}
+			moveOnRoot := false
+			var calls []string
+			c := f1Conn(t, func(r *http.Request) (*http.Response, error) {
+				calls = append(calls, r.Method+" "+r.URL.Path)
+				switch r.URL.Path {
+				case root:
+					if moveOnRoot {
+						f.move()
+					}
+					return f1JSON(r, 200, f1HPA()), nil
+				case "/apis/apps/v1":
+					return f1JSON(r, 200, &metav1.APIResourceList{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "deployments", Kind: "Deployment", Namespaced: true}}}), nil
+				case "/apis/keda.sh/v1alpha1":
+					return f1JSON(r, 200, &metav1.APIResourceList{GroupVersion: "keda.sh/v1alpha1", APIResources: []metav1.APIResource{{Name: "scaledobjects", Kind: "ScaledObject", Namespaced: true}}}), nil
+				}
+				return f1JSON(r, 404, metav1.Status{Status: metav1.StatusFailure, Code: 404, Reason: metav1.StatusReasonNotFound}), nil
+			})
+			if warm {
+				d, err := c.GetInstanceDetail(context.Background(), "autoscaling", "v2", "horizontalpodautoscalers", "ns", "scale")
+				if err != nil {
+					t.Fatal(err)
+				}
+				linked := map[string]bool{}
+				for _, r := range d.Related {
+					linked[r.Relation+" "+r.Plural] = true
+				}
+				if !linked["scale target deployments"] || !linked["owner scaledobjects"] {
+					t.Fatalf("control: the references resolve through discovery: %+v", d.Related)
+				}
+			}
+			calls = nil
+			moveOnRoot = true
+			_, err := c.GetInstanceDetail(f.ctx(), "autoscaling", "v2", "horizontalpodautoscalers", "ns", "scale")
+			for _, call := range calls {
+				if strings.HasPrefix(call, "GET /apis/apps") || strings.HasPrefix(call, "GET /apis/keda.sh") {
+					t.Fatalf("discovery after the move: %v", calls)
+				}
+			}
+			if !readfence.Failed(err) {
+				t.Fatalf("a detail read under a moved fence: %v (calls %v)", err, calls)
+			}
+		})
+	}
+}
+
+// RR1: a related reference never falls back to the core-kind table past a
+// fence - an owner, a scale target or an authentication reference.
+func TestARelatedReferenceNeverGuessesPastAFence(t *testing.T) {
+	c := f1Conn(t, func(r *http.Request) (*http.Response, error) { return nil, fmt.Errorf("unexpected %s", r.URL.Path) })
+	c.disc = f1Disc{}
+	if ref, ok, err := c.refFor(context.Background(), "apps/v1", "Deployment", "ns", "web", "owner"); err != nil || !ok || ref.Plural != "deployments" {
+		t.Fatalf("control: the core-kind fallback: %+v %v %v", ref, ok, err)
+	}
+	f := &f1Fence{}
+	f.move()
+	if _, ok, err := c.refFor(f.ctx(), "apps/v1", "Deployment", "ns", "web", "owner"); ok || !readfence.Failed(err) {
+		t.Fatalf("a core-kind guess past the fence: %v %v", ok, err)
+	}
+	hpa := &unstructured.Unstructured{Object: f1HPA()}
+	if _, err := c.relatedRefs(f.ctx(), "autoscaling", "v2", "horizontalpodautoscalers", "ns", "scale", hpa); !readfence.Failed(err) {
+		t.Fatalf("an owner past the fence: %v", err)
+	}
+	if _, err := c.ownerRefs(f.ctx(), "ns", hpa); !readfence.Failed(err) {
+		t.Fatalf("ownerRefs: %v", err)
+	}
+	sj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ScaledJob",
+		"metadata": map[string]any{"name": "job", "namespace": "ns"},
+		"spec":     map[string]any{"triggers": []any{map[string]any{"type": "prometheus", "authenticationRef": map[string]any{"name": "ta"}}}}}}
+	if _, err := c.relatedRefs(f.ctx(), "keda.sh", "v1alpha1", "scaledjobs", "ns", "job", sj); !readfence.Failed(err) {
+		t.Fatalf("an authentication reference past the fence: %v", err)
+	}
+}
+
+// RR1: a component read that degrades to nothing under a moved fence - a
+// Service's backing - leaves the detail as the fence's refusal, never a
+// partial answer.
+func TestADegradedComponentReadIsTheFencesRefusal(t *testing.T) {
+	f := &f1Fence{}
+	c := f1Conn(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/v1/namespaces/ns/services/web" {
+			f.move()
+			return f1JSON(r, 200, map[string]any{"apiVersion": "v1", "kind": "Service", "metadata": map[string]any{"name": "web", "namespace": "ns", "uid": "svc-id"}}), nil
+		}
+		return f1JSON(r, 404, metav1.Status{Status: metav1.StatusFailure, Code: 404, Reason: metav1.StatusReasonNotFound}), nil
+	})
+	if _, err := c.GetInstanceDetail(f.ctx(), "", "v1", "services", "ns", "web"); !readfence.Failed(err) {
+		t.Fatalf("a partial detail under a moved fence: %v", err)
+	}
+}
+
+// RR1: a refusal of a related reference's discovery ends the detail even
+// when the fence holds again by its end.
+func TestARelatedRefusalEndsTheDetail(t *testing.T) {
+	var mu sync.Mutex
+	failNext := false
+	fence := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failNext {
+			failNext = false
+			return errors.New("c: its policy changed")
+		}
+		return nil
+	}
+	c := f1Conn(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/apis/autoscaling/v2/namespaces/ns/horizontalpodautoscalers/scale" {
+			mu.Lock()
+			failNext = r.Header.Get("Accept") == "" || !strings.Contains(r.Header.Get("Accept"), "as=Table")
+			mu.Unlock()
+			return f1JSON(r, 200, f1HPA()), nil
+		}
+		return f1JSON(r, 404, metav1.Status{Status: metav1.StatusFailure, Code: 404, Reason: metav1.StatusReasonNotFound}), nil
+	})
+	c.disc = f1Disc{}
+	_, err := c.GetInstanceDetail(readfence.With(context.Background(), fence), "autoscaling", "v2", "horizontalpodautoscalers", "ns", "scale")
+	if !readfence.Failed(err) {
+		t.Fatalf("a detail without the owner its fence refused: %v", err)
 	}
 }
