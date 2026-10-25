@@ -6,7 +6,7 @@ Opened 2026-10-25, on `feat/settings-s0`, after the redesign was accepted and it
 - the coverage tests that make an undescribed setting a failure;
 - Diagnostics' read-only parts.
 
-S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revision 1 the same day, after that review (§8).
+S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revisions 1 and 2 the same day, after that review and its re-review (§8, §9).
 
 ## 1. Addressing and navigation
 
@@ -36,7 +36,7 @@ type SettingsSection = "fleet" | "observability" | "ai" | "git" | "notifications
 
 **⌘,** (mod+,) opens Settings from anywhere the shell owns keys, through AppShell's ownership checks. A confirmation, the palette or a text editor owns its keys first. Collapsing the rail keeps the existing focus handoff.
 
-**Leaving a section with a draft** asks to save, discard or stay. This applies to switching sections, a search result, history, a deep link or leaving Settings, since a section is mounted one at a time and the AI panel's draft is local. A save that is still being read back finishes first. A key draft is never persisted in the route, history or the registry. This is the redesign's §2 rule, and S1 builds it.
+**Leaving a section with a draft** asks to save, discard or stay. A typed credential is its own draft, never saved or discarded as part of the section's settings: the guard names it separately ("an unsaved API key"), and Save settings never stores it. This applies to switching sections, a search result, history, a deep link or leaving Settings, since a section is mounted one at a time and the AI panel's draft is local. A save that is still being read back finishes first. A key draft is never persisted in the route, history or the registry. This is the redesign's §2 rule, and S1 builds it.
 
 **The route** is validated when restored: an unknown section or anchor opens Settings at Fleet, said. History compares and describes section routes. Returning to Settings from another route keeps its section.
 
@@ -114,32 +114,43 @@ Four Go tests derive what must be covered, each from its own source, and fail on
 | **bounds** | the fixed ceilings the redesign names (chat and investigation budgets, conversation slots, Git cache caps, rows and alerts bounds) | a list, each read from its Go constant through a dependency-free leaf package (`internal/bounds`), so a changed constant changes the shown value. A new ceiling is added to the list by review: the test detects changed values, not new ceilings, and says so. |
 | **controls** (frontend) | every form control a section actually renders: input, select, textarea, switch and checkbox roles, in dialogs and portals too, under each provider's state. Each must sit inside a `SettingField` whose id is registered, or carry an explicit exemption (`data-setting-exempt="action"`, `"search"`, `"nav"`). | mounted renders of each section with fixtures, and a negative fixture that inserts a raw unregistered input and fails |
 
-### 3.1 Environment sources
+### 3.1 Environment: one facade
 
-`internal/settings/env.go` declares every environment name Klyx reads, each in a family:
-- **product:** `KLYX_CONFIG`, and the eval, smoke and lab builds' variables, these as `fixed` under a "not product settings" note;
-- **tool overrides:** the `KLYX_*_PATH` names, taken from the `clibin` binaries' `EnvVar` fields, never retyped;
-- **injected:** names read through an injected `getenv`, such as `TERMINAL`, `SSH_AUTH_SOCK` and `XDG_CONFIG_HOME`;
-- **walked:** prefixes read by walking the environment, such as `LANG` and `LC_*`;
-- **dynamic:** the AI key variable, whose name is `ai.apiKeyEnv`'s value: its entry describes the contract, never a value;
-- **inherited:** names honoured by libraries, not Klyx's own reads (the proxy variables, `HOME`, `PATH`, `KUBECONFIG`). They are declared as such, without claiming to enumerate what a kubeconfig exec plugin reads.
+Product code reads the environment only through `internal/envread`, and a scan rejects any other access. Coverage then follows from the type system, not from recognizing every way code might spell a read.
+- **Names:** every name is a typed constant, `envread.Name`, declared in `internal/settings/env.go` with its family, and constructible nowhere else:
+  - **product:** `KLYX_CONFIG`, and the eval, smoke and lab builds' variables, these as `fixed` under a "not product settings" note;
+  - **tool overrides:** the `KLYX_*_PATH` names; each `clibin.Binary` takes an `envread.Name`, so a new override is a new declaration;
+  - **library:** names Klyx passes to a library that reads them, such as `KUBECONFIG` through client-go's `RecommendedConfigPathEnvVar`, declared, and checked equal to the library's constant by a test;
+  - **injected:** names read through an injected function (`TERMINAL`, `SSH_AUTH_SOCK`, `XDG_CONFIG_HOME`), whose type is `func(envread.Name) string`;
+  - **dynamic:** the AI key variable, read by `envread.Dynamic(name, purpose)` with `purpose` a declared constant: its entry describes the contract, never a value;
+  - **inherited:** names honoured by libraries without Klyx reading them (the proxy variables, `HOME`, `PATH`), declared as such, without claiming to enumerate what a kubeconfig exec plugin reads.
+- **Walks:** a walk of the environment is `envread.Walk(family)`, where the family declares its prefixes and `Walk` applies them itself. A new prefix is therefore a new declaration, never an edit at the walk site. A child process's inherited environment is `envread.ForChild(family)`, likewise.
+- **The scan** (Go AST, product code: `internal/`, `cmd/klyx/*.go`, `cmd/klyxctl`; tests and build-tagged harness files excluded) fails on any reference, called or not, to:
+  - `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv` or `os.Unsetenv`;
+  - `syscall.Getenv` or `syscall.Environ`;
+  - the same through an aliased import;
+  - all of these outside `envread`.
 
-**The test** is a Go AST scan of product code (`internal/`, `cmd/klyx/*.go`, `cmd/klyxctl`; tests and build-tagged harness files excluded). It fails on any read that names a variable with no declaration:
-- a string literal argument to `os.Getenv`, `os.LookupEnv`, or any function or field named `getenv`/`Getenv`;
-- an `EnvVar:` field of a composite literal;
-- a call to `os.Environ()` in a file that declares no walked family.
+  A function value, a constant name or a helper cannot bypass it, because any of them must start from one of these references.
+- **Negative fixtures,** synthetic Go files run through the scan, each fail it:
+  - a constant-named `os.Getenv`;
+  - `os.LookupEnv`;
+  - `os.Environ` used as a value;
+  - an aliased `os` import;
+  - a raw `getenv` default of `os.Getenv`.
 
-Negative fixtures, synthetic Go files run through the scanner, show it catches each form: a new `Binary.EnvVar`, an injected `getenv("X")`, and an unregistered walk.
+  A second walk that names an undeclared family fails to compile.
 
-### 3.2 Stores
+### 3.2 Stores: one facade each
 
-- **Webview storage:** every key is declared once, in `src/settings/storageKeys.ts`, and all `localStorage` and `sessionStorage` access goes through one wrapper whose key type is that union.
-  - The existing call sites (23, all through constants or `persist.ts`'s wrapper) move to it.
-  - A frontend test fails on any `localStorage.` or `sessionStorage.` use outside the wrapper.
-  - The registry has an entry for each declared key.
-- **Native stores:** every file or directory Klyx keeps beside the fleet file (`window.json`, `claude-builds.json`, `git-cache/`) comes from one function, `localstore.Path(name)`, with its names registered there and in the registry.
-  - The paths `main.go` builds today move to it.
-  - A Go scan fails on any other path built from the fleet file's directory.
+- **Webview storage:** all `localStorage` and `sessionStorage` access goes through `src/settings/storage.ts`, whose functions take a key from the declared union (`storageKeys.ts`). Each key has a registry entry.
+  - The existing call sites move to it, `persist.ts`'s helper included.
+  - A TypeScript AST test fails on any reference to `localStorage`, `sessionStorage`, `window.localStorage`, `globalThis.sessionStorage` and the like, outside that module. This covers element access by string (`window["localStorage"]`), and a reference held in a variable or passed to a helper, since obtaining the object is the reference.
+  - Negative fixtures: storage passed to a helper, aliased, and accessed with brackets.
+- **Native stores:** the fleet file's directory is held only by `internal/localstore`, set once at startup.
+  - Every file or directory Klyx keeps beside the fleet file (`window.json`, `claude-builds.json`, `git-cache/`) comes from `localstore.Path(name)`, with `name` a typed constant declared there.
+  - A test compares the declared names with the registry's native entries, each way.
+  - The paths `main.go` builds today move to it, and a Go scan fails on any `filepath.Dir` of the fleet path outside `localstore`.
 
 **Search** filters the snapshot by label and effect, case-insensitively and by word. It lists matches by section, and opens the section at the entry's anchor.
 
@@ -169,7 +180,7 @@ One component renders a setting, whichever control it has. Its parts:
 - **The default and the validation,** in a disclosure under the effect, reachable by keyboard.
 - **A read-only row** for a file-only or fixed entry, with its effective value and where to change it ("in fleet.yaml, under clusters[].group; applies at restart"), or "fixed".
 
-It carries `data-setting=<id>` and `id=setting-<id>` for the anchor. The rows grow to fit (redesign §12).
+It carries `data-setting=<id>`, and its control and description ids are made from the registry id and the instance key (§1), so a repeated field's are unique. The rows grow to fit (redesign §12).
 
 ## 5. Diagnostics (read-only)
 
@@ -181,7 +192,13 @@ It carries `data-setting=<id>` and `id=setting-<id>` for the anchor. The rows gr
   - a summary of slice 0's drift.
 - **Tools:** for git, kubectl, helm and flux, the resolution, shown on every visit without running anything:
   - the path `clibin` resolves;
-  - its source: the override, chosen; the override set but missing, falling back to `PATH`; `PATH`; or not found, with why.
+  - its source, which the resolver now returns rather than Diagnostics inferring it:
+    - the override, chosen;
+    - `PATH`;
+    - a platform or package-manager fallback location;
+    - not found, with why.
+
+    Separately, whether an override was set but missing, so a missing override that fell back to `PATH` or to a fallback says both.
 
   **Versions are read only on an explicit "Check versions"**, which says that it runs these local programs:
 
@@ -198,10 +215,11 @@ It carries `data-setting=<id>` and `id=setting-<id>` for the anchor. The rows gr
   - its own process group, killed on cancel;
   - a 5-second deadline with a wait delay;
   - stdout and stderr each capped at 64 KiB;
-  - the version taken from the output, its first line clipped to 120 characters with control characters removed;
+  - the version parsed from the output and only then clipped to 120 characters with control characters removed: kubectl's JSON `clientVersion.gitVersion`, and the version field of helm's and flux's output;
+  - on a platform without the reviewed process containment, versions are not checked, and Diagnostics says so; there is no plain-exec fallback;
   - a failure said with a fixed reason and the exit status, never the raw error text.
 
-  Nothing is sent anywhere, and no cluster is read.
+  Klyx invokes only these client-only commands, and nothing in Diagnostics changes Klyx's configuration or state; the empty kubeconfig is a scratch file, removed afterwards. Running a local tool is not a sandbox: what an installed wrapper does beyond these arguments is the wrapper's.
 - **The launch environment:**
   - the names of the proxy variables that are set (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lower-case forms), never their values, and what honours them: the AI clients do, the observability transports deliberately do not;
   - a note that a GUI launch may not see shell exports, which matters for an AI key read from the environment.
@@ -225,7 +243,8 @@ Nothing in Diagnostics writes, and nothing is sent anywhere.
   - an override chosen, and an override set but missing;
   - the proxy names without values;
   - the load states;
-  - "Check versions" with stand-in binaries that record argv and environment, fail if a kubeconfig is read, emit excessive output, spawn a child or hang.
+  - "Check versions" with stand-in binaries that record argv and environment, fail if a kubeconfig is read, emit excessive output, spawn a child that outlives a normal exit, or hang; a cancel; kubectl's JSON parsed;
+  - a fallback location found, with and without a missing override.
 
 **Frontend:**
 - the controls coverage test (§3);
@@ -261,3 +280,19 @@ Codex requested changes: three P2 and two P3. It accepted the Go registry (§2) 
 - registry and snapshot checks for missing, surplus and duplicate ids (§2);
 - `Entry.Source` is provenance, not the effective value's source (§2);
 - the bounds come through a leaf package (§3).
+
+## 9. Revision 2: Codex's re-review (2026-10-25)
+
+Codex ruled R2 to R5 resolved, R1 partly. One P2 and one P3 remained.
+
+| Finding | Change |
+|---|---|
+| **RR1, P2:** a scan of read forms misses constants, function values, walks and storage passed to helpers | §3.1, §3.2: facades. The environment, webview storage and the fleet file's directory are reachable only through `envread`, `storage.ts` and `localstore`. Names are typed declarations, walks and child environments name a declared family, and a scan fails on any raw reference outside a facade, however it is spelled. Negative fixtures for each form Codex named. |
+| **RR2, P3:** no source label for a platform fallback | §5: the resolver returns its source, with a fallback location among them and a missing override said separately. |
+
+**Also from the re-review:**
+- kubectl's version parsed from its JSON before clipping (§5);
+- no plain-exec fallback where containment is not reviewed (§5);
+- the honest wording of what Diagnostics writes and runs (§5);
+- unique ids for repeated fields (§4);
+- a typed credential kept apart from the section's draft (§1).
