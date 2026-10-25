@@ -20,6 +20,7 @@ import { setThemeChoice, THEMES, toggleTheme } from "../theme/ThemeProvider";
 import { BUILTIN_CATALOG } from "../cluster/builtins";
 import { CAP_STATE_TEXT, NAV_GROUPS, connected, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { openTerminal } from "../bridge/configsvc";
+import { ENTRIES, SECTION_TITLES, SETTINGS_SECTIONS } from "../settings/registry";
 import { zoomIn, zoomOut, zoomPercent, zoomReset } from "../app/zoom";
 import { supportsRiskFilter } from "../cluster/resourceRisk";
 import { reveal } from "../nav/reveal";
@@ -171,7 +172,16 @@ export function buildCommands(s: FleetStore): Command[] {
   cmds.push({ id: "fleet:backups", group: "Application", title: "Backups", hint: "Velero schedules fleet-wide, the longest without a retained success first", run: () => s.openFleet("backups") });
   cmds.push({ id: "forwards", group: "Application", title: "Port-forwards", hint: (s.forwards?.length ?? 0) > 0 ? `${s.forwards.length} active` : "none active", run: () => s.openForwards() });
   cmds.push({ id: "activity", group: "Application", title: "Activity log", hint: "recent action outcomes", run: () => s.openActivity() });
-  cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "fleet config · kubeconfig contexts", run: () => s.openSettings() });
+  cmds.push({ id: "settings", group: "Application", title: "Settings", hint: "the section you last showed", run: () => s.openSettings() });
+  // Settings S1 §3: each section, and each setting that is editable or
+  // shown with its file value, from the registry.
+  for (const sec of SETTINGS_SECTIONS) {
+    cmds.push({ id: `settings:${sec}`, group: "Application", title: `Settings: ${SECTION_TITLES[sec]}`, hint: "a Settings section", keywords: ["settings", "preferences"], run: () => s.openSettings(sec) });
+  }
+  for (const e of ENTRIES) {
+    if (e.disposition !== "editable" && e.disposition !== "effective-file-only") continue;
+    cmds.push({ id: `setting:${e.id}`, group: "Application", title: `Settings: ${e.label}`, hint: `${SECTION_TITLES[e.section]} · ${e.effect.split(/(?<=\.) /)[0]}`, keywords: ["settings"], run: () => s.openSettings(e.section, e.id) });
+  }
   cmds.push({ id: "terminal", group: "Application", title: "Terminal", hint: "a shell with this fleet's kubeconfig", run: () => void openTerminal() });
   // Cluster chat (spec 2026-10-14 §8): the open cluster's conversation.
   if (cluster) {
@@ -729,7 +739,7 @@ function destinationCommands(s: FleetStore, g: NavGroup, d: Destination, here: s
     // Connect cluster only where connecting one is the way forward.
     const canConnect = s.clusters.length === 0 || (!anyConnected && !connecting);
     out.push({ id, group, title: d.label, hint: base, run: () => {}, disabled: why, keywords, shownAs,
-      ...(canConnect ? { action: { label: "Connect cluster", run: () => s.openSettings() } } : {}) });
+      ...(canConnect ? { action: { label: "Connect cluster", run: () => s.openSettings("fleet") } } : {}) });
   }
   // Cluster-qualified task results: "events prd-weu" opens Events there.
   if (d.type === "task") {

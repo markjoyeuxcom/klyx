@@ -1,5 +1,9 @@
 import { useFleet } from "./fleet";
 import type { ArgoViewMode, ClusterSection, FluxViewMode, Route, WorkloadKind } from "./fleet";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
+import { isSettingsSection, type SettingsSection } from "../settings/registry";
+import { sayInSettings } from "../settings/notice";
 
 // Session persistence for navigation + per-cluster view filters.
 //
@@ -18,33 +22,20 @@ import type { ArgoViewMode, ClusterSection, FluxViewMode, Route, WorkloadKind } 
 // their target state (namespace request, needs-attention) immediately before
 // the view mounts; hydration must never clobber an explicit intent.
 
-const ROUTE_KEY = "klyx-route";
-const PREFS_KEY = "klyx-view-prefs";
-const SEARCH_KEY = "klyx-view-search";
+const ROUTE_KEY: StorageKey = "klyx-route";
+const PREFS_KEY: StorageKey = "klyx-view-prefs";
+const SEARCH_KEY: StorageKey = "klyx-view-search"; // the session tier (storageKeys.ts)
 
-// Guarded storage access: webview storage can be unavailable (privacy mode)
-// or full - persistence is a nicety and must never take the app down.
-function read(storage: Storage, key: string): string | null {
-  try {
-    return storage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-function write(storage: Storage, key: string, value: string): void {
-  try {
-    storage.setItem(key, value);
-  } catch {
-    // ignore - persistence is best-effort
-  }
-}
+// Storage is reached through settings/storage.ts, best-effort: webview
+// storage can be unavailable (privacy mode) or full, and persistence is a
+// nicety that must never take the app down.
 
 // ---- route ------------------------------------------------------------------
 
 type PersistedRoute =
   | { name: "fleet"; view?: string }
   | { name: "forwards" }
-  | { name: "settings" }
+  | { name: "settings"; section?: string }
   | { name: "activity" }
   | { name: "cluster"; cluster: string; section: string; argoView?: string; fluxView?: string };
 
@@ -61,19 +52,23 @@ export function saveRoute(route: Route): void {
     persisted = { name: "cluster", cluster: route.cluster, section: route.section, argoView: route.argoView, fluxView: route.fluxView };
   } else if (route.name === "fleet" && route.view) {
     persisted = { name: "fleet", view: route.view };
+  } else if (route.name === "settings") {
+    // the section, never the anchor: a relaunch opens the section at its top
+    persisted = route.section ? { name: "settings", section: route.section } : { name: "settings" };
   } else {
     persisted = { name: route.name };
   }
-  write(localStorage, ROUTE_KEY, JSON.stringify(persisted));
+  writeStored(ROUTE_KEY, JSON.stringify(persisted));
 }
 
 export function loadRoute(): PersistedRoute | null {
-  const raw = read(localStorage, ROUTE_KEY);
+  const raw = readStored(ROUTE_KEY);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersistedRoute;
     if (parsed.name === "fleet") return parsed.view === "promotion" || parsed.view === "expiry" || parsed.view === "backups" ? { name: "fleet", view: parsed.view } : { name: "fleet" };
-    if (parsed.name === "forwards" || parsed.name === "settings" || parsed.name === "activity") return { name: parsed.name };
+    if (parsed.name === "settings") return typeof parsed.section === "string" ? { name: "settings", section: parsed.section } : { name: "settings" };
+    if (parsed.name === "forwards" || parsed.name === "activity") return { name: parsed.name };
     if (parsed.name === "cluster" && typeof parsed.cluster === "string" && parsed.cluster !== "") {
       return {
         name: "cluster",
@@ -117,7 +112,14 @@ export function restoreRouteOnBoot(clusterNames: string[]): void {
     if (saved.view === "promotion" || saved.view === "expiry" || saved.view === "backups") useFleet.setState({ route: { name: "fleet", view: saved.view } });
     return;
   }
-  if (saved.name === "forwards" || saved.name === "settings" || saved.name === "activity") {
+  if (saved.name === "settings") {
+    // an unknown section (an older or newer build's) opens Fleet, said
+    const known = saved.section === undefined || isSettingsSection(saved.section);
+    if (!known) sayInSettings("The section Settings last showed is not in this version of Klyx, so Settings opened at Fleet.");
+    useFleet.setState({ route: { name: "settings", section: known && saved.section ? (saved.section as SettingsSection) : "fleet" } });
+    return;
+  }
+  if (saved.name === "forwards" || saved.name === "activity") {
     useFleet.setState({ route: { name: saved.name } });
     return;
   }
@@ -156,7 +158,7 @@ type ClusterPrefs = {
 type AllPrefs = Record<string, ClusterPrefs>;
 
 function loadAllPrefs(): AllPrefs {
-  const raw = read(localStorage, PREFS_KEY);
+  const raw = readStored(PREFS_KEY);
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);
@@ -173,7 +175,7 @@ export function loadClusterPrefs(cluster: string): ClusterPrefs {
 function saveViewPrefs<K extends keyof ClusterPrefs>(cluster: string, view: K, prefs: ClusterPrefs[K]): void {
   const all = loadAllPrefs();
   all[cluster] = { ...all[cluster], [view]: prefs };
-  write(localStorage, PREFS_KEY, JSON.stringify(all));
+  writeStored(PREFS_KEY, JSON.stringify(all));
 }
 
 export const savePodsViewPrefs = (cluster: string, p: PodsViewPrefs) => saveViewPrefs(cluster, "pods", p);
@@ -186,7 +188,7 @@ export const saveHelmViewPrefs = (cluster: string, p: HelmViewPrefs) => saveView
 type SearchView = "pods" | "workloads" | "events" | "helm";
 
 function loadAllSearch(): Record<string, string> {
-  const raw = read(sessionStorage, SEARCH_KEY);
+  const raw = readStored(SEARCH_KEY);
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw);
@@ -209,5 +211,5 @@ export function saveSearch(cluster: string, view: SearchView, query: string): vo
   } else {
     all[key] = query;
   }
-  write(sessionStorage, SEARCH_KEY, JSON.stringify(all));
+  writeStored(SEARCH_KEY, JSON.stringify(all));
 }

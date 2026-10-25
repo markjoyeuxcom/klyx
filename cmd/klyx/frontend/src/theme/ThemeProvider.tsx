@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
 
 // The Line (2026-10-14): night and day are the app's look. Light and dark stay
 // as "classic"; bench and bench-light remain selectable for one release after
@@ -9,7 +11,7 @@ type Ctx = { theme: Theme; effectiveTheme: EffectiveTheme; setTheme: (theme: The
 
 const ThemeContext = createContext<Ctx | null>(null);
 
-const STORAGE_KEY = "klyx-theme";
+const STORAGE_KEY: StorageKey = "klyx-theme";
 const CHANGE_EVENT = "klyx:theme-change";
 export const THEMES: ReadonlyArray<{ id: Theme; label: string }> = [
   { id: "system", label: "System" },
@@ -30,8 +32,8 @@ function isTheme(value: string | null): value is Theme {
 
 // The six palettes removed on 2026-10-14; all were dark.
 const RETIRED = new Set(["midnight", "graphite", "crimson", "forest", "amber", "violet"]);
-const BENCH_MIGRATED_KEY = "klyx-theme-bench-migrated";
-const LINE_MIGRATED_KEY = "klyx-theme-line-migrated";
+const BENCH_MIGRATED_KEY: StorageKey = "klyx-theme-bench-migrated";
+const LINE_MIGRATED_KEY: StorageKey = "klyx-theme-line-migrated";
 
 // initial applies the one-time move to The Line (spec §2.1). A choice saved
 // before it maps once onto night or day - bench onto night, bench-light onto
@@ -39,11 +41,11 @@ const LINE_MIGRATED_KEY = "klyx-theme-line-migrated";
 // the July bench migration onto day or night. A choice made afterwards
 // sticks, classic light and dark included; the flag is never read again.
 export function initial(): Theme {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (localStorage.getItem(LINE_MIGRATED_KEY)) return isTheme(saved) ? saved : "night";
-  localStorage.setItem(LINE_MIGRATED_KEY, "1");
-  const benchMigrated = !!localStorage.getItem(BENCH_MIGRATED_KEY);
-  localStorage.setItem(BENCH_MIGRATED_KEY, "1");
+  const saved = readStored(STORAGE_KEY);
+  if (readStored(LINE_MIGRATED_KEY)) return isTheme(saved) ? saved : "night";
+  writeStored(LINE_MIGRATED_KEY, "1");
+  const benchMigrated = !!readStored(BENCH_MIGRATED_KEY);
+  writeStored(BENCH_MIGRATED_KEY, "1");
   if (saved === null) return "night";
   if (saved === "bench" || RETIRED.has(saved)) return "night";
   if (saved === "bench-light") return "day";
@@ -71,7 +73,7 @@ function applyTheme(theme: Theme): EffectiveTheme {
   document.documentElement.setAttribute("data-theme-choice", theme);
   document.documentElement.setAttribute("data-theme", effective);
   document.documentElement.style.colorScheme = isLight(effective) ? "light" : "dark";
-  localStorage.setItem(STORAGE_KEY, theme);
+  writeStored(STORAGE_KEY, theme);
   return effective;
 }
 
@@ -86,7 +88,7 @@ export function setThemeChoice(theme: Theme): EffectiveTheme {
 // command palette). System remains an explicit menu choice; the quick action
 // moves through the concrete palettes.
 export function toggleTheme(): Theme {
-  const stored = document.documentElement.getAttribute("data-theme-choice") ?? localStorage.getItem(STORAGE_KEY);
+  const stored = document.documentElement.getAttribute("data-theme-choice") ?? readStored(STORAGE_KEY);
   const current: Theme = isTheme(stored) ? stored : "night";
   const next = ORDER[(Math.max(0, ORDER.indexOf(current)) + 1) % ORDER.length];
   setThemeChoice(next);

@@ -151,7 +151,7 @@ func Resolve(store secretstore.Store, in Input) Credential {
 	var kc *secretstore.KeychainError
 	switch {
 	case errors.Is(err, secretstore.ErrNoKey):
-		out.State, out.Why = Missing, "no credential is stored for it - set one in Settings > External endpoints"
+		out.State, out.Why = Missing, "no credential is stored for it - set one in Settings > Observability"
 		return out
 	case errors.As(err, &kc):
 		out.State, out.Why = Unavailable, kc.Error()

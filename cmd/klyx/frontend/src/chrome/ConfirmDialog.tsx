@@ -159,6 +159,7 @@ export function ConfirmDialog({
               {" "}active. Type <b>{cluster}</b> to confirm.
             </div>
             <input
+              data-setting-exempt="action"
               autoFocus
               placeholder={cluster}
               value={typed}

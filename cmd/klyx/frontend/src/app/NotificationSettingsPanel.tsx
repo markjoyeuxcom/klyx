@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getNotificationSettings, setNotificationSettings, type NotificationSettings } from "../bridge/notifications";
+import { SettingField } from "../settings/SettingField";
 
 // NotificationSettingsPanel is Settings > Notifications (The Line slice 10,
 // parent §8.6, §14.9): off until enabled; once enabled, new faults on
@@ -10,14 +11,16 @@ import { getNotificationSettings, setNotificationSettings, type NotificationSett
 const hint: React.CSSProperties = { fontSize: 11, color: "var(--color-text-tertiary)" };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 12 };
 
-export function NotificationSettingsPanel() {
+// onSettings hands the settings to the section (its sentence says them).
+export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: NotificationSettings) => void } = {}) {
   const [s, setS] = useState<NotificationSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
 
   useEffect(() => {
-    void getNotificationSettings().then((v) => { if (v) setS(v); else setLoadFailed(true); });
+    void getNotificationSettings().then((v) => { if (v) { setS(v); onSettings?.(v); } else setLoadFailed(true); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async (next: NotificationSettings) => {
@@ -31,8 +34,10 @@ export function NotificationSettingsPanel() {
       setMessage({ kind: "error", text: `Not saved: ${r.error ?? "unknown error"}` });
     } else if (r.error) {
       setMessage({ kind: "warn", text: r.error });
+      onSettings?.(next);
     } else {
       setMessage(null);
+      onSettings?.(next);
     }
   };
 
@@ -40,27 +45,24 @@ export function NotificationSettingsPanel() {
   if (!s) return <div style={hint}>Reading…</div>;
   return (
     <div data-testid="notification-settings" style={{ display: "grid", gap: 4 }}>
-      <label style={row}>
-        <input type="checkbox" checked={s.enabled} disabled={busy} onChange={(e) => void save({ ...s, enabled: e.target.checked })} />
-        Notify me about new faults
-      </label>
-      <div style={hint}>Off until enabled. Faults already present when a cluster connects are listed once in Activity, never notified; nothing is sent while Klyx shows that cluster.</div>
-      <fieldset disabled={!s.enabled || busy} style={{ border: 0, padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
-        <legend className="t-legend" style={{ fontSize: 10, padding: 0, marginBottom: 2 }}>Clusters</legend>
-        <label style={row}>
-          <input type="radio" name="notify-scope" checked={s.scope !== "all"} onChange={() => void save({ ...s, scope: "protected" })} />
-          Protected clusters only
-        </label>
-        <label style={row}>
-          <input type="radio" name="notify-scope" checked={s.scope === "all"} onChange={() => void save({ ...s, scope: "all" })} />
-          Every cluster
-        </label>
-        <label style={row}>
-          <input type="checkbox" checked={s.recoveries} onChange={(e) => void save({ ...s, recoveries: e.target.checked })} />
-          Also notify recoveries
-        </label>
-        <div style={hint}>A recovery is notified only for a fault you were notified about, and only once it is healthy again.</div>
-      </fieldset>
+      <SettingField id="notifications.enabled" source="file">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={s.enabled} disabled={busy} onChange={(e) => void save({ ...s, enabled: e.target.checked })} />}
+      </SettingField>
+      <SettingField id="notifications.scope" group source={s.scope ? "file" : "default"}>
+        {() => (<>
+          <label style={row}>
+            <input type="radio" name="notify-scope" disabled={!s.enabled || busy} checked={s.scope !== "all"} onChange={() => void save({ ...s, scope: "protected" })} />
+            Protected clusters only
+          </label>
+          <label style={row}>
+            <input type="radio" name="notify-scope" disabled={!s.enabled || busy} checked={s.scope === "all"} onChange={() => void save({ ...s, scope: "all" })} />
+            Every cluster
+          </label>
+        </>)}
+      </SettingField>
+      <SettingField id="notifications.recoveries" source="file">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" disabled={!s.enabled || busy} checked={s.recoveries} onChange={(e) => void save({ ...s, recoveries: e.target.checked })} />}
+      </SettingField>
       {message && (
         <div role={message.kind === "error" ? "alert" : "status"} style={{ fontSize: 11, color: message.kind === "error" ? "var(--color-text-danger)" : message.kind === "warn" ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}>
           {message.kind !== "ok" ? "▲ " : ""}{message.text}

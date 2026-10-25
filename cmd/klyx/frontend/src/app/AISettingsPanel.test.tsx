@@ -347,7 +347,9 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     bridge.getAISettings.mockResolvedValue(state({ persisted: local, active: { backend: "openaiCompatible", ready: true, model: "m", origin: "https://llm.lan:8443" } }));
     render(<AISettingsPanel />);
     expect((await screen.findByTestId("ai-tls-off")).textContent).toContain("certificate not verified");
-    expect(screen.getByLabelText("Skip certificate verification").closest("label")?.textContent).toContain("insecure");
+    // the effect is the control's description (Settings S1 §4)
+    const box = screen.getByLabelText("Skip certificate verification");
+    expect(document.getElementById(box.getAttribute("aria-describedby") ?? "")?.textContent).toContain("Insecure");
   });
 
   // Codex's review of slice 0, finding 1: an edit made while the successful

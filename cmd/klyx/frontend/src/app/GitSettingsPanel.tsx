@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { OperationDialog } from "../chrome/OperationDialog";
+import { SettingField } from "../settings/SettingField";
+import { anchorOf } from "../settings/registry";
 import {
   approveGitRepo,
   clearGitCache,
@@ -48,7 +50,9 @@ export function historyLine(r: GitRepo): { text: string; tone: "ok" | "warn" | "
   return { text: "not fetched yet", tone: "muted" };
 }
 
-export function GitSettingsPanel() {
+// onSettings hands the read settings to the section (its sentence says the
+// binary in use).
+export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings) => void } = {}) {
   const [state, setState] = useState<GitSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // the URL an action runs on
@@ -59,7 +63,10 @@ export function GitSettingsPanel() {
   const load = async () => {
     const s = await getGitSettings();
     setLoadFailed(s === null);
-    if (s) setState(s);
+    if (s) {
+      setState(s);
+      onSettings?.(s);
+    }
   };
   useEffect(() => {
     void load();
@@ -156,7 +163,7 @@ export function GitSettingsPanel() {
         <div style={hint}>Every Git repository the clusters use is approved.</div>
       ) : (
         state.unapproved.map((u) => (
-          <div key={u.key} data-testid="git-unapproved" style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+          <div key={u.key} data-testid="git-unapproved" data-anchor={anchorOf("git.repos[].url", u.key)} tabIndex={-1} style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ ...mono, flex: 1, minWidth: 0 }}>{u.key}</span>
               <button className="l-btn" onClick={() => setApproving(u)}>Approve…</button>
@@ -209,7 +216,7 @@ function ApprovedRepo({ repo: r, busy, gitOn, onFetch, onClear, onRemove, onMatc
   const [newKey, setNewKey] = useState("");
   const h = historyLine(r);
   return (
-    <div data-testid="git-repo" style={{ padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+    <div data-testid="git-repo" data-anchor={anchorOf("git.repos[].url", r.key)} tabIndex={-1} style={{ padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ ...mono, fontSize: 12, fontWeight: 600, flex: 1, minWidth: 0 }} title="runs exactly as written">{r.url}</span>
         <button className="l-btn" disabled={busy || r.fetching || !gitOn || r.tracked.length === 0} onClick={onFetch}>{r.fetching || busy ? "Fetching…" : "Fetch now"}</button>
@@ -227,38 +234,39 @@ function ApprovedRepo({ repo: r, busy, gitOn, onFetch, onClear, onRemove, onMatc
           {r.trackNotes.map((n, i) => <span key={i} style={{ ...hint, display: "block" }}>{n}</span>)}
         </span>
       </div>
-      <div style={row}>
-        <span style={labelStyle}>serves</span>
-        <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", minWidth: 0 }}>
-          <span style={mono}>{r.key}</span>
-          {r.matches.map((m) => (
-            <span key={m} data-testid="git-match" style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 4px", borderRadius: 3, boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
-              {m}
-              <button aria-label={`stop serving ${m}`} disabled={busy} onClick={() => onMatch(m, false)} style={{ border: 0, background: "none", padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex" }}>
-                <IconX size={10} stroke={1.6} />
-              </button>
-            </span>
-          ))}
-          <input
-            aria-label={`another repository ${r.url} serves`}
-            className="l-input"
-            placeholder="host/org/repo (an SSH alias)"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            style={{ ...mono, width: 220 }}
-          />
-          <button
-            className="l-btn"
-            disabled={busy || newKey.trim() === ""}
-            onClick={() => {
-              onMatch(newKey.trim(), true);
-              setNewKey("");
-            }}
-          >
-            Add
-          </button>
-        </span>
-      </div>
+      <SettingField id="git.repos[].matches" instance={r.key} label={`Also serves (${r.key})`} source="file">
+        {(ids) => (
+          <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", minWidth: 0 }}>
+            {r.matches.map((m) => (
+              <span key={m} data-testid="git-match" style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 4px", borderRadius: 3, boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
+                {m}
+                <button aria-label={`stop serving ${m}`} disabled={busy} onClick={() => onMatch(m, false)} style={{ border: 0, background: "none", padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex" }}>
+                  <IconX size={10} stroke={1.6} />
+                </button>
+              </span>
+            ))}
+            <input
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              className="l-input"
+              placeholder="host/org/repo (an SSH alias)"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              style={{ ...mono, width: 220 }}
+            />
+            <button
+              className="l-btn"
+              disabled={busy || newKey.trim() === ""}
+              onClick={() => {
+                onMatch(newKey.trim(), true);
+                setNewKey("");
+              }}
+            >
+              Add
+            </button>
+          </span>
+        )}
+      </SettingField>
       {r.web && (
         <div style={row}>
           <span style={labelStyle}>web</span>
@@ -299,10 +307,9 @@ function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onC
       onCancel={onCancel}
       onConfirm={() => onApprove(url.trim(), web.trim())}
     >
-      <label style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>The URL that will run, exactly as written (https or ssh, no token)</span>
-        <input aria-label="URL to approve" className="l-input" value={url} onChange={(e) => setUrl(e.target.value)} style={{ ...mono, fontSize: 12 }} />
-      </label>
+      <SettingField id="git.repos[].url" label="URL to approve">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={url} onChange={(e) => setUrl(e.target.value)} style={{ ...mono, fontSize: 12 }} />}
+      </SettingField>
       {item.refused && !item.suggest && (
         <div style={{ ...hint, color: "var(--color-text-warning)" }}>The clusters&apos; URL cannot run as written: {item.refused}. Enter the https or ssh URL to fetch from.</div>
       )}
@@ -311,10 +318,9 @@ function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onC
         ~/.ssh/config, as written.{" "}
         {item.serves ? <>This entry will serve <span style={mono}>{item.serves}</span>, the repository these clusters use.</> : "The clusters' URL names no repository Klyx can match, so this entry serves only its own."}
       </div>
-      <label style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>&quot;Open in Git&quot; link (optional, https) for a host Klyx does not know</span>
-        <input aria-label="Open in Git link" className="l-input" value={web} onChange={(e) => setWeb(e.target.value)} placeholder="https://git.example.com/org/repo" style={mono} />
-      </label>
+      <SettingField id="git.repos[].web">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={web} onChange={(e) => setWeb(e.target.value)} placeholder="https://git.example.com/org/repo" style={mono} />}
+      </SettingField>
     </OperationDialog>
   );
 }

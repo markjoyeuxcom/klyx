@@ -1,5 +1,5 @@
 import { Browser } from "@wailsio/runtime";
-import type { ClusterDTO, ExpiryItemDTO } from "../store/fleet";
+import { useFleet, type ClusterDTO, type ExpiryItemDTO } from "../store/fleet";
 import type { LineDTO } from "../store/line";
 import type { LineGitCommitDTO, LineGitDTO } from "../store/lineGit";
 import { commitHref, historyNote } from "../line/history";
@@ -28,7 +28,14 @@ export function Ledger({ dto, git = null }: { dto: LineDTO | null; git?: LineGit
         <h2 id="ledger-h" className="aside-title">Ledger</h2>
         <span className="aside-sub">{dto?.key ? "revisions on the line now" : "no key compared"}</span>
       </div>
-      {note && <p className="aside-note" data-testid="ledger-history-note">{note}</p>}
+      {note && (
+        <p className="aside-note" data-testid="ledger-history-note">
+          {note}
+          {git?.state === "unapproved" && git.approve && (
+            <>{" "}<button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings("git", `git.repos[].url@${git.approve}`)}>Open Settings &gt; Git</button></>
+          )}
+        </p>
+      )}
       {!dto ? <p className="aside-note">Reading the line…</p>
         : revs.length === 0 ? <p className="aside-note">{dto.key ? "No station has a single applied revision." : "Nothing is compared, so no revision is on the line."}</p>
         : (

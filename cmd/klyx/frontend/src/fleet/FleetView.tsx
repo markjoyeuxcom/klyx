@@ -70,14 +70,14 @@ export function FleetView() {
             icon={<IconLayoutGrid size={28} stroke={1.2} />}
             title="fleet.yaml did not load, so no cluster is connected."
             hint={`${loadError} - fix the file in an editor, then restart Klyx.`}
-            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
+            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings("fleet") }}
           />
         ) : (
           <EmptyState
             icon={<IconLayoutGrid size={28} stroke={1.2} />}
             title="No clusters connected yet."
             hint="Klyx reads standard kubeconfig contexts - add or enable them in Settings."
-            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings() }}
+            action={{ label: "Open Settings", onClick: () => useFleet.getState().openSettings("fleet") }}
           />
         )
       }

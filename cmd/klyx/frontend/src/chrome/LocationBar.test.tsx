@@ -105,7 +105,7 @@ describe("location bar utilities", () => {
     fireEvent.click(getByRole("button", { name: "Activity" }));
     expect(useFleet.getState().route).toEqual({ name: "activity" });
     fireEvent.click(getByRole("button", { name: "Settings" }));
-    expect(useFleet.getState().route).toEqual({ name: "settings" });
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "fleet" });
     expect(getByRole("button", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
   });
 
@@ -184,7 +184,7 @@ describe("location bar crumbs and history", () => {
     r1.unmount();
     useFleet.setState({ route: { name: "settings" } });
     const r2 = render(<LocationBar />);
-    expect(r2.getByRole("navigation", { name: "Location" }).textContent).toBe("Fleet/Settings");
+    expect(r2.getByRole("navigation", { name: "Location" }).textContent).toBe("Fleet/Settings › Fleet");
     fireEvent.click(r2.getByRole("button", { name: "Fleet" }));
     expect(useFleet.getState().route).toEqual({ name: "fleet" });
   });

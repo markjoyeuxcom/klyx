@@ -81,6 +81,9 @@ func TestDiagnosticsNamesProxiesWithoutValues(t *testing.T) {
 	if strings.Join(d.Proxies, ",") != "HTTPS_PROXY,no_proxy" {
 		t.Fatalf("%v", d.Proxies)
 	}
+	if !contains(d.EnvSet, "HTTPS_PROXY") || contains(d.EnvSet, "HTTP_PROXY") {
+		t.Fatalf("envSet %v", d.EnvSet)
+	}
 	b, _ := json.Marshal(d)
 	if strings.Contains(string(b), "s3cr3t") || strings.Contains(string(b), "proxy.example") {
 		t.Fatal("a proxy value reached Diagnostics")

@@ -133,7 +133,7 @@ describe("GitSettingsPanel", () => {
   it("adds and removes an explicit match, and removes an approval after confirming", async () => {
     bridge.getGitSettings.mockResolvedValue(state({ repos: [repo({ matches: ["github.com/acme/old"] })] }));
     render(<GitSettingsPanel />);
-    fireEvent.change(await screen.findByLabelText("another repository git@github.com:acme/fleet.git serves"), { target: { value: " github.com/acme/fleet-mirror " } });
+    fireEvent.change(await screen.findByLabelText(/^Also serves \(/), { target: { value: " github.com/acme/fleet-mirror " } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(bridge.setGitRepoMatch).toHaveBeenCalledWith("git@github.com:acme/fleet.git", "github.com/acme/fleet-mirror", true));
     fireEvent.click(await screen.findByRole("button", { name: "stop serving github.com/acme/old" }));

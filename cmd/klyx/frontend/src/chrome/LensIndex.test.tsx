@@ -115,16 +115,23 @@ describe("the lens index", () => {
     expect(entry("Pods").textContent).not.toMatch(/\d/);
   });
 
-  it("fleet and app routes list the fleet views, the current one marked", () => {
+  it("fleet and app routes list the fleet views, the current one marked; Settings lists its sections", () => {
     useFleet.setState({ route: { name: "fleet", view: "promotion" } });
     const r1 = render(<LensIndex />);
     expect(entry("Promotion tracker").getAttribute("aria-current")).toBe("page");
     fireEvent.click(entry("Expiry horizon"));
     expect(routeOf()).toEqual({ name: "fleet", view: "expiry" });
     r1.unmount();
-    useFleet.setState({ route: { name: "settings" } });
-    render(<LensIndex />);
+    useFleet.setState({ route: { name: "activity" } });
+    const r2 = render(<LensIndex />);
     expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-current"))).toEqual([null, null, null, null]);
+    r2.unmount();
+    // Settings S1 §1: the rail is the index's slot, its sections in order
+    useFleet.setState({ route: { name: "settings", section: "ai" } });
+    render(<LensIndex />);
+    expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeTruthy();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Fleet", "Observability", "AI", "Git", "Notifications", "Appearance", "Data and storage", "Diagnostics"]);
+    expect(entry("AI").getAttribute("aria-current")).toBe("page");
   });
 });
 

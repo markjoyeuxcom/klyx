@@ -1,32 +1,65 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { IconAlertTriangle, IconSettings } from "@tabler/icons-react";
 import { EmptyState } from "../chrome/EmptyState";
 import { SkeletonRows } from "../chrome/SkeletonRows";
-import { LensLayout, type DatasetState } from "../layout/LensLayout";
-import { getFleetConfig, addClusters, refreshNewContextCount } from "../bridge/configsvc";
+import { LensLayout } from "../layout/LensLayout";
+import { getFleetConfig } from "../bridge/configsvc";
 import type { FleetConfigDTO } from "../bridge/configsvc";
-import { btn, ellipsis } from "../chrome/primitives";
-import { AISettingsPanel } from "./AISettingsPanel";
-import { EndpointsPanel } from "./EndpointsPanel";
-import { AppearancePanel } from "./AppearancePanel";
-import { GitSettingsPanel } from "./GitSettingsPanel";
-import { NotificationSettingsPanel } from "./NotificationSettingsPanel";
+import { useFleet } from "../store/fleet";
+import { SECTION_TITLES, isSettingsSection, parseAnchor, settingEntry, type SettingsSection } from "../settings/registry";
+import { sayInSettings, useSettingsNotice } from "../settings/notice";
+import { FleetSection, sentenceForFleet } from "../settings/sections/FleetSection";
+import { AISection, AppearanceSection, GitSection, NotificationsSection, ObservabilitySection } from "../settings/sections/panels";
+import { DataSection } from "../settings/sections/DataSection";
+import { DiagnosticsSection } from "../settings/sections/DiagnosticsSection";
 
 // a configuration problem, said before anything else on the page
 const problem: React.CSSProperties = { display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, padding: "8px 10px", marginBottom: 12, border: "0.5px solid currentColor", borderRadius: "var(--border-radius-md)" };
 
-// SettingsView is the fleet-configuration surface: the loaded fleet.yaml
-// (path, clusters, load warnings) and a fresh kubeconfig context scan with
-// one-click "add to fleet", and the app's appearance. Adds append to the file
-// on disk AND join the running fleet immediately - the new cluster appears in
-// the station switcher within a push-loop tick, no restart needed.
+// SettingsView is Settings (S1 §1): one section at a time, under its
+// sentence, addressed by the route's section and anchor. The rail beside it
+// (the lens index's slot) lists the sections and searches every setting.
+
+const quote = (s: string) => `"${s.replace(/["\\]/g, "\\$&")}"`;
+
+// applyAnchor scrolls to the setting an anchor names and focuses its
+// control, or its read-only row; a repeated field's id marks every
+// instance's row. It returns what to say when the anchor names nothing here.
+function applyAnchor(root: HTMLElement, anchor: string): string | null {
+  root.querySelectorAll("[data-anchored]").forEach((el) => el.removeAttribute("data-anchored"));
+  const { id, instance } = parseAnchor(anchor);
+  const e = settingEntry(id);
+  if (!e) return "That setting is not in this version of Klyx.";
+  const exact = instance !== undefined ? Array.from(root.querySelectorAll<HTMLElement>(`[data-anchor=${quote(anchor)}]`)) : [];
+  const all = Array.from(root.querySelectorAll<HTMLElement>(`[data-setting=${quote(id)}]`));
+  const targets = instance !== undefined ? exact : all;
+  if (targets.length === 0) {
+    all.forEach((el) => el.setAttribute("data-anchored", ""));
+    all[0]?.scrollIntoView?.({ block: "center" });
+    return instance !== undefined ? `${e.label} for ${instance} is no longer there.` : `${e.label} is not shown here right now.`;
+  }
+  targets.forEach((el) => {
+    el.setAttribute("data-anchored", "");
+    for (let p = el.parentElement; p && p !== root; p = p.parentElement) if (p instanceof HTMLDetailsElement) p.open = true;
+  });
+  const first = targets[0];
+  first.scrollIntoView?.({ block: "center" });
+  const control = first.querySelector<HTMLElement>(".setting-control input:not([type=hidden]), .setting-control select, .setting-control textarea");
+  (control ?? first).focus();
+  return null;
+}
 
 export function SettingsView() {
+  const route = useFleet((s) => s.route);
+  const section: SettingsSection = route.name === "settings" && isSettingsSection(route.section) ? route.section : "fleet";
+  const anchor = route.name === "settings" ? route.anchor : undefined;
+  const notice = useSettingsNotice((s) => s.notice);
   const [cfg, setCfg] = useState<FleetConfigDTO | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [banner, setBanner] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [sentence, setSentence] = useState("");
+  const [readyFor, setReadyFor] = useState<SettingsSection | null>(null);
+  const page = useRef<HTMLDivElement | null>(null);
+  const shown = useRef<SettingsSection | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -38,50 +71,70 @@ export function SettingsView() {
     void load();
   }, []);
 
-  const toggle = (name: string) =>
-    setSelected((cur) => (cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]));
+  // a notice belongs to the section it was said on
+  useEffect(() => {
+    if (shown.current !== null && shown.current !== section) sayInSettings(null);
+    shown.current = section;
+    setSentence("");
+    setReadyFor(null);
+  }, [section]);
+  const say = useCallback((s: string) => setSentence(s), []);
+  const ready = useCallback(() => setReadyFor(section), [section]);
 
-  const onAdd = async () => {
-    if (selected.length === 0 || busy) return;
-    setBusy(true);
-    const r = await addClusters(selected);
-    setBusy(false);
-    if (r.ok) {
-      setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml - connecting now.` });
-      setSelected([]);
-      void load();
-      void refreshNewContextCount();
-    } else {
-      setBanner({ kind: "error", text: r.error || "Could not update fleet.yaml" });
+  // an anchor applies once its section has rendered what it can name, and
+  // then leaves the route (it is where in the section, not a place)
+  useEffect(() => {
+    if (!anchor || readyFor !== section || !page.current) return;
+    const root = page.current;
+    const id = requestAnimationFrame(() => {
+      const missing = applyAnchor(root, anchor);
+      if (missing) sayInSettings(missing);
+      useFleet.setState((s) => (s.route.name === "settings" && s.route.anchor === anchor ? { route: { name: "settings", section } } : {}));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [anchor, readyFor, section]);
+
+  const fleetSentence = cfg ? sentenceForFleet(cfg) : "";
+  const summary = section === "fleet" ? fleetSentence : sentence;
+  const content = (() => {
+    switch (section) {
+      case "fleet":
+        return cfg ? <FleetSection cfg={cfg} reload={() => void load()} say={say} ready={ready} /> : null;
+      case "observability":
+        return <ObservabilitySection say={say} ready={ready} />;
+      case "ai":
+        return <AISection say={say} ready={ready} />;
+      case "git":
+        return <GitSection say={say} ready={ready} />;
+      case "notifications":
+        return <NotificationsSection say={say} ready={ready} />;
+      case "appearance":
+        return <AppearanceSection say={say} ready={ready} />;
+      case "data":
+        return <DataSection say={say} ready={ready} />;
+      case "diagnostics":
+        return <DiagnosticsSection say={say} ready={ready} />;
     }
-  };
+  })();
 
-  const frame = (state: DatasetState, stateView: React.ReactNode, body: React.ReactNode, summary?: React.ReactNode) => (
+  const frame = (state: "loading" | "unreadable" | "ready", stateView: React.ReactNode, body: React.ReactNode) => (
     <LensLayout
       label="Settings"
-      title="Settings"
-      summary={summary}
-      headerEnd={<button className="l-btn" onClick={() => void load()} disabled={loading}>{loading ? "Reading…" : "Re-scan kubeconfig contexts"}</button>}
-      notice={banner ? (
-        <div data-testid="settings-banner" role="status" className="t-body" style={{ color: banner.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-primary)" }}>
-          {banner.kind === "error" ? "▲ " : ""}{banner.text}
-        </div>
-      ) : undefined}
+      title={SECTION_TITLES[section]}
+      summary={summary ? <span className="t-secondary" data-testid="settings-sentence">{summary}</span> : undefined}
+      headerEnd={section === "fleet" ? <button className="l-btn" onClick={() => void load()} disabled={loading}>{loading ? "Reading…" : "Re-scan kubeconfig contexts"}</button> : undefined}
       state={state}
       stateView={stateView}
       body={body}
     />
   );
-  if (loading && !cfg) return frame("loading", <SkeletonRows rows={4} label="reading the fleet configuration" />, null);
-  if (!cfg) return frame("unreadable", <EmptyState icon={<IconSettings size={28} stroke={1.2} />} title="Could not load the fleet configuration." action={{ label: "Retry", onClick: () => void load() }} />, null);
+  if (section === "fleet" && loading && !cfg) return frame("loading", <SkeletonRows rows={4} label="reading the fleet configuration" />, null);
+  if (section === "fleet" && !cfg) return frame("unreadable", <EmptyState icon={<IconSettings size={28} stroke={1.2} />} title="Could not load the fleet configuration." action={{ label: "Retry", onClick: () => void load() }} />, null);
 
-  const newContexts = cfg.contexts.filter((c) => !c.inFleet);
-
-  // Step 7d: an app route on the workspace template.
   return frame("ready", null, (
-    <div className="ov-page" style={{ fontSize: 12, maxWidth: 900 }}>
-
-      {cfg.loadError && (
+    <div ref={page} className="ov-page settings-page" data-section={section}>
+      {notice && <p className="settings-notice" role="status" data-testid="settings-notice">{notice}</p>}
+      {cfg?.loadError && (
         // Settings review slice 0: never an empty fleet without saying why
         <div data-testid="settings-load-error" role="alert" style={{ ...problem, color: "var(--color-text-danger)" }}>
           <IconAlertTriangle size={13} stroke={1.7} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
@@ -92,7 +145,7 @@ export function SettingsView() {
           </div>
         </div>
       )}
-      {!cfg.loadError && cfg.fileError && (
+      {cfg && !cfg.loadError && cfg.fileError && (
         <div data-testid="settings-file-error" role="status" style={{ ...problem, color: "var(--color-text-warning)" }}>
           <IconAlertTriangle size={13} stroke={1.7} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
           <div>
@@ -101,157 +154,7 @@ export function SettingsView() {
           </div>
         </div>
       )}
-
-      <Section title="Appearance">
-        <AppearancePanel />
-      </Section>
-
-      <Section title="Fleet configuration">
-        <PathRow label="file" path={cfg.path} />
-        <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 8 }}>
-          The clusters below are the ones Klyx is running. It reads their identity, tags, protection and endpoints from fleet.yaml when it starts, so an edit to a cluster entry takes effect when Klyx restarts (an edited endpoint also when you Test it under External endpoints); a row says when the file differs. Klyx writes the file in five places only: it appends the clusters you add below; Settings &gt; AI, Git and Notifications each rewrite their own block (comments inside that block are not kept); and External endpoints replaces a cluster&apos;s plaintext metrics token line with auth when you move it to the keychain. Every other line stays as you wrote it; edit the file directly for anything else.
-        </div>
-        {cfg.fileOnly && cfg.fileOnly.length > 0 && (
-          <div data-testid="settings-file-only" role="status" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>
-            In fleet.yaml but not running: <span style={{ fontFamily: "var(--font-mono)" }}>{cfg.fileOnly.join(", ")}</span>. Klyx connects {cfg.fileOnly.length === 1 ? "it" : "them"} when it restarts.
-          </div>
-        )}
-        {cfg.warnings.length > 0 && (
-          <div style={{ marginBottom: 8 }}>
-            {cfg.warnings.map((w, i) => (
-              <div key={i} style={{ fontSize: 11, color: "var(--color-text-warning)", padding: "2px 0", display: "flex", alignItems: "baseline", gap: 4 }}><IconAlertTriangle size={11} stroke={1.7} style={{ flexShrink: 0, alignSelf: "center" }} /> {w}</div>
-            ))}
-          </div>
-        )}
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.3fr) 70px 70px 70px 60px", gap: 8, fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--color-text-tertiary)", padding: "0 0 4px", borderBottom: "0.5px solid var(--color-border-secondary)" }}>
-          <span>name</span><span>context</span><span>env</span><span>group</span><span>protected</span><span>metrics</span>
-        </div>
-        {cfg.clusters.map((c) => (
-          <div key={c.name} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.3fr) 70px 70px 70px 60px", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11, padding: "5px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", alignItems: "center" }}>
-            <span style={ellipsis} title={c.name}>{c.name}</span>
-            <span style={{ ...ellipsis, color: "var(--color-text-tertiary)" }} title={c.context}>{c.context}</span>
-            <span style={{ color: "var(--color-text-tertiary)" }}>{c.env || "—"}</span>
-            <span style={{ color: "var(--color-text-tertiary)" }}>{c.group || "—"}</span>
-            <span
-              style={{ color: c.protected ? "var(--color-text-warning)" : "var(--color-text-tertiary)" }}
-              title={c.protectedInferred ? "inferred from a prd/prod/production token in its env, name or context - set protected: true to make it explicit" : undefined}
-            >
-              {c.protected ? (c.protectedInferred ? "inferred" : "yes") : "no"}
-            </span>
-            <span style={{ color: "var(--color-text-tertiary)" }}>{c.hasMetrics ? "yes" : "—"}</span>
-            {c.drift && (
-              <span data-testid="settings-drift" style={{ gridColumn: "1 / -1", fontFamily: "var(--font-body)", color: "var(--color-text-warning)", fontSize: 11 }}>{c.drift}</span>
-            )}
-          </div>
-        ))}
-      </Section>
-
-      <Section title="External endpoints">
-        <EndpointsPanel />
-      </Section>
-
-      <Section title="AI assist">
-        <AISettingsPanel />
-      </Section>
-
-      <Section title="Git history">
-        <GitSettingsPanel />
-      </Section>
-
-      <Section title="Notifications">
-        <NotificationSettingsPanel />
-      </Section>
-
-      <Section title="Kubeconfig contexts">
-        <PathRow label="kubeconfig" path={cfg.kubeconfigPath} />
-        {cfg.scanError ? (
-          <div style={{ fontSize: 11, color: "var(--color-text-danger)" }}>Could not read the kubeconfig: {cfg.scanError}</div>
-        ) : cfg.contexts.length === 0 ? (
-          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>No contexts found.</div>
-        ) : (
-          <>
-            <div style={{ color: "var(--color-text-tertiary)", fontSize: 11, marginBottom: 6 }}>
-              Re-scanned every time this page opens - a context added to the kubeconfig shows up here without restarting.
-            </div>
-            {cfg.contexts.map((c) => (
-              <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-mono)", fontSize: 11, padding: "4px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                {c.inFleet ? (
-                  <span style={{ width: 14 }} />
-                ) : (
-                  <input
-                    type="checkbox"
-                    aria-label={`select context ${c.name}`}
-                    checked={selected.includes(c.name)}
-                    onChange={() => toggle(c.name)}
-                    style={{ margin: 0 }}
-                  />
-                )}
-                <span style={{ ...ellipsis, flex: 1 }} title={c.name}>{c.name}</span>
-                {c.inFleet ? (
-                  <span className="t-secondary">in fleet</span>
-                ) : (
-                  <span style={{ fontSize: 10, color: "var(--color-text-info)" }}>not in fleet</span>
-                )}
-              </div>
-            ))}
-            {newContexts.length > 0 && cfg.loadError && (
-              <div style={{ marginTop: 10, fontSize: 11, color: "var(--color-text-tertiary)" }}>Adding clusters waits until fleet.yaml loads.</div>
-            )}
-            {newContexts.length > 0 && !cfg.loadError && (
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-                <button
-                  onClick={() => void onAdd()}
-                  disabled={selected.length === 0 || busy}
-                  style={{ ...btn, opacity: selected.length === 0 || busy ? 0.5 : 1, cursor: selected.length === 0 || busy ? "not-allowed" : "pointer" }}
-                >
-                  {busy ? "adding…" : `add ${selected.length || ""} to fleet`.replace("  ", " ")}
-                </button>
-                <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>appends to fleet.yaml · connects immediately</span>
-              </div>
-            )}
-          </>
-        )}
-      </Section>
+      {content}
     </div>
-  ), (
-    <>
-      <span className="t-number" style={{ color: "var(--color-text-secondary)" }}>{cfg.clusters.length}</span>
-      <span className="t-secondary">cluster{cfg.clusters.length === 1 ? "" : "s"} running{cfg.loadError ? " · fleet.yaml did not load" : ""}</span>
-      {newContexts.length > 0 && <span className="t-secondary">{newContexts.length} kubeconfig context{newContexts.length === 1 ? "" : "s"} not in the fleet</span>}
-    </>
   ));
-}
-
-function PathRow({ label, path }: { label: string; path: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-      <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", width: 70 }}>{label}</span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, ...ellipsis }} title={path}>{path || "—"}</span>
-      {path && (
-        <button
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(path);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            } catch { /* clipboard unavailable */ }
-          }}
-          style={{ ...btn, padding: "1px 7px", fontSize: 10 }}
-          aria-label={`copy ${label} path`}
-        >
-          {copied ? "copied" : "copy"}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section style={{ marginBottom: 16 }}>
-      <h3 className="t-section-label" style={{ marginBottom: 8 }}>{title}</h3>
-      {children}
-    </section>
-  );
 }

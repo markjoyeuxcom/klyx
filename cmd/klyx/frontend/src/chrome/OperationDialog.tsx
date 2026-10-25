@@ -169,6 +169,7 @@ export function OperationDialog({
                 {" "}active. Type <b style={{ fontFamily: "var(--font-mono)" }}>{cluster}</b> to arm.
               </div>
               <input
+                data-setting-exempt="action"
                 autoFocus
                 aria-label="protected cluster confirmation"
                 placeholder={cluster}

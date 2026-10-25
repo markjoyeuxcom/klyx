@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { layoutViewportHeight, unzoom, ZOOM_EVENT } from "../app/zoom";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
 
-const STORAGE_KEY = "klyx-logs-dock-height";
+const STORAGE_KEY: StorageKey = "klyx-logs-dock-height";
 const MIN_HEIGHT = 160;
 const DEFAULT_HEIGHT = 320;
 const MAX_SHARE = 0.6;      // the dock never takes more than 60% of the workspace
@@ -29,9 +31,9 @@ export function clampDock(value: number, max: number): number {
 
 // The persisted preference, kept unclamped by the current window so a zoom or
 // resize round trip gives the operator's dock size back.
-function readStored(): number {
+function readPreferred(): number {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readStored(STORAGE_KEY);
     if (raw === null) return DEFAULT_HEIGHT;
     const n = parseInt(raw, 10);
     return Number.isNaN(n) ? DEFAULT_HEIGHT : Math.max(MIN_HEIGHT, Math.min(STORED_MAX, n));
@@ -61,7 +63,7 @@ export interface ResizableDockHandle {
  * localStorage["klyx-logs-dock-height"].
  */
 export function useResizableDock(): ResizableDockHandle {
-  const [preferred, setPreferred] = useState<number>(readStored);
+  const [preferred, setPreferred] = useState<number>(readPreferred);
   const [max, setMax] = useState<number>(() => dockMaxHeight());
   const height = clampDock(preferred, max);
   const dragging = useRef(false);
@@ -100,11 +102,7 @@ export function useResizableDock(): ResizableDockHandle {
     const delta = unzoom(startY.current - e.clientY);
     const final = clampDock(startHeight.current + delta, max);
     setPreferred(final);
-    try {
-      localStorage.setItem(STORAGE_KEY, String(final));
-    } catch {
-      // localStorage not available in test / sandboxed environments — ignore.
-    }
+    writeStored(STORAGE_KEY, String(final)); // best-effort, as in a sandboxed test
   }, [max]);
 
   return {

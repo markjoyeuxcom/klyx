@@ -70,6 +70,16 @@ type Index struct {
 
 // New builds an index. Each search admits its own working set (§2.6,
 // review of 9b).
+// Configured is what the index runs with: its kinds' keys and its limits,
+// after the defaults (Settings S1: the effective values, never the file's).
+func (ix *Index) Configured() ([]string, Limits) {
+	keys := make([]string, 0, len(ix.s.Kinds))
+	for _, k := range ix.s.Kinds {
+		keys = append(keys, k.Key())
+	}
+	return keys, ix.s.Limits
+}
+
 func New(s Settings) *Index {
 	if s.Kinds == nil {
 		s.Kinds = DefaultKinds

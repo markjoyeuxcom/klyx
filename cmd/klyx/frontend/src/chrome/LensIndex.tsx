@@ -5,10 +5,12 @@ import { FLEET_VIEWS, absentLine, coverageOf, lensIndex, type IndexEntry } from 
 import { LENS_INDEX_ID, useLensIndexOpen } from "../nav/lensIndexOpen";
 import { toneColor } from "./primitives/styles";
 import { Aspect } from "./primitives";
+import { SettingsRail } from "../settings/SettingsRail";
 
 // The lens index (The Line slice 4 §4): the open cluster's lenses as two
 // sections, "Needs you" and "Everything else", with one quiet line for what
-// is not installed; on fleet routes, the fleet views. It replaces NavBand.
+// is not installed; on fleet routes, the fleet views; on Settings, its
+// sections and search (Settings S1 §1). It replaces NavBand.
 // Every number is navCounts'; capability checking or unknown stays listed,
 // disabled; only a confirmed absence hides a lens.
 export { LENS_INDEX_ID };
@@ -20,8 +22,8 @@ export function LensIndex() {
   return (
     // data-list-keys="ignore": a focused index entry owns its keys - Enter,
     // j/k and lens verbs never reach the list beside it.
-    <nav id={LENS_INDEX_ID} aria-label="Lenses" className="lens-index" data-list-keys="ignore">
-      {route.name === "cluster" ? <ClusterIndex cluster={route.cluster} /> : <FleetIndex />}
+    <nav id={LENS_INDEX_ID} aria-label={route.name === "settings" ? "Settings sections" : "Lenses"} className="lens-index" data-list-keys="ignore">
+      {route.name === "cluster" ? <ClusterIndex cluster={route.cluster} /> : route.name === "settings" ? <SettingsRail /> : <FleetIndex />}
     </nav>
   );
 }

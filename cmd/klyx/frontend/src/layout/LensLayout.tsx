@@ -3,6 +3,8 @@ import { unzoom } from "../app/zoom";
 import { inEditable } from "../chrome/inEditable";
 import { InspectorExpand } from "./inspectorExpand";
 import "./layout.css";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
 
 // LensLayout owns the workspace geometry for a list + detail lens: header,
 // controls, an optional notice, the body well, the footer, and the split with
@@ -20,7 +22,7 @@ export type DatasetState = "loading" | "unreadable" | "empty" | "no-match" | "re
 // a mismatch would overlap rows, clip the last one and drift the cursor.
 export const TABLE_ROW_HEIGHT = 40; // parent §2.3: 40px rows
 
-export const INSPECTOR_WIDTH_KEY = "klyx.layout.v1.inspectorWidth";
+export const INSPECTOR_WIDTH_KEY: StorageKey = "klyx.layout.v1.inspectorWidth";
 export const INSPECTOR_DEFAULT = 400;
 export const INSPECTOR_MIN = 360;
 // The drawer overlays a narrow workspace and keeps the redesign's ceiling.
@@ -34,15 +36,13 @@ const SPLIT_GAP = 8;
 const KEY_STEP = 16;
 
 function readRequestedWidth(): number {
-  try {
-    const n = Number(localStorage.getItem(INSPECTOR_WIDTH_KEY));
-    if (Number.isFinite(n) && n >= INSPECTOR_MIN && n <= REQUEST_CEILING) return n;
-  } catch { /* storage unavailable: default */ }
+  const n = Number(readStored(INSPECTOR_WIDTH_KEY)); // unavailable storage: the default
+  if (Number.isFinite(n) && n >= INSPECTOR_MIN && n <= REQUEST_CEILING) return n;
   return INSPECTOR_DEFAULT;
 }
 
 function writeRequestedWidth(n: number) {
-  try { localStorage.setItem(INSPECTOR_WIDTH_KEY, String(n)); } catch { /* best effort */ }
+  writeStored(INSPECTOR_WIDTH_KEY, String(n));
 }
 
 /**

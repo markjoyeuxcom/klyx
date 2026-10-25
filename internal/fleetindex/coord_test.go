@@ -484,3 +484,13 @@ func TestCoordRelistsOnExpiredWatch(t *testing.T) {
 	api.ch("configmaps") <- `{"type":"ERROR","object":{"kind":"Status","code":410,"reason":"Expired"}}`
 	eventually(t, "relisted", func() bool { return fmt.Sprint(entryUIDs(ix, "a", "/configmaps")) == "[c2]" })
 }
+
+// Settings S1: the index says what it runs with, after the defaults.
+func TestConfiguredIsWhatRuns(t *testing.T) {
+	ix := New(Settings{})
+	defer ix.Stop()
+	kinds, l := ix.Configured()
+	if len(kinds) != len(DefaultKinds) || l != DefaultLimits {
+		t.Fatalf("%v %+v", kinds, l)
+	}
+}

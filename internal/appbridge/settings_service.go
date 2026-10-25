@@ -83,6 +83,7 @@ type DiagnosticsDTO struct {
 	Fleet       DiagFleetDTO   `json:"fleet"`
 	Tools       []DiagToolDTO  `json:"tools"`
 	Proxies     []string       `json:"proxies"` // the proxy variables that are set, by name only
+	EnvSet      []string       `json:"envSet"`  // every declared product variable that is set, by name only
 	Bounds      []DiagBoundDTO `json:"bounds"`
 	CanCheck    bool           `json:"canCheck"`              // versions can be checked here
 	CannotCheck string         `json:"cannotCheck,omitempty"` // why not
@@ -124,7 +125,7 @@ var proxyNames = []envread.Name{envread.HTTPProxy, envread.HTTPSProxy, envread.N
 // running them, and lists the launch environment's proxy names and the
 // fixed bounds.
 func (s *SettingsService) Diagnostics() DiagnosticsDTO {
-	dto := DiagnosticsDTO{Tools: []DiagToolDTO{}, Proxies: []string{}, Bounds: []DiagBoundDTO{}}
+	dto := DiagnosticsDTO{Tools: []DiagToolDTO{}, Proxies: []string{}, EnvSet: []string{}, Bounds: []DiagBoundDTO{}}
 	if s.config != nil {
 		f := s.config.GetFleetConfig()
 		dto.Fleet = DiagFleetDTO{Path: f.Path, State: "loaded", LoadError: f.LoadError, FileError: f.FileError, Warnings: f.Warnings, FileOnly: f.FileOnly}
@@ -154,6 +155,14 @@ func (s *SettingsService) Diagnostics() DiagnosticsDTO {
 	for _, n := range proxyNames {
 		if v, ok := envread.Lookup(n); ok && v != "" {
 			dto.Proxies = append(dto.Proxies, n.Key())
+		}
+	}
+	for _, d := range envread.Declared() {
+		if d.Kind == "harness" {
+			continue
+		}
+		if v, ok := envread.Lookup(d.Name); ok && v != "" {
+			dto.EnvSet = append(dto.EnvSet, d.Key)
 		}
 	}
 	labels := map[string]string{}

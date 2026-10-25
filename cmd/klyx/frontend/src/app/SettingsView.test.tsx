@@ -3,6 +3,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { SettingsView } from "./SettingsView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { FleetConfigDTO } from "../bridge/configsvc";
+import { useFleet } from "../store/fleet";
 
 const mockGetFleetConfig = vi.fn<() => Promise<FleetConfigDTO | null>>();
 const mockAddClusters = vi.fn();
@@ -31,6 +32,7 @@ describe("SettingsView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetFleetConfig.mockResolvedValue(baseCfg);
+    useFleet.setState({ route: { name: "settings", section: "fleet" } });
   });
 
   it("renders the fleet file path, clusters, and load warnings", async () => {
@@ -98,9 +100,11 @@ describe("Settings > Appearance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetFleetConfig.mockResolvedValue(baseCfg);
+    useFleet.setState({ route: { name: "settings", section: "fleet" } });
   });
 
   it("lists every theme as a radio; choosing one sets the theme", async () => {
+    useFleet.setState({ route: { name: "settings", section: "appearance" } });
     const { findByRole, getByRole } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     const group = await findByRole("group", { name: "Theme" });
     const radios = Array.from(group.querySelectorAll<HTMLInputElement>('input[type="radio"]'));

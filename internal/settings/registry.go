@@ -177,14 +177,14 @@ func aiEntries() []Entry {
 		return e
 	}
 	return []Entry{
-		a("provider", "Provider", "Which AI Klyx uses for Explain, Suggest-fix, chat and investigations. Off turns every AI surface off.", "off", "off, anthropic, openai, gemini, openaiCompatible or claudeCLI."),
+		a("provider", "AI provider", "Which AI Klyx uses for Explain, Suggest-fix, chat and investigations. Off turns every AI surface off.", "off", "off, anthropic, openai, gemini, openaiCompatible or claudeCLI."),
 		a("model", "Model", "The model every AI call uses.", "claude-opus-5-5 for Anthropic and the Claude Code CLI; the others must be chosen", "A model the provider serves; Load models lists them."),
-		a("keySource", "Key from", "Where Klyx reads the API key: the keychain, an environment variable, or none for a local server.", "keychain", "keychain, env or none; legacy for a key still in fleet.yaml."),
+		a("keySource", "Key source", "Where Klyx reads the API key: the keychain, an environment variable, or none for a local server.", "keychain", "keychain, env or none; legacy for a key still in fleet.yaml."),
 		a("apiKeyEnv", "Environment variable name", "The variable Klyx reads the key from when the key comes from the environment. A GUI launch may not see shell exports.", "none", "A variable name."),
 		a("baseUrl", "Server URL or custom origin", "For a local OpenAI-compatible server, its URL; for a vendor, an HTTPS origin the key is sent to instead of the vendor's own.", "the vendor's origin; http://localhost:11434 for a local server", "An http URL for a local server, https otherwise."),
 		a("cliPath", "Claude Code path", "The Claude Code binary to run, instead of the one found on PATH or in ~/.local/bin.", "found automatically", "An absolute path to an executable."),
-		a("allowProtectedEgress", "Protected-cluster egress", "Send protected clusters' context to the AI in use: one permission for chat, Explain, Suggest-fix and investigations, following whichever provider and origin are in use. Off, AI is unavailable on protected clusters unless the model runs on this machine.", "false", "true or false; turning it on asks you to confirm."),
-		a("tlsSkipVerify", "Skip certificate verification", "For a local server only: accept any certificate, so the connection is encrypted but the server is not authenticated.", "false", "true or false."),
+		a("allowProtectedEgress", "Allow protected-cluster egress", "Send protected (prd) clusters' context to the AI in use. One permission for chat, Explain, Suggest-fix and investigations, and it follows whichever provider and origin are in use: it stays on if you change them later. Off: AI stays unavailable on protected clusters unless the model runs on this machine.", "false", "true or false; turning it on asks you to type a confirmation, and saves."),
+		a("tlsSkipVerify", "Skip certificate verification", "Insecure, for a local server only: Klyx accepts any certificate this server presents, for any host name, so the connection is encrypted but the server is not authenticated. Use it only for a server on a network you trust; prompts and the key go to whoever answers.", "false", "true or false."),
 		a("refusalFallback", "Refusal fallback", "Let Anthropic retry a refused request on another Claude model; the result names the model used.", "true", "true or false; Anthropic only."),
 		a("proposeActions", "Propose actions in investigations", "An investigation may propose day-2 steps, each run only when you review and confirm it. Off, the remedy stays text.", "true", "true or false."),
 		legacy("backend", "Backend (legacy)", "The pre-2026-10-13 spelling of the provider: hosted is anthropic, local is openaiCompatible."),
@@ -215,9 +215,9 @@ func notificationEntries() []Entry {
 			TakesEffect: Now, Save: notifySave, Disposition: Editable, Source: FromSchema}
 	}
 	return []Entry{
-		n("enabled", "Notify about new faults", "Sends an OS notification when a cluster develops a new fault. Faults already present when a cluster connects are listed in Activity, never notified. Turning it on asks the OS for permission.", "false", "true or false."),
-		n("scope", "Which clusters", "Protected clusters only, or every cluster.", "protected", "protected or all."),
-		n("recoveries", "Recoveries", "Also notify when a fault you were notified about is healthy again.", "false", "true or false."),
+		n("enabled", "Notify me about new faults", "Off until enabled. Faults already present when a cluster connects are listed once in Activity, never notified; nothing is sent while Klyx shows that cluster. Turning it on asks the OS for permission.", "false", "true or false."),
+		n("scope", "Clusters", "Which clusters' new faults are notified: protected clusters only, or every cluster.", "protected", "protected or all."),
+		n("recoveries", "Also notify recoveries", "A recovery is notified only for a fault you were notified about, and only once it is healthy again.", "false", "true or false."),
 	}
 }
 

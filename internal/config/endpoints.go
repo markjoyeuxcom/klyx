@@ -92,7 +92,7 @@ func EndpointURLProblem(endpoint string) string {
 	case err != nil:
 		return "the endpoint URL does not parse; fix it in fleet.yaml"
 	case u.User != nil:
-		return "the endpoint URL carries credentials; set them in Settings > External endpoints"
+		return "the endpoint URL carries credentials; set them in Settings > Observability"
 	}
 	return ""
 }

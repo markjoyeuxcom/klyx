@@ -209,7 +209,7 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
           <div className="chat-notice" role="alert" data-testid="chat-failure">
             ▲ {failure}
             {/Settings > AI|AI is off|unavailable|protected/.test(failure) && (
-              <div><button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings()}>Open Settings</button></div>
+              <div><button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings("ai")}>Open Settings &gt; AI</button></div>
             )}
           </div>
         )}

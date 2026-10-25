@@ -18,6 +18,8 @@ import {
   type AITest,
   type AIModel,
 } from "../bridge/aiSettings";
+import { SettingField } from "../settings/SettingField";
+import { setSectionDraft } from "../settings/navGuard";
 
 // AISettingsPanel is Settings > AI (spec 2026-10-13 §2.4). It edits a draft of
 // fleet.yaml's ai block and shows exactly where prompts go. A key goes in
@@ -40,10 +42,16 @@ export function providerLabel(id: string): string {
 }
 
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" };
-const labelStyle: React.CSSProperties = { fontSize: 10, color: "var(--color-text-tertiary)", width: 110, flexShrink: 0 };
 const hint: React.CSSProperties = { fontSize: 11, color: "var(--color-text-tertiary)" };
 
-export function AISettingsPanel() {
+// differs reports an unsaved settings draft.
+function differs(draft: AISettings, saved: AISettings): boolean {
+  return (Object.keys(draft) as (keyof AISettings)[]).some((k) => (draft[k] ?? "") !== (saved[k] ?? ""));
+}
+
+// onState hands the read state to the section (its sentence is the In use
+// line).
+export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) => void } = {}) {
   const [state, setState] = useState<AISettingsState | null>(null);
   const [draft, setDraft] = useState<AISettings | null>(null);
   const [keyInput, setKeyInput] = useState("");
@@ -65,6 +73,11 @@ export function AISettingsPanel() {
   // nothing was edited while it was on its way (Codex's review of Settings
   // slice 0, finding 1).
   const loadSeq = useRef(0);
+  // The guard's Save, set on each render that reaches the form; and the
+  // save still being read back, which finishes before leaving is asked
+  // about (Settings S1 §1).
+  const saveRef = useRef<() => Promise<boolean>>(async () => false);
+  const saving = useRef<Promise<unknown> | null>(null);
 
   const load = async (keepDraft = false) => {
     const seq = ++loadSeq.current;
@@ -74,12 +87,34 @@ export function AISettingsPanel() {
     setLoadFailed(s === null);
     if (!s) return;
     setState(s);
+    onState?.(s);
     if (!draft || (!keepDraft && gen === draftGen.current)) setDraft(s.persisted);
   };
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Leaving the section with a draft asks first (S1 §1): the settings draft,
+  // and a typed key as its own draft that Save never stores.
+  useEffect(() => {
+    const unsaved = !!state && !!draft && differs(draft, state.persisted);
+    const typedKey = keyInput.trim() !== "";
+    setSectionDraft("ai", unsaved || typedKey || saving.current ? {
+      settings: unsaved,
+      credentials: typedKey ? ["an unsaved API key"] : [],
+      save: () => saveRef.current(),
+      discard: () => {
+        setKeyInput("");
+        if (state) {
+          draftGen.current++;
+          setDraft(state.persisted);
+        }
+      },
+      settling: () => saving.current,
+    } : null);
+  });
+  useEffect(() => () => setSectionDraft("ai", null), []);
 
   // The installed Claude Code, described without running it. A reply for an
   // older path or provider is dropped.
@@ -112,15 +147,24 @@ export function AISettingsPanel() {
 
   const provider = PROVIDERS.find((p) => p.id === draft.provider) ?? PROVIDERS[0];
   const keyStored = !!state.keysStored[draft.provider];
-  const run = async (fn: () => Promise<{ ok: boolean; error: string }>, okText: string, keepDraft = false) => {
+  const run = async (fn: () => Promise<{ ok: boolean; error: string }>, okText: string, keepDraft = false): Promise<boolean> => {
     // an edit made while this runs is newer than its reply: the reload keeps
     // it (Settings review slice 0)
     const gen = draftGen.current;
     setBusy(true);
-    const r = await fn();
-    setBusy(false);
-    setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
-    if (r.ok) await load(keepDraft || gen !== draftGen.current);
+    const work = (async () => {
+      const r = await fn();
+      setBusy(false);
+      setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
+      if (r.ok) await load(keepDraft || gen !== draftGen.current);
+      return r.ok;
+    })();
+    saving.current = work;
+    try {
+      return await work;
+    } finally {
+      if (saving.current === work) saving.current = null;
+    }
   };
   const update = (patch: Partial<AISettings>) => {
     draftGen.current++;
@@ -145,13 +189,14 @@ export function AISettingsPanel() {
     });
   };
   const save = (d: AISettings) => run(() => saveAISettings(d), "Saved. Chat, Explain, Suggest-fix and investigations now use these settings.");
+  saveRef.current = () => save(draft);
 
   const a = state.active;
   const customOrigin = provider.defaultOrigin && draft.baseUrl ? draft.baseUrl : "";
   // The status line is what is IN USE; a draft that differs from the saved
   // settings says so, so a chosen provider never reads as applied (UI review
   // 2026-10-13: "AI is off" sat beside a chosen, unsaved Claude Code).
-  const dirty = (Object.keys(draft) as (keyof AISettings)[]).some((k) => (draft[k] ?? "") !== (state.persisted[k] ?? ""));
+  const dirty = differs(draft, state.persisted);
   // the saved settings are the ones in use unless they diverged (its notice)
   const unverified = !state.diverged && a.backend === "openaiCompatible" && state.persisted.tlsSkipVerify;
 
@@ -191,110 +236,107 @@ export function AISettingsPanel() {
         </Notice>
       )}
 
-      <div style={row}>
-        <span style={labelStyle}>provider</span>
-        <select aria-label="AI provider" className="l-input" value={draft.provider} onChange={(e) => chooseProvider(e.target.value)}>
-          {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-        </select>
-      </div>
+      <SettingField id="ai.provider" source="file">
+        {(ids) => (
+          <select id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={draft.provider} onChange={(e) => chooseProvider(e.target.value)}>
+            {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        )}
+      </SettingField>
 
       {provider.id !== "off" && (
         <>
           {provider.keyed && (
             <>
-              <div style={row}>
-                <span style={labelStyle}>key from</span>
-                <select aria-label="Key source" className="l-input" value={draft.keySource === "legacy" ? "legacy" : draft.keySource} onChange={(e) => update({ keySource: e.target.value })}>
-                  <option value="keychain">Keychain</option>
-                  <option value="env">Environment variable</option>
-                  {provider.id === "openaiCompatible" && <option value="none">No key</option>}
-                  {draft.keySource === "legacy" && <option value="legacy">fleet.yaml (plain text)</option>}
-                </select>
-                {draft.keySource === "env" && (
-                  <input aria-label="Environment variable name" className="l-input" placeholder="ANTHROPIC_API_KEY" value={draft.apiKeyEnv} onChange={(e) => update({ apiKeyEnv: e.target.value })} />
+              <SettingField id="ai.keySource" source="file">
+                {(ids) => (
+                  <select id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={draft.keySource === "legacy" ? "legacy" : draft.keySource} onChange={(e) => update({ keySource: e.target.value })}>
+                    <option value="keychain">Keychain</option>
+                    <option value="env">Environment variable</option>
+                    {provider.id === "openaiCompatible" && <option value="none">No key</option>}
+                    {draft.keySource === "legacy" && <option value="legacy">fleet.yaml (plain text)</option>}
+                  </select>
                 )}
-              </div>
+              </SettingField>
+              {draft.keySource === "env" && (
+                <SettingField id="ai.apiKeyEnv" source="file">
+                  {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} className="l-input" placeholder="ANTHROPIC_API_KEY" value={draft.apiKeyEnv} onChange={(e) => update({ apiKeyEnv: e.target.value })} />}
+                </SettingField>
+              )}
               {draft.keySource === "keychain" && (
-                <div style={row}>
-                  <span style={labelStyle}>API key</span>
-                  <span data-testid="ai-key-state" style={{ fontSize: 11, color: keyStored ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
+                <SettingField id="credential.ai-key" note={
+                  <span data-testid="ai-key-state" style={{ color: keyStored ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
                     {keyStored ? "stored in the keychain" : "no key stored"}
                   </span>
-                  <input
-                    aria-label="API key"
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="l-input"
-                    style={{ flex: 1, minWidth: 0 }}
-                    placeholder={keyStored ? "paste a new key to replace it" : "paste a key"}
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                  />
-                  <button
-                    className="l-btn"
-                    disabled={busy || keyInput.trim() === ""}
-                    onClick={() => {
-                      const k = keyInput;
-                      setKeyInput("");
-                      void run(() => setAPIKey(provider.id, k), "Key stored in the keychain.", true);
-                    }}
-                  >
-                    {keyStored ? "Replace key" : "Save key"}
-                  </button>
-                  {keyStored && (
-                    <button className="l-btn l-btn-danger" disabled={busy} onClick={() => void run(() => clearAPIKey(provider.id), "Key removed from the keychain.", true)}>Remove key</button>
-                  )}
-                </div>
+                }>
+                  {(ids) => (<>
+                    <input
+                      id={ids.id}
+                      aria-describedby={ids.describedBy}
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="l-input"
+                      placeholder={keyStored ? "paste a new key to replace it" : "paste a key"}
+                      value={keyInput}
+                      onChange={(e) => setKeyInput(e.target.value)}
+                    />
+                    <button
+                      className="l-btn"
+                      disabled={busy || keyInput.trim() === ""}
+                      onClick={() => {
+                        const k = keyInput;
+                        setKeyInput("");
+                        void run(() => setAPIKey(provider.id, k), "Key stored in the keychain.", true);
+                      }}
+                    >
+                      {keyStored ? "Replace key" : "Save key"}
+                    </button>
+                    {keyStored && (
+                      <button className="l-btn l-btn-danger" disabled={busy} onClick={() => void run(() => clearAPIKey(provider.id), "Key removed from the keychain.", true)}>Remove key</button>
+                    )}
+                  </>)}
+                </SettingField>
               )}
             </>
           )}
 
-          <div style={row}>
-            <span style={labelStyle}>model</span>
-            <input
-              aria-label="Model"
-              className="l-input"
-              list={modelListId}
-              style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)" }}
-              placeholder={provider.id === "anthropic" || provider.id === "claudeCLI" ? "claude-opus-5-5 (default)" : "choose a model"}
-              value={draft.model}
-              onChange={(e) => update({ model: e.target.value })}
-            />
-            <datalist id={modelListId}>
-              {models.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
-            </datalist>
-            <button
-              className="l-btn"
-              disabled={busy}
-              onClick={async () => {
-                const gen = draftGen.current;
-                setBusy(true);
-                const r = await listAIModels(draft);
-                setBusy(false);
-                if (gen !== draftGen.current) return; // the draft changed meanwhile
-                setModels(r.models);
-                setMessage(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: `${r.models.length} model${r.models.length === 1 ? "" : "s"} available.` });
-              }}
-            >
-              Load models
-            </button>
-          </div>
+          <SettingField id="ai.model" source={draft.model ? "file" : "default"}>
+            {(ids) => (<>
+              <input
+                id={ids.id}
+                aria-describedby={ids.describedBy}
+                className="l-input"
+                list={modelListId}
+                style={{ fontFamily: "var(--font-mono)" }}
+                placeholder={provider.id === "anthropic" || provider.id === "claudeCLI" ? "claude-opus-5-5 (default)" : "choose a model"}
+                value={draft.model}
+                onChange={(e) => update({ model: e.target.value })}
+              />
+              <datalist id={modelListId}>
+                {models.map((m) => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+              </datalist>
+              <button
+                className="l-btn"
+                disabled={busy}
+                onClick={async () => {
+                  const gen = draftGen.current;
+                  setBusy(true);
+                  const r = await listAIModels(draft);
+                  setBusy(false);
+                  if (gen !== draftGen.current) return; // the draft changed meanwhile
+                  setModels(r.models);
+                  setMessage(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: `${r.models.length} model${r.models.length === 1 ? "" : "s"} available.` });
+                }}
+              >
+                Load models
+              </button>
+            </>)}
+          </SettingField>
 
           {provider.id === "claudeCLI" && (
-            <>
-              <div style={row}>
-                <span style={labelStyle}>CLI path</span>
-                <input
-                  aria-label="Claude Code path"
-                  className="l-input"
-                  style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)" }}
-                  placeholder="found automatically (PATH, then ~/.local/bin/claude)"
-                  value={draft.cliPath}
-                  onChange={(e) => update({ cliPath: e.target.value })}
-                />
-              </div>
-              <div data-testid="ai-cli-status" style={{ ...hint, marginLeft: 118, color: cli?.problem ? "var(--color-text-warning)" : undefined }}>
+            <SettingField id="ai.cliPath" source={draft.cliPath ? "file" : "default"} note={<>
+              <div data-testid="ai-cli-status" style={{ color: cli?.problem ? "var(--color-text-warning)" : undefined }}>
                 {cli === null ? (
                   "Checking the installed Claude Code…"
                 ) : (
@@ -305,76 +347,76 @@ export function AISettingsPanel() {
                   </>
                 )}
               </div>
-              <div style={{ ...hint, marginLeft: 118 }}>
+              <div style={hint}>
                 Klyx runs a Claude Code build (2.1.296 or later) only after Test has checked it on this machine, so each Claude Code update needs one Test. It runs signed in to a personal Pro or Max account, with no tools, MCP servers, hooks or settings. Before every call it re-checks the sign-in and administrator policy, and refuses if either changed.
               </div>
-            </>
+            </>}>
+              {(ids) => (
+                <input
+                  id={ids.id}
+                  aria-describedby={ids.describedBy}
+                  className="l-input"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                  placeholder="found automatically (PATH, then ~/.local/bin/claude)"
+                  value={draft.cliPath}
+                  onChange={(e) => update({ cliPath: e.target.value })}
+                />
+              )}
+            </SettingField>
           )}
 
           {provider.id !== "claudeCLI" && (
-          <div style={row}>
-            <span style={labelStyle}>{provider.id === "openaiCompatible" ? "server URL" : "custom origin"}</span>
-            <input
-              aria-label={provider.id === "openaiCompatible" ? "Server URL" : "Custom origin"}
-              className="l-input"
-              style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)" }}
-              placeholder={provider.defaultOrigin ? `${provider.defaultOrigin} (default)` : "http://localhost:11434"}
-              value={draft.baseUrl}
-              onChange={(e) => update({ baseUrl: e.target.value })}
-            />
-          </div>
-          )}
-          {customOrigin && (
-            <div data-testid="ai-origin-disclosure" style={{ ...hint, marginLeft: 118, color: "var(--color-text-warning)" }}>
-              Your {providerLabel(provider.id).split(" (")[0]} key will be sent to {customOrigin}, not to {provider.defaultOrigin}.
-            </div>
+            <SettingField id="ai.baseUrl" label={provider.id === "openaiCompatible" ? "Server URL" : "Custom origin"} source={draft.baseUrl ? "file" : "default"}
+              note={customOrigin ? (
+                <span data-testid="ai-origin-disclosure" style={{ color: "var(--color-text-warning)" }}>
+                  Your {providerLabel(provider.id).split(" (")[0]} key will be sent to {customOrigin}, not to {provider.defaultOrigin}.
+                </span>
+              ) : undefined}>
+              {(ids) => (
+                <input
+                  id={ids.id}
+                  aria-describedby={ids.describedBy}
+                  className="l-input"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                  placeholder={provider.defaultOrigin ? `${provider.defaultOrigin} (default)` : "http://localhost:11434"}
+                  value={draft.baseUrl}
+                  onChange={(e) => update({ baseUrl: e.target.value })}
+                />
+              )}
+            </SettingField>
           )}
 
           {provider.id === "anthropic" && (
-            <label style={{ ...row, cursor: "pointer" }}>
-              <span style={labelStyle}>refusals</span>
-              <input type="checkbox" checked={draft.refusalFallback} onChange={(e) => update({ refusalFallback: e.target.checked })} />
-              <span style={{ fontSize: 11 }}>Let Anthropic retry a refused request on another Claude model (the result names the model used)</span>
-            </label>
+            <SettingField id="ai.refusalFallback" source="file">
+              {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={draft.refusalFallback} onChange={(e) => update({ refusalFallback: e.target.checked })} />}
+            </SettingField>
           )}
           {provider.id === "openaiCompatible" && (
-            <label style={{ ...row, cursor: "pointer" }}>
-              <span style={labelStyle}>TLS</span>
-              <input type="checkbox" aria-label="Skip certificate verification" checked={draft.tlsSkipVerify} onChange={(e) => update({ tlsSkipVerify: e.target.checked })} />
-              <span style={{ fontSize: 11 }}>
-                Skip certificate verification (insecure): Klyx accepts any certificate this server presents, for any host name, so the connection is encrypted but the server is not authenticated. Use it only for a server on a network you trust; prompts and the key go to whoever answers.
-              </span>
-            </label>
+            <SettingField id="ai.tlsSkipVerify" source="file">
+              {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={draft.tlsSkipVerify} onChange={(e) => update({ tlsSkipVerify: e.target.checked })} />}
+            </SettingField>
           )}
 
-          <label style={{ ...row, cursor: "pointer" }}>
-            <span style={labelStyle}>protected clusters</span>
-            <input
-              type="checkbox"
-              aria-label="Allow protected-cluster egress"
-              checked={draft.allowProtectedEgress}
-              onChange={(e) => {
-                if (e.target.checked && !state.persisted.allowProtectedEgress) setConfirmEgress(true);
-                else update({ allowProtectedEgress: e.target.checked });
-              }}
-            />
-            <span style={{ fontSize: 11 }}>
-              Send protected (prd) clusters' context to the AI in use. One permission for chat, Explain, Suggest-fix and investigations, and it follows whichever provider and origin are in use: it stays on if you change them later. Off: AI stays unavailable on protected clusters unless the model runs on this machine.
-            </span>
-          </label>
+          <SettingField id="ai.allowProtectedEgress" source="file">
+            {(ids) => (
+              <input
+                id={ids.id}
+                aria-describedby={ids.describedBy}
+                type="checkbox"
+                checked={draft.allowProtectedEgress}
+                onChange={(e) => {
+                  if (e.target.checked && !state.persisted.allowProtectedEgress) setConfirmEgress(true);
+                  else update({ allowProtectedEgress: e.target.checked });
+                }}
+              />
+            )}
+          </SettingField>
 
           {/* AI A3 §6: on by default; off removes the tool, the snapshot
               instruction and the card - the remedy stays text */}
-          <label style={{ ...row, cursor: "pointer" }}>
-            <span style={labelStyle}>investigations</span>
-            <input
-              type="checkbox"
-              aria-label="Propose actions in investigations"
-              checked={draft.proposeActions ?? true}
-              onChange={(e) => update({ proposeActions: e.target.checked })}
-            />
-            <span style={{ fontSize: 11 }}>Propose actions in investigations: the model may propose day-2 steps, and each runs only when you review and confirm it. Off: the remedy stays text.</span>
-          </label>
+          <SettingField id="ai.proposeActions" source={draft.proposeActions === undefined ? "default" : "file"}>
+            {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={draft.proposeActions ?? true} onChange={(e) => update({ proposeActions: e.target.checked })} />}
+          </SettingField>
         </>
       )}
 
