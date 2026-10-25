@@ -513,6 +513,8 @@ Each slice is reviewed by Codex before and after it is built, and its as-built n
 
 ## 16. Owner decisions
 
+**Confirmed by the owner, 2026-10-25: all four, as proposed, with the conditions below.**
+
 1. **Settings edits cluster entries** (§5): context, kubeconfig, placement and protection, but not the name, under §4's plan, epoch and interlock contract. Settings has never written the clusters list beyond appending. Proposed: yes.
 2. **An existing protected-egress grant migrates** to a grant with the current resolved terms, but only if AI is on and its destination resolves (§7). The alternative is asking again on upgrade. Proposed: migrate, and say so once.
 3. **An installation serves a group** (`serves: [{group: ...}]`), as the owner described a group sharing one Alertmanager (§6). Each member has its own subscription, tenant and scope, with explicit precedence. A membership change re-keys its data and ends the old lineage, and group membership never grants consent. Proposed: yes.
@@ -589,4 +591,4 @@ The re-review's implementation details on epochs, S8a buckets and existing per-c
 
 ## 20. ACCEPT (2026-10-25)
 
-Codex accepted the design at revision 2 (5f21e40), after the review of 17890a2 and two re-reviews, with no remaining findings. It ruled RR1 to RR4 resolved, and the original R1 to R6 contracts still addressed with no new conflict. It found §17a a faithful record of its implementation notes, which are acceptance requirements for slices F and S3a. A temporary test confirmed that the §6.1 examples parse and that each subscription names an installation of its kind. The four owner decisions (§16) stand as proposed with their conditions, for the owner's confirmation.
+Codex accepted the design at revision 2 (5f21e40), after the review of 17890a2 and two re-reviews, with no remaining findings. It ruled RR1 to RR4 resolved, and the original R1 to R6 contracts still addressed with no new conflict. It found §17a a faithful record of its implementation notes, which are acceptance requirements for slices F and S3a. A temporary test confirmed that the §6.1 examples parse and that each subscription names an installation of its kind. The owner then confirmed the four decisions (§16) as proposed, with their conditions.
