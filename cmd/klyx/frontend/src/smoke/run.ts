@@ -1,6 +1,7 @@
 import { Call } from "@wailsio/runtime";
 import { NAV_GROUPS, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useFleet } from "../store/fleet";
+import { SETTINGS_SECTIONS } from "../settings/registry";
 import { useChat, invSlot } from "../ai/chatStore";
 import { investigationState } from "../bridge/chat";
 import { setThemeChoice } from "../theme/ThemeProvider";
@@ -1127,11 +1128,31 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   });
 
   // ---- settings and the chat drawer ----
+  // Settings S1 §7: every section opens by its address, the rail marking
+  // it; mod+, opens the section last shown; search finds "protection" by
+  // its effect and opens Fleet at it.
+  await step(steps, "Settings sections by address, mod+, and search", async () => {
+    for (const sec of SETTINGS_SECTIONS) {
+      useFleet.getState().openSettings(sec);
+      await within(8000, `the ${sec} section`, () => $(`.settings-page[data-section='${sec}']`));
+      await within(4000, `${sec} marked in the rail`, () => $(`.lens-index [data-section='${sec}'][aria-current='page']`));
+    }
+    useFleet.getState().openFleet();
+    await within(4000, "the fleet", () => useFleet.getState().route.name === "fleet");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, ctrlKey: true, bubbles: true }));
+    await within(4000, "mod+, opening Diagnostics", () => $(".settings-page[data-section='diagnostics']"));
+    const search = await within(4000, "the settings search", () => $<HTMLInputElement>(".lens-index input[aria-label='Search settings']"));
+    typeInto(search, "protection");
+    (await within(4000, "the Protection result", () => $<HTMLButtonElement>("[data-result='clusters[].protected']"))).click();
+    await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected");
+    const marked = document.querySelectorAll("[data-setting='clusters[].protected'][data-anchored]").length;
+    typeInto(search, "");
+    return { sections: SETTINGS_SECTIONS.length, marked };
+  });
   await step(steps, "Settings", async () => {
-    useFleet.getState().openSettings();
+    useFleet.getState().openSettings("notifications");
     await within(8000, "the Notifications panel", () => $("[data-testid='notification-settings']"));
-    const text = document.body.textContent ?? "";
-    for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    useFleet.getState().openSettings("observability");
     // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
     // their credential states (the smoke fleet configures the lab's
     // Alertmanager); S8a: Test reads its status

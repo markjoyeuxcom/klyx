@@ -81,7 +81,9 @@ func TestDiagnosticsNamesProxiesWithoutValues(t *testing.T) {
 	if strings.Join(d.Proxies, ",") != "HTTPS_PROXY,no_proxy" {
 		t.Fatalf("%v", d.Proxies)
 	}
-	if !contains(d.EnvSet, "HTTPS_PROXY") || contains(d.EnvSet, "HTTP_PROXY") {
+	t.Setenv("KLYX_SMOKE_OUT", "/harness/only") // a harness name is never listed
+	d = settingsWith().Diagnostics()
+	if !contains(d.EnvSet, "HTTPS_PROXY") || contains(d.EnvSet, "HTTP_PROXY") || contains(d.EnvSet, "KLYX_SMOKE_OUT") {
 		t.Fatalf("envSet %v", d.EnvSet)
 	}
 	b, _ := json.Marshal(d)

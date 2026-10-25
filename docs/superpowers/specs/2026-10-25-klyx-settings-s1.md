@@ -340,3 +340,68 @@ Codex accepted the S1 design at revision 3 (83d047b), after the review of 8b9231
 - **§3.3:** a faithful record of its preservation requirements.
 
 The accepted contracts are acceptance requirements for the build: the coverage tests, the facades and their scans, the rendered-control coverage, instance anchors, the draft guard, Diagnostics' passive resolution and contained version check, and §3.3's old-versus-new comparisons.
+
+## 12. As built (2026-10-25)
+
+Built on `feat/settings-s0` in five commits: the facades (a24f265, with the §3.3 comparisons in 51e57e8), the registry, its coverage and Diagnostics (8352bc9), the frontend (956afbd), and the endpoint links (2b048ab).
+
+**Where each contract lives:**
+
+| Contract | Code |
+|---|---|
+| §3.1 the environment | `internal/envread` (Name, Family, Purpose; Get, Lookup, Set, Walk, ForChild, Dynamic); the scan in `internal/settings/scan_test.go`, fixtures in `internal/settings/testdata/envscan` |
+| §3.2 native stores | `internal/localstore` (Root, Beside, Path); the Dir and store-name scan, fixtures in `testdata/dirscan` |
+| §3.2 webview storage | `src/settings/storage.ts`, `storageKeys.ts`; the TypeScript AST scan in `storage.test.ts` |
+| §3 bounds | `internal/bounds`, which the owning packages now alias |
+| §2 the registry | `internal/settings/registry.go` (146 entries), the snapshot `src/settings/registry.snapshot.json`, read by `src/settings/registry.ts` |
+| §3.3 preservation | `execenv/envread_parity_test.go`, `gitcli/env_parity_test.go`, `ai/claudecli_env_parity_test.go`, each against the old formula on the real environment |
+| §5 Diagnostics | `appbridge/settings_service.go`; the containment tests in `settings_service_unix_test.go` |
+| §1 route, rail, guard | `store/fleet.ts` (the route, `guardRoute`, `settingsLast`), `store/persist.ts`, `nav/history.ts`, `settings/SettingsRail.tsx`, `settings/navGuard.ts`, `settings/LeaveDialog.tsx` |
+| §4 SettingField | `settings/SettingField.tsx`, used by every panel |
+
+**Where the build differs from the design, or adds to it:**
+- **Two vocabulary additions.** `Entry.Source` has a fifth value, `credential`, for the two keychain entries (`credential.ai-key`, `credential.endpoint`). `Disposition` has `effective` for a store Klyx keeps where it is used: a dragged width, the palette's ranking, the route. These are shown, not offered, and they are not file-only.
+- **Id prefixes:**
+  - `native.` for the stores beside the fleet file;
+  - `env.family.` and `env.purpose.` for the families and the AI key's purpose;
+  - `bound.` for the ceilings.
+- **The scans are wider than §3.1:**
+  - they cover the build-tagged harnesses too, which now read through `envread`;
+  - they cover `Clearenv` and `golang.org/x/sys`'s environment functions;
+  - a literal naming a declared store outside `localstore` fails.
+- **The fleet-path Dir scan matches names.** It fails on a `filepath.Dir` or `path.Dir` whose argument names `configPath`, `fleetPath`, `fleetFile` or `cfgPath`, as an identifier or a field, whatever the alias. A fleet path held under another name would pass it. The store-name literal check covers what such a path would be joined with.
+- **`localstore`'s root is a value.** `Beside(fleetPath)` gives a `Root`; `main` and the Git service each make one from the same fleet path, and tests make their own. `gitcli.Start` now takes the cache base, and `CacheBase` is gone.
+- **Every entry renders a row in its own section.** This is a rule added beyond the spec, so that search always lands somewhere, and a test holds it per section. File-only fields of a repeated row are described once, under their table, while each cell carries its instance anchor.
+- **Labels are accessible names.** Several registry labels take the panels' wording, such as "AI provider" and "Notify me about new faults". A repeated row's control names its instance: "prd metrics token", "Also serves (github.com/acme/fleet)".
+- **The guard is the store's.** A zustand middleware holds any route change that would leave a section with a draft, from any caller, and history's back, forward and go ask first. The store also records the last section whenever the route enters Settings, so returning to Settings does not depend on the page being mounted.
+- **The theme's first read is best-effort.** Before, an unavailable storage threw at start; through the facade it opens night. This is a behaviour change, the safe direction.
+- **Endpoint prompts.** Reasons now say "Settings > Observability". A link that opens the cluster's endpoint, its credential field focused, follows them in the alerts lens and inspector block, log history, node and pod usage, workload sparklines and the route inspector. Where no cluster is in scope (the Overview monitoring line, Hubble, the data path, chat reads), the text stays without a link.
+- **New read-only APIs:**
+  - `IndexService.Settings()`: the index's kinds and limits as it runs;
+  - `DiagnosticsDTO.envSet`: the declared product variables that are set, by name.
+- **The location bar names the section** ("Settings › AI").
+
+**Not done in S1, as designed:** no new write, and no Apply model or editing of clusters, endpoints or the index. The Observability sentence reads endpoint configuration and the health summary's alerts parts; there is no separate discovery read. Data and storage gives the Git cache's size, and the webview's, but not the size of the two small native files.
+
+**Tests:**
+- **Go:**
+  - the registry's snapshot, completeness and each-way coverage of the schema, `envread`, `localstore` and `bounds`;
+  - the two scans and their fixtures;
+  - the facades' refusals;
+  - clibin's resolution sources;
+  - the three §3.3 comparisons;
+  - SettingsService: resolution without running, proxy names without values, the load states, no containment, stand-ins that record argv and environment, refuse a read kubeconfig, flood output, leave a child, fail, garble, hang and are cancelled; the parsers.
+- **Frontend:**
+  - the storage facade and scan (12 tests);
+  - the controls coverage across every section and provider variant, the approve dialog, and its negative fixture;
+  - a row for every entry;
+  - the route, persistence, an unknown section, history and mod+;
+  - anchors: one instance, every instance, a vanished one, unique ids;
+  - the rail and search;
+  - the console entries;
+  - the guard: stay, discard, save, a typed key, a save being read back;
+  - SettingField;
+  - every section's sentence;
+  - the endpoint link.
+
+  The whole suite is 2,500+ tests.

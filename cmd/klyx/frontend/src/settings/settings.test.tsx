@@ -389,6 +389,31 @@ describe("the draft guard (S1 §1)", () => {
     stop();
   });
 
+  it("history's back asks first, moving nothing until the answer", async () => {
+    _resetHistoryForTest();
+    useFleet.setState({ route: { name: "fleet" } });
+    const stop = initHistory();
+    at("ai");
+    await Promise.resolve();
+    page();
+    await settled();
+    await settled();
+    fireEvent.change(await screen.findByLabelText("Model"), { target: { value: "claude-sonnet-5-5" } });
+    expect(back()).toBe(false);
+    expect(await screen.findByTestId("settings-leave")).toBeTruthy();
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai" });
+    fireEvent.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => expect(useFleet.getState().route).toEqual({ name: "fleet" }));
+    stop();
+  });
+
+  it("an anchor inside the same section never asks", async () => {
+    await editModel();
+    useFleet.getState().openSettings("ai", "ai.proposeActions");
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "ai", anchor: "ai.proposeActions" });
+    expect(screen.queryByTestId("settings-leave")).toBeNull();
+  });
+
   it("names a typed key on its own, and Save never stores it", async () => {
     await show("ai");
     fireEvent.change(await screen.findByLabelText("API key"), { target: { value: "sk-typed" } });
