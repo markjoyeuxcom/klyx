@@ -1,6 +1,6 @@
 # Klyx Settings: the redesign
 
-Opened 2026-10-25, on `feat/settings-s0`, after slice 0 (`2026-10-25-klyx-settings-slice0.md`, accepted at 2a985ad); revisions 1 and 2 the same day, after Codex's review and re-review (§18, §19). The owner asked for considerable enhancements to the Settings page (2026-10-25):
+Opened 2026-10-25, on `feat/settings-s0`, after slice 0 (`2026-10-25-klyx-settings-slice0.md`, accepted at 2a985ad); revisions 1 and 2 the same day, after Codex's review and re-review (§18, §19); the design is accepted (§20). The owner asked for considerable enhancements to the Settings page (2026-10-25):
 - every setting described by its effect;
 - AI roadmap decision 2: the user chooses the default model for unattended, opt-in proactive runs;
 - decision 4: the user sets report retention;
@@ -586,3 +586,7 @@ Codex ruled revision 1's six fixes resolved as design contracts, and requested c
 | **RR4, P3:** an example subscribed Loki to an Alertmanager installation | §6.1: a Loki installation of its own; each kind is its own installation. |
 
 The re-review's implementation details on epochs, S8a buckets and existing per-cluster blocks are §17a's acceptance notes. The tests for RR1 to RR3 are in §15.
+
+## 20. ACCEPT (2026-10-25)
+
+Codex accepted the design at revision 2 (5f21e40), after the review of 17890a2 and two re-reviews, with no remaining findings. It ruled RR1 to RR4 resolved, and the original R1 to R6 contracts still addressed with no new conflict. It found §17a a faithful record of its implementation notes, which are acceptance requirements for slices F and S3a. A temporary test confirmed that the §6.1 examples parse and that each subscription names an installation of its kind. The four owner decisions (§16) stand as proposed with their conditions, for the owner's confirmation.
