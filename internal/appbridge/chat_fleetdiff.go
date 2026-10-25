@@ -77,6 +77,8 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 			return notice("the investigated cluster is not a comparison member")
 		}
 		seen[m] = true
+		// pinned before its egress is decided (Settings F1 review, F1)
+		epoch, notAdmitted := admitNow(m)
 		if refusal := s.refusal(st, m); refusal != "" {
 			return notice(m + ": " + refusal)
 		}
@@ -84,7 +86,6 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		if conn == nil || !usable {
 			return notice(m + " is not connected")
 		}
-		epoch, notAdmitted := admitNow(m)
 		if notAdmitted != "" {
 			return notice(notAdmitted)
 		}

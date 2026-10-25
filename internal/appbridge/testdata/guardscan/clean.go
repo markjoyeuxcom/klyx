@@ -3,6 +3,8 @@ package fixture
 import (
 	"context"
 	"os/exec"
+
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // a clean guarded method: its contexts from the ticket, a marked unfenced
@@ -23,4 +25,22 @@ func drain(c string) error {
 		return err
 	}
 	return cmd.Start()
+}
+
+// the dry-run form: a marked base, fenced on the write path, and a
+// composed fence inside the ticket's Write
+func apply(c string, dryRun bool, conns func() error) error {
+	base := context.Background() // unfenced: a dry run writes nothing
+	if !dryRun {
+		t, err := guardFor(c)
+		if err != nil {
+			return err
+		}
+		base = t.Write(readfence.With(base, conns))
+	}
+	ctx, cancel := context.WithTimeout(base, 0)
+	defer cancel()
+	vctx, vcancel, _ := fenced(ctx, conns)
+	defer vcancel()
+	return write(vctx)
 }

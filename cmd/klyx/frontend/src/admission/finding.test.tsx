@@ -48,6 +48,12 @@ describe("the toast and the Activity entry", () => {
     const refused = successStatus({ ok: true, error: "", steps: [{ ...steps[0], refused: true, error: "forbidden" }, steps[1]] }, "ok");
     expect(refused.message).toBe("ok; not every step was written (GitRepository flux-system/flux-system: not written - forbidden; Kustomization flux-system/app: written)");
   });
+  it("a step Klyx stopped before sending says not sent, beside a written source (Settings F1 review, F4)", () => {
+    const steps = [{ verb: "reconcile", subject: "GitRepository flux-system/flux-system", written: true },
+      { verb: "reconcile", subject: "Kustomization flux-system/app", written: false, refused: true, notSent: true, error: "the policy changed" }];
+    const s = failureStatus({ ok: false, error: "reconcile ...", steps }, "Reconcile failed");
+    expect(s.message).toBe("reconcile ... (GitRepository flux-system/flux-system: written; Kustomization flux-system/app: not sent - the policy changed)");
+  });
   it("stored entries: older ones and malformed findings read as before", () => {
     expect(validActivityAdmission(undefined)).toBeUndefined();
     expect(validActivityAdmission([{ summary: 1 }])).toBeUndefined();

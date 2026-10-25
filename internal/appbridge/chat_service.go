@@ -341,18 +341,19 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 		return ChatStateDTO{Cluster: cluster, Kind: kind, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	st := s.ai.load()
+	// Settings slice F §4: a conversation starts only on an Active cluster,
+	// and pins its epoch beside the settings revision - before egress is
+	// decided, so the decision is never older than the pin (F1 review, F1)
+	epoch, notAdmitted := admitNow(cluster)
 	if refusal := s.refusal(st, cluster); refusal != "" {
 		return refuse(refusal)
+	}
+	if notAdmitted != "" {
+		return refuse(notAdmitted)
 	}
 	conn, usable := s.state(cluster)
 	if conn == nil || !usable {
 		return refuse("the cluster is not connected")
-	}
-	// Settings slice F §4: a conversation starts only on an Active cluster,
-	// and pins its epoch beside the settings revision
-	epoch, notAdmitted := admitNow(cluster)
-	if notAdmitted != "" {
-		return refuse(notAdmitted)
 	}
 	if len(s.convs) >= chatMaxConvs && s.convs[key] == nil {
 		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))

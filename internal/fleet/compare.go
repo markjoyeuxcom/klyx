@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/moomora/klyx/internal/gitops/flux"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -185,6 +186,9 @@ func (c *ClusterConn) fluxOwnerRevision(ctx context.Context, o *workloads.Owner)
 		return "", "revision not read - no dynamic client"
 	}
 	gvr, err := gvrForKindIn(c.discoveryFor(ctx), flux.Kind(o.Kind))
+	if readfence.Failed(err) {
+		return "", "revision not read - " + err.Error()
+	}
 	if err != nil {
 		return "", "Flux " + o.Kind + " API not served"
 	}

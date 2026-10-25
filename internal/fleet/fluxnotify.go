@@ -45,8 +45,10 @@ func (c *ClusterConn) notificationList(ctx context.Context, resource string) not
 	if c.dyn == nil {
 		return notify.List{Error: "dynamic client unavailable"}
 	}
-	version, served := servedVersion(c.discovery(), group, resource, notify.StaticVersion)
+	version, served, err := servedVersion(c.discovery(), group, resource, notify.StaticVersion)
 	switch {
+	case err != nil:
+		return notify.List{Error: err.Error()}
 	case !served:
 		return notify.List{Absent: true}
 	case version != notify.StaticVersion:

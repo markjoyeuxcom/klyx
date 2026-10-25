@@ -169,26 +169,35 @@ func (s *AIService) callFence(st *AIState, cluster string) (func() error, string
 	}, ""
 }
 
-// precheck is the shared gate: a provider exists, the cluster's context may
-// go to it, and the cluster is connected. It reads only the given snapshot.
-func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
+// precheck is the shared gate: a provider exists, the cluster is admitted
+// and its epoch pinned (callFence), the cluster's context may go to the
+// provider, and the cluster is connected. It reads only the given
+// snapshot. The epoch is pinned before egress is decided (Settings F1
+// review, finding F1): a protection change after the pin moves the epoch,
+// so the returned fence refuses every later read and send, and a
+// permission read before it can never pass under a newer epoch.
+func (s *AIService) precheck(st *AIState, cluster string) (AIConn, func() error, string) {
 	if st.Provider == nil {
 		if st.Problem != "" {
-			return nil, "AI is unavailable: " + st.Problem
+			return nil, nil, "AI is unavailable: " + st.Problem
 		}
-		return nil, "AI backend not configured"
+		return nil, nil, "AI backend not configured"
 	}
 	if problem := notReady(st); problem != "" {
-		return nil, "AI is unavailable: " + problem
+		return nil, nil, "AI is unavailable: " + problem
+	}
+	fence, notAdmitted := s.callFence(st, cluster)
+	if notAdmitted != "" {
+		return nil, nil, notAdmitted
 	}
 	if !s.egressAllowed(st, cluster) {
-		return nil, egressRefusal(cluster)
+		return nil, nil, egressRefusal(cluster)
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return nil, "cluster not connected"
+		return nil, nil, "cluster not connected"
 	}
-	return conn, ""
+	return conn, fence, ""
 }
 
 // complete runs one completion on the snapshot's provider and folds the
@@ -261,7 +270,7 @@ func refusalDetail(r *ai.RefusedError) string {
 // upstream, credential-like values redacted, capped).
 func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid string) AIResultDTO {
 	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
+	conn, fence, refusal := s.precheck(st, cluster)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
@@ -277,10 +286,6 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 		// S10 §8: a class's spec holds its role, instance profile and
 		// selector IDs; no manifest of one is sent
 		return AIResultDTO{Error: "Suggest fix is not available for a Karpenter NodeClass: its spec holds the role, the instance profile and cloud IDs, which Klyx never sends to AI; nothing was sent"}
-	}
-	fence, notAdmitted := s.callFence(st, cluster)
-	if notAdmitted != "" {
-		return AIResultDTO{Error: notAdmitted}
 	}
 	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeFix))
 	defer cancel()

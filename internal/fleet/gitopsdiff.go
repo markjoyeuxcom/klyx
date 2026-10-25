@@ -27,7 +27,7 @@ func (c *ClusterConn) FluxAvailable() bool { return fluxcli.Detect() }
 // cluster, inheriting the shell's per-cloud auth for SOPS/KMS. When path is
 // empty the resource's spec.path is used.
 func (c *ClusterConn) FluxDiffKustomization(ctx context.Context, ns, name, path string) (fluxcli.DiffResult, error) {
-	gvr, err := c.gvrForKind(flux.KustomizationKind)
+	gvr, err := c.gvrForKind(ctx, flux.KustomizationKind)
 	if err != nil {
 		return fluxcli.DiffResult{}, err
 	}

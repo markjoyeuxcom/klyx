@@ -95,3 +95,26 @@ func TestAMoveDuringTheCLIsPreflightSendsNothing(t *testing.T) {
 		t.Fatal("the evidence reached the CLI's stdin")
 	}
 }
+
+// Settings F1 review, finding F6 (Codex's probe): a stop at the release,
+// before the prompt went on stdin, says nothing was sent.
+func TestACLIStopAtTheReleaseSaysNothingWasSent(t *testing.T) {
+	t.Parallel()
+	f := newFakeCLI(t)
+	var moved atomic.Bool
+	f.p.afterLaunch = func() { moved.Store(true) }
+	ctx, cancel := context.WithTimeout(readfence.WithWriteTracker(readfence.With(context.Background(), func() error {
+		if moved.Load() {
+			return errors.New("aks-we-prd: its policy changed")
+		}
+		return nil
+	})), 20*time.Second)
+	defer cancel()
+	_, err := f.p.Complete(ctx, Request{System: "SYSTEM-TEXT", User: "EVIDENCE-TEXT", Purpose: PurposeExplain})
+	if _, e := os.Stat(filepath.Join(f.home, "record.json")); !os.IsNotExist(e) {
+		t.Fatalf("control: the prompt reached stdin: %v", e)
+	}
+	if !errors.Is(err, readfence.ErrNotForwarded) || !readfence.Failed(err) {
+		t.Fatalf("an unsent release is not marked not sent: %T %v", err, err)
+	}
+}

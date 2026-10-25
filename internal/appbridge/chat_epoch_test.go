@@ -141,3 +141,40 @@ func TestAMembersMoveEndsTheTurn(t *testing.T) {
 		t.Fatalf("a member being applied: %+v", st)
 	}
 }
+
+// Settings F1 review, finding F1, for a conversation and a comparison
+// member: the epoch is pinned before egress is decided, so a protection
+// change that the start's own egress read missed ends the first turn as a
+// policy change.
+func TestAChatsEgressIsDecidedUnderItsPinnedEpoch(t *testing.T) {
+	reg := installRegistry(t, false, "x")
+	f := newToolsFixture(t, answer("hello"))
+	f.aiSvc.isProtected = racingProtection(t, reg, "x", true)
+	st := f.svc.Start("x")
+	if st.Error != "" {
+		t.Fatalf("control: %+v", st)
+	}
+	f.svc.mu.Lock()
+	c := f.svc.convs["x"]
+	f.svc.mu.Unlock()
+	r := &turnRunner{s: f.svc, c: c}
+	if _, err := r.guard(); err == nil || !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("the start's pin is older than its egress read: %v", err)
+	}
+}
+
+func TestAMembersEgressIsDecidedUnderItsPinnedEpoch(t *testing.T) {
+	reg := installRegistry(t, false, "x", "stg")
+	f := newFleetFixture(t, answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.ai.isProtected = racingProtection(t, reg, "stg", true)
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"stg"}); st.Notice != "" {
+		t.Fatalf("control: %+v", st)
+	}
+	f.svc.mu.Lock()
+	m := f.svc.convs[invKey("x")].members[0]
+	f.svc.mu.Unlock()
+	if p := f.svc.memberProblem(f.svc.ai.load(), m); !strings.Contains(p, "comparison cluster stg: its policy changed") {
+		t.Fatalf("the member's pin is older than its egress read: %q", p)
+	}
+}

@@ -84,9 +84,11 @@ type StepDTO struct {
 	Verb    string `json:"verb"`
 	Subject string `json:"subject"`
 	Written bool   `json:"written"`
-	// Refused: the server refused this request, so nothing of it was
-	// written; neither written nor refused is unverified (a lost answer)
+	// Refused: the server refused this request, or Klyx did before sending
+	// it (NotSent), so nothing of it was written; neither written nor
+	// refused is unverified (a lost answer)
 	Refused   bool                 `json:"refused,omitempty"`
+	NotSent   bool                 `json:"notSent,omitempty"`
 	Error     string               `json:"error,omitempty"`
 	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
 }
@@ -358,7 +360,7 @@ func admissionInventory(ctx context.Context, r admissionRows) (configs []*admiss
 func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO {
 	out := make([]StepDTO, 0, len(verbSteps))
 	for _, s := range verbSteps {
-		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written, Refused: s.refused}
+		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written, Refused: s.refused, NotSent: s.notSent}
 		if s.err != nil {
 			d.Error, d.Admission = writeError(ctx, conn, s.err)
 		}
@@ -369,9 +371,9 @@ func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO 
 
 // stepOutcome is a fleet step, decoupled from fleet's type.
 type stepOutcome struct {
-	verb, subject    string
-	written, refused bool
-	err              error
+	verb, subject             string
+	written, refused, notSent bool
+	err                       error
 }
 
 // failed is a write path's failed result (coverage S3b §5). A fence's

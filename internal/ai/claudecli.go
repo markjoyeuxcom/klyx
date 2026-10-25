@@ -970,8 +970,9 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 			return p.store.release(t, func() error {
 				// Settings slice F §4: the call's fence, immediately before
 				// the prompt goes on stdin; a refusal here sends nothing, and
-				// nothing hands the prompt over again
-				if err := readfence.Check(ctx); err != nil {
+				// nothing hands the prompt over again. Send marks it so
+				// (F1 review, finding F6) and records the handoff.
+				if err := readfence.Send(ctx); err != nil {
 					return err
 				}
 				if err := write(); err != nil {

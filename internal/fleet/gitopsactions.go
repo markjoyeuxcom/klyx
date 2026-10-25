@@ -39,9 +39,10 @@ func fluxGroupForKind(kind flux.Kind) (group, fallbackVersion string, ok bool) {
 
 // gvrForKind resolves the served GVR for a Flux kind via per-resource discovery
 // (servedVersion; the documented version when discovery cannot answer, e.g. in
-// tests).
-func (c *ClusterConn) gvrForKind(kind flux.Kind) (schema.GroupVersionResource, error) {
-	return gvrForKindIn(c.discovery(), kind)
+// tests). Discovery is read under ctx's fence (discoveryFor), a cached
+// answer included: a verb's ticket stops it (Settings F1 review, F2).
+func (c *ClusterConn) gvrForKind(ctx context.Context, kind flux.Kind) (schema.GroupVersionResource, error) {
+	return gvrForKindIn(c.discoveryFor(ctx), kind)
 }
 
 // gvrForKindIn is gvrForKind through disc: a composite read passes its
@@ -55,7 +56,10 @@ func gvrForKindIn(disc discoveryLike, kind flux.Kind) (schema.GroupVersionResour
 	if !ok {
 		return schema.GroupVersionResource{}, fmt.Errorf("unsupported kind %q", kind)
 	}
-	version, served := servedVersion(disc, group, resource, fallback)
+	version, served, err := servedVersion(disc, group, resource, fallback)
+	if err != nil {
+		return schema.GroupVersionResource{}, err
+	}
 	if !served {
 		return schema.GroupVersionResource{}, fmt.Errorf("%s is not served by this cluster (%s CRD not installed)", kind, resource)
 	}
@@ -185,7 +189,7 @@ func refusedForUID(err error) bool {
 // Reconcile stamps the Flux reconcile annotation so the controller
 // re-reconciles - on the armed object only (uid; design §5b).
 func (c *ClusterConn) Reconcile(ctx context.Context, kind, ns, name, uid string) error {
-	gvr, err := c.gvrForKind(flux.Kind(kind))
+	gvr, err := c.gvrForKind(ctx, flux.Kind(kind))
 	if err != nil {
 		return notSent(err)
 	}
@@ -226,13 +230,23 @@ func (c *ClusterConn) ReconcileWithSource(ctx context.Context, kind, ns, name, u
 type Step struct {
 	Verb, Subject string
 	Written       bool
-	// Refused: the server refused the request (definiteRefusal), so nothing
-	// of it was written. A step neither written nor refused is unverified:
-	// its answer was lost and the write may have landed (Codex's
-	// implementation review, finding 5).
+	// Refused: the server refused the request (definiteRefusal), or Klyx
+	// did before sending it (NotSent), so nothing of it was written. A step
+	// neither written nor refused is unverified: its answer was lost and
+	// the write may have landed (Codex's implementation review, finding 5).
 	Refused bool
+	// NotSent: Klyx refused the request before any of it was sent - its
+	// fence moved before the write was forwarded (Settings F1 review,
+	// finding F4). Refused is set too.
+	NotSent bool
 	// Err is the step's error, wrapped as its request's (admission.Wrap).
 	Err error
+}
+
+// newStep is a step and its outcome, classified from its error.
+func newStep(verb, subject string, err error) Step {
+	_, notSent := WriteOutcome(err)
+	return Step{Verb: verb, Subject: subject, Written: err == nil, Refused: notSent || stepRefused(err), NotSent: notSent, Err: err}
 }
 
 // ReconcileWithSourceSteps is ReconcileWithSource with each step's
@@ -244,7 +258,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		// notification kind binds no source (S1c §5)
 		return nil, fmt.Errorf("reconcile with source is not offered for %s", kind)
 	}
-	gvr, err := c.gvrForKind(flux.Kind(kind))
+	gvr, err := c.gvrForKind(ctx, flux.Kind(kind))
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +275,12 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		return nil, fmt.Errorf("reconcile with source is not offered for %s %s/%s: its source is an ExternalArtifact, which its producer reconciles; reconcile it alone", kind, ns, name)
 	}
 	if ref, ok := flux.BoundSource(u); ok {
-		if sgvr, ok := c.sourceServedGVR(ref.Kind); ok {
+		sgvr, ok, err := c.sourceServedGVR(ctx, ref.Kind)
+		if err != nil {
+			// the fence moved before the source's write: nothing was sent
+			return nil, fmt.Errorf("reconcile %s %s/%s: its source %s %s/%s: %w", kind, ns, name, ref.Kind, ref.Namespace, ref.Name, err)
+		}
+		if ok {
 			body := flux.ReconcilePatch(c.clk.Now())
 			what := fmt.Sprintf("its source %s %s/%s", ref.Kind, ref.Namespace, ref.Name)
 			// each logical write tracks its own forwarding (Settings slice F
@@ -269,10 +288,13 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 			_, err := c.dyn.Resource(sgvr).Namespace(ref.Namespace).Patch(readfence.WithWriteTracker(ctx), ref.Name, types.MergePatchType, body, metav1.PatchOptions{})
 			err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: sgvr.Group, Version: sgvr.Version, Resource: sgvr.Resource, Namespace: ref.Namespace},
 				ref.Kind, ref.Namespace, ref.Name, err)
-			steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), Written: err == nil, Refused: stepRefused(err), Err: err})
+			step := newStep("reconcile", fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name), err)
+			steps = append(steps, step)
 			switch {
 			case err == nil:
 				source = what + " was already asked to reconcile"
+			case step.NotSent:
+				source = what + " was not sent either: " + err.Error()
 			case definiteRefusal(err):
 				source = what + " was not asked to reconcile either: " + err.Error()
 			default:
@@ -281,7 +303,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 		}
 	}
 	err = c.patchArmed(readfence.WithWriteTracker(ctx), gvr, kind, ns, name, uid, flux.ReconcilePatch(c.clk.Now()))
-	steps = append(steps, Step{Verb: "reconcile", Subject: fmt.Sprintf("%s %s/%s", kind, ns, name), Written: err == nil, Refused: stepRefused(err), Err: err})
+	steps = append(steps, newStep("reconcile", fmt.Sprintf("%s %s/%s", kind, ns, name), err))
 	if err != nil {
 		if source != "" {
 			return steps, fmt.Errorf("reconcile %w; %s", err, source)
@@ -293,7 +315,7 @@ func (c *ClusterConn) ReconcileWithSourceSteps(ctx context.Context, kind, ns, na
 
 // SetSuspend toggles spec.suspend on the armed Flux resource (uid).
 func (c *ClusterConn) SetSuspend(ctx context.Context, kind, ns, name, uid string, suspend bool) error {
-	gvr, err := c.gvrForKind(flux.Kind(kind))
+	gvr, err := c.gvrForKind(ctx, flux.Kind(kind))
 	if err != nil {
 		return notSent(err)
 	}

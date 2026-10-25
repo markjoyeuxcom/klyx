@@ -119,7 +119,7 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid 
 	steps, err := conn.ReconcileWithSourceSteps(ctx, kind, namespace, name, uid)
 	var outs []stepOutcome
 	for _, st := range steps {
-		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, refused: st.Refused, err: st.Err})
+		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, refused: st.Refused, notSent: st.NotSent, err: st.Err})
 	}
 	r := ActionResultDTO{OK: err == nil}
 	if err != nil {
@@ -127,6 +127,9 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid 
 	}
 	if len(outs) > 1 {
 		r.Steps = stepsDTO(ctx, conn, outs)
+		// each step says its own outcome; the target's fence refusal never
+		// speaks for a source already written (Settings F1 review, F4)
+		r.Outcome, r.NotSent = "", false
 	}
 	return r
 }

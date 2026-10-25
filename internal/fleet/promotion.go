@@ -84,7 +84,10 @@ func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, e
 			{"helm.toolkit.fluxcd.io", "helmreleases", "v2", flux.ParseHelmRelease},
 		}
 		for _, l := range lists {
-			ver, served := servedVersion(disc, l.group, l.resource, l.fallback)
+			ver, served, err := servedVersion(disc, l.group, l.resource, l.fallback)
+			if err != nil {
+				return PromotionSnapshot{}, err
+			}
 			if !served {
 				continue
 			}
@@ -104,7 +107,10 @@ func (c *ClusterConn) GitOpsPromotion(ctx context.Context) (PromotionSnapshot, e
 		}
 
 		for _, kind := range []string{"GitRepository", "OCIRepository"} {
-			gvr, ok := c.sourceServedGVR(kind)
+			gvr, ok, err := c.sourceServedGVR(ctx, kind)
+			if err != nil {
+				return PromotionSnapshot{}, err
+			}
 			if !ok {
 				continue
 			}

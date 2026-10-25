@@ -42,11 +42,14 @@ func (e *Error) Error() string { return e.Err.Error() }
 func (e *Error) Unwrap() error { return e.Err }
 
 // Check runs ctx's fence: nil when it holds, or when ctx has none, else an
-// *Error.
+// *Error - marked ErrNotForwarded when ctx tracks a write and nothing of
+// it was forwarded yet, as a refused request is (a discovery read before
+// the write: Settings F1 review, findings F2 and F6).
 func Check(ctx context.Context) error {
 	if f, ok := ctx.Value(key{}).(func() error); ok {
 		if err := f(); err != nil {
-			return &Error{Err: err}
+			wt, _ := ctx.Value(writeKey{}).(*writeTracker)
+			return refusal(wt, &Error{Err: err})
 		}
 	}
 	return nil
@@ -72,25 +75,47 @@ type transport struct{ rt http.RoundTripper }
 
 func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	mutating := req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions
-	wt, _ := req.Context().Value(writeKey{}).(*writeTracker)
 	if err := Check(req.Context()); err != nil {
-		if mutating && wt != nil && !wt.forwarded.Load() {
-			return nil, notForwarded{err}
-		}
 		return nil, err
 	}
-	if mutating && wt != nil {
+	if wt, _ := req.Context().Value(writeKey{}).(*writeTracker); mutating && wt != nil {
 		wt.forwarded.Store(true)
 	}
 	return t.rt.RoundTrip(req)
 }
 
-// ErrNotForwarded marks a fence's refusal of a write when no write under
-// the same tracker was forwarded before it (AI A3 stage 1 review, finding
-// 5): nothing of that write can have reached the server. A refusal after a
-// write was forwarded - a retry, a redirect's hop - is not marked: the
-// earlier send may have landed.
+// ErrNotForwarded marks a fence's refusal under a write tracker when no
+// write under it was forwarded before (AI A3 stage 1 review, finding 5):
+// nothing of that write can have reached the server. The refused request
+// may be the write itself or a read before it - a refresh's GET of its
+// object (Settings F1 review, finding F6). A refusal after a write was
+// forwarded - a retry, a redirect's hop - is not marked: the earlier send
+// may have landed.
 var ErrNotForwarded = errors.New("the write was not sent")
+
+// refusal marks a fence's refusal under an unforwarded tracker; without a
+// tracker nothing says whether an earlier attempt was sent.
+func refusal(wt *writeTracker, err *Error) error {
+	if wt != nil && !wt.forwarded.Load() {
+		return notForwarded{err}
+	}
+	return err
+}
+
+// Send checks ctx's fence before a send that is not an HTTP request - a
+// child process's start, a prompt's handoff on its stdin - and, when it
+// holds, records on ctx's tracker that the send went ahead. A refusal is
+// marked as the transport marks one: ErrNotForwarded when nothing under
+// the tracker was forwarded before it.
+func Send(ctx context.Context) error {
+	if err := Check(ctx); err != nil {
+		return err
+	}
+	if wt, _ := ctx.Value(writeKey{}).(*writeTracker); wt != nil {
+		wt.forwarded.Store(true)
+	}
+	return nil
+}
 
 type writeKey struct{}
 

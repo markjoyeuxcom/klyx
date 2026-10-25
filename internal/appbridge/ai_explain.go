@@ -58,13 +58,9 @@ var errReplaced = errors.New("the object was replaced or removed since Klyx eval
 // one, from an allowlisted, scrubbed, capped evidence document. Read-only.
 func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
+	conn, fence, refusal := s.precheck(st, cluster)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
-	}
-	fence, notAdmitted := s.callFence(st, cluster)
-	if notAdmitted != "" {
-		return AIResultDTO{Error: notAdmitted}
 	}
 	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeExplain))
 	defer cancel()

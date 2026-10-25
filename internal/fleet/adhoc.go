@@ -139,8 +139,11 @@ func (c *ClusterConn) applyAdhocDoc(ctx context.Context, doc string, dryRun bool
 		return r
 	}
 
-	gvr, res, err := c.resolveGVK(u.GetAPIVersion(), kind)
+	gvr, res, err := c.resolveGVKIn(c.discoveryFor(ctx), u.GetAPIVersion(), kind)
 	if err != nil {
+		if readfence.Failed(err) {
+			r.refusal = err // the fence moved before the create: nothing was sent
+		}
 		r.Error = err.Error()
 		return r
 	}
@@ -384,11 +387,20 @@ func (c *ClusterConn) LaunchDiagnosticPod(ctx context.Context, name, image strin
 	annos := map[string]string{adhocCreatedByAnno: "klyx", adhocCreatedAtAnno: clk.Now().UTC().Format(time.RFC3339)}
 
 	// Ensure the scratch namespace exists; racing an existing one is fine.
+	// The namespace and the pod are two logical writes, each tracking its
+	// own forwarding (Settings F1 review, finding F3): a pod never sent
+	// says so even after the namespace's create was.
 	nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ScratchNamespace, Labels: stamp, Annotations: annos}}
-	if _, err := c.typed.CoreV1().Namespaces().Create(ctx, nsObj, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+	_, err := c.typed.CoreV1().Namespaces().Create(readfence.WithWriteTracker(ctx), nsObj, metav1.CreateOptions{FieldManager: adhocFieldManager})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
 		r.refusal = admission.Wrap(admission.Request{Operation: "CREATE", Version: "v1", Resource: "namespaces"}, "Namespace", "", ScratchNamespace, err)
 		r.Error = "create " + ScratchNamespace + " namespace: " + err.Error()
 		return r
+	}
+	// the namespace's own outcome, said beside a pod that was not created
+	nsCreated := ""
+	if err == nil {
+		nsCreated = " (the " + ScratchNamespace + " namespace was created)"
 	}
 
 	pod := &corev1.Pod{
@@ -403,13 +415,13 @@ func (c *ClusterConn) LaunchDiagnosticPod(ctx context.Context, name, image strin
 			}},
 		},
 	}
-	if _, err := c.typed.CoreV1().Pods(ScratchNamespace).Create(ctx, pod, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil {
+	if _, err := c.typed.CoreV1().Pods(ScratchNamespace).Create(readfence.WithWriteTracker(ctx), pod, metav1.CreateOptions{FieldManager: adhocFieldManager}); err != nil {
 		r.refusal = admission.Wrap(admission.Request{Operation: "CREATE", Version: "v1", Resource: "pods", Namespace: ScratchNamespace}, "Pod", ScratchNamespace, name, err)
 		if apierrors.IsAlreadyExists(err) {
 			r.Error = fmt.Sprintf("pod %q already exists in %s - delete it from the scratch list or pick another name", name, ScratchNamespace)
 			return r
 		}
-		r.Error = err.Error()
+		r.Error = err.Error() + nsCreated
 		return r
 	}
 	r.OK = true
@@ -706,7 +718,20 @@ func (c *ClusterConn) resolveGVK(apiVersion, kind string) (schema.GroupVersionRe
 	if c.typed == nil {
 		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("discovery unavailable: no cluster connection")
 	}
-	rl, err := c.discovery().ServerResourcesForGroupVersion(apiVersion)
+	return c.resolveGVKIn(c.discovery(), apiVersion, kind)
+}
+
+// resolveGVKIn is resolveGVK through disc: a write passes its
+// context-bound discovery (discoveryFor), whose fence refusal is returned
+// as itself, never as "not served" (Settings F1 review, finding F2).
+func (c *ClusterConn) resolveGVKIn(disc discoveryLike, apiVersion, kind string) (schema.GroupVersionResource, metav1.APIResource, error) {
+	if c.typed == nil {
+		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("discovery unavailable: no cluster connection")
+	}
+	rl, err := disc.ServerResourcesForGroupVersion(apiVersion)
+	if readfence.Failed(err) {
+		return schema.GroupVersionResource{}, metav1.APIResource{}, err
+	}
 	if err != nil || rl == nil {
 		return schema.GroupVersionResource{}, metav1.APIResource{}, fmt.Errorf("apiVersion %q is not served (typo, or the CRD is not installed)", apiVersion)
 	}

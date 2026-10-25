@@ -64,8 +64,9 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	// Settings slice F §2: the context's fence (a write's ticket) is
 	// checked at the child's actual start; a started helm is not stopped by
-	// a later move. A read's context has no fence and passes.
-	if err := readfence.Check(ctx); err != nil {
+	// a later move. A read's context has no fence and passes. A refusal
+	// here started nothing, and Send marks it so (F1 review, finding F6).
+	if err := readfence.Send(ctx); err != nil {
 		return nil, err
 	}
 	if err := cmd.Run(); err != nil {
