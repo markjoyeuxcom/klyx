@@ -69,12 +69,26 @@ func productFiles(t *testing.T) []string {
 }
 
 func parse(t *testing.T, path string) *ast.File {
+	f, _, _ := parseSrc(t, path, nil)
+	return f
+}
+
+// parseSrc parses a file, or src under its name, keeping what a site's text
+// is read from.
+func parseSrc(t *testing.T, path string, src []byte) (*ast.File, *token.FileSet, []byte) {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if src == nil {
+		var err error
+		if src, err = os.ReadFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return f
+	return f, fset, src
 }
 
 // imports maps each import's local name to its path; a dot import is "."
@@ -129,39 +143,62 @@ func envRefs(f *ast.File) []string {
 // its reason. A new one fails until it is reviewed: if it is the fleet
 // file's directory, the store belongs in localstore.
 var reviewedSites = map[string]string{
-	"dir internal/ai/claudecli.go claudeCLIProvider.callDir":                   "walks up from the Claude Code executable to its install root",
-	"dir internal/ai/claudecli_builds.go claudeBuildStore.replaceLocked":       "the builds file's own directory, for its temp file; the file is localstore's ClaudeBuilds",
-	"dir internal/config/append.go AppendClusters":                             "the fleet writers' resolved target (slice 0's write policy), not a store root",
-	"dir internal/config/append.go fleetTemp":                                  "the fleet writers' resolved target, for the temp file beside it",
-	"dir internal/evalrun/preflight.go Preflight.Run":                          "the eval harness checks the lab's own fleet file lies in the lab",
-	"dir internal/evalrun/scenario.go loadScenario":                            "the eval harness: a scenario's own directory",
-	"dir internal/gitcli/cache.go Runner.InitRepo":                             "inside the Git cache",
-	"dir internal/gitcli/cache.go WriteFileDurable":                            "a file's own directory, synced after a write inside the Git cache",
-	"dir internal/gitcli/commands.go verifyPack":                               "a pack's own directory inside a repository",
-	"dir internal/winstate/winstate.go Save":                                   "the window file's own directory; the file is localstore's Window",
-	"dotdot cmd/klyx/eval.go labEval.runA3":                                    "the eval harness's lab script beside its scenarios",
-	"dotdot internal/cachediff/child.go filepathClean":                         "refuses a path that climbs out",
-	"dotdot internal/cachediff/child.go readInput":                             "refuses a path that climbs out",
-	"dotdot internal/cachediff/scan.go references":                             "refuses a reference that climbs out",
-	"dotdot internal/config/endpoints.go validateEndpoint":                     "refuses an endpoint path that climbs out",
-	"dotdot internal/crd/messages.go validRefName":                             "refuses a name with a path segment",
-	"dotdot internal/evalrun/preflight.go inDir":                               "the eval harness: a path that climbs out of the lab",
-	"dotdot internal/gitcli/commands.go CleanPath":                             "refuses a path that climbs out",
-	"dotdot internal/gitcli/refs.go checkRefName":                              "refuses a ref name with a path segment",
-	"dotdot internal/identity/values.go valueOf":                               "refuses a path segment in a value",
-	"fleet cmd/klyx/main.go configPath":                                        "the one place the app takes the fleet file's path",
-	"fleet cmd/klyx/smoke.go init":                                             "the smoke harness requires a lab fleet file",
-	"fleet cmd/klyx/eval.go init":                                              "the eval harness requires a lab fleet file",
-	"fleet internal/appbridge/settings_service.go SettingsService.Diagnostics": "says whether KLYX_CONFIG set the path; never reads beside it",
+	"fleet cmd/klyx/eval.go init envread.KlyxConfig":                                              "the eval harness requires a lab fleet file",
+	"dotdot cmd/klyx/eval.go labEval.runA3 \"..\"":                                                "the eval harness's lab script beside its scenarios",
+	"fleet cmd/klyx/main.go configPath envread.KlyxConfig":                                        "the one place the app takes the fleet file's path",
+	"fleet cmd/klyx/smoke.go init envread.KlyxConfig":                                             "the smoke harness requires a lab fleet file",
+	"dir internal/ai/claudecli.go claudeCLIProvider.callDir filepath.Dir(dir)":                    "walks up from the Claude Code executable to its install root",
+	"dir internal/ai/claudecli.go claudeCLIProvider.callDir filepath.Dir(dir)#2":                  "walks up from the Claude Code executable to its install root",
+	"dir internal/ai/claudecli_builds.go claudeBuildStore.replaceLocked filepath.Dir(s.path)":     "the builds file's own directory, for its temp file; the file is localstore's ClaudeBuilds",
+	"dir internal/ai/claudecli_builds.go claudeBuildStore.replaceLocked filepath.Dir(s.path)#2":   "the builds file's own directory, for its temp file; the file is localstore's ClaudeBuilds",
+	"fleet internal/appbridge/settings_service.go SettingsService.Diagnostics envread.KlyxConfig": "says whether KLYX_CONFIG set the path; never reads beside it",
+	"dotdot internal/cachediff/child.go readInput \"..\"":                                         "refuses a path that climbs out",
+	"dotdot internal/cachediff/child.go readInput \"../\"":                                        "refuses a path that climbs out",
+	"dotdot internal/cachediff/child.go filepathClean \"..\"":                                     "refuses a path that climbs out",
+	"dotdot internal/cachediff/child.go filepathClean \"../\"":                                    "refuses a path that climbs out",
+	"dotdot internal/cachediff/scan.go references \"..\"":                                         "refuses a reference that climbs out",
+	"dotdot internal/cachediff/scan.go references \"../\"":                                        "refuses a reference that climbs out",
+	"dir internal/config/append.go fleetTemp filepath.Dir(target)":                                "the fleet writers' resolved target, for the temp file beside it",
+	"dir internal/config/append.go AppendClusters filepath.Dir(target)":                           "the fleet writers' resolved target (slice 0's write policy), not a store root",
+	"dotdot internal/config/endpoints.go validateEndpoint \"/../\"":                               "refuses an endpoint path that climbs out",
+	"dotdot internal/crd/messages.go validRefName \"..\"":                                         "refuses a name with a path segment",
+	"dir internal/evalrun/preflight.go Preflight.Run filepath.Dir(abs)":                           "the eval harness checks the lab's own fleet file lies in the lab",
+	"dotdot internal/evalrun/preflight.go inDir \"..\"":                                           "the eval harness: a path that climbs out of the lab",
+	"dir internal/evalrun/scenario.go loadScenario filepath.Dir(path)":                            "the eval harness: a scenario's own directory",
+	"dir internal/gitcli/cache.go Runner.InitRepo filepath.Dir(gitDir)":                           "inside the Git cache",
+	"dir internal/gitcli/cache.go WriteFileDurable filepath.Dir(path)":                            "a file's own directory, synced after a write inside the Git cache",
+	"dotdot internal/gitcli/commands.go CleanPath \"..\"":                                         "refuses a path that climbs out",
+	"dir internal/gitcli/commands.go verifyPack filepath.Dir(idx)":                                "a pack's own directory inside a repository",
+	"dotdot internal/gitcli/refs.go checkRefName \"..\"":                                          "refuses a ref name with a path segment",
+	"dotdot internal/identity/values.go valueOf \"..\"":                                           "refuses a path segment in a value",
+	"dir internal/winstate/winstate.go Save filepath.Dir(path)":                                   "the window file's own directory; the file is localstore's Window",
 }
 
 var dotdotSegment = regexp.MustCompile(`(^|[/\\])\.\.([/\\]|$)`)
 
+// dirPackages are the packages whose parent-directory functions are sites,
+// and envread, whose KlyxConfig is: a dot import of any of them is refused,
+// since its functions would be unqualified (Codex's re-review, RR1).
+var dirPackages = map[string]bool{"path/filepath": true, "path": true, "github.com/moomora/klyx/internal/envread": true}
+
 // dirSites are a file's parent-directory derivations, fleet-variable
-// references and store-name literals, each as "kind file function".
-func dirSites(f *ast.File, file string) []string {
-	named, _ := imports(f)
+// references, store-name literals and refused dot imports. Each is one
+// occurrence: "kind file function text", the text being the occurrence's
+// own source (a call with its argument, a literal), numbered "#2" on when a
+// function repeats it. A reviewed site therefore approves that occurrence
+// only: another derivation in the same function is a new site (RR1).
+func dirSites(f *ast.File, fset *token.FileSet, src []byte, file string) []string {
+	named, dot := imports(f)
 	var out []string
+	for _, p := range dot {
+		if dirPackages[p] {
+			out = append(out, "dotimport "+file+" "+p)
+		}
+	}
+	text := func(n ast.Node) string {
+		return strings.Join(strings.Fields(string(src[fset.Position(n.Pos()).Offset:fset.Position(n.End()).Offset])), " ")
+	}
+	seen := map[string]int{}
 	for _, d := range f.Decls {
 		fn := "<top>"
 		if fd, ok := d.(*ast.FuncDecl); ok {
@@ -170,8 +207,25 @@ func dirSites(f *ast.File, file string) []string {
 				fn = recvName(fd.Recv.List[0].Type) + "." + fn
 			}
 		}
-		site := func(kind string) { out = append(out, kind+" "+file+" "+fn) }
+		site := func(kind string, n ast.Node) {
+			key := kind + " " + file + " " + fn + " " + text(n)
+			seen[key]++
+			if c := seen[key]; c > 1 {
+				key += "#" + strconv.Itoa(c)
+			}
+			out = append(out, key)
+		}
+		var stack []ast.Node
 		ast.Inspect(d, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			parent := ast.Node(nil)
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			stack = append(stack, n)
 			switch n := n.(type) {
 			case *ast.BasicLit:
 				if n.Kind != token.STRING {
@@ -185,18 +239,24 @@ func dirSites(f *ast.File, file string) []string {
 					out = append(out, "store "+file+" "+fn+" "+n.Value)
 				}
 				if dotdotSegment.MatchString(v) {
-					site("dotdot")
+					site("dotdot", n)
 				}
 			case *ast.SelectorExpr:
 				x, ok := n.X.(*ast.Ident)
 				if !ok {
 					return true
 				}
+				// the call, when the selector is called; the bare function
+				// value otherwise
+				var at ast.Node = n
+				if c, ok := parent.(*ast.CallExpr); ok && c.Fun == n {
+					at = c
+				}
 				switch {
 				case (named[x.Name] == "path/filepath" || named[x.Name] == "path") && (n.Sel.Name == "Dir" || n.Sel.Name == "Split"):
-					site("dir") // called or not: a function value derives a parent too
+					site("dir", at)
 				case named[x.Name] == "github.com/moomora/klyx/internal/envread" && n.Sel.Name == "KlyxConfig":
-					site("fleet")
+					site("fleet", n)
 				}
 			}
 			return true
@@ -220,9 +280,9 @@ func recvName(e ast.Expr) string {
 }
 
 // dirRefs are a file's sites that are not on the reviewed list.
-func dirRefs(f *ast.File, file string) []string {
+func dirRefs(f *ast.File, fset *token.FileSet, src []byte, file string) []string {
 	var out []string
-	for _, s := range dirSites(f, file) {
+	for _, s := range dirSites(f, fset, src, file) {
 		if _, ok := reviewedSites[s]; !ok {
 			out = append(out, s)
 		}
@@ -249,7 +309,8 @@ func TestProductCodeFindsStoresOnlyThroughLocalstore(t *testing.T) {
 			continue
 		}
 		rel := filepath.ToSlash(strings.TrimPrefix(p, filepath.Join("..", "..")+string(filepath.Separator)))
-		for _, r := range dirRefs(parse(t, p), rel) {
+		f, fset, src := parseSrc(t, p, nil)
+		for _, r := range dirRefs(f, fset, src, rel) {
 			t.Errorf("%s: not reviewed (a parent directory, the fleet file's variable or a store name outside internal/localstore): add it to reviewedSites with its reason, or keep the store in localstore", r)
 		}
 	}
@@ -260,7 +321,8 @@ func TestEveryReviewedSiteExists(t *testing.T) {
 	seen := map[string]bool{}
 	for _, p := range productFiles(t) {
 		rel := filepath.ToSlash(strings.TrimPrefix(p, filepath.Join("..", "..")+string(filepath.Separator)))
-		for _, s := range dirSites(parse(t, p), rel) {
+		f, fset, src := parseSrc(t, p, nil)
+		for _, s := range dirSites(f, fset, src, rel) {
 			seen[s] = true
 		}
 	}
@@ -271,16 +333,50 @@ func TestEveryReviewedSiteExists(t *testing.T) {
 	}
 }
 
+// Codex's re-review, RR1: a reviewed site approves that occurrence only. A
+// new derivation in a reviewed function - with new text, or the same text
+// again - is a new site, in the real file.
+func TestANewDerivationInAReviewedFunctionIsNotReviewed(t *testing.T) {
+	path := filepath.Join("..", "..", "internal", "config", "append.go")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := regexp.MustCompile(`(?m)^func AppendClusters\([^\n]*\{\n`)
+	if !head.Match(src) {
+		t.Fatal("AppendClusters moved: update this test")
+	}
+	for name, line := range map[string]string{
+		"new text":  "\t_ = os.WriteFile(filepath.Join(filepath.Dir(path), \"new-preference.json\"), []byte(\"{}\"), 0o600)\n",
+		"same text": "\t_ = filepath.Dir(target)\n",
+	} {
+		mutated := head.ReplaceAllFunc(src, func(m []byte) []byte { return append(append([]byte{}, m...), line...) })
+		f, fset, msrc := parseSrc(t, path, mutated)
+		if got := dirRefs(f, fset, msrc, "internal/config/append.go"); len(got) != 1 {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+	f, fset, osrc := parseSrc(t, path, nil)
+	if got := dirRefs(f, fset, osrc, "internal/config/append.go"); len(got) != 0 {
+		t.Fatalf("the file as it is: %v", got)
+	}
+}
+
 // Every fixture but the clean one fails its scan.
 func TestTheScansRefuseEveryFixture(t *testing.T) {
-	dirScan := func(f *ast.File) []string { return dirRefs(f, "testdata/dirscan/fixture.go") }
-	for dir, scan := range map[string]func(*ast.File) []string{"envscan": envRefs, "dirscan": dirScan} {
+	for dir, scan := range map[string]func(string) []string{
+		"envscan": func(p string) []string { return envRefs(parse(t, p)) },
+		"dirscan": func(p string) []string {
+			f, fset, src := parseSrc(t, p, nil)
+			return dirRefs(f, fset, src, "testdata/dirscan/fixture.go")
+		},
+	} {
 		entries, err := os.ReadDir(filepath.Join("testdata", dir))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			got := scan(parse(t, filepath.Join("testdata", dir, e.Name())))
+			got := scan(filepath.Join("testdata", dir, e.Name()))
 			if e.Name() == "clean.go" {
 				if len(got) != 0 {
 					t.Errorf("%s/clean.go: %v", dir, got)
