@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/gitcache"
 	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/localstore"
 )
 
 // GitService is The Line's read-only Git access (parent spec §7, slice 6
@@ -75,14 +74,15 @@ type GitDeps struct {
 // the owner's credential helpers once, recovering every cache - so startup
 // never waits on it.
 func NewGitService(ctx context.Context, d GitDeps) *GitService {
-	configDir := filepath.Dir(d.ConfigPath)
+	// "" (no fleet path) leaves Git off: gitcli.Start refuses the base.
+	cacheBase, _ := localstore.Beside(d.ConfigPath).Path(localstore.GitCache)
 	if d.StartGit == nil {
 		d.StartGit = func(ctx context.Context) (gitcli.Runner, gitcli.Helpers, error) {
-			return gitcli.Start(ctx, configDir, gitcli.OwnerEnv(os.Getenv, os.Environ()))
+			return gitcli.Start(ctx, cacheBase, gitcli.ProcessEnv())
 		}
 	}
 	if d.NewStore == nil {
-		d.NewStore = func(r gitcli.Runner) gitStore { return gitcache.New(gitcli.CacheBase(configDir), r) }
+		d.NewStore = func(r gitcli.Runner) gitStore { return gitcache.New(cacheBase, r) }
 	}
 	if d.SaveGit == nil {
 		d.SaveGit = config.SaveGit

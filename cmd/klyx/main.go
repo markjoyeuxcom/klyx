@@ -5,7 +5,6 @@ import (
 	"embed"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -19,10 +18,12 @@ import (
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/localstore"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/secretstore"
 	"github.com/moomora/klyx/internal/winstate"
@@ -38,7 +39,7 @@ import (
 var assets embed.FS
 
 func configPath() string {
-	if p := os.Getenv("KLYX_CONFIG"); p != "" {
+	if p := envread.Get(envread.KlyxConfig); p != "" {
 		return p
 	}
 	home, err := os.UserHomeDir()
@@ -50,17 +51,21 @@ func configPath() string {
 	return home + "/.config/klyx/fleet.yaml"
 }
 
-// windowStatePath lives beside the fleet config so a KLYX_CONFIG override
-// relocates both together.
-func windowStatePath() string {
-	return filepath.Join(filepath.Dir(configPath()), "window.json")
+// storePath is where a store Klyx keeps beside the fleet config lives
+// (localstore), so a KLYX_CONFIG override relocates them together.
+func storePath(s localstore.Store) string {
+	p, err := localstore.Beside(configPath()).Path(s)
+	if err != nil {
+		log.Fatalf("the %s beside the fleet config: %v", s.Name(), err)
+	}
+	return p
 }
 
-// claudeBuildsPath records the Claude Code builds that passed Test, beside
-// the fleet config like the window state.
-func claudeBuildsPath() string {
-	return filepath.Join(filepath.Dir(configPath()), "claude-builds.json")
-}
+// windowStatePath is the window's size and place.
+func windowStatePath() string { return storePath(localstore.Window) }
+
+// claudeBuildsPath records the Claude Code builds that passed Test.
+func claudeBuildsPath() string { return storePath(localstore.ClaudeBuilds) }
 
 func main() {
 	// The cache diff's confined build (The Line slice 6 note §7.1): Klyx's
@@ -492,7 +497,7 @@ func main() {
 	// default), and a problem leaves AI unavailable with that reason. The egress
 	// gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
 	ai.UseClaudeBuildsFile(claudeBuildsPath())
-	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, os.Getenv)
+	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, envread.Dynamic(envread.AIKey))
 	if aiState.Problem != "" {
 		log.Printf("klyx: AI (%s) unavailable: %s", aiState.ProviderID, aiState.Problem)
 	}
@@ -538,7 +543,7 @@ func main() {
 
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
-	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, os.Getenv, aiSvc, cfg.AI)
+	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, envread.Dynamic(envread.AIKey), aiSvc, cfg.AI)
 
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {
 		c, ok := reg.Conn(name)

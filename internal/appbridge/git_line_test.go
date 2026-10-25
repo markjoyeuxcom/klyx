@@ -36,13 +36,13 @@ func (f historyFixture) short(s string) string { return s[:7] }
 // an unrelated root u1; e1 is in no history. Published into a Klyx cache.
 func newHistory(t *testing.T) historyFixture {
 	t.Helper()
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
 		t.Skipf("no usable git: %v", err)
 	}
-	base := gitcli.CacheBase(t.TempDir())
+	base := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestCommitLinks(t *testing.T) {
 // commits and commit times tie (design review of cbef8e4): every displayed
 // commit's dots match git's own ancestry.
 func TestLedgerContainmentIsExact(t *testing.T) {
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
@@ -394,7 +394,7 @@ func TestLedgerContainmentIsExact(t *testing.T) {
 	}
 	run("merge", "-q", "--no-ff", "-m", "merge y", "y")
 	run("commit", "-q", "--allow-empty", "-m", "after merge")
-	base2 := gitcli.CacheBase(t.TempDir())
+	base2 := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base2); err != nil {
 		t.Fatal(err)
 	}

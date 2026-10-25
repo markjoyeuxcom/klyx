@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/bounds"
 )
 
 // AI A1 §1.1: a provider without tools cannot ask for reads, so an
@@ -19,7 +20,7 @@ import (
 // labels as it labels report_findings.
 
 const (
-	invSnapshotMax  = 96 * 1024
+	invSnapshotMax  = bounds.InvSnapshotBytes
 	invPlanObjects  = 3  // health-check objects followed
 	invPlanPods     = 3  // failing pods per object
 	invPlanLogTail  = 50 // lines of a previous container's log

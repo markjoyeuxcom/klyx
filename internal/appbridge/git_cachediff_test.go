@@ -132,7 +132,7 @@ func newDiffFixture(t *testing.T) (*cacheFake, string) {
 // earlier files), publishes main into a Klyx cache, and returns the commits.
 func newHistoryFixture(t *testing.T, commits ...map[string]string) (*cacheFake, []string) {
 	t.Helper()
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
@@ -166,7 +166,7 @@ func newHistoryFixture(t *testing.T, commits ...map[string]string) (*cacheFake, 
 		run("commit", "-qm", fmt.Sprintf("fleet %d", i))
 		shas = append(shas, run("rev-parse", "HEAD"))
 	}
-	base := gitcli.CacheBase(t.TempDir())
+	base := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/clibin"
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // Runner executes a helm invocation and returns stdout. The real runner shells
@@ -40,7 +40,7 @@ type ExecRunner struct {
 // package-manager fallbacks). Tests swap its lookup hooks.
 var helmBin = clibin.Binary{
 	Name:          "helm",
-	EnvVar:        "KLYX_HELM_PATH",
+	Override:      envread.KlyxHelmPath,
 	FallbackPaths: defaultHelmFallbackPaths,
 }
 
@@ -53,7 +53,7 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	}
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec
 	if len(r.Env) > 0 {
-		cmd.Env = append(os.Environ(), r.Env...)
+		cmd.Env = envread.ForChild(envread.NativeTools, r.Env)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -96,13 +96,13 @@ func defaultHelmFallbackPaths() []string {
 		}
 	case "windows":
 		var paths []string
-		if root := strings.TrimSpace(os.Getenv("ChocolateyInstall")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ChocolateyInstall)); root != "" {
 			paths = append(paths, filepath.Join(root, "bin", "helm.exe"))
 		}
-		if root := strings.TrimSpace(os.Getenv("ProgramData")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ProgramData)); root != "" {
 			paths = append(paths, filepath.Join(root, "chocolatey", "bin", "helm.exe"))
 		}
-		if root := strings.TrimSpace(os.Getenv("ProgramFiles")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ProgramFiles)); root != "" {
 			paths = append(paths, filepath.Join(root, "Helm", "bin", "helm.exe"))
 		}
 		return paths

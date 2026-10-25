@@ -1,8 +1,9 @@
 package execenv
 
 import (
-	"os"
 	"strings"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // KubeconfigEnv returns the environment entry that pins a kubectl/helm/flux
@@ -30,5 +31,5 @@ func Environ(extra []string) []string {
 	if len(extra) == 0 {
 		return nil
 	}
-	return append(os.Environ(), extra...)
+	return envread.ForChild(envread.NativeTools, extra)
 }

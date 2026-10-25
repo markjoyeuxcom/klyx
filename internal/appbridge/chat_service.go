@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/bounds"
 )
 
 // ChatService is the cluster chat (spec 2026-10-14 §5): one conversation per
@@ -20,25 +21,25 @@ import (
 // continuation stay in the backend. Read-only: no tool changes anything.
 
 const (
-	chatTurnDeadline   = 120 * time.Second
-	chatMaxModelCalls  = 6
-	chatMaxToolCalls   = 8
+	chatTurnDeadline   = bounds.ChatTurnDeadline
+	chatMaxModelCalls  = bounds.ChatModelCalls
+	chatMaxToolCalls   = bounds.ChatToolCalls
 	chatReadWorkers    = 4
-	chatQuestionMax    = 4 * 1024
-	chatAnswerMax      = 32 * 1024
-	chatRequestBudget  = 384 * 1024
+	chatQuestionMax    = bounds.ChatQuestionBytes
+	chatAnswerMax      = bounds.ChatAnswerBytes
+	chatRequestBudget  = bounds.ChatRequestBytes
 	chatRetainExchange = 20
 	chatRetainBytes    = 1024 * 1024
 	// chatStepRecords is AI A3 §2.4's cap on a conversation's step records
 	chatStepRecords   = 16
-	chatMaxConvs      = 8
-	chatSnapshotMax   = 48 * 1024
+	chatMaxConvs      = bounds.Conversations
+	chatSnapshotMax   = bounds.ChatSnapshotBytes
 	chatSnapshotPrior = 16 * 1024
 
 	// An investigation's turn reads more (AI A1 §1).
-	invTurnDeadline  = 300 * time.Second
-	invMaxModelCalls = 12
-	invMaxToolCalls  = 24
+	invTurnDeadline  = bounds.InvTurnDeadline
+	invMaxModelCalls = bounds.InvModelCalls
+	invMaxToolCalls  = bounds.InvToolCalls
 	invReadWorkers   = 6
 )
 

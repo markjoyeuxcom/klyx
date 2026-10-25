@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/moomora/klyx/internal/alertmanager"
+	"github.com/moomora/klyx/internal/bounds"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/endpointhttp"
@@ -36,11 +37,11 @@ import (
 // bounds, the credential path, and the read itself.
 
 const (
-	amMaxBytes       = 8 << 20
+	amMaxBytes       = bounds.AlertsBytes
 	amHTTPTimeout    = 10 * time.Second
 	amDiscoveryTTL   = 5 * time.Minute
-	amMaxAlerts      = 5000
-	amMaxAppearances = 20000
+	amMaxAlerts      = bounds.AlertsPerRead
+	amMaxAppearances = bounds.AlertsAppearances
 	amMaxInFlight    = 4
 	// amMaxProofEndpoints bounds the governing Service's proof: one Pod GET
 	// per endpoint, at most every amDiscoveryTTL.

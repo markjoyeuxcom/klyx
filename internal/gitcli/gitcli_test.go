@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // The Line slice 6a (slice 6 note §3, §8): the binary and its version gate,
@@ -107,7 +109,8 @@ func TestTheEnvironmentIsExactlyTheAllowlist(t *testing.T) {
 		"GIT_CONFIG_PARAMETERS='core.hooksPath'='/evil'", "GIT_CONFIG_COUNT=1", "KUBECONFIG=/home/o/.kube/config",
 		"AWS_SECRET_ACCESS_KEY=s3cr3t", "AZURE_CLIENT_SECRET=s3cr3t", "HTTPS_PROXY=http://proxy", "LD_PRELOAD=/evil.so",
 	}
-	get := func(k string) string {
+	get := func(n envread.Name) string {
+		k := n.Key()
 		for _, kv := range environ {
 			if v, ok := strings.CutPrefix(kv, k+"="); ok {
 				return v
@@ -388,7 +391,7 @@ func TestScrub(t *testing.T) {
 
 func realRunner(t *testing.T) Runner {
 	t.Helper()
-	env := OwnerEnv(os.Getenv, os.Environ())
+	env := ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := Locate(context.Background(), env)
 	if err != nil {

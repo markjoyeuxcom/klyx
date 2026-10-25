@@ -22,6 +22,7 @@ import (
 	"github.com/moomora/klyx/internal/appbridge"
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/evalrun"
 	"github.com/moomora/klyx/internal/evalrun/record"
 )
@@ -43,22 +44,22 @@ func init() {
 	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
 		return
 	}
-	out := os.Getenv("KLYX_EVAL_OUT")
+	out := envread.Get(envread.KlyxEvalOut)
 	if out == "" {
 		log.Fatal("the eval build needs KLYX_EVAL_OUT")
 	}
 	var names []string
-	if s := strings.TrimSpace(os.Getenv("KLYX_EVAL_SCENARIOS")); s != "" {
+	if s := strings.TrimSpace(envread.Get(envread.KlyxEvalScenarios)); s != "" {
 		names = strings.Split(s, ",")
 	}
-	a3 := strings.TrimSpace(os.Getenv("KLYX_EVAL_A3"))
+	a3 := strings.TrimSpace(envread.Get(envread.KlyxEvalA3))
 	if a3 != "" {
 		if !slices.Contains(evalrun.A3Cases, a3) {
 			log.Fatalf("eval: no A3 case %q (%s)", a3, strings.Join(evalrun.A3Cases, ", "))
 		}
 		names = []string{"e1-flux-crashloop"}
 	}
-	scenarios, err := evalrun.LoadScenarios(os.Getenv("KLYX_EVAL_LAB"), names)
+	scenarios, err := evalrun.LoadScenarios(envread.Get(envread.KlyxEvalLab), names)
 	if err != nil {
 		log.Fatalf("eval: %v", err)
 	}
@@ -66,18 +67,18 @@ func init() {
 	for _, s := range scenarios {
 		repos = append(repos, s.Repos...)
 	}
-	kind := os.Getenv("KLYX_EVAL_KIND")
+	kind := envread.Get(envread.KlyxEvalKind)
 	if kind == "" {
 		kind = "klyx"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	lab, err := evalrun.Preflight{ConfigPath: os.Getenv("KLYX_CONFIG"), KindName: kind, Repos: repos}.Run(ctx)
+	lab, err := evalrun.Preflight{ConfigPath: envread.Get(envread.KlyxConfig), KindName: kind, Repos: repos}.Run(ctx)
 	if err != nil {
 		log.Fatalf("eval: %v", err)
 	}
 	runs := 3
-	if n, err := strconv.Atoi(os.Getenv("KLYX_EVAL_RUNS")); err == nil && n > 0 {
+	if n, err := strconv.Atoi(envread.Get(envread.KlyxEvalRuns)); err == nil && n > 0 {
 		runs = min(n, evalrun.MaxRuns)
 	}
 	log.Printf("eval: lab %s at %s; %d scenarios × %d runs: at most %d model calls", lab.Cluster.Name, lab.Server, len(scenarios), runs, len(scenarios)*runs*12)
@@ -194,7 +195,7 @@ func (e *labEval) runA3(ctx context.Context, d evalDeps) int {
 		log.Printf("eval: %v", err)
 		return 2
 	}
-	script := filepath.Join(os.Getenv("KLYX_EVAL_LAB"), "..", "klyx-eval.sh")
+	script := filepath.Join(envread.Get(envread.KlyxEvalLab), "..", "klyx-eval.sh")
 	lab := &evalrun.A3Lab{
 		Chat:    d.chat,
 		Cluster: e.lab.Cluster.Name,

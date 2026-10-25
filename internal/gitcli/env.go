@@ -2,6 +2,8 @@ package gitcli
 
 import (
 	"strings"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // Env is the owner's environment values git may see (parent §7: an
@@ -16,10 +18,11 @@ type Env struct {
 	systemConfig string
 }
 
-// OwnerEnv reads the allowlist once from the process environment.
-func OwnerEnv(getenv func(string) string, environ []string) Env {
-	e := Env{Home: getenv("HOME"), Path: getenv("PATH"), User: getenv("USER"), Tmpdir: getenv("TMPDIR"),
-		SSHAuthSock: getenv("SSH_AUTH_SOCK"), XDGConfigHome: getenv("XDG_CONFIG_HOME")}
+// OwnerEnv reads the allowlist once: getenv for the named values, environ
+// for the locale (ProcessEnv passes envread's GitLocale walk).
+func OwnerEnv(getenv func(envread.Name) string, environ []string) Env {
+	e := Env{Home: getenv(envread.Home), Path: getenv(envread.Path), User: getenv(envread.User), Tmpdir: getenv(envread.Tmpdir),
+		SSHAuthSock: getenv(envread.SSHAuthSock), XDGConfigHome: getenv(envread.XDGConfigHome)}
 	for _, kv := range environ {
 		if strings.HasPrefix(kv, "LANG=") || strings.HasPrefix(kv, "LC_") {
 			e.Locale = append(e.Locale, kv)
@@ -27,6 +30,9 @@ func OwnerEnv(getenv func(string) string, environ []string) Env {
 	}
 	return e
 }
+
+// ProcessEnv is OwnerEnv of this process's environment.
+func ProcessEnv() Env { return OwnerEnv(envread.Get, envread.Walk(envread.GitLocale)) }
 
 func (e Env) base() []string {
 	var out []string

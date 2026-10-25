@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/obslog"
 )
@@ -56,7 +57,7 @@ func (h *HealthSink) each(f func(HealthListener)) {
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
-	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE")), log: obslog.New()}
+	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(envread.Get(envread.KlyxRowsTrace)), log: obslog.New()}
 	if h.trace != nil {
 		startLabNoise(em) // lab-only, and only when asked for
 	}
@@ -161,7 +162,7 @@ func NewHealthService(observers func() []*observe.Observer) *HealthService {
 // (KLYX_ROWS_TRACE + ".probe"), so a lab run reads the webview's numbers
 // without the screen. A no-op unless the lab trace is on.
 func (s *HealthService) LabReport(text string) {
-	path := os.Getenv("KLYX_ROWS_TRACE")
+	path := envread.Get(envread.KlyxRowsTrace)
 	if path == "" {
 		return
 	}

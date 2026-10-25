@@ -11,6 +11,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/moomora/klyx/internal/cachediff"
+	"github.com/moomora/klyx/internal/envread"
 	smokepkg "github.com/moomora/klyx/internal/smoke"
 )
 
@@ -26,25 +27,25 @@ func init() {
 	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
 		return
 	}
-	out := os.Getenv("KLYX_SMOKE_OUT")
+	out := envread.Get(envread.KlyxSmokeOut)
 	if out == "" {
 		log.Fatal("the smoke build needs KLYX_SMOKE_OUT")
 	}
-	if os.Getenv("KLYX_CONFIG") == "" {
+	if envread.Get(envread.KlyxConfig) == "" {
 		log.Fatal("the smoke build needs KLYX_CONFIG: the lab's fleet config, never the owner's")
 	}
-	atoi := func(k string, d int) int {
-		if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+	atoi := func(k envread.Name, d int) int {
+		if n, err := strconv.Atoi(envread.Get(k)); err == nil && n > 0 {
 			return n
 		}
 		return d
 	}
 	dist, _ := fs.Sub(assets, "frontend/dist")
 	smoke = &nativeSmoke{w: &smokepkg.Watchdog{Out: out, Settings: smokepkg.Settings{
-		Theme:      os.Getenv("KLYX_SMOKE_THEME"),
-		Width:      atoi("KLYX_SMOKE_WIDTH", 1440),
-		Height:     atoi("KLYX_SMOKE_HEIGHT", 900),
-		Cluster:    os.Getenv("KLYX_SMOKE_CLUSTER"),
+		Theme:      envread.Get(envread.KlyxSmokeTheme),
+		Width:      atoi(envread.KlyxSmokeWidth, 1440),
+		Height:     atoi(envread.KlyxSmokeHeight, 900),
+		Cluster:    envread.Get(envread.KlyxSmokeCluster),
 		Provenance: smokepkg.BuildProvenance(dist),
 	}}}
 }

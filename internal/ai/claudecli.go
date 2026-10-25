@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/procrun"
 )
 
@@ -407,13 +408,17 @@ func NewClaudeCLI(cliPath, model string) Provider {
 
 func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 	return &claudeCLIProvider{
-		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
+		cliPath: cliPath, model: model, environ: claudeEnviron, lookPath: exec.LookPath,
 		platforms: claudePlatforms, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, builds: defaultClaudeBuilds, hashes: defaultExeHashes,
 		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, initDeadline: claudeShortDeadline,
 		stdinDeadline: claudeStdinDeadline, offline: claudeOffline,
 	}
 }
+
+// claudeEnviron is the parent environment the CLI's allowlist takes; claudeEnv
+// still filters it, and adds the fixed lockdown values.
+func claudeEnviron() []string { return envread.Walk(envread.ClaudeCLI) }
 
 func (p *claudeCLIProvider) envValue(k string) string {
 	for _, kv := range p.environ() {
