@@ -6,7 +6,7 @@ Opened 2026-10-25, on `feat/settings-s0`, after the redesign was accepted and it
 - the coverage tests that make an undescribed setting a failure;
 - Diagnostics' read-only parts.
 
-S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revisions 1 and 2 the same day, after that review and its re-review (§8, §9).
+S1 adds no new write and changes no setting's behaviour. This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§8 to §10).
 
 ## 1. Addressing and navigation
 
@@ -117,14 +117,14 @@ Four Go tests derive what must be covered, each from its own source, and fail on
 ### 3.1 Environment: one facade
 
 Product code reads the environment only through `internal/envread`, and a scan rejects any other access. Coverage then follows from the type system, not from recognizing every way code might spell a read.
-- **Names:** every name is a typed constant, `envread.Name`, declared in `internal/settings/env.go` with its family, and constructible nowhere else:
+- **Names are opaque handles, owned by the facade.** `envread.Name` is a struct with an unexported field. Only `envread` can make a non-zero one, and it makes exactly the declared ones, as exported values (`envread.KlyxConfig`, `envread.Terminal`). A string, a conversion or a literal cannot become a Name outside `envread`. The zero Name, the only one other code can construct, is refused by every facade function before any access, as is a handle missing from the declaration table (a membership check, not trust in the type). Families, dynamic purposes and native store ids are handles of the same kind. `internal/settings` holds the descriptive metadata keyed by the handles, and a test compares the facade's declaration table with the registry, each way. The declarations, by family:
   - **product:** `KLYX_CONFIG`, and the eval, smoke and lab builds' variables, these as `fixed` under a "not product settings" note;
   - **tool overrides:** the `KLYX_*_PATH` names; each `clibin.Binary` takes an `envread.Name`, so a new override is a new declaration;
   - **library:** names Klyx passes to a library that reads them, such as `KUBECONFIG` through client-go's `RecommendedConfigPathEnvVar`, declared, and checked equal to the library's constant by a test;
   - **injected:** names read through an injected function (`TERMINAL`, `SSH_AUTH_SOCK`, `XDG_CONFIG_HOME`), whose type is `func(envread.Name) string`;
   - **dynamic:** the AI key variable, read by `envread.Dynamic(name, purpose)` with `purpose` a declared constant: its entry describes the contract, never a value;
   - **inherited:** names honoured by libraries without Klyx reading them (the proxy variables, `HOME`, `PATH`), declared as such, without claiming to enumerate what a kubeconfig exec plugin reads.
-- **Walks:** a walk of the environment is `envread.Walk(family)`, where the family declares its prefixes and `Walk` applies them itself. A new prefix is therefore a new declaration, never an edit at the walk site. A child process's inherited environment is `envread.ForChild(family)`, likewise.
+- **Walks:** a walk of the environment is `envread.Walk(family)`, where the family is a declared handle owning its prefixes, and `Walk` applies them itself. A new prefix is therefore a new declaration, never an edit at the walk site. A child process's environment is `envread.ForChild(family)`, likewise (§3.3).
 - **The scan** (Go AST, product code: `internal/`, `cmd/klyx/*.go`, `cmd/klyxctl`; tests and build-tagged harness files excluded) fails on any reference, called or not, to:
   - `os.Getenv`, `os.LookupEnv`, `os.Environ`, `os.ExpandEnv`, `os.Setenv` or `os.Unsetenv`;
   - `syscall.Getenv` or `syscall.Environ`;
@@ -132,25 +132,49 @@ Product code reads the environment only through `internal/envread`, and a scan r
   - all of these outside `envread`.
 
   A function value, a constant name or a helper cannot bypass it, because any of them must start from one of these references.
-- **Negative fixtures,** synthetic Go files run through the scan, each fail it:
+- **Negative cases:** an undeclared or zero Name, family, dynamic purpose or native store id is refused before any access (unit tests of each facade). Synthetic Go files run through the scan, and each of these fails it:
   - a constant-named `os.Getenv`;
   - `os.LookupEnv`;
   - `os.Environ` used as a value;
   - an aliased `os` import;
   - a raw `getenv` default of `os.Getenv`.
 
-  A second walk that names an undeclared family fails to compile.
+  A walk naming a family that is not a declared handle is refused before it reads.
 
 ### 3.2 Stores: one facade each
 
-- **Webview storage:** all `localStorage` and `sessionStorage` access goes through `src/settings/storage.ts`, whose functions take a key from the declared union (`storageKeys.ts`). Each key has a registry entry.
+- **Webview storage:** all `localStorage` and `sessionStorage` access goes through `src/settings/storage.ts`, whose functions take a key from the declared union (`storageKeys.ts`). They also check the key's membership in that declared table at run time, so a cast (`"x" as StorageKey`) is refused before any access. Each key has a registry entry.
   - The existing call sites move to it, `persist.ts`'s helper included.
   - A TypeScript AST test fails on any reference to `localStorage`, `sessionStorage`, `window.localStorage`, `globalThis.sessionStorage` and the like, outside that module. This covers element access by string (`window["localStorage"]`), and a reference held in a variable or passed to a helper, since obtaining the object is the reference.
   - Negative fixtures: storage passed to a helper, aliased, and accessed with brackets.
 - **Native stores:** the fleet file's directory is held only by `internal/localstore`, set once at startup.
-  - Every file or directory Klyx keeps beside the fleet file (`window.json`, `claude-builds.json`, `git-cache/`) comes from `localstore.Path(name)`, with `name` a typed constant declared there.
+  - Every file or directory Klyx keeps beside the fleet file (`window.json`, `claude-builds.json`, `git-cache/`) comes from `localstore.Path(store)`, with `store` an opaque handle declared there. An undeclared or zero handle is refused before a path is formed.
   - A test compares the declared names with the registry's native entries, each way.
   - The paths `main.go` builds today move to it, and a Go scan fails on any `filepath.Dir` of the fleet path outside `localstore`.
+
+### 3.3 Preserving behaviour through the facades
+
+The facades change how code reaches the environment and stores, not what it reads, inherits or writes. Each of these existing behaviours is an acceptance requirement, with old-versus-new fixture comparisons:
+- **Native tools inherit the whole environment** (`execenv.Environ`: nil inherits; extras are appended last), as do helm and flux. Their `ForChild` family is "inherit all", so an external auth or plugin variable (`AWS_PROFILE`, an exec plugin's own) still reaches kubectl. Settings describes it as inheritance and never shows values.
+- **Git and the Claude Code CLI keep their allowlists:**
+  - Git's owner environment and isolated per-command configuration (`gitcli/env.go`);
+  - the CLI's exact names, its `LC_*` family and its fixed lockdown values (`claudecli_contract.go`).
+
+  Their families are those allowlists, never "inherit all". Fixed child overrides stay after inherited entries, with their precedence.
+- **Timing and injection:**
+  - Reads happen at the same moments as today, never frozen at module start.
+  - Tests keep their fake readers.
+  - `Dynamic` stays bound to the AI key's explicit source.
+  - The desktop PATH extension (`ApplyDesktopToolPath`) keeps its ordering and platform expansion through `envread`.
+- **Webview storage:**
+  - the same key strings, tiers (local or session), JSON formats, migrations and defaults;
+  - the best-effort handling when storage is unavailable;
+  - the session lifetime of view searches;
+  - zoom's cross-window updates and the theme's change notifications.
+- **Native locations:**
+  - `localstore`'s root is the fleet file's lexical directory, as today, so `KLYX_CONFIG` still relocates the adjacent files;
+  - it is not slice 0's resolved symlink target, which stays the fleet file writers' own: `localstore` never touches the temp-file, mode, symlink or compare-and-swap rules;
+  - tests supply isolated roots without re-rooting a running app.
 
 **Search** filters the snapshot by label and effect, case-insensitively and by word. It lists matches by section, and opens the section at the entry's anchor.
 
@@ -225,7 +249,7 @@ It carries `data-setting=<id>`, and its control and description ids are made fro
   - a note that a GUI launch may not see shell exports, which matters for an AI key read from the environment.
 - **The fixed bounds:** each ceiling with its value, from its Go constant (§3).
 
-Nothing in Diagnostics writes, and nothing is sent anywhere.
+Diagnostics changes nothing of Klyx's configuration or state, and sends nothing anywhere (the version check's scratch kubeconfig aside, §5).
 
 ## 6. What S1 does not do
 
@@ -296,3 +320,15 @@ Codex ruled R2 to R5 resolved, R1 partly. One P2 and one P3 remained.
 - the honest wording of what Diagnostics writes and runs (§5);
 - unique ids for repeated fields (§4);
 - a typed credential kept apart from the section's draft (§1).
+
+## 10. Revision 3: Codex's second re-review (2026-10-25)
+
+Codex ruled the raw-reference bans, the walk families, the storage scan and the fallback source resolved. One P2 remained.
+
+| Finding | Change |
+|---|---|
+| **R2-1, P2:** Go's named string types do not stop `envread.Read("UNDECLARED")` from compiling | §3.1, §3.2: opaque handles owned by each facade (a struct with an unexported field), declared there as exported values. The zero handle and any handle not in the declaration table are refused before access. Families, dynamic purposes and native store ids are handled the same way. Webview keys are checked for membership at run time, so a cast is refused. The declaration tables and the registry are compared each way. |
+
+**Also from the re-review:**
+- §3.3 records the behaviour the facades must preserve, with old-versus-new fixture comparisons: native tools inheriting the whole environment, Git's and the CLI's allowlists, read timing and injection, storage formats and lifetimes, and native locations kept apart from the fleet file writers' symlink target;
+- the old "nothing writes" sentence in §5 now agrees with the version check's scratch kubeconfig.
