@@ -138,7 +138,7 @@ Codex accepted slice 0 at 2a985ad, after the review of 829c55e and four re-revie
 - Its independent extraction from yaml.v3 v3.0.1's sources matches the 51-message allowlist exactly.
 - It found no listed message that carries content, and no omission that hurts repair: real malformed files keep their specific messages (a missing colon, an invalid escape, tab indentation, an unfinished list, invalid base64, an invalid merge).
 - Every accumulated probe passes.
-- Its corpus check of 106 configurations that loaded before found no unexpected refusal.
+- Its corpus check of 106 configurations that loaded before found no unexpected refusal. The native smoke then passed 210/210 four ways at 17890a2 (the accepted code and its note), from a clean tree.
 
 ## 3. Next: the redesign spec
 
