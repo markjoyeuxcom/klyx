@@ -430,3 +430,13 @@ Codex reviewed 36f3c60 (handoff f21e11c1) and requested changes: six P2 and two 
 | **R8, P3:** the new `effective` disposition showed "file only" | No disposition chip for an effective store. |
 
 **Also from the review:** the Fleet section's field descriptions said every value was in the table; kubeconfig and tags now say they are not shown in this version.
+
+## 14. Revision 2: Codex's re-review (2026-10-25)
+
+Codex ruled R1-R3 and R5-R8 resolved at 3c3388a, R4 partly. One P2 remained, RR1. The reviewed list approved a whole function: every `Dir` in `AppendClusters` was the same site, so a new store derivation there inherited the approval. A dot-imported `filepath.Dir` also produced no site at all.
+
+| Finding | Change |
+|---|---|
+| **RR1, P2:** reviewed sites were whole functions, and a dot import produced no site | A site is one occurrence: its kind, file, function and its own source text, numbered when a function repeats it. A new derivation in a reviewed function is a new site, whether its text is new or repeated, and a removed one leaves a stale entry. A dot import of `path/filepath`, `path` or `envread` is refused. The tests cover Codex's real-file case and a same-text repeat in `AppendClusters` itself, plus a dot-import fixture. |
+
+This change is test-only, so the smoke at 3c3388a still stands for the product.
