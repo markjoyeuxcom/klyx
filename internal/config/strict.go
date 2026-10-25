@@ -130,7 +130,7 @@ func (w *keyWalk) walk(n *yaml.Node, t reflect.Type, path string) {
 			ft, ok := fields[k.Value]
 			if !ok {
 				if path == "" {
-					w.top = append(w.top, fmt.Sprintf("unknown top-level key %q (line %d) is ignored", k.Value, k.Line))
+					w.top = append(w.top, fmt.Sprintf("unknown top-level key %s (line %d) is ignored", describeKey(k.Value), k.Line))
 				} else {
 					w.nested = append(w.nested, unknownAt(path, k, fields))
 				}
@@ -202,15 +202,22 @@ func itemPath(path string, i int, item *yaml.Node) string {
 }
 
 func unknownAt(path string, k *yaml.Node, fields map[string]reflect.Type) string {
-	name := fmt.Sprintf("%q", k.Value)
-	if n := len([]rune(k.Value)); n >= 25 { // no field is this long: perhaps a pasted value
-		name = fmt.Sprintf("a key of %d characters", n)
-	}
-	s := fmt.Sprintf("%s: %s at line %d", path, name, k.Line)
+	s := fmt.Sprintf("%s: %s at line %d", path, describeKey(k.Value), k.Line)
 	if near := nearest(k.Value, fields); near != "" {
 		s += fmt.Sprintf(" (did you mean %q?)", near)
 	}
 	return s
+}
+
+// describeKey names a key in a diagnostic: quoted, or, at 25 characters or
+// more - longer than any field or label Klyx reads, so perhaps a pasted
+// value - by its length alone. Every diagnostic that names a key the file
+// holds uses it (Codex's re-review of slice 0).
+func describeKey(k string) string {
+	if n := len([]rune(k)); n >= 25 {
+		return fmt.Sprintf("a key of %d characters", n)
+	}
+	return fmt.Sprintf("%q", k)
 }
 
 // nearest is the known key within two edits of key, if one is.
@@ -262,6 +269,10 @@ func clip(s string, n int) string {
 // so it is withheld, spaces and all.
 var echoedValue = regexp.MustCompile("`[^`]{25,}`|\\(got \"(?:[^\"\\\\]|\\\\.){25,}\"\\)")
 
+// duplicateKey is YAML's own error for a key given twice, which names the
+// key before Klyx's walk can (Codex's re-review of slice 0).
+var duplicateKey = regexp.MustCompile("mapping key \"((?:[^\"\\\\]|\\\\.){25,})\" already defined")
+
 // DisplayError is a fleet-file error as Klyx shows it: an echoed long value
 // is withheld, so a key pasted into the wrong field is never put on screen;
 // a short one (a typo of an enum) and the file's path stay, to be fixed.
@@ -269,11 +280,14 @@ func DisplayError(err error) string {
 	if err == nil {
 		return ""
 	}
-	return echoedValue.ReplaceAllStringFunc(err.Error(), func(m string) string {
+	s := echoedValue.ReplaceAllStringFunc(err.Error(), func(m string) string {
 		if strings.HasPrefix(m, "`") {
 			return fmt.Sprintf("`a value of %d characters, withheld`", len([]rune(m))-2)
 		}
 		return fmt.Sprintf("(got a value of %d characters, withheld)", len([]rune(m))-len(`(got "")`))
+	})
+	return duplicateKey.ReplaceAllStringFunc(s, func(m string) string {
+		return fmt.Sprintf("mapping key, %s, already defined", describeKey(duplicateKey.FindStringSubmatch(m)[1]))
 	})
 }
 

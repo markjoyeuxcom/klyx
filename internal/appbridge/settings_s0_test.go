@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -186,5 +187,46 @@ func TestABrokenFleetLinkIsSaidInSettings(t *testing.T) {
 	WithConfigLoadError(s, err)
 	if dto := s.GetFleetConfig(); !strings.Contains(dto.LoadError, "symlink whose target does not exist") || !strings.Contains(dto.FileError, "symlink whose target does not exist") {
 		t.Fatalf("%+v", dto)
+	}
+}
+
+// Codex's re-review of slice 0: a long key pasted into the file never
+// reaches a diagnostic - a top-level warning, a match label's error, YAML's
+// duplicate-key error - in Load's strings or in Settings' payload; a short
+// key stays named, to be fixed.
+func TestALongPastedKeyNeverReachesADiagnostic(t *testing.T) {
+	key := "sk-synthetic-0123456789abcdefghijklmnop"
+	for _, c := range []struct {
+		name, doc string
+	}{
+		{"a top-level key", "clusters:\n  - name: a\n" + key + ": true\n"},
+		{"a match label", "clusters:\n  - name: a\n    alertmanager:\n      endpoint: https://am.example\n      match: {" + key + ": a}\n"},
+		{"a duplicate key", "clusters:\n  - name: a\n    " + key + ": 1\n    " + key + ": 2\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := configServiceAt(t, c.doc, &config.Config{Clusters: []config.ClusterConfig{{Name: "a", Context: "a"}}})
+			cfg, err := config.Load(s.path)
+			if err != nil && strings.Contains(err.Error(), key) {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg != nil {
+				s.cfg = cfg
+				if w := strings.Join(cfg.Warnings(), "\n"); strings.Contains(w, key) || !strings.Contains(w, "a key of 39 characters") {
+					t.Fatalf("warnings: %s", w)
+				}
+			}
+			WithConfigLoadError(s, err)
+			b, _ := json.Marshal(s.GetFleetConfig())
+			if strings.Contains(string(b), key) || !strings.Contains(string(b), "a key of 39 characters") {
+				t.Fatalf("Settings: %s", b)
+			}
+			if _, err := config.ReadSnapshot(s.path); err != nil && strings.Contains(err.Error(), key) {
+				t.Fatalf("ReadSnapshot: %v", err)
+			}
+		})
+	}
+	short := configServiceAt(t, "clusters:\n  - name: a\nnotification: {}\n", &config.Config{})
+	if cfg, err := config.Load(short.path); err != nil || !strings.Contains(strings.Join(cfg.Warnings(), "\n"), `"notification"`) {
+		t.Fatalf("a short key is named: %v", err)
 	}
 }

@@ -97,6 +97,15 @@ Codex requested changes: six P2, all residual cases of the slice's own fixes. It
 
 **Gates:** as before, with 2483 frontend tests. A mutation pass over the fixes caught 10 of 10. The native smoke passed 210/210 four ways on 829c55e from a clean tree, the slice before these fixes; the fixes are covered by the tests above.
 
+### 2.2 Codex's re-review (2026-10-25)
+
+Codex found the six fixes sound, with one residual P2. A long pasted key was described by its length only on the nested unknown-field path; three other diagnostics still named it in full:
+- the top-level warning;
+- an invalid `match` label;
+- YAML's own duplicate-key error.
+
+Every diagnostic that names a key the file holds now uses one rule (`describeKey`): quoted, or, at 25 characters or more (longer than any field or label Klyx reads), by its length. YAML's duplicate-key error is rewritten the same way. A regression covers all three, in Load's and ReadSnapshot's strings and in Settings' serialized payload, with a short key still named. A mutation pass caught 4 of 4.
+
 ## 3. Next: the redesign spec
 
 A spec for the redesign, reviewed by Codex before it is built:

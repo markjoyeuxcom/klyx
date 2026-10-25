@@ -127,10 +127,10 @@ func validateEndpoint(prefix string, e EndpointConfig, legacyToken bool) error {
 	sort.Strings(names)
 	for _, k := range names {
 		if !labelName.MatchString(k) {
-			return fmt.Errorf("%s.match: %q is not a label name", prefix, k)
+			return fmt.Errorf("%s.match: %s is not a label name", prefix, describeKey(k))
 		}
 		if v := e.Match[k]; v == "" || hasControl(v) {
-			return fmt.Errorf("%s.match.%s must be a non-empty value without control characters", prefix, k)
+			return fmt.Errorf("%s.match: %s needs a non-empty value without control characters", prefix, describeKey(k))
 		}
 	}
 	if a := e.Auth; a != nil {
