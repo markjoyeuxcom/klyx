@@ -57,6 +57,7 @@ type AIConn interface {
 // whole (SetAIState) and loaded once per call (spec 2026-10-13 §1.1).
 type AIService struct {
 	lookup       func(string) (AIConn, bool)
+	lease        leaser // an Explain's or a Suggest-fix's lease (Settings S2 §2.3)
 	state        atomic.Pointer[AIState]
 	rev          atomic.Uint64
 	isProtected  func(string) bool
@@ -98,24 +99,38 @@ func (s *AIService) applyingNow() bool {
 // admitCall registers an Explain's or a Suggest-fix's call as work, unless
 // an Apply is deciding: atomically, so an Apply's plan either names the
 // call or refused it.
-func (s *AIService) admitCall(kind, cluster string) (func(), string) {
+//
+// The call takes a lease on the connection precheck found (Settings S2
+// §2.3): the lease's context ends with that connection, and a connection
+// replaced since precheck refuses the call.
+func (s *AIService) admitCall(kind, cluster string, conn AIConn) (func(), *Lease, string) {
+	what := map[string]string{"explain": "an Explain", "suggest-fix": "a Suggest-fix"}[kind]
+	le, err := s.lease(cluster, Work{Kind: kind, What: what + " on " + cluster})
+	if err != nil {
+		return nil, nil, err.Error()
+	}
+	if !le.Pins(conn) {
+		le.Release()
+		return nil, nil, "the cluster's connection changed; nothing was sent"
+	}
 	s.gateMu.Lock()
 	defer s.gateMu.Unlock()
 	if s.applying {
-		return nil, aiApplying
+		le.Release()
+		return nil, nil, aiApplying
 	}
 	if s.calls == nil {
 		s.calls = map[uint64]PlanWorkDTO{}
 	}
 	s.callSeq++
 	id := s.callSeq
-	what := map[string]string{"explain": "an Explain", "suggest-fix": "a Suggest-fix"}[kind]
 	s.calls[id] = PlanWorkDTO{ID: fmt.Sprintf("%s:%d", kind, id), Kind: kind, Cluster: cluster, Started: time.Now().UTC().Format(time.RFC3339), What: what + " on " + cluster}
 	return func() {
 		s.gateMu.Lock()
 		delete(s.calls, id)
 		s.gateMu.Unlock()
-	}, ""
+		le.Release()
+	}, le, ""
 }
 
 // callsWork is the in-flight Explain and Suggest-fix calls, by identity.
@@ -132,10 +147,12 @@ func (s *AIService) callsWork() []PlanWorkDTO {
 
 // NewAIService wires the read-only AI surface with its first snapshot.
 func NewAIService(lookup func(string) (AIConn, bool), initial *AIState, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
-	s := &AIService{lookup: lookup, isProtected: isProtected, capabilities: capabilities}
+	s := &AIService{lookup: lookup, lease: plainLeaser(lookup), isProtected: isProtected, capabilities: capabilities}
 	SetAIState(s, initial)
 	return s
 }
+
+func (s *AIService) setLeaser(l leaser) { s.lease = l }
 
 // SetAIState publishes a new snapshot. A free function, not a method: every
 // exported method of a bound service is callable from the webview, and only
@@ -346,7 +363,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
-	done, refusal := s.admitCall("suggest-fix", cluster)
+	done, le, refusal := s.admitCall("suggest-fix", cluster, conn)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
@@ -364,7 +381,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 		// selector IDs; no manifest of one is sent
 		return AIResultDTO{Error: "Suggest fix is not available for a Karpenter NodeClass: its spec holds the role, the instance profile and cloud IDs, which Klyx never sends to AI; nothing was sent"}
 	}
-	ctx, cancel := context.WithTimeout(readfence.With(context.Background(), fence), ai.Deadline(ai.PurposeFix))
+	ctx, cancel := context.WithTimeout(readfence.With(le.Ctx, fence), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
 	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)

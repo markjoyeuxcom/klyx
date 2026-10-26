@@ -559,6 +559,12 @@ func main() {
 	appbridge.SetChatGit(chatSvc, gitSvc)               // AI A1 §3.2: git_changes
 	appbridge.SetChatLogHistory(chatSvc, logHistorySvc) // AI A1 §3.6: get_log_history
 
+	// Settings S2 §2.3: every piece of work on a cluster takes a lease from
+	// the lifecycle - admitted only now, pinned to the current connection,
+	// ended (or continued) when that connection is replaced or removed.
+	appbridge.UseLeases(lifecycle, forwardsSvc, logsSvc, eventsSvc, logHistorySvc, chatSvc, aiSvc, nodeOpsSvc, helmSvc)
+	lifecycle.OnEnd(func(cluster string, _ fleet.ConnID, why string) { logHistorySvc.EndCluster(cluster, why) })
+
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
 	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, envread.Dynamic(envread.AIKey), aiSvc, cfg.AI)

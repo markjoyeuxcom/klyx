@@ -655,8 +655,19 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 		r := refusedNotSent(err.Error())
 		return StepRunDTO{Reason: err.Error(), Result: &r}
 	}
+	// the confirmed request's lease (Settings S2 §2.3): admitted now, before
+	// anything is read or written, and continuing across its connection's
+	// retirement - a request already sent keeps its outcome
+	le, lerr := s.lease(cluster, Work{Kind: "step", What: "a confirmed step's request on " + cluster + ", opening", Continues: true})
+	if lerr != nil {
+		return StepRunDTO{Reason: lerr.Error()}
+	}
+	defer le.Release()
 	s.mu.Lock()
 	c, p, why := s.planLocked(cluster, conversationID, exchangeID)
+	if why == "" && !le.Pins(c.conn) {
+		why = "the cluster's connection changed since this plan was proposed"
+	}
 	if why == "" {
 		why = s.offeredLocked(c, p, n)
 	}
@@ -686,6 +697,7 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	request := fmt.Sprintf("%s:request:%d", stepWorkID(c, exchangeID, n), s.admissions)
 	s.requests[request] = PlanWorkDTO{ID: request, Kind: "step", Cluster: c.cluster, What: stepWhatLocked(c, exchangeID, n) + ": its confirmed request goes ahead, and may still write"}
 	defer s.endRequest(request)
+	_ = le.Settle(stepWhatLocked(c, exchangeID, n) + ": its write is refused if it was not yet sent; once sent, it keeps its written or unverified outcome")
 	sn := snapLocked(c, p, n)
 	conn := c.conn
 	s.mu.Unlock()

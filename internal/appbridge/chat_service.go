@@ -52,6 +52,9 @@ type ChatConnState func(cluster string) (conn ChatConn, usable bool)
 // ChatService holds conversations and runs turns.
 type ChatService struct {
 	state ChatConnState
+	// lease: a conversation's, a confirmed request's and a verification's
+	// lease (Settings S2 §2.3)
+	lease leaser
 	ai    *AIService
 	em    Emitter
 	now   func() time.Time
@@ -75,7 +78,61 @@ type ChatService struct {
 
 // NewChatService wires the chat to the registry and the AI snapshot.
 func NewChatService(state ChatConnState, aiSvc *AIService, em Emitter) *ChatService {
-	return &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}, requests: map[string]PlanWorkDTO{}}
+	s := &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}, requests: map[string]PlanWorkDTO{}}
+	s.lease = plainLeaser(func(cluster string) (ChatConn, bool) {
+		c, _ := state(cluster)
+		return c, c != nil
+	})
+	return s
+}
+
+func (s *ChatService) setLeaser(l leaser) { s.lease = l }
+
+// ChatEndedEvent tells the page a conversation ended because its cluster's
+// connection was replaced or removed (Settings S2 §2.3).
+const ChatEndedEvent = "chat:ended"
+
+// ChatEndedDTO is that notice.
+type ChatEndedDTO struct {
+	Cluster        string `json:"cluster"`
+	ConversationID string `json:"conversationId"`
+	Reason         string `json:"reason"`
+	Version        uint64 `json:"version"`
+}
+
+// endConversation ends the conversation holding le, whose connection was
+// retired (S2 §2.3): explicitly, with the reason, never left to its next
+// read. Its turn is cancelled and records why, its offers are withdrawn,
+// the version moves, and the page is told.
+func (s *ChatService) endConversation(le *Lease, why string) {
+	s.mu.Lock()
+	var c *conversation
+	for _, cv := range s.convs {
+		if cv.lease == le {
+			c = cv
+		}
+	}
+	if c == nil || c.ended != "" {
+		s.mu.Unlock()
+		return
+	}
+	reason := why + "; start a new conversation"
+	c.ended = reason
+	if c.active != nil {
+		c.active.endedWhy = reason
+		c.active.cancel()
+	}
+	for _, e := range c.exchanges {
+		if p := e.plan; p != nil && p.withdrawn == "" {
+			p.withdrawn = why
+		}
+	}
+	s.version++
+	ev := ChatEndedDTO{Cluster: c.cluster, ConversationID: c.id, Reason: reason, Version: s.version}
+	s.mu.Unlock()
+	if s.em != nil {
+		s.em.Emit(ChatEndedEvent, ev)
+	}
 }
 
 type conversation struct {
@@ -94,6 +151,7 @@ type conversation struct {
 	members     []member
 	membersRead bool
 	conn        ChatConn
+	lease       *Lease       // the conversation's (S2 §2.3), pinning conn; released with it
 	epoch       policy.Epoch // the cluster's, pinned at start (Settings slice F §4)
 	rev         uint64
 	provider    ai.ProviderID
@@ -130,6 +188,9 @@ type activeTurn struct {
 	id      string
 	cancel  context.CancelFunc
 	stopped bool
+	// endedWhy: the conversation's connection was retired (S2 §2.3); the
+	// turn ends with that reason, never as merely stopped
+	endedWhy string
 }
 
 // exchange is one question and everything it caused.
@@ -367,12 +428,37 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 		// slice F §5: no new work while an AI Apply decides
 		return refuse(aiApplying)
 	}
-	conn, usable := s.state(cluster)
-	if conn == nil || !usable {
+	if cur, usable := s.state(cluster); cur == nil || !usable {
 		return refuse("the cluster is not connected")
 	}
 	if len(s.convs) >= chatMaxConvs && s.convs[key] == nil {
 		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))
+	}
+	// the conversation's lease, admitted now and pinning the connection it
+	// runs on (S2 §2.3): ended explicitly with that connection
+	what := "the chat on " + cluster
+	if anchor != nil {
+		obj := anchor.Name
+		if anchor.Namespace != "" {
+			obj = anchor.Namespace + "/" + anchor.Name
+		}
+		if anchor.Plural != "" {
+			obj = anchor.Plural + " " + obj
+		}
+		what = "the investigation of " + obj
+	}
+	var le *Lease
+	le, err := s.lease(cluster, Work{Kind: kind, What: what, End: func(why string) { s.endConversation(le, why) }})
+	if err != nil {
+		return refuse(err.Error())
+	}
+	conn, ok := le.Conn.(ChatConn)
+	if !ok {
+		le.Release()
+		return refuse("the cluster is not connected")
+	}
+	if old := s.convs[key]; old != nil {
+		old.lease.Release() // an ended conversation the new one replaces
 	}
 	mode := "snapshot"
 	if _, ok := st.Provider.(ai.Converser); ok {
@@ -382,7 +468,7 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if kind == kindInvestigation {
 		id = invIDPrefix + id
 	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, lease: le, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -598,6 +684,7 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 			c.active.cancel()
 		}
 		delete(s.convs, c.key)
+		c.lease.Release()
 		s.version++
 	}
 }
@@ -650,7 +737,11 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		seed = c.anchor // validated when the investigation started
 	}
 	lim := c.limits()
-	ctx, cancel := context.WithTimeout(context.Background(), lim.deadline)
+	parent := context.Background()
+	if c.lease != nil {
+		parent = c.lease.Ctx // ends with the conversation's connection (S2 §2.3)
+	}
+	ctx, cancel := context.WithTimeout(parent, lim.deadline)
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
 	c.turns++
@@ -684,6 +775,9 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	c.active = nil
 	if turn.stopped && err == nil {
 		err = context.Canceled // stopped: a late success is never an answer
+	}
+	if turn.endedWhy != "" {
+		err = &endError{reason: turn.endedWhy} // its connection was retired, said
 	}
 	switch {
 	case err == nil:

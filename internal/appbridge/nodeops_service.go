@@ -34,6 +34,8 @@ type drainStream struct {
 	cmd    *exec.Cmd          // the running kubectl drain process
 	done   chan struct{}      // closed when the reader goroutine has fully exited
 	node   string             // the node being drained (for the cancel report)
+	lease  *Lease             // continuing (Settings S2 §2.3): released when the drain ends
+	up     bool               // the child started: from then on deregister releases the lease; guarded by s.mu
 }
 
 const (
@@ -49,6 +51,7 @@ const (
 // "nodedrain:<streamID>" event, and emits a terminal EOF chunk on exit.
 type NodeOpsService struct {
 	lookup func(string) (NodeOpsConn, bool)
+	lease  leaser // a drain's lease (Settings S2 §2.3)
 	em     Emitter
 
 	mu     sync.Mutex
@@ -60,10 +63,13 @@ type NodeOpsService struct {
 func NewNodeOpsService(lookup func(string) (NodeOpsConn, bool), em Emitter) *NodeOpsService {
 	return &NodeOpsService{
 		lookup: lookup,
+		lease:  plainLeaser(lookup),
 		em:     em,
 		drains: map[string]*drainStream{},
 	}
 }
+
+func (s *NodeOpsService) setLeaser(l leaser) { s.lease = l }
 
 // Cordon cordons (unschedulable=true) or uncordons (unschedulable=false) the
 // node object the verb was armed against (uid; design §5b) - never a
@@ -121,7 +127,19 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	if err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-	conn, ok := s.lookup(cluster)
+	// a drain's lease (S2 §2.3): admitted before anything starts, and
+	// continuing - a started drain runs to its end, whatever its connection
+	le, err := s.lease(cluster, Work{Kind: "drain", What: "the drain of " + node + ", starting", Continues: true})
+	if err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
+	started := false
+	defer func() {
+		if !started {
+			le.Release()
+		}
+	}()
+	conn, ok := le.Conn.(NodeOpsConn)
 	if !ok {
 		return OpenLogStreamResultDTO{Error: "cluster not connected: " + cluster}
 	}
@@ -152,7 +170,7 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	rc := &drainPipe{PipeReader: pr, pw: pw}
 
 	ctx, cancel := context.WithCancel(context.Background()) // unfenced: the drain stream's lifetime, no cluster request
-	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{}), node: node}
+	ds := &drainStream{cancel: cancel, cmd: cmd, done: make(chan struct{}), node: node, lease: le}
 
 	// Reserve the slot before starting the process: the cap check and the add
 	// happen under one lock, and a registered stream can never miss CancelAll.
@@ -173,6 +191,11 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 	s.order = append(s.order, streamID)
 	s.mu.Unlock()
 
+	// from here deregister releases the lease, however soon the drain ends
+	s.mu.Lock()
+	ds.up = true
+	s.mu.Unlock()
+	started = true
 	// slice F §2: checked at the child's actual start, after the slot is
 	// reserved; a started drain is not stopped by a later move
 	if err := t.StartCLI(); err != nil {
@@ -187,6 +210,7 @@ func (s *NodeOpsService) StartDrain(cluster, node, uid string, opts DrainOptions
 		_ = rc.Close()
 		return OpenLogStreamResultDTO{Error: "start drain: " + err.Error()}
 	}
+	_ = le.Settle("the drain of " + node) // continuing: it runs to its end
 
 	// Close the write end after the process exits. This is the normal EOF path;
 	// the supervisor close handles the cancel path. Both are idempotent.
@@ -330,6 +354,9 @@ func (s *NodeOpsService) deregister(streamID string) *drainStream {
 			s.order = append(s.order[:i], s.order[i+1:]...)
 			break
 		}
+	}
+	if ds != nil && ds.up {
+		ds.lease.Release() // the drain ended: its lease goes with it
 	}
 	return ds
 }

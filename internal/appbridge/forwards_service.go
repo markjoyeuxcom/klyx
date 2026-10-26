@@ -46,6 +46,7 @@ type forward struct {
 	stop      func()
 	cancelSup context.CancelFunc
 	supDone   chan struct{}
+	lease     *Lease // released when the forward ends
 }
 
 // ForwardsService manages long-lived port-forwards on behalf of the frontend.
@@ -56,8 +57,8 @@ type forward struct {
 // exit it closes supDone. stop() is idempotent. The registry never grows past
 // maxActiveForwards because the cap check and the add happen under one lock.
 type ForwardsService struct {
-	lookup func(string) (ForwardsConn, bool)
-	em     Emitter
+	lease leaser // Settings S2 §2.3: every forward takes a lease
+	em    Emitter
 
 	seq atomic.Uint64
 
@@ -69,11 +70,13 @@ type ForwardsService struct {
 // NewForwardsService wires the cluster lookup and the event emitter.
 func NewForwardsService(lookup func(string) (ForwardsConn, bool), em Emitter) *ForwardsService {
 	return &ForwardsService{
-		lookup:   lookup,
+		lease:    plainLeaser(lookup),
 		em:       em,
 		forwards: map[string]*forward{},
 	}
 }
+
+func (s *ForwardsService) setLeaser(l leaser) { s.lease = l }
 
 // StartForward begins forwarding localPort -> the target's port. kind is "Pod"
 // or "Service"; for a Service the backing pod is resolved first (TargetKind
@@ -81,12 +84,28 @@ func NewForwardsService(lookup func(string) (ForwardsConn, bool), em Emitter) *F
 // local port; the resolved port is returned in the DTO. At cap, returns an
 // error and starts nothing.
 func (s *ForwardsService) StartForward(cluster, namespace, kind, name string, localPort, targetPort int) StartForwardResultDTO {
-	conn, ok := s.lookup(cluster)
+	id := fmt.Sprintf("%s/%s/%s#%d", cluster, namespace, name, s.seq.Add(1))
+	// the lease first, before any I/O (S2 §2.3): a forward still opening is
+	// listed, and ended with its connection
+	le, err := s.lease(cluster, Work{Kind: "forward",
+		What: fmt.Sprintf("a port-forward to %s %s/%s, opening", kind, namespace, name),
+		End:  func(why string) { s.endForward(id, why) }})
+	if err != nil {
+		return StartForwardResultDTO{Error: err.Error()}
+	}
+	conn, ok := le.Conn.(ForwardsConn)
 	if !ok {
+		le.Release()
 		return StartForwardResultDTO{Error: "cluster not connected: " + cluster}
 	}
+	opened := false
+	defer func() {
+		if !opened {
+			le.Release()
+		}
+	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), forwardResolveTimeout)
+	ctx, cancel := context.WithTimeout(le.Ctx, forwardResolveTimeout)
 	defer cancel()
 
 	// Resolve the forward target to a concrete pod + container port.
@@ -106,7 +125,6 @@ func (s *ForwardsService) StartForward(cluster, namespace, kind, name string, lo
 		return StartForwardResultDTO{Error: err.Error()}
 	}
 
-	id := fmt.Sprintf("%s/%s/%s#%d", cluster, namespace, name, s.seq.Add(1))
 	dto := ForwardDTO{
 		ID:          id,
 		Cluster:     cluster,
@@ -120,7 +138,7 @@ func (s *ForwardsService) StartForward(cluster, namespace, kind, name string, lo
 	}
 
 	supCtx, cancelSup := context.WithCancel(context.Background())
-	fwd := &forward{dto: dto, stop: stop, cancelSup: cancelSup, supDone: make(chan struct{})}
+	fwd := &forward{dto: dto, stop: stop, cancelSup: cancelSup, supDone: make(chan struct{}), lease: le}
 
 	s.mu.Lock()
 	if len(s.forwards) >= maxActiveForwards {
@@ -133,6 +151,13 @@ func (s *ForwardsService) StartForward(cluster, namespace, kind, name string, lo
 	s.forwards[id] = fwd
 	s.order = append(s.order, id)
 	s.mu.Unlock()
+	opened = true
+	// settled after the I/O: a connection retired while this opened ends it
+	// here, closing what was opened (S2 §2.3)
+	if err := le.Settle(fmt.Sprintf("forward of localhost:%d to %s %s/%s:%d", actualLocal, kind, namespace, name, resolvedTarget)); err != nil {
+		s.StopForward(id)
+		return StartForwardResultDTO{Error: err.Error()}
+	}
 
 	// Supervisor: the ONLY place a forward transitions to broken. It waits for the
 	// tunnel to die on its own (done) OR for an explicit stop (supCtx cancelled by
@@ -144,11 +169,12 @@ func (s *ForwardsService) StartForward(cluster, namespace, kind, name string, lo
 		case <-done:
 			// Tunnel died on its own. Flip to broken if still registered.
 			s.mu.Lock()
-			if cur, present := s.forwards[id]; present {
+			if cur, present := s.forwards[id]; present && cur.dto.Status == "active" {
 				cur.dto.Status = "broken"
 			}
 			changed := s.snapshotLocked()
 			s.mu.Unlock()
+			fwd.lease.Release()
 			s.em.Emit(ForwardsChangedEvent, changed)
 		case <-supCtx.Done():
 			// Explicit stop; nothing to emit here (the stopper owns the emit).
@@ -221,6 +247,7 @@ func (s *ForwardsService) StopAll() {
 func (s *ForwardsService) teardown(f *forward) {
 	f.stop()
 	f.cancelSup()
+	f.lease.Release()
 	select {
 	case <-f.supDone:
 	case <-time.After(closeWaitTimeout):
@@ -252,4 +279,23 @@ func (s *ForwardsService) emitChanged() {
 	list := s.snapshotLocked()
 	s.mu.Unlock()
 	s.em.Emit(ForwardsChangedEvent, list)
+}
+
+// endForward ends a forward whose cluster's connection was retired (S2
+// §2.3): the tunnel is torn down, and the forward stays listed as ended,
+// saying why, until it is stopped. A forward still opening is not listed
+// yet: its Settle fails, and its opener closes it.
+func (s *ForwardsService) endForward(id, why string) {
+	s.mu.Lock()
+	f := s.forwards[id]
+	if f == nil || f.dto.Status == "ended" {
+		s.mu.Unlock()
+		return
+	}
+	f.dto.Status, f.dto.Reason = "ended", why
+	s.mu.Unlock()
+	go func() {
+		s.teardown(f)
+		s.emitChanged()
+	}()
 }

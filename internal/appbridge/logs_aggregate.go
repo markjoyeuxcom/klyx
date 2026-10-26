@@ -41,15 +41,21 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 	if err := validStreamID(streamID); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-	conn, ok := s.lookup(cluster)
+	le, err := s.leaseStream(cluster, fmt.Sprintf("logs of %s %s/%s, opening", kind, namespace, name))
+	if err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
+	conn, ok := le.Conn.(LogsConn)
 	if !ok {
+		le.Release()
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
 	}
 
 	// Reserved before any network I/O, like OpenLogStream: the pending open
 	// counts as ONE stream against the cap and a close cancels it.
-	st, ctx, err := s.reserve(streamID)
+	st, ctx, err := s.reserve(streamID, le)
 	if err != nil {
+		le.Release()
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
 	stop := openDeadline(st)
@@ -107,6 +113,14 @@ func (s *LogsService) OpenWorkloadLogStream(cluster, namespace, kind, name, cont
 		readers = append(readers, podReader{short: short, rc: rc})
 	}
 	timedOut := stop()
+	if !timedOut && ctx.Err() == nil && len(readers) > 0 {
+		if err := le.Settle(fmt.Sprintf("logs of %s %s/%s", kind, namespace, name)); err != nil {
+			for _, pr := range readers {
+				_ = pr.rc.Close()
+			}
+			return fail(false, err)
+		}
+	}
 	if timedOut || ctx.Err() != nil || len(readers) == 0 {
 		for _, pr := range readers {
 			_ = pr.rc.Close()
@@ -267,6 +281,13 @@ func (s *LogsService) emitAggregateEOF(streamID string, failMu *sync.Mutex, fail
 	if n > 0 {
 		msg = fmt.Sprintf("%d of %d pod streams failed", n, total)
 	}
+	s.mu.Lock()
+	for _, m := range []map[string]*logStream{s.streams, s.draining} {
+		if st := m[streamID]; st != nil && st.reason != "" {
+			msg = "the stream ended: " + st.reason // S2 §2.3: said, never silent
+		}
+	}
+	s.mu.Unlock()
 	s.em.Emit("podlogs:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: msg})
 }
 
@@ -296,6 +317,7 @@ func (s *LogsService) deregister(streamID string) {
 
 	if st != nil {
 		st.cancel() // release ctx (supervisors exit); idempotent
+		st.lease.Release()
 		select {
 		case <-st.done:
 		default:

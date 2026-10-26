@@ -812,7 +812,7 @@ func TestTheGuardScanChecksTheForwardedContext(t *testing.T) {
 			return strings.Replace(s, old, "_ = ctx\n\treturn doScaleWorkload(stdctx.Background(), conn, kind, namespace, name, uid, replicas)", 1)
 		},
 		"reviewed-multi-result": func(s string) string {
-			return strings.Replace(s, old, "logs := NewLogsService(nil, nil)\n\t_, lifetime, _ := logs.reserve(\"probe\")\n\t_ = ctx\n\treturn doScaleWorkload(lifetime, conn, kind, namespace, name, uid, replicas)", 1)
+			return strings.Replace(s, old, "logs := NewLogsService(nil, nil)\n\t_, lifetime, _ := logs.reserve(\"probe\", PlainLease(\"probe\", nil))\n\t_ = ctx\n\treturn doScaleWorkload(lifetime, conn, kind, namespace, name, uid, replicas)", 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

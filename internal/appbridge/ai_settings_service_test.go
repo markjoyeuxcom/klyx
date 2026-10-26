@@ -77,6 +77,8 @@ func newSettingsFixture(t *testing.T, fleet string) *settingsFixture {
 	f := &settingsFixture{path: path, keys: newMemKeys(), env: map[string]string{}}
 	getenv := func(k string) string { return f.env[k] }
 	f.ai = NewAIService(func(string) (AIConn, bool) { return nil, false }, BuildAIState(cfg.AI, f.keys, getenv), func(string) bool { return true }, nil)
+	// a call registered directly needs no connection (S2 §2.3)
+	f.ai.lease = func(cluster string, _ Work) (*Lease, error) { return PlainLease(cluster, nil), nil }
 	f.svc = NewAISettingsService(path, f.keys, getenv, f.ai, cfg.AI)
 	return f
 }

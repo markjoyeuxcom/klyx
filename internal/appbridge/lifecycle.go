@@ -37,6 +37,11 @@ type Lifecycle struct {
 	hmu        sync.Mutex
 	enders     []func(cluster string, id fleet.ConnID, why string)
 	forgetters []func(cluster string)
+
+	// leases (S2 §2.3), by number
+	lmu      sync.Mutex
+	leases   map[uint64]*Lease
+	leaseSeq uint64
 }
 
 // NewLifecycle wires the lifecycle to the registry, the policy registry,
@@ -44,7 +49,8 @@ type Lifecycle struct {
 // usability to it, and the sink takes a publication only from a cluster's
 // current connection.
 func NewLifecycle(reg *fleet.Registry, pol *policy.Registry, sink *HealthSink, ix *fleetindex.Index) *Lifecycle {
-	l := &Lifecycle{reg: reg, pol: pol, sink: sink, ix: ix, gates: map[string]*sync.Mutex{}, wake: make(chan struct{}, 1)}
+	l := &Lifecycle{reg: reg, pol: pol, sink: sink, ix: ix, gates: map[string]*sync.Mutex{}, wake: make(chan struct{}, 1), leases: map[uint64]*Lease{}}
+	l.enders = append(l.enders, l.endLeases) // the work ends first, then the generation
 	reg.SetOnUsable(l.OnUsable)
 	if sink != nil {
 		sink.SetIdentityCheck(func(cluster string, inc uint64) bool { return reg.IsCurrent(cluster, fleet.ConnID(inc)) })

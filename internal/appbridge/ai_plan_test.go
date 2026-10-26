@@ -117,7 +117,7 @@ func TestAPlanNamesTheWorkItEnds(t *testing.T) {
 	f.svc.work = func() aiWorkList {
 		return aiWorkList{ends: []PlanWorkDTO{{ID: "conv:c1", Kind: "investigation", Cluster: "a", What: "an investigation on a"}}}
 	}
-	done, why := f.ai.admitCall("explain", "a")
+	done, _, why := f.ai.admitCall("explain", "a", nil)
 	if why != "" {
 		t.Fatal(why)
 	}
@@ -233,11 +233,11 @@ func TestARefusalBeforeTheWriteChangesNothing(t *testing.T) {
 func TestNoNewWorkStartsWhileAnApplyDecides(t *testing.T) {
 	f := newSettingsFixture(t, localFleet)
 	f.ai.beginApply()
-	if _, why := f.ai.admitCall("explain", "a"); why != aiApplying {
+	if _, _, why := f.ai.admitCall("explain", "a", nil); why != aiApplying {
 		t.Fatalf("an Explain started: %q", why)
 	}
 	f.ai.endApply()
-	done, why := f.ai.admitCall("explain", "a")
+	done, _, why := f.ai.admitCall("explain", "a", nil)
 	if why != "" {
 		t.Fatal(why)
 	}
@@ -398,7 +398,7 @@ func TestNewWorkIsRefusedDuringAnApply(t *testing.T) {
 	p := f.svc.PlanAI(d)
 	why := ""
 	f.svc.saveAI = func(path, version string, a config.AIConfig) (string, error) {
-		_, why = f.ai.admitCall("explain", "a")
+		_, _, why = f.ai.admitCall("explain", "a", nil)
 		return config.SaveAIAt(path, version, a)
 	}
 	if r := f.svc.ApplyAI(p.Digest, ""); !r.OK {

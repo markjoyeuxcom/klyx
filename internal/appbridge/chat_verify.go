@@ -262,9 +262,17 @@ func (s *ChatService) verifyFence(c *conversation) func() error {
 // verifyStepEffect runs a step's verification and settles it (§5.2).
 func (s *ChatService) verifyStepEffect(c *conversation, p *actionPlan, n int, sn stepSnap, res ActionResultDTO, ranAt time.Time) {
 	fence := s.verifyFence(c)
+	// the verification's lease (Settings S2 §2.3): it ends with its
+	// connection, and the effect is then unverified
+	le, err := s.lease(c.cluster, Work{Kind: "step", What: fmt.Sprintf("the verification of a confirmed step on %s", c.cluster)})
+	if err != nil {
+		s.settleEffect(c, p, n, stepEffectUnverified, err.Error())
+		return
+	}
+	defer le.Release()
 	// one context for every read: fenced, and bounded by verifyObject and
 	// verifyDeletion from before their first read
-	ctx, stop, fencedWhy := fenced(readfence.With(context.Background(), fence), fence)
+	ctx, stop, fencedWhy := fenced(readfence.With(le.Ctx, fence), fence)
 	defer stop()
 	w := &witness{sn: sn, written: res.Outcome == fleet.OutcomeWritten}
 	if res.Receipt != nil {

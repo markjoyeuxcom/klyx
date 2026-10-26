@@ -27,6 +27,9 @@ const (
 // succeeded; false means the watch is down or the latest re-list failed.
 type liveStatusDTO struct {
 	Live bool `json:"live"`
+	// Ended: why the subscription's connection ended it - its cluster
+	// reconnected or was removed (Settings S2 §2.3)
+	Ended string `json:"ended,omitempty"`
 }
 
 // liveSub is one live subscription. stopWatch tears down the fleet WatchDirty

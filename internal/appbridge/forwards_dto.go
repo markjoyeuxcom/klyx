@@ -15,7 +15,10 @@ type ForwardDTO struct {
 	LocalPort   int    `json:"localPort"`
 	TargetPort  int    `json:"targetPort"`
 	StartedUnix int64  `json:"startedUnix"`
-	Status      string `json:"status"` // "active" | "broken"
+	Status      string `json:"status"` // "active" | "broken" | "ended"
+	// Reason: why an ended forward ended - its cluster reconnected or was
+	// removed (Settings S2 §2.3)
+	Reason string `json:"reason,omitempty"`
 }
 
 // StartForwardResultDTO is returned synchronously from StartForward. On success
