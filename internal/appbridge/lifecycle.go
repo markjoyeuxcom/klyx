@@ -40,6 +40,7 @@ type Lifecycle struct {
 	enders     []func(cluster string, id fleet.ConnID, why string)
 	forgetters []func(cluster string)
 	releasers  []func(cluster string, id fleet.ConnID)
+	publishers []func(cluster string, id fleet.ConnID)
 
 	// leases (S2 §2.3), by number
 	lmu      sync.Mutex
@@ -137,6 +138,12 @@ func (l *Lifecycle) applyUsable(ev fleet.UsabilityEvent) {
 	published, released := l.ackUsable(ev)
 	if published != nil {
 		published()
+		l.hmu.Lock()
+		ps := append([]func(string, fleet.ConnID){}, l.publishers...)
+		l.hmu.Unlock()
+		for _, f := range ps {
+			f(ev.Cluster, ev.ID)
+		}
 	}
 	if released {
 		l.hmu.Lock()
@@ -167,6 +174,15 @@ func (l *Lifecycle) ackUsable(ev fleet.UsabilityEvent) (published func(), releas
 		}
 	}
 	return published, released
+}
+
+// OnPublished registers what learns that a connection's move into usable
+// was published - the connection really connected (S2 §4.5). It runs after
+// the gate.
+func (l *Lifecycle) OnPublished(f func(cluster string, id fleet.ConnID)) {
+	l.hmu.Lock()
+	defer l.hmu.Unlock()
+	l.publishers = append(l.publishers, f)
 }
 
 // OnReleased registers what records a held attempt's release (S2 §4.5):
@@ -258,6 +274,7 @@ func (l *Lifecycle) Remove(name, why string) error {
 	g := l.gate(name)
 	g.Lock()
 	old, id, ok := l.retireLocked(name)
+	l.pol.Forget(name) // published with the retirement (S2b review, R2)
 	g.Unlock()
 	if ok {
 		l.ended(name, id, why)

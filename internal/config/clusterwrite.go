@@ -189,18 +189,20 @@ func findEntry(doc []byte, name string, remove bool) (*entryAt, error) {
 }
 
 // yamlReferences says why a node's subtree cannot be edited line by line:
-// an anchor another node may alias, an alias, or a merge key.
+// an anchor another node may alias, an alias, or a merge key. It names the
+// structure and its line, never the anchor's or alias's name, which is the
+// file's own text (Codex's review of S2b, R7).
 func yamlReferences(n *yaml.Node) string {
 	switch {
 	case n.Anchor != "":
-		return "it carries a YAML anchor (&" + n.Anchor + ")"
+		return fmt.Sprintf("it carries a YAML anchor (line %d)", n.Line)
 	case n.Kind == yaml.AliasNode:
-		return "it uses a YAML alias (*" + n.Value + ")"
+		return fmt.Sprintf("it uses a YAML alias (line %d)", n.Line)
 	}
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if n.Content[i].Value == "<<" && n.Content[i].Tag == "!!merge" {
-				return "it uses a YAML merge key (<<)"
+				return fmt.Sprintf("it uses a YAML merge key (line %d)", n.Content[i].Line)
 			}
 		}
 	}

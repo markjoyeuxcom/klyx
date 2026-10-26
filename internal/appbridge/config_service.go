@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/policy"
 )
 
@@ -391,8 +392,30 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 			toks = append(toks, tok)
 		}
 	}
+	// each connection is prepared before anything is written, so one that
+	// cannot be built adds nothing (S2 §4.5; Codex's review of S2b, R6)
+	var prepared []*fleet.Prepared
+	discard := func() {
+		for _, p := range prepared {
+			p.Discard()
+		}
+	}
+	if s.fp != nil {
+		for _, name := range contexts {
+			p, err := s.fp.d.Prepare(config.ClusterConfigForContext(name))
+			if err != nil {
+				discard()
+				return ActionResultDTO{Error: "Klyx cannot connect to " + name + ", so nothing was added: " + config.DisplayError(err)}
+			}
+			prepared = append(prepared, p)
+		}
+	}
 	if err := s.appendClusters(s.path, contexts); err != nil {
+		discard()
 		return ActionResultDTO{Error: err.Error()}
+	}
+	if s.fp != nil {
+		return s.installAdded(contexts, prepared)
 	}
 	var failed []string
 	for _, name := range contexts {
@@ -417,6 +440,41 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 				continue
 			}
 		}
+	}
+	if len(failed) > 0 {
+		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}
+	}
+	return ActionResultDTO{OK: true}
+}
+
+// installAdded commits each prepared addition under its cluster's commit
+// gate - seeded over its placeholder, still reserved - then installs and
+// starts its connection.
+func (s *ConfigService) installAdded(contexts []string, prepared []*fleet.Prepared) ActionResultDTO {
+	var failed []string
+	for i, name := range contexts {
+		cc := config.ClusterConfigForContext(name)
+		p := prepared[i]
+		err := s.fp.d.Life.Decide(cc.Name, Bound{}, func() error {
+			s.appendRunning(cc)
+			s.policy.Seed(cc.Name, cc.IsProtected())
+			s.fp.attempt(cc.Name, p.ID(), s2Of(cc))
+			return nil
+		})
+		if err == nil {
+			err = s.fp.d.Install(s.fp.d.Ctx, p)
+			if err != nil {
+				s.dropRunning(cc.Name)
+				s.policy.Forget(cc.Name)
+			}
+		}
+		if err != nil {
+			p.Discard()
+			failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
+		}
+	}
+	if s.fp.d.Changed != nil {
+		s.fp.d.Changed()
 	}
 	if len(failed) > 0 {
 		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}

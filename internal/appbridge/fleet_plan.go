@@ -94,10 +94,14 @@ type fleetPlans struct {
 	beforeDecide func()
 
 	mu sync.Mutex
-	// connected is each cluster's last terms that connected (S2 §4.5), raw:
-	// what Revert writes back; attempts, each pending attempt's terms
+	// raw S2 terms, kept with the connections that actually use them
+	// (Codex's review of S2b, R5): terms, by connection identity; current,
+	// each cluster's current connection's or pending attempt's; connected,
+	// the last terms whose connection really connected - what Revert writes
+	// back. The file's entry never stands in for them.
+	terms     map[fleet.ConnID]attemptTerms
+	current   map[string]s2Fields
 	connected map[string]s2Fields
-	attempts  map[fleet.ConnID]attemptTerms
 }
 
 type attemptTerms struct {
@@ -105,31 +109,49 @@ type attemptTerms struct {
 	terms   s2Fields
 }
 
-// WireFleetPlans gives the configuration service its fleet plans (S2 §4):
-// a released attempt's terms become its cluster's last connected terms.
+// WireFleetPlans gives the configuration service its fleet plans (S2 §4).
+// The startup connections' raw terms are read from fleet.yaml as Klyx
+// started; a connection's terms become its cluster's last connected terms
+// when its usability is published - when it really connected.
 func WireFleetPlans(cs *ConfigService, d FleetPlanDeps) {
-	fp := &fleetPlans{d: d, cache: newPlanCache(time.Now), connected: map[string]s2Fields{}, attempts: map[fleet.ConnID]attemptTerms{}}
+	fp := &fleetPlans{d: d, cache: newPlanCache(time.Now), terms: map[fleet.ConnID]attemptTerms{}, current: map[string]s2Fields{}, connected: map[string]s2Fields{}}
+	if _, raw, _, err := config.LoadRaw(cs.path); err == nil {
+		for _, cc := range cs.fleetClusters() {
+			entry, ok := raw[cc.Name]
+			if !ok {
+				continue
+			}
+			fp.current[cc.Name] = s2Of(entry)
+			if c, ok := d.Life.reg.Conn(cc.Name); ok {
+				if id, ok := connID(c); ok {
+					fp.terms[id] = attemptTerms{cluster: cc.Name, terms: s2Of(entry)}
+				}
+			}
+		}
+	}
 	cs.fp = fp
-	d.Life.OnReleased(fp.released)
+	d.Life.OnPublished(fp.published)
 	d.Life.OnForget(fp.forget)
 }
 
-func (fp *fleetPlans) released(cluster string, id fleet.ConnID) {
+// published records that connection id of cluster connected: its terms are
+// the last that connected.
+func (fp *fleetPlans) published(cluster string, id fleet.ConnID) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
-	if a, ok := fp.attempts[id]; ok && a.cluster == cluster {
+	if a, ok := fp.terms[id]; ok && a.cluster == cluster {
 		fp.connected[cluster] = a.terms
 	}
-	delete(fp.attempts, id)
 }
 
 func (fp *fleetPlans) forget(cluster string) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	delete(fp.connected, cluster)
-	for id, a := range fp.attempts {
+	delete(fp.current, cluster)
+	for id, a := range fp.terms {
 		if a.cluster == cluster {
-			delete(fp.attempts, id)
+			delete(fp.terms, id)
 		}
 	}
 }
@@ -138,6 +160,15 @@ func (fp *fleetPlans) lastConnected(cluster string) (s2Fields, bool) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	t, ok := fp.connected[cluster]
+	return t, ok
+}
+
+// currentTerms are the raw terms of the cluster's current connection or
+// pending attempt: what Retry connects with.
+func (fp *fleetPlans) currentTerms(cluster string) (s2Fields, bool) {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	t, ok := fp.current[cluster]
 	return t, ok
 }
 
@@ -408,19 +439,25 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 			}
 		}
 	case planRetry:
+		saved, ok := fp.currentTerms(name)
 		switch {
 		case !running:
 			return refuse(name + " is not running")
 		case !held:
 			return refuse(name + " is not waiting to connect: there is nothing to retry")
+		case !ok:
+			return refuse("Klyx does not know the terms " + name + " was saved with; use the file's values")
 		}
-		x.terms, x.cand = x.before, run
-		if !inFile {
-			x.terms = s2Of(run)
-		}
+		// the saved terms that run, never a hand edit since: Retry makes no
+		// history the connection did not have (S2b review, R5)
+		x.terms, x.cand = saved, run
 	default:
 		return refuse("unknown plan")
 	}
+
+	// protection's baseline is the published value - a held reconnect's
+	// pending terms are not in force yet (Codex's review of S2b, R4)
+	published := running && s.IsProtected(name)
 
 	// the class, from what changes (S2 §4.2)
 	switch {
@@ -430,12 +467,17 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		x.class = classAddition
 	case c.Kind == planRevert || c.Kind == planRetry || connTerms(run) != connTerms(x.cand):
 		x.class = classReconnect
-	case run.IsProtected() != x.cand.IsProtected():
+	case published != x.cand.IsProtected():
 		x.class = classProtection
 	default:
 		x.class = classPlacement
 	}
 	x.plan.Class = x.class
+	if held && x.class == classProtection {
+		// the hold publishes its attempt's protection when it connects: a
+		// change now is refused before anything is written (S2b review, R3)
+		return refuse(name + " is saved, not connected yet: change its protection once it connects, or Revert or Retry first")
+	}
 
 	// the checks made at plan time (S2 §4.4)
 	switch x.class {
@@ -472,7 +514,7 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 			revs = append(revs, r.Kind+"="+r.Revision)
 		}
 		x.plan.Runtime["records"] = strings.Join(revs, ",")
-		if run.IsProtected() {
+		if published {
 			x.plan.Interlock = &InterlockDTO{Phrase: name, Why: "Klyx disconnects the protected cluster " + name + " and stops showing it."}
 		}
 	} else {
@@ -480,9 +522,9 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		if !running {
 			from = config.ClusterConfig{Name: name}
 		}
-		x.plan.Changes = clusterChanges(from, x.cand, running)
+		x.plan.Changes = clusterChanges(from, x.cand, running, published)
 		x.plan.Writes = x.edit != nil
-		if running && run.IsProtected() && !x.cand.IsProtected() {
+		if published && !x.cand.IsProtected() {
 			x.plan.Interlock = &InterlockDTO{Phrase: name, Why: "Destructive actions on " + name + " will no longer ask for its name to be typed, and AI egress stops treating it as protected."}
 		}
 	}
@@ -567,8 +609,11 @@ func (fp *fleetPlans) records(name string, chosen []string) ([]PlanRecordDTO, st
 }
 
 // clusterChanges are the effective changes from run to cand, with
-// protection's effect as its own line naming what decides it (S2 §4.2).
-func clusterChanges(run, cand config.ClusterConfig, running bool) []PlanChangeDTO {
+// protection's effect as its own line naming what decides it (S2 §4.2):
+// from the published value, which a held reconnect's pending terms do not
+// set yet. A cluster connected from the file names the endpoint kinds it
+// brings (S2 §4.6), never their secrets.
+func clusterChanges(run, cand config.ClusterConfig, running, published bool) []PlanChangeDTO {
 	out := []PlanChangeDTO{}
 	add := func(id, label, from, to string) {
 		if from != to {
@@ -584,7 +629,20 @@ func clusterChanges(run, cand config.ClusterConfig, running bool) []PlanChangeDT
 	add("fleet.environment", "Environment", run.Environment, cand.Environment)
 	add("fleet.region", "Region", run.Tags["region"], cand.Tags["region"])
 	add("fleet.tags", "Tags", tagsText(run.Tags), tagsText(cand.Tags))
-	add("fleet.protection", "Protection", protectionText(run), protectionText(cand))
+	from := protectionText(run)
+	if running && run.IsProtected() != published {
+		from = map[bool]string{true: "on", false: "off"}[published] + ", until the pending connection is usable"
+	}
+	add("fleet.protection", "Protection", from, protectionText(cand))
+	if !running {
+		var kinds []string
+		for _, e := range cand.Endpoints() {
+			kinds = append(kinds, e.Kind)
+		}
+		if len(kinds) > 0 {
+			add("fleet.endpoints", "Endpoints", "none", strings.Join(kinds, ", "))
+		}
+	}
 	return out
 }
 

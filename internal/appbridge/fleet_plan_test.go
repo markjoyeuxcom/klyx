@@ -356,6 +356,7 @@ func TestAReconnectIsHeldUntilItsOwnConnectionIsUsable(t *testing.T) {
 // the last terms that connected, held for its own attempt.
 func TestRevertGoesBackToTheLastTermsThatConnected(t *testing.T) {
 	r := newFleetRig(t, false)
+	connectNow(t, r, "dev") // the startup terms really connected
 	d := devDraft()
 	d.Context = "dev-2"
 	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {

@@ -49,6 +49,10 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 		fp.beforeDecide()
 	}
 	name, life := c.Cluster, fp.d.Life
+	// write runs under the commit gate: the edit or the removal against the
+	// plan's file version - or, writing nothing, that version checked all
+	// the same, so a file changed since the re-plan is never adopted
+	// (Codex's review of S2b, R1)
 	write := func() error {
 		switch {
 		case x.edit != nil:
@@ -58,7 +62,7 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 			_, err := config.RemoveClusterAt(s.path, x.version, name)
 			return err
 		}
-		return nil
+		return s.fileIs(x.version)
 	}
 	note := ""
 	switch x.class {
@@ -87,13 +91,12 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 		if perr != nil {
 			return ApplyResultDTO{Error: "Klyx cannot connect with these terms, so nothing was applied: " + config.DisplayError(perr)}
 		}
-		connected := !s.heldNow(name) // the terms running now connected
 		err = life.Switch(fp.d.Ctx, tok, x.bound, p, "saved, not connected yet: connecting with context "+x.cand.Context, name+"'s connection settings changed", x.cand.IsProtected(), func() error {
 			if err := write(); err != nil {
 				return err
 			}
 			s.swapRunning(x.cand)
-			fp.attempt(name, p.ID(), x.before, x.terms, connected)
+			fp.attempt(name, p.ID(), x.terms)
 			return nil
 		})
 	case classRemoval:
@@ -107,8 +110,12 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 			return ApplyResultDTO{Error: "Klyx cannot connect with these terms, so nothing was applied: " + config.DisplayError(perr)}
 		}
 		err = life.Decide(name, Bound{}, func() error {
+			if err := s.fileIs(x.version); err != nil {
+				return err
+			}
 			s.appendRunning(x.cand)
 			s.policy.Seed(name, x.cand.IsProtected()) // over its placeholder: still reserved
+			fp.attempt(name, p.ID(), x.terms)
 			return nil
 		})
 		if err != nil {
@@ -137,17 +144,26 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 	return ApplyResultDTO{OK: true, Note: note}
 }
 
-// attempt records a reconnect's attempt under the gate: its terms become
-// the last connected ones when it releases its hold. When the terms it
-// replaces had connected, they are the last connected ones until then, so
-// Revert can go back to them.
-func (fp *fleetPlans) attempt(cluster string, id fleet.ConnID, before, terms s2Fields, connected bool) {
+// attempt records a new connection's raw terms under the gate: they are
+// the cluster's current terms, and become its last connected ones when
+// that connection's usability is published.
+func (fp *fleetPlans) attempt(cluster string, id fleet.ConnID, terms s2Fields) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
-	if _, ok := fp.connected[cluster]; !ok && connected {
-		fp.connected[cluster] = before
+	fp.terms[id] = attemptTerms{cluster: cluster, terms: terms}
+	fp.current[cluster] = terms
+}
+
+// fileIs checks fleet.yaml is still the version a plan was made from.
+func (s *ConfigService) fileIs(version string) error {
+	v, err := config.FileVersion(s.path)
+	if err != nil {
+		return err
 	}
-	fp.attempts[id] = attemptTerms{cluster: cluster, terms: terms}
+	if v != version {
+		return config.ErrFileChanged
+	}
+	return nil
 }
 
 // deleteRecords deletes a removed cluster's chosen keychain records, each

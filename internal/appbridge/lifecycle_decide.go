@@ -109,6 +109,10 @@ func (l *Lifecycle) Unseat(bound Bound, name, why string, write func() error) er
 			return err
 		}
 		old, oldID, retired = l.retireLocked(name)
+		// the removal is published with the retirement, under the gate:
+		// work admitted before - a ticket, a fence - is refused from now,
+		// before any callback below can block (Codex's review of S2b, R2)
+		l.pol.Forget(name)
 		return nil
 	}); err != nil {
 		return err
