@@ -615,3 +615,33 @@ S2a is the cluster lifecycle, backend only. Nothing in the page changes yet, and
 - the index's attached word, end and forgetting.
 
 The first run left one survivor: the notification scope was tested only through its stored reader. Five more mutants did not compile at first. The end-to-end scope test, the continuing-work test and the AI pin test came from that run.
+
+## 14. S2a revision 1: Codex's review (2026-10-26)
+
+Codex requested changes at 50fa962: seven P2. It found the foundations sound:
+- the identity source, the Observer's incarnation binding and the trusted end;
+- the policy tombstone and the one protection reader;
+- the lease API without a context, End before the cancel, and continuing leases;
+- page leases for log history, and Reconnect and Remove as S2b's primitives.
+
+The findings were where workers meet the lifecycle. Each is fixed, and its probe is a regression test (`lifecycle_review_test.go` in appbridge and fleet).
+
+| Finding | Fix |
+|---|---|
+| **F1:** a chat's `End` read the lease before `Start` had it back, so a retirement in that window lost the end, and raced | `End` finds its work by an identity the worker made before acquiring, never by the lease. Chat binds it to the conversation. `Start` holds the service's lock from the lease to the registration, so an end in between waits, then finds the conversation registered, or refused. The lifecycle records why on the lease itself (`Lease.EndedWhy`), before its context is cancelled, so a log stream says why however the two interleave, with no `End` at all |
+| **F2:** an old events `End` closed the subscription by key, so it could close a replacement opened on the same key | Each subscription is an entry that owns its lease and its subscription. `End` detaches that subscription only (`liveRegistry.detach`, compare-and-remove), and tells the page it ended under the registry's lock, so the notice never lands after a replacement opened. A subscription whose connection ended before it was recorded is refused, and the failed-Settle path closes its own subscription only |
+| **F3:** comparison members held their connections without leases | Each member takes a lease on its own cluster, listed under that cluster's work, and retiring it ends the investigation explicitly. A replaced set, a refused one, Clear, an end and a removal release them |
+| **F4:** a credential action captured the connection before it took the fleet lock | `activate` resolves the connection inside the fleet lock, runs the action on it, and publishes from that same connection. Set, Move and Remove all take it, so every credential action is serialized with an Apply |
+| **F5:** a pending usability was hidden only from `Snapshot`, so the Observer and the index heard "connected" before the lifecycle published it | The Observer and index handoff reads the same visible state as `Snapshot`, with the reason from before the move. `AckUsable` reports whether the move became visible, and the lifecycle then calls `Published` after leaving the gate, so the handoff never runs under it |
+| **F6:** a removal left ended conversations in their slots | A removal-only forget drops the cluster's conversations after their end is recorded, and releases their leases. A reconnect keeps them, ended, to read. A confirmed step keeps its own continuing lease |
+| **F7:** endpoint credential revisions survived a removal, so an old reader stayed current after a re-add | A removal moves every endpoint kind's revision (`endpointcred.Registry.Retire`), without a revocation. Counters only move forward, and a kept keychain record stays usable under its own checks. It is not done at a reconnect, which builds its replacement before it retires the old connection |
+
+**Also from the audit:** the two lifecycle hooks on bound services became plain package functions, so the webview cannot call them. They are the chat's forget (`ForgetChats`) and the log history views' end (`EndLogHistory`, formerly an exported method on the bound service).
+
+**Tests:** Codex's seven probes, inverted. Each has a further case:
+- an events `End` that runs before the subscription is recorded is refused;
+- a refused comparison holds no member's lease;
+- the lifecycle hands the published state to health, and only then;
+- removing a credential waits for the fleet lock.
+
+**Mutation pass:** 14 mutants of the fixes, 13 caught. The survivor releases a forgotten conversation's leases again. It is equivalent under the lifecycle, whose end has released them already, and is kept as a net for leases taken outside it.
