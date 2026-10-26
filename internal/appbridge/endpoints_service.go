@@ -420,31 +420,40 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 	if err != nil {
 		return fail(red, err)
 	}
-	if err := s.store.Set(endpointcred.Account(cluster, config.EndpointMetrics), v); err != nil {
-		return EndpointActionDTO{Message: "Nothing changed: " + red.Text(err.Error())}
-	}
-	next, err := config.MoveMetricsTokenToAuth(snap, cluster)
-	if err != nil {
-		why := red.Text(err.Error())
-		if errors.Is(err, config.ErrFileChangedSinceSnapshot) {
-			why = "fleet.yaml changed meanwhile and still holds a token"
+	// the whole transfer is one credential action under the fleet lock
+	// (S2 §2.6; Codex's re-review of S2a, RR3): the keychain first, then the
+	// file's compare-and-swap, then the connection and the revision. A
+	// partial transfer says what happened, and publishes nothing.
+	var res EndpointActionDTO
+	_ = s.activate(cluster, config.EndpointMetrics, func(conn EndpointConn) error {
+		if err := s.store.Set(endpointcred.Account(cluster, config.EndpointMetrics), v); err != nil {
+			res = EndpointActionDTO{Message: "Nothing changed: " + red.Text(err.Error())}
+			return errNotActivated
 		}
-		return EndpointActionDTO{Message: "The token is stored in the keychain for " + origin + "; " + why + " - review it and move again."}
-	}
-	for _, c := range next.Clusters {
-		if c.Name == cluster && c.Metrics != nil {
-			mc := *c.Metrics
-			_ = s.activate(cluster, config.EndpointMetrics, func(conn EndpointConn) error {
-				if conn != nil {
-					conn.SetMetricsConfig(mc)
-				}
-				return nil
-			})
+		next, err := config.MoveMetricsTokenToAuth(snap, cluster)
+		if err != nil {
+			why := red.Text(err.Error())
+			if errors.Is(err, config.ErrFileChangedSinceSnapshot) {
+				why = "fleet.yaml changed meanwhile and still holds a token"
+			}
+			res = EndpointActionDTO{Message: "The token is stored in the keychain for " + origin + "; " + why + " - review it and move again."}
+			return errNotActivated
 		}
-	}
-	s.revs.Bump(cluster, config.EndpointMetrics, true)
-	return EndpointActionDTO{OK: true, Message: "Moved to the keychain for " + origin + "; fleet.yaml now says auth: {type: bearer}."}
+		for _, c := range next.Clusters {
+			if c.Name == cluster && c.Metrics != nil && conn != nil {
+				conn.SetMetricsConfig(*c.Metrics)
+			}
+		}
+		s.revs.Bump(cluster, config.EndpointMetrics, true)
+		res = EndpointActionDTO{OK: true, Message: "Moved to the keychain for " + origin + "; fleet.yaml now says auth: {type: bearer}."}
+		return nil
+	})
+	return res
 }
+
+// errNotActivated: an activation that stopped part-way, having said what
+// happened; nothing is published.
+var errNotActivated = errors.New("not activated")
 
 // TestEndpoint reads the endpoint the person reviewed once: metrics,
 // Alertmanager's status, or Loki's build info and label names (S8b §6).

@@ -41,6 +41,37 @@ type member struct {
 	// listed under the member's connection, and retiring it ends the
 	// investigation explicitly (Codex's review of S2a, F3)
 	lease *Lease
+	adm   *memberAdmission
+}
+
+// memberAdmission is one member's admission to a comparison set, made
+// before its lease (Codex's re-review of S2a, RR2): its lease's End acts on
+// the investigation only while the set holding it is the committed one; a
+// set refused, or replaced, never ends it. Guarded by the chat service's
+// mutex.
+type memberAdmission struct{ committed bool }
+
+// release ends the member's lease and its admission. Under s.mu.
+func (m member) release() {
+	if m.adm != nil {
+		m.adm.committed = false
+	}
+	m.lease.Release()
+}
+
+// memberEnded ends c because its member name's connection was retired -
+// only when that member's admission is committed to c's set.
+func (s *ChatService) memberEnded(c *conversation, adm *memberAdmission, name, why string) {
+	s.mu.Lock()
+	var ev ChatEndedDTO
+	ok := false
+	if adm.committed {
+		ev, ok = s.endLocked(c, "the comparison cluster "+name+": "+why)
+	}
+	s.mu.Unlock()
+	if ok && s.em != nil {
+		s.em.Emit(ChatEndedEvent, ev)
+	}
 }
 
 // SetComparison fixes an investigation's comparison set before its first
@@ -77,9 +108,9 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 	var set []member
 	chosen := false
 	defer func() {
-		if !chosen { // a refusal holds no member's lease
+		if !chosen { // a refusal holds no member's lease, and commits none
 			for _, m := range set {
-				m.lease.Release()
+				m.release()
 			}
 		}
 	}()
@@ -103,20 +134,30 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		if notAdmitted != "" {
 			return notice(notAdmitted)
 		}
-		name := m
+		name, adm := m, &memberAdmission{}
 		le, err := s.lease(m, Work{Kind: kindInvestigation, What: "the comparison in the investigation on " + cluster,
-			End: func(why string) { s.endConversation(c, "the comparison cluster "+name+": "+why) }})
+			End: func(why string) { s.memberEnded(c, adm, name, why) }})
 		if err != nil {
 			return notice(m + ": " + err.Error())
 		}
+		set = append(set, member{cluster: m, conn: conn, epoch: epoch, lease: le, adm: adm})
 		if !le.Pins(conn) {
-			le.Release()
 			return notice(m + " is not connected")
 		}
-		set = append(set, member{cluster: m, conn: conn, epoch: epoch, lease: le})
+	}
+	// a member whose connection was retired while the set was chosen: the
+	// set is refused, and that member's end, waiting for s.mu, acts on
+	// nothing
+	for _, m := range set {
+		if m.lease.Retired() {
+			return notice("the comparison cluster " + m.cluster + " disconnected while it was chosen; choose again")
+		}
 	}
 	for _, old := range c.members {
-		old.lease.Release()
+		old.release()
+	}
+	for _, m := range set {
+		m.adm.committed = true
 	}
 	chosen = true
 	c.members = set

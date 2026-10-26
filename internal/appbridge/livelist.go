@@ -39,6 +39,40 @@ type liveSub struct {
 	stopWatch func()
 	cancel    chan struct{}
 	done      chan struct{}
+	once      sync.Once // closes cancel
+	// emitMu makes each delivery atomic with stop: nothing is delivered
+	// once the subscription is stopped, and detach's notice comes after
+	// every delivery (Codex's re-review of S2a, RR1)
+	emitMu sync.Mutex
+}
+
+// deliver runs f - an emit - unless the subscription is stopped, and says
+// whether it ran.
+func (s *liveSub) deliver(f func()) bool {
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
+	if s.cancelled() {
+		return false
+	}
+	f()
+	return true
+}
+
+func newLiveSub() *liveSub {
+	return &liveSub{cancel: make(chan struct{}), done: make(chan struct{})}
+}
+
+// stop cancels the subscription: it computes and emits nothing more, and
+// one not yet started never starts. Idempotent.
+func (s *liveSub) stop() { s.once.Do(func() { close(s.cancel) }) }
+
+func (s *liveSub) cancelled() bool {
+	select {
+	case <-s.cancel:
+		return true
+	default:
+		return false
+	}
 }
 
 // liveRegistry runs watch-driven live subscriptions keyed by an opaque string
@@ -53,6 +87,9 @@ type liveSub struct {
 // exit path. interval is a field (not a const) so tests can drive a 10ms ticker.
 type liveRegistry struct {
 	interval time.Duration
+	// stage is a test seam: told "register" before a subscription registers
+	// and "watch" before its watch starts. Nil in production.
+	stage func(stage string, sub *liveSub)
 
 	mu   sync.Mutex
 	subs map[string]*liveSub
@@ -85,17 +122,37 @@ func (r *liveRegistry) open(
 	emit func(payload any),
 	emitLive func(bool),
 ) *liveSub {
-	sub := &liveSub{
-		cancel: make(chan struct{}),
-		done:   make(chan struct{}),
-	}
+	sub := newLiveSub()
+	r.openSub(key, sub, watchStart, compute, emit, emitLive)
+	return sub
+}
 
+// openSub is open for a subscription its caller made first, so the caller
+// can name it - and stop it - before it starts (Codex's re-review of S2a,
+// RR1): one stopped before it registers never registers, watches, computes
+// or emits.
+func (r *liveRegistry) openSub(
+	key string,
+	sub *liveSub,
+	watchStart func(onDirty func(), onLive func(bool)) (func(), error),
+	compute func() (any, bool),
+	emit func(payload any),
+	emitLive func(bool),
+) {
 	// Replace any existing sub for this key BEFORE registering the new one, so a
 	// rapid re-open never leaves two loops emitting on the same event. The old
 	// sub is detached under the lock but drained OUTSIDE it: stopSub waits on the
 	// old loop's done, and that loop (or its watch-failed path) may itself need
 	// r.mu to deregister - holding r.mu across the wait would deadlock.
+	if r.stage != nil {
+		r.stage("register", sub)
+	}
 	r.mu.Lock()
+	if sub.cancelled() {
+		r.mu.Unlock()
+		close(sub.done)
+		return
+	}
 	old := r.subs[key]
 	delete(r.subs, key)
 	r.subs[key] = sub
@@ -152,7 +209,7 @@ func (r *liveRegistry) open(
 		lastLive = up
 		mu.Unlock()
 		if changed {
-			emitLive(up == 1)
+			sub.deliver(func() { emitLive(up == 1) })
 		}
 	}
 
@@ -178,19 +235,28 @@ func (r *liveRegistry) open(
 		report()
 	}
 
+	if r.stage != nil {
+		r.stage("watch", sub)
+	}
+	// stopped while it registered: it never watches, computes or emits
+	if sub.cancelled() {
+		r.mu.Lock()
+		if r.subs[key] == sub {
+			delete(r.subs, key)
+		}
+		r.mu.Unlock()
+		close(sub.done)
+		return
+	}
 	stopWatch, err := watchStart(onDirty, onLive)
 	if err != nil {
 		// Could not establish the watch. Report not-live and run a single compute
 		// so the subscriber still gets a one-shot snapshot, then exit the sub: with
 		// no watch there is nothing to drive re-lists.
-		emitLive(false)
+		sub.deliver(func() { emitLive(false) })
 		if payload, ok := compute(); ok {
 			// Guard: if this sub was replaced while compute ran, drop the stale emit.
-			select {
-			case <-sub.cancel:
-			default:
-				emit(payload)
-			}
+			sub.deliver(func() { emit(payload) })
 		}
 		r.mu.Lock()
 		// Only deregister if we are still the registered sub (a racing re-open may
@@ -200,7 +266,7 @@ func (r *liveRegistry) open(
 		}
 		r.mu.Unlock()
 		close(sub.done)
-		return sub
+		return
 	}
 	sub.stopWatch = stopWatch
 
@@ -217,26 +283,26 @@ func (r *liveRegistry) open(
 	dirty = false
 	gen := watchGen
 	mu.Unlock()
-	if payload, ok := compute(); ok {
-		// Guard: if a replace arrived while compute ran, drop the stale emit.
-		select {
-		case <-sub.cancel:
-		default:
-			emit(payload)
+	// stopped meanwhile: no read for a subscription that is over
+	if !sub.cancelled() {
+		if payload, ok := compute(); ok {
+			// Guard: if a replace arrived while compute ran, drop the stale emit.
+			if sub.deliver(func() { emit(payload) }) {
+				mu.Lock()
+				noteCompute(true, gen)
+				mu.Unlock()
+				report()
+			}
+		} else {
+			// A failed read still reaches the frontend: compute returns the DTO with
+			// its error, so the view leaves "loading" and shows WHY instead of
+			// waiting on a bare live:false (Codex batch-2 review R3).
+			emitFailure(sub, payload, emit)
 			mu.Lock()
-			noteCompute(true, gen)
+			noteCompute(false, gen)
 			mu.Unlock()
 			report()
 		}
-	} else {
-		// A failed read still reaches the frontend: compute returns the DTO with
-		// its error, so the view leaves "loading" and shows WHY instead of
-		// waiting on a bare live:false (Codex batch-2 review R3).
-		emitFailure(sub, payload, emit)
-		mu.Lock()
-		noteCompute(false, gen)
-		mu.Unlock()
-		report()
 	}
 
 	// Panic net: compute() parses live cluster objects, so a malformed object must
@@ -268,12 +334,9 @@ func (r *liveRegistry) open(
 				if payload, ok := compute(); ok {
 					// Guard: if this sub was replaced/cancelled while compute ran,
 					// drop the stale emit rather than clobbering fresh state.
-					select {
-					case <-sub.cancel:
+					if !sub.deliver(func() { emit(payload) }) {
 						continue
-					default:
 					}
-					emit(payload)
 					mu.Lock()
 					noteCompute(true, gen)
 					mu.Unlock()
@@ -291,7 +354,6 @@ func (r *liveRegistry) open(
 		emitLive(false)
 		sub.stopWatch()
 	})
-	return sub
 }
 
 // emitFailure forwards a failed compute's payload (the DTO carrying its error)
@@ -300,33 +362,25 @@ func emitFailure(sub *liveSub, payload any, emit func(any)) {
 	if payload == nil {
 		return
 	}
-	select {
-	case <-sub.cancel:
-	default:
-		emit(payload)
-	}
+	sub.deliver(func() { emit(payload) })
 }
 
 // stopSub signals a sub's loop to exit and waits briefly for it to drain. The
 // caller must have already removed it from the map. close(cancel) is guarded so
 // a double stop (replace + closeAll) never panics on a re-close.
 func (r *liveRegistry) stopSub(sub *liveSub) {
-	select {
-	case <-sub.cancel:
-		// already cancelled
-	default:
-		close(sub.cancel)
-	}
+	sub.stop()
 	select {
 	case <-sub.done:
 	case <-time.After(liveCloseWaitTimeout):
 	}
 }
 
-// detach removes sub from key's place if it is still there, running
-// detached under the registry's lock - before any replacement can register
-// - and reports whether it did; the caller then stops it with stopSub. A
-// sub already replaced or closed is left alone.
+// detach removes sub from key's place if it is still there, stops it at
+// once - it reads and emits nothing more - and runs detached, all under the
+// registry's lock, before any replacement can register. It reports whether
+// it did; the caller then waits for its loop with stopSub, off any path
+// that must not block. A sub already replaced or closed is left alone.
 func (r *liveRegistry) detach(key string, sub *liveSub, detached func()) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -334,6 +388,9 @@ func (r *liveRegistry) detach(key string, sub *liveSub, detached func()) bool {
 		return false
 	}
 	delete(r.subs, key)
+	sub.emitMu.Lock()
+	defer sub.emitMu.Unlock()
+	sub.stop()
 	if detached != nil {
 		detached()
 	}
@@ -364,11 +421,7 @@ func (r *liveRegistry) closeAll() {
 
 	// Signal all first, then wait, so total drain is bounded by one timeout, not N.
 	for _, sub := range subs {
-		select {
-		case <-sub.cancel:
-		default:
-			close(sub.cancel)
-		}
+		sub.stop()
 	}
 	for _, sub := range subs {
 		select {

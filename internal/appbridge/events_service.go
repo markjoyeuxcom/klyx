@@ -74,6 +74,13 @@ func (s *EventsService) drop(key string, e *liveEntry) bool {
 	return true
 }
 
+// endedWhy is why e's connection ended it, "" while it has not.
+func (s *EventsService) endedWhy(e *liveEntry) string {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	return e.ended
+}
+
 // bind records e's subscription, and says why it must not run: its
 // connection ended it before the subscription was recorded. Then e is
 // dropped, and the caller stops the subscription.
@@ -90,15 +97,25 @@ func (s *EventsService) bind(key string, e *liveEntry, sub *liveSub) string {
 // endLive ends e because its connection was retired (S2 §2.3): its own
 // subscription is detached and the page told why, under the registry's
 // lock, so the notice never lands after a replacement opened; the watch
-// stops off the lifecycle's path. Not yet subscribed, e is marked, and bind
-// stops it.
+// stops off the lifecycle's path. A subscription still starting is
+// stopped, so it never registers, reads or emits; not yet bound, e is
+// marked, and bind refuses it (Codex's re-review of S2a, RR1).
 func (s *EventsService) endLive(key string, e *liveEntry, liveEvent, why string) {
 	s.lmu.Lock()
 	e.ended = why
 	sub := e.sub
 	s.lmu.Unlock()
 	s.drop(key, e)
+	if sub == nil {
+		return
+	}
 	if s.live.detach(key, sub, func() { s.em.Emit(liveEvent, liveStatusDTO{Live: false, Ended: why}) }) {
+		go s.live.stopSub(sub)
+		return
+	}
+	sub.stop()
+	// it may have registered meanwhile: out, quietly - its open is refused
+	if s.live.detach(key, sub, nil) {
 		go s.live.stopSub(sub)
 	}
 }
@@ -121,8 +138,14 @@ func (s *EventsService) ListEvents(cluster, namespace string) EventsResultDTO {
 // failed (returns non-nil empties); the live runner uses ok to gate
 // emit/liveness.
 func computeEvents(conn EventsConn, namespace string) (EventsResultDTO, bool) {
+	return computeEventsCtx(context.Background(), conn, namespace)
+}
+
+// computeEventsCtx is computeEvents under parent: a live subscription's
+// lease, so its reads end with its connection (S2 §2.3).
+func computeEventsCtx(parent context.Context, conn EventsConn, namespace string) (EventsResultDTO, bool) {
 	out := EventsResultDTO{Namespaces: []string{}, Events: []EventRowDTO{}}
-	ctx, cancel := context.WithTimeout(context.Background(), eventsTimeout)
+	ctx, cancel := context.WithTimeout(parent, eventsTimeout)
 	defer cancel()
 
 	events, truncated, err := conn.ListEvents(ctx, namespace)
@@ -172,19 +195,24 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 	e.le = le
 	s.keep(key, e)
 
-	sub := s.live.open(key,
+	// the subscription is named and bound before anything starts: one whose
+	// connection ended it already starts nothing, and an end that comes
+	// while it starts stops it before it reads or emits (Codex's re-review
+	// of S2a, RR1). Its reads run under the lease's context.
+	sub := newLiveSub()
+	if why := s.bind(key, e, sub); why != "" {
+		le.Release()
+		return ActionResultDTO{Error: "the live events ended: " + why}
+	}
+	s.live.openSub(key, sub,
 		func(onDirty func(), onLive func(bool)) (func(), error) {
 			return conn.WatchDirty(le.Ctx, namespace, []string{"events"}, onDirty, onLive)
 		},
-		func() (any, bool) { return computeEvents(conn, namespace) },
+		func() (any, bool) { return computeEventsCtx(le.Ctx, conn, namespace) },
 		func(payload any) { s.em.Emit(dataEvent, payload) },
 		func(live bool) { s.em.Emit(liveEvent, liveStatusDTO{Live: live}) },
 	)
-	if why := s.bind(key, e, sub); why != "" {
-		le.Release()
-		if s.live.detach(key, sub, nil) {
-			s.live.stopSub(sub)
-		}
+	if why := s.endedWhy(e); why != "" {
 		return ActionResultDTO{Error: "the live events ended: " + why}
 	}
 	if err := le.Settle("live events in " + where); err != nil {

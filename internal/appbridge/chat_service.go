@@ -109,9 +109,18 @@ type ChatEndedDTO struct {
 // refused, and ends nothing (Codex's review of S2a, F1).
 func (s *ChatService) endConversation(c *conversation, why string) {
 	s.mu.Lock()
+	ev, ok := s.endLocked(c, why)
+	s.mu.Unlock()
+	if ok && s.em != nil {
+		s.em.Emit(ChatEndedEvent, ev)
+	}
+}
+
+// endLocked is endConversation under s.mu: the notice to send after it is
+// released, and whether c ended now.
+func (s *ChatService) endLocked(c *conversation, why string) (ChatEndedDTO, bool) {
 	if s.convs[c.key] != c || c.ended != "" {
-		s.mu.Unlock()
-		return
+		return ChatEndedDTO{}, false
 	}
 	reason := why + "; start a new conversation"
 	c.ended = reason
@@ -126,11 +135,7 @@ func (s *ChatService) endConversation(c *conversation, why string) {
 		}
 	}
 	s.version++
-	ev := ChatEndedDTO{Cluster: c.cluster, ConversationID: c.id, Reason: reason, Version: s.version}
-	s.mu.Unlock()
-	if s.em != nil {
-		s.em.Emit(ChatEndedEvent, ev)
-	}
+	return ChatEndedDTO{Cluster: c.cluster, ConversationID: c.id, Reason: reason, Version: s.version}, true
 }
 
 type conversation struct {
@@ -692,7 +697,7 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 func (c *conversation) releaseLocked() {
 	c.lease.Release()
 	for _, m := range c.members {
-		m.lease.Release()
+		m.release()
 	}
 }
 
