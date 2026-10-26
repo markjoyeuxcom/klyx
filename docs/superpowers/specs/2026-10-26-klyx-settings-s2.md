@@ -824,3 +824,16 @@ Each finding is fixed, and its probe is a regression test (`fleet_review_test.go
 - Revert's test now has its startup connection connect first: terms count as connected only once their connection's usability is published.
 
 **Mutation pass:** 13 mutants of the fixes, all caught.
+
+## 22. S2b revision 2: Codex's re-review (2026-10-26)
+
+Codex found R1, R2, R7 and R8 closed, and R3 to R6's original probes passing. It requested changes: four residual P2s, in the Held classification, the connection terms' bookkeeping, and the addition's admission.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** while Held, an edit whose protection equalled the published value, but not the pending attempt's, was classed as placement. The hold's release then published the pending value, undoing the edit | While Held, any edit that is not a reconnect is refused when its protection differs from either the published value or the pending attempt's, before anything is written |
+| **RR2:** a startup connection could publish its usability before the plans subscribed, so its terms were never remembered | Wiring seeds each startup connection's terms, subscribes, then records any startup connection already published, so there is no gap. A startup connection's terms are its file entry only while that entry still says what started, never a hand edit made since |
+| **RR3:** a placement or protection change on an existing connection left its tracked terms stale, so Retry recorded terms other than those it built | Every committed placement or protection change updates its connection's terms and the cluster's current terms. It updates the last connected terms too, when that connection is the one that connected |
+| **RR4:** `AddClusters` found a name already running only after writing it | Every name is checked before anything is prepared or written. A name that runs, or is published, is refused, and the file's values remove it |
+
+**Tests:** Codex's four probes, as regression tests, and an edit on the connected identity keeping its last connected terms. **Mutation pass:** 6 mutants, all caught.
