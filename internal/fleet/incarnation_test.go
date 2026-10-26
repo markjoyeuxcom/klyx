@@ -12,9 +12,9 @@ import (
 func TestAnIncarnationIsEachReturnToUsable(t *testing.T) {
 	c := &ClusterConn{name: "a", state: Connecting}
 	var ups []ConnState
-	c.SetOnUsable(func(cluster string) {
-		if cluster != "a" {
-			t.Errorf("told %q", cluster)
+	c.SetOnUsable(func(ev UsabilityEvent) {
+		if ev.Cluster != "a" {
+			t.Errorf("told %q", ev.Cluster)
 		}
 		ups = append(ups, c.state) // the state before the move: not yet visible
 	})
@@ -43,7 +43,7 @@ func TestTheRegistryWiresTheHook(t *testing.T) {
 	var told []string
 	cc := &ClusterConn{name: "b"}
 	r := NewRegistry(&config.Config{Clusters: []config.ClusterConfig{{Name: "b"}}}, func(config.ClusterConfig) (Conn, error) { return cc, nil })
-	r.SetOnUsable(func(cluster string) { told = append(told, cluster) })
+	r.SetOnUsable(func(ev UsabilityEvent) { told = append(told, ev.Cluster) })
 	r.wireHealth(cc)
 	cc.mu.Lock()
 	cc.moveLocked(Synced)

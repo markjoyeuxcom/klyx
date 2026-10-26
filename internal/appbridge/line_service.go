@@ -283,6 +283,7 @@ func (s *LineService) scan() {
 		if !seen[name] {
 			s.detach(st)
 			delete(s.stations, name)
+			delete(s.hist.st, name) // a removed cluster's history goes with it (S2 §2.5)
 		}
 	}
 	s.dirty = true

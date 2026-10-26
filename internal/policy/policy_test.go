@@ -87,3 +87,27 @@ func TestTheRegistryIsSafeForConcurrentUse(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+// Settings S2 §2.5: a forgotten cluster admits nothing, and seeded again
+// under its name it starts above its tombstone, so no epoch captured
+// before the removal can match.
+func TestAForgottenClusterNeverRepeatsAnEpoch(t *testing.T) {
+	r := New()
+	r.Seed("a", true)
+	r.ConnUp("a")
+	old, _ := r.Snapshot("a")
+	r.Forget("a")
+	if _, ok := r.Snapshot("a"); ok {
+		t.Fatal("a forgotten cluster is known")
+	}
+	r.ConnUp("a") // late: ignored
+	r.Forget("a") // twice: no change
+	r.Seed("a", false)
+	s, ok := r.Snapshot("a")
+	if !ok || s.Epoch == old.Epoch || s.Protected || s.State != Active {
+		t.Fatalf("re-seeded %+v, before %+v", s, old)
+	}
+	if p, _ := s.Epoch.Moved(old.Epoch); !p {
+		t.Fatalf("the policy epoch did not move above the tombstone: %v from %v", s.Epoch, old.Epoch)
+	}
+}

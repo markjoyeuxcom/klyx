@@ -13,8 +13,14 @@ import (
 )
 
 // incarnations is process-wide: a new Observer for the same cluster always
-// outranks an older one (spec §3.4).
+// outranks an older one (spec §3.4). A cluster connection's identity is
+// drawn from it too (Settings S2 §2.2), and handed to its Observer, so the
+// two are one number.
 var incarnations atomic.Uint64
+
+// NextIncarnation draws the next process-wide identity: above every one
+// drawn before it.
+func NextIncarnation() uint64 { return incarnations.Add(1) }
 
 // Owner holds a domain lease. The refcount is the number of distinct owners;
 // a repeated Acquire by the same owner is idempotent.
@@ -166,6 +172,10 @@ type Config struct {
 	BackoffMax         time.Duration // 30s
 	// RoleCap bounds each ledger part's role list and ledger (50,000).
 	RoleCap int
+	// Incarnation, when set, is the identity this Observer publishes under:
+	// its connection's, drawn with NextIncarnation (Settings S2 §2.4). Zero
+	// draws a new one.
+	Incarnation uint64
 }
 
 type partKey struct{ task, part string }
@@ -266,7 +276,11 @@ func New(cfg Config) *Observer {
 	if clk == nil {
 		clk = clock.RealClock{}
 	}
-	o := &Observer{cfg: cfg, clk: clk, incarnation: incarnations.Add(1),
+	inc := cfg.Incarnation
+	if inc == 0 {
+		inc = NextIncarnation()
+	}
+	o := &Observer{cfg: cfg, clk: clk, incarnation: inc,
 		kinds: map[string]*kindState{}, snaps: map[string]*snapState{}, byTask: map[string]*domainState{},
 		dirty: map[partKey]bool{}, done: make(chan struct{}), wake: make(chan struct{}, 1), reqs: make(chan rowsReq), roleReqs: make(chan rolesReq), connUsable: true}
 	o.tsink, _ = cfg.Sink.(TransitionSink)
@@ -334,6 +348,18 @@ func (o *Observer) Incarnation() uint64 { return o.incarnation }
 // Done closes once the Final summary is published and every goroutine of
 // this Observer - snapshot reads included - has returned.
 func (o *Observer) Done() <-chan struct{} { return o.done }
+
+// Stop ends the Observer before its parent context does (Settings S2 §2.1):
+// it publishes its Final summary and returns, as at quit. Idempotent; a
+// no-op before Start. Wait on Done for it to finish.
+func (o *Observer) Stop() {
+	o.mu.Lock()
+	cancel := o.cancel
+	o.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
 
 // Latest returns the last published summary.
 func (o *Observer) Latest() (Summary, bool) {

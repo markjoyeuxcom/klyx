@@ -78,23 +78,44 @@ func (e *entry) snapshot() Snapshot {
 type Registry struct {
 	mu sync.Mutex
 	m  map[string]*entry
+	// tombs keeps a forgotten cluster's last epoch (Settings S2 §2.5), so a
+	// cluster seeded again under its name starts above it and no ticket,
+	// arm, review or offer from before the removal can ever match.
+	tombs map[string]Epoch
 }
 
 // New is an empty registry: a cluster it does not know admits nothing.
-func New() *Registry { return &Registry{m: map[string]*entry{}} }
+func New() *Registry { return &Registry{m: map[string]*entry{}, tombs: map[string]Epoch{}} }
 
 // ErrUnknown is a cluster the registry does not know.
 var ErrUnknown = errors.New("policy: an unknown cluster")
 
-// Seed publishes a new cluster, Active at policy 1. Seeding a known
-// cluster changes nothing: a change goes through Begin and Publish.
+// Seed publishes a new cluster, Active at policy 1, or above its tombstone
+// when it was forgotten. Seeding a known cluster changes nothing: a change
+// goes through Begin and Publish.
 func (r *Registry) Seed(cluster string, protected bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.m[cluster]; ok {
 		return
 	}
-	r.m[cluster] = &entry{protected: protected, policy: 1}
+	t := r.tombs[cluster]
+	r.m[cluster] = &entry{protected: protected, policy: t.policy + 1, conn: t.conn}
+}
+
+// Forget removes a cluster (Settings S2 §2.5): it admits nothing from now
+// on, and its last epoch is kept as a tombstone, so a later Seed of the
+// same name starts above it. Forgetting an unknown cluster changes
+// nothing.
+func (r *Registry) Forget(cluster string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.m[cluster]
+	if !ok {
+		return
+	}
+	r.tombs[cluster] = Epoch{e.policy, e.conn}
+	delete(r.m, cluster)
 }
 
 // Snapshot is the cluster's admission state, false for an unknown one.

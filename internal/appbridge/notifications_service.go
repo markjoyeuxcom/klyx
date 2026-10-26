@@ -173,8 +173,11 @@ func NotificationsListener(s *NotificationsService) HealthListener { return noti
 type notifyListener struct{ s *NotificationsService }
 
 func (l notifyListener) OnTransitions(b observe.TransitionBatch) { l.s.engine.Apply(b) }
-func (l notifyListener) OnSummary(observe.Summary)               {}
-func (l notifyListener) OnRows(observe.Rows)                     {}
+
+// ForgetCluster drops a removed cluster's episodes silently (S2 §2.5).
+func (l notifyListener) ForgetCluster(cluster string) { l.s.engine.Forget(cluster) }
+func (l notifyListener) OnSummary(observe.Summary)    {}
+func (l notifyListener) OnRows(observe.Rows)          {}
 
 // NotificationsStateDTO is Settings > Notifications: the settings in use,
 // and whether fleet.yaml's block differs from them (Settings slice F §5).

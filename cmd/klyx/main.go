@@ -117,7 +117,6 @@ func main() {
 	for _, c := range cfg.Clusters {
 		policyReg.Seed(c.Name, c.IsProtected())
 	}
-	reg.SetOnUsable(policyReg.ConnUp)
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer
@@ -134,6 +133,11 @@ func main() {
 	index := fleetindex.New(ixSettings)
 	defer index.Stop()
 	reg.SetIndex(index)
+	// Settings S2 §2: the cluster lifecycle publishes each connection's
+	// usability under its commit gate, gates the sink on identity, and
+	// retires, replaces and forgets clusters.
+	lifecycle := appbridge.NewLifecycle(reg, policyReg, healthSink, index)
+	go lifecycle.Run(ctx)
 	// Health notifications (The Line slice 10): the listener is in place
 	// before any cluster starts, so every connect's baseline is seen. The
 	// cluster lookups resolve once configSvc is published: they run on the
@@ -501,7 +505,9 @@ func main() {
 	// mid-session through Settings is gated immediately rather than fail-open
 	// until a restart. Installed here, after configSvc exists; the guard is not
 	// consulted until a destructive verb runs at request time.
-	appbridge.SetProtectGuard(appbridge.NewProtectGuard(policyReg, time.Now))
+	protectGuard := appbridge.NewProtectGuard(policyReg, time.Now)
+	appbridge.SetProtectGuard(protectGuard)
+	lifecycle.OnForget(protectGuard.Forget) // a removed cluster's grant goes with it (S2 §2.5)
 
 	// AI-assist (read-only Explain and Suggest-fix). Off unless fleet.yaml
 	// configures a provider. The snapshot is built once from the startup config:

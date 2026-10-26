@@ -241,3 +241,10 @@ func SetProtectGuard(g *ProtectGuard) { activeProtectGuard.Store(g) }
 func guardFor(cluster string) (Ticket, error) {
 	return activeProtectGuard.Load().Guard(cluster)
 }
+
+// Forget drops a removed cluster's grant (Settings S2 §2.5).
+func (g *ProtectGuard) Forget(cluster string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.armed, cluster)
+}

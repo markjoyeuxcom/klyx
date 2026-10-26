@@ -189,3 +189,10 @@ func (t *lineTap) drain() map[string]drained {
 	}
 	return out
 }
+
+// ForgetCluster drops a removed cluster (Settings S2 §2.5).
+func (t *lineTap) ForgetCluster(cluster string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.clusters, cluster)
+}

@@ -217,3 +217,17 @@ func (l *rowsLineage) prints(rows any) (uids []string, fp map[string]uint64) {
 	}
 	return uids, fp
 }
+
+// forget drops a removed cluster's states and its incarnation marks
+// (Settings S2 §2.5).
+func (l *rowsLineage) forget(cluster string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.newest, cluster)
+	delete(l.final, cluster)
+	for k := range l.states {
+		if k.cluster == cluster {
+			delete(l.states, k)
+		}
+	}
+}

@@ -223,9 +223,34 @@ type ClusterConn struct {
 	index          *fleetindex.Index         // the fleet metadata index (The Line slice 9); nil without one
 
 	// onUsable is told each time the connection becomes usable from not
-	// usable - a new incarnation (Settings slice F §1) - under c.mu, before
-	// the new state is visible. Set before Start; nil in tests.
-	onUsable func(cluster string)
+	// usable - a new incarnation (Settings slice F §1) - under c.mu. It must
+	// not block: the lifecycle queues the event and publishes the
+	// incarnation under its commit gate, then acknowledges it (AckUsable).
+	// Until then the move is pending, and Snapshot reports the state before
+	// it, so the new incarnation is published before usability is seen
+	// (Settings S2 §4.5, §12). Set before Start; nil in tests and tools,
+	// where a move is visible at once.
+	onUsable func(UsabilityEvent)
+	// usableInc numbers this connection's moves into usable; pending marks
+	// the newest one not yet acknowledged, and pendingFrom the state it
+	// moved from (what Snapshot reports meanwhile).
+	usableInc   uint64
+	pending     bool
+	pendingFrom ConnState
+
+	// id is the connection's identity for its lifetime (Settings S2 §2.2),
+	// its Observer's incarnation too.
+	id ConnID
+	// The connection's own lifetime (Settings S2 §2.1): cancel ends its
+	// context, wg tracks its loops, factories are its informer factories,
+	// shut down at Stop; stopped is set for good by Stop.
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	factories []interface{ Shutdown() }
+	stopped   bool
+	// lifeMu serializes Start and Stop, so no loop is added to wg once Stop
+	// has begun waiting for it.
+	lifeMu sync.Mutex
 
 	// metricsMu guards the metrics cache. Note: ClusterMetrics holds it across
 	// the probe + sample network I/O (up to a few seconds). This serializes
@@ -247,6 +272,7 @@ func NewClusterConn(name string, typed kubernetes.Interface, meta metadata.Inter
 	dyn dynamic.Interface, detector *capability.Detector, clk clock.Clock, metricsCfg config.MetricsConfig) *ClusterConn {
 	return &ClusterConn{
 		name: name, typed: typed, meta: meta, dyn: dyn, detector: detector, clk: clk,
+		id:             newConnID(),
 		metricsCfg:     metricsCfg,
 		state:          Unconnected,
 		connectTimeout: defaultConnectTimeout,
@@ -353,6 +379,9 @@ func (c *ClusterConn) setState(ev Event, reason string) {
 	defer c.syncHealth() // after the unlock below
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stopped {
+		return
+	}
 	if next, ok := Transition(c.state, ev); ok {
 		c.moveLocked(next)
 		c.reason = reason
@@ -413,7 +442,18 @@ func (c *ClusterConn) onWatchError(err error) {
 // are bound to ctx; the informers retry in the background, so a connection that
 // fails to sync within connectTimeout is marked Failed but self-heals to Synced
 // when a later relist succeeds.
-func (c *ClusterConn) Start(ctx context.Context) {
+func (c *ClusterConn) Start(parent context.Context) {
+	c.lifeMu.Lock()
+	defer c.lifeMu.Unlock()
+	ctx, cancel := context.WithCancel(parent) // the connection's own lifetime (S2 §2.1)
+	c.mu.Lock()
+	c.cancel = cancel
+	stopped := c.stopped
+	c.mu.Unlock()
+	if stopped {
+		cancel() // stopped before it started: nothing runs
+		return
+	}
 	c.startHealth(ctx)
 	c.setState(EvStart, "")
 	c.ctx = ctx
@@ -442,8 +482,75 @@ func (c *ClusterConn) Start(ctx context.Context) {
 		c.startPodInformer(ctx)
 	}
 
-	go c.refreshLoop(ctx)
-	go c.connectLoop(ctx)
+	c.goTracked(func() { c.refreshLoop(ctx) })
+	c.goTracked(func() { c.connectLoop(ctx) })
+}
+
+// goTracked runs f as one of the connection's loops: Stop waits for it.
+func (c *ClusterConn) goTracked(f func()) {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		f()
+	}()
+}
+
+// addFactory records an informer factory before it starts, for Stop.
+func (c *ClusterConn) addFactory(f interface{ Shutdown() }) {
+	c.mu.Lock()
+	c.factories = append(c.factories, f)
+	c.mu.Unlock()
+}
+
+// ID is the connection's identity (Settings S2 §2.2).
+func (c *ClusterConn) ID() ConnID { return c.id }
+
+// Stop ends the connection for good (Settings S2 §2.1): its state becomes
+// Stopped and never moves again, its context is cancelled, and it waits up
+// to timeout for its loops, its informers and its Observer to return. It
+// reports whether they all did; a connection that did not is stopped all
+// the same, and its retired identity drops whatever it publishes later
+// (§2.4). Idempotent.
+func (c *ClusterConn) Stop(timeout time.Duration) bool {
+	c.lifeMu.Lock()
+	defer c.lifeMu.Unlock()
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return true
+	}
+	c.stopped = true
+	c.state, c.pending = Stopped, false
+	cancel, h := c.cancel, c.health
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if h != nil {
+		h.Stop()
+	}
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		c.mu.Lock()
+		fs := c.factories
+		c.mu.Unlock()
+		for _, f := range fs {
+			f.Shutdown()
+		}
+		if h != nil {
+			<-h.Done()
+		}
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // startNodeInformer runs the eager node informer - only without an
@@ -469,6 +576,7 @@ func (c *ClusterConn) startNodeInformer(ctx context.Context) {
 	c.mu.Lock()
 	c.nodeInf = nodeInformer
 	c.mu.Unlock()
+	c.addFactory(nodeFactory)
 	nodeFactory.Start(ctx.Done())
 }
 
@@ -527,6 +635,7 @@ func (c *ClusterConn) startPodInformer(ctx context.Context) {
 	c.mu.Lock()
 	c.podInf = inf
 	c.mu.Unlock()
+	c.addFactory(metaFactory)
 	metaFactory.Start(ctx.Done())
 }
 
@@ -625,7 +734,7 @@ func (c *ClusterConn) connectLoop(ctx context.Context) {
 			// controller-workload watch; the re-probe keeps the rest current.
 			if c.commitSynced(Connecting, Failed) {
 				c.startCapHealth(ctx, caps)
-				go c.reprobeLoop(ctx)
+				c.goTracked(func() { c.reprobeLoop(ctx) })
 				return
 			}
 			continue
@@ -805,9 +914,13 @@ func (c *ClusterConn) refreshCounts() {
 func (c *ClusterConn) Snapshot() Snapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	st := c.state
+	if c.pending {
+		st = c.pendingFrom // a new incarnation not yet published (S2 §12)
+	}
 	return Snapshot{
 		Name:         c.name,
-		State:        c.state,
+		State:        st,
 		Reason:       c.reason,
 		LastSync:     c.lastSync,
 		NodesReady:   c.snapNodesReady,
@@ -837,19 +950,47 @@ func (c *ClusterConn) setLBServicesSeen(seen bool) {
 	c.mu.Unlock()
 }
 
+// UsabilityEvent is one move of a connection into usable from not usable:
+// a new incarnation, for the lifecycle to publish (Settings S2 §4.5).
+type UsabilityEvent struct {
+	Cluster string
+	ID      ConnID
+	Inc     uint64 // this connection's move number, for AckUsable
+}
+
 // SetOnUsable sets the incarnation hook (slice F §1). Call before Start.
-func (c *ClusterConn) SetOnUsable(f func(cluster string)) {
+func (c *ClusterConn) SetOnUsable(f func(UsabilityEvent)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onUsable = f
 }
 
+// AckUsable makes move inc visible: its incarnation is published. A move
+// since superseded, or left again, is ignored.
+func (c *ClusterConn) AckUsable(inc uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending && inc == c.usableInc {
+		c.pending = false
+	}
+}
+
 // moveLocked is the one way the connection's state changes: crossing into
 // a usable state from one that is not is a new incarnation, told to
-// onUsable before any reader can see the state. Caller holds c.mu.
+// onUsable, and pending - reported as the state before it - until the
+// lifecycle has published it (S2 §12). A stopped connection never moves.
+// Caller holds c.mu.
 func (c *ClusterConn) moveLocked(next ConnState) {
-	if !c.state.Usable() && next.Usable() && c.onUsable != nil {
-		c.onUsable(c.name)
+	if c.stopped {
+		return
+	}
+	switch {
+	case !c.state.Usable() && next.Usable() && c.onUsable != nil:
+		c.usableInc++
+		c.pending, c.pendingFrom = true, c.state
+		c.onUsable(UsabilityEvent{Cluster: c.name, ID: c.id, Inc: c.usableInc})
+	case !next.Usable():
+		c.pending = false
 	}
 	c.state = next
 }
@@ -916,7 +1057,8 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	as, ad := healthsrc.Alerts(healthsrc.AlertsDeps{Cluster: c.name, Read: c.ReadAlerts}) // S8a
 	snaps = append(append(snaps, es...), as...)
 	domains = append(append(append(domains, hd...), ed...), ad...)
-	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces})
+	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces,
+		Incarnation: uint64(c.id)}) // one identity: the connection's (S2 §2.4)
 	// a change of the alert source re-keys this Observer's alerts snapshot
 	c.setAlertsRekey(func(key string) { o.RekeySnapshot(healthsrc.SnapAlerts, key) })
 	c.mu.Lock()
@@ -959,7 +1101,7 @@ func (c *ClusterConn) syncHealth() {
 		kick() // the capability re-probe refreshes the param kinds too
 	}
 	if ix != nil {
-		ix.SetConnection(c.name, word) // the same word, in the same handoff
+		ix.SetConnectionOf(c.name, h, word) // the same word, in the same handoff, bound to this Observer (S2 §2.4)
 	}
 	h.SetFact(healthsrc.FactFluxPresent, caps.GitOps.Flux.Present)
 	h.SetFact(healthsrc.FactFluxOperator, caps.GitOps.FluxOperator)

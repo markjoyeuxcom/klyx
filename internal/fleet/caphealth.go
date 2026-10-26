@@ -67,6 +67,7 @@ func (c *ClusterConn) startCapHealth(ctx context.Context, set capability.Set) {
 		factories = append(factories, factory)
 	}
 	for _, factory := range factories {
+		c.addFactory(factory)
 		factory.Start(ctx.Done())
 	}
 
@@ -80,11 +81,11 @@ func (c *ClusterConn) startCapHealth(ctx context.Context, set capability.Set) {
 	if h.argoInf != nil {
 		syncs = append(syncs, h.argoInf.HasSynced)
 	}
-	go func() {
+	c.goTracked(func() {
 		if cache.WaitForCacheSync(ctx.Done(), syncs...) {
 			h.recompute()
 		}
-	}()
+	})
 }
 
 // recompute reads controller readiness from the informer stores and applies the
