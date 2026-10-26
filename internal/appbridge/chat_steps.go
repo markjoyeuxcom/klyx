@@ -679,8 +679,11 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	reviewed := p.runs[n-1].review.digest
 	p.running, c.stepRunning = n, p // reserved with the check, under one lock
 	// the confirmed request is work until it returns (Settings F2a
-	// re-review, RR2); every path out of here ends it
-	request := stepWorkID(c, exchangeID, n) + ":request"
+	// re-review, RR2); every path out of here ends it. Each admission is
+	// its own: a newer one of the same step, after this one's refusal,
+	// is never removed by this one's cleanup (re-review 2, R2-1)
+	s.admissions++
+	request := fmt.Sprintf("%s:request:%d", stepWorkID(c, exchangeID, n), s.admissions)
 	s.requests[request] = PlanWorkDTO{ID: request, Kind: "step", Cluster: c.cluster, What: stepWhatLocked(c, exchangeID, n) + ": its confirmed request goes ahead, and may still write"}
 	defer s.endRequest(request)
 	sn := snapLocked(c, p, n)

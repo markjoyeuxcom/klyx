@@ -67,6 +67,10 @@ type ChatService struct {
 	// §4.4), so a plan names each until it returns, whatever its
 	// conversation's revision (Settings F2a re-review, RR2)
 	requests map[string]PlanWorkDTO
+	// admissions numbers each admitted request, never reused: an attempt
+	// owns its entry, so an older attempt's cleanup can never remove a
+	// newer one's (F2a re-review 2, R2-1)
+	admissions uint64
 }
 
 // NewChatService wires the chat to the registry and the AI snapshot.

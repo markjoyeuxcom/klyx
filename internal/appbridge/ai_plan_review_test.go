@@ -168,7 +168,7 @@ func TestAContinuingStepIsNotListedAsEnding(t *testing.T) {
 	}
 	request, verify := false, false
 	for _, w := range p.Continues {
-		request = request || strings.HasSuffix(w.ID, ":1:request")
+		request = request || strings.Contains(w.ID, ":1:request:")
 	}
 	for _, w := range p.Ends {
 		verify = verify || strings.HasSuffix(w.ID, ":1:verify")
@@ -364,7 +364,7 @@ func TestAConfirmedRequestStaysVisibleAfterAnAIApply(t *testing.T) {
 	if len(sf.sc.recorded()) == 0 {
 		t.Fatal("control: the admitted write continued")
 	}
-	if len(second.Continues) != 1 || !strings.HasSuffix(second.Continues[0].ID, ":1:request") {
+	if len(second.Continues) != 1 || !strings.Contains(second.Continues[0].ID, ":1:request:") {
 		t.Fatalf("the first Apply hid a request that still writes: %+v", second)
 	}
 	// once it returned, it is no longer work
