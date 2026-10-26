@@ -680,8 +680,20 @@ Codex requested changes on 12d8901: two residual P2. It closed R1-R4. It also ru
 **Mutation pass:** 8 mutants, 6 caught after one fix:
 - **Caught:** the refresh's number left out, its identity by URL, busy cleared before a toggle's settlement, busy cleared before a plan Apply's settlement (caught once its test was added), and the Git panel's read and outcome order.
 - **Removed:** the Git panel's check that dropped a plan answered after a newer action. It is no longer in the code, for the reason above.
-- **Kept as equivalent:** the notifications panel's read order. While every change holds busy through its readback, no route starts a read while another is pending. It stays as defence in depth.
+- **Kept as equivalent:** the notifications panel's read order. While every change holds busy through its readback, no production route starts a read while another is pending. It stays as defence in depth: in development, React's StrictMode starts two mount reads before either answers, and the guard keeps the later one (§24).
 
 §21's and §22's mutants, rerun on this revision: all caught.
 
 Every Go suite, the race suites of `appbridge` and `config`, gofmt, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
+
+## 24. F2b ACCEPT (2026-10-26)
+
+Codex accepted F2b at d035040, after the review of 97ad5f6 and two re-reviews, with no remaining findings. RR1 and RR2 are closed, and R1-R4 stay closed. It ruled on two points:
+- **The notifications read-order guard stays,** as defence in depth. §23's "equivalent" holds for the production paths only. In development, StrictMode issues two mount reads before either answers, and the guard keeps the later one.
+- **A file plan answered after a newer Git action is shown.** It is a review, never applied automatically. Apply sends that plan's digest, and the backend refuses stale terms with a replacement plan, which does not inherit the confirmation.
+
+Its three extra controls are adopted as tests (68d54e7):
+- a refresh's cleanup owning its admission under an identical clock (`appbridge/git_plan_rereview2_test.go`);
+- StrictMode's two mount reads, ordered, and a late Git plan (`app/SettingsPlansRereview2.test.tsx`).
+
+Settings slice F is complete: F1 the fences, F2a the plan engine and AI, F2b notifications and Git. S2 builds next.
