@@ -106,3 +106,31 @@ describe("NotificationSettingsPanel", () => {
     expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).checked).toBe(false);
   });
 });
+
+// F2b re-review, RR2: a change stays busy through its readback, so no
+// other change starts while its outcome is being read.
+describe("NotificationSettingsPanel settlement", () => {
+  it("keeps the controls busy until the readback answers", async () => {
+    let release!: (s: State) => void;
+    bridge.getNotificationSettings.mockImplementationOnce(async () => off()).mockImplementationOnce(() => new Promise<State>((r) => { release = r; }));
+    await act(async () => { render(<NotificationSettingsPanel />); });
+    await act(async () => { fireEvent.click(screen.getByLabelText("Notify me about new faults")); });
+    expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).disabled).toBe(true);
+    await act(async () => { release({ ...off(), inUse: { enabled: true, scope: "protected", recoveries: false } }); });
+    expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("keeps the controls busy until an applied plan's readback answers", async () => {
+    let release!: (s: State) => void;
+    bridge.getNotificationSettings.mockImplementationOnce(async () => ({ ...off(), diverged: true })).mockImplementationOnce(() => new Promise<State>((r) => { release = r; }));
+    bridge.planNotificationsFromFile.mockResolvedValueOnce(filePlan());
+    await act(async () => { render(<NotificationSettingsPanel />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Use the file's values" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Apply" })); });
+    expect(bridge.applyNotifications).toHaveBeenCalledWith("d1");
+    expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).disabled).toBe(true);
+    await act(async () => { release({ inUse: { enabled: true, scope: "protected", recoveries: false }, diverged: false }); });
+    expect((screen.getByLabelText("Notify me about new faults") as HTMLInputElement).disabled).toBe(false);
+  });
+});

@@ -29,8 +29,11 @@ import (
 // the lock is released. So an Apply's plan names each acquisition in
 // flight, and none starts after a revocation (F2b review, R1).
 
-// gitAcq is one commit or content acquisition in flight.
+// gitAcq is one acquisition in flight: its admission number, never
+// reused, is its identity in a plan, so a later acquisition of the same
+// repository is other work, whenever it started (F2b re-review, RR1).
 type gitAcq struct {
+	n         uint64
 	url, what string
 	started   time.Time
 }
@@ -63,10 +66,14 @@ func (s *GitService) admitFetch(url string) (func(), error) {
 	if _, ok := s.fetching[url]; ok {
 		return nil, errors.New("a fetch of this repository is already running")
 	}
-	s.fetching[url] = s.d.Now()
+	s.acqSeq++
+	n := s.acqSeq
+	s.fetching[url] = gitAcq{n: n, url: url, what: "the fetch", started: s.d.Now()}
 	return func() {
 		s.mu.Lock()
-		delete(s.fetching, url)
+		if s.fetching[url].n == n {
+			delete(s.fetching, url)
+		}
 		s.mu.Unlock()
 	}, nil
 }
@@ -81,7 +88,7 @@ func (s *GitService) admitAcquisition(url, what string) (func(), error) {
 	}
 	s.acqSeq++
 	n := s.acqSeq
-	s.acquiring[n] = gitAcq{url: url, what: what, started: s.d.Now()}
+	s.acquiring[n] = gitAcq{n: n, url: url, what: what, started: s.d.Now()}
 	return func() {
 		s.mu.Lock()
 		delete(s.acquiring, n)
@@ -210,9 +217,9 @@ func (s *GitService) candidateLocked(c gitCandidate, file config.GitConfig) (con
 func (s *GitService) planLocked(c gitCandidate, cand config.GitConfig, version string, file config.GitConfig) PlanDTO {
 	s.mu.Lock()
 	run, rev := s.run, s.runRev
-	fetching := make(map[string]time.Time, len(s.fetching))
-	for u, t := range s.fetching {
-		fetching[u] = t
+	fetching := make(map[string]gitAcq, len(s.fetching))
+	for u, a := range s.fetching {
+		fetching[u] = a
 	}
 	acquiring := make(map[uint64]gitAcq, len(s.acquiring))
 	for n, a := range s.acquiring {
@@ -444,7 +451,7 @@ func gitChanges(from, to config.GitConfig) []PlanChangeDTO {
 // gitContinues is what a change does not stop: an acquisition in flight
 // from a repository it stops approving finishes, and nothing reads that
 // history afterwards. A new one is refused from then on.
-func gitContinues(from, to config.GitConfig, fetching map[string]time.Time, acquiring map[uint64]gitAcq) []PlanWorkDTO {
+func gitContinues(from, to config.GitConfig, fetching map[string]gitAcq, acquiring map[uint64]gitAcq) []PlanWorkDTO {
 	out := []PlanWorkDTO{}
 	ta, _ := approvedOf(to)
 	still := map[string]bool{}
@@ -459,9 +466,9 @@ func gitContinues(from, to config.GitConfig, fetching map[string]time.Time, acqu
 		}
 	}
 	const after = " in progress: it finishes, and its history is no longer used"
-	for url, started := range fetching {
+	for url, a := range fetching {
 		if stops[url] {
-			out = append(out, PlanWorkDTO{ID: "fetch:" + url, Kind: "fetch", Started: started.UTC().Format(time.RFC3339), What: "the fetch of " + url + after})
+			out = append(out, PlanWorkDTO{ID: fmt.Sprintf("fetch:%d:%s", a.n, url), Kind: "fetch", Started: a.started.UTC().Format(time.RFC3339), What: "the fetch of " + url + after})
 		}
 	}
 	for n, a := range acquiring {

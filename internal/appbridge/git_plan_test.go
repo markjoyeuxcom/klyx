@@ -243,7 +243,7 @@ func TestAGitPlanNamesAFetchInFlight(t *testing.T) {
 	}
 	h.write(strings.Replace(gitFleet, "    - url: git@github.com:acme/fleet.git\n      matches: [\"https://ghp_matchtok@github.com/acme/alias\"]\n", "", 1))
 	p := h.svc.PlanGitFromFile()
-	if len(p.Continues) != 1 || p.Continues[0].ID != "fetch:"+fleetURL || p.Continues[0].Kind != "fetch" || p.Continues[0].Started == "" || len(p.Ends) != 0 {
+	if len(p.Continues) != 1 || !strings.HasPrefix(p.Continues[0].ID, "fetch:") || !strings.HasSuffix(p.Continues[0].ID, ":"+fleetURL) || p.Continues[0].Kind != "fetch" || p.Continues[0].Started == "" || len(p.Ends) != 0 {
 		t.Fatalf("continues %+v", p.Continues)
 	}
 	close(gate)

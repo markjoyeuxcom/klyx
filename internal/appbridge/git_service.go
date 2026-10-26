@@ -30,13 +30,15 @@ type GitService struct {
 	writeMu sync.Mutex // serialises Settings plans and Applies
 	cache   *planCache
 
-	mu       sync.Mutex
-	ready    bool   // startup finished
-	off      string // why Git is off; "" when it is on
-	git      gitcli.Git
-	helpers  gitcli.Helpers
-	store    gitStore
-	fetching map[string]time.Time // a history refresh in flight, by URL: when it started
+	mu      sync.Mutex
+	ready   bool   // startup finished
+	off     string // why Git is off; "" when it is on
+	git     gitcli.Git
+	helpers gitcli.Helpers
+	store   gitStore
+	// fetching: a history refresh in flight, by URL (one per repository),
+	// with its own admission number
+	fetching map[string]gitAcq
 	// acquiring: the consumers' commit and content acquisitions in flight
 	// (the cache diff's, chat's), by admission number
 	acquiring map[uint64]gitAcq
@@ -110,7 +112,7 @@ func NewGitService(ctx context.Context, d GitDeps) *GitService {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &GitService{d: d, ctx: ctx, fetching: map[string]time.Time{}, acquiring: map[uint64]gitAcq{}, wake: make(chan struct{}, 1), cache: newPlanCache(time.Now),
+	s := &GitService{d: d, ctx: ctx, fetching: map[string]gitAcq{}, acquiring: map[uint64]gitAcq{}, wake: make(chan struct{}, 1), cache: newPlanCache(time.Now),
 		lineGit: LineGitDTO{State: LineGitChecking, Reason: "Git is still starting", Stations: []LineGitStationDTO{},
 			Ledger: []LineGitCommitDTO{}, Only: []LineGitOnlyDTO{}}}
 	if d.Initial != nil {
@@ -334,7 +336,7 @@ func shownURL(raw string) string {
 	return config.RedactURL(raw)
 }
 
-func copyFlags(m map[string]time.Time) map[string]bool {
+func copyFlags(m map[string]gitAcq) map[string]bool {
 	out := make(map[string]bool, len(m))
 	for k := range m {
 		out[k] = true

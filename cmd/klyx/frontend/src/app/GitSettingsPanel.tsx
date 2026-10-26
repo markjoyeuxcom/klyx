@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { OperationDialog } from "../chrome/OperationDialog";
@@ -70,8 +70,16 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
   const [removing, setRemoving] = useState<GitRepo | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
 
+  // Reads and actions are numbered: an older read's reply never replaces a
+  // newer one's, and an older action's outcome never replaces a newer
+  // one's message or plan (F2b re-review, RR2). Actions on different
+  // repositories may overlap: a fetch can take minutes.
+  const loadSeq = useRef(0);
+  const runSeq = useRef(0);
   const load = async () => {
+    const seq = ++loadSeq.current;
     const s = await getGitSettings();
+    if (seq !== loadSeq.current) return; // a newer read answers
     setLoadFailed(s === null);
     if (s) {
       setState(s);
@@ -91,9 +99,15 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
   // run says an action's result; a plan that came back is shown for
   // review, never applied by this
   const run = async (url: string, fn: () => Promise<ActionResult | ApplyResult>, okText: string) => {
+    const op = ++runSeq.current;
     setBusy(url);
     setMessage(null);
     const r = await fn();
+    if (op !== runSeq.current) {
+      // a newer action started meanwhile: its outcome is the one said
+      await load();
+      return;
+    }
     setBusy(null);
     const a: ApplyResult = r;
     if (a.plan) setPlan(a.plan);
@@ -110,11 +124,13 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
     await load();
   };
 
+  // a plan answered after a newer action is still shown: it is a review,
+  // and Apply refuses it with a replacement if what runs moved
   const adoptFile = async () => {
     setBusy("plan");
     setMessage(null);
     const p = await planGitFromFile();
-    setBusy(null);
+    setBusy((b) => (b === "plan" ? null : b));
     setPlan(p);
   };
 

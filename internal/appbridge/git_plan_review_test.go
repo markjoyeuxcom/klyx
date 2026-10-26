@@ -6,8 +6,8 @@ package appbridge
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"

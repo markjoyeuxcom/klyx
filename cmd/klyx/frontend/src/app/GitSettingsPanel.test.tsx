@@ -255,3 +255,37 @@ describe("GitSettingsPanel outcomes", () => {
     expect((await screen.findByTestId("git-message")).textContent).toContain("could not be cleared");
   });
 });
+
+// F2b re-review, RR2: actions on different repositories may overlap; an
+// older read or outcome never replaces a newer one.
+describe("GitSettingsPanel overlapping actions", () => {
+  it("keeps a newer readback and outcome over an older one's", async () => {
+    const infra = repo({ url: "https://github.com/acme/infra.git", key: "github.com/acme/infra", sources: [] });
+    let releaseRead!: (s: GitSettings) => void;
+    let releaseFetch!: (r: { ok: boolean; error: string }) => void;
+    bridge.getGitSettings
+      .mockResolvedValueOnce(state({ repos: [repo(), infra] }))
+      .mockImplementationOnce(() => new Promise<GitSettings>((r) => { releaseRead = r; }))
+      .mockResolvedValue(state({ repos: [repo()] }));
+    bridge.fetchGitRepo.mockImplementation(() => new Promise((r) => { releaseFetch = r; }));
+    render(<GitSettingsPanel />);
+    const rows = await screen.findAllByTestId("git-repo");
+    // an older action on one repository, still running
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Fetch now" }));
+    // a newer one on another, applied and read back
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(bridge.removeGitRepo).toHaveBeenCalledWith("https://github.com/acme/infra.git"));
+    // the older action ends after it: its outcome is not said over the
+    // newer's, and its readback, the newest read, answers
+    releaseFetch({ ok: true, error: "" });
+    await waitFor(() => expect(bridge.getGitSettings).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("git-message").textContent).toContain("Removed https://github.com/acme/infra.git");
+    await waitFor(() => expect(screen.getAllByTestId("git-repo")).toHaveLength(1));
+    // the removal's own readback answers last: an older read never
+    // replaces what a newer one found
+    releaseRead(state({ repos: [repo(), infra] }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getAllByTestId("git-repo")).toHaveLength(1);
+  });
+});

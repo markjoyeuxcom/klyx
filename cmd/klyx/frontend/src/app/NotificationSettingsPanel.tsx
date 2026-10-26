@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   applyNotifications,
   applyNotificationsQuiet,
@@ -33,8 +33,13 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
 
+  // each read is numbered: an older reply never replaces what a newer
+  // read found (F2b re-review, RR2)
+  const loadSeq = useRef(0);
   const load = async (): Promise<boolean> => {
+    const seq = ++loadSeq.current;
     const v = await getNotificationSettings();
+    if (seq !== loadSeq.current) return v !== null; // a newer read answers
     setLoadFailed(v === null);
     if (!v) return false;
     setSt(v);
@@ -68,14 +73,27 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
     }
   };
 
+  // An operation stays busy through its settlement and readback, so no
+  // other change starts while its outcome is being read (RR2).
   const save = async (next: NotificationSettings) => {
     if (!st) return;
     const prev = st;
     setSt({ ...st, inUse: next });
     setBusy(true);
-    const r = await applyNotificationsQuiet(next);
-    setBusy(false);
-    await settle(r, "Applied: nothing running ends.", prev);
+    try {
+      await settle(await applyNotificationsQuiet(next), "Applied: nothing running ends.", prev);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reread = async () => {
+    setBusy(true);
+    try {
+      await load();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const adoptFile = async () => {
@@ -96,7 +114,7 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
         // to be what runs
         <div data-testid="notifications-reread-failed" style={notice}>
           <span>▲ Klyx could not read the notification settings again: what is shown is as last read and may be out of date.</span>
-          <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
+          <button className="l-btn" disabled={busy} onClick={() => void reread()}>Retry</button>
         </div>
       )}
       {st.fileError && <div data-testid="notifications-file-error" style={notice}>▲ fleet.yaml cannot be read: {st.fileError}</div>}
@@ -137,10 +155,13 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
           interlockTitle="Apply the notification settings?"
           onApply={async () => {
             setBusy(true);
-            const r = await applyNotifications(plan.digest);
-            setBusy(false);
-            await settle(r, "Applied: these are the notification settings in use.");
-            return r;
+            try {
+              const r = await applyNotifications(plan.digest);
+              await settle(r, "Applied: these are the notification settings in use.");
+              return r;
+            } finally {
+              setBusy(false);
+            }
           }}
           onCancel={() => setPlan(null)}
         />
