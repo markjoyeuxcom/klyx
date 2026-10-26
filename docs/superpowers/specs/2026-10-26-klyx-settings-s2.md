@@ -645,3 +645,25 @@ The findings were where workers meet the lifecycle. Each is fixed, and its probe
 - removing a credential waits for the fleet lock.
 
 **Mutation pass:** 14 mutants of the fixes, 13 caught. The survivor releases a forgotten conversation's leases again. It is equivalent under the lifecycle, whose end has released them already, and is kept as a net for leases taken outside it.
+
+## 15. S2a revision 2: Codex's re-review (2026-10-26)
+
+Codex found F1, F5, F6 and F7 resolved, and F2, F3 and F4's original counterexamples resolved. It requested changes: three residual P2s, each where an admission meets its first publication.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** an events open its connection had already ended still listed and emitted once before its refusal, under a context its lease did not end | The subscription is named and bound before anything starts: an entry ended before binding starts nothing. An end while the subscription starts stops it at once, so it never registers, watches or computes, and a second, quiet detach takes it out if it registered meanwhile. Every delivery runs under the subscription's delivery lock, which `detach` also holds while it stops the subscription and sends its ended notice, so nothing is delivered after that notice. The list runs under the lease's context, so a read in flight ends with its connection |
+| **RR2:** a comparison member whose end was selected before `SetComparison` refused could still end the investigation | Each member's admission is made before its lease, and its end acts on the investigation only while that admission is committed to the investigation's set. A set with a member retired while it was chosen is refused. A refused set never commits, and a replaced or released member is uncommitted, so their ends act on nothing. A committed member's retirement still ends the investigation explicitly |
+| **RR3:** MoveToKeychain wrote the keychain and fleet.yaml before it took the fleet lock, and bumped the revision after it | The whole transfer runs under the fleet lock, in order: the keychain write, the file's compare-and-swap, the live connection and the revision. A partial transfer says what happened and publishes nothing. The lock order is unchanged: endpoints, then the fleet Apply lock, then the file writer |
+
+**Tests:**
+- Codex's three probes, as regression tests. Each also has a case of its own:
+  - an end while the subscription starts, and one just before it registers;
+  - a stopped subscription never starts or replaces another;
+  - a detached subscription delivers nothing more;
+  - a read in flight ends with its connection;
+  - a member retired while chosen, or replaced while its end is in flight, never ends the investigation;
+  - the token move changes nothing, its revision included, before it holds the lock.
+- The live registry gained one test seam, told the stage before a subscription registers and before its watch starts. It is nil in production.
+
+**Mutation pass:** all 12 mutants of the fixes are caught.
