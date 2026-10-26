@@ -26,7 +26,14 @@ type FleetService struct {
 	reg    Snapshotter
 	lookup func(string) (config.ClusterConfig, bool)
 	now    func() time.Time
+	// protected is the published protection (Settings S2 §2.7): every
+	// reader agrees with what the guard admits under. Nil: the entry's own
+	// inputs (tools, tests).
+	protected func(string) bool
 }
+
+// SetFleetProtection makes the fleet DTOs say the published protection.
+func SetFleetProtection(s *FleetService, protected func(string) bool) { s.protected = protected }
 
 // NewFleetService builds the fleet DTO source. lookup resolves a cluster's
 // config from the LIVE fleet (main passes LiveClusterConfig), so clusters
@@ -57,7 +64,12 @@ func (s *FleetService) GetFleet() []ClusterDTO {
 	out := make([]ClusterDTO, 0, len(snaps))
 	for _, snap := range snaps {
 		cc, _ := s.lookup(snap.Name)
-		out = append(out, ToDTO(snap, cc, now))
+		d := ToDTO(snap, cc, now)
+		if s.protected != nil {
+			p := s.protected(snap.Name)
+			d.Protected, d.ProtectedInferred = p, p && !cc.Protected
+		}
+		out = append(out, d)
 	}
 	return out
 }

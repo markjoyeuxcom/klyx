@@ -188,8 +188,13 @@ func main() {
 	}), loadErr)
 	appbridge.WithPolicy(configSvc, policyReg)
 	liveConfig.Store(configSvc)
+	// Settings S2 §2.6-§2.7: the running fleet loses a removed cluster, and
+	// every reader of protection reads the published value
+	lifecycle.OnForget(func(name string) { appbridge.ForgetRunningCluster(configSvc, name) })
+	appbridge.SetNotifyProtection(healthNotify, configSvc.IsProtected)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
+	appbridge.SetFleetProtection(svc, configSvc.IsProtected)
 	healthSvc := appbridge.NewHealthService(func() []*observe.Observer {
 		var out []*observe.Observer
 		for _, s := range reg.Snapshots() {
@@ -412,6 +417,9 @@ func main() {
 		ec, ok := c.(appbridge.EndpointConn)
 		return ec, ok
 	})
+	// Settings S2 §2.6: an endpoint activation publishes into the running
+	// fleet under the fleet Apply lock, so a reconnect keeps it
+	appbridge.WireEndpointActivation(endpointsSvc, configSvc)
 
 	workloadsSvc := appbridge.NewWorkloadsService(func(name string) (appbridge.WorkloadsConn, bool) {
 		c, ok := reg.Conn(name)

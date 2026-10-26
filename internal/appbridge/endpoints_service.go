@@ -97,6 +97,49 @@ type EndpointsService struct {
 	// mu serialises endpoint actions, keychain calls included; it is taken
 	// before the fleet file writer's lock, in that order only (C5 §6).
 	mu sync.Mutex
+	// The running fleet (Settings S2 §2.6): an activation runs under the
+	// fleet Apply lock - after mu, in that order only, and no Apply takes mu
+	// - and publishes the endpoint the connection now uses into the running
+	// entry, so a reconnect keeps it. Nil in tools and tests.
+	fleetLock func() func()
+	publish   func(cluster, kind string, m *config.MetricsConfig, e *config.EndpointConfig)
+}
+
+// WireEndpointActivation makes every endpoint activation publish into the
+// running fleet under the fleet Apply lock (Settings S2 §2.6).
+func WireEndpointActivation(es *EndpointsService, cs *ConfigService) {
+	es.fleetLock = func() func() { return FleetApplyLock(cs) }
+	es.publish = func(cluster, kind string, m *config.MetricsConfig, e *config.EndpointConfig) {
+		SetRunningEndpoint(cs, cluster, kind, m, e)
+	}
+}
+
+// activate runs an endpoint activation under the fleet Apply lock, then
+// publishes what the connection now uses for kind into the running entry.
+func (s *EndpointsService) activate(cluster, kind string, f func() error) error {
+	if s.fleetLock != nil {
+		defer s.fleetLock()()
+	}
+	if err := f(); err != nil {
+		return err
+	}
+	if s.publish == nil {
+		return nil
+	}
+	conn, ok := s.lookup(cluster)
+	if !ok {
+		return nil
+	}
+	switch kind {
+	case config.EndpointMetrics:
+		mc := conn.MetricsConfig()
+		s.publish(cluster, kind, &mc, nil)
+	case config.EndpointAlertmanager:
+		s.publish(cluster, kind, nil, conn.AlertmanagerConfig())
+	case config.EndpointLoki:
+		s.publish(cluster, kind, nil, conn.LokiConfig())
+	}
+	return nil
 }
 
 func NewEndpointsService(path string, store secretstore.Store, revs *endpointcred.Registry, lookup func(string) (EndpointConn, bool)) *EndpointsService {
@@ -300,19 +343,19 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 	// configuration as one step, so no reader pairs the new credential
 	// with the configuration it replaces (Codex's revision 1 review)
 	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointMetrics && cl.Metrics != nil {
-		if err := conn.ChangeMetricsCredential(*cl.Metrics, install); err != nil {
+		if err := s.activate(cluster, kind, func() error { return conn.ChangeMetricsCredential(*cl.Metrics, install) }); err != nil {
 			return fail(red, err)
 		}
 		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 	}
 	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointAlertmanager && cl.Alertmanager != nil {
-		if err := conn.ChangeAlertmanagerCredential(cl.Alertmanager, install); err != nil {
+		if err := s.activate(cluster, kind, func() error { return conn.ChangeAlertmanagerCredential(cl.Alertmanager, install) }); err != nil {
 			return fail(red, err)
 		}
 		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 	}
 	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointLoki && cl.Loki != nil {
-		if err := conn.ChangeLokiCredential(cl.Loki, install); err != nil {
+		if err := s.activate(cluster, kind, func() error { return conn.ChangeLokiCredential(cl.Loki, install) }); err != nil {
 			return fail(red, err)
 		}
 		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
@@ -393,7 +436,8 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 	for _, c := range next.Clusters {
 		if c.Name == cluster && c.Metrics != nil {
 			if conn, ok := s.lookup(cluster); ok {
-				conn.SetMetricsConfig(*c.Metrics)
+				mc := *c.Metrics
+				_ = s.activate(cluster, config.EndpointMetrics, func() error { conn.SetMetricsConfig(mc); return nil })
 			}
 		}
 	}
@@ -412,14 +456,17 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 	if err == nil {
 		// the test reads the endpoint as reviewed, never the connection's
 		// older configuration
-		switch kind {
-		case config.EndpointMetrics:
-			s.syncMetrics(cluster, cl)
-		case config.EndpointAlertmanager:
-			s.syncAlertmanager(cluster, cl)
-		default:
-			s.syncLoki(cluster, cl)
-		}
+		_ = s.activate(cluster, kind, func() error {
+			switch kind {
+			case config.EndpointMetrics:
+				s.syncMetrics(cluster, cl)
+			case config.EndpointAlertmanager:
+				s.syncAlertmanager(cluster, cl)
+			default:
+				s.syncLoki(cluster, cl)
+			}
+			return nil
+		})
 	}
 	s.mu.Unlock()
 	if err != nil {

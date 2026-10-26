@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/healthnotify"
 	"github.com/moomora/klyx/internal/observe"
+	"sync/atomic"
 )
 
 // Events the notifications service emits to the webview.
@@ -50,10 +51,13 @@ type NotificationsService struct {
 	// running copy and the engine, so a later change never lands under an
 	// earlier one.
 	setMu sync.Mutex
-	load  func(string) (*config.NotificationsConfig, string, error)
-	save  func(path, version string, n config.NotificationsConfig) (string, error)
-	cache *planCache
-	mu    sync.Mutex
+	// protected is the published protection (Settings S2 §2.7); set once
+	// the configuration service exists, nil in tests
+	protected atomic.Pointer[func(string) bool]
+	load      func(string) (*config.NotificationsConfig, string, error)
+	save      func(path, version string, n config.NotificationsConfig) (string, error)
+	cache     *planCache
+	mu        sync.Mutex
 	// settings is the running copy, normalized; rev moves with each
 	// activation.
 	settings config.NotificationsConfig
@@ -109,6 +113,9 @@ func NewNotificationsService(path string, cfg *config.Config, cluster func(strin
 		Send: s.deliver,
 		List: s.list,
 		Protected: func(name string) bool {
+			if p := s.protected.Load(); p != nil {
+				return (*p)(name) // the published value (Settings S2 §2.7)
+			}
 			cc, ok := cluster(name)
 			return ok && cc.IsProtected()
 		},
@@ -139,6 +146,12 @@ func engineSettings(c config.NotificationsConfig) healthnotify.Settings {
 
 // The service's own lifecycle and inputs are package functions, not
 // methods: every exported method of a bound service reaches the webview.
+
+// SetNotifyProtection makes the engine's protected scope read the published
+// protection (Settings S2 §2.7).
+func SetNotifyProtection(s *NotificationsService, protected func(string) bool) {
+	s.protected.Store(&protected)
+}
 
 // RunNotifications ticks the engine once a second until StopNotifications.
 func RunNotifications(s *NotificationsService) {
