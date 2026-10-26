@@ -522,3 +522,17 @@ Codex requested changes on 13fc529: two residual P2 in R4. It closed R1-R3, R5 a
 **Mutation pass:** 5 mutants - a step named without its plan, the wording without its turn, the requests left unnamed, a request never recorded, and a refused run keeping its request - 5 caught. The first needed the test to compare the identities themselves: the turn in the wording alone already moved the digest.
 
 Every Go suite, the race suite of `appbridge` and golangci-lint (with and without the eval tag) pass; the frontend is unchanged in this revision. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit.
+
+## 19. F2a revision 3: Codex's second re-review (2026-10-26)
+
+Codex requested changes on c0b525c: one P2. It closed RR1, found RR2's revision-change case fixed, and its Clear control passes: a request is kept after its conversation is cleared, until it returns.
+
+| Finding | Change |
+|---|---|
+| **R2-1:** every admission of a step shared one record key, so an older run refused before its write could, through its deferred cleanup, remove a newer, freshly reviewed run's request while its write was in flight | each admission is numbered, never reused, and owns its entry (`step:<conversation>:<exchange>:<n>:request:<admission>`): a run's cleanup and its result's record remove only its own. Two admissions of the same step are two pieces of work in the digest |
+
+**Tests added:** Codex's two probes, adopted (`appbridge/ai_plan_lifecycle_test.go`): a second client's review and run started between the first run's release and its cleanup keeps its request named until it returns, ten times over; and Clear keeps an in-flight request until it returns.
+
+**Mutation pass:** the shared key restored is caught, in two runs; §18's five are caught again.
+
+Every Go suite, the race suite of `appbridge` (the cleanup probe three times over as well) and golangci-lint (with and without the eval tag) pass; the frontend is unchanged. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit.
