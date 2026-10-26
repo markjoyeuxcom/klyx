@@ -7,7 +7,7 @@ Opened 2026-10-26, on `feat/settings-s0`, after slice F was accepted (F §24). S
 
 It applies every change through F's plans and policy registry.
 
-This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§9 to §11).
+This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§9 to §11); the design is accepted (§12).
 
 ## 0. What exists
 
@@ -526,3 +526,12 @@ Codex found RR2 and RR3 resolved, and RR1's state rules resolved. It requested c
 | **R2-1, P2:** the digest was compared before the preparation, and nothing ordered the write after it with a usability. So a held attempt that became usable during a Revert's preparation would be released, and then replaced by the stale Revert | §4.5: a commit gate per cluster, through which usability events pass. A connection queues its event without blocking, and the lifecycle applies it under the gate. Apply decides inside the gate, after its preparation: the bound epoch and attempt are still current, or it refuses with a fresh plan; then it writes and commits, retiring the old identity and rebinding the hold. A usability that wins first is kept and makes the Apply refuse. One that arrives after is for a retired attempt, and is stale |
 
 **Also noted from the re-review:** a preparation combines the candidate's S2 fields with the running entry's active endpoint terms. Revert restores the last connected S2 fields, without reverting independently activated endpoints.
+
+## 12. ACCEPT (2026-10-26)
+
+Codex accepted the design at revision 3 (8a4a907), after the review of dc54655 and three re-reviews, with no outstanding findings. Its five rulings of §8 stand. It carried three implementation checkpoints, which are acceptance details for the build:
+- **Queuing an event is not publishing usability.** F §1 requires a new incarnation to be published before usability is exposed, which `ClusterConn.moveLocked` does today. The queued route must keep that order. While the lifecycle's consumer is held pending, an old ticket or AI epoch must not reach a newly usable incarnation under the old epoch. Once the event is applied, the old pins must refuse.
+- **"Stale after the decision" holds only after a committed retirement.** A failed write retires nothing, so its queued current-attempt usability is still applied, once, after the gate opens. A placement or protection change keeps its connection's identity, so a later recovery of that identity still publishes its epoch normally. The tests cover both, beside the stale retired attempt.
+- **The gate takes no reentrant lifecycle callback.** Sink delivery during a trusted retirement, and a connection's start and stop, run outside the gate, and the tests run them under the race detector. A refused Apply releases both its gate and its reservation.
+
+S2a builds next.
