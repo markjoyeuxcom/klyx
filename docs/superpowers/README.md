@@ -129,16 +129,17 @@ The roadmap orders A1, then A2 and A3, then extensions. A1 (deeper investigation
 - [Klyx AI A1: deeper investigation](specs/2026-10-21-klyx-ai-a1-investigation.md) (spec)
 - [Klyx AI A1.1: rollout history](specs/2026-10-24-klyx-ai-a1-1-rollout-history.md) (spec)
 - [Klyx AI eval: scored investigations on the kind lab](specs/2026-10-22-klyx-ai-eval.md) (spec)
-- [Klyx AI A3: guarded execution](specs/2026-10-24-klyx-ai-a3-guarded-execution.md) (spec)
+- [Klyx AI A3: guarded execution](specs/2026-10-24-klyx-ai-a3-guarded-execution.md) (spec, built and accepted; merged 2026-10-26)
 
 ## Settings (2026-10-25 onward)
 
 Claude and Codex reviewed the Settings page and its coverage, independently and then against each other. Slice 0 fixes what the review found wrong; a redesign spec follows, reviewed before it is built, and A2's settings come with it.
 
-- [Klyx Settings slice 0: correctness before the redesign](specs/2026-10-25-klyx-settings-slice0.md) (spec)
+- [Klyx Settings slice 0: correctness before the redesign](specs/2026-10-25-klyx-settings-slice0.md) (spec, built and accepted)
 - [Klyx Settings: the redesign](specs/2026-10-25-klyx-settings-redesign.md) (spec, accepted)
 - [Klyx Settings S1: sections, the registry and its coverage](specs/2026-10-25-klyx-settings-s1.md) (spec, built and accepted)
-- [Klyx Settings F: the activation foundation](specs/2026-10-25-klyx-settings-f.md) (spec, design accepted, being built)
+- [Klyx Settings F: the activation foundation](specs/2026-10-25-klyx-settings-f.md) (spec, built and accepted)
+- [Klyx Settings S2: Fleet - the cluster lifecycle, editor, reconnect and remove](specs/2026-10-26-klyx-settings-s2.md) (spec, design accepted; S2a built, in review)
 
 ## Next
 

@@ -682,3 +682,18 @@ Codex found RR2 and RR3 resolved, and RR1's original scenario resolved. It reque
 - A close while an open is still starting stops that open too.
 
 **Mutation pass:** 5 mutants of the fixes, 4 caught. The survivor is `bind`'s ownership check. Every path that takes an entry's place marks it, and the stop checks after `bind` refuse it anyway, so the check only narrows a window. It is kept.
+
+## 17. S2a revision 4: Codex's third re-review (2026-10-26)
+
+Codex found R2-2 resolved, and R2-1's registration window fixed. It requested changes: two P2s in the window between an events open taking its lease and taking its place. That window existed because an open became visible only once its lease returned. Rather than close each window in turn, revision 4 removes that window from the design.
+
+| Finding | Fix |
+|---|---|
+| **R3-1:** an open retired while taking its lease could, returning late, take the place of a replacement already running on the new connection. A close while an open was still taking its lease found nothing to stop | Every open draws its place in the key's order of opens before it takes its lease (`begin`). It adopts its lease in one step under the entry lock (`adopt`), and only while it has not ended and is still the newest open; otherwise it takes nothing, releases its own lease, and leaves the current entry untouched. A close moves the order on, so an open still taking its lease loses; so does shutdown. A newer open that is refused at admission leaves the working subscription running |
+| **R3-2:** `invalidate` read the entry's lease outside the entry lock, while the open published it outside the lock too | An entry's lease is written only by `adopt` and read only by `invalidate`, both under the entry lock; the release happens outside it. An end that comes before the lease is adopted marks the entry, and the open, finding it ended, releases its own lease |
+
+**Tests:**
+- Codex's three probes, as regression tests: the early end against the adoption, under the race detector; a late retired open against the replacement; a close while an open takes its lease.
+- One case of its own: a reopen refused at admission keeps the working subscription.
+
+**Mutation pass:** 4 mutants of the fixes, all caught.
