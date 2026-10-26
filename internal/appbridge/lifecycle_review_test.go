@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -782,5 +783,116 @@ func TestAReplacedMembersEndActsOnNothing(t *testing.T) {
 	f.svc.mu.Unlock()
 	if why != "" {
 		t.Fatalf("a replaced member ended the investigation: %s", why)
+	}
+}
+
+// Codex's second re-review of S2a (2026-10-26): its two probes, and a
+// close while an open starts.
+
+// R2-1: an open replaced while it is still starting never takes its
+// successor's place, and nothing of it outlives the connection.
+func TestAReplacedOpeningCannotOutliveRetirement(t *testing.T) {
+	r := newLifeRig(t, true)
+	c := &countingEvents{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+	defer s.CloseAll()
+	s.setLeaser(r.leasedVia(EventsConn(c)))
+	blocked := make(chan *liveSub, 1)
+	resume := make(chan struct{})
+	var registrations atomic.Int32
+	s.live.stage = func(stage string, sub *liveSub) {
+		if stage == "register" && registrations.Add(1) == 1 {
+			blocked <- sub
+			<-resume
+		}
+	}
+	firstDone := make(chan ActionResultDTO, 1)
+	go func() { firstDone <- s.OpenLiveEvents("prd", "shop") }()
+	first := <-blocked
+	second := s.OpenLiveEvents("prd", "shop")
+	close(resume)
+	if !second.OK {
+		t.Fatalf("the newer open: %+v", second)
+	}
+	firstResult := <-firstDone
+	s.live.mu.Lock()
+	oldRegistered := s.live.subs["events:prd:shop"] == first
+	s.live.mu.Unlock()
+	if oldRegistered || firstResult.OK {
+		t.Fatalf("the older open took its successor's place (%v), or reported OK: %+v", oldRegistered, firstResult)
+	}
+	r.reconnect()
+	if !waitUntil(t, 3*time.Second, func() bool { return s.live.count() == 0 }) {
+		t.Fatalf("subscriptions after retirement: %d", s.live.count())
+	}
+}
+
+// R2-1: a close while an open is still starting stops that open too.
+func TestACloseStopsAnOpenStillStarting(t *testing.T) {
+	c := &countingEvents{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+	defer s.CloseAll()
+	s.live.stage = func(stage string, _ *liveSub) {
+		if stage == "register" {
+			s.CloseLiveEvents("prd", "shop")
+		}
+	}
+	if res := s.OpenLiveEvents("prd", "shop"); res.OK || !strings.Contains(res.Error, "closed") {
+		t.Fatalf("got %+v", res)
+	}
+	if s.live.count() != 0 || c.readCount() != 0 {
+		t.Fatalf("subscriptions %d, reads %d", s.live.count(), c.readCount())
+	}
+}
+
+// R2-2: the panic net's status obeys the delivery fence: nothing after a
+// detach's notice, over a replacement.
+func TestAPanicCannotDeliverAfterTheEndedNotice(t *testing.T) {
+	r := newLiveRegistry()
+	r.interval = time.Millisecond
+	defer r.closeAll()
+	reading, finish := make(chan struct{}), make(chan struct{})
+	var dirty func()
+	var calls atomic.Int32
+	var mu sync.Mutex
+	var said []string
+	say := func(what string) { mu.Lock(); said = append(said, what); mu.Unlock() }
+	stopped := make(chan struct{})
+	var stopOnce sync.Once
+	sub := r.open("k", func(onDirty func(), _ func(bool)) (func(), error) {
+		dirty = onDirty
+		return func() { stopOnce.Do(func() { close(stopped) }) }, nil
+	}, func() (any, bool) {
+		if calls.Add(1) == 1 {
+			return "initial", true
+		}
+		close(reading)
+		<-finish
+		panic("a malformed object")
+	}, func(any) { say("data") }, func(bool) { say("live") })
+	dirty()
+	<-reading
+	if !r.detach("k", sub, func() { say("ended") }) {
+		close(finish)
+		t.Fatal("not detached")
+	}
+	r.open("k", func(_ func(), onLive func(bool)) (func(), error) {
+		onLive(true)
+		return func() {}, nil
+	}, func() (any, bool) { return "replacement", true },
+		func(any) { say("replacement-data") }, func(up bool) {
+			if up {
+				say("replacement-live")
+			}
+		})
+	mu.Lock()
+	before := len(said)
+	mu.Unlock()
+	close(finish)
+	<-stopped // the panic net ran and stopped the watch
+	mu.Lock()
+	defer mu.Unlock()
+	if len(said) != before {
+		t.Fatalf("the old subscription spoke after its notice and the replacement: %v", said)
 	}
 }

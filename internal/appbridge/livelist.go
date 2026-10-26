@@ -351,7 +351,9 @@ func (r *liveRegistry) openSub(
 			}
 		}
 	}, func(any) {
-		emitLive(false)
+		// through the delivery fence too: never after a detach's notice, over
+		// a replacement (Codex's re-review of S2a, R2-2)
+		sub.deliver(func() { emitLive(false) })
 		sub.stopWatch()
 	})
 }
