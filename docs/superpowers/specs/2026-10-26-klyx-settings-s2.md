@@ -7,7 +7,7 @@ Opened 2026-10-26, on `feat/settings-s0`, after slice F was accepted (F §24). S
 
 It applies every change through F's plans and policy registry.
 
-This note is for Codex's review before it is built.
+This note is for Codex's review before it is built; revision 1 the same day, after that review (§9).
 
 ## 0. What exists
 
@@ -56,7 +56,7 @@ From a read of the code at 39f17cd, with an inventory of every per-cluster piece
 **Built but unused:** F's `Begin`, `Publish`, `Hold` and `Release` have no callers yet; F built them for S2.
 
 **Kept by name:**
-- **The keychain:** endpoint credentials are stored as `endpoint/<cluster>/<kind>`. The store cannot list them, so a record left by a removal cannot be found later.
+- **The keychain:** endpoint credentials are stored as `endpoint/<cluster>/<kind>`. The store cannot list accounts, so a record left by a removal cannot be found without its cluster's name. A cluster added again under that name computes the same account and finds it (§4.3).
 - **The page:** view preferences, each view's search, the palette's frecency ids, and the restored route. The route is checked for existence on restore.
 
 ## 1. Stages
@@ -64,16 +64,17 @@ From a read of the code at 39f17cd, with an inventory of every per-cluster piece
 S2 is built in three stages, each leaving a working app and each reviewed on its own:
 - **S2a, the cluster lifecycle (backend):**
   - a connection that stops;
-  - replace, remove and retry in the registry;
-  - the work on a cluster, listed and ended by its connection;
+  - connection identities, and replace, remove and retry in the registry;
+  - leases: the work on a cluster admitted, listed and ended by its connection;
+  - retiring a connection's identity, so nothing it publishes later is taken;
   - a removed cluster forgotten;
   - one protection reader;
   - the running fleet.
 - **S2b, the writers and plans:**
   - a cluster entry edited node-wise, or removed;
-  - plans for an edit, the file's values, a removal and Revert;
+  - the reservation, and plans for an edit, the file's values, a connect, a removal and Revert;
   - protection's effect and the interlock;
-  - saved, not connected.
+  - a reconnect held until its own connection is usable.
 - **S2c, the page:** the editor, its plans and the removal; drift and file-only clusters; the native smoke.
 
 ## 2. The cluster lifecycle (S2a)
@@ -89,29 +90,47 @@ S2 is built in three stages, each leaving a working app and each reviewed on its
 
 ### 2.2 The registry: replace, remove, retry
 
-- `Prepare(cc)` builds a connection through the factory without starting it: the REST configuration, the clients and the capability detector. A factory error returns, and nothing changes. Section 4.4 uses this so that a context that cannot be resolved writes nothing.
-- `Replace(ctx, prepared)` swaps the entry under the registry's lock. From then on every `Conn(name)` returns the new connection, which starts. The old one is stopped outside the lock.
-- `Remove(name)` takes the entry out of the registry under the lock, then stops its connection.
-- `Retry(name)` builds a Failed entry again from the running entry, for a connection that failed to build at start. `Add`'s refusal of a duplicate stays for a running connection.
-- **The index order follows the running fleet,** not the startup configuration.
-- **Incarnations never recur.** A connection's incarnation is drawn from one process-wide counter. So a replacement, or a cluster removed and added again under the same name, starts above every incarnation before it (F §1).
+**Every connection has an identity:** a `ConnID`, drawn from one process-wide counter when the connection is built. A replacement, or a cluster removed and added again under the same name, therefore has an identity above every one before it. The connection's incarnation (F §1) comes from the same counter, so incarnations never recur either.
 
-### 2.3 Work on a cluster, listed and ended by its connection
+**Operations:**
+- `Prepare(cc)` builds a connection through the factory without starting it: the REST configuration, the clients and the capability detector. It is given its `ConnID` then. A factory error returns, and nothing changes. §4.5 uses this, so a context that cannot be resolved writes nothing.
+- `Replace(prepared)` retires the current connection's identity (§2.4), then swaps the entry under the registry's lock. From then on every lookup returns the new connection, which starts. The old one is stopped outside the lock.
+- `Remove(name)` retires the identity, takes the entry out of the registry under the lock, then stops the connection.
+- `Retry(name)` builds again a connection that failed to build: one that failed at start, or a reconnect's attempt (§4.5). `Add`'s refusal of a duplicate stays for a running connection.
 
-Each service that runs work on a cluster records the connection it runs on, and implements:
+**The index order follows the running fleet,** not the startup configuration.
+
+### 2.3 Leases: admission, registration and teardown
+
+A connection is never looked up and then used later. Every piece of work on a cluster takes a **lease** from the cluster's lifecycle, as one step, under the lifecycle's lock:
 
 ```go
-type clusterWorker interface {
-	// clusterWork lists the work on conn by identity: what ending its
-	// connection stops, and what continues.
-	clusterWork(cluster string, conn ConnID) (ends, continues []PlanWorkDTO)
-	// endCluster ends the work on conn, saying why. Work started on another
-	// connection of the same cluster is untouched.
-	endCluster(cluster string, conn ConnID, why string)
+// Acquire admits one piece of work on cluster, now: refused while the
+// cluster is Reserved, Held or retired (§4.1, §4.5). It pins the current
+// connection and registers the work, pending, before any I/O.
+func (l *Life) Acquire(cluster string, w Work) (*Lease, error)
+
+type Lease struct {
+	Conn *fleet.ClusterConn // the pinned connection
+	Ctx  context.Context    // cancelled when its connection is retired, unless the work continues
+	// ...
 }
+
+// Settle records what the work became, after its I/O ("forward of
+// localhost:8080 to shop/web:80"). It fails if the connection was retired
+// meanwhile, and the worker then closes what it opened.
+func (l *Lease) Settle(desc string) error
+func (l *Lease) Release()
 ```
 
-A plan lists the work through these, and Apply ends it through them, by connection. So a reconnect never closes work already started on the new connection.
+**The contract:**
+- **Pending work is listed.** A lease is in the list from `Acquire`, as "a port-forward to shop/web, opening", before its I/O. So a plan's work version includes work that has not finished starting.
+- **A retired lease cannot settle.** Retiring a connection cancels its leases' contexts and marks them retired. A late completion's `Settle` fails, and the worker closes what it opened. That covers the window Codex's probe found: a forward that captured the old connection, blocked on its I/O, and would otherwise register after the teardown.
+- **Retiring holds no lock across I/O.** It marks and cancels under the lock, then waits for nothing. Each worker ends its own I/O when its context is cancelled.
+- **Every worker takes a lease,** not only the guarded writes: forwards, log streams, live events, log history views, chat conversations and investigations, A3 offers, reviews and runs, Explain and Suggest-fix, drains and Helm rollbacks.
+- **A chat start that pinned its epoch before a transition** takes its lease at registration. If the cluster is Reserved or Held by then, the start is refused, even though its read and send fences would also refuse it later.
+
+**The work, as listed and as ended:**
 
 | Work | Listed as | On a reconnect or removal |
 |---|---|---|
@@ -119,25 +138,35 @@ A plan lists the work through these, and Apply ends it through them, by connecti
 | log stream | "logs of shop/web-7c9 (container web)" | ends: closed. The page says the stream ended and why |
 | live events | "live events in shop" | ends |
 | log history view | "log history of shop/web" | ends |
-| chat or investigation | "the investigation of Deployment shop/web, started 10:40" | ends, explicitly at Apply and with the reason ("aks-we-prd reconnected"), not lazily at its next read |
-| A3 offer or review | as in F2a | ends: withdrawn by the epoch |
-| A3 confirmed request | as in F2a | continues: "its write is refused if it was not yet sent; once sent, it completes, unverified" |
+| chat or investigation | "the investigation of Deployment shop/web, started 10:40" | ends, explicitly at Apply and with the reason ("aks-we-prd reconnected"). The page is told: a version moves and an event says the reason |
+| A3 offer or review | as in F2a | ends: withdrawn |
+| A3 confirmed request | as in F2a | continues: "its write is refused if it was not yet sent; once sent, it keeps its written or unverified outcome" |
 | Explain, Suggest-fix | as in F2a | ends |
 | drain | "the drain of node-3, started 10:41" | continues: the kubectl child runs to its end (F §17a); Cancel still stops it |
 | Helm rollback | "the rollback of release shop/web" | continues: it runs to its end |
 
-**What is added to make the table possible:**
-- log streams and drains record their cluster and connection;
-- live events record their connection (today they capture its pointer);
-- a Helm rollback is recorded while it runs, with its cluster, release and start.
+- **A continuing lease** has no context of its own to cancel. It is listed under Continues, and it is released when the work ends.
+- **A lens view's row subscription is not a lease.** It follows the Observer: the page subscribes again to the new one, and a removed cluster's views close.
+- **Exec and debug terminals are not tracked.** Every reconnect and removal plan carries a fixed line instead: "An exec or debug terminal opened on aks-we-prd keeps its old context. Klyx does not track or close terminals."
 
-**Not listed by identity:** a lens view's row subscription follows the Observer. The page subscribes again to the new one, and a removed cluster's views close.
+### 2.4 Retiring a connection's identity
 
-**Exec and debug terminals are not tracked.** Every reconnect and removal plan carries a fixed line instead: "An exec or debug terminal opened on aks-we-prd keeps its old context. Klyx does not track or close terminals."
+A retired connection must not publish into its replacement, nor recreate state a removal forgot. Its in-flight callbacks can outlive a bounded `Stop`. So the barrier is its identity, not its quiescence:
+- **The lifecycle keeps each cluster's current `ConnID`, and a set of retired ones.** Retirement happens before the swap or the removal (§2.2).
+- **Every callback a connection makes carries its `ConnID`,** and the receiver drops it when that identity is not the cluster's current one. The callbacks:
+  - **usability:** the registry's `onUsable`, and so `policy.ConnUp`;
+  - **connection state:** the index's `SetConnection`;
+  - **the health sink's publications:** transitions, summaries, rows and the final batch. These already carry the Observer's incarnation, which is the same identity;
+  - **deferred cleanups.**
+- **Every shared sink gates on that check:**
+  - the health sink, ahead of its listeners: the line, the notification engine, obslog, the histories and the line tap;
+  - the index's coordinator;
+  - the policy registry.
+- **No publication creates state for an unknown or retired identity.** The index's `coordFor` and the per-name maps in the sinks create an entry only for the current identity.
+- **Forgetting keeps the retirement.** A removed cluster's last `ConnID` stays in the retired set. So a late callback after a removal is dropped and recreates nothing, and a re-add installs a new identity above it.
+- **A `Stop` that times out** is logged. The connection is already retired, so whatever it publishes later is dropped.
 
-**The order:** the work is ended after the swap or the removal. So new work goes to the new connection, and the old connection's work is ended by its identity.
-
-### 2.4 Forgetting a removed cluster
+### 2.5 Forgetting a removed cluster
 
 A removal forgets the cluster everywhere:
 - **in the policy registry,** with its last epoch kept as a tombstone;
@@ -153,16 +182,16 @@ Its endpoint credential revisions are kept as tombstones too, since revisions ar
 
 **A reconnect forgets nothing by name.** Histories continue across incarnations, as today.
 
-### 2.5 The running fleet
+### 2.6 The running fleet
 
-- `ConfigService` holds the running clusters as one list: the startup configuration, then each addition, edit and removal. It carries a revision.
+- `ConfigService` holds the running clusters as one list: the startup configuration, then each addition, edit and removal. It carries a revision, and each Apply replaces one entry under it, never the whole list from an older copy.
 - `LiveClusterConfig` and `LiveFleetClusters` read that list, and so does every other runtime reader of a cluster's configuration:
   - the fleet DTOs;
   - the line's placement;
   - the notification engine's place;
   - the Settings table and its drift.
 
-### 2.6 One protection reader
+### 2.7 One protection reader
 
 - **Every reader of effective protection reads the published snapshot.** That adds the fleet DTO, the Settings table and the notification engine's protected scope to the readers already on it.
 - **For display,** the running entry supplies the inputs and says which one infers protection. The published value is the authority.
@@ -202,68 +231,110 @@ Its endpoint credential revisions are kept as tombstones too, since revisions ar
 
 ## 4. Plans (S2b)
 
-### 4.1 The plan
+### 4.1 The reservation, and what moves the epoch
+
+Applying a plan must change nothing when it is refused before the write: F §11, and Codex's ruling. F's `Begin` cannot be that gate, because it moves the epoch, and its `Publish` moves the epoch again even when protection is unchanged. So S2 adds a reservation to the policy registry, separate from the committed transition:
+
+| State | New admissions | What was admitted before | Entered by | Epoch |
+|---|---|---|---|---|
+| **Reserved** | refused: no ticket, no lease, no AI start | stays valid under its epoch | `Reserve(cluster)`, at Apply | unchanged |
+| back to Active | admitted | valid | `Unreserve(cluster)`: a refusal, or a change that moves no epoch | unchanged |
+| Active, moved | admitted under the new epoch | stale | `Advance(cluster, protected)`: a committed protection change | moves once |
+| **Held** | refused | stale | `Hold(cluster, reason)`: a committed reconnect, until it is usable (§4.5) | moves |
+| Active, released | admitted under the new epoch | stale | `Release(cluster, protected)`, by the bound connection's first usability | moves |
+
+- **A ticket stays valid while Reserved.** A ticket is valid while its cluster is Active or Reserved, under the epoch it captured. A Reserved cluster refuses new tickets, leases and AI starts. So a manual write admitted before the reservation is not refused by the reservation itself, only by a committed move.
+- **The reviewed baseline is the epoch before the reservation.** The re-plan under the reservation compares the epoch the plan bound with the cluster's epoch, which `Reserve` did not move.
+- **The work snapshot is final under the reservation.** No lease can be acquired while Reserved, so the re-plan's list of work is the list the Apply ends.
+- **F's `Begin`, `Publish` and `Hold` keep their meaning** for any other caller. S2 uses `Reserve`, `Unreserve`, `Advance`, `Hold` and `Release`.
+
+### 4.2 The plan
 
 Fleet plans use F's engine: `PlanDTO`, `seal`, the candidate cache and the digest. The section is `fleet`, and each plan is for one cluster.
 
 **Kinds:**
 - `save`: the editor's draft;
-- `file`: the file's entry (§4.5);
+- `file`: the file's entry (§4.6);
+- `connect`: a cluster in the file and not running (§4.6);
 - `remove`;
 - `revert`: back to the last terms that connected.
 
 **Classes,** from what the plan changes (redesign §4):
 
-| Change | Apply | Epoch |
+| Change | Apply, after `Reserve` and the re-plan | Epoch |
 |---|---|---|
-| placement (region, group, environment, tags) with protection unchanged | write; swap the running entry. The line rescans, and notifications relabel | unchanged |
-| protection tightened, through any input | `Begin`, write, `Publish` | moves: arms, reviews and offers are stale, and conversations end |
-| protection loosened, through any input | the interlock naming the cluster, then as tightening | moves |
-| context or kubeconfig | `Begin`; prepare the connection; write; `Replace`; `Publish` | moves: both the policy and the connection |
-| removal | the interlock on a protected cluster; `Begin`; write; `Remove`; forget | gone, and tombstoned |
+| placement (region, group, environment, tags) with protection unchanged | write; swap the running entry; `Unreserve`. The line rescans, and notifications relabel | unchanged |
+| protection tightened, through any input | write; swap the entry; `Advance` | moves once: arms, reviews and offers are stale, and conversations end |
+| protection loosened, through any input | the interlock naming the cluster, then as tightening | moves once |
+| context or kubeconfig | prepare the connection; write; swap the entry; `Hold` ("connecting"); `Replace`; `Release` at the bound first usability (§4.5) | moves, and stays held until usable |
+| removal | the interlock on a protected cluster; the host check (§4.4); write; `Remove`; forget | gone, and tombstoned |
+
+**A refusal before the write** (a moved file, a moved digest, a missing interlock, a failed preparation) `Unreserve`s. Nothing is invalidated, and no work ends.
 
 **What a plan shows:**
-- **Changes:** each field from and to. Protection's effect is its own line, with the input that decides it: "Protection: on, inferred from environment prd → off".
-- **Ends and Continues:** §2.3's list for this cluster, by identity. The work version is in the digest, as in F2a.
+- **Changes:** each field from and to. Protection's effect is its own line, with the input that decides it: "Protection: on, inferred from environment prd → off". The effect is derived from the complete candidate, defaults included. So removing one input never reports protection off while another input still infers it: a cleared context defaults to the name, which may infer it.
+- **Ends and Continues:** §2.3's list for this cluster, by identity, pending leases included. The work version is in the digest, as in F2a.
 - **Interlock:** for loosening protection, or removing a protected cluster. The phrase is the cluster's name, as for the destructive verbs. Tightening never takes one.
 
-### 4.2 Protection that cannot be loosened here
+**One fleet Apply at a time.** Plans for different clusters, and additions and removals, share the fleet file and the running list. So:
+- Applies are serialized fleet-wide, by one lock.
+- Each re-plan checks three things together: the plan's file version, the running fleet's revision, and the cluster's work identities.
+- An Apply replaces only its own entry in the running list.
+- `AddClusters`, `connect`, `revert` and `Retry` go through the same transaction.
+
+### 4.3 Protection that cannot be loosened here
 
 Protection inferred from the name, which is read-only, cannot be loosened in Settings. Nor can protection inferred from a context the person keeps.
 
 The editor says what infers it, and what would change it: "inferred from the name aks-we-prd: a rename is a later slice". `protected: false` is never offered as a way to loosen protection, because protection ORs all its inputs.
 
-### 4.3 Plan-time checks
+### 4.4 Plan-time checks
 
-- **A new context or kubeconfig is resolved when the plan is made.** The REST configuration builds, and the context exists in the effective kubeconfig. A plan that cannot connect is refused before anything is written.
-- **An unreachable API server cannot be known when the plan is made.** The new connection's own state says it (§4.4).
-- **A removal is checked against the candidate configuration.** That includes S3a's installations once they exist: an installation naming the cluster as its host refuses the removal. In S2 no installation can name a host, so this is the hook S3a fills.
-- **The keychain records a removal offers to delete** (`endpoint/<cluster>/<kind>`, those present) are each a separate choice, bound by the plan's digest. None is deleted unless chosen.
+- **A new context or kubeconfig is resolved when the plan is made.** The REST configuration builds, and the context exists in the effective kubeconfig. A plan that cannot connect is refused before anything is written. Resolvable is not reachable: the plan cannot know that the API server answers, so the new connection's own state says that (§4.5).
+- **The host check.** A removal, including one through "Use the file's values", is checked against the candidate configuration first. That includes file-only installations, once S3a builds them: an installation naming the cluster as its host refuses the removal, before anything disconnects or is deleted. In S2 no installation can name a host, so this is the hook S3a fills. A host that changes between the plan and the Apply moves the plan's file version, so the Apply refuses.
+- **The keychain records** a removal offers to delete are those present: `endpoint/<cluster>/<kind>`.
+  - Each record is its own choice, bound by the digest to the record's current credential revision.
+  - Deletion is serialized with the endpoint credential actions (set, clear and move) and with a re-add of the same name. A credential changed between the plan and the Apply moves its revision, so the Apply refuses.
+  - None is deleted unless chosen. A deletion that fails is said, record by record, and the cluster stays removed.
+  - **A kept record** stays in the keychain. A cluster added again under that name finds it, and it is usable for the same endpoint origin: Observability shows it as stored, and can remove it.
+- **No secret** is in a plan, in its digest input or in the candidate cache: a credential appears only as present or absent.
 
-### 4.4 Apply, and saved, not connected
+### 4.5 Apply, and saved, not connected
 
-**Apply** runs under the cluster's Applying state (`Begin`):
-1. re-plan, and compare the digests;
-2. check the interlock;
-3. write, against the plan's file version;
-4. activate, by class.
+**Apply** for a plan:
+1. `Reserve` the cluster; on a removal or an addition, take the fleet Apply lock as well;
+2. re-plan, and compare the digests;
+3. check the interlock;
+4. for a reconnect, prepare the connection;
+5. write, against the plan's file version;
+6. commit by class (§4.2).
 
-A refusal before the write `Publish`es the running protection again.
+A refusal at any step before the write `Unreserve`s, and changes nothing.
 
-**A reconnect prepares its connection before the write.** If the factory fails because the context cannot be resolved now, nothing is written and the plan is refused with the reason.
+**A reconnect is held until its connection is usable.**
+- After the write, the cluster is Held ("saved, not connected yet: connecting with context <ctx>"). The new connection is swapped in and starts.
+- Nothing new is admitted while it is held: no ticket, no lease and no AI start, even though the connection's clients exist.
+- **The release is bound to this attempt.** Only the first usability of the connection this attempt prepared releases the hold, identified by its `ConnID`. `Release` then publishes the new protection, and the new terms become the last terms that connected.
+- **A stale attempt changes nothing.** A usability from an earlier attempt, or from a connection Revert or Retry has since replaced, is retired (§2.4), so it neither releases the hold nor replaces the last connected terms.
+- **While held,** Settings says both states, and offers two ways on:
+  - **Revert:** a plan back to the last terms that connected. It writes them, and prepares and swaps a connection of its own, held the same way;
+  - **Retry:** a fresh connection for the saved terms, with a new identity.
 
-**After the swap,** the new connection connects as any connection does, retrying on its own. Until it is first usable, the cluster is "saved, not connected yet":
-- Settings says both states;
-- it offers Revert: a plan back to the last terms that connected, which are kept until the new connection is usable.
+  The connection's own retries continue meanwhile; the first usability of the current attempt is what releases.
+- **At start,** a cluster whose connection failed to build is Held with that reason, and offers Retry (§2.2).
 
-**At start,** a cluster whose connection failed to build offers Retry (§2.2).
+### 4.6 Use the file's values
 
-### 4.5 Use the file's values
+**The field boundary.** "Use the file's values" adopts S2's fields only: context, kubeconfig, group, environment, tags and `protected`.
+- An entry's endpoint blocks (metrics, Alertmanager and Loki) keep their existing route: Observability's Test applies them, as today, until S3. Endpoint drift stays reported where it is now.
+- A reconnect's new connection takes the running entry's endpoint terms, never the file's. So adopting a context never silently adopts an endpoint as well.
+- The candidate cache holds S2's fields only. A plan that needs the file's whole entry (`connect`) binds the file version, and re-reads the entry at Apply. It never caches the raw entry, which may hold a legacy `metrics.token`.
 
+**The cases:**
 - **A running cluster whose file entry differs:** a plan from the running entry to the file's entry, writing nothing, in its class (relabel, protection or reconnect).
-- **A cluster in the file and not running:** "Connect" plans its addition from the file, writing nothing. This replaces "Klyx connects them when it restarts".
+- **A cluster in the file and not running:** "Connect" plans its addition from the file, writing nothing, with the file's endpoint terms: there are no running ones. The plan says which endpoint kinds are configured, and never their secrets. This replaces "Klyx connects them when it restarts". A fleet file that failed to load at start does not block it: whether the file loads is checked again at plan time.
 - **A running cluster gone from the file:** "Use the file's values" plans its removal, writing nothing, under the same interlock.
-- **A file that does not load:** no plan, and Settings says so.
+- **A file that does not load:** no plan, and Settings says so. That includes a file emptied of clusters by hand: it does not load, so its emptiness is never adopted as a removal of the last cluster.
 
 ## 5. The page (S2c)
 
@@ -271,7 +342,7 @@ A refusal before the write `Publish`es the running protection again.
 - **name:** read-only, saying why;
 - **context and kubeconfig:** the context is picked from the entry's effective kubeconfig;
 - **region, group, environment and tags:** each says what it places or ranks;
-- **protection:** explicit, inferred (with its input), or none. Its effect is in words, and so is what would loosen it (§4.2);
+- **protection:** explicit, inferred (with its input), or none. Its effect is in words, and so is what would loosen it (§4.3);
 - **endpoints:** a link to Observability, filtered to this cluster.
 
 **Actions:**
@@ -302,21 +373,37 @@ A refusal before the write `Publish`es the running protection again.
   - its conversations end with the reason;
   - drains and rollbacks continue, and are listed.
 - **`Remove`:** forgets the cluster in every store, each one checked.
-- **Re-adding a name:** epochs, incarnations and credential revisions never recur after a removal.
+- **Re-adding a name:** epochs, identities and credential revisions never recur after a removal.
+- **Leases:**
+  - a pending start (a forward paused in its I/O) is listed, and cannot settle after its connection is retired: Codex's probe;
+  - every worker acquires one;
+  - none is admitted while Reserved or Held.
+- **Retirement:** delayed down, up, final and batch callbacks from a retired connection, across a swap, a removal and a re-add, including after a `Stop` that timed out. Each is dropped, and none recreates state.
 - **Protection readers:** all of them agree after a publication.
 
 **S2b:**
-- **The editor's writes:** other fields and comments kept; the refusals (flow, alias, anchor, merge, duplicate, multi-line); the tags block.
+- **The editor's writes:**
+  - other fields, comments and unrelated bytes kept;
+  - the refusals: flow, alias, anchor, merge, duplicate and multi-line;
+  - the tags block;
+  - trailing comments, nested blocks, CRLF line endings and document boundaries;
+  - the defaulted context, and protection inferred from it, after a field is cleared;
+  - slice 0's YAML error redaction, and its symlink, mode and compare-and-swap policy.
 - **A removal's writes:** the last cluster refused; writes held to their file version.
 - **Plans, by class:**
   - the interlock taken for loosening and for removing a protected cluster, and not for tightening;
   - protection's effect line, including protection inferred from the name that cannot be loosened;
   - a context that cannot be resolved, refused at plan time, and at Apply before the write;
-  - a guard between `Begin` and `Publish` refused (F's R1 probe);
+  - a refusal before the write leaving the epoch, the arms, the offers and the conversations as they were;
+  - a placement-only Apply leaving the epoch as it was;
+  - a guard during the reservation refused, and a ticket admitted before it still valid;
+  - a reconnect held until its own connection's first usability; a stale usability from an earlier attempt neither releasing nor recording terms; Revert and Retry bound the same way;
+  - two clusters' Applies serialized, neither overwriting the other in the running list;
   - a reconnect ending the listed work;
   - the digest moving when work starts;
   - the keychain choices bound to the digest, and only the chosen records deleted;
-  - "Use the file's values" for each kind of drift.
+  - "Use the file's values" for each kind of drift, adopting S2's fields only; a hand-changed endpoint left to its own route; no raw entry cached;
+  - a keychain deletion refused when its credential's revision moved, and a partial failure said record by record.
 - **The redesign's named R1 tests** (§15):
   - a hand edit before Apply;
   - protection tightened after a guard and before the write;
@@ -346,3 +433,23 @@ A refusal before the write `Publish`es the running protection again.
 3. A reconnect prepares its connection before the write, so a context that cannot be resolved writes nothing. "Saved, not connected yet" is then a replacement not yet usable, with Revert to the last terms that connected.
 4. The last cluster cannot be removed.
 5. Each keychain record of a removed cluster is offered for deletion as its own choice, bound by the digest, and kept unless chosen.
+
+## 9. Revision 1: Codex's review (2026-10-26)
+
+Codex requested changes: five P2 and one P3. It accepted the staging, the foundations of S2a, and the five rulings of §8, the second and fifth with conditions now in §4.2 and §4.4. Each finding is addressed:
+
+| Finding | Change |
+|---|---|
+| **R1, P2:** `Begin` before the re-plan moves the epoch, so a refusal before the write would end work, and a placement-only change could not keep its epoch | §4.1: a reservation separate from the committed transition. `Reserve` refuses new admissions and keeps the epoch, and what was admitted before stays valid. A refusal `Unreserve`s and changes nothing. Placement `Unreserve`s, protection `Advance`s once, and a reconnect `Hold`s |
+| **R2, P2:** recording a connection on registered work leaves a pending start (a forward blocked in its I/O) outside the teardown | §2.3: leases. Every worker acquires one, as one step under the lifecycle's lock, before its I/O. Pending leases are listed and in the work version. A retired lease cannot settle, so a late completion closes what it opened. Retiring holds no lock across I/O |
+| **R3, P2:** `Replace` then `Publish` admits work before the new connection is usable | §4.5: a reconnect is Held after its write until its own connection's first usability, identified by `ConnID`. Only that releases it and records the last connected terms. A stale attempt is retired, and neither releases nor records. Revert and Retry are bound the same way |
+| **R4, P2:** a retired connection can publish by name into its replacement, or recreate state a removal forgot | §2.4: retirement by identity. Every callback carries its `ConnID`. The registry, the policy registry, the index and the health sink drop a retired or unknown identity, and no sink creates state for one. Forgetting keeps the retirement, and a `Stop` that times out stays retired |
+| **R5, P2:** "Use the file's values" had no rule for an entry's endpoint fields | §4.6: adoption takes S2's fields only. Endpoints keep their route (Observability's Test, until S3), and a reconnect keeps the running endpoint terms. `connect` uses the file's endpoint terms, bound to the file version and re-read at Apply, and never caches a raw entry |
+| **R6, P3:** a kept keychain record can be found again by its name | §0 and §4.4: the store cannot list accounts, but a re-add under the same name finds the record, and it is usable for the same endpoint origin. Each deletion is bound to the record's revision and serialized with the credential actions; a partial failure is said |
+
+**Also adopted from the review:**
+- **One fleet Apply at a time:** each re-plan checks the file version, the running fleet's revision and the work identities together. Every route goes through the same transaction: `AddClusters`, `connect`, `revert` and `Retry`.
+- **Load checked again at plan time:** a fleet file that failed to load at start no longer blocks `connect` for the session.
+- **The writer's extra cases:** trailing comments, CRLF, document boundaries, and the defaults after a cleared field.
+- **The host check** gates a removal through "Use the file's values" too.
+- **A file emptied by hand** does not load, so it is never adopted as a removal.
