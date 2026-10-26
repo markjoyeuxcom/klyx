@@ -100,24 +100,22 @@ type ChatEndedDTO struct {
 	Version        uint64 `json:"version"`
 }
 
-// endConversation ends the conversation holding le, whose connection was
-// retired (S2 §2.3): explicitly, with the reason, never left to its next
-// read. Its turn is cancelled and records why, its offers are withdrawn,
-// the version moves, and the page is told.
-func (s *ChatService) endConversation(le *Lease, why string) {
+// endConversation ends c, whose connection was retired (S2 §2.3):
+// explicitly, with the reason, never left to its next read. Its turn is
+// cancelled and records why, its offers are withdrawn, the version moves,
+// and the page is told. c is the conversation the lease was taken for,
+// made before it: Start holds s.mu from the lease to c's registration, so
+// an end that comes in between waits here and finds c registered - or
+// refused, and ends nothing (Codex's review of S2a, F1).
+func (s *ChatService) endConversation(c *conversation, why string) {
 	s.mu.Lock()
-	var c *conversation
-	for _, cv := range s.convs {
-		if cv.lease == le {
-			c = cv
-		}
-	}
-	if c == nil || c.ended != "" {
+	if s.convs[c.key] != c || c.ended != "" {
 		s.mu.Unlock()
 		return
 	}
 	reason := why + "; start a new conversation"
 	c.ended = reason
+	c.releaseLocked()
 	if c.active != nil {
 		c.active.endedWhy = reason
 		c.active.cancel()
@@ -447,8 +445,16 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 		}
 		what = "the investigation of " + obj
 	}
-	var le *Lease
-	le, err := s.lease(cluster, Work{Kind: kind, What: what, End: func(why string) { s.endConversation(le, why) }})
+	mode := "snapshot"
+	if _, ok := st.Provider.(ai.Converser); ok {
+		mode = "tools"
+	}
+	id := newID()
+	if kind == kindInvestigation {
+		id = invIDPrefix + id
+	}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
+	le, err := s.lease(cluster, Work{Kind: kind, What: what, End: func(why string) { s.endConversation(c, why) }})
 	if err != nil {
 		return refuse(err.Error())
 	}
@@ -458,17 +464,9 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 		return refuse("the cluster is not connected")
 	}
 	if old := s.convs[key]; old != nil {
-		old.lease.Release() // an ended conversation the new one replaces
+		old.releaseLocked() // an ended conversation the new one replaces
 	}
-	mode := "snapshot"
-	if _, ok := st.Provider.(ai.Converser); ok {
-		mode = "tools"
-	}
-	id := newID()
-	if kind == kindInvestigation {
-		id = invIDPrefix + id
-	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, lease: le, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
+	c.conn, c.lease = conn, le
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -684,7 +682,43 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 			c.active.cancel()
 		}
 		delete(s.convs, c.key)
-		c.lease.Release()
+		c.releaseLocked()
+		s.version++
+	}
+}
+
+// releaseLocked ends the conversation's leases: on its own cluster and on
+// each comparison member. Idempotent. Under s.mu.
+func (c *conversation) releaseLocked() {
+	c.lease.Release()
+	for _, m := range c.members {
+		m.lease.Release()
+	}
+}
+
+// ForgetChats is the lifecycle's forget hook for conversations: a plain
+// function, never a method of the bound service, so the webview cannot
+// call it.
+func ForgetChats(s *ChatService) func(cluster string) { return s.forgetCluster }
+
+// forgetCluster forgets a removed cluster's conversations (Settings S2
+// §2.5), after the lifecycle has ended them: their slots are free again,
+// and their leases released. A reconnect keeps them, ended, to read; only
+// a removal forgets. A confirmed step still running keeps its own
+// continuing lease and runs to its end (Codex's review of S2a, F6).
+func (s *ChatService) forgetCluster(cluster string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, c := range s.convs {
+		if c.cluster != cluster {
+			continue
+		}
+		if c.active != nil {
+			c.active.stopped = true
+			c.active.cancel()
+		}
+		delete(s.convs, key)
+		c.releaseLocked()
 		s.version++
 	}
 }

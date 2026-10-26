@@ -191,6 +191,7 @@ func main() {
 	// Settings S2 §2.6-§2.7: the running fleet loses a removed cluster, and
 	// every reader of protection reads the published value
 	lifecycle.OnForget(func(name string) { appbridge.ForgetRunningCluster(configSvc, name) })
+	lifecycle.OnForget(appbridge.ForgetEndpointRevisions(endpointCreds.Revisions)) // old endpoint readers never current again (S2 §2.5)
 	appbridge.SetNotifyProtection(healthNotify, configSvc.IsProtected)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
@@ -571,7 +572,8 @@ func main() {
 	// the lifecycle - admitted only now, pinned to the current connection,
 	// ended (or continued) when that connection is replaced or removed.
 	appbridge.UseLeases(lifecycle, forwardsSvc, logsSvc, eventsSvc, logHistorySvc, chatSvc, aiSvc, nodeOpsSvc, helmSvc)
-	lifecycle.OnEnd(func(cluster string, _ fleet.ConnID, why string) { logHistorySvc.EndCluster(cluster, why) })
+	lifecycle.OnEnd(appbridge.EndLogHistory(logHistorySvc))
+	lifecycle.OnForget(appbridge.ForgetChats(chatSvc)) // a removed cluster's conversations free their slots (S2 §2.5)
 
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.

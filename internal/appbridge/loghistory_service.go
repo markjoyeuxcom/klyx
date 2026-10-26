@@ -175,11 +175,18 @@ func NewLogHistoryService(readerOf func(cluster string) (HistoryReader, error)) 
 
 func (s *LogHistoryService) setLeaser(l leaser) { s.lease = l }
 
-// EndCluster ends every view's page set on cluster, whose connection was
+// EndLogHistory is the lifecycle's end hook for log history views: a plain
+// function, never a method of the bound service, so the webview cannot
+// end them.
+func EndLogHistory(s *LogHistoryService) func(cluster string, id fleet.ConnID, why string) {
+	return func(cluster string, _ fleet.ConnID, why string) { s.endCluster(cluster, why) }
+}
+
+// endCluster ends every view's page set on cluster, whose connection was
 // retired (Settings S2 §2.3): a read in flight already ended with its
 // lease; an idle view holds no connection, and its next page says why it
-// ended. A lifecycle end hook.
-func (s *LogHistoryService) EndCluster(cluster, why string) {
+// ended.
+func (s *LogHistoryService) endCluster(cluster, why string) {
 	s.mu.Lock()
 	slots := make([]*historySlot, 0, len(s.views))
 	for _, sl := range s.views {

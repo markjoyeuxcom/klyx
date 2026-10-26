@@ -37,6 +37,10 @@ type member struct {
 	cluster string
 	conn    ChatConn
 	epoch   policy.Epoch // pinned with the set (Settings slice F §4)
+	// lease is the investigation's work on the member (Settings S2 §10):
+	// listed under the member's connection, and retiring it ends the
+	// investigation explicitly (Codex's review of S2a, F3)
+	lease *Lease
 }
 
 // SetComparison fixes an investigation's comparison set before its first
@@ -71,6 +75,14 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 	}
 	seen := map[string]bool{}
 	var set []member
+	chosen := false
+	defer func() {
+		if !chosen { // a refusal holds no member's lease
+			for _, m := range set {
+				m.lease.Release()
+			}
+		}
+	}()
 	for _, m := range members {
 		switch {
 		case m == "" || seen[m]:
@@ -91,8 +103,22 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		if notAdmitted != "" {
 			return notice(notAdmitted)
 		}
-		set = append(set, member{cluster: m, conn: conn, epoch: epoch})
+		name := m
+		le, err := s.lease(m, Work{Kind: kindInvestigation, What: "the comparison in the investigation on " + cluster,
+			End: func(why string) { s.endConversation(c, "the comparison cluster "+name+": "+why) }})
+		if err != nil {
+			return notice(m + ": " + err.Error())
+		}
+		if !le.Pins(conn) {
+			le.Release()
+			return notice(m + " is not connected")
+		}
+		set = append(set, member{cluster: m, conn: conn, epoch: epoch, lease: le})
 	}
+	for _, old := range c.members {
+		old.lease.Release()
+	}
+	chosen = true
 	c.members = set
 	s.version++
 	return s.stateLocked(c)

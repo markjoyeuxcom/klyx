@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/policy"
@@ -121,28 +123,48 @@ func (l *Lifecycle) Run(ctx context.Context) {
 // applyUsable publishes a move under the cluster's gate: the incarnation
 // first, then the move made visible (slice F §1, S2 §12). A retired
 // identity's move is dropped: it is never published.
+//
+// The visible state then reaches the Observer and the index after the gate
+// is left: their handoff may deliver to the health sink, and the gate takes
+// no reentrant callback (S2 §12).
 func (l *Lifecycle) applyUsable(ev fleet.UsabilityEvent) {
+	if published := l.ackUsable(ev); published != nil {
+		published()
+	}
+}
+
+func (l *Lifecycle) ackUsable(ev fleet.UsabilityEvent) func() {
 	g := l.gate(ev.Cluster)
 	g.Lock()
 	defer g.Unlock()
 	if !l.reg.IsCurrent(ev.Cluster, ev.ID) {
-		return
+		return nil
 	}
 	l.pol.ConnUp(ev.Cluster)
 	if c, ok := l.reg.Conn(ev.Cluster); ok {
 		if a, ok := c.(interface {
 			ID() fleet.ConnID
-			AckUsable(uint64)
-		}); ok && a.ID() == ev.ID {
-			a.AckUsable(ev.Inc)
+			AckUsable(uint64) bool
+			Published()
+		}); ok && a.ID() == ev.ID && a.AckUsable(ev.Inc) {
+			return a.Published
 		}
 	}
+	return nil
 }
 
 // retireLocked retires name's current identity: under the gate, so no
 // usability of it is published after. Caller holds the gate.
 func (l *Lifecycle) retireLocked(name string) (fleet.Conn, fleet.ConnID, bool) {
 	return l.reg.Retire(name)
+}
+
+// ForgetEndpointRevisions retires a removed cluster's endpoint credential
+// revisions, for every kind (Settings S2 §2.5; Codex's review of S2a, F7):
+// an endpoint client or reader built before the removal is never current
+// again, even once the name is added back. For OnForget.
+func ForgetEndpointRevisions(revs *endpointcred.Registry) func(cluster string) {
+	return func(cluster string) { revs.Retire(cluster, config.EndpointKinds...) }
 }
 
 // ended delivers the end of a retired identity, outside the gate: its work

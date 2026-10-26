@@ -48,12 +48,11 @@ type EndpointConn interface {
 }
 
 // syncLoki is syncMetrics for the Loki endpoint (S8b §6). Caller holds s.mu.
-func (s *EndpointsService) syncLoki(cluster string, cl *config.ClusterConfig) {
+func (s *EndpointsService) syncLoki(conn EndpointConn, cl *config.ClusterConfig) {
 	if cl == nil || cl.Loki == nil {
 		return
 	}
-	conn, ok := s.lookup(cluster)
-	if !ok || reflect.DeepEqual(conn.LokiConfig(), cl.Loki) {
+	if reflect.DeepEqual(conn.LokiConfig(), cl.Loki) {
 		return
 	}
 	conn.SetLokiConfig(cl.Loki)
@@ -61,12 +60,11 @@ func (s *EndpointsService) syncLoki(cluster string, cl *config.ClusterConfig) {
 
 // syncAlertmanager is syncMetrics for the Alertmanager endpoint (S8a §4).
 // Caller holds s.mu.
-func (s *EndpointsService) syncAlertmanager(cluster string, cl *config.ClusterConfig) {
+func (s *EndpointsService) syncAlertmanager(conn EndpointConn, cl *config.ClusterConfig) {
 	if cl == nil || cl.Alertmanager == nil {
 		return
 	}
-	conn, ok := s.lookup(cluster)
-	if !ok || reflect.DeepEqual(conn.AlertmanagerConfig(), cl.Alertmanager) {
+	if reflect.DeepEqual(conn.AlertmanagerConfig(), cl.Alertmanager) {
 		return
 	}
 	conn.SetAlertmanagerConfig(cl.Alertmanager)
@@ -77,12 +75,11 @@ func (s *EndpointsService) syncAlertmanager(cluster string, cl *config.ClusterCo
 // connection still on an older configuration adopts the snapshot's, which
 // moves the revision so nothing read through the old one is shown. Caller
 // holds s.mu.
-func (s *EndpointsService) syncMetrics(cluster string, cl *config.ClusterConfig) {
+func (s *EndpointsService) syncMetrics(conn EndpointConn, cl *config.ClusterConfig) {
 	if cl == nil || cl.Metrics == nil {
 		return
 	}
-	conn, ok := s.lookup(cluster)
-	if !ok || reflect.DeepEqual(conn.MetricsConfig(), *cl.Metrics) {
+	if reflect.DeepEqual(conn.MetricsConfig(), *cl.Metrics) {
 		return
 	}
 	conn.SetMetricsConfig(*cl.Metrics)
@@ -114,20 +111,23 @@ func WireEndpointActivation(es *EndpointsService, cs *ConfigService) {
 	}
 }
 
-// activate runs an endpoint activation under the fleet Apply lock, then
-// publishes what the connection now uses for kind into the running entry.
-func (s *EndpointsService) activate(cluster, kind string, f func() error) error {
+// activate runs an endpoint activation under the fleet Apply lock, on the
+// connection current inside it - never one looked up before the lock,
+// which a reconnect holding the lock may have replaced (Codex's review of
+// S2a, F4) - then publishes what that same connection now uses for kind
+// into the running entry. f gets nil when the cluster is not connected.
+func (s *EndpointsService) activate(cluster, kind string, f func(conn EndpointConn) error) error {
 	if s.fleetLock != nil {
 		defer s.fleetLock()()
 	}
-	if err := f(); err != nil {
-		return err
-	}
-	if s.publish == nil {
-		return nil
-	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
+		conn = nil
+	}
+	if err := f(conn); err != nil {
+		return err
+	}
+	if s.publish == nil || conn == nil {
 		return nil
 	}
 	switch kind {
@@ -339,31 +339,26 @@ func (s *EndpointsService) SetCredential(cluster, kind, revision, secret string)
 		return fail(red, err)
 	}
 	install := func() error { return s.store.Set(endpointcred.Account(cluster, kind), v) }
-	// a live metrics connection takes the credential and the reviewed
+	// a live connection takes the credential and the reviewed
 	// configuration as one step, so no reader pairs the new credential
 	// with the configuration it replaces (Codex's revision 1 review)
-	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointMetrics && cl.Metrics != nil {
-		if err := s.activate(cluster, kind, func() error { return conn.ChangeMetricsCredential(*cl.Metrics, install) }); err != nil {
-			return fail(red, err)
+	if err := s.activate(cluster, kind, func(conn EndpointConn) error {
+		switch {
+		case conn != nil && kind == config.EndpointMetrics && cl.Metrics != nil:
+			return conn.ChangeMetricsCredential(*cl.Metrics, install)
+		case conn != nil && kind == config.EndpointAlertmanager && cl.Alertmanager != nil:
+			return conn.ChangeAlertmanagerCredential(cl.Alertmanager, install)
+		case conn != nil && kind == config.EndpointLoki && cl.Loki != nil:
+			return conn.ChangeLokiCredential(cl.Loki, install)
 		}
-		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
-	}
-	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointAlertmanager && cl.Alertmanager != nil {
-		if err := s.activate(cluster, kind, func() error { return conn.ChangeAlertmanagerCredential(cl.Alertmanager, install) }); err != nil {
-			return fail(red, err)
+		if err := install(); err != nil {
+			return err
 		}
-		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
-	}
-	if conn, ok := s.lookup(cluster); ok && kind == config.EndpointLoki && cl.Loki != nil {
-		if err := s.activate(cluster, kind, func() error { return conn.ChangeLokiCredential(cl.Loki, install) }); err != nil {
-			return fail(red, err)
-		}
-		return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
-	}
-	if err := install(); err != nil {
+		s.revs.Bump(cluster, kind, true)
+		return nil
+	}); err != nil {
 		return fail(red, err)
 	}
-	s.revs.Bump(cluster, kind, true)
 	return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 }
 
@@ -380,8 +375,11 @@ func (s *EndpointsService) RemoveCredential(cluster, kind, revision string) Endp
 	if s.store == nil {
 		return EndpointActionDTO{Message: "keychain unavailable: no credential store"}
 	}
-	s.revs.Revoke(cluster, kind)
-	if err := s.store.Delete(endpointcred.Account(cluster, kind)); err != nil {
+	// under the fleet lock, like every credential action (S2 §2.6)
+	if err := s.activate(cluster, kind, func(EndpointConn) error {
+		s.revs.Revoke(cluster, kind)
+		return s.store.Delete(endpointcred.Account(cluster, kind))
+	}); err != nil {
 		return EndpointActionDTO{Message: "Removed from use; the keychain still holds it - " + red.Text(err.Error())}
 	}
 	if kind == config.EndpointMetrics && cl.Metrics != nil && cl.Metrics.Token != "" {
@@ -435,10 +433,13 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 	}
 	for _, c := range next.Clusters {
 		if c.Name == cluster && c.Metrics != nil {
-			if conn, ok := s.lookup(cluster); ok {
-				mc := *c.Metrics
-				_ = s.activate(cluster, config.EndpointMetrics, func() error { conn.SetMetricsConfig(mc); return nil })
-			}
+			mc := *c.Metrics
+			_ = s.activate(cluster, config.EndpointMetrics, func(conn EndpointConn) error {
+				if conn != nil {
+					conn.SetMetricsConfig(mc)
+				}
+				return nil
+			})
 		}
 	}
 	s.revs.Bump(cluster, config.EndpointMetrics, true)
@@ -456,14 +457,17 @@ func (s *EndpointsService) TestEndpoint(cluster, kind, revision string) Endpoint
 	if err == nil {
 		// the test reads the endpoint as reviewed, never the connection's
 		// older configuration
-		_ = s.activate(cluster, kind, func() error {
+		_ = s.activate(cluster, kind, func(conn EndpointConn) error {
+			if conn == nil {
+				return nil
+			}
 			switch kind {
 			case config.EndpointMetrics:
-				s.syncMetrics(cluster, cl)
+				s.syncMetrics(conn, cl)
 			case config.EndpointAlertmanager:
-				s.syncAlertmanager(cluster, cl)
+				s.syncAlertmanager(conn, cl)
 			default:
-				s.syncLoki(cluster, cl)
+				s.syncLoki(conn, cl)
 			}
 			return nil
 		})

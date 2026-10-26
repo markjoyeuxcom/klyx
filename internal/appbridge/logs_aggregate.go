@@ -281,13 +281,9 @@ func (s *LogsService) emitAggregateEOF(streamID string, failMu *sync.Mutex, fail
 	if n > 0 {
 		msg = fmt.Sprintf("%d of %d pod streams failed", n, total)
 	}
-	s.mu.Lock()
-	for _, m := range []map[string]*logStream{s.streams, s.draining} {
-		if st := m[streamID]; st != nil && st.reason != "" {
-			msg = "the stream ended: " + st.reason // S2 §2.3: said, never silent
-		}
+	if why := s.endedWhy(streamID); why != "" {
+		msg = "the stream ended: " + why // S2 §2.3: said, never silent
 	}
-	s.mu.Unlock()
 	s.em.Emit("podlogs:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: msg})
 }
 

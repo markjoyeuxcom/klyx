@@ -232,11 +232,13 @@ type ClusterConn struct {
 	// where a move is visible at once.
 	onUsable func(UsabilityEvent)
 	// usableInc numbers this connection's moves into usable; pending marks
-	// the newest one not yet acknowledged, and pendingFrom the state it
-	// moved from (what Snapshot reports meanwhile).
-	usableInc   uint64
-	pending     bool
-	pendingFrom ConnState
+	// the newest one not yet acknowledged, and pendingFrom and
+	// pendingReason the state it moved from: what Snapshot, the Observer
+	// and the index are told meanwhile.
+	usableInc     uint64
+	pending       bool
+	pendingFrom   ConnState
+	pendingReason string
 
 	// id is the connection's identity for its lifetime (Settings S2 §2.2),
 	// its Observer's incarnation too.
@@ -914,14 +916,11 @@ func (c *ClusterConn) refreshCounts() {
 func (c *ClusterConn) Snapshot() Snapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	st := c.state
-	if c.pending {
-		st = c.pendingFrom // a new incarnation not yet published (S2 §12)
-	}
+	st, reason := c.visibleLocked()
 	return Snapshot{
 		Name:         c.name,
 		State:        st,
-		Reason:       c.reason,
+		Reason:       reason,
 		LastSync:     c.lastSync,
 		NodesReady:   c.snapNodesReady,
 		NodesTotal:   c.snapNodesTotal,
@@ -965,15 +964,36 @@ func (c *ClusterConn) SetOnUsable(f func(UsabilityEvent)) {
 	c.onUsable = f
 }
 
+// visibleLocked is the state the connection shows: the state before a
+// move into usable whose new incarnation is not published yet (S2 §12),
+// the current one otherwise. Snapshot, the Observer and the index all read
+// it, so none sees usability before the lifecycle has published it.
+// Caller holds c.mu.
+func (c *ClusterConn) visibleLocked() (ConnState, string) {
+	if c.pending {
+		return c.pendingFrom, c.pendingReason
+	}
+	return c.state, c.reason
+}
+
 // AckUsable makes move inc visible: its incarnation is published. A move
-// since superseded, or left again, is ignored.
-func (c *ClusterConn) AckUsable(inc uint64) {
+// since superseded, or left again, is ignored. It reports whether the move
+// became visible; the caller then calls Published, outside its commit
+// gate.
+func (c *ClusterConn) AckUsable(inc uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pending && inc == c.usableInc {
 		c.pending = false
+		return true
 	}
+	return false
 }
+
+// Published hands the visible state to the Observer and the index after
+// AckUsable made a move visible. Never under the lifecycle's commit gate:
+// it may deliver to the health sink (S2 §12; Codex's review of S2a, F5).
+func (c *ClusterConn) Published() { c.syncHealth() }
 
 // moveLocked is the one way the connection's state changes: crossing into
 // a usable state from one that is not is a new incarnation, told to
@@ -987,7 +1007,7 @@ func (c *ClusterConn) moveLocked(next ConnState) {
 	switch {
 	case !c.state.Usable() && next.Usable() && c.onUsable != nil:
 		c.usableInc++
-		c.pending, c.pendingFrom = true, c.state
+		c.pending, c.pendingFrom, c.pendingReason = true, c.state, c.reason
 		c.onUsable(UsabilityEvent{Cluster: c.name, ID: c.id, Inc: c.usableInc})
 	case !next.Usable():
 		c.pending = false
@@ -1084,7 +1104,8 @@ func (c *ClusterConn) syncHealth() {
 	c.healthSyncMu.Lock()
 	defer c.healthSyncMu.Unlock()
 	c.mu.RLock()
-	h, st, reason, caps, hook, ix := c.health, c.state, c.reason, c.caps, c.healthSyncHook, c.index
+	st, reason := c.visibleLocked()
+	h, caps, hook, ix := c.health, c.caps, c.healthSyncHook, c.index
 	c.mu.RUnlock()
 	if h == nil {
 		return

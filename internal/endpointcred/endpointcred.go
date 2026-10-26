@@ -232,6 +232,22 @@ func (r *Registry) Revoke(cluster, kind string) {
 	r.rev[k]++
 }
 
+// Retire moves each of kinds' revisions for a removed cluster (Settings S2
+// §2.5), with no revocation: a client built before the removal never
+// matches again, whatever is added under the name later, while a kept
+// keychain record stays usable under its own checks. Counters only move
+// forward; nothing is reset or erased.
+func (r *Registry) Retire(cluster string, kinds ...string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, kind := range kinds {
+		r.rev[key(cluster, kind)]++
+	}
+}
+
 // Revoked reports the tombstone.
 func (r *Registry) Revoked(cluster, kind string) bool {
 	if r == nil {

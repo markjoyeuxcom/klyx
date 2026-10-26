@@ -45,7 +45,11 @@ type lifeRig struct {
 	life *Lifecycle
 }
 
-func newLifeRig(t *testing.T, run bool) *lifeRig {
+func newLifeRig(t *testing.T, run bool) *lifeRig { t.Helper(); return newLifeRigWith(t, run, false) }
+
+// newLifeRigWith is newLifeRig, its connections' Observers publishing into
+// the rig's sink when health is set.
+func newLifeRigWith(t *testing.T, run, health bool) *lifeRig {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -56,6 +60,9 @@ func newLifeRig(t *testing.T, run bool) *lifeRig {
 	r.ix = fleetindex.New(fleetindex.Settings{})
 	t.Cleanup(r.ix.Stop)
 	r.reg.SetIndex(r.ix)
+	if health {
+		r.reg.SetHealthSink(r.sink)
+	}
 	r.life = NewLifecycle(r.reg, r.pol, r.sink, r.ix)
 	if run {
 		go r.life.Run(ctx)

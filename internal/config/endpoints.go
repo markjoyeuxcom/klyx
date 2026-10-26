@@ -23,6 +23,9 @@ const (
 	EndpointLoki         = "loki"
 )
 
+// EndpointKinds is every endpoint kind.
+var EndpointKinds = []string{EndpointMetrics, EndpointAlertmanager, EndpointLoki}
+
 // EndpointAuth says how an endpoint authenticates: a bearer token, or basic
 // with this username. The secret is in the keychain (C5 §3).
 type EndpointAuth struct {

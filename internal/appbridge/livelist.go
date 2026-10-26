@@ -62,7 +62,9 @@ func newLiveRegistry() *liveRegistry {
 	return &liveRegistry{interval: liveListInterval, subs: map[string]*liveSub{}}
 }
 
-// open starts (or replaces) the subscription for key.
+// open starts (or replaces) the subscription for key, and returns it: a
+// caller that ends it later names it, so it never ends a replacement
+// (Codex's review of S2a, F2).
 //
 //   - watchStart establishes the dirty-signal source and returns its stop func.
 //     onDirty/onLive are wired into the loop below.
@@ -82,7 +84,7 @@ func (r *liveRegistry) open(
 	compute func() (any, bool),
 	emit func(payload any),
 	emitLive func(bool),
-) {
+) *liveSub {
 	sub := &liveSub{
 		cancel: make(chan struct{}),
 		done:   make(chan struct{}),
@@ -198,7 +200,7 @@ func (r *liveRegistry) open(
 		}
 		r.mu.Unlock()
 		close(sub.done)
-		return
+		return sub
 	}
 	sub.stopWatch = stopWatch
 
@@ -289,6 +291,7 @@ func (r *liveRegistry) open(
 		emitLive(false)
 		sub.stopWatch()
 	})
+	return sub
 }
 
 // emitFailure forwards a failed compute's payload (the DTO carrying its error)
@@ -318,6 +321,23 @@ func (r *liveRegistry) stopSub(sub *liveSub) {
 	case <-sub.done:
 	case <-time.After(liveCloseWaitTimeout):
 	}
+}
+
+// detach removes sub from key's place if it is still there, running
+// detached under the registry's lock - before any replacement can register
+// - and reports whether it did; the caller then stops it with stopSub. A
+// sub already replaced or closed is left alone.
+func (r *liveRegistry) detach(key string, sub *liveSub, detached func()) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sub == nil || r.subs[key] != sub {
+		return false
+	}
+	delete(r.subs, key)
+	if detached != nil {
+		detached()
+	}
+	return true
 }
 
 // close stops the subscription for key. Idempotent: an unknown key is a no-op.

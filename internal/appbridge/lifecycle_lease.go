@@ -30,7 +30,9 @@ type Work struct {
 	Continues bool
 	// End is told why the work ended when its connection is retired; it
 	// runs once, outside every lock, and must not block. Nil for work that
-	// ends through its context alone.
+	// ends through its context alone, and reads EndedWhy. End may run
+	// before Acquire has returned: it must find its work by an identity the
+	// worker made before acquiring, never by the lease it is given.
 	End func(why string)
 }
 
@@ -56,6 +58,7 @@ type Lease struct {
 	started time.Time
 	settled bool
 	retired bool
+	why     string // why its connection ended it
 }
 
 // PlainLease is a lease outside any lifecycle - tools and tests - on conn,
@@ -139,6 +142,19 @@ func (le *Lease) Pins(conn any) bool {
 	return le.life == nil || le.Conn == conn
 }
 
+// EndedWhy is why the lease's connection ended its work, "" while it has
+// not (S2 §2.3). It is recorded before the lease's context is cancelled, so
+// a worker that ends through its context can always say why - however its
+// End and its own registration interleaved (Codex's review of S2a, F1).
+func (le *Lease) EndedWhy() string {
+	if le == nil || le.life == nil {
+		return ""
+	}
+	le.life.lmu.Lock()
+	defer le.life.lmu.Unlock()
+	return le.why
+}
+
 // Retired reports whether the lease's connection was retired.
 func (le *Lease) Retired() bool {
 	if le == nil || le.life == nil {
@@ -180,6 +196,7 @@ func (l *Lifecycle) endLeases(cluster string, id fleet.ConnID, why string) {
 			continue // runs to its end; listed under Continues until released
 		}
 		delete(l.leases, n)
+		le.why = why
 		cancel, end := le.cancel, le.work.End
 		ends = append(ends, func() {
 			if end != nil {
