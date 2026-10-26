@@ -667,3 +667,18 @@ Codex found F1, F5, F6 and F7 resolved, and F2, F3 and F4's original counterexam
 - The live registry gained one test seam, told the stage before a subscription registers and before its watch starts. It is nil in production.
 
 **Mutation pass:** all 12 mutants of the fixes are caught.
+
+## 16. S2a revision 3: Codex's second re-review (2026-10-26)
+
+Codex found RR2 and RR3 resolved, and RR1's original scenario resolved. It requested changes: one P2 and one P3, both in the events integration.
+
+| Finding | Fix |
+|---|---|
+| **R2-1, P2:** a newer open replaced an older one that was still starting by releasing its lease only. The older open could then register over its successor, report OK, and outlive the connection's retirement, untracked | Taking an entry's place invalidates the entry first: it is marked, its own subscription is stopped and detached (never another's), and only then is its lease released. That covers a replacement, a close, a shutdown, a retirement and a failed Settle. An open still starting finds itself marked, or its subscription stopped, and refuses. `bind` also refuses an entry that no longer holds its place |
+| **R2-2, P3:** the panic net's not-live edge bypassed the delivery fence | It is delivered through the fence like every other delivery, and the old watch still stops |
+
+**Tests:**
+- Codex's two probes, as regression tests.
+- A close while an open is still starting stops that open too.
+
+**Mutation pass:** 5 mutants of the fixes, 4 caught. The survivor is `bind`'s ownership check. Every path that takes an entry's place marks it, and the stop checks after `bind` refuse it anyway, so the check only narrows a window. It is kept.
