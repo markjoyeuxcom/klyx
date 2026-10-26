@@ -187,6 +187,7 @@ func main() {
 		return err
 	}), loadErr)
 	appbridge.WithPolicy(configSvc, policyReg)
+	appbridge.HoldBuildFailures(reg, policyReg) // saved, not active, until a Retry connects it (S2 §4.5)
 	liveConfig.Store(configSvc)
 	// Settings S2 §2.6-§2.7: the running fleet loses a removed cluster, and
 	// every reader of protection reads the published value

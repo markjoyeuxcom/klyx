@@ -39,6 +39,7 @@ type Lifecycle struct {
 	hmu        sync.Mutex
 	enders     []func(cluster string, id fleet.ConnID, why string)
 	forgetters []func(cluster string)
+	releasers  []func(cluster string, id fleet.ConnID)
 
 	// leases (S2 §2.3), by number
 	lmu      sync.Mutex
@@ -127,30 +128,54 @@ func (l *Lifecycle) Run(ctx context.Context) {
 // The visible state then reaches the Observer and the index after the gate
 // is left: their handoff may deliver to the health sink, and the gate takes
 // no reentrant callback (S2 §12).
+//
+// A cluster Held for this connection's attempt is released by its first
+// usability, exactly once (S2 §4.5): its new protection is published, and
+// the OnReleased hooks run after the gate - the new terms become the last
+// terms that connected.
 func (l *Lifecycle) applyUsable(ev fleet.UsabilityEvent) {
-	if published := l.ackUsable(ev); published != nil {
+	published, released := l.ackUsable(ev)
+	if published != nil {
 		published()
+	}
+	if released {
+		l.hmu.Lock()
+		rs := append([]func(string, fleet.ConnID){}, l.releasers...)
+		l.hmu.Unlock()
+		for _, f := range rs {
+			f(ev.Cluster, ev.ID)
+		}
 	}
 }
 
-func (l *Lifecycle) ackUsable(ev fleet.UsabilityEvent) func() {
+func (l *Lifecycle) ackUsable(ev fleet.UsabilityEvent) (published func(), released bool) {
 	g := l.gate(ev.Cluster)
 	g.Lock()
 	defer g.Unlock()
 	if !l.reg.IsCurrent(ev.Cluster, ev.ID) {
-		return nil
+		return nil, false
 	}
 	l.pol.ConnUp(ev.Cluster)
+	_, released = l.pol.ReleaseAttempt(ev.Cluster, uint64(ev.ID))
 	if c, ok := l.reg.Conn(ev.Cluster); ok {
 		if a, ok := c.(interface {
 			ID() fleet.ConnID
 			AckUsable(uint64) bool
 			Published()
 		}); ok && a.ID() == ev.ID && a.AckUsable(ev.Inc) {
-			return a.Published
+			published = a.Published
 		}
 	}
-	return nil
+	return published, released
+}
+
+// OnReleased registers what records a held attempt's release (S2 §4.5):
+// the attempt's terms become the last terms that connected. It runs after
+// the gate.
+func (l *Lifecycle) OnReleased(f func(cluster string, id fleet.ConnID)) {
+	l.hmu.Lock()
+	defer l.hmu.Unlock()
+	l.releasers = append(l.releasers, f)
 }
 
 // retireLocked retires name's current identity: under the gate, so no

@@ -370,6 +370,24 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	// Settings S2 §4.1: each name is reserved first - absent, a placeholder
+	// that admits nothing and is published nowhere - and unreserved last,
+	// so nothing is admitted on a cluster until its addition is committed
+	if s.policy != nil {
+		var toks []policy.Token
+		defer func() {
+			for _, t := range toks {
+				s.policy.Unreserve(t)
+			}
+		}()
+		for _, name := range contexts {
+			tok, err := s.policy.Reserve(config.ClusterConfigForContext(name).Name)
+			if err != nil {
+				return ActionResultDTO{Error: name + " is applying a change to its settings; try again in a moment"}
+			}
+			toks = append(toks, tok)
+		}
+	}
 	if err := s.appendClusters(s.path, contexts); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -384,11 +402,14 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 		s.runningRev++
 		s.mu.Unlock()
 		if s.policy != nil {
-			s.policy.Seed(cc.Name, cc.IsProtected())
+			s.policy.Seed(cc.Name, cc.IsProtected()) // over its placeholder: still reserved
 		}
 		if s.connect != nil {
 			if err := s.connect(cc); err != nil {
 				s.dropRunning(cc.Name)
+				if s.policy != nil {
+					s.policy.Forget(cc.Name) // nothing of it runs
+				}
 				failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
 				continue
 			}
