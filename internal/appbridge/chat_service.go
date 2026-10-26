@@ -62,11 +62,16 @@ type ChatService struct {
 	mu      sync.Mutex
 	convs   map[string]*conversation // by cluster
 	version uint64                   // bumped on every change; orders state replies
+	// requests are the confirmed step requests admitted and not yet
+	// returned, by identity: an AI settings change does not stop them (A3
+	// §4.4), so a plan names each until it returns, whatever its
+	// conversation's revision (Settings F2a re-review, RR2)
+	requests map[string]PlanWorkDTO
 }
 
 // NewChatService wires the chat to the registry and the AI snapshot.
 func NewChatService(state ChatConnState, aiSvc *AIService, em Emitter) *ChatService {
-	return &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}}
+	return &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}, requests: map[string]PlanWorkDTO{}}
 }
 
 type conversation struct {

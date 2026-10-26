@@ -9,10 +9,12 @@ import (
 // aiWork is the AI work an Apply of the AI settings affects (Settings slice
 // F §5), by identity: each open conversation under the running revision,
 // its question being answered, its offered plan, and a running step's
-// verification end. A running step's confirmed request continues - the AI
-// revision does not fence it (A3 §4.4) - and is named apart, by its phase
-// (F2a review, R4). A conversation from an earlier revision is already
-// ended for new turns, so it is not named again.
+// verification end. A confirmed step request continues - the AI revision
+// does not fence it (A3 §4.4) - and is named apart until it returns,
+// whatever its conversation's revision (F2a review, R4; re-review, RR2).
+// A step is named by its conversation, the exchange that proposed its
+// plan, its number and its phase (RR1). A conversation from an earlier
+// revision is already ended for new turns, so it is not named again.
 func (s *ChatService) aiWork() aiWorkList {
 	rev := s.ai.load().Rev
 	s.mu.Lock()
@@ -46,19 +48,52 @@ func (s *ChatService) aiWork() aiWorkList {
 			}
 			break
 		}
-		if p := c.stepRunning; p != nil && p.running > 0 && p.running <= len(p.runs) {
-			n := p.running
-			step := fmt.Sprintf("step %d of the action plan on %s", n, c.cluster)
-			if p.runs[n-1].request == "" {
-				// its write is not yet recorded: it goes ahead
-				continues = append(continues, PlanWorkDTO{ID: fmt.Sprintf("step:%s:%d:request", c.id, n), Kind: "step", Cluster: c.cluster, What: step + ": its confirmed request goes ahead, and may still write"})
+		if p := c.stepRunning; p != nil && p.running > 0 {
+			if ex := planExchangeLocked(c, p); ex != "" {
+				out = append(out, PlanWorkDTO{ID: stepWorkID(c, ex, p.running) + ":verify", Kind: "step", Cluster: c.cluster, What: "the verification of " + stepWhatLocked(c, ex, p.running) + ": it ends unverified"})
 			}
-			out = append(out, PlanWorkDTO{ID: fmt.Sprintf("step:%s:%d:verify", c.id, n), Kind: "step", Cluster: c.cluster, What: "the verification of " + step + ": it ends unverified"})
 		}
+	}
+	for _, w := range s.requests {
+		continues = append(continues, w)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	sort.Slice(continues, func(i, j int) bool { return continues[i].ID < continues[j].ID })
 	return aiWorkList{ends: out, continues: continues}
+}
+
+// stepWorkID names step n of the plan exchange proposed in c.
+func stepWorkID(c *conversation, exchange string, n int) string {
+	return fmt.Sprintf("step:%s:%s:%d", c.id, exchange, n)
+}
+
+// stepWhatLocked says which step it is: its number, the turn that proposed
+// its plan, and the cluster.
+func stepWhatLocked(c *conversation, exchange string, n int) string {
+	for _, e := range c.exchanges {
+		if e.id == exchange {
+			return fmt.Sprintf("step %d of the action plan proposed in turn %d on %s", n, e.turn, c.cluster)
+		}
+	}
+	return fmt.Sprintf("step %d of an action plan on %s", n, c.cluster)
+}
+
+// planExchangeLocked is the exchange that proposed p in c.
+func planExchangeLocked(c *conversation, p *actionPlan) string {
+	for _, e := range c.exchanges {
+		if e.plan == p {
+			return e.id
+		}
+	}
+	return ""
+}
+
+// endRequest ends a confirmed request's work, once it returned or was
+// refused.
+func (s *ChatService) endRequest(id string) {
+	s.mu.Lock()
+	delete(s.requests, id)
+	s.mu.Unlock()
 }
 
 func offersAStep(p *actionPlan) bool {

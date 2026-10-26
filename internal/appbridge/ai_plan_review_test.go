@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/config"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Settings F2a implementation review (Codex's probes, adopted).
@@ -249,5 +251,137 @@ func TestAVerifyingStepOnlyEnds(t *testing.T) {
 	}
 	if len(w.continues) != 0 || !verify {
 		t.Fatalf("a verifying step: continues %+v, ends %+v", w.continues, w.ends)
+	}
+}
+
+// The F2a re-review (Codex's probes, adopted).
+
+func settingsForSteps(t *testing.T, sf *stepsFixture) *settingsFixture {
+	t.Helper()
+	f := newSettingsFixture(t, baseFleet+"ai:\n  provider: anthropic\n  model: m\n  baseUrl: https://api.example\n  keySource: legacy\n  apiKey: fake-key\n")
+	f.svc.aiSvc = sf.aiSvc
+	WireAIWork(f.svc, sf.svc)
+	return f
+}
+
+// RR1: another plan's step with the same number is other work: the plan's
+// digest moves, and the stale confirmation is refused.
+func TestTheSameStepNumberInAnotherPlanIsOtherWork(t *testing.T) {
+	prev := verifyStepHook
+	var finishA func()
+	verifyStepHook = func(s *ChatService, c *conversation, p *actionPlan, n int, _ stepSnap, _ ActionResultDTO) {
+		if finishA == nil {
+			finishA = func() { s.settleEffect(c, p, n, stepEffectEstablished, "") }
+		}
+	}
+	t.Cleanup(func() { verifyStepHook = prev })
+	sf := newStepsFixture(t, pauseWeb)
+	if r := sf.run(1, sf.review(1).Token); !r.Ran {
+		t.Fatalf("A's run: %+v", r)
+	}
+	// B is offered while A's step 1 still verifies
+	sf.prov.turns = append(sf.prov.turns, calls(ai.ToolCall{ID: "b", Name: toolActions, Args: json.RawMessage(`{"steps":[` + scaleWeb + `]}`)}), answer("new proposal"))
+	st := sf.svc.Ask("x", sf.conv, "next?", nil)
+	b := st.Exchanges[len(st.Exchanges)-1].ID
+	if b == sf.ex || st.Exchanges[len(st.Exchanges)-1].Plan == nil {
+		t.Fatal("no distinct plan B")
+	}
+	f := settingsForSteps(t, sf)
+	d := toDTO(f.svc.applied)
+	d.Model = "next-model"
+	p := f.svc.PlanAI(d)
+	finishA()
+	rv := sf.svc.ReviewStep("x", sf.conv, b, 1)
+	if !rv.Offered {
+		t.Fatalf("B's review: %+v", rv)
+	}
+	if r := sf.svc.RunStep("x", sf.conv, b, 1, rv.Token); !r.Ran {
+		t.Fatalf("B's run: %+v", r)
+	}
+	now := f.svc.PlanAI(d)
+	if p.Digest == now.Digest {
+		t.Fatalf("A's verification became B's without the digest moving: %+v", now.Ends)
+	}
+	if r := f.svc.ApplyAI(p.Digest, ""); r.OK || r.Plan == nil {
+		t.Fatalf("the stale confirmation applied: %+v", r)
+	}
+	turn := false
+	for _, w := range now.Ends {
+		turn = turn || strings.Contains(w.What, "proposed in turn 2")
+	}
+	if !turn {
+		t.Fatalf("the verification names its plan's turn: %+v", now.Ends)
+	}
+	// the identities themselves differ, the wording apart
+	verifyOf := func(ends []PlanWorkDTO) string {
+		for _, w := range ends {
+			if strings.HasSuffix(w.ID, ":verify") {
+				return w.ID
+			}
+		}
+		return ""
+	}
+	if a, b := verifyOf(p.Ends), verifyOf(now.Ends); a == "" || a == b {
+		t.Fatalf("A's verification %q and B's %q", a, b)
+	}
+}
+
+// RR2: a confirmed request still in flight stays under Continues after an
+// AI Apply moved its conversation's revision, until it returns.
+func TestAConfirmedRequestStaysVisibleAfterAnAIApply(t *testing.T) {
+	establish(t)
+	sf := newStepsFixture(t, pauseWeb)
+	rv := sf.review(1)
+	if !rv.Offered {
+		t.Fatal(rv.Reason)
+	}
+	f := settingsForSteps(t, sf)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	sf.sc.getHook = func() { once.Do(func() { close(entered); <-release }) }
+	done := make(chan StepRunDTO, 1)
+	go func() { done <- sf.run(1, rv.Token) }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the run did not start")
+	}
+	d := toDTO(f.svc.applied)
+	d.Model = "next-model"
+	if r := f.svc.ApplyAI(f.svc.PlanAI(d).Digest, ""); !r.OK {
+		close(release)
+		<-done
+		t.Fatalf("the first apply: %+v", r)
+	}
+	d.Model = "third-model"
+	second := f.svc.PlanAI(d)
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the run did not return")
+	}
+	if len(sf.sc.recorded()) == 0 {
+		t.Fatal("control: the admitted write continued")
+	}
+	if len(second.Continues) != 1 || !strings.HasSuffix(second.Continues[0].ID, ":1:request") {
+		t.Fatalf("the first Apply hid a request that still writes: %+v", second)
+	}
+	// once it returned, it is no longer work
+	if w := sf.svc.aiWork(); len(w.continues) != 0 {
+		t.Fatalf("a returned request is still named: %+v", w.continues)
+	}
+}
+
+// RR2: a run refused before its write leaves no request behind.
+func TestARefusedRunLeavesNoRequest(t *testing.T) {
+	sf := newStepsFixture(t, scaleWeb)
+	rv := sf.review(1)
+	_ = unstructured.SetNestedField(sf.web().Object, int64(2), "spec", "replicas")
+	if r := sf.run(1, rv.Token); r.Ran {
+		t.Fatalf("control: %+v", r)
+	}
+	if w := sf.svc.aiWork(); len(w.continues) != 0 {
+		t.Fatalf("a refused run is still named: %+v", w.continues)
 	}
 }

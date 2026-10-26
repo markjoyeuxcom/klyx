@@ -678,6 +678,11 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	}
 	reviewed := p.runs[n-1].review.digest
 	p.running, c.stepRunning = n, p // reserved with the check, under one lock
+	// the confirmed request is work until it returns (Settings F2a
+	// re-review, RR2); every path out of here ends it
+	request := stepWorkID(c, exchangeID, n) + ":request"
+	s.requests[request] = PlanWorkDTO{ID: request, Kind: "step", Cluster: c.cluster, What: stepWhatLocked(c, exchangeID, n) + ": its confirmed request goes ahead, and may still write"}
+	defer s.endRequest(request)
 	sn := snapLocked(c, p, n)
 	conn := c.conn
 	s.mu.Unlock()
@@ -731,6 +736,7 @@ func (s *ChatService) RunStep(cluster, conversationID, exchangeID string, n int,
 	res := runVerb(ctx, conn, sn)
 
 	s.mu.Lock()
+	delete(s.requests, request) // returned: only its verification is left
 	r := p.runs[n-1]
 	r.review = nil
 	r.request, r.notSent, r.errText, r.ranAt = res.Outcome, res.NotSent, capRecord(res.Error, stepErrMax), s.now()
