@@ -89,6 +89,9 @@ type FleetPlanDeps struct {
 type fleetPlans struct {
 	d     FleetPlanDeps
 	cache *planCache
+	// beforeDecide is a test seam: it runs after the re-plan and the
+	// interlock, before the class's decision. Nil in production.
+	beforeDecide func()
 
 	mu sync.Mutex
 	// connected is each cluster's last terms that connected (S2 §4.5), raw:

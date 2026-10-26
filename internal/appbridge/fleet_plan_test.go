@@ -214,6 +214,9 @@ func TestAPlacementEditRelabelsAndKeepsTheEpoch(t *testing.T) {
 	if res := r.cs.ApplyClusterPlan(p.Digest, ""); res.OK {
 		t.Fatal("a plan applied twice")
 	}
+	if p := r.cs.PlanClusterRetry("dev"); p.Refused == "" {
+		t.Fatal("Retry offered on a connected cluster")
+	}
 }
 
 func TestTighteningTakesNoInterlockAndMovesTheEpochOnce(t *testing.T) {
@@ -538,8 +541,8 @@ func TestUseTheFilesValues(t *testing.T) {
 	if res := r.apply(p, ""); !res.OK {
 		t.Fatal(res.Error)
 	}
-	if s := r.snap("lab"); s.State != policy.Active || s.Reserved {
-		t.Fatalf("lab: %+v", s)
+	if s, ok := r.pol.Snapshot("lab"); !ok || s.State != policy.Active || s.Reserved {
+		t.Fatalf("lab: %+v %v", s, ok)
 	}
 	if _, ok := r.reg.Conn("lab"); !ok {
 		t.Fatal("lab is not connected")
@@ -644,5 +647,63 @@ func TestRetryConnectsAClusterWhoseBuildFailed(t *testing.T) {
 	}
 	if _, ok := r.reg.Conn("dev"); !ok || r.file() != file {
 		t.Fatal("not connected, or written")
+	}
+}
+
+// The last terms that connected follow each release: a second reconnect's
+// Revert goes back to the first reconnect's terms, not the startup ones.
+func TestRevertFollowsTheLastRelease(t *testing.T) {
+	r := newFleetRig(t, false)
+	reconnect := func(context string) fleet.ConnID {
+		d := devDraft()
+		d.Context = context
+		if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+			t.Fatal(res.Error)
+		}
+		return fleet.ConnID(r.snap("dev").Attempt)
+	}
+	a := reconnect("dev-2")
+	var evA fleet.UsabilityEvent
+	if !waitUntil(t, 5*time.Second, func() bool {
+		r.life.qmu.Lock()
+		defer r.life.qmu.Unlock()
+		for _, e := range r.life.queue {
+			if e.ID == a {
+				evA = e
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("no usability for the attempt")
+	}
+	r.life.applyUsable(evA) // dev-2 connects: its terms are the last connected
+	if r.snap("dev").State != policy.Active {
+		t.Fatal("not released")
+	}
+	reconnect("dev-3")
+	p := r.cs.PlanClusterRevert("dev")
+	if !hasChange(p, "fleet.context", "dev-3", "dev-2") {
+		t.Fatalf("revert: %+v", p.Changes)
+	}
+}
+
+// A removal refused at its decision - its activation moved after the
+// re-plan - deletes no record and removes nothing.
+func TestARemovalRefusedAtItsDecisionDeletesNothing(t *testing.T) {
+	r := newFleetRig(t, true)
+	r.records["dev"] = []PlanRecordDTO{{Kind: config.EndpointMetrics, Revision: "1"}}
+	p := r.cs.PlanClusterRemove("dev", []string{config.EndpointMetrics})
+	file := r.file()
+	r.cs.fp.beforeDecide = func() { r.pol.ConnUp("dev") } // a recovery, just before the gate
+	res := r.cs.ApplyClusterPlan(p.Digest, "")
+	if res.OK || res.Error != ErrMoved.Error() || res.Plan == nil {
+		t.Fatalf("got %+v", res)
+	}
+	if len(r.deleted) != 0 || r.file() != file {
+		t.Fatalf("deleted %v, or wrote", r.deleted)
+	}
+	if _, ok := r.cs.runningEntry("dev"); !ok {
+		t.Fatal("removed")
 	}
 }

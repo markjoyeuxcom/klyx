@@ -45,6 +45,9 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 	case x.plan.Interlock != nil && strings.TrimSpace(typed) != x.plan.Interlock.Phrase:
 		return ApplyResultDTO{Error: "Type \"" + x.plan.Interlock.Phrase + "\" to confirm; nothing was applied."}
 	}
+	if fp.beforeDecide != nil {
+		fp.beforeDecide()
+	}
 	name, life := c.Cluster, fp.d.Life
 	write := func() error {
 		switch {
