@@ -1010,3 +1010,58 @@ func TestARefusedReopenKeepsTheWorkingSubscription(t *testing.T) {
 		t.Fatal("a refused reopen stopped the working subscription")
 	}
 }
+
+// Codex's fourth re-review of S2a (2026-10-26), R4-1: a close stops only
+// what it captured. A later open admitted while the close finishes keeps
+// running; after CloseAll, nothing more is admitted.
+func TestAnEarlierCloseCannotSweepTheLaterOpen(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		t.Run(map[bool]string{false: "CloseLiveEvents", true: "CloseAll"}[all], func(t *testing.T) {
+			c := &countingEvents{}
+			s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+			defer s.CloseAll()
+			releasing, resume := make(chan struct{}), make(chan struct{})
+			var acquired atomic.Int32
+			s.setLeaser(func(cluster string, _ Work) (*Lease, error) {
+				le := PlainLease(cluster, EventsConn(c))
+				if acquired.Add(1) == 1 {
+					cancel := le.cancel
+					var once sync.Once
+					le.cancel = func() {
+						cancel()
+						once.Do(func() { close(releasing); <-resume }) // the close, paused releasing
+					}
+				}
+				return le, nil
+			})
+			if old := s.OpenLiveEvents("prd", "shop"); !old.OK {
+				t.Fatal(old.Error)
+			}
+			closed := make(chan struct{})
+			go func() {
+				if all {
+					s.CloseAll()
+				} else {
+					s.CloseLiveEvents("prd", "shop")
+				}
+				close(closed)
+			}()
+			<-releasing
+			later := s.OpenLiveEvents("prd", "shop")
+			close(resume)
+			<-closed
+			if all {
+				if later.OK || s.live.count() != 0 {
+					t.Fatalf("an open admitted after CloseAll: %+v, subscriptions %d", later, s.live.count())
+				}
+				return
+			}
+			s.lmu.Lock()
+			e := s.leases["events:prd:shop"]
+			s.lmu.Unlock()
+			if !later.OK || e == nil || e.sub == nil || e.sub.cancelled() || s.live.count() != 1 {
+				t.Fatalf("the later open %+v was swept by the earlier close; subscriptions %d", later, s.live.count())
+			}
+		})
+	}
+}
