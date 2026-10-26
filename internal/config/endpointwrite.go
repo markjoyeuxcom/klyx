@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -40,7 +39,7 @@ type Snapshot struct {
 
 // ReadSnapshot reads the fleet file once.
 func ReadSnapshot(path string) (Snapshot, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFleetFile(path)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read fleet config %q: %w", path, err)
 	}
@@ -55,17 +54,7 @@ func ReadSnapshot(path string) (Snapshot, error) {
 	return Snapshot{Path: path, Bytes: b, Mode: st.Mode().Perm(), Config: cfg}, nil
 }
 
-func loadBytes(b []byte) (*Config, error) {
-	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
-		return nil, err
-	}
-	c.applyDefaults()
-	if err := c.validate(); err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
+func loadBytes(b []byte) (*Config, error) { return decode(b) }
 
 // Endpoint finds a cluster's endpoint of a kind in the snapshot.
 func (s Snapshot) Endpoint(cluster, kind string) (NamedEndpoint, *ClusterConfig, bool) {
@@ -122,7 +111,11 @@ func MoveMetricsTokenToAuth(snap Snapshot, cluster string) (*Config, error) {
 	if err := onlyTokenMoved(snap.Bytes, candidate, cluster); err != nil {
 		return nil, fmt.Errorf("the edit would change other settings (file unchanged): %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(snap.Path), ".fleet-*.yaml") // 0600: the token is still plaintext here
+	target, _, _, err := fleetTarget(snap.Path)
+	if err != nil {
+		return nil, err
+	}
+	tmp, err := fleetTemp(target, 0o600) // 0600 while the plaintext token is still in it
 	if err != nil {
 		return nil, fmt.Errorf("create temp config: %w", err)
 	}
@@ -152,7 +145,10 @@ func MoveMetricsTokenToAuth(snap Snapshot, cluster string) (*Config, error) {
 	if !bytes.Equal(cur, snap.Bytes) || st.Mode().Perm() != snap.Mode {
 		return nil, ErrFileChangedSinceSnapshot
 	}
-	if err := os.Rename(tmpPath, snap.Path); err != nil {
+	if now, _, _, err := fleetTarget(snap.Path); err != nil || now != target {
+		return nil, ErrFileChangedSinceSnapshot
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
 		return nil, fmt.Errorf("replace fleet config: %w", err)
 	}
 	return got, nil
@@ -163,7 +159,7 @@ func MoveMetricsTokenToAuth(snap Snapshot, cluster string) (*Config, error) {
 // other shape is left for the person to edit by hand.
 func tokenLineEdit(doc []byte, cluster string) ([]byte, error) {
 	var root yaml.Node
-	if err := yaml.Unmarshal(doc, &root); err != nil {
+	if err := unmarshalFleet(doc, &root); err != nil {
 		return nil, err
 	}
 	metrics := clusterMetricsNode(&root, cluster)
@@ -239,10 +235,10 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 // metrics.token gone and metrics.auth set to bearer.
 func onlyTokenMoved(before, after []byte, cluster string) error {
 	var a, b map[string]any
-	if err := yaml.Unmarshal(before, &a); err != nil {
+	if err := unmarshalFleet(before, &a); err != nil {
 		return fmt.Errorf("decode current config: %w", err)
 	}
-	if err := yaml.Unmarshal(after, &b); err != nil {
+	if err := unmarshalFleet(after, &b); err != nil {
 		return fmt.Errorf("decode new config: %w", err)
 	}
 	cls, _ := a["clusters"].([]any)

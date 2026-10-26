@@ -157,7 +157,10 @@ func (c *ClusterConn) kustomizationsForOwnership(ctx context.Context) ([]*unstru
 	// Kustomization version rather than panic (tests, degraded conns).
 	ver := "v1"
 	if c.typed != nil {
-		v, served := servedVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
+		v, served, err := servedVersion(c.discovery(), "kustomize.toolkit.fluxcd.io", "kustomizations", "v1")
+		if err != nil {
+			return nil, "Flux ownership check unavailable: " + err.Error()
+		}
 		if !served {
 			return nil, "" // no Kustomization CRD: nothing can own the object
 		}

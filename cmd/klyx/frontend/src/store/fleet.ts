@@ -1,7 +1,11 @@
 import { validActivityAdmission, type ActivityAdmission, type AdmissionFindingDTO } from "../admission/finding";
 import type { ClaimHealthDTO, DeviceHealthDTO, PodClaimRefDTO } from "../bridge/dra";
-import { create } from "zustand";
+import { create, type StateCreator } from "zustand";
+import type { SettingsSection } from "../settings/registry";
+import { mustAsk, requestLeave } from "../settings/navGuard";
 import type { HealthLike } from "../health/verdict";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
 
 export type ClusterDTO = {
   name: string;
@@ -409,7 +413,9 @@ export type WorkloadDTO = { kind: string; namespace: string; name: string; uid?:
 
 // Rollout history (newest first). Images may be empty when a
 // ControllerRevision's patch data carries no template - never fabricated.
-export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string };
+// objectUID/templateDigest: the revision object and its template, passed back
+// so an undo writes only this revision (A3 §4.5).
+export type RolloutRevisionDTO = { revision: number; ageSeconds: number; images: string[]; current: boolean; changeCause?: string; objectUID?: string; templateDigest?: string };
 // uid/asOfUnix: the workload the history was read from, and when (§5b).
 export type RolloutHistoryResultDTO = { revisions: RolloutRevisionDTO[]; uid?: string; asOfUnix?: number; error?: string };
 
@@ -752,7 +758,9 @@ export type FleetView = "promotion" | "expiry" | "backups";
 export type Route =
   | { name: "fleet"; view?: FleetView }
   | { name: "forwards" }
-  | { name: "settings" }
+  // Settings S1 §1: a section, and an anchor naming a setting (a registry id,
+  // plus an instance for a repeated row)
+  | { name: "settings"; section?: SettingsSection; anchor?: string }
   | { name: "activity" }
   | { name: "cluster"; cluster: string; section: ClusterSection; resource?: ResourceRef; instance?: InstanceRef; gateway?: GatewayRef; argoView?: ArgoViewMode; fluxView?: FluxViewMode };
 
@@ -1065,14 +1073,14 @@ export type ActionEvent = ActionStatus & { id: number; at: number };
 // The activity log survives relaunches: "what did I do and did it succeed"
 // must be answerable the morning after, especially on protected clusters.
 // Storage helpers live here (not store/persist.ts) to avoid an import cycle.
-const ACTION_LOG_KEY = "klyx-action-log";
+const ACTION_LOG_KEY: StorageKey = "klyx-action-log";
 const ACTION_LOG_MAX = 200;
 const MAX_VISIBLE_TOASTS = 4;
 let nextActionId = 1;
 
 function loadActionLog(): ActionEvent[] {
   try {
-    const raw = localStorage.getItem(ACTION_LOG_KEY);
+    const raw = readStored(ACTION_LOG_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -1093,11 +1101,7 @@ function loadActionLog(): ActionEvent[] {
 }
 
 function saveActionLog(log: ActionEvent[]): void {
-  try {
-    localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(log));
-  } catch {
-    // best-effort - a full or unavailable storage must never block an action
-  }
+  writeStored(ACTION_LOG_KEY, JSON.stringify(log)); // best-effort: never blocks an action
 }
 
 // NavIntent is a one-shot cross-view request (the pods nsRequest pattern,
@@ -1140,7 +1144,10 @@ type FleetState = {
   route: Route;
   openFleet: (view?: FleetView) => void;
   openForwards: () => void;
-  openSettings: () => void;
+  // openSettings opens a section (and an anchor in it); with none, the
+  // section this session last showed, else Fleet
+  openSettings: (section?: SettingsSection, anchor?: string) => void;
+  settingsLast: SettingsSection | null;
   newContexts: number;
   setNewContexts: (n: number) => void;
   openCluster: (name: string) => void;
@@ -1287,13 +1294,45 @@ type FleetState = {
   clearHelm: () => void;
 };
 
-export const useFleet = create<FleetState>((set) => ({
+// guardRoute is the store's one gate for leaving a Settings section with a
+// draft (Settings S1 §1): any route change that leaves it - from an action,
+// a palette command or a direct setState - is held and asked about first
+// (settings/navGuard.ts). Everything else passes through unchanged.
+function leavesSettingsSection(from: Route, to: Route | undefined): boolean {
+  if (from.name !== "settings" || !to || to === from) return false;
+  return !(to.name === "settings" && (to.section ?? "fleet") === (from.section ?? "fleet"));
+}
+function guardRoute(config: StateCreator<FleetState>): StateCreator<FleetState> {
+  return (set, get, api) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const guarded = ((partial: any, replace?: any) => {
+      const next = typeof partial === "function" ? partial(get()) : partial;
+      if (next && leavesSettingsSection(get().route, next.route) && mustAsk()) {
+        requestLeave(() => guarded(partial, replace));
+        return;
+      }
+      // the section Settings last showed, whoever set the route (S1 §1:
+      // returning to Settings keeps its section)
+      const r = next?.route as Route | undefined;
+      if (r && r.name === "settings" && r.section && next.settingsLast === undefined && get().settingsLast !== r.section) {
+        set({ ...next, settingsLast: r.section }, replace);
+        return;
+      }
+      set(next, replace);
+    }) as typeof set;
+    api.setState = guarded;
+    return config(guarded, get, api);
+  };
+}
+
+export const useFleet = create<FleetState>()(guardRoute((set, get) => ({
   clusters: [],
   setClusters: (clusters) => set({ clusters }),
   route: { name: "fleet" },
   openFleet: (view) => set({ route: view ? { name: "fleet", view } : { name: "fleet" } }),
   openForwards: () => set({ route: { name: "forwards" } }),
-  openSettings: () => set({ route: { name: "settings" } }),
+  openSettings: (section, anchor) => set({ route: { name: "settings", section: section ?? get().settingsLast ?? "fleet", ...(anchor ? { anchor } : {}) } }),
+  settingsLast: null,
   newContexts: 0,
   setNewContexts: (newContexts) => set({ newContexts }),
   openCluster: (name) => set({ route: { name: "cluster", cluster: name, section: "overview" } }),
@@ -1671,7 +1710,7 @@ export const useFleet = create<FleetState>((set) => ({
     return { helm: { ...s.helm, history, values, detailLoading: false, historyError, valuesError } };
   }),
   clearHelm: () => set({ helm: { cluster: null, releases: [], available: true, message: "", loading: false, selected: null, history: [], values: "", detailLoading: false, snapshotAt: null, error: null, historyError: null, valuesError: null } }),
-}));
+})));
 
 // podsText renders a cluster's pod count honestly: unknown is a dash, never
 // a zero; a stale count says it is the last good one.

@@ -117,6 +117,7 @@ func TestDeletePod_IsArmedByUID(t *testing.T) {
 // --- RolloutRestart ---
 
 func TestRolloutRestart_Deployment_PatchesAnnotation(t *testing.T) {
+	resetAttemptTokens(t)
 	fakeTime := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	clk := clock.NewFake(fakeTime)
 	typed := typedfake.NewSimpleClientset(seedDeployment("default", "api"))
@@ -142,6 +143,7 @@ func TestRolloutRestart_Deployment_PatchesAnnotation(t *testing.T) {
 }
 
 func TestRolloutRestart_StatefulSet_PatchesAnnotation(t *testing.T) {
+	resetAttemptTokens(t)
 	fakeTime := time.Date(2026, 6, 10, 9, 0, 0, 0, time.UTC)
 	clk := clock.NewFake(fakeTime)
 	typed := typedfake.NewSimpleClientset(seedStatefulSet("db", "pg"))
@@ -166,6 +168,7 @@ func TestRolloutRestart_StatefulSet_PatchesAnnotation(t *testing.T) {
 }
 
 func TestRolloutRestart_DaemonSet_PatchesAnnotation(t *testing.T) {
+	resetAttemptTokens(t)
 	fakeTime := time.Date(2026, 6, 10, 8, 30, 0, 0, time.UTC)
 	clk := clock.NewFake(fakeTime)
 	typed := typedfake.NewSimpleClientset(seedDaemonSet("kube-system", "cilium"))

@@ -90,37 +90,36 @@ const diffTimeout = 120 * time.Second
 // uid is the object the verb was armed against (the row the operator
 // confirmed): only that object is written.
 func (s *GitOpsService) Reconcile(cluster, kind, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+	t, err := guardFor(cluster)
+	if err != nil {
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
-	if err := conn.Reconcile(ctx, kind, namespace, name, uid); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doReconcile(ctx, conn, kind, namespace, name, uid)
 }
 
 func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	// coverage S3b §2.3: each step's outcome, the refused source's kept
 	// even when the target is written
 	steps, err := conn.ReconcileWithSourceSteps(ctx, kind, namespace, name, uid)
 	var outs []stepOutcome
 	for _, st := range steps {
-		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, refused: st.Refused, err: st.Err})
+		outs = append(outs, stepOutcome{verb: st.Verb, subject: st.Subject, written: st.Written, refused: st.Refused, notSent: st.NotSent, err: st.Err})
 	}
 	r := ActionResultDTO{OK: err == nil}
 	if err != nil {
@@ -128,6 +127,9 @@ func (s *GitOpsService) ReconcileWithSource(cluster, kind, namespace, name, uid 
 	}
 	if len(outs) > 1 {
 		r.Steps = stepsDTO(ctx, conn, outs)
+		// each step says its own outcome; the target's fence refusal never
+		// speaks for a source already written (Settings F1 review, F4)
+		r.Outcome, r.NotSent = "", false
 	}
 	return r
 }
@@ -159,19 +161,17 @@ func (s *GitOpsService) FluxDiff(cluster, namespace, name, path string) FluxDiff
 }
 
 func (s *GitOpsService) SetSuspend(cluster, kind, namespace, name, uid string, suspend bool) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+	t, err := guardFor(cluster)
+	if err != nil {
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
-	if err := conn.SetSuspend(ctx, kind, namespace, name, uid, suspend); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doSetSuspend(ctx, conn, kind, namespace, name, uid, suspend)
 }
 
 // GetResourceDetail reads the detail view for one Flux resource directly
@@ -308,14 +308,15 @@ func (s *GitOpsService) ResolveGitLink(cluster, kind, namespace, name string) Gi
 // the typed-confirmation grant first, as every Flux verb does. A verb
 // reports "requested"; only the object's status says it was evaluated.
 func (s *GitOpsService) FluxOpAct(cluster, kind, namespace, name, uid, verb string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	if err := conn.FluxOpAct(ctx, kind, namespace, name, uid, verb); err != nil {
 		return failedScrubbed(ctx, conn, err)

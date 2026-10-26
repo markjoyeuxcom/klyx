@@ -3,6 +3,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { SettingsView } from "./SettingsView";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import type { FleetConfigDTO } from "../bridge/configsvc";
+import { useFleet } from "../store/fleet";
 
 const mockGetFleetConfig = vi.fn<() => Promise<FleetConfigDTO | null>>();
 const mockAddClusters = vi.fn();
@@ -31,6 +32,7 @@ describe("SettingsView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetFleetConfig.mockResolvedValue(baseCfg);
+    useFleet.setState({ route: { name: "settings", section: "fleet" } });
   });
 
   it("renders the fleet file path, clusters, and load warnings", async () => {
@@ -98,9 +100,11 @@ describe("Settings > Appearance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetFleetConfig.mockResolvedValue(baseCfg);
+    useFleet.setState({ route: { name: "settings", section: "fleet" } });
   });
 
   it("lists every theme as a radio; choosing one sets the theme", async () => {
+    useFleet.setState({ route: { name: "settings", section: "appearance" } });
     const { findByRole, getByRole } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
     const group = await findByRole("group", { name: "Theme" });
     const radios = Array.from(group.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
@@ -110,5 +114,36 @@ describe("Settings > Appearance", () => {
     expect((getByRole("radio", { name: "Day" }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(getByRole("radio", { name: "Night" }));
     await waitFor(() => expect(document.documentElement.getAttribute("data-theme")).toBe("night"));
+  });
+
+  // Settings review slice 0: a fleet.yaml that did not load is said first,
+  // and adding clusters waits; a file edited since startup is said per row.
+  it("says a fleet.yaml that did not load, and refuses to add clusters", async () => {
+    mockGetFleetConfig.mockResolvedValue({ ...baseCfg, clusters: [], loadError: "invalid config \"/x/fleet.yaml\": unknown field: clusters[0] (a).alertmanager: \"matches\" at line 4 (did you mean \"match\"?)" });
+    const { findByTestId, queryByRole, getByText } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
+    const banner = await findByTestId("settings-load-error");
+    expect(banner.getAttribute("role")).toBe("alert");
+    expect(banner.textContent).toContain("connected no cluster");
+    expect(banner.textContent).toContain("did you mean");
+    expect(getByText("Adding clusters waits until fleet.yaml loads.")).toBeTruthy();
+    expect(queryByRole("button", { name: /to fleet/ })).toBeNull();
+  });
+
+  it("says when the file now differs from the running fleet", async () => {
+    mockGetFleetConfig.mockResolvedValue({
+      ...baseCfg,
+      clusters: [{ ...baseCfg.clusters[0], drift: "fleet.yaml now differs (protection (the file protects it; it is not protected until Klyx restarts)): Klyx applies it at a restart" }, baseCfg.clusters[1]],
+      fileOnly: ["k8s-new"],
+    });
+    const { findByTestId, getByTestId, getByRole } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
+    expect((await findByTestId("settings-drift")).textContent).toContain("not protected until Klyx restarts");
+    expect(getByTestId("settings-file-only").textContent).toContain("k8s-new");
+    expect(getByRole("button", { name: "Re-scan kubeconfig contexts" })).toBeTruthy();
+  });
+
+  it("says a file that does not load now, while the fleet keeps running", async () => {
+    mockGetFleetConfig.mockResolvedValue({ ...baseCfg, fileError: "invalid config: yaml: line 3: did not find expected key" });
+    const { findByTestId } = render(<ThemeProvider><SettingsView /></ThemeProvider>);
+    expect((await findByTestId("settings-file-error")).textContent).toContain("keeps running the fleet it read at startup");
   });
 });

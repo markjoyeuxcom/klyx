@@ -13,9 +13,10 @@ export type AdmissionFindingDTO = {
   candidates: AdmissionCandidateDTO[]; candidatesOmitted?: number; aliases?: number; maybeUnread?: boolean;
   inventory: string; inventoryAsOf?: number; exempt?: boolean;
 };
-// refused: the server refused the step, so nothing of it was written; a
-// step neither written nor refused is unverified (its answer was lost)
-export type StepDTO = { verb: string; subject: string; written: boolean; refused?: boolean; error?: string; admission?: AdmissionFindingDTO };
+// refused: the server refused the step, or Klyx did before sending it
+// (notSent), so nothing of it was written; a step neither written nor
+// refused is unverified (its answer was lost)
+export type StepDTO = { verb: string; subject: string; written: boolean; refused?: boolean; notSent?: boolean; error?: string; admission?: AdmissionFindingDTO };
 export type ActionResultLike = { ok: boolean; error: string; admission?: AdmissionFindingDTO; steps?: StepDTO[] };
 
 // The Activity log keeps the finding's line and its candidates' names,
@@ -35,6 +36,8 @@ export function activityOf(f: AdmissionFindingDTO): ActivityAdmission {
 function stepWords(s: StepDTO): string {
   if (s.written) return `${s.subject}: written`;
   if (s.admission) return `${s.subject}: refused - ${s.admission.what}`;
+  // Settings F1 review, F4: Klyx stopped it before it was sent
+  if (s.notSent) return `${s.subject}: not sent - ${s.error || "stopped"}`;
   if (s.refused) return `${s.subject}: not written - ${s.error || "refused"}`;
   return `${s.subject}: outcome unverified - ${s.error || "no answer"}`;
 }

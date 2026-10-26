@@ -66,6 +66,32 @@ func TestSaveGit_RefusesAnEditMadeMeanwhile(t *testing.T) {
 	}
 }
 
+// Settings slice F §5: a Git write from a plan refuses any file version
+// but the one it was planned from, and returns the version it wrote.
+func TestSaveGitAt_RefusesAnotherVersion(t *testing.T) {
+	path := writeFleet(t, "clusters:\n  - name: a\n")
+	read, err := FileVersion(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := "clusters:\n  - name: a\n  - name: b\n"
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := GitConfig{Repos: []GitRepoConfig{{URL: "git@github.com:acme/fleet.git"}}}
+	if _, err := SaveGitAt(path, read, g); !errors.Is(err, ErrFileChanged) || readFleet(t, path) != edited {
+		t.Fatalf("got %v:\n%s", err, readFleet(t, path))
+	}
+	now, _ := FileVersion(path)
+	written, err := SaveGitAt(path, now, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := FileVersion(path); v != written || !strings.Contains(readFleet(t, path), "acme/fleet") {
+		t.Fatalf("returned %s, file %s:\n%s", written, v, readFleet(t, path))
+	}
+}
+
 func TestApprovedGitRepos_IgnoresWhatCouldCarryACredential(t *testing.T) {
 	path := writeFleet(t, `clusters:
   - name: a

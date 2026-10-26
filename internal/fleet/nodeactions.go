@@ -26,17 +26,20 @@ func (c *ClusterConn) SetCordon(ctx context.Context, nodeName, uid string, cordo
 		verb = "uncordon"
 	}
 	if err := c.CheckNodeArmed(ctx, nodeName, uid); err != nil {
-		return fmt.Errorf("%s %w - nothing was written", verb, err)
+		return notSent(fmt.Errorf("%s %w - nothing was written", verb, err))
 	}
 	body, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{"uid": uid},
 		"spec":     map[string]any{"unschedulable": cordon},
 	})
 	if err != nil {
-		return fmt.Errorf("%s marshal: %w", verb, err)
+		return notSent(fmt.Errorf("%s marshal: %w", verb, err))
 	}
-	_, err = c.typed.CoreV1().Nodes().Patch(ctx, nodeName, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+	out, err := c.typed.CoreV1().Nodes().Patch(ctx, nodeName, types.StrategicMergePatchType, body, metav1.PatchOptions{})
 	err = admission.Wrap(admission.Request{Operation: "UPDATE", Version: "v1", Resource: "nodes"}, "Node", "", nodeName, err)
+	if err == nil {
+		NoteReceipt(ctx, Receipt{UID: string(out.UID), Generation: out.Generation, ResourceVersion: out.ResourceVersion})
+	}
 	return armedWriteErr(verb, "node "+nodeName, err)
 }
 

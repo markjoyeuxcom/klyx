@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useCallback, useMemo, useState, useRef, useLayoutEffect } from "react";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { useExtendedRows, type ExtendedMarks } from "../health/useExtendedRows";
 import { acceleratorsOf, gpuCell, totalsText } from "./extended";
 import type { Mark } from "../health/useExtendedRows";
@@ -713,7 +714,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   if (error && scopedNodes.length > 0) notices.push(<WatchErrorBanner key="read" tool="Nodes" failure={`read failed - showing the last good read${lastGood ? ` from ${clock(lastGood)}` : ""}`} error={error} />);
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{nodes.rowsState?.refreshError ? ` Last re-read failed: ${nodes.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
-  if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.</div>);
+  if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.<EndpointSettingsLink text={util.message} cluster={cluster} kind="metrics" /></div>);
   if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
   if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
   // coverage S11a: the extended parts' own state - a budget cut, a failed

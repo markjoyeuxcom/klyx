@@ -1,15 +1,34 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
+
+// ErrFileChanged: the fleet file is not the version a plan was made from,
+// so nothing was written (Settings slice F §5: a hand edit made while a
+// plan was open refuses its Apply).
+var ErrFileChanged = errors.New("fleet.yaml changed after this was planned, so nothing was written")
+
+// FileVersion is the fleet file's version: a hash of its bytes, compared
+// only for equality. A plan records it, and its write refuses any other.
+func FileVersion(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return versionOf(b), nil
+}
+
+func versionOf(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // saveTopLevelBlock replaces the fleet file's top-level key block with block
 // (or appends one) by TEXTUAL replacement: every other byte - comments,
@@ -19,47 +38,71 @@ import (
 // (reading back exactly the intended settings) before it replaces the file.
 // It shares the fleet write lock with AppendClusters and refuses to
 // overwrite an edit made on disk meanwhile (spec 2026-10-13 §2.3). SaveAI
-// and SaveGit write through it (The Line slice 6 note §5.1).
-func saveTopLevelBlock(path, key, block, what string, check func(*Config) error) error {
+// and SaveGit write through it (The Line slice 6 note §5.1). pre, when set,
+// checks the file as it is before the write: a writer whose block came from
+// an earlier read refuses an edit made since (Settings review slice 0).
+// version, when set, is the file version a plan was made from: any other
+// is ErrFileChanged (Settings slice F §5). It returns the written file's
+// version.
+func saveTopLevelBlock(path, key, block, what, version string, pre, check func(*Config) error) (string, error) {
 	fleetWriteMu.Lock()
 	defer fleetWriteMu.Unlock()
 
+	target, mode, _, err := fleetTarget(path)
+	if err != nil {
+		return "", err
+	}
 	original, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("there is no fleet config at %q yet - add a cluster first", path)
+			return "", fmt.Errorf("there is no fleet config at %q yet - add a cluster first", path)
 		}
-		return fmt.Errorf("read fleet config %q: %w", path, err)
+		return "", fmt.Errorf("read fleet config %q: %w", path, err)
+	}
+	if version != "" && versionOf(original) != version {
+		return "", ErrFileChanged
+	}
+	if pre != nil {
+		cur, err := decode(original)
+		if err != nil {
+			return "", fmt.Errorf("fleet config %q does not load, so the %s were not saved: %w", path, what, err)
+		}
+		if err := pre(cur); err != nil {
+			return "", err
+		}
 	}
 	candidate, err := replaceTopLevelBlock(string(original), key, block)
 	if err != nil {
-		return fmt.Errorf("fleet config %q: %w", path, err)
+		return "", fmt.Errorf("fleet config %q: %w", path, err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
+	tmp, err := fleetTemp(target, mode)
 	if err != nil {
-		return fmt.Errorf("create temp config: %w", err)
+		return "", fmt.Errorf("create temp config: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }() // best-effort temp cleanup
 	if _, err := tmp.WriteString(candidate); err != nil {
 		_ = tmp.Close() // already returning the write error
-		return fmt.Errorf("write temp config: %w", err)
+		return "", fmt.Errorf("write temp config: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp config: %w", err)
+		return "", fmt.Errorf("close temp config: %w", err)
 	}
 	got, err := Load(tmpPath)
 	if err != nil {
-		return fmt.Errorf("the %s failed validation (file unchanged): %w", what, err)
+		return "", fmt.Errorf("the %s failed validation (file unchanged): %w", what, err)
 	}
 	if err := onlyKeyChanged(original, []byte(candidate), key); err != nil {
-		return fmt.Errorf("saving %s would change other settings (file unchanged): %w", what, err)
+		return "", fmt.Errorf("saving %s would change other settings (file unchanged): %w", what, err)
 	}
 	if err := check(got); err != nil {
-		return err
+		return "", err
 	}
-	return replaceUnchanged(path, tmpPath, original, true)
+	if err := replaceUnchanged(path, target, mode, tmpPath, original, true); err != nil {
+		return "", err
+	}
+	return versionOf([]byte(candidate)), nil
 }
 
 // replaceTopLevelBlock swaps the top-level key block in doc for block, or
@@ -115,10 +158,10 @@ func isTopLevelKey(line, name string) bool {
 // identical before and after.
 func onlyKeyChanged(before, after []byte, key string) error {
 	var a, b map[string]any
-	if err := yaml.Unmarshal(before, &a); err != nil {
+	if err := unmarshalFleet(before, &a); err != nil {
 		return fmt.Errorf("decode current config: %w", err)
 	}
-	if err := yaml.Unmarshal(after, &b); err != nil {
+	if err := unmarshalFleet(after, &b); err != nil {
 		return fmt.Errorf("decode new config: %w", err)
 	}
 	delete(a, key)

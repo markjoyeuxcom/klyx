@@ -481,7 +481,7 @@ func TestGetDebugCommand(t *testing.T) {
 func TestOpenDebugTerminal_ProtectedClusterNeedsGrant(t *testing.T) {
 	now := time.Now()
 	SetProtectGuard(newTestGuard("prd-cluster", &now))
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	looked := false
 	svc := NewExecService(func(string) (ExecConn, bool) {

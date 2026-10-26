@@ -93,7 +93,12 @@ func (c *ClusterConn) FluxOpAct(ctx context.Context, kind, ns, name, uid, verb s
 	if kind == composition.KindGenerator {
 		// S1c §3: Klyx reads a generator at one version, and writes only
 		// what it reads
-		if served, ok := servedVersion(c.discovery(), group, gvr.Resource, version); !ok || served != version {
+		// read under the ticket's fence (Settings F1 review, finding F2)
+		served, ok, err := servedVersion(c.discoveryFor(ctx), group, gvr.Resource, version)
+		if err != nil {
+			return fmt.Errorf("%s %s %s/%s: %w", verb, kind, ns, name, err)
+		}
+		if !ok || served != version {
 			return fmt.Errorf("%s is not offered: this cluster does not serve %s at %s", verb, gvr.Resource, version)
 		}
 	}

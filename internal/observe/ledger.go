@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moomora/klyx/internal/bounds"
 	"k8s.io/apimachinery/pkg/api/meta"
 )
 
@@ -18,7 +19,7 @@ import (
 // pending, so delivery is exactly once and Final has nothing to settle.
 
 // DefaultRoleCap bounds a ledger part's role list and each partition.
-const DefaultRoleCap = 50000
+const DefaultRoleCap = bounds.RowsRoleCap
 
 type partitionState int
 

@@ -20,6 +20,14 @@ type ActionResultDTO struct {
 	Steps []StepDTO `json:"steps,omitempty"`
 	// Conflict is a refused apply's fields and their managers (v0.15.1).
 	Conflict *ApplyConflictDTO `json:"conflict,omitempty"`
+	// Outcome classifies an A3 matrix verb's request (A3 §5.1): written,
+	// refused or unverified (sent, its answer lost). NotSent marks a refusal
+	// Klyx made before any write was sent. Receipt is a written request's
+	// own witness. Other write paths leave all three unset.
+	Outcome string      `json:"outcome,omitempty"`
+	NotSent bool        `json:"notSent,omitempty"`
+	Receipt *ReceiptDTO `json:"receipt,omitempty"`
+	Attempt *AttemptDTO `json:"attempt,omitempty"`
 }
 
 // ApplyConflictDTO is a server-side apply refused for fields other managers

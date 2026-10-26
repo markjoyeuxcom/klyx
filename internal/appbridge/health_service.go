@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/obslog"
 )
@@ -26,6 +27,107 @@ type HealthSink struct {
 
 	lmu       sync.RWMutex
 	listeners []HealthListener
+
+	// The identity gate (Settings S2 §2.4): current says whether a
+	// publication's (cluster, incarnation) is the cluster's current
+	// connection; nil passes every one (tools, tests). Each cluster's
+	// publications are checked and delivered under its own handoff lock, so
+	// none passes between "current" and its delivery, and a trusted end
+	// waits for a delivery already under way.
+	gmu     sync.Mutex
+	current func(cluster string, inc uint64) bool
+	idents  map[string]*sinkIdent
+}
+
+// sinkIdent is one cluster's handoff: its lock, the incarnation it last
+// delivered and that one's last sequences, and the incarnations ended.
+type sinkIdent struct {
+	mu         sync.Mutex
+	inc        uint64
+	batchSeq   uint64
+	summarySeq uint64
+	ended      map[uint64]bool
+}
+
+// SetIdentityCheck installs the identity gate.
+func (h *HealthSink) SetIdentityCheck(current func(cluster string, inc uint64) bool) {
+	h.gmu.Lock()
+	defer h.gmu.Unlock()
+	h.current = current
+}
+
+func (h *HealthSink) ident(cluster string) (*sinkIdent, func(string, uint64) bool) {
+	h.gmu.Lock()
+	defer h.gmu.Unlock()
+	if h.idents == nil {
+		h.idents = map[string]*sinkIdent{}
+	}
+	id := h.idents[cluster]
+	if id == nil {
+		id = &sinkIdent{ended: map[uint64]bool{}}
+		h.idents[cluster] = id
+	}
+	return id, h.current
+}
+
+// admit runs deliver when (cluster, inc) may publish, under the cluster's
+// handoff lock: never for an ended or retired incarnation.
+func (h *HealthSink) admit(cluster string, inc uint64, deliver func(*sinkIdent)) {
+	id, current := h.ident(cluster)
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	if id.ended[inc] || (current != nil && !current(cluster, inc)) {
+		return
+	}
+	if inc != id.inc {
+		id.inc, id.batchSeq, id.summarySeq = inc, 0, 0
+	}
+	deliver(id)
+}
+
+// EndIdentity is the trusted end of a retired incarnation (Settings S2
+// §2.4): the lifecycle's, never left to the retired Observer. It delivers
+// what an Observer's own end does - its end batch, then its Final summary -
+// to the log, the listeners and the webview, after any delivery already
+// under way, and only once; whatever that incarnation publishes later is
+// dropped. Listeners act on their generation of inc only.
+func (h *HealthSink) EndIdentity(cluster string, inc uint64, connection string) {
+	id, _ := h.ident(cluster)
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	if id.ended[inc] {
+		return
+	}
+	id.ended[inc] = true
+	bseq, sseq := uint64(0), uint64(0)
+	if id.inc == inc {
+		bseq, sseq = id.batchSeq, id.summarySeq
+	}
+	now := time.Now()
+	b := observe.TransitionBatch{Cluster: cluster, Incarnation: inc, Seq: bseq + 1, Kind: observe.BatchEnd, At: now}
+	h.log.Apply(b)
+	h.each(func(l HealthListener) { l.OnTransitions(b) })
+	sum := observe.Summary{Cluster: cluster, Incarnation: inc, Seq: sseq + 1, EvaluatedAt: now, Connection: connection, Final: true}
+	h.lineage.summary(sum)
+	h.em.Emit(HealthSummaryEvent, sum)
+	h.each(func(l HealthListener) { l.OnSummary(sum) })
+}
+
+// clusterForgetter is a listener that keeps per-cluster state a removal
+// drops (Settings S2 §2.5).
+type clusterForgetter interface{ ForgetCluster(cluster string) }
+
+// ForgetCluster drops a removed cluster from the log, the lineage and every
+// listener that keeps it. Its ended incarnations stay ended, so a late
+// publication from them is still dropped and recreates nothing.
+func (h *HealthSink) ForgetCluster(cluster string) {
+	h.log.Forget(cluster)
+	h.lineage.forget(cluster)
+	h.each(func(l HealthListener) {
+		if f, ok := l.(clusterForgetter); ok {
+			f.ForgetCluster(cluster)
+		}
+	})
 }
 
 // HealthListener receives every Observer publication in Go, before the
@@ -56,7 +158,7 @@ func (h *HealthSink) each(f func(HealthListener)) {
 }
 
 func NewHealthSink(em Emitter) *HealthSink {
-	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(os.Getenv("KLYX_ROWS_TRACE")), log: obslog.New()}
+	h := &HealthSink{em: em, lineage: newRowsLineage(), trace: openRowsTrace(envread.Get(envread.KlyxRowsTrace)), log: obslog.New()}
 	if h.trace != nil {
 		startLabNoise(em) // lab-only, and only when asked for
 	}
@@ -64,17 +166,23 @@ func NewHealthSink(em Emitter) *HealthSink {
 }
 
 func (h *HealthSink) Summary(s observe.Summary) {
-	h.lineage.summary(s)
-	h.em.Emit(HealthSummaryEvent, s)
-	h.each(func(l HealthListener) { l.OnSummary(s) })
+	h.admit(s.Cluster, s.Incarnation, func(id *sinkIdent) {
+		id.summarySeq = max(id.summarySeq, s.Seq)
+		h.lineage.summary(s)
+		h.em.Emit(HealthSummaryEvent, s)
+		h.each(func(l HealthListener) { l.OnSummary(s) })
+	})
 }
 
 // Transitions feed the observation log (The Line slice 2b §6): each batch
 // is applied whole, at its commit, on the Observer's loop goroutine. Nothing
 // is emitted to the webview yet.
 func (h *HealthSink) Transitions(b observe.TransitionBatch) {
-	h.log.Apply(b)
-	h.each(func(l HealthListener) { l.OnTransitions(b) })
+	h.admit(b.Cluster, b.Incarnation, func(id *sinkIdent) {
+		id.batchSeq = max(id.batchSeq, b.Seq)
+		h.log.Apply(b)
+		h.each(func(l HealthListener) { l.OnTransitions(b) })
+	})
 }
 
 // ObservationLog is the log the sink feeds.
@@ -84,6 +192,10 @@ func (h *HealthSink) ObservationLog() *obslog.Log { return h.log }
 // no lens reads yet has no converter and is not emitted. A delta part with
 // a subscribed lineage is sent as a delta against it (addendum §3.3).
 func (h *HealthSink) Rows(r observe.Rows) {
+	h.admit(r.Cluster, r.Incarnation, func(*sinkIdent) { h.rows(r) })
+}
+
+func (h *HealthSink) rows(r observe.Rows) {
 	h.each(func(l HealthListener) { l.OnRows(r) }) // raw rows, before any webview conversion or delta
 	dto, ok := toRowsDTO(r)
 	if !ok {
@@ -161,7 +273,7 @@ func NewHealthService(observers func() []*observe.Observer) *HealthService {
 // (KLYX_ROWS_TRACE + ".probe"), so a lab run reads the webview's numbers
 // without the screen. A no-op unless the lab trace is on.
 func (s *HealthService) LabReport(text string) {
-	path := os.Getenv("KLYX_ROWS_TRACE")
+	path := envread.Get(envread.KlyxRowsTrace)
 	if path == "" {
 		return
 	}

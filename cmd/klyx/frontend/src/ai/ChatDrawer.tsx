@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { IconX, IconMessageChatbot } from "@tabler/icons-react";
 import { useFleet, type ResourceRef } from "../store/fleet";
-import { chatAsk, chatClear, chatSetComparison, chatStart, chatState, chatStop, investigationStart, investigationState, onChatRead, type ChatCheck, type ChatExchange, type ChatRead, type ChatRef, type ChatSeed, type ChatState } from "../bridge/chat";
+import { chatAsk, chatClear, chatSetComparison, chatStart, chatState, chatStop, investigationStart, investigationState, onChatPlan, onChatRead, type ActionStep, type ChatCheck, type ChatExchange, type ChatRead, type ChatRef, type ChatSeed, type ChatState } from "../bridge/chat";
 import { providerLabel } from "../app/AISettingsPanel";
 import { WELL_KNOWN_RESOURCE_REFS } from "../cluster/resourceRefs";
 import { SafeMarkdown, type Cite } from "./SafeMarkdown";
 import { useChat } from "./chatStore";
 import { FindingsPanel } from "./FindingsPanel";
+import { ActionCard } from "./ActionCard";
 import { Rail, type RailSegment, type RailStep } from "../chrome/primitives";
 
 // ChatDrawer is the cluster chat (spec 2026-10-14 §8): one conversation per
@@ -113,6 +114,13 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
     return onChatRead(conversationId, () => void background(slot, cluster));
   }, [conversationId, cluster, slot]);
 
+  // a plan's step settles and its incident is read in the background (AI
+  // A3 §5): the conversation is read back, ordered by version as ever
+  useEffect(() => {
+    if (!conversationId || !isInv) return;
+    return onChatPlan(conversationId, () => void background(slot, cluster));
+  }, [conversationId, cluster, slot, isInv]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [st?.exchanges.length, asking]);
@@ -201,7 +209,7 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
           <div className="chat-notice" role="alert" data-testid="chat-failure">
             ▲ {failure}
             {/Settings > AI|AI is off|unavailable|protected/.test(failure) && (
-              <div><button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings()}>Open Settings</button></div>
+              <div><button type="button" className="l-btn" onClick={() => useFleet.getState().openSettings("ai")}>Open Settings &gt; AI</button></div>
             )}
           </div>
         )}
@@ -232,7 +240,10 @@ function ChatPanel({ cluster, slot }: { cluster: string; slot: string }) {
         {isInv && st && conversationId && (
           <Comparison cluster={cluster} slot={slot} st={st} editable={firstInv && !busy && !otherAnchor} />
         )}
-        {st?.exchanges.map((ex) => <Exchange key={ex.id} cluster={cluster} ex={ex} cite={cite} />)}
+        {st?.exchanges.map((ex) => (
+          <Exchange key={ex.id} cluster={cluster} ex={ex} cite={cite}
+            plan={isInv && conversationId ? { conversationId, protected: st.protected, onChanged: () => void background(slot, cluster) } : undefined} />
+        ))}
         {asking && asking.conversationId === conversationId && !inFlight && !st?.exchanges.some((e) => e.question === asking.question) && (
           <div className="chat-exchange" aria-busy="true">
             <div className="chat-q">{asking.question}</div>
@@ -348,7 +359,10 @@ export function citeFrom(ledger: Map<string, { read: ChatRead; check?: ChatCheck
   };
 }
 
-function Exchange({ cluster, ex, cite }: { cluster: string; ex: ChatExchange; cite?: Cite }) {
+// PlanContext is what an investigation exchange's action card needs.
+type PlanContext = { conversationId: string; protected: boolean; onChanged: () => void };
+
+function Exchange({ cluster, ex, cite, plan }: { cluster: string; ex: ChatExchange; cite?: Cite; plan?: PlanContext }) {
   const last = ex.calls[ex.calls.length - 1];
   return (
     <div className="chat-exchange" data-testid="chat-exchange">
@@ -370,6 +384,11 @@ function Exchange({ cluster, ex, cite }: { cluster: string; ex: ChatExchange; ci
         </>
       )}
       {ex.findings && <FindingsPanel findings={ex.findings} reads={ex.reads} cite={cite} />}
+      {ex.plan && plan && (
+        <ActionCard cluster={cluster} conversationId={plan.conversationId} exchangeId={ex.id} plan={ex.plan} protected={plan.protected} cite={cite}
+          openObject={(st: ActionStep) => st.gvr && openRef(cluster, { gvr: st.gvr, namespace: st.target.namespace, name: st.target.name, uid: st.target.uid })}
+          onChanged={plan.onChanged} />
+      )}
       {ex.outcome === "failed" && <div className="chat-err">▲ {ex.error}</div>}
       {ex.note && <div className="chat-small">{ex.note}</div>}
       {ex.outcome === "cancelled" && <div className="chat-small">Stopped.</div>}

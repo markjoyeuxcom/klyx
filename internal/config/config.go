@@ -6,11 +6,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -22,6 +19,9 @@ type Config struct {
 	// Notifications are the health notifications (The Line slice 10): only
 	// Settings > Notifications writes them.
 	Notifications *NotificationsConfig `yaml:"notifications"`
+
+	// unknownTop are the unknown top-level keys, for Warnings (strict.go)
+	unknownTop []string
 }
 
 // NotificationsConfig is the notifications block. Absent, notifications
@@ -93,6 +93,9 @@ type AIConfig struct {
 	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"`
 	TLSSkipVerify        bool   `yaml:"tlsSkipVerify"`   // openaiCompatible only: a self-signed local server
 	RefusalFallback      *bool  `yaml:"refusalFallback"` // anthropic: server-side refusal fallback, default on
+	// ProposeActions lets an investigation propose day-2 verbs for the
+	// operator to run (AI A3 §6), default on
+	ProposeActions *bool `yaml:"proposeActions"`
 
 	// The pre-2026-10-13 spelling, still read: backend hosted = anthropic,
 	// local = openaiCompatible; apiKey is a plain-text key (keySource legacy).
@@ -102,6 +105,12 @@ type AIConfig struct {
 
 // Enabled reports whether AI is configured to run (a non-nil, non-off backend).
 func (a *AIConfig) Enabled() bool { return a != nil && a.Provider != "" && a.Provider != "off" }
+
+// UsesProposeActions reports whether investigations may propose actions
+// (AI A3 §6, default on).
+func (a *AIConfig) UsesProposeActions() bool {
+	return a == nil || a.ProposeActions == nil || *a.ProposeActions
+}
 
 // UsesRefusalFallback reports the anthropic refusal-fallback setting (default on).
 func (a *AIConfig) UsesRefusalFallback() bool {
@@ -199,7 +208,7 @@ var reservedTagKeys = map[string]bool{
 // Warnings returns non-fatal config problems worth surfacing at startup, chiefly
 // tag keys that shadow a real cluster field. Deterministically ordered.
 func (c *Config) Warnings() []string {
-	var w []string
+	w := append([]string(nil), c.unknownTop...)
 	for _, cl := range c.Clusters {
 		shadowed := make([]string, 0, len(cl.Tags))
 		for k := range cl.Tags {
@@ -246,19 +255,32 @@ func (c *Config) Summary() string {
 
 // Load reads, parses, defaults, and validates a fleet config file.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readFleetFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
-	var c Config
-	if err := yaml.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", path, err)
-	}
-	c.applyDefaults()
-	if err := c.validate(); err != nil {
+	c, err := decode(raw)
+	if err != nil {
 		return nil, fmt.Errorf("invalid config %q: %w", path, err)
 	}
-	return &c, nil
+	return c, nil
+}
+
+// LoadVersioned is Load with the file version of the bytes it decoded
+// (FileVersion): a plan reads its block and the version it writes against
+// from one read (Settings slice F §5). The version is set whenever the file
+// was read, so a file that does not decode still has one.
+func LoadVersioned(path string) (*Config, string, error) {
+	raw, err := readFleetFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read config %q: %w", path, err)
+	}
+	version := versionOf(raw)
+	c, err := decode(raw)
+	if err != nil {
+		return nil, version, fmt.Errorf("invalid config %q: %w", path, err)
+	}
+	return c, version, nil
 }
 
 func (c *Config) applyDefaults() {

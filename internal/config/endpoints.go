@@ -23,6 +23,9 @@ const (
 	EndpointLoki         = "loki"
 )
 
+// EndpointKinds is every endpoint kind.
+var EndpointKinds = []string{EndpointMetrics, EndpointAlertmanager, EndpointLoki}
+
 // EndpointAuth says how an endpoint authenticates: a bearer token, or basic
 // with this username. The secret is in the keychain (C5 §3).
 type EndpointAuth struct {
@@ -44,6 +47,12 @@ type EndpointConfig struct {
 	// what it returns. None means everything there is this cluster's.
 	Match map[string]string `yaml:"match"`
 }
+
+// Located says the endpoint names where it is: a URL or a Service. An
+// Alertmanager or metrics block without either is discovered in the
+// cluster; Loki is never discovered, so its block needs one (Settings
+// review slice 0).
+func (e EndpointConfig) Located() bool { return e.Endpoint != "" || e.ServiceRef != nil }
 
 // Spec is the metrics endpoint in the shared shape.
 func (m MetricsConfig) Spec() EndpointConfig {
@@ -86,7 +95,7 @@ func EndpointURLProblem(endpoint string) string {
 	case err != nil:
 		return "the endpoint URL does not parse; fix it in fleet.yaml"
 	case u.User != nil:
-		return "the endpoint URL carries credentials; set them in Settings > External endpoints"
+		return "the endpoint URL carries credentials; set them in Settings > Observability"
 	}
 	return ""
 }
@@ -121,10 +130,10 @@ func validateEndpoint(prefix string, e EndpointConfig, legacyToken bool) error {
 	sort.Strings(names)
 	for _, k := range names {
 		if !labelName.MatchString(k) {
-			return fmt.Errorf("%s.match: %q is not a label name", prefix, k)
+			return fmt.Errorf("%s.match: %s is not a label name", prefix, describeKey(k))
 		}
 		if v := e.Match[k]; v == "" || hasControl(v) {
-			return fmt.Errorf("%s.match.%s must be a non-empty value without control characters", prefix, k)
+			return fmt.Errorf("%s.match: %s needs a non-empty value without control characters", prefix, describeKey(k))
 		}
 	}
 	if a := e.Auth; a != nil {
@@ -162,6 +171,9 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	}
 	if p := EndpointURLProblem(e.Endpoint); p != "" {
 		w = append(w, fmt.Sprintf("cluster %q: %s: %s", cluster, prefix, p))
+	}
+	if prefix == EndpointLoki && !e.Located() {
+		w = append(w, fmt.Sprintf("cluster %q: loki has no endpoint or serviceRef: Klyx does not discover Loki, so it reads no log history for this cluster", cluster))
 	}
 	return w
 }

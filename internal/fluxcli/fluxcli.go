@@ -9,13 +9,13 @@ package fluxcli
 import (
 	"bytes"
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/moomora/klyx/internal/clibin"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
 
@@ -39,9 +39,12 @@ type ExecRunner struct {
 // package-manager fallbacks). Tests swap its lookup hooks.
 var fluxBin = clibin.Binary{
 	Name:          "flux",
-	EnvVar:        "KLYX_FLUX_PATH",
+	Override:      envread.KlyxFluxPath,
 	FallbackPaths: defaultFluxFallbackPaths,
 }
+
+// Binary is how Klyx resolves flux, for Settings > Diagnostics.
+func Binary() clibin.Binary { return fluxBin }
 
 func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, error) {
 	bin, ok := Resolve()
@@ -50,7 +53,7 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, string, er
 	}
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec
 	if len(r.Env) > 0 {
-		cmd.Env = append(os.Environ(), r.Env...)
+		cmd.Env = envread.ForChild(envread.NativeTools, r.Env)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -79,10 +82,10 @@ func defaultFluxFallbackPaths() []string {
 		return []string{"/usr/local/bin/flux", "/usr/bin/flux", "/snap/bin/flux"}
 	case "windows":
 		var paths []string
-		if root := strings.TrimSpace(os.Getenv("ChocolateyInstall")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ChocolateyInstall)); root != "" {
 			paths = append(paths, filepath.Join(root, "bin", "flux.exe"))
 		}
-		if root := strings.TrimSpace(os.Getenv("ProgramFiles")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ProgramFiles)); root != "" {
 			paths = append(paths, filepath.Join(root, "flux", "flux.exe"))
 		}
 		return paths

@@ -89,13 +89,13 @@ func TestServedVersion_ResolvesPerResource(t *testing.T) {
 		{"buckets", "", false},               // advertised group, resource not served
 	}
 	for _, tc := range cases {
-		ver, served := servedVersion(disc, "source.toolkit.fluxcd.io", tc.resource, "v1")
+		ver, served, _ := servedVersion(disc, "source.toolkit.fluxcd.io", tc.resource, "v1")
 		if ver != tc.wantVer || served != tc.wantServed {
 			t.Errorf("%s: servedVersion = (%q, %v), want (%q, %v)", tc.resource, ver, served, tc.wantVer, tc.wantServed)
 		}
 	}
 	// A group discovery does not advertise keeps the documented fallback.
-	if ver, served := servedVersion(disc, "example.com", "widgets", "v9"); ver != "v9" || !served {
+	if ver, served, _ := servedVersion(disc, "example.com", "widgets", "v9"); ver != "v9" || !served {
 		t.Errorf("unadvertised group: (%q, %v), want the fallback", ver, served)
 	}
 }
@@ -134,7 +134,7 @@ func TestFluxGVRs_UseTheResourcesOwnServedVersion(t *testing.T) {
 		t.Fatal("reconcile-with-source must patch the bound OCIRepository")
 	}
 
-	if _, err := c.gvrForKind(flux.Kind("Bucket")); err == nil {
+	if _, err := c.gvrForKind(context.Background(), flux.Kind("Bucket")); err == nil {
 		t.Fatal("gvrForKind must refuse a kind it does not handle")
 	}
 }
@@ -157,11 +157,11 @@ func TestServedVersion_PartialDiscoveryIsNotAbsence(t *testing.T) {
 	typed := fake.NewSimpleClientset()
 	typed.Resources = fluxSplitDiscovery()
 	d := partialDiscovery{typed.Discovery()}
-	if v, served := servedVersion(d, "source.toolkit.fluxcd.io", "ocirepositories", "v1beta2"); !served || v != "v1beta2" {
+	if v, served, _ := servedVersion(d, "source.toolkit.fluxcd.io", "ocirepositories", "v1beta2"); !served || v != "v1beta2" {
 		t.Fatalf("partial discovery = (%q, %v), want the unreadable fallback v1beta2", v, served)
 	}
 	// Complete discovery still establishes absence.
-	if _, served := servedVersion(typed.Discovery(), "source.toolkit.fluxcd.io", "buckets", "v1"); served {
+	if _, served, _ := servedVersion(typed.Discovery(), "source.toolkit.fluxcd.io", "buckets", "v1"); served {
 		t.Fatal("complete discovery without the resource is absence")
 	}
 }

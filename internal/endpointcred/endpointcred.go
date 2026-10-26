@@ -151,7 +151,7 @@ func Resolve(store secretstore.Store, in Input) Credential {
 	var kc *secretstore.KeychainError
 	switch {
 	case errors.Is(err, secretstore.ErrNoKey):
-		out.State, out.Why = Missing, "no credential is stored for it - set one in Settings > External endpoints"
+		out.State, out.Why = Missing, "no credential is stored for it - set one in Settings > Observability"
 		return out
 	case errors.As(err, &kc):
 		out.State, out.Why = Unavailable, kc.Error()
@@ -230,6 +230,22 @@ func (r *Registry) Revoke(cluster, kind string) {
 	k := key(cluster, kind)
 	r.tomb[k] = true
 	r.rev[k]++
+}
+
+// Retire moves each of kinds' revisions for a removed cluster (Settings S2
+// §2.5), with no revocation: a client built before the removal never
+// matches again, whatever is added under the name later, while a kept
+// keychain record stays usable under its own checks. Counters only move
+// forward; nothing is reset or erased.
+func (r *Registry) Retire(cluster string, kinds ...string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, kind := range kinds {
+		r.rev[key(cluster, kind)]++
+	}
 }
 
 // Revoked reports the tombstone.

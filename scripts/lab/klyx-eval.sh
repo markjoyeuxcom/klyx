@@ -10,6 +10,11 @@
 #   scripts/lab/klyx-eval.sh run [s]    run the eval build on the configured provider: KLYX_EVAL_BIN, KLYX_EVAL_RUNS
 #   scripts/lab/klyx-eval.sh selftest   every status and mark on the scripted model (fake-model.mjs), no key
 #   scripts/lab/klyx-eval.sh check      the exact-target check alone
+#   scripts/lab/klyx-eval.sh a3 [case]  AI A3 §7's lab on E1 with the scripted model: plan, undo-only,
+#                                       resume-between (default all); KLYX_EVAL_BIN. Klyx's own steps
+#                                       write to the lab; each case restores it
+#   scripts/lab/klyx-eval.sh a3-write resume|restore   the A3 lab's own writes: resume a1-web and request
+#                                       a reconcile; or that, then E1's plant again (its setup)
 #
 # The eval directory ($KLYX_EVAL_DIR) holds the marker, the eval's own
 # kubeconfig (never ~/.kube/config), the ownership token and the eval's
@@ -176,6 +181,57 @@ selftest)
 check)
 	owned
 	echo "klyx-eval: $ctx is the eval's ($dir)"
+	;;
+a3)
+	owned
+	bin=${KLYX_EVAL_BIN:?the eval build: go build -tags eval -o <bin> ./cmd/klyx}
+	"$lab/e1-flux-crashloop/setup.sh"
+	log=$dir/a3-model.log
+	node "$lab/fake-model.mjs" "$model_port" >"$log" 2>&1 &
+	model=$!
+	trap 'kill $model 2>/dev/null || true' EXIT
+	sleep 1
+	root=$dir/out/a3-$(date +%Y%m%dT%H%M%S)
+	mkdir -p "$root"
+	failed=0
+	for c in ${@:-plan undo-only resume-between}; do
+		m=a3-plan
+		[[ $c == undo-only ]] && m=a3-undo-only
+		config "$dir/fleet-a3-$c.yaml" "$m"
+		KLYX_CONFIG=$dir/fleet-a3-$c.yaml KLYX_EVAL_DIR=$dir KLYX_EVAL_LAB=$lab KLYX_EVAL_OUT=$root KLYX_EVAL_A3=$c KLYX_EVAL_KIND=$name \
+			"$bin" >"$root/$c.log" 2>&1 || {
+			echo "klyx-eval: A3 $c exited $?" >&2
+			failed=1
+		}
+		[[ -f $root/a3-$c.md ]] && cat "$root/a3-$c.md"
+	done
+	echo "klyx-eval: A3 records in $root"
+	exit $failed
+	;;
+a3-write)
+	owned
+	case ${1:-} in
+	resume | restore)
+		# only a1-web, and only while it is this eval's (lib.sh claim)
+		owner=$(label_of "$owner_key" -n klyx-a1-flux kustomization a1-web) || exit 1
+		[[ $owner == "$(owner_id)" ]] || die "refusing: a1-web is not this eval's"
+		token=$(date +%s)
+		k -n klyx-a1-flux patch kustomization a1-web --type merge -p '{"spec":{"suspend":false}}' >/dev/null
+		k -n klyx-a1-flux annotate --overwrite kustomization a1-web reconcile.fluxcd.io/requestedAt="$token" >/dev/null
+		echo "klyx-eval: a1-web resumed"
+		# a plan's roll back and the resume leave Flux's history moved on:
+		# E1's setup plants it again, steady then crash. It reads a1-web's
+		# status, so the resume's reconcile comes first: until Flux handles
+		# it the status is the plan's, and a reconcile right after a roll
+		# back can record a success at the crash commit (the A3 lab)
+		if [[ $1 == restore ]]; then
+			handled() { [[ $(k -n klyx-a1-flux get kustomization a1-web -o jsonpath='{.status.lastHandledReconcileAt}') == "$token" ]]; }
+			wait_for 300 "a1-web to handle the restore's reconcile" handled
+			"$lab/e1-flux-crashloop/setup.sh"
+		fi
+		;;
+	*) die "a3-write: no write ${1:-}" ;;
+	esac
 	;;
 *)
 	sed -n '2,20p' "$0"

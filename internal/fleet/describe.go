@@ -25,6 +25,7 @@ import (
 
 	"github.com/moomora/klyx/internal/clibin"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/execenv"
 )
 
@@ -34,9 +35,12 @@ import (
 // PATH. Tests swap the lookup hooks.
 var kubectlBin = clibin.Binary{
 	Name:          "kubectl",
-	EnvVar:        "KLYX_KUBECTL_PATH",
+	Override:      envread.KlyxKubectlPath,
 	FallbackPaths: defaultKubectlFallbackPaths,
 }
+
+// KubectlBinary is how Klyx resolves kubectl, for Settings > Diagnostics.
+func KubectlBinary() clibin.Binary { return kubectlBin }
 
 func defaultKubectlFallbackPaths() []string {
 	switch runtime.GOOS {
@@ -46,10 +50,10 @@ func defaultKubectlFallbackPaths() []string {
 		return []string{"/usr/local/bin/kubectl", "/usr/bin/kubectl", "/snap/bin/kubectl"}
 	case "windows":
 		var paths []string
-		if root := strings.TrimSpace(os.Getenv("ChocolateyInstall")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ChocolateyInstall)); root != "" {
 			paths = append(paths, filepath.Join(root, "bin", "kubectl.exe"))
 		}
-		if root := strings.TrimSpace(os.Getenv("ProgramFiles")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ProgramFiles)); root != "" {
 			paths = append(paths, filepath.Join(root, "kubectl", "kubectl.exe"))
 		}
 		return paths

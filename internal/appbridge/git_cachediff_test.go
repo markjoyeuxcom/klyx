@@ -36,6 +36,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == cachediff.ChildFlag {
 		os.Exit(cachediff.RunChild(os.Stdin, os.Stdout, os.Stderr))
 	}
+	// Settings slice F §2: without a guard nothing is admitted, so the
+	// package's tests run under an open one
+	SetProtectGuard(defaultTestGuard)
 	os.Exit(m.Run())
 }
 
@@ -132,7 +135,7 @@ func newDiffFixture(t *testing.T) (*cacheFake, string) {
 // earlier files), publishes main into a Klyx cache, and returns the commits.
 func newHistoryFixture(t *testing.T, commits ...map[string]string) (*cacheFake, []string) {
 	t.Helper()
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
@@ -166,7 +169,7 @@ func newHistoryFixture(t *testing.T, commits ...map[string]string) (*cacheFake, 
 		run("commit", "-qm", fmt.Sprintf("fleet %d", i))
 		shas = append(shas, run("rev-parse", "HEAD"))
 	}
-	base := gitcli.CacheBase(t.TempDir())
+	base := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +192,7 @@ func newDiffService(t *testing.T, store *cacheFake) *GitService {
 	if err := os.WriteFile(path, []byte(diffFleet), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewGitService(context.Background(), GitDeps{ConfigPath: path,
+	svc := NewGitService(context.Background(), GitDeps{ConfigPath: path, Initial: startupGit(t, path),
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
 			return gitcli.Runner{Git: gitcli.Git{Path: "/usr/bin/git"}}, gitcli.Helpers{}, nil
 		},

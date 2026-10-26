@@ -20,6 +20,9 @@ vi.mock("../bridge/workload-metrics", () => ({ getWorkloadMetrics: vi.fn().mockR
 // coverage S9 §7: who owns the replica count, per test
 const owner = vi.hoisted(() => ({ value: { autoscaler: "unowned", gitops: "unowned", owners: [] as string[] } as Record<string, unknown> }));
 vi.mock("../bridge/keda", () => ({ replicaOwner: vi.fn(async () => owner.value) }));
+// the undo dialog's authoritative ownership read (A3 §9 stage 1)
+const ownership = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("../bridge/crd", () => ({ gitOpsOwnership: vi.fn(async () => ownership.value) }));
 vi.mock("../bridge/windows", () => ({ openWorkloadLogsWindow: vi.fn().mockResolvedValue(true) }));
 vi.mock("../bridge/pods", () => ({
   deletePod: vi.fn().mockResolvedValue(undefined),
@@ -106,12 +109,17 @@ describe("WorkloadsView", () => {
     expect(getByText("on node-3")).toBeTruthy();
   });
 
-  it("rollout history lists revisions; undo opens the danger confirm with the GitOps warning", async () => {
+  it("rollout history lists revisions; undo opens the danger confirm with the authoritative GitOps consequence", async () => {
+    ownership.value = {
+      ownerKind: "Kustomization", ownerNamespace: "flux-system", ownerName: "ollama", ownerPrunes: true, ownerSuspended: false, basis: "flux-inventory",
+      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "",
+      argoApps: [], warnings: [],
+    };
     vi.mocked(rolloutHistory).mockResolvedValue({
       uid: "uid-ollama",
       revisions: [
-        { revision: 3, ageSeconds: 600, images: ["shop/cart:v3"], current: true },
-        { revision: 2, ageSeconds: 7200, images: ["shop/cart:v2"], current: false, changeCause: "hotfix" },
+        { revision: 3, ageSeconds: 600, images: ["shop/cart:v3"], current: true, objectUID: "rs3", templateDigest: "d3" },
+        { revision: 2, ageSeconds: 7200, images: ["shop/cart:v2"], current: false, changeCause: "hotfix", objectUID: "rs2", templateDigest: "d2" },
       ],
     });
     seed([broken]);
@@ -124,12 +132,56 @@ describe("WorkloadsView", () => {
     fireEvent.click(undoButtons);
     // Danger confirm names the target AND the GitOps-owned consequence.
     expect(await findByText(/revision 2/)).toBeTruthy();
-    expect(getByText(/Flux will revert this on its next reconcile/)).toBeTruthy();
+    expect(await findByText(/Kustomization flux-system\/ollama manages it \(its Flux inventory\)\. While it is not suspended/)).toBeTruthy();
     expect(getByText("Roll back")).toBeTruthy();
     expect(vi.mocked(rolloutUndo)).not.toHaveBeenCalled();
     fireEvent.click(getByText("Roll back"));
-    expect(vi.mocked(rolloutUndo)).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama", 2);
+    // the revision the history showed travels with the undo (A3 §4.5)
+    expect(vi.mocked(rolloutUndo)).toHaveBeenCalledWith("homelab-nelli", "Deployment", "ollama-prod", "ollama", "uid-ollama", 2, "rs2", "d2");
     expect(queryByText("Roll back")).toBeNull();
+  });
+
+  // A3 stage 1 review, finding 2: Confirm waits for the consequence, and a
+  // reply to a cancelled opening never lands on a later one.
+  it("undo offers no confirmation until its ownership read lands, and ignores a cancelled opening's reply", async () => {
+    const crd = await import("../bridge/crd");
+    const replies: Array<(o: unknown) => void> = [];
+    vi.mocked(crd.gitOpsOwnership).mockImplementation(() => new Promise((r) => { replies.push(r as (o: unknown) => void); }) as never);
+    vi.mocked(rolloutHistory).mockResolvedValue({ uid: "uid-ollama", revisions: [
+      { revision: 3, ageSeconds: 600, images: ["v3"], current: true, objectUID: "rs3", templateDigest: "d3" },
+      { revision: 2, ageSeconds: 7200, images: ["v2"], current: false, objectUID: "rs2", templateDigest: "d2" },
+    ] });
+    seed([broken]);
+    const { getByText, findByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect(await findByText("#3")).toBeTruthy();
+    fireEvent.click(getByText("undo →"));
+    expect(getByText(/checking which GitOps unit manages it/)).toBeTruthy();
+    expect((getByText("Roll back") as HTMLButtonElement).disabled).toBe(true);
+    const before = vi.mocked(rolloutUndo).mock.calls.length;
+    fireEvent.click(getByText("Roll back"));
+    expect(vi.mocked(rolloutUndo).mock.calls.length).toBe(before);
+    fireEvent.click(getByText("Cancel"));
+    fireEvent.click(getByText("undo →"));
+    const suspended = { ownerKind: "Kustomization", ownerNamespace: "flux-system", ownerName: "ollama", ownerPrunes: true, ownerSuspended: true, basis: "flux-inventory",
+      namespaceOwnerKind: "", namespaceOwnerNamespace: "", namespaceOwnerName: "", namespacePrunes: false, namespaceManaged: false, namespaceBasis: "", argoApps: [], warnings: [] };
+    await act(async () => { replies[0](suspended); });
+    expect(screen.queryByText(/It is suspended/)).toBeNull();
+    await act(async () => { replies[1]({ ...suspended, ownerSuspended: false }); });
+    expect(getByText(/While it is not suspended/)).toBeTruthy();
+    expect((getByText("Roll back") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a revision whose identity was not read offers no undo", async () => {
+    vi.mocked(rolloutHistory).mockResolvedValue({ uid: "uid-ollama", revisions: [
+      { revision: 3, ageSeconds: 600, images: ["v3"], current: true },
+      { revision: 2, ageSeconds: 7200, images: ["v2"], current: false },
+    ] });
+    seed([broken]);
+    const { findByText, queryByText } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect(await findByText("no undo")).toBeTruthy();
+    expect(queryByText("undo →")).toBeNull();
   });
 
   it("a failed history read renders its error, never a silently missing section", async () => {

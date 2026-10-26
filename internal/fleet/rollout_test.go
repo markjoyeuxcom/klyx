@@ -35,7 +35,7 @@ func rolloutDeployment(paused bool, revision string) *appsv1.Deployment {
 func rolloutRS(name, revision, image, cause string, created time.Time) *appsv1.ReplicaSet {
 	return &appsv1.ReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "shop", Name: name,
+			Namespace: "shop", Name: name, UID: types.UID("rs-" + name),
 			Annotations:       map[string]string{deployRevisionAnn: revision, changeCauseAnn: cause},
 			OwnerReferences:   []metav1.OwnerReference{{UID: depUID, Kind: "Deployment", Name: "cart"}},
 			CreationTimestamp: metav1.Time{Time: created},
@@ -102,7 +102,7 @@ func TestRolloutUndo_DeploymentRestoresOldTemplateWithoutHashLabel(t *testing.T)
 	})
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
 
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2); err != nil {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 2, reviewed(t, c, "Deployment", "shop", "cart", 2)); err != nil {
 		t.Fatal(err)
 	}
 	if patchType != types.JSONPatchType {
@@ -139,7 +139,7 @@ func TestRolloutUndo_DeploymentDropsFieldsAddedAfterTarget(t *testing.T) {
 	typed := k8sfake.NewSimpleClientset(dep, old)
 	c := &ClusterConn{typed: typed}
 
-	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err != nil {
+	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -219,7 +219,7 @@ func TestRolloutUndo_ChangeCauseResultingObject(t *testing.T) {
 			}
 			typed := k8sfake.NewSimpleClientset(dep, old)
 			c := &ClusterConn{typed: typed}
-			if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err != nil {
+			if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1)); err != nil {
 				t.Fatal(err)
 			}
 			got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -256,7 +256,7 @@ func TestRolloutUndo_RecreatedDeploymentIsNotRolledBack(t *testing.T) {
 		return false, nil, nil
 	})
 	c := &ClusterConn{typed: typed}
-	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1); err == nil {
+	if err := c.undoDeployment(context.Background(), "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1)); err == nil {
 		t.Fatal("undo against a recreated Deployment must fail the uid precondition")
 	}
 	got, err := typed.AppsV1().Deployments("shop").Get(context.Background(), "cart", metav1.GetOptions{})
@@ -274,10 +274,10 @@ func TestRolloutUndo_RefusesCurrentAndUnknownRevisions(t *testing.T) {
 		rolloutRS("cart-3", "3", "shop/cart:v3", "", time.Unix(0, 0)),
 	)
 	c := &ClusterConn{typed: typed, clk: clock.NewFake(time.Unix(0, 0))}
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 3); err == nil || !strings.Contains(err.Error(), "already at revision") {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 3, reviewed(t, c, "Deployment", "shop", "cart", 3)); err == nil || !strings.Contains(err.Error(), "already at revision") {
 		t.Fatalf("undo-to-current must refuse: %v", err)
 	}
-	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 99); err == nil || !strings.Contains(err.Error(), "not found") {
+	if err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 99, reviewed(t, c, "Deployment", "shop", "cart", 99)); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("unknown revision must refuse: %v", err)
 	}
 }
@@ -285,7 +285,7 @@ func TestRolloutUndo_RefusesCurrentAndUnknownRevisions(t *testing.T) {
 func stsRevision(name string, rev int64, image string, ownerUID types.UID) *appsv1.ControllerRevision {
 	raw := []byte(`{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"` + image + `"}]}}}}`)
 	return &appsv1.ControllerRevision{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "db", Name: name,
+		ObjectMeta: metav1.ObjectMeta{Namespace: "db", Name: name, UID: types.UID("cr-" + name),
 			OwnerReferences: []metav1.OwnerReference{{UID: ownerUID, Kind: "StatefulSet", Name: "pg"}}},
 		Revision: rev,
 		Data:     runtime.RawExtension{Raw: raw},
@@ -323,7 +323,7 @@ func TestRolloutHistoryAndUndo_StatefulSetViaControllerRevisions(t *testing.T) {
 		t.Fatalf("images from revision data: %+v", hist[1])
 	}
 
-	if err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1); err != nil {
+	if err := c.RolloutUndo(context.Background(), "StatefulSet", "db", "pg", string(stsUID), 1, reviewed(t, c, "StatefulSet", "db", "pg", 1)); err != nil {
 		t.Fatal(err)
 	}
 	// kubectl semantics: the ControllerRevision data IS the patch.
@@ -360,4 +360,25 @@ func TestRolloutHistory_UnsupportedKind(t *testing.T) {
 	if _, _, err := c.RolloutHistory(context.Background(), "CronJob", "x", "y"); err == nil {
 		t.Fatal("unsupported kind must error")
 	}
+}
+
+// reviewed is the expectation an undo of revision rev carries: the revision
+// object and template the history shows (A3 §4.5). A revision the history
+// does not show gets a placeholder, so a test of a refusal before the
+// expectation is checked still reaches it.
+func reviewed(t *testing.T, c *ClusterConn, kind, ns, name string, rev int64) *RevisionExpect {
+	t.Helper()
+	return reviewedOf(c, kind, ns, name, rev)
+}
+
+func reviewedOf(c *ClusterConn, kind, ns, name string, rev int64) *RevisionExpect {
+	hist, _, err := c.RolloutHistory(context.Background(), kind, ns, name)
+	if err == nil {
+		for _, r := range hist {
+			if r.Revision == rev && r.ObjectUID != "" && r.TemplateDigest != "" {
+				return &RevisionExpect{ObjectUID: r.ObjectUID, TemplateDigest: r.TemplateDigest}
+			}
+		}
+	}
+	return &RevisionExpect{ObjectUID: "unreviewed", TemplateDigest: "unreviewed"}
 }

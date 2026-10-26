@@ -25,6 +25,8 @@ type fakeWLConn struct {
 	historyErr      error
 	undoErr         error
 	lastUndoRev     int64
+	lastExpect      *fleet.RevisionExpect
+	attemptToken    string
 	lastPause       *bool
 	lastUID         string // the armed UID the last verb carried
 }
@@ -33,8 +35,8 @@ func (f *fakeWLConn) RolloutHistory(context.Context, string, string, string) ([]
 	return f.history, f.historyUID, f.historyErr
 }
 
-func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _, uid string, revision int64) error {
-	f.lastUndoRev, f.lastUID = revision, uid
+func (f *fakeWLConn) RolloutUndo(_ context.Context, _, _, _, uid string, revision int64, expect *fleet.RevisionExpect) error {
+	f.lastUndoRev, f.lastUID, f.lastExpect = revision, uid, expect
 	return f.undoErr
 }
 
@@ -52,8 +54,14 @@ func (f *fakeWLConn) WorkloadMetrics(context.Context, string) (map[string]worklo
 	return map[string]workloads.Usage{"Deployment/ns/api": {CPU: &cpu}}, workloads.UsageStatus{Available: true}
 }
 
-func (f *fakeWLConn) RolloutRestart(_ context.Context, kind, _, _, uid string) error {
+func (f *fakeWLConn) RolloutRestart(ctx context.Context, kind, _, _, uid string) error {
 	f.lastRestartKind, f.lastUID = kind, uid
+	if f.attemptToken != "" {
+		fleet.NoteAttempt(ctx, fleet.Attempt{UID: uid, Token: f.attemptToken})
+	}
+	if f.rolloutErr == nil {
+		fleet.NoteReceipt(ctx, fleet.Receipt{UID: uid, Generation: 7, Token: "t-1", PriorGeneration: 6})
+	}
 	return f.rolloutErr
 }
 
@@ -278,13 +286,13 @@ func TestRolloutHistoryMapsToDTO(t *testing.T) {
 func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)
 
 	// Unarmed on a protected cluster: refused before the conn is touched.
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2); r.OK || r.Error == "" {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2, "rs-uid", "digest"); r.OK || r.Error == "" {
 		t.Fatalf("unarmed undo on prd must refuse: %+v", r)
 	}
 	if conn.lastUndoRev != 0 {
@@ -295,14 +303,14 @@ func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 	if err := activeProtectGuard.Load().Arm("prd", "prd"); err != nil {
 		t.Fatal(err)
 	}
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2); !r.OK {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 2, "rs-uid", "digest"); !r.OK {
 		t.Fatalf("armed undo: %+v", r)
 	}
 	if conn.lastUndoRev != 2 {
 		t.Fatalf("revision passthrough: %d", conn.lastUndoRev)
 	}
 	// The grant was consumed - a second undo without re-arming refuses.
-	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 1); r.OK {
+	if r := svc.RolloutUndo("prd", "Deployment", "shop", "cart", "uid-cart", 1, "rs-uid", "digest"); r.OK {
 		t.Fatalf("grant must be one-shot: %+v", r)
 	}
 }
@@ -310,7 +318,7 @@ func TestRolloutUndoGatedByProtectGuard(t *testing.T) {
 func TestRolloutPausePassesThroughAndGates(t *testing.T) {
 	prev := activeProtectGuard.Load()
 	t.Cleanup(func() { activeProtectGuard.Store(prev) })
-	SetProtectGuard(NewProtectGuard(func(c string) bool { return c == "prd" }, time.Now))
+	SetProtectGuard(newGuardFor(func(c string) bool { return c == "prd" }, time.Now))
 
 	conn := &fakeWLConn{}
 	svc := wlSvc(conn)
@@ -340,8 +348,10 @@ func TestWorkloadsService_VerbsCarryTheArmedUID(t *testing.T) {
 	for name, run := range map[string]func() ActionResultDTO{
 		"restart": func() ActionResultDTO { return s.RolloutRestart("c", "Deployment", "ns", "api", "uid-armed") },
 		"scale":   func() ActionResultDTO { return s.ScaleWorkload("c", "Deployment", "ns", "api", "uid-armed", 2) },
-		"undo":    func() ActionResultDTO { return s.RolloutUndo("c", "Deployment", "ns", "api", "uid-armed", 1) },
-		"pause":   func() ActionResultDTO { return s.RolloutPause("c", "ns", "api", "uid-armed", true) },
+		"undo": func() ActionResultDTO {
+			return s.RolloutUndo("c", "Deployment", "ns", "api", "uid-armed", 1, "rs-uid", "digest")
+		},
+		"pause": func() ActionResultDTO { return s.RolloutPause("c", "ns", "api", "uid-armed", true) },
 	} {
 		conn.lastUID = ""
 		if r := run(); !r.OK || conn.lastUID != "uid-armed" {

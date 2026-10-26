@@ -30,13 +30,13 @@ type pathHistory struct {
 
 func newPathHistory(t *testing.T) pathHistory {
 	t.Helper()
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
 		t.Skipf("no usable git: %v", err)
 	}
-	base := gitcli.CacheBase(t.TempDir())
+	base := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
 	}

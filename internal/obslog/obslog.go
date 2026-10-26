@@ -495,3 +495,10 @@ func copyTime(t *time.Time) *time.Time {
 	c := *t
 	return &c
 }
+
+// Forget drops a removed cluster's log (Settings S2 §2.5).
+func (l *Log) Forget(cluster string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.clusters, cluster)
+}

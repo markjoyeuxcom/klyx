@@ -253,6 +253,26 @@ See `docs/history/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-26 - AI A3 guarded execution and Settings through S2a (untagged;
+specs `docs/superpowers/specs/2026-10-24-klyx-ai-a3-guarded-execution.md`
+§15-§20, `docs/superpowers/specs/2026-10-25-klyx-settings-*.md` and
+`docs/superpowers/specs/2026-10-26-klyx-settings-s2.md` §13-§17):**
+- A3: an investigation's action proposal - at most four existing day-2
+  verbs on objects it read by UID - checked against a fixed verb matrix
+  and shown as an action card; each step runs on the operator's
+  confirmation through the manual verb's guards, with receipts and a
+  pinned undo partner, then its effect and the incident are verified.
+  Stages 1-6 Codex-accepted; the owner's real-model run remains
+- Settings slice 0, the redesign, S1 (sections, the registry and its
+  coverage, Diagnostics) and slice F (policy epochs and fenced writes,
+  the plan engine, AI, notifications and Git from their running copies),
+  each Codex-accepted
+- S2a, the cluster lifecycle: connection identity and stop, retirement
+  with a trusted end, leases for every worker on a cluster, forgetting a
+  removed cluster everywhere, the running fleet and one protection
+  reader. Merged at revision 4 with Codex's re-review in progress; native
+  smoke 213/213 four ways. S2b and S2c follow
+
 **2026-10-24 - AI A1.1 rollout history and the scored eval (untagged; specs
 `docs/superpowers/specs/2026-10-24-klyx-ai-a1-1-rollout-history.md` §13 and
 `docs/superpowers/specs/2026-10-22-klyx-ai-eval.md` §15-§17):**

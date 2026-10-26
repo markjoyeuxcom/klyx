@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // ExplainTargetDTO names what to explain (spec 2026-10-13 §4.1):
@@ -57,11 +58,16 @@ var errReplaced = errors.New("the object was replaced or removed since Klyx eval
 // one, from an allowlisted, scrubbed, capped evidence document. Read-only.
 func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
+	conn, fence, refusal := s.precheck(st, cluster)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeExplain))
+	done, le, refusal := s.admitCall("explain", cluster, conn)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
+	}
+	defer done()
+	ctx, cancel := context.WithTimeout(readfence.With(le.Ctx, fence), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 
 	var (

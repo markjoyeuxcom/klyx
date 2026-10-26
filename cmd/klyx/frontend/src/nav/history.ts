@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { useFleet, WORKLOAD_KINDS } from "../store/fleet";
 import type { Route, WorkloadKind } from "../store/fleet";
 import { activeLocation, sameRef } from "./registry";
+import { SECTION_TITLES } from "../settings/registry";
+import { mustAsk, requestLeave } from "../settings/navGuard";
 
 // Navigation history (redesign step 7b; added to the spec after the Lens
 // comparison): Back / Forward and a Recent menu. An entry is a place - the
@@ -21,6 +23,8 @@ export const useHistory = create<HistoryState>(() => ({ past: [], future: [], re
 const ALL_KINDS = Object.fromEntries(WORKLOAD_KINDS.map((k) => [k, true])) as Record<WorkloadKind, boolean>;
 
 function entryOf(route: Route, kindFilter: Record<WorkloadKind, boolean>): HistoryEntry {
+  // a Settings place is its section: an anchor is where in it, not a place
+  if (route.name === "settings") return { route: { name: "settings", section: route.section ?? "fleet" } };
   return route.name === "cluster" && route.section === "workloads" && !route.resource ? { route, kindFilter } : { route };
 }
 
@@ -34,7 +38,7 @@ export function entryLabel(e: HistoryEntry): { cluster: string | null; place: st
   if (r.name === "fleet") return { cluster: null, place: r.view === "promotion" ? "Promotion tracker" : r.view === "expiry" ? "Expiry horizon" : r.view === "backups" ? "Backups" : "Fleet board" };
   if (r.name === "forwards") return { cluster: null, place: "Port-forwards" };
   if (r.name === "activity") return { cluster: null, place: "Activity" };
-  if (r.name === "settings") return { cluster: null, place: "Settings" };
+  if (r.name === "settings") return { cluster: null, place: `Settings › ${SECTION_TITLES[r.section ?? "fleet"] ?? "Fleet"}` };
   const { group, destination } = activeLocation(r, e.kindFilter ?? ALL_KINDS);
   let place = destination?.label ?? (r.resource ? r.resource.kind : group?.label ?? r.section);
   if (r.instance) place += ` › ${r.instance.namespace ? `${r.instance.namespace}/` : ""}${r.instance.name}`;
@@ -151,8 +155,17 @@ export function forwardTarget(): HistoryEntry | undefined {
   return undefined;
 }
 
+// leaving asks first when it would lose a Settings draft (S1 §1); the
+// question's answer runs the move, or nothing.
+function askFirst(move: () => boolean): boolean {
+  if (!mustAsk() || useFleet.getState().route.name !== "settings") return false;
+  requestLeave(() => { move(); });
+  return true;
+}
+
 // back / forward skip places whose cluster has left the fleet.
 export function back(): boolean {
+  if (askFirst(back)) return false;
   const h = useHistory.getState();
   const past = [...h.past];
   const skipped: HistoryEntry[] = [];
@@ -165,6 +178,7 @@ export function back(): boolean {
 }
 
 export function forward(): boolean {
+  if (askFirst(forward)) return false;
   const h = useHistory.getState();
   const future = [...h.future];
   let target: HistoryEntry | undefined;
@@ -178,6 +192,7 @@ export function forward(): boolean {
 // go opens a Recent place as an ordinary navigation (it is recorded).
 export function go(e: HistoryEntry): void {
   if (!exists(e)) return;
+  if (askFirst(() => { go(e); return true; })) return;
   const from = current();
   restore(e);
   if (entryKey(from) !== entryKey(current())) useHistory.setState((h) => ({ past: [...h.past, from].slice(-MAX), future: [] }));

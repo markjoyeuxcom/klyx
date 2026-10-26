@@ -9,6 +9,9 @@ import {
   type EndpointRow,
   type EndpointsState,
 } from "../bridge/endpoints";
+import { SettingField } from "../settings/SettingField";
+import { setSectionDraft } from "../settings/navGuard";
+import { anchorOf } from "../settings/registry";
 
 // EndpointsPanel is Settings > Endpoints (coverage C5 §8): each cluster's
 // metrics, Alertmanager and Loki endpoints with their credential's state.
@@ -41,7 +44,8 @@ export function stateText(r: EndpointRow): { text: string; warn: boolean } {
   return { text: r.why ? `${r.state}: ${r.why}` : r.state, warn: true };
 }
 
-export function EndpointsPanel() {
+// onLoaded hands the rows to the section (its sentence reads them).
+export function EndpointsPanel({ onLoaded }: { onLoaded?: (s: EndpointsState) => void } = {}) {
   const [state, setState] = useState<EndpointsState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,13 +57,27 @@ export function EndpointsPanel() {
     setLoadFailed(!st);
     if (st) {
       setState(st);
+      onLoaded?.(st);
       const live = new Set(st.rows.map(draftKey));
       setInputs((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => live.has(k))));
     }
   };
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A typed credential is its own draft (Settings S1 §1): leaving the
+  // section names it, and never stores it.
+  useEffect(() => {
+    const typed = (state?.rows ?? []).filter((r) => (inputs[draftKey(r)] ?? "").trim() !== "");
+    setSectionDraft("endpoints", typed.length === 0 ? null : {
+      settings: false,
+      credentials: typed.map((r) => `an unsaved ${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind} ${r.authType === "basic" ? "password" : "token"}`),
+      discard: () => setInputs({}),
+    });
+  }, [inputs, state]);
+  useEffect(() => () => setSectionDraft("endpoints", null), []);
 
   const run = async (fn: () => Promise<EndpointAction>) => {
     setBusy(true);
@@ -81,8 +99,16 @@ export function EndpointsPanel() {
   return (
     <div data-testid="endpoints-settings">
       <div style={{ ...hint, marginBottom: 8 }}>
-        Endpoints are set in fleet.yaml (metrics, alertmanager, loki under a cluster). A credential is kept in the keychain for the endpoint's origin only, and is sent nowhere else.
+        Endpoints are set in fleet.yaml (metrics, alertmanager, loki under a cluster), and this list reads the file as it is now. A cluster takes an edited endpoint when you Test it or change its credential here, or when Klyx restarts. A credential is kept in the keychain for the endpoint's origin only, and is sent nowhere else.
       </div>
+      {loadFailed && (
+        // a reread after an action failed: the rows are as last read
+        // (Settings review slice 0)
+        <div role="status" data-testid="endpoints-reread-failed" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>
+          Klyx could not read the endpoints again: these rows are as last read and may be out of date.{" "}
+          <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
       {state.error && <div role="status" data-testid="endpoints-error" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>fleet.yaml cannot be read: {state.error}</div>}
       {message && (
         <div role="status" data-testid="endpoints-message" style={{ fontSize: 11, marginBottom: 8, color: message.ok ? "var(--color-text-primary)" : "var(--color-text-warning)" }}>{message.text}</div>
@@ -94,21 +120,33 @@ export function EndpointsPanel() {
         const st = stateText(r);
         const value = inputs[dk] ?? "";
         return (
-          <div key={k} data-testid="endpoint-row" data-endpoint={k} style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+          <div key={k} data-testid="endpoint-row" data-endpoint={k} data-anchor={anchorOf(`clusters[].${r.kind}.endpoint`, r.cluster)} tabIndex={-1}
+            style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
             <div style={row}>
               <span style={{ fontWeight: 600, minWidth: 110 }}>{r.cluster} · {KIND_LABEL[r.kind] ?? r.kind}</span>
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>{r.source}</span>
               {r.tenant && <span style={hint}>tenant {r.tenant}</span>}
               {r.authType && <span style={hint}>{r.authType}{r.username ? ` as ${r.username}` : ""}</span>}
+              {r.tlsOff && <span data-testid="endpoint-tls-off" style={{ fontSize: 11, color: "var(--color-text-warning)" }}>certificate not verified (tlsSkipVerify)</span>}
             </div>
+            {(r.scope || r.unscoped) && (
+              <div style={row}>
+                <span data-testid="endpoint-scope" style={{ fontSize: 11, color: r.unscoped ? "var(--color-text-tertiary)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>
+                  {r.scope
+                    ? <>this cluster's {r.kind === "loki" ? "streams" : "alerts"}: <span style={{ fontFamily: "var(--font-mono)" }}>{r.scope}</span></>
+                    : `no match: everything this ${KIND_LABEL[r.kind] ?? r.kind} holds is read as ${r.cluster}'s; set match when other clusters share it`}
+                </span>
+              </div>
+            )}
             <div style={row}>
               <span data-testid="endpoint-state" style={{ fontSize: 11, color: st.warn ? "var(--color-text-warning)" : "var(--color-text-secondary)", overflowWrap: "anywhere" }}>{st.text}</span>
             </div>
-            <div style={row}>
-              {r.canSet && (
-                <>
+            {r.canSet && (
+              <SettingField id="credential.endpoint" instance={k} label={`${r.cluster} ${r.kind} ${r.authType === "basic" ? "password" : "token"}`}>
+                {(ids) => (<>
                   <input
-                    aria-label={`${r.cluster} ${r.kind} ${r.authType === "basic" ? "password" : "token"}`}
+                    id={ids.id}
+                    aria-describedby={ids.describedBy}
                     type="password"
                     autoComplete="off"
                     spellCheck={false}
@@ -129,8 +167,10 @@ export function EndpointsPanel() {
                   >
                     {r.state === "stored" ? "Replace" : "Store"}
                   </button>
-                </>
-              )}
+                </>)}
+              </SettingField>
+            )}
+            <div style={row}>
               {r.canMove && <button className="l-btn" aria-label={`Move the ${r.cluster} metrics token to the keychain`} disabled={busy} onClick={() => void run(() => moveToKeychain(r.cluster, r.revision))}>Move to keychain</button>}
               {r.canRemove && (
                 <button className="l-btn l-btn-danger" aria-label={`${r.removeLabel ?? "Remove"} (${r.cluster} ${KIND_LABEL[r.kind] ?? r.kind})`} disabled={busy} onClick={() => void run(() => removeCredential(r.cluster, r.kind, r.revision))}>

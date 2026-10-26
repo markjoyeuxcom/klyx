@@ -19,7 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/procrun"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // ClaudeCLIOrigin is where a Claude Code call's prompt goes, as Settings and
@@ -407,13 +409,17 @@ func NewClaudeCLI(cliPath, model string) Provider {
 
 func newClaudeCLI(cliPath, model string) *claudeCLIProvider {
 	return &claudeCLIProvider{
-		cliPath: cliPath, model: model, environ: os.Environ, lookPath: exec.LookPath,
+		cliPath: cliPath, model: model, environ: claudeEnviron, lookPath: exec.LookPath,
 		platforms: claudePlatforms, goos: runtime.GOOS, goarch: runtime.GOARCH,
 		store: defaultClaudeAdmissions, builds: defaultClaudeBuilds, hashes: defaultExeHashes,
 		authDeadline: claudeAuthDeadline, doctorDeadline: claudeDocDeadline, initDeadline: claudeShortDeadline,
 		stdinDeadline: claudeStdinDeadline, offline: claudeOffline,
 	}
 }
+
+// claudeEnviron is the parent environment the CLI's allowlist takes; claudeEnv
+// still filters it, and adds the fixed lockdown values.
+func claudeEnviron() []string { return envread.Walk(envread.ClaudeCLI) }
 
 func (p *claudeCLIProvider) envValue(k string) string {
 	for _, kv := range p.environ() {
@@ -962,6 +968,13 @@ func (p *claudeCLIProvider) run(ctx context.Context, t callTicket, req Request, 
 				return err
 			}
 			return p.store.release(t, func() error {
+				// Settings slice F §4: the call's fence, immediately before
+				// the prompt goes on stdin; a refusal here sends nothing, and
+				// nothing hands the prompt over again. Send marks it so
+				// (F1 review, finding F6) and records the handoff.
+				if err := readfence.Send(ctx); err != nil {
+					return err
+				}
 				if err := write(); err != nil {
 					return &CLIDiscardedError{Reason: fmt.Sprintf("Klyx could not finish handing the prompt to Claude Code: %v", err), Partial: true}
 				}

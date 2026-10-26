@@ -111,6 +111,7 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	if err != nil {
 		return t.failed(toolUnit, "api", target, err)
 	}
+	acquired := acquisition()
 	if raw.GetKind() != kind {
 		return t.refuse(toolUnit, target, fmt.Errorf("the object read is a %s, not a %s", label(raw.GetKind()), kind))
 	}
@@ -180,7 +181,9 @@ func (t *chatTools) unit(ctx context.Context, kind, ns, name string) ChatToolRes
 	checks = append(checks, current...)
 	env.Data = data
 	env.Checks = capChecks(checks)
-	return t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
+	res := t.finish(env, ChatRead{Tool: toolUnit, Target: target, Outcome: "completed", Redacted: p.redacted, Refs: capRefs(refs)})
+	res.facts = []actionFact{factOf(gvr, raw, t.readID, env.ReadAt, acquired)}
+	return res
 }
 
 // conditionRaw is one condition's last transition, status, reason and raw

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { InspectorBlock } from "../layout/InspectorLayout";
 import { Age } from "../chrome/Age";
 import { navigate, NAV_GROUPS } from "../nav/registry";
@@ -66,6 +67,7 @@ export function useInspectorAlerts(cluster: string, target: AlertTarget | null):
     <InspectorBlock title="Alerts" count={total > 0 ? total : undefined} extra={<span className="t-secondary" style={{ marginLeft: "auto" }}>{freshness}</span>}>
       {failure && <div className="t-secondary" role="status" style={{ color: "var(--color-text-warning)" }} data-testid="insp-alerts-failure">
         Alerts read failed: {failure}{rows !== null && rows.length > 0 ? " - showing the last good read; nothing here is called resolved." : "."}
+        <EndpointSettingsLink text={failure} cluster={cluster} kind="alertmanager" />
       </div>}
       {own.map((a) => <AlertLine key={a.key} cluster={cluster} a={a} byFp={byFp} nameOnly={byNameOnly.has(a.key)} />)}
       {onPods.length > 0 && <div className="t-section-label" style={{ marginTop: 6 }}>on its pods</div>}

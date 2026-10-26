@@ -5,19 +5,21 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // ApplyDesktopToolPath augments PATH with common package-manager and cloud CLI
 // locations. It is intentionally additive: user-provided PATH entries stay
 // first, and duplicates are ignored.
 func ApplyDesktopToolPath() {
-	_ = os.Setenv("PATH", AugmentPath(os.Getenv("PATH"), runtime.GOOS, os.Getenv))
+	_ = envread.Set(envread.Path, AugmentPath(envread.Get(envread.Path), runtime.GOOS, envread.Get))
 }
 
 // AugmentPath returns a PATH with common desktop-tool directories appended for
 // the target OS. getenv is injected for tests and for Windows ProgramFiles
 // expansion.
-func AugmentPath(path, goos string, getenv func(string) string) string {
+func AugmentPath(path, goos string, getenv func(envread.Name) string) string {
 	sep := pathListSeparator(goos)
 	entries := splitPath(path, sep)
 	for _, candidate := range desktopToolDirs(goos, getenv) {
@@ -26,7 +28,7 @@ func AugmentPath(path, goos string, getenv func(string) string) string {
 	return strings.Join(entries, sep)
 }
 
-func desktopToolDirs(goos string, getenv func(string) string) []string {
+func desktopToolDirs(goos string, getenv func(envread.Name) string) []string {
 	switch goos {
 	case "darwin":
 		return []string{
@@ -46,20 +48,20 @@ func desktopToolDirs(goos string, getenv func(string) string) []string {
 		}
 	case "windows":
 		var out []string
-		if pf := getenv("ProgramFiles"); pf != "" {
+		if pf := getenv(envread.ProgramFiles); pf != "" {
 			out = append(out,
 				pf+`\Amazon\AWSCLIV2`,
 				pf+`\Amazon\AWSCLIV2\bin`,
 				pf+`\Kubernetes`,
 			)
 		}
-		if pf86 := getenv("ProgramFiles(x86)"); pf86 != "" {
+		if pf86 := getenv(envread.ProgramFilesX86); pf86 != "" {
 			out = append(out,
 				pf86+`\Amazon\AWSCLIV2`,
 				pf86+`\Amazon\AWSCLIV2\bin`,
 			)
 		}
-		if chocolatey := getenv("ChocolateyInstall"); chocolatey != "" {
+		if chocolatey := getenv(envread.ChocolateyInstall); chocolatey != "" {
 			out = append(out, chocolatey+`\bin`)
 		}
 		return append(out, `C:\ProgramData\chocolatey\bin`)

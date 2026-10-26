@@ -44,7 +44,7 @@ func workloadVerbs() []workloadVerb {
 		{"scale statefulset", "StatefulSet", "db", "pg", func(c *ClusterConn, uid string) error { return c.ScaleWorkload(ctx, "StatefulSet", "db", "pg", uid, 2) }},
 		{"pause", "Deployment", "default", "api", func(c *ClusterConn, uid string) error { return c.RolloutPause(ctx, "default", "api", uid, true) }},
 		{"undo", "Deployment", "default", "api", func(c *ClusterConn, uid string) error {
-			return c.RolloutUndo(ctx, "Deployment", "default", "api", uid, 1)
+			return c.RolloutUndo(ctx, "Deployment", "default", "api", uid, 1, reviewedOf(c, "Deployment", "default", "api", 1))
 		}},
 	}
 }
@@ -135,7 +135,7 @@ func TestWorkloadVerbs_CarryTheArmedUIDOnTheWrite(t *testing.T) {
 		return true, sts, nil
 	})
 	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-	if err := c.RolloutUndo(ctx, "StatefulSet", "db", "pg", "uid-pg", 1); err != nil {
+	if err := c.RolloutUndo(ctx, "StatefulSet", "db", "pg", "uid-pg", 1, reviewed(t, c, "StatefulSet", "db", "pg", 1)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(patched, `"uid":"uid-pg"`) || !strings.Contains(patched, "postgres:16.2") {
@@ -207,7 +207,7 @@ func TestRolloutUndo_A422NamesAReplacementOnlyWhenConfirmed(t *testing.T) {
 			return true, nil, failed
 		})
 		c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-		err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1)
+		err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1))
 		if errors.Is(err, ErrReplaced) != replaced {
 			t.Fatalf("replaced=%v: %v", replaced, err)
 		}
@@ -237,7 +237,7 @@ func TestRolloutUndo_A422WithAFailedReReadIsNotAReplacement(t *testing.T) {
 		return false, nil, nil
 	})
 	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-	err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1)
+	err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1))
 	if err == nil || errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
 		t.Fatalf("an unconfirmed 422 is a refusal, never a replacement: %v", err)
 	}
@@ -252,13 +252,13 @@ func TestRolloutUndo_ReadObjectMustBeTheArmedOne(t *testing.T) {
 	dep := rolloutDeployment(false, "2")
 	typed := typedfake.NewClientset(dep, rolloutRS("cart-1", "1", "v1", "", time.Now()))
 	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-	if err := c.undoDeployment(ctx, "shop", "cart", "uid-old", 1); !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
+	if err := c.undoDeployment(ctx, "shop", "cart", "uid-old", 1, reviewed(t, c, "Deployment", "shop", "cart", 1)); !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
 		t.Fatalf("a Deployment read with another UID is ErrReplaced: %v", err)
 	}
 	sts := &appsv1.StatefulSet{ObjectMeta: seedStatefulSet("db", "pg").ObjectMeta}
 	typed = typedfake.NewClientset(sts, stsRevision("pg-rev1", 1, "postgres:16.2", sts.UID))
 	c = newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-	if err := c.undoFromControllerRevision(ctx, "StatefulSet", "db", "pg", "uid-old", 1); !errors.Is(err, ErrReplaced) {
+	if err := c.undoFromControllerRevision(ctx, "StatefulSet", "db", "pg", "uid-old", 1, reviewed(t, c, "StatefulSet", "db", "pg", 1)); !errors.Is(err, ErrReplaced) {
 		t.Fatalf("a StatefulSet read with another UID is ErrReplaced: %v", err)
 	}
 	for _, a := range typed.Actions() {
@@ -284,7 +284,7 @@ func TestRolloutUndo_HistoryOfAReplacementIsRefused(t *testing.T) {
 		return true, newer, nil
 	})
 	c := newPodActionsConn(typed, clock.NewFake(time.Unix(0, 0)))
-	err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1)
+	err := c.RolloutUndo(context.Background(), "Deployment", "shop", "cart", string(depUID), 1, reviewed(t, c, "Deployment", "shop", "cart", 1))
 	if !errors.Is(err, ErrReplaced) || !strings.Contains(err.Error(), "nothing was written") {
 		t.Fatalf("the history of a replacement is refused: %v", err)
 	}

@@ -256,3 +256,10 @@ func (h *appliedHistory) Change(cluster, uid string) (AppliedChange, bool) {
 	}
 	return out, true
 }
+
+// ForgetCluster drops a removed cluster (Settings S2 §2.5).
+func (h *appliedHistory) ForgetCluster(cluster string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.st, cluster)
+}

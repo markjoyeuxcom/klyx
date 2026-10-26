@@ -16,6 +16,7 @@ import { ClusterDetail } from "../cluster/ClusterDetail";
 import { CommandPalette, getPaletteOpen } from "../chrome/CommandPalette";
 import { ActionToast } from "../chrome/ActionToast";
 import { ChatDrawer } from "../ai/ChatDrawer";
+import { LeaveDialog } from "../settings/LeaveDialog";
 import { back, forward } from "../nav/history";
 import { handleZoomKey } from "./zoom";
 import { startSummaries } from "../bridge/healthRows";
@@ -50,11 +51,14 @@ export function handleShellKey(e: KeyboardEvent): void {
   if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
   const history = e.key === "[" || e.key === "]";
   const index = e.key === "\\";
+  const settings = e.key === ",";
   const n = Number(e.key);
   const cluster = Number.isInteger(n) && n >= 1 && n <= 9;
-  if (!history && !cluster && !index) return;
+  if (!history && !cluster && !index && !settings) return;
   if (shellKeysOwnedElsewhere(e)) return;
   e.preventDefault();
+  // mod+, opens Settings at the section this session last showed (S1 §1).
+  if (settings) { useFleet.getState().openSettings(); return; }
   // mod+\ shows or hides the lens index (slice 4 §4.3).
   if (index) { toggleLensIndex(); return; }
   // mod+[ / mod+] move through history - places only, never actions.
@@ -105,6 +109,7 @@ export function AppShell() {
       </div>
       <ChatDrawer />
       <ActionToast />
+      <LeaveDialog />
     </div>
   );
 }

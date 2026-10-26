@@ -101,6 +101,11 @@ type RolloutRevisionDTO struct {
 	Images      []string `json:"images"`
 	Current     bool     `json:"current"`
 	ChangeCause string   `json:"changeCause,omitempty"`
+	// ObjectUID and TemplateDigest identify the revision object and its pod
+	// template: an undo passes them back and writes only this revision
+	// (A3 §4.5).
+	ObjectUID      string `json:"objectUID,omitempty"`
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // RolloutHistoryResultDTO is RolloutHistory's payload. Error is the fold-in

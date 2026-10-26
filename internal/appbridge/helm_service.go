@@ -25,13 +25,16 @@ type HelmConn interface {
 // rollback; install/uninstall are intentionally excluded (Git owns desired state).
 type HelmService struct {
 	lookup func(string) (HelmConn, bool)
+	lease  leaser // a rollback's lease (Settings S2 §2.3)
 	now    func() time.Time
 }
 
 // NewHelmService creates a HelmService with the given cluster-lookup function.
 func NewHelmService(lookup func(string) (HelmConn, bool)) *HelmService {
-	return &HelmService{lookup: lookup, now: time.Now}
+	return &HelmService{lookup: lookup, lease: plainLeaser(lookup), now: time.Now}
 }
+
+func (s *HelmService) setLeaser(l leaser) { s.lease = l }
 
 // ListHelmReleases returns all Helm releases for a cluster. If the helm binary
 // is absent or the cluster is not connected, Available is false and Message
@@ -184,10 +187,18 @@ type RollbackOptionsDTO struct {
 
 // HelmRollback rolls back a release to the specified revision.
 func (s *HelmService) HelmRollback(cluster, namespace, release string, revision int, opts RollbackOptionsDTO) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
-	conn, ok := s.lookup(cluster)
+	// a rollback's lease (S2 §2.3): continuing - a started rollback runs to
+	// its end, whatever its connection
+	le, err := s.lease(cluster, Work{Kind: "rollback", What: "the rollback of release " + namespace + "/" + release, Continues: true})
+	if err != nil {
+		return ActionResultDTO{Error: err.Error()}
+	}
+	defer le.Release()
+	conn, ok := le.Conn.(HelmConn)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
@@ -198,7 +209,9 @@ func (s *HelmService) HelmRollback(cluster, namespace, release string, revision 
 	// (cross-review C), and no derived budget is safe either - hook deletion
 	// and readiness each get their own timeout, per hook (batch-3 review R1).
 	// Killing helm mid-operation strands the release in pending-rollback.
-	if err := conn.HelmRollback(context.Background(), namespace, release, revision, ro); err != nil {
+	// slice F §2: the helm runner checks the ticket at the child's actual
+	// start; a started rollback is not stopped by a later move
+	if err := conn.HelmRollback(t.Write(context.Background()), namespace, release, revision, ro); err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	return ActionResultDTO{OK: true}

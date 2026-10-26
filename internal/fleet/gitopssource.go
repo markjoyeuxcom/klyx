@@ -32,17 +32,18 @@ func sourceGVR(kind string) (group, fallbackVersion, resource string, ok bool) {
 // sourceServedGVR is the GVR a Flux source kind is served at, resolved per
 // resource (servedVersion): OCIRepository can lag the group's preferred
 // version (review 2026-10-03 #11). ok=false for an unsupported or unserved
-// kind.
-func (c *ClusterConn) sourceServedGVR(kind string) (schema.GroupVersionResource, bool) {
+// kind. Discovery is read under ctx's fence (discoveryFor); a fence that
+// no longer holds is the error (Settings F1 review, finding F2).
+func (c *ClusterConn) sourceServedGVR(ctx context.Context, kind string) (schema.GroupVersionResource, bool, error) {
 	group, fallback, resource, ok := sourceGVR(kind)
 	if !ok {
-		return schema.GroupVersionResource{}, false
+		return schema.GroupVersionResource{}, false, nil
 	}
-	version, served := servedVersion(c.discovery(), group, resource, fallback)
-	if !served {
-		return schema.GroupVersionResource{}, false
+	version, served, err := servedVersion(c.discoveryFor(ctx), group, resource, fallback)
+	if err != nil || !served {
+		return schema.GroupVersionResource{}, false, err
 	}
-	return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}, true
+	return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}, true, nil
 }
 
 // fluxGVR maps a Flux kind Klyx reads to its group, fallback version and

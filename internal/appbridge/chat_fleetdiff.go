@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/moomora/klyx/internal/fleet"
+	"github.com/moomora/klyx/internal/policy"
 )
 
 // AI A1 §3.7 and A-C2: an investigation may compare its workload across an
@@ -35,6 +36,42 @@ func fleetDiffToolDef() ChatToolDef {
 type member struct {
 	cluster string
 	conn    ChatConn
+	epoch   policy.Epoch // pinned with the set (Settings slice F §4)
+	// lease is the investigation's work on the member (Settings S2 §10):
+	// listed under the member's connection, and retiring it ends the
+	// investigation explicitly (Codex's review of S2a, F3)
+	lease *Lease
+	adm   *memberAdmission
+}
+
+// memberAdmission is one member's admission to a comparison set, made
+// before its lease (Codex's re-review of S2a, RR2): its lease's End acts on
+// the investigation only while the set holding it is the committed one; a
+// set refused, or replaced, never ends it. Guarded by the chat service's
+// mutex.
+type memberAdmission struct{ committed bool }
+
+// release ends the member's lease and its admission. Under s.mu.
+func (m member) release() {
+	if m.adm != nil {
+		m.adm.committed = false
+	}
+	m.lease.Release()
+}
+
+// memberEnded ends c because its member name's connection was retired -
+// only when that member's admission is committed to c's set.
+func (s *ChatService) memberEnded(c *conversation, adm *memberAdmission, name, why string) {
+	s.mu.Lock()
+	var ev ChatEndedDTO
+	ok := false
+	if adm.committed {
+		ev, ok = s.endLocked(c, "the comparison cluster "+name+": "+why)
+	}
+	s.mu.Unlock()
+	if ok && s.em != nil {
+		s.em.Emit(ChatEndedEvent, ev)
+	}
 }
 
 // SetComparison fixes an investigation's comparison set before its first
@@ -60,6 +97,8 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		return notice("the comparison set is fixed once the investigation has begun")
 	case len(members) > chatComparisonMax:
 		return notice(fmt.Sprintf("at most %d clusters to compare", chatComparisonMax))
+	case s.ai.applyingNow():
+		return notice(aiApplying)
 	}
 	st := s.ai.load()
 	if st.Rev != c.rev {
@@ -67,6 +106,14 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 	}
 	seen := map[string]bool{}
 	var set []member
+	chosen := false
+	defer func() {
+		if !chosen { // a refusal holds no member's lease, and commits none
+			for _, m := range set {
+				m.release()
+			}
+		}
+	}()
 	for _, m := range members {
 		switch {
 		case m == "" || seen[m]:
@@ -75,6 +122,8 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 			return notice("the investigated cluster is not a comparison member")
 		}
 		seen[m] = true
+		// pinned before its egress is decided (Settings F1 review, F1)
+		epoch, notAdmitted := admitNow(m)
 		if refusal := s.refusal(st, m); refusal != "" {
 			return notice(m + ": " + refusal)
 		}
@@ -82,8 +131,35 @@ func (s *ChatService) SetComparison(cluster, conversationID string, members []st
 		if conn == nil || !usable {
 			return notice(m + " is not connected")
 		}
-		set = append(set, member{cluster: m, conn: conn})
+		if notAdmitted != "" {
+			return notice(notAdmitted)
+		}
+		name, adm := m, &memberAdmission{}
+		le, err := s.lease(m, Work{Kind: kindInvestigation, What: "the comparison in the investigation on " + cluster,
+			End: func(why string) { s.memberEnded(c, adm, name, why) }})
+		if err != nil {
+			return notice(m + ": " + err.Error())
+		}
+		set = append(set, member{cluster: m, conn: conn, epoch: epoch, lease: le, adm: adm})
+		if !le.Pins(conn) {
+			return notice(m + " is not connected")
+		}
 	}
+	// a member whose connection was retired while the set was chosen: the
+	// set is refused, and that member's end, waiting for s.mu, acts on
+	// nothing
+	for _, m := range set {
+		if m.lease.Retired() {
+			return notice("the comparison cluster " + m.cluster + " disconnected while it was chosen; choose again")
+		}
+	}
+	for _, old := range c.members {
+		old.release()
+	}
+	for _, m := range set {
+		m.adm.committed = true
+	}
+	chosen = true
 	c.members = set
 	s.version++
 	return s.stateLocked(c)
@@ -96,6 +172,9 @@ func (s *ChatService) memberProblem(st *AIState, m member) string {
 	conn, usable := s.state(m.cluster)
 	if conn == nil || conn != m.conn || !usable {
 		return "the comparison cluster " + m.cluster + " disconnected; start a new investigation"
+	}
+	if p := epochProblem(m.cluster, m.epoch); p != "" {
+		return "the comparison cluster " + p + "; start a new investigation"
 	}
 	if refusal := s.refusal(st, m.cluster); refusal != "" {
 		return "the comparison cluster " + m.cluster + ": " + refusal

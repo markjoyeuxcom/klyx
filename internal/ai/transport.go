@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -43,6 +44,11 @@ func NewHTTPClient(tlsSkipVerify bool) *http.Client {
 
 // Harden returns a copy of c with the response cap on its transport and the
 // redirect policy installed. The caller's client is not mutated.
+//
+// Settings slice F §4: the transport also checks the call's read fence
+// before every HTTP attempt - a permitted same-host redirect and an SDK
+// retry included, since both go through this transport - so nothing is
+// sent once the cluster's policy, its connection or the AI settings moved.
 func Harden(c *http.Client) *http.Client {
 	if c == nil {
 		c = &http.Client{Timeout: httpBackstop}
@@ -52,7 +58,7 @@ func Harden(c *http.Client) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	hc.Transport = safehttp.Cap(base, maxResponseBytes, ErrResponseTooLarge)
+	hc.Transport = safehttp.Cap(readfence.Transport(base), maxResponseBytes, ErrResponseTooLarge)
 	hc.CheckRedirect = checkRedirect
 	return &hc
 }

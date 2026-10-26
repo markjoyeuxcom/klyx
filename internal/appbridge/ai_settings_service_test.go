@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/moomora/klyx/internal/ai"
 	"github.com/moomora/klyx/internal/config"
@@ -78,8 +77,19 @@ func newSettingsFixture(t *testing.T, fleet string) *settingsFixture {
 	f := &settingsFixture{path: path, keys: newMemKeys(), env: map[string]string{}}
 	getenv := func(k string) string { return f.env[k] }
 	f.ai = NewAIService(func(string) (AIConn, bool) { return nil, false }, BuildAIState(cfg.AI, f.keys, getenv), func(string) bool { return true }, nil)
+	// a call registered directly needs no connection (S2 §2.3)
+	f.ai.lease = func(cluster string, _ Work) (*Lease, error) { return PlainLease(cluster, nil), nil }
 	f.svc = NewAISettingsService(path, f.keys, getenv, f.ai, cfg.AI)
 	return f
+}
+
+// save plans the draft and applies it, typing typed for an interlock.
+func (f *settingsFixture) save(d AISettingsDTO, typed string) ApplyResultDTO {
+	p := f.svc.PlanAI(d)
+	if p.Refused != "" {
+		return ApplyResultDTO{Error: p.Refused}
+	}
+	return f.svc.ApplyAI(p.Digest, typed)
 }
 
 func (f *settingsFixture) file(t *testing.T) string {
@@ -96,7 +106,7 @@ const baseFleet = "clusters:\n  - name: a\n"
 func TestAISettings_SaveAppliesAndPersists(t *testing.T) {
 	f := newSettingsFixture(t, baseFleet)
 	rev := f.ai.load().Rev
-	r := f.svc.SaveAISettings(AISettingsDTO{Provider: "openaiCompatible", Model: "llama3.1", BaseURL: "http://localhost:11434", KeySource: "none"})
+	r := f.save(AISettingsDTO{Provider: "openaiCompatible", Model: "llama3.1", BaseURL: "http://localhost:11434", KeySource: "none"}, "")
 	if !r.OK {
 		t.Fatalf("save: %+v", r)
 	}
@@ -117,7 +127,7 @@ func TestAISettings_SaveAppliesAndPersists(t *testing.T) {
 func TestAISettings_UnbuildableSaveWritesNothing(t *testing.T) {
 	f := newSettingsFixture(t, baseFleet)
 	before, rev := f.file(t), f.ai.load().Rev
-	r := f.svc.SaveAISettings(AISettingsDTO{Provider: "anthropic", KeySource: "keychain"})
+	r := f.save(AISettingsDTO{Provider: "anthropic", KeySource: "keychain"}, "")
 	if r.OK || !strings.Contains(r.Error, "No API key") {
 		t.Fatalf("want a no-key refusal, got %+v", r)
 	}
@@ -126,43 +136,44 @@ func TestAISettings_UnbuildableSaveWritesNothing(t *testing.T) {
 	}
 }
 
-// Spec §2.3: turning protected egress on is authorized at the backend by a
-// one-shot, expiring grant - not only by the dialog.
-func TestAISettings_EgressNeedsTheBackendGrant(t *testing.T) {
+// Settings slice F §5: turning protected egress on is the plan's interlock,
+// checked at the backend - not only by the dialog - and taken again each
+// time it is turned on.
+func TestAISettings_EgressIsThePlansInterlock(t *testing.T) {
 	f := newSettingsFixture(t, baseFleet)
-	now := time.Now()
-	f.svc.now = func() time.Time { return now }
 	on := AISettingsDTO{Provider: "openaiCompatible", Model: "m", BaseURL: "http://192.168.1.10:11434", KeySource: "none", AllowProtectedEgress: true}
 
-	if r := f.svc.SaveAISettings(on); r.OK || !strings.Contains(r.Error, "typed confirmation") {
-		t.Fatalf("without a grant: %+v", r)
+	p := f.svc.PlanAI(on)
+	if p.Interlock == nil || p.Interlock.Phrase != aiEgressPhrase || !strings.Contains(p.Interlock.Why, "192.168.1.10") {
+		t.Fatalf("the plan's interlock: %+v", p.Interlock)
 	}
-	if r := f.svc.ArmAIEgress("allow"); r.OK {
-		t.Fatal("a wrong phrase must not arm")
+	before := f.file(t)
+	if r := f.svc.ApplyAI(p.Digest, ""); r.OK || !strings.Contains(r.Error, "to confirm") || f.file(t) != before {
+		t.Fatalf("without the phrase: %+v", r)
 	}
-	if r := f.svc.ArmAIEgress("allow protected egress"); !r.OK {
-		t.Fatalf("arm: %+v", r)
+	if r := f.svc.ApplyAI(p.Digest, "allow"); r.OK {
+		t.Fatal("a wrong phrase must not apply")
 	}
-	if r := f.svc.SaveAISettings(on); !r.OK {
-		t.Fatalf("with a grant: %+v", r)
+	if r := f.svc.ApplyAI(p.Digest, aiEgressPhrase); !r.OK {
+		t.Fatalf("with the phrase: %+v", r)
 	}
 	if !f.ai.load().AllowEgress {
 		t.Fatal("egress not active")
 	}
-	// Off needs no grant; on again needs a fresh one (one-shot).
+	if r := f.svc.ApplyAI(p.Digest, aiEgressPhrase); r.OK {
+		t.Fatal("an applied plan's digest must be consumed")
+	}
+	// off needs no interlock; on again needs it again
 	off := on
 	off.AllowProtectedEgress = false
-	if r := f.svc.SaveAISettings(off); !r.OK {
+	if p := f.svc.PlanAI(off); p.Interlock != nil {
+		t.Fatalf("turning egress off: %+v", p.Interlock)
+	}
+	if r := f.save(off, ""); !r.OK {
 		t.Fatalf("off: %+v", r)
 	}
-	if r := f.svc.SaveAISettings(on); r.OK {
-		t.Fatal("the grant must be one-shot")
-	}
-	// An expired grant is refused.
-	f.svc.ArmAIEgress("allow protected egress")
-	now = now.Add(aiEgressGrantTTL + time.Second)
-	if r := f.svc.SaveAISettings(on); r.OK {
-		t.Fatal("an expired grant must be refused")
+	if p := f.svc.PlanAI(on); p.Interlock == nil {
+		t.Fatal("on again needs the interlock again")
 	}
 }
 
@@ -229,7 +240,7 @@ func TestAISettings_MoveKeyToKeychain(t *testing.T) {
 	})
 	t.Run("fleet.yaml write fails", func(t *testing.T) {
 		f := newSettingsFixture(t, legacy)
-		f.svc.saveAI = func(string, config.AIConfig) error { return errors.New("disk full") }
+		f.svc.saveAI = func(string, string, config.AIConfig) (string, error) { return "", errors.New("disk full") }
 		r := f.svc.MoveKeyToKeychain()
 		if r.OK || !strings.Contains(r.Error, "still holds it in plain text") {
 			t.Fatalf("got %+v", r)
@@ -340,7 +351,7 @@ func TestAISettings_ClearStopsTheRunningProviderWhateverTheFile(t *testing.T) {
 
 	t.Run("fleet.yaml unreadable", func(t *testing.T) {
 		f := setup(t, keyed)
-		f.svc.loadAI = func(string) (*config.AIConfig, error) { return nil, errors.New("permission denied") }
+		f.svc.loadAI = func(string) (*config.AIConfig, string, error) { return nil, "", errors.New("permission denied") }
 		r := f.svc.ClearAPIKey("openaiCompatible")
 		if r.OK || !strings.Contains(r.Error, "no longer uses it") {
 			t.Fatalf("got %+v", r)
@@ -351,7 +362,7 @@ func TestAISettings_ClearStopsTheRunningProviderWhateverTheFile(t *testing.T) {
 	})
 	t.Run("fleet.yaml write fails", func(t *testing.T) {
 		f := setup(t, keyed)
-		f.svc.saveAI = func(string, config.AIConfig) error { return errors.New("disk full") }
+		f.svc.saveAI = func(string, string, config.AIConfig) (string, error) { return "", errors.New("disk full") }
 		r := f.svc.ClearAPIKey("openaiCompatible")
 		if r.OK || !strings.Contains(r.Error, "was not updated") {
 			t.Fatalf("got %+v", r)
@@ -401,7 +412,43 @@ func TestAISettings_ModelsListWithoutAModel(t *testing.T) {
 	if res := f.svc.TestProvider(draft); res.OK || !strings.Contains(res.Error, "model") {
 		t.Fatalf("Test still needs a model: %+v", res)
 	}
-	if r := f.svc.SaveAISettings(draft); r.OK {
+	if r := f.save(draft, ""); r.OK {
 		t.Fatal("Save still needs a model")
+	}
+}
+
+// AI A3 §6: the panel's setting reaches the AI state, and a draft that
+// does not carry it keeps the current value.
+func TestAISettings_ProposeActions(t *testing.T) {
+	f := newSettingsFixture(t, baseFleet)
+	if f.ai.load().ProposalsOff {
+		t.Fatal("proposals are on by default")
+	}
+	off := false
+	base := AISettingsDTO{Provider: "openaiCompatible", Model: "llama3.1", BaseURL: "http://localhost:11434", KeySource: "none"}
+	if r := f.save(base, ""); !r.OK || f.ai.load().ProposalsOff { // a draft without the field, on
+		t.Fatalf("a draft without the setting keeps it on: %+v", r)
+	}
+	d := base
+	d.ProposeActions = &off
+	if r := f.save(d, ""); !r.OK {
+		t.Fatal(r)
+	}
+	if !f.ai.load().ProposalsOff || !strings.Contains(f.file(t), "proposeActions: false") {
+		t.Fatalf("off: %+v", f.ai.load())
+	}
+	if got := f.svc.GetAISettings().Persisted.ProposeActions; got == nil || *got {
+		t.Fatalf("the panel reads it back: %v", got)
+	}
+	if r := f.save(base, ""); !r.OK { // a draft without the field
+		t.Fatal(r)
+	}
+	if !f.ai.load().ProposalsOff {
+		t.Fatal("a draft that does not carry the setting kept it off")
+	}
+	on := true
+	d.ProposeActions = &on
+	if r := f.save(d, ""); !r.OK || f.ai.load().ProposalsOff {
+		t.Fatalf("on again: %+v", r)
 	}
 }

@@ -11,9 +11,6 @@ import (
 	"strings"
 )
 
-// CacheBase is the cache root beside fleet.yaml: <config dir>/git-cache.
-func CacheBase(configDir string) string { return filepath.Join(configDir, "git-cache") }
-
 // GlobalConfigPath is the generated global config inside the cache root.
 func GlobalConfigPath(base string) string { return filepath.Join(base, "gitconfig") }
 

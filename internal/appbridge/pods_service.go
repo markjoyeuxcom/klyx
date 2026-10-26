@@ -99,14 +99,15 @@ func (s *PodsService) GetPodDetail(cluster, namespace, name string) PodDetailDTO
 // klyx-scratch namespace (created on first use). A create is a mutation, so it
 // consumes the protected-cluster grant like every destructive verb.
 func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSeconds int64) AdhocResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return AdhocResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return AdhocResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	r := conn.LaunchDiagnosticPod(ctx, name, image, ttlSeconds)
 	text, f := adhocFinding(ctx, conn, r.Error, r.Refusal())
@@ -117,19 +118,17 @@ func (s *PodsService) LaunchDiagnosticPod(cluster, name, image string, ttlSecond
 // §5b) - never a same-name replacement. The owning controller recreates it;
 // this is the standard imperative bounce.
 func (s *PodsService) DeletePod(cluster, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
-		return ActionResultDTO{Error: err.Error()}
+	t, err := guardFor(cluster)
+	if err != nil {
+		return refusedNotSent(err.Error())
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return ActionResultDTO{Error: "cluster not connected: " + cluster}
+		return notConnected(cluster)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
-	if err := conn.DeletePod(ctx, namespace, name, uid); err != nil {
-		return failed(ctx, conn, err)
-	}
-	return ActionResultDTO{OK: true}
+	return doDeletePod(ctx, conn, namespace, name, uid)
 }
 
 // toPodRowDTO is the bounded rows-transport form of a pod (addendum §3.2).

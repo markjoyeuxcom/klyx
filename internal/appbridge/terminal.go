@@ -2,10 +2,11 @@ package appbridge
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // Terminal launching, per platform. Klyx's deliberate stance is "shell out to a
@@ -22,7 +23,7 @@ var hostGOOS = runtime.GOOS
 // the command - or an honest error naming the fallback (copy the command).
 // Empty argv means "open a plain interactive terminal". newConsole asks the
 // launcher for a fresh console window (Windows).
-func terminalLaunchArgv(goos string, lookPath func(string) (string, error), getenv func(string) string, argv []string) (launch []string, newConsole bool, err error) {
+func terminalLaunchArgv(goos string, lookPath func(string) (string, error), getenv func(envread.Name) string, argv []string) (launch []string, newConsole bool, err error) {
 	if goos == "windows" {
 		launch, err := windowsTerminalArgv(lookPath, argv)
 		return launch, true, err
@@ -37,7 +38,7 @@ func terminalLaunchArgv(goos string, lookPath func(string) (string, error), gete
 
 // posixTerminalArgv resolves the terminal for a POSIX-quoted command string
 // (cmdStr == "" opens a plain interactive terminal).
-func posixTerminalArgv(goos string, lookPath func(string) (string, error), getenv func(string) string, cmdStr string) ([]string, error) {
+func posixTerminalArgv(goos string, lookPath func(string) (string, error), getenv func(envread.Name) string, cmdStr string) ([]string, error) {
 	switch goos {
 	case "darwin":
 		return darwinTerminalArgv(cmdStr), nil
@@ -98,13 +99,13 @@ var linuxEmulators = []struct {
 // convention), then the probe table. The command runs as
 // `sh -c "<cmd>; exec ${SHELL:-sh}"` so the window stays interactive after
 // kubectl exits instead of vanishing with its output.
-func linuxTerminalArgv(lookPath func(string) (string, error), getenv func(string) string, cmdStr string) ([]string, error) {
+func linuxTerminalArgv(lookPath func(string) (string, error), getenv func(envread.Name) string, cmdStr string) ([]string, error) {
 	shellArgv := []string{}
 	if cmdStr != "" {
 		shellArgv = []string{"sh", "-c", cmdStr + `; exec "${SHELL:-sh}"`}
 	}
 
-	if t := strings.TrimSpace(getenv("TERMINAL")); t != "" {
+	if t := strings.TrimSpace(getenv(envread.Terminal)); t != "" {
 		if path, err := lookPath(t); err == nil {
 			if len(shellArgv) == 0 {
 				return []string{path}, nil
@@ -208,7 +209,7 @@ func psQuote(s string) (string, error) {
 // = a plain window). Fire-and-forget: the launcher child is reaped by a
 // goroutine while the terminal itself lives on detached.
 func launchTerminal(argv []string) ActionResultDTO {
-	launch, newConsole, err := terminalLaunchArgv(hostGOOS, exec.LookPath, os.Getenv, argv)
+	launch, newConsole, err := terminalLaunchArgv(hostGOOS, exec.LookPath, envread.Get, argv)
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}

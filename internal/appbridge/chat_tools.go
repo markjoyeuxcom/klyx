@@ -263,6 +263,9 @@ func byName(kind, ns, name string) ChatCheckSubject {
 type ChatToolResult struct {
 	JSON []byte
 	Read ChatRead
+	// facts are what Klyx read off the objects of this call, for the
+	// action proposals' eligibility (AI A3 §2.2): never sent
+	facts []actionFact
 }
 
 type chatIdentity struct {
@@ -610,12 +613,19 @@ var (
 // type and no trailing data (Codex review of aea77e7: a null or a repeated
 // member must never silently widen a read). Empty arguments are {}.
 func strictArgs(raw json.RawMessage, into any) error {
+	return strictArgsWithin(raw, into, 4096)
+}
+
+// strictArgsWithin is strictArgs within max bytes: a call whose documented
+// fields are larger than a read's arguments (report_findings,
+// propose_actions) has its own aggregate bound, named when it is exceeded.
+func strictArgsWithin(raw json.RawMessage, into any, max int) error {
 	b := bytes.TrimSpace(raw)
 	if len(b) == 0 {
 		b = []byte("{}")
 	}
-	if len(b) > 4096 {
-		return errors.New("arguments are too large")
+	if len(b) > max {
+		return fmt.Errorf("arguments are too large: at most %d bytes in all", max)
 	}
 	if err := strictShape(b); err != nil {
 		return fmt.Errorf("invalid arguments: %s", err.Error())
@@ -697,7 +707,13 @@ func walkValue(dec *json.Decoder, depth int, member string) error {
 // records - cluster text, read errors, connection reasons - adding its
 // redactions to n when n is not nil (Codex review of aea77e7).
 func chatScrub(s string, n *int) string {
-	out, c := ai.ScrubEvidence(s, chatStringMax)
+	return chatScrubWithin(s, chatStringMax, n)
+}
+
+// chatScrubWithin is chatScrub with its own cap, for a field documented
+// longer than chatStringMax (a remedy part).
+func chatScrubWithin(s string, max int, n *int) string {
+	out, c := ai.ScrubEvidence(s, max)
 	if n != nil {
 		*n += c
 	}
@@ -1365,13 +1381,30 @@ type chatVerdict struct {
 	PartVer             uint64        `json:"partVer"`
 	Coverage            string        `json:"coverage"`
 	Kinds               []chatKindCov `json:"kinds,omitempty"`
+	// at is the capture's evaluation time in full: EvaluatedAt is
+	// second-precision text, and a reading must follow a write by its own
+	// clock (AI A3 stage 4 review, finding 3). Never sent. captured is
+	// when this reading's capture was taken (observe.Rows.CapturedAt): at
+	// moves only when the part's data changes.
+	at, captured time.Time
 }
 
 // chatVerdicts is one part's verdicts by UID, with the part's coverage
 // problem when it is not live.
 type chatVerdicts struct {
-	byUID   map[string]chatVerdict
-	problem string
+	byUID map[string]chatVerdict
+	// completed is a KEDA scaler row's own evidence of a completed full
+	// pause (keda.Verdict.Completed), by UID (AI A3 stage 3 re-review)
+	completed map[string]bool
+	// byName is every row's UID by resource, namespace and name, and
+	// complete says the part is live with no capped kind: a UID absent from
+	// it is gone (AI A3 §5.3)
+	byName   map[string]string
+	complete bool
+	// at is when the capture was evaluated: an absence it shows is dated by
+	// it; captured is when this reading's capture was taken
+	at, captured time.Time
+	problem      string
 	// capped names a capture's kinds that are capped snapshots: their
 	// verdicts may be missing even in a live part (A1.1 §4)
 	capped string
@@ -1386,7 +1419,7 @@ func verdictOf(rows observe.Rows, r capturedRow, n *int) (chatVerdict, bool) {
 		Classifier: v.Classifier, Kind: v.Kind, Role: v.Role, IncludedInAttention: v.IncludedInAttention,
 		Label: chatScrub(v.Label, n), Reason: chatScrub(v.Reason, n), Generation: r.ref.Generation,
 		EvaluatedAt: v.EvaluatedAt, Incarnation: rows.Incarnation, PartVer: rows.Part.Ver, Coverage: string(rows.Part.Coverage),
-		Kinds: chatKinds(rows.Part.Kinds, n),
+		Kinds: chatKinds(rows.Part.Kinds, n), at: rows.EvaluatedAt, captured: rows.CapturedAt,
 	}, true
 }
 
@@ -1470,20 +1503,34 @@ func (t *chatTools) verdictsFor(ctx context.Context, gvr schema.GroupVersionReso
 	if !ok {
 		return &chatVerdicts{problem: tp[0] + "/" + tp[1] + ": Klyx's verdicts are not available"}
 	}
-	out := &chatVerdicts{byUID: map[string]chatVerdict{}, problem: partProblem(tp[0], rows)}
+	out := &chatVerdicts{byUID: map[string]chatVerdict{}, completed: map[string]bool{}, byName: map[string]string{}, complete: rows.Part.Coverage == observe.Live, at: rows.EvaluatedAt, captured: rows.CapturedAt, problem: partProblem(tp[0], rows)}
 	var capped []string
 	for _, k := range rows.Part.Kinds {
 		if k.Truncated {
 			capped = append(capped, fmt.Sprintf("%s/%s: %s is a capped snapshot of %d objects; Klyx's verdicts may be missing", tp[0], rows.Part.ID, k.Kind, k.Objects))
+			out.complete = false
 		}
 	}
 	out.capped = strings.Join(capped, "; ")
 	forEachRow(rows.Rows, func(r capturedRow) {
+		out.byName[rowName(r.ref.GVR, r.ref.Namespace, r.ref.Name)] = r.ref.UID
 		if v, ok := verdictOf(rows, r, n); ok {
 			out.byUID[r.ref.UID] = v
 		}
+		switch d := r.data.(type) {
+		case healthsrc.ScaledObjectRow:
+			out.completed[r.ref.UID] = d.Verdict.Completed
+		case healthsrc.ScaledJobRow:
+			out.completed[r.ref.UID] = d.Verdict.Completed
+		}
 	})
 	return out
+}
+
+// rowName keys a row by its resource (a GVR's last segment), namespace and
+// name.
+func rowName(gvr, ns, name string) string {
+	return gvr[strings.LastIndex(gvr, "/")+1:] + "|" + ns + "/" + name
 }
 
 // forEachRow walks a part's healthsrc.RowSet[T] (any T).
@@ -1621,6 +1668,7 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	if wantUID != "" && string(u.GetUID()) != wantUID {
 		return t.refuse(toolGet, gvr.Resource+" "+target, errors.New("the object was replaced since you asked about it (its UID changed); nothing about the new object was read"))
 	}
+	read, acquired := u, acquisition()
 	// coverage S0b §3: the sanitiser runs before the structural projection,
 	// so a registered surface never reaches a model, scrubbed or not
 	u = &unstructured.Unstructured{Object: crd.SanitizeEmbedded(gvr.Group, u.GetKind(), u.Object).Object}
@@ -1666,7 +1714,9 @@ func (t *chatTools) getResolved(ctx context.Context, gvr schema.GroupVersionReso
 	checks = append(checks, eventChecks(data.Events)...)
 	env.Checks = capChecks(checks)
 	ref := ChatRef{GVR: gvrString(gvr), Namespace: ns, Name: name, UID: o.UID}
-	return t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
+	res := t.finish(env, ChatRead{Tool: toolGet, Target: o.Kind + " " + target, Outcome: "completed", Redacted: p.redacted, Refs: []ChatRef{ref}})
+	res.facts = []actionFact{factOf(gvr, read, t.readID, env.ReadAt, acquired)}
+	return res
 }
 
 type chatLogData struct {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,7 +22,7 @@ import (
 func (c *ClusterConn) DeletePod(ctx context.Context, namespace, name, uid string) error {
 	what := fmt.Sprintf("pod %s/%s", namespace, name)
 	if uid == "" {
-		return fmt.Errorf("delete %s: no object identity was armed - reload the list and retry", what)
+		return notSent(fmt.Errorf("delete %s: no object identity was armed - reload the list and retry", what))
 	}
 	u := types.UID(uid)
 	err := c.typed.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &u}})
@@ -31,6 +31,10 @@ func (c *ClusterConn) DeletePod(ctx context.Context, namespace, name, uid string
 	// (Codex's implementation review, finding 7)
 	if apierrors.IsNotFound(err) && !admission.Classify(statusOf(err)).Attributed() {
 		return fmt.Errorf("delete %s: it is already gone - nothing was deleted: %w", what, err)
+	}
+	if err == nil {
+		// the UID precondition held: the server deleted exactly this pod
+		NoteReceipt(ctx, Receipt{UID: uid})
 	}
 	return armedWriteErr("delete", what, err)
 }
@@ -45,10 +49,13 @@ func (c *ClusterConn) RolloutRestart(ctx context.Context, kind, namespace, name,
 	if clk == nil {
 		clk = clock.Real{}
 	}
-	ts := clk.Now().UTC().Format(time.RFC3339)
+	// this attempt's own token (A3 §1): unique in the process, so two
+	// restarts are distinct templates and the token is this request's witness
+	ts := attemptToken(clk.Now())
 
-	if err := c.CheckWorkloadArmed(ctx, kind, namespace, name, uid); err != nil {
-		return fmt.Errorf("rollout restart %w - nothing was written", err)
+	prior, err := c.armedWorkload(ctx, kind, namespace, name, uid)
+	if err != nil {
+		return notSent(fmt.Errorf("rollout restart %w - nothing was written", err))
 	}
 	patch := map[string]interface{}{
 		"metadata": map[string]interface{}{"uid": uid},
@@ -64,17 +71,31 @@ func (c *ClusterConn) RolloutRestart(ctx context.Context, kind, namespace, name,
 	}
 	body, err := json.Marshal(patch)
 	if err != nil {
-		return fmt.Errorf("rollout restart marshal: %w", err)
+		return notSent(fmt.Errorf("rollout restart marshal: %w", err))
 	}
 
+	NoteAttempt(ctx, Attempt{UID: uid, Token: ts})
+	var meta metav1.Object
 	switch kind {
 	case "Deployment":
-		_, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+		var out *appsv1.Deployment
+		if out, err = c.typed.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{}); err == nil {
+			meta = out
+		}
 	case "StatefulSet":
-		_, err = c.typed.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+		var out *appsv1.StatefulSet
+		if out, err = c.typed.AppsV1().StatefulSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{}); err == nil {
+			meta = out
+		}
 	case "DaemonSet":
-		_, err = c.typed.AppsV1().DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{})
+		var out *appsv1.DaemonSet
+		if out, err = c.typed.AppsV1().DaemonSets(namespace).Patch(ctx, name, types.StrategicMergePatchType, body, metav1.PatchOptions{}); err == nil {
+			meta = out
+		}
 	}
 	err = admission.Wrap(admission.Request{Operation: "UPDATE", Group: "apps", Version: "v1", Resource: workloadResource(kind), Namespace: namespace}, kind, namespace, name, err)
+	if err == nil && meta != nil {
+		NoteReceipt(ctx, Receipt{UID: string(meta.GetUID()), Generation: meta.GetGeneration(), ResourceVersion: meta.GetResourceVersion(), Token: ts, PriorGeneration: prior})
+	}
 	return armedWriteErr("rollout restart", fmt.Sprintf("%s %s/%s", kind, namespace, name), err)
 }

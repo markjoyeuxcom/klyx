@@ -1,12 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { OperationDialog } from "../chrome/OperationDialog";
+import { PlanView } from "../settings/PlanView";
+import { SettingField } from "../settings/SettingField";
+import { anchorOf } from "../settings/registry";
+import { setSectionDraft } from "../settings/navGuard";
 import {
+  applyGit,
   approveGitRepo,
   clearGitCache,
   fetchGitRepo,
   getGitSettings,
+  planGitFromFile,
   removeGitRepo,
   setGitRepoMatch,
   type ActionResult,
@@ -15,12 +21,17 @@ import {
   type GitSource,
   type GitUnapproved,
 } from "../bridge/gitSettings";
+import { lostAnswer, type ApplyResult, type Plan } from "../bridge/plan";
 
 // GitSettingsPanel is Settings > Git (The Line slice 6c, slice 6 note §5.3):
 // the repositories Klyx may fetch history from, approved one by one. What
 // runs is always the approved URL exactly as written, through the system git
 // with the owner's SSH agent or credential helper; a URL read from a cluster
 // is only matched to an entry and shown scrubbed. Klyx stores no token.
+//
+// Settings slice F: what is shown is the running copy. Each action is a
+// plan applied by the action's own confirmation; a hand edit of the block
+// is drift, adopted with "Use the file's values".
 
 const row: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, padding: "2px 0" };
 const labelStyle: React.CSSProperties = { fontSize: 10, color: "var(--color-text-tertiary)", width: 70, flexShrink: 0 };
@@ -48,18 +59,32 @@ export function historyLine(r: GitRepo): { text: string; tone: "ok" | "warn" | "
   return { text: "not fetched yet", tone: "muted" };
 }
 
-export function GitSettingsPanel() {
+// onSettings hands the read settings to the section (its sentence says the
+// binary in use).
+export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings) => void } = {}) {
   const [state, setState] = useState<GitSettings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // the URL an action runs on
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [approving, setApproving] = useState<GitUnapproved | null>(null);
   const [removing, setRemoving] = useState<GitRepo | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
 
+  // Reads and actions are numbered: an older read's reply never replaces a
+  // newer one's, and an older action's outcome never replaces a newer
+  // one's message or plan (F2b re-review, RR2). Actions on different
+  // repositories may overlap: a fetch can take minutes.
+  const loadSeq = useRef(0);
+  const runSeq = useRef(0);
   const load = async () => {
+    const seq = ++loadSeq.current;
     const s = await getGitSettings();
+    if (seq !== loadSeq.current) return; // a newer read answers
     setLoadFailed(s === null);
-    if (s) setState(s);
+    if (s) {
+      setState(s);
+      onSettings?.(s);
+    }
   };
   useEffect(() => {
     void load();
@@ -71,13 +96,42 @@ export function GitSettingsPanel() {
     return () => clearTimeout(t);
   }, [state]);
 
-  const run = async (url: string, fn: () => Promise<ActionResult>, okText: string) => {
+  // run says an action's result; a plan that came back is shown for
+  // review, never applied by this
+  const run = async (url: string, fn: () => Promise<ActionResult | ApplyResult>, okText: string) => {
+    const op = ++runSeq.current;
     setBusy(url);
     setMessage(null);
     const r = await fn();
+    if (op !== runSeq.current) {
+      // a newer action started meanwhile: its outcome is the one said
+      await load();
+      return;
+    }
     setBusy(null);
-    setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
+    const a: ApplyResult = r;
+    if (a.plan) setPlan(a.plan);
+    else if (a.ok) setPlan(null);
+    if (a.unknown) {
+      // a lost answer is not a refusal: what runs is read again below (F2b review, R3)
+      setMessage({ kind: "error", text: `${lostAnswer(a)}: what is shown was read again.` });
+    } else if (a.ok && a.note) {
+      // applied, with a part that did not happen (a removal's cache)
+      setMessage({ kind: "error", text: a.note });
+    } else {
+      setMessage(a.ok ? { kind: "ok", text: okText } : { kind: "error", text: a.error || "failed" });
+    }
     await load();
+  };
+
+  // a plan answered after a newer action is still shown: it is a review,
+  // and Apply refuses it with a replacement if what runs moved
+  const adoptFile = async () => {
+    setBusy("plan");
+    setMessage(null);
+    const p = await planGitFromFile();
+    setBusy((b) => (b === "plan" ? null : b));
+    setPlan(p);
   };
 
   if (loadFailed && !state) {
@@ -106,6 +160,14 @@ export function GitSettingsPanel() {
           </>
         )}
       </div>
+      {loadFailed && (
+        // a reread after an action failed: what is shown is as last read
+        // (Settings review slice 0)
+        <div role="status" data-testid="git-reread-failed" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 6 }}>
+          Klyx could not read the Git settings again: what is shown is as last read and may be out of date.{" "}
+          <button className="l-btn" disabled={busy !== null} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
       <div style={{ ...hint, marginBottom: 8, lineHeight: 1.5 }}>
         Read-only: Klyx fetches commits and trees for the line&apos;s tracked refs and never writes to a repository. It runs only the URLs
         approved here, exactly as written, with your SSH agent and ~/.ssh/config
@@ -117,12 +179,32 @@ export function GitSettingsPanel() {
           {state.refusedHelpers === 1 ? "A credential helper given as a shell snippet (!…) is" : `${state.refusedHelpers} credential helpers given as shell snippets (!…) are`} not used.
         </Notice>
       )}
-      {state.configError && <Notice testId="git-config-error">fleet.yaml cannot be read: {state.configError}</Notice>}
+      {state.configError && <Notice testId="git-config-error">fleet.yaml cannot be read: {state.configError}. What is shown is in use.</Notice>}
+      {state.diverged && (
+        <Notice testId="git-diverged">
+          fleet.yaml&apos;s Git settings differ from the ones in use: an action is refused until you use the file&apos;s values, or undo that edit.{" "}
+          <button className="l-btn" disabled={busy !== null} onClick={() => void adoptFile()}>Use the file&apos;s values</button>
+        </Notice>
+      )}
       {state.notes.map((n, i) => <Notice key={i} testId="git-note">{n}</Notice>)}
       {message && (
         <div data-testid="git-message" role="status" style={{ fontSize: 11, margin: "4px 0 8px", color: message.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
           {message.kind === "error" ? "▲ " : ""}{message.text}
         </div>
+      )}
+      {plan && (
+        <PlanView
+          key={plan.digest}
+          plan={plan}
+          busy={busy !== null}
+          interlockTitle="Apply the Git settings?"
+          onApply={async () => {
+            let result: ApplyResult = { ok: false };
+            await run("plan", async () => (result = await applyGit(plan.digest)), "Applied: these are the Git settings in use.");
+            return result;
+          }}
+          onCancel={() => setPlan(null)}
+        />
       )}
 
       <Subhead>Approved repositories</Subhead>
@@ -148,7 +230,7 @@ export function GitSettingsPanel() {
         <div style={hint}>Every Git repository the clusters use is approved.</div>
       ) : (
         state.unapproved.map((u) => (
-          <div key={u.key} data-testid="git-unapproved" style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+          <div key={u.key} data-testid="git-unapproved" data-anchor={anchorOf("git.repos[].url", u.key)} tabIndex={-1} style={{ padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ ...mono, flex: 1, minWidth: 0 }}>{u.key}</span>
               <button className="l-btn" onClick={() => setApproving(u)}>Approve…</button>
@@ -175,7 +257,7 @@ export function GitSettingsPanel() {
           cluster=""
           showScope={false}
           protected={false}
-          detail={`Klyx stops fetching ${removing.url} and deletes its cache${removing.size ? ` (${sizeText(removing.size)})` : ""}. Every other line of fleet.yaml stays as it is.`}
+          detail={`Klyx stops fetching ${removing.url} and deletes its cache${removing.size ? ` (${sizeText(removing.size)})` : ""}. Klyx rewrites fleet.yaml's git block without this entry (comments inside that block are not kept); every line outside it stays as it is.`}
           confirmLabel="Remove"
           onCancel={() => setRemoving(null)}
           onConfirm={() => {
@@ -199,9 +281,15 @@ function ApprovedRepo({ repo: r, busy, gitOn, onFetch, onClear, onRemove, onMatc
   onMatch: (key: string, on: boolean) => void;
 }) {
   const [newKey, setNewKey] = useState("");
+  // a typed alias is a draft Save does not apply: Add does (Codex's S1
+  // implementation review, R6); leaving the section asks first
+  useEffect(() => {
+    setSectionDraft(`git-match:${r.key}`, newKey.trim() === "" ? null : { settings: false, credentials: [], unsaved: [`an alias not yet added to ${r.key}`], discard: () => setNewKey("") });
+  }, [newKey, r.key]);
+  useEffect(() => () => setSectionDraft(`git-match:${r.key}`, null), [r.key]);
   const h = historyLine(r);
   return (
-    <div data-testid="git-repo" style={{ padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+    <div data-testid="git-repo" data-anchor={anchorOf("git.repos[].url", r.key)} tabIndex={-1} style={{ padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ ...mono, fontSize: 12, fontWeight: 600, flex: 1, minWidth: 0 }} title="runs exactly as written">{r.url}</span>
         <button className="l-btn" disabled={busy || r.fetching || !gitOn || r.tracked.length === 0} onClick={onFetch}>{r.fetching || busy ? "Fetching…" : "Fetch now"}</button>
@@ -219,38 +307,39 @@ function ApprovedRepo({ repo: r, busy, gitOn, onFetch, onClear, onRemove, onMatc
           {r.trackNotes.map((n, i) => <span key={i} style={{ ...hint, display: "block" }}>{n}</span>)}
         </span>
       </div>
-      <div style={row}>
-        <span style={labelStyle}>serves</span>
-        <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", minWidth: 0 }}>
-          <span style={mono}>{r.key}</span>
-          {r.matches.map((m) => (
-            <span key={m} data-testid="git-match" style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 4px", borderRadius: 3, boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
-              {m}
-              <button aria-label={`stop serving ${m}`} disabled={busy} onClick={() => onMatch(m, false)} style={{ border: 0, background: "none", padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex" }}>
-                <IconX size={10} stroke={1.6} />
-              </button>
-            </span>
-          ))}
-          <input
-            aria-label={`another repository ${r.url} serves`}
-            className="l-input"
-            placeholder="host/org/repo (an SSH alias)"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            style={{ ...mono, width: 220 }}
-          />
-          <button
-            className="l-btn"
-            disabled={busy || newKey.trim() === ""}
-            onClick={() => {
-              onMatch(newKey.trim(), true);
-              setNewKey("");
-            }}
-          >
-            Add
-          </button>
-        </span>
-      </div>
+      <SettingField id="git.repos[].matches" instance={r.key} label={`Also serves (${r.key})`} source="file">
+        {(ids) => (
+          <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", minWidth: 0 }}>
+            {r.matches.map((m) => (
+              <span key={m} data-testid="git-match" style={{ ...mono, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 4px", borderRadius: 3, boxShadow: "inset 0 0 0 1px var(--color-border-tertiary)" }}>
+                {m}
+                <button aria-label={`stop serving ${m}`} disabled={busy} onClick={() => onMatch(m, false)} style={{ border: 0, background: "none", padding: 0, cursor: "pointer", color: "var(--color-text-tertiary)", display: "inline-flex" }}>
+                  <IconX size={10} stroke={1.6} />
+                </button>
+              </span>
+            ))}
+            <input
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              className="l-input"
+              placeholder="host/org/repo (an SSH alias)"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              style={{ ...mono, width: 220 }}
+            />
+            <button
+              className="l-btn"
+              disabled={busy || newKey.trim() === ""}
+              onClick={() => {
+                onMatch(newKey.trim(), true);
+                setNewKey("");
+              }}
+            >
+              Add
+            </button>
+          </span>
+        )}
+      </SettingField>
       {r.web && (
         <div style={row}>
           <span style={labelStyle}>web</span>
@@ -280,6 +369,15 @@ function Sources({ sources, inline = false }: { sources: GitSource[]; inline?: b
 function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onCancel: () => void; onApprove: (url: string, web: string) => void }) {
   const [url, setUrl] = useState(item.suggest ?? "");
   const [web, setWeb] = useState("");
+  // what is typed here is a draft Approve applies, never Save (R6)
+  useEffect(() => {
+    const typed = url.trim() !== (item.suggest ?? "").trim() || web.trim() !== "";
+    setSectionDraft(`git-approve:${item.key}`, !typed ? null : {
+      settings: false, credentials: [], unsaved: [`an approval of ${item.key} not yet confirmed`],
+      discard: () => { setUrl(item.suggest ?? ""); setWeb(""); },
+    });
+  }, [url, web, item.key, item.suggest]);
+  useEffect(() => () => setSectionDraft(`git-approve:${item.key}`, null), [item.key]);
   return (
     <OperationDialog
       title="Approve a Git repository"
@@ -291,10 +389,9 @@ function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onC
       onCancel={onCancel}
       onConfirm={() => onApprove(url.trim(), web.trim())}
     >
-      <label style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>The URL that will run, exactly as written (https or ssh, no token)</span>
-        <input aria-label="URL to approve" className="l-input" value={url} onChange={(e) => setUrl(e.target.value)} style={{ ...mono, fontSize: 12 }} />
-      </label>
+      <SettingField id="git.repos[].url" label="URL to approve">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={url} onChange={(e) => setUrl(e.target.value)} style={{ ...mono, fontSize: 12 }} />}
+      </SettingField>
       {item.refused && !item.suggest && (
         <div style={{ ...hint, color: "var(--color-text-warning)" }}>The clusters&apos; URL cannot run as written: {item.refused}. Enter the https or ssh URL to fetch from.</div>
       )}
@@ -303,10 +400,9 @@ function ApproveDialog({ item, onCancel, onApprove }: { item: GitUnapproved; onC
         ~/.ssh/config, as written.{" "}
         {item.serves ? <>This entry will serve <span style={mono}>{item.serves}</span>, the repository these clusters use.</> : "The clusters' URL names no repository Klyx can match, so this entry serves only its own."}
       </div>
-      <label style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>&quot;Open in Git&quot; link (optional, https) for a host Klyx does not know</span>
-        <input aria-label="Open in Git link" className="l-input" value={web} onChange={(e) => setWeb(e.target.value)} placeholder="https://git.example.com/org/repo" style={mono} />
-      </label>
+      <SettingField id="git.repos[].web">
+        {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} className="l-input" value={web} onChange={(e) => setWeb(e.target.value)} placeholder="https://git.example.com/org/repo" style={mono} />}
+      </SettingField>
     </OperationDialog>
   );
 }

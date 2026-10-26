@@ -19,6 +19,24 @@ type IndexService struct {
 
 func NewIndexService(ix *fleetindex.Index) *IndexService { return &IndexService{ix: ix} }
 
+// IndexSettingsDTO is what the index runs with (Settings > Data and
+// storage): its kinds and limits after the defaults.
+type IndexSettingsDTO struct {
+	Kinds             []string `json:"kinds"`
+	EntriesPerCluster int      `json:"entriesPerCluster"`
+	MiBPerCluster     int64    `json:"mibPerCluster"`
+	EntriesFleet      int      `json:"entriesFleet"`
+	MiBFleet          int64    `json:"mibFleet"`
+	PodPercent        int      `json:"podPercent"`
+}
+
+// Settings is the running index's kinds and limits.
+func (s *IndexService) Settings() IndexSettingsDTO {
+	kinds, l := s.ix.Configured()
+	return IndexSettingsDTO{Kinds: kinds, EntriesPerCluster: l.ClusterEntries, MiBPerCluster: l.ClusterBytes >> 20,
+		EntriesFleet: l.FleetEntries, MiBFleet: l.FleetBytes >> 20, PodPercent: l.PodPercent}
+}
+
 // IndexSearchDTO is one search's hits and the coverage it ran under.
 type IndexSearchDTO struct {
 	Hits  []IndexHitDTO `json:"hits"`

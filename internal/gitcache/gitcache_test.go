@@ -58,7 +58,7 @@ type fixture struct {
 // config trusts the fixture's CA. Upstream: c1 (apps/a.yaml, apps/b.yaml,
 // base/k.yaml) <- c2 (a.yaml changed) on main; annotated v1 on c1.
 func newFixture(t *testing.T, serverConfig ...string) *fixture {
-	env := gitcli.OwnerEnv(os.Getenv, os.Environ())
+	env := gitcli.ProcessEnv()
 	env.Home = t.TempDir()
 	g, err := gitcli.Locate(context.Background(), env)
 	if err != nil {
@@ -93,7 +93,7 @@ func newFixture(t *testing.T, serverConfig ...string) *fixture {
 		t.Fatal(err)
 	}
 	f.url = srv.URL + "/fleet.git"
-	base := gitcli.CacheBase(t.TempDir())
+	base := filepath.Join(t.TempDir(), "git-cache")
 	if err := gitcli.EnsureBase(base); err != nil {
 		t.Fatal(err)
 	}

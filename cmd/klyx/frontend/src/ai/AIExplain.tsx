@@ -155,7 +155,7 @@ export function useAIExplain(cluster: string, target: ExplainTarget | null, read
 /** aiExplainMenuItem is the inspector's More-menu entry. */
 export function aiExplainMenuItem(readiness: AIReadiness, state: AIExplainState, run: () => void, enabled = true): MenuItem[] {
   if (readiness.loading || !enabled) return [];
-  if (!readiness.configured) return [{ label: "Set up AI…", onSelect: () => useFleet.getState().openSettings(), hint: "Explain needs an AI provider" }];
+  if (!readiness.configured) return [{ label: "Set up AI…", onSelect: () => useFleet.getState().openSettings("ai"), hint: "Explain needs an AI provider" }];
   if (!readiness.ready) return [{ label: "Explain with AI", disabled: true, hint: readiness.reason, onSelect: () => {} }];
   return [{ label: state.status === "loading" ? "Explaining…" : "Explain with AI", disabled: state.status === "loading", onSelect: run }];
 }

@@ -214,3 +214,10 @@ func (h *routeHistory) Interval(cluster, uid string, index int, fingerprint stri
 	}
 	return RuleInterval{Start: start, Cutoff: start.Add(ruleRateWindow), Basis: basis}, true
 }
+
+// ForgetCluster drops a removed cluster (Settings S2 §2.5).
+func (h *routeHistory) ForgetCluster(cluster string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.st, cluster)
+}

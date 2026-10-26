@@ -40,6 +40,25 @@ describe("ConfirmDialog", () => {
     expect(armProtected).toHaveBeenCalledWith("prd-we", "prd-we");
   });
 
+  // A3 stage 1 review, finding 2: while what the confirmation rests on is
+  // read, neither the button nor Enter in the typed field dispatches, and
+  // no grant is armed.
+  it("waiting: nothing confirms, not even Enter in the typed field", async () => {
+    const onConfirm = vi.fn();
+    const props = { title: "roll back", cluster: "prd-we", detail: "deployment shop/web", protected: true, onConfirm, onCancel: () => {} };
+    const { getByText, getByPlaceholderText, rerender } = render(<ConfirmDialog {...props} waiting="reading" />);
+    const input = getByPlaceholderText("prd-we");
+    fireEvent.change(input, { target: { value: "prd-we" } });
+    expect((getByText("Confirm") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await Promise.resolve();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(armProtected).not.toHaveBeenCalled();
+    rerender(<ConfirmDialog {...props} />);
+    fireEvent.keyDown(getByPlaceholderText("prd-we"), { key: "Enter" });
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+  });
+
   it("protected: a failed arm blocks onConfirm and surfaces the error", async () => {
     vi.mocked(armProtected).mockResolvedValueOnce({ ok: false, error: "confirmation mismatch" });
     const onConfirm = vi.fn();
@@ -50,6 +69,45 @@ describe("ConfirmDialog", () => {
     fireEvent.click(getByText("Confirm"));
     await waitFor(() => expect(getByText("confirmation mismatch")).toBeTruthy());
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  // AI A3 stage 5 review, finding 1: Confirm is the commitment point. While
+  // the grant arms, nothing closes the dialog; the action follows the arm's
+  // answer, once.
+  it("protected: once confirmed, Cancel, Escape and the scrim wait for the arm", async () => {
+    let answer: (r: { ok: boolean; error: string }) => void = () => {};
+    vi.mocked(armProtected).mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { getByText, getByPlaceholderText, getByRole, container } = render(
+      <ConfirmDialog title="Suspend" cluster="prd-we" detail="x" protected={true} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.change(getByPlaceholderText("prd-we"), { target: { value: "prd-we" } });
+    fireEvent.click(getByText("Confirm"));
+    await waitFor(() => expect(getByText("Arming…")).toBeTruthy());
+    const cancel = getByText("Cancel") as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(container.firstChild as HTMLElement);
+    expect(onCancel).not.toHaveBeenCalled();
+    answer({ ok: true, error: "" });
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+  });
+
+  it("protected: a thrown arm ends the commitment, and nothing runs", async () => {
+    vi.mocked(armProtected).mockImplementationOnce(async () => { throw new Error("bridge down"); });
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const { getByText, getByPlaceholderText, findByText } = render(
+      <ConfirmDialog title="Suspend" cluster="prd-we" detail="x" protected={true} onConfirm={onConfirm} onCancel={onCancel} />,
+    );
+    fireEvent.change(getByPlaceholderText("prd-we"), { target: { value: "prd-we" } });
+    fireEvent.click(getByText("Confirm"));
+    expect((await findByText(/could not arm protected action: Error: bridge down/)).textContent).toBeTruthy();
+    expect(onConfirm).not.toHaveBeenCalled();
+    fireEvent.click(getByText("Cancel"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("cancel fires onCancel", () => {

@@ -1,7 +1,9 @@
 import { Call } from "@wailsio/runtime";
 import { NAV_GROUPS, destState, navigate, type Destination, type NavGroup } from "../nav/registry";
 import { useFleet } from "../store/fleet";
+import { SETTINGS_SECTIONS } from "../settings/registry";
 import { useChat, invSlot } from "../ai/chatStore";
+import { investigationState } from "../bridge/chat";
 import { setThemeChoice } from "../theme/ThemeProvider";
 import { describeResource } from "../bridge/exec";
 import { describeArg } from "../chrome/describe/targets";
@@ -1126,11 +1128,36 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   });
 
   // ---- settings and the chat drawer ----
+  // Settings S1 §7: every section opens by its address, the rail marking
+  // it; mod+, opens the section last shown; search finds "protection" by
+  // its effect and opens Fleet at it.
+  await step(steps, "Settings sections by address, mod+, and search", async () => {
+    for (const sec of SETTINGS_SECTIONS) {
+      useFleet.getState().openSettings(sec);
+      await within(8000, `the ${sec} section`, () => $(`.settings-page[data-section='${sec}']`));
+      await within(4000, `${sec} marked in the rail`, () => $(`.lens-index [data-section='${sec}'][aria-current='page']`));
+    }
+    useFleet.getState().openFleet();
+    await within(4000, "the fleet", () => useFleet.getState().route.name === "fleet");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, ctrlKey: true, bubbles: true }));
+    await within(4000, "mod+, opening Diagnostics", () => $(".settings-page[data-section='diagnostics']"));
+    const search = await within(4000, "the settings search", () => $<HTMLInputElement>(".lens-index input[aria-label='Search settings']"));
+    typeInto(search, "protection");
+    (await within(4000, "the Protection result", () => $<HTMLButtonElement>("[data-result='clusters[].protected']"))).click();
+    const marks = () => document.querySelectorAll("[data-setting='clusters[].protected'][data-anchored]").length;
+    // what the page did, so a failure says whether the anchor applied
+    const missed = await within(8000, "Fleet at Protection", () => $(".settings-page[data-section='fleet']") && document.activeElement?.getAttribute("data-setting") === "clusters[].protected").then(() => null, (e: unknown) => e);
+    if (missed) {
+      throw new Error(`${missed instanceof Error ? missed.message : missed}: ${marks()} marked, focus on ${document.activeElement?.outerHTML.slice(0, 100) ?? "nothing"}, route ${JSON.stringify(useFleet.getState().route)}, notice ${$("[data-testid='settings-notice']")?.textContent ?? "none"}`);
+    }
+    const marked = marks();
+    typeInto(search, "");
+    return { sections: SETTINGS_SECTIONS.length, marked };
+  });
   await step(steps, "Settings", async () => {
-    useFleet.getState().openSettings();
+    useFleet.getState().openSettings("notifications");
     await within(8000, "the Notifications panel", () => $("[data-testid='notification-settings']"));
-    const text = document.body.textContent ?? "";
-    for (const s of ["Appearance", "Git", "Notifications", "External endpoints"]) if (!text.includes(s)) throw new Error(`no ${s} section`);
+    useFleet.getState().openSettings("observability");
     // coverage C5: Settings > Endpoints reads fleet.yaml's endpoints and
     // their credential states (the smoke fleet configures the lab's
     // Alertmanager); S8a: Test reads its status
@@ -1142,6 +1169,24 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     (await within(8000, "the Loki Test", () => $<HTMLButtonElement>("button[aria-label='Test the kind-klyx Loki endpoint']"))).click();
     await within(20_000, "Loki's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Loki 3\.7\.8/));
     return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length, test: result.textContent?.trim().slice(0, 120) };
+  });
+  // Settings slice F2b: a Git alias is a plan from the running copy,
+  // applied by its own action against the file version it was planned
+  // from; removed again, so the smoke fleet ends as it began.
+  await step(steps, "Settings > Git: an alias applied as a plan, then removed", async () => {
+    useFleet.getState().openSettings("git");
+    const entry = () => [...document.querySelectorAll<HTMLElement>("[data-testid='git-repo']")].find((r) => (r.textContent ?? "").includes("gl-work:platform/workloads.git")) ?? null;
+    await within(8000, "the workloads entry", entry);
+    if ($("[data-testid='git-diverged']")) throw new Error("the smoke fleet's git block differs from the one in use");
+    const alias = "gitlab.example.com/platform/workloads-mirror";
+    const chip = () => [...(entry()?.querySelectorAll("[data-testid='git-match']") ?? [])].some((m) => m.textContent === alias);
+    typeInto(entry()!.querySelector<HTMLInputElement>("input.l-input")!, alias);
+    (await within(4000, "Add", () => [...(entry()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((b) => b.textContent === "Add" && !b.disabled) ?? null)).click();
+    const added = await within(8000, "the alias applied", () => chip() ? byText<HTMLElement>("[data-testid='git-message']", /now also serves/) ?? null : null);
+    (await within(4000, "the alias's remove", () => entry()?.querySelector<HTMLButtonElement>(`button[aria-label='stop serving ${alias}']`) ?? null)).click();
+    await within(8000, "the alias removed", () => !chip() && byText<HTMLElement>("[data-testid='git-message']", /^Removed /));
+    if ($("[data-testid='git-diverged']")) throw new Error("the running copy and fleet.yaml differ after the actions");
+    return { added: added.textContent?.trim() };
   });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");
@@ -1186,10 +1231,47 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (!/ completed: \d+ commits/.test(changes)) throw new Error(`git_changes did not compare the renders: ${changes || "not read"}`);
     if (!labels.includes("suspected")) throw new Error(`no suspected cause: ${labels.join(", ")}`);
     const reads = drawer.querySelectorAll("[data-testid='chat-reads'] .chat-read-id").length;
-    button(/^Clear$/)?.click();
-    key(drawer, { key: "Escape" });
-    await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
+    // the investigation stays open: the A3 step reviews its proposal
     return { labels, reads, ledger };
+  });
+
+  // ---- AI A3: the investigation's proposed plan (the eval's a3-plan) ----
+  // The card renders from the scripted model's proposal; Review opens the
+  // ConfirmDialog in Klyx's words, and Cancel sends nothing: read back from
+  // the backend, step 1 is still offered and has no run.
+  await step(steps, "Review a proposed step, then Cancel", async () => {
+    const drawer = await within(4000, "the investigation", () => $("[data-testid='chat-drawer']"));
+    const button = (re: RegExp) => byText<HTMLButtonElement>("[data-testid='chat-drawer'] button", re);
+    try {
+      const card = await within(30_000, "the proposed plan", () => drawer.querySelector<HTMLElement>("[data-testid='act-card']"));
+      sized(card, "the proposed plan");
+      const text = card.textContent ?? "";
+      for (const want of ["Proposed by the model", "suspend", "Kustomization klyx-a1-flux/a1-web", "roll back", "Deployment klyx-a1-app/web"]) {
+        if (!text.includes(want)) throw new Error(`the card lacks "${want}"`);
+      }
+      (await within(4000, "Review…", () => card.querySelector<HTMLButtonElement>("[data-testid='act-review']"))).click();
+      // the ConfirmDialog by its own detail: another surface may carry the
+      // dialog role too (at 1024 px one does)
+      const confirm = () => $("[data-testid='confirm-detail']")?.closest<HTMLElement>("[role='dialog']") ?? null;
+      const dialog = await within(30_000, "the confirmation", confirm);
+      const words = dialog.textContent ?? "";
+      const others = [...document.querySelectorAll("[role='dialog']")].filter((d) => d !== dialog).map((d) => (d.textContent ?? "").slice(0, 80));
+      for (const want of ["Run step 1 of the investigation's plan", "spec.suspend: false → true", "within 30 s"]) {
+        if (!words.includes(want)) throw new Error(`the confirmation lacks "${want}"; other dialogs: ${JSON.stringify(others)}`);
+      }
+      (await within(2000, "Cancel", () => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => /^Cancel$/.test(b.textContent ?? "")))).click();
+      await within(4000, "the confirmation closed", () => !confirm());
+      const st = await investigationState(cluster);
+      const plan = st.exchanges[st.exchanges.length - 1]?.plan;
+      const first = plan?.steps[0];
+      if (!first || first.state !== "offered" || first.run) throw new Error(`step 1 after Cancel: ${JSON.stringify(first)}`);
+      if (!card.querySelector("[data-testid='act-review']")) throw new Error("step 1 is no longer offered on the card");
+      return { steps: plan?.steps.map((s) => `${s.n} ${s.verb} ${s.state}`), otherDialogs: others };
+    } finally {
+      button(/^Clear$/)?.click();
+      key(drawer, { key: "Escape" });
+      await within(2000, "the investigation closed", () => !$("[data-testid='chat-drawer']"));
+    }
   });
 
   // ---- the inspector at this width ----
@@ -1211,6 +1293,28 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (drawer !== narrow) throw new Error(`the inspector is ${drawer ? "a drawer" : "split"} at ${settings.width}px`);
     if (drawer && !$(".lens-drawer")?.contains(document.activeElement)) throw new Error("focus did not move into the drawer");
     return { drawer };
+  });
+
+  // ---- Settings slice F §7: the AI section's Review and apply, on the
+  // lab: the plan shown, then applied, and the setting restored. Last in
+  // the walk: an applied AI change ends the conversations open now. ----
+  await step(steps, "Settings > AI: Review and apply", async () => {
+    useFleet.getState().openSettings("ai");
+    const box = () => $<HTMLInputElement>("[data-setting='ai.proposeActions'] input[type='checkbox']");
+    const before = (await within(8000, "the propose-actions setting", box)).checked;
+    const apply = async (want: boolean) => {
+      box()!.click();
+      (await within(4000, "Review and apply", () => byText<HTMLElement>("[data-testid='ai-settings'] button", /^Review and apply$/))).click();
+      const plan = await within(8000, "the plan", () => $("[data-testid='settings-plan']"));
+      const changes = await within(4000, "the plan's change", () => byText<HTMLElement>("[data-testid='plan-changes'] li", /^Propose actions: /));
+      const ends = plan.querySelectorAll("[data-testid='plan-ends'] li").length;
+      (await within(4000, "Apply", () => byText<HTMLElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
+      await within(15_000, "the applied setting, read back", () => !$("[data-testid='settings-plan']") && !$("[data-testid='ai-unsaved']") && box()?.checked === want && /Applied/.test($("[data-testid='ai-message']")?.textContent ?? ""));
+      return { change: changes.textContent, ends };
+    };
+    const off = await apply(!before);
+    const back = await apply(before);
+    return { off: off.change, ends: off.ends, back: back.change };
   });
   return steps;
 }

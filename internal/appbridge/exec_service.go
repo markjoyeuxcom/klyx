@@ -175,7 +175,8 @@ func (s *ExecService) GetDebugCommand(cluster, ns, pod, container, image, profil
 // The kubectl the terminal runs is checked first (coverage S6 §6): an
 // unresolved, unreadable or pre-1.30 kubectl launches nothing.
 func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container, image, profile string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
@@ -186,13 +187,18 @@ func (s *ExecService) OpenDebugTerminal(cluster, ns, pod, uid, container, image,
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), actionTimeout)
 	defer cancel()
 	if k := conn.DebugKubectlCheck(ctx); !k.OK {
 		return ActionResultDTO{Error: "debug refused: " + k.Reason + " - nothing was started"}
 	}
 	if err := conn.CheckPodArmed(ctx, ns, pod, uid); err != nil {
 		return ActionResultDTO{Error: "debug " + err.Error() + " - nothing was started"}
+	}
+	// slice F §2: checked at the terminal handoff; once the terminal opens,
+	// Klyx no longer controls it
+	if err := t.StartCLI(); err != nil {
+		return ActionResultDTO{Error: "debug not started: " + err.Error()}
 	}
 	return launchTerminal(argv)
 }

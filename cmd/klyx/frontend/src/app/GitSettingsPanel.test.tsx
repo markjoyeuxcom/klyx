@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { GitRepo, GitSettings } from "../bridge/gitSettings";
+import type { Plan } from "../bridge/plan";
 
 const bridge = vi.hoisted(() => ({
   getGitSettings: vi.fn(),
@@ -9,6 +10,8 @@ const bridge = vi.hoisted(() => ({
   setGitRepoMatch: vi.fn(),
   fetchGitRepo: vi.fn(),
   clearGitCache: vi.fn(),
+  planGitFromFile: vi.fn(),
+  applyGit: vi.fn(),
 }));
 vi.mock("../bridge/gitSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/gitSettings")>()), ...bridge }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn() }));
@@ -53,6 +56,7 @@ function state(over: Partial<GitSettings> = {}): GitSettings {
       },
     ],
     notes: [],
+    diverged: false,
     ...over,
   };
 }
@@ -133,7 +137,7 @@ describe("GitSettingsPanel", () => {
   it("adds and removes an explicit match, and removes an approval after confirming", async () => {
     bridge.getGitSettings.mockResolvedValue(state({ repos: [repo({ matches: ["github.com/acme/old"] })] }));
     render(<GitSettingsPanel />);
-    fireEvent.change(await screen.findByLabelText("another repository git@github.com:acme/fleet.git serves"), { target: { value: " github.com/acme/fleet-mirror " } });
+    fireEvent.change(await screen.findByLabelText(/^Also serves \(/), { target: { value: " github.com/acme/fleet-mirror " } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(bridge.setGitRepoMatch).toHaveBeenCalledWith("git@github.com:acme/fleet.git", "github.com/acme/fleet-mirror", true));
     fireEvent.click(await screen.findByRole("button", { name: "stop serving github.com/acme/old" }));
@@ -167,5 +171,121 @@ describe("GitSettingsPanel without a repository key", () => {
     fireEvent.change(within(dialog).getByLabelText("URL to approve"), { target: { value: "git@github.com:acme/x.git" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(bridge.approveGitRepo).toHaveBeenCalledWith("git@github.com:acme/x.git", "", ""));
+  });
+
+  // Settings review slice 0: a failed reread qualifies what is shown.
+  it("qualifies what is shown when a reread fails", async () => {
+    bridge.getGitSettings.mockResolvedValueOnce(state()).mockResolvedValue(null);
+    bridge.fetchGitRepo.mockResolvedValue(ok);
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Fetch now" }));
+    expect((await screen.findByTestId("git-reread-failed")).textContent).toContain("as last read");
+  });
+});
+
+// Settings slice F2b: what is shown is the running copy; a hand edit is
+// drift, adopted with "Use the file's values".
+describe("GitSettingsPanel drift", () => {
+  const filePlan = (over: Partial<Plan> = {}): Plan => ({
+    section: "git", kind: "file", digest: "g1", fileVersion: "v1", runtime: { git: "0", work: "" },
+    changes: [{ id: "git.repos[git@github.com:acme/fleet.git].url", label: "Repository git@github.com:acme/fleet.git", from: "approved", to: "not approved" }],
+    ends: [], continues: [{ id: "fetch:git@github.com:acme/fleet.git", kind: "fetch", cluster: "", started: "2026-10-26T10:42:00Z", what: "the fetch of git@github.com:acme/fleet.git in progress: it finishes, and its history is no longer used" }],
+    writes: false, activates: true, ...over,
+  });
+
+  it("offers the file's values as a plan, and applies only its digest", async () => {
+    bridge.getGitSettings.mockResolvedValue(state({ diverged: true }));
+    bridge.planGitFromFile.mockResolvedValue(filePlan());
+    bridge.applyGit.mockResolvedValue({ ok: true });
+    render(<GitSettingsPanel />);
+    const notice = await screen.findByTestId("git-diverged");
+    expect(notice.textContent).toContain("differ from the ones in use");
+    fireEvent.click(within(notice).getByRole("button", { name: "Use the file's values" }));
+    const plan = await screen.findByTestId("settings-plan");
+    expect(plan.getAttribute("data-plan-digest")).toBe("g1");
+    expect(plan.textContent).toContain("fleet.yaml already says this");
+    expect(plan.textContent).toContain("Continues");
+    expect(plan.textContent).toContain("it finishes, and its history is no longer used");
+    expect(bridge.applyGit).not.toHaveBeenCalled();
+    bridge.getGitSettings.mockResolvedValue(state({ repos: [] }));
+    fireEvent.click(within(plan).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(bridge.applyGit).toHaveBeenCalledWith("g1"));
+    await waitFor(() => expect(screen.queryByTestId("settings-plan")).toBeNull());
+    expect(screen.queryByTestId("git-diverged")).toBeNull();
+    expect(screen.getByTestId("git-message").textContent).toContain("Applied");
+  });
+
+  it("an action refused for drift says so; a plan it returns is shown, never applied", async () => {
+    bridge.getGitSettings.mockResolvedValue(state({ diverged: true }));
+    bridge.removeGitRepo.mockResolvedValue({ ok: false, error: "fleet.yaml's Git settings differ from the ones in use, so nothing was written: use the file's values first, or undo that edit" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    expect((await screen.findByTestId("git-message")).textContent).toContain("use the file's values first");
+
+    bridge.setGitRepoMatch.mockResolvedValue({ ok: false, error: "Something changed since this was planned: review the new plan.", plan: filePlan({ kind: "save", digest: "g2", writes: true }) });
+    fireEvent.change(screen.getByLabelText(/^Also serves \(/), { target: { value: "github.com/acme/fleet-mirror" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect((await screen.findByTestId("settings-plan")).getAttribute("data-plan-digest")).toBe("g2");
+    expect(bridge.applyGit).not.toHaveBeenCalled();
+  });
+});
+
+// F2b review, R2-R3: a lost answer is not a refusal, and a removal whose
+// cache could not be cleared says so.
+describe("GitSettingsPanel outcomes", () => {
+  it("says a lost answer is not known, and reads again", async () => {
+    bridge.getGitSettings.mockResolvedValue(state());
+    bridge.removeGitRepo.mockResolvedValue({ ok: false, unknown: true, error: "lost bridge answer" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    const msg = await screen.findByTestId("git-message");
+    expect(msg.textContent).toContain("whether it applied is not known");
+    expect(msg.textContent).not.toContain("Removed");
+    await waitFor(() => expect(bridge.getGitSettings).toHaveBeenCalledTimes(2));
+  });
+
+  it("says a removal whose cache could not be cleared", async () => {
+    bridge.getGitSettings.mockResolvedValue(state());
+    bridge.removeGitRepo.mockResolvedValue({ ok: true, note: "the approval was removed, but its cache could not be cleared: busy" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    expect((await screen.findByTestId("git-message")).textContent).toContain("could not be cleared");
+  });
+});
+
+// F2b re-review, RR2: actions on different repositories may overlap; an
+// older read or outcome never replaces a newer one.
+describe("GitSettingsPanel overlapping actions", () => {
+  it("keeps a newer readback and outcome over an older one's", async () => {
+    const infra = repo({ url: "https://github.com/acme/infra.git", key: "github.com/acme/infra", sources: [] });
+    let releaseRead!: (s: GitSettings) => void;
+    let releaseFetch!: (r: { ok: boolean; error: string }) => void;
+    bridge.getGitSettings
+      .mockResolvedValueOnce(state({ repos: [repo(), infra] }))
+      .mockImplementationOnce(() => new Promise<GitSettings>((r) => { releaseRead = r; }))
+      .mockResolvedValue(state({ repos: [repo()] }));
+    bridge.fetchGitRepo.mockImplementation(() => new Promise((r) => { releaseFetch = r; }));
+    render(<GitSettingsPanel />);
+    const rows = await screen.findAllByTestId("git-repo");
+    // an older action on one repository, still running
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Fetch now" }));
+    // a newer one on another, applied and read back
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(bridge.removeGitRepo).toHaveBeenCalledWith("https://github.com/acme/infra.git"));
+    // the older action ends after it: its outcome is not said over the
+    // newer's, and its readback, the newest read, answers
+    releaseFetch({ ok: true, error: "" });
+    await waitFor(() => expect(bridge.getGitSettings).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("git-message").textContent).toContain("Removed https://github.com/acme/infra.git");
+    await waitFor(() => expect(screen.getAllByTestId("git-repo")).toHaveLength(1));
+    // the removal's own readback answers last: an older read never
+    // replaces what a newer one found
+    releaseRead(state({ repos: [repo(), infra] }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getAllByTestId("git-repo")).toHaveLength(1);
   });
 });

@@ -58,11 +58,7 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 		return FluxDiffDTO{}, false
 	}
 	rawURL, _, _ := unstructured.NestedString(src.Object, "spec", "url")
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return FluxDiffDTO{}, false
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[line.NormalizeRepo(rawURL)]
 	if url == "" {
@@ -76,6 +72,8 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 	if !ok {
 		return FluxDiffDTO{}, false
 	}
+	// each fetch is admitted when it starts (F2b review, R1)
+	cs = admittedStore{cacheStore: cs, s: s, what: "the cache diff"}
 	d := FluxDiffDTO{Available: true, Via: "cache"}
 	fail := func(format string, a ...any) (FluxDiffDTO, bool) {
 		d.Error = gitcli.Scrub(fmt.Sprintf(format, a...))

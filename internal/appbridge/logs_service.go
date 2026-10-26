@@ -50,6 +50,7 @@ var logOpenTimeout = 30 * time.Second
 type logStream struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	lease  *Lease // released when the stream ends (Settings S2 §2.3)
 }
 
 // LogsService streams pod logs to the frontend over Wails events. Event name
@@ -63,8 +64,8 @@ type logStream struct {
 // per-stream supervisor goroutine closes the ReadCloser on ctx.Done - that is
 // the documented unblock mechanism.
 type LogsService struct {
-	lookup func(string) (LogsConn, bool)
-	em     Emitter
+	lease leaser // Settings S2 §2.3: every stream takes a lease
+	em    Emitter
 
 	mu       sync.Mutex
 	streams  map[string]*logStream
@@ -77,11 +78,31 @@ type LogsService struct {
 // can push live updates to the frontend.
 func NewLogsService(lookup func(string) (LogsConn, bool), em Emitter) *LogsService {
 	return &LogsService{
-		lookup:   lookup,
+		lease:    plainLeaser(lookup),
 		em:       em,
 		streams:  map[string]*logStream{},
 		draining: map[string]*logStream{},
 	}
+}
+
+func (s *LogsService) setLeaser(l leaser) { s.lease = l }
+
+// leaseStream takes a stream's lease: its connection's retirement cancels
+// the stream's context, and its final chunk says why (S2 §2.3).
+func (s *LogsService) leaseStream(cluster, what string) (*Lease, error) {
+	return s.lease(cluster, Work{Kind: "logs", What: what})
+}
+
+// endedWhy is why the stream's connection ended it, "" if it did not.
+func (s *LogsService) endedWhy(streamID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range []map[string]*logStream{s.streams, s.draining} {
+		if st := m[streamID]; st != nil {
+			return st.lease.EndedWhy()
+		}
+	}
+	return ""
 }
 
 // evictToCapLocked evicts the oldest stream(s) until there is room to register
@@ -127,10 +148,11 @@ func (s *LogsService) registerLocked(streamID string, st *logStream) error {
 // review 2026-10-13 #4): a pending open then counts against the cap, and
 // CloseLogStream, CloseAll or an eviction cancel it through its context. The
 // caller either starts the stream's reader or calls release.
-func (s *LogsService) reserve(streamID string) (*logStream, context.Context, error) {
-	// Long-lived: cancellation is the lifecycle, not a timeout.
-	ctx, cancel := context.WithCancel(context.Background())
-	st := &logStream{cancel: cancel, done: make(chan struct{})}
+func (s *LogsService) reserve(streamID string, le *Lease) (*logStream, context.Context, error) {
+	// Long-lived: cancellation is the lifecycle, not a timeout - and the
+	// lease's, which ends with its connection.
+	ctx, cancel := context.WithCancel(le.Ctx)
+	st := &logStream{cancel: cancel, done: make(chan struct{}), lease: le}
 	s.mu.Lock()
 	err := s.registerLocked(streamID, st)
 	s.mu.Unlock()
@@ -160,6 +182,7 @@ func (s *LogsService) release(streamID string, st *logStream) {
 	}
 	s.mu.Unlock()
 	st.cancel()
+	st.lease.Release()
 	close(st.done)
 }
 
@@ -198,18 +221,28 @@ func (s *LogsService) OpenLogStream(cluster, namespace, pod, container string, p
 	if err := validStreamID(streamID); err != nil {
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
-	conn, ok := s.lookup(cluster)
+	le, err := s.leaseStream(cluster, fmt.Sprintf("logs of %s/%s (container %s), opening", namespace, pod, container))
+	if err != nil {
+		return OpenLogStreamResultDTO{Error: err.Error()}
+	}
+	conn, ok := le.Conn.(LogsConn)
 	if !ok {
+		le.Release()
 		return OpenLogStreamResultDTO{Error: "cluster not connected"}
 	}
 
-	st, ctx, err := s.reserve(streamID)
+	st, ctx, err := s.reserve(streamID, le)
 	if err != nil {
+		le.Release()
 		return OpenLogStreamResultDTO{Error: err.Error()}
 	}
 	stop := openDeadline(st)
 	rc, err := conn.PodLogStream(ctx, namespace, pod, container, previous, int64(tailLines))
 	timedOut := stop()
+	if err == nil && !timedOut && ctx.Err() == nil {
+		// settled after the I/O: a connection retired meanwhile ends it here
+		err = le.Settle(fmt.Sprintf("logs of %s/%s (container %s)", namespace, pod, container))
+	}
 	if err != nil || timedOut || ctx.Err() != nil {
 		if rc != nil {
 			_ = rc.Close()
@@ -306,6 +339,11 @@ func (s *LogsService) read(ctx context.Context, streamID string, rc io.ReadClose
 // stream, and closes done. Closing rc here is idempotent with the supervisor's
 // close (both call Close; the second is a no-op).
 func (s *LogsService) finish(streamID string, rc io.ReadCloser, errMsg string) {
+	if errMsg == "" {
+		if why := s.endedWhy(streamID); why != "" {
+			errMsg = "the stream ended: " + why // S2 §2.3: said, never silent
+		}
+	}
 	s.em.Emit("podlogs:"+streamID, LogChunkDTO{Lines: []string{}, EOF: true, Error: errMsg})
 	_ = rc.Close()
 
@@ -329,6 +367,7 @@ func (s *LogsService) finish(streamID string, rc io.ReadCloser, errMsg string) {
 
 	if st != nil {
 		st.cancel() // release the context (supervisor exits); idempotent
+		st.lease.Release()
 		close(st.done)
 	}
 }

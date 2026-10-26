@@ -10,6 +10,11 @@ export type EndpointRow = {
   kind: string;
   source: string;
   tenant?: string;
+  // tlsOff: its certificate is not verified; scope its match in words;
+  // unscoped: an Alertmanager or Loki with no match (Settings review slice 0)
+  tlsOff?: boolean;
+  scope?: string;
+  unscoped?: boolean;
   authType?: string;
   username?: string;
   state: string;

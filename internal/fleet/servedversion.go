@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/moomora/klyx/internal/readfence"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,10 +26,17 @@ import (
 // the watch's health. When discovery cannot answer at all (it errors, or the
 // group is not advertised - as with the fake discovery in tests) the
 // documented fallback is returned as served.
-func servedVersion(disc discoveryLike, group, resource, fallback string) (version string, served bool) {
+//
+// A fence that no longer holds is the one error: a context-bound discovery
+// (discoveryFor) refused the read, and nothing falls back past it (Settings
+// F1 review, finding F2).
+func servedVersion(disc discoveryLike, group, resource, fallback string) (version string, served bool, err error) {
 	groups, err := disc.ServerGroups()
+	if readfence.Failed(err) {
+		return "", false, err
+	}
 	if err != nil || groups == nil {
-		return fallback, true
+		return fallback, true, nil
 	}
 	var candidates []string
 	for _, g := range groups.Groups {
@@ -45,30 +53,33 @@ func servedVersion(disc discoveryLike, group, resource, fallback string) (versio
 		}
 	}
 	if len(candidates) == 0 {
-		return fallback, true
+		return fallback, true, nil
 	}
 	var unreadable []string
 	for _, v := range candidates {
 		rl, err := disc.ServerResourcesForGroupVersion(group + "/" + v)
+		if readfence.Failed(err) {
+			return "", false, err
+		}
 		if err != nil || rl == nil {
 			unreadable = append(unreadable, v)
 			continue
 		}
 		for _, r := range rl.APIResources {
 			if r.Name == resource {
-				return v, true
+				return v, true, nil
 			}
 		}
 	}
 	if len(unreadable) == 0 {
-		return "", false
+		return "", false, nil
 	}
 	for _, v := range unreadable {
 		if v == fallback {
-			return v, true
+			return v, true, nil
 		}
 	}
-	return unreadable[0], true
+	return unreadable[0], true, nil
 }
 
 // servedResourceAmong is servedVersion for a resource read at one of a list
@@ -84,10 +95,21 @@ func servedResourceAmong(disc discoveryLike, group, resource string, candidates 
 		return "", false, fmt.Errorf("%s/%s: no candidate versions", group, resource)
 	}
 	groups, gerr := disc.ServerGroups()
+	if readfence.Failed(gerr) {
+		return "", false, gerr // never a fallback past a fence (F1 review, F2)
+	}
 	if gerr != nil || groups == nil || !slices.ContainsFunc(groups.Groups, func(g metav1.APIGroup) bool { return g.Name == group }) {
 		return candidates[0], true, nil
 	}
-	p, err := servedAmong(groups, disc.ServerResourcesForGroupVersion, func() error { return nil }, group, resource, candidates)
+	var fenced error
+	resources := func(gv string) (*metav1.APIResourceList, error) {
+		rl, err := disc.ServerResourcesForGroupVersion(gv)
+		if readfence.Failed(err) {
+			fenced = err
+		}
+		return rl, err
+	}
+	p, err := servedAmong(groups, resources, func() error { return fenced }, group, resource, candidates)
 	if err != nil {
 		return "", false, err
 	}

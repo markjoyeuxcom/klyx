@@ -3,9 +3,10 @@ package appbridge
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"time"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 // LabNoiseEvent carries the §6a lab's delivery control: with the lab trace
@@ -15,7 +16,7 @@ import (
 const LabNoiseEvent = "lab:noise"
 
 func startLabNoise(em Emitter) {
-	n, _ := strconv.Atoi(os.Getenv("KLYX_LAB_NOISE_BYTES"))
+	n, _ := strconv.Atoi(envread.Get(envread.KlyxLabNoiseBytes))
 	if n <= 0 {
 		return
 	}

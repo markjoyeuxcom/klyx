@@ -90,11 +90,7 @@ func SetChatGit(c *ChatService, g *GitService) {
 
 func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChangesOut, error) {
 	var out gitChangesOut
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return out, fmt.Errorf("reading the Git settings: %w", err)
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[line.NormalizeRepo(req.RepoURL)]
 	if url == "" {
@@ -108,6 +104,8 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 	if !ok {
 		return out, errors.New("the Git cache cannot fetch commits")
 	}
+	// each fetch is admitted when it starts (F2b review, R1)
+	cs = admittedStore{cacheStore: cs, s: s, what: "chat's Git changes"}
 	applied, err := gitcli.SHA(req.Applied)
 	if err != nil {
 		return out, err

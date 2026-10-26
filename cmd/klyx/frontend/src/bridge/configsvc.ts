@@ -16,6 +16,9 @@ export type FleetClusterConfigDTO = {
   protected: boolean;
   protectedInferred?: boolean;
   hasMetrics: boolean;
+  // drift: how fleet.yaml now differs from this running entry, applied at a
+  // restart (Settings review slice 0)
+  drift?: string;
 };
 export type KubeContextDTO = { name: string; inFleet: boolean };
 export type FleetConfigDTO = {
@@ -25,6 +28,11 @@ export type FleetConfigDTO = {
   scanError?: string;
   clusters: FleetClusterConfigDTO[];
   contexts: KubeContextDTO[];
+  // loadError: fleet.yaml did not load at startup, so no cluster connected;
+  // fileError: it does not load now; fileOnly: in the file, not running
+  loadError?: string;
+  fileError?: string;
+  fileOnly?: string[];
 };
 
 // getFleetConfig fetches the fleet file state plus a FRESH kubeconfig scan —
@@ -36,6 +44,16 @@ export async function getFleetConfig(): Promise<FleetConfigDTO | null> {
   } catch (e) {
     console.error("fleet config", e);
     return null;
+  }
+}
+
+// configLoadError is why fleet.yaml did not load when Klyx started ("" when
+// it did, or there was none yet): the fleet's empty state says it.
+export async function configLoadError(): Promise<string> {
+  try {
+    return await ConfigService.LoadError();
+  } catch {
+    return "";
   }
 }
 

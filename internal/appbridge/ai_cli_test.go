@@ -105,7 +105,7 @@ func TestAISettings_TestProbesACLI(t *testing.T) {
 // The CLI path is a setting the panel edits and saves.
 func TestAISettings_CLIPathRoundTrips(t *testing.T) {
 	f := newSettingsFixture(t, baseFleet)
-	if r := f.svc.SaveAISettings(AISettingsDTO{Provider: "claudeCLI", KeySource: "none", CLIPath: "  /opt/claude/2.1.296  "}); !r.OK {
+	if r := f.save(AISettingsDTO{Provider: "claudeCLI", KeySource: "none", CLIPath: "  /opt/claude/2.1.296  "}, ""); !r.OK {
 		t.Fatalf("save: %+v", r)
 	}
 	st := f.svc.GetAISettings()

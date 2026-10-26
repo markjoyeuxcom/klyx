@@ -9,8 +9,10 @@ import (
 
 	"github.com/moomora/klyx/internal/admission"
 	"github.com/moomora/klyx/internal/crd"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/scrub"
 	"github.com/moomora/klyx/internal/urlscrub"
 )
@@ -82,9 +84,11 @@ type StepDTO struct {
 	Verb    string `json:"verb"`
 	Subject string `json:"subject"`
 	Written bool   `json:"written"`
-	// Refused: the server refused this request, so nothing of it was
-	// written; neither written nor refused is unverified (a lost answer)
+	// Refused: the server refused this request, or Klyx did before sending
+	// it (NotSent), so nothing of it was written; neither written nor
+	// refused is unverified (a lost answer)
 	Refused   bool                 `json:"refused,omitempty"`
+	NotSent   bool                 `json:"notSent,omitempty"`
 	Error     string               `json:"error,omitempty"`
 	Admission *AdmissionFindingDTO `json:"admission,omitempty"`
 }
@@ -356,7 +360,7 @@ func admissionInventory(ctx context.Context, r admissionRows) (configs []*admiss
 func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO {
 	out := make([]StepDTO, 0, len(verbSteps))
 	for _, s := range verbSteps {
-		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written, Refused: s.refused}
+		d := StepDTO{Verb: s.verb, Subject: s.subject, Written: s.written, Refused: s.refused, NotSent: s.notSent}
 		if s.err != nil {
 			d.Error, d.Admission = writeError(ctx, conn, s.err)
 		}
@@ -367,15 +371,22 @@ func stepsDTO(ctx context.Context, conn any, verbSteps []stepOutcome) []StepDTO 
 
 // stepOutcome is a fleet step, decoupled from fleet's type.
 type stepOutcome struct {
-	verb, subject    string
-	written, refused bool
-	err              error
+	verb, subject             string
+	written, refused, notSent bool
+	err                       error
 }
 
-// failed is a write path's failed result (coverage S3b §5).
+// failed is a write path's failed result (coverage S3b §5). A fence's
+// refusal also says what reached the cluster (Settings slice F §2): not
+// sent when nothing of the write was forwarded, else unverified - for a
+// verb that records no receipts too.
 func failed(ctx context.Context, conn any, err error) ActionResultDTO {
 	text, f := writeError(ctx, conn, err)
-	return ActionResultDTO{Error: text, Admission: f}
+	r := ActionResultDTO{Error: text, Admission: f}
+	if readfence.Failed(err) {
+		r.Outcome, r.NotSent = fleet.WriteOutcome(err)
+	}
+	return r
 }
 
 // failedScrubbed is failed for a path whose text passes the URL rule.

@@ -121,6 +121,7 @@ type LogHistoryPageDTO struct {
 type historySlot struct {
 	mu       sync.Mutex
 	state    *historyView // nil: no page set (none yet, failed, or ended)
+	ended    string       // why the view's cluster ended its page set (Settings S2 §2.3), said once
 	cancel   context.CancelFunc
 	inFlight int
 	used     time.Time
@@ -152,11 +153,14 @@ type historyView struct {
 // LogHistoryService serves History views.
 type LogHistoryService struct {
 	readerOf func(cluster string) (HistoryReader, error)
-	now      func() time.Time
-	mu       sync.Mutex
-	views    map[string]*historySlot
-	sets     atomic.Uint64
-	chats    atomic.Uint64 // chat's private views (AI A1 §3.6)
+	// lease: a page read's lease (Settings S2 §2.3); the plain one in tools
+	// and tests reads through readerOf
+	lease leaser
+	now   func() time.Time
+	mu    sync.Mutex
+	views map[string]*historySlot
+	sets  atomic.Uint64
+	chats atomic.Uint64 // chat's private views (AI A1 §3.6)
 }
 
 // errHistoryViewsFull: every view the service holds is reading; a new one
@@ -165,7 +169,37 @@ var errHistoryViewsFull = fmt.Errorf("%d log history views are reading; close on
 
 // NewLogHistoryService wires the cluster's Loki reader.
 func NewLogHistoryService(readerOf func(cluster string) (HistoryReader, error)) *LogHistoryService {
-	return &LogHistoryService{readerOf: readerOf, now: time.Now, views: map[string]*historySlot{}}
+	return &LogHistoryService{readerOf: readerOf, now: time.Now, views: map[string]*historySlot{},
+		lease: func(cluster string, _ Work) (*Lease, error) { return PlainLease(cluster, nil), nil }}
+}
+
+func (s *LogHistoryService) setLeaser(l leaser) { s.lease = l }
+
+// EndLogHistory is the lifecycle's end hook for log history views: a plain
+// function, never a method of the bound service, so the webview cannot
+// end them.
+func EndLogHistory(s *LogHistoryService) func(cluster string, id fleet.ConnID, why string) {
+	return func(cluster string, _ fleet.ConnID, why string) { s.endCluster(cluster, why) }
+}
+
+// endCluster ends every view's page set on cluster, whose connection was
+// retired (Settings S2 §2.3): a read in flight already ended with its
+// lease; an idle view holds no connection, and its next page says why it
+// ended.
+func (s *LogHistoryService) endCluster(cluster, why string) {
+	s.mu.Lock()
+	slots := make([]*historySlot, 0, len(s.views))
+	for _, sl := range s.views {
+		slots = append(slots, sl)
+	}
+	s.mu.Unlock()
+	for _, sl := range slots {
+		sl.mu.Lock()
+		if sl.state != nil && sl.state.cluster == cluster {
+			sl.state, sl.ended = nil, why
+		}
+		sl.mu.Unlock()
+	}
 }
 
 // LokiConn is a connection that can read its cluster's Loki.
@@ -201,12 +235,33 @@ func (s *LogHistoryService) CloseView(view string) {
 
 // ReadPodHistory reads one page: the first of a new page set, or the next.
 func (s *LogHistoryService) ReadPodHistory(req PodHistoryRequestDTO) LogHistoryPageDTO {
-	return s.readPodHistory(context.Background(), req)
+	// the page's lease, before any I/O (Settings S2 §2.3): its read ends with
+	// its cluster's connection
+	le, err := s.lease(req.Cluster, Work{Kind: "log-history", What: fmt.Sprintf("a page of log history of %s/%s", req.Namespace, req.Pod)})
+	if err != nil {
+		return LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}, Error: err.Error()}
+	}
+	defer le.Release()
+	readerOf := s.readerOf
+	if c, ok := le.Conn.(LokiConn); ok {
+		readerOf = func(string) (HistoryReader, error) {
+			r, err := c.Loki()
+			if err != nil {
+				return nil, err
+			}
+			return r, nil
+		}
+	}
+	return s.readPodHistoryWith(le.Ctx, req, readerOf)
 }
 
 // readPodHistory is ReadPodHistory under a parent context: chat's read ends
-// with its turn (AI A1 §3.6).
+// with its turn (AI A1 §3.6), whose own lease covers it.
 func (s *LogHistoryService) readPodHistory(parent context.Context, req PodHistoryRequestDTO) LogHistoryPageDTO {
+	return s.readPodHistoryWith(parent, req, s.readerOf)
+}
+
+func (s *LogHistoryService) readPodHistoryWith(parent context.Context, req PodHistoryRequestDTO, readerOf func(string) (HistoryReader, error)) LogHistoryPageDTO {
 	out := LogHistoryPageDTO{View: req.View, Lines: []LogHistoryLineDTO{}, Selectors: []string{}}
 	if err := validStreamID(req.View); err != nil {
 		out.Error = err.Error()
@@ -216,7 +271,7 @@ func (s *LogHistoryService) readPodHistory(parent context.Context, req PodHistor
 		out.Error = "a pod's namespace and name are required"
 		return out
 	}
-	r, err := s.readerOf(req.Cluster)
+	r, err := readerOf(req.Cluster)
 	if err != nil {
 		out.Error = err.Error()
 		return out
@@ -234,6 +289,14 @@ func (s *LogHistoryService) readPodHistory(parent context.Context, req PodHistor
 	if ctx.Err() != nil {
 		out.Error = "a newer request for this view replaced this one"
 		return out
+	}
+	if why := slot.ended; why != "" {
+		slot.ended = ""
+		if !req.Restart {
+			// said once: the next page starts the view again
+			out.Reset, out.Error = true, "the log history view ended: "+why+"; read it again"
+			return out
+		}
 	}
 	release, err := r.Slot(ctx)
 	if err != nil {

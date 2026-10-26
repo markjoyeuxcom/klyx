@@ -3,10 +3,12 @@ package execenv
 import (
 	"strings"
 	"testing"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 func TestAugmentPathAddsMacDesktopToolDirsAfterExistingPath(t *testing.T) {
-	got := AugmentPath("/custom/bin:/usr/bin", "darwin", func(string) string { return "" })
+	got := AugmentPath("/custom/bin:/usr/bin", "darwin", func(envread.Name) string { return "" })
 	parts := strings.Split(got, ":")
 	if parts[0] != "/custom/bin" || parts[1] != "/usr/bin" {
 		t.Fatalf("existing PATH order changed: %v", parts)
@@ -27,7 +29,7 @@ func TestAugmentPathAddsWindowsAWSCLIPath(t *testing.T) {
 		"ProgramFiles(x86)": `C:\Program Files (x86)`,
 		"ChocolateyInstall": `C:\Tools\choco`,
 	}
-	got := AugmentPath(`C:\Windows\System32`, "windows", func(k string) string { return env[k] })
+	got := AugmentPath(`C:\Windows\System32`, "windows", func(n envread.Name) string { return env[n.Key()] })
 	parts := strings.Split(got, ";")
 	for _, want := range []string{
 		`C:\Windows\System32`,

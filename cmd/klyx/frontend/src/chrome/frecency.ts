@@ -1,3 +1,6 @@
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
+
 // Palette frecency: frequently + recently run commands float up. Stored in
 // localStorage as {commandId: {n: uses, t: last-used-ms}}, trimmed to the 300
 // most recently used entries so it never grows unbounded.
@@ -6,7 +9,7 @@
 // two weeks, so frecency reorders the empty-query list and tiebreaks fuzzy
 // matches without ever letting a stale habit outrank a clearly better match.
 
-const KEY = "klyx-palette-frecency";
+const KEY: StorageKey = "klyx-palette-frecency";
 const MAX_ENTRIES = 300;
 const HALF_LIFE_DAYS = 14;
 const MAX_BOOST = 10;
@@ -15,7 +18,7 @@ type Entry = { n: number; t: number };
 
 function load(): Record<string, Entry> {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = readStored(KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as Record<string, Entry>) : {};
@@ -25,11 +28,7 @@ function load(): Record<string, Entry> {
 }
 
 function save(entries: Record<string, Entry>): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(entries));
-  } catch {
-    // best-effort - a full or unavailable storage must never break the palette
-  }
+  writeStored(KEY, JSON.stringify(entries)); // best-effort: never breaks the palette
 }
 
 export function recordUse(id: string, now: number = Date.now()): void {

@@ -1,10 +1,13 @@
 import { replicaOwner, type ReplicaOwnerDTO } from "../bridge/keda";
+import { EndpointSettingsLink } from "../settings/EndpointSettingsLink";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useInspectorAlerts } from "./AlertsBlock";
 import { useDescribe } from "../chrome/describe/useDescribe";
 import { IconTerminal2, IconExternalLink, IconBox, IconX, IconAlertTriangle, IconTrash } from "@tabler/icons-react";
 import { useFleet } from "../store/fleet";
-import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO } from "../store/fleet";
+import type { WorkloadDTO, PodDTO, WorkloadKind, ResourceCellDTO, RolloutRevisionDTO, KindCoverageDTO, GitOpsOwnershipDTO } from "../store/fleet";
+import { gitOpsOwnership } from "../bridge/crd";
+import { undoOwnershipLine } from "./ownership";
 import { rolloutRestart, rolloutHistory, rolloutUndo, rolloutPause, scaleWorkload } from "../bridge/workloads";
 import { deletePod } from "../bridge/pods";
 import { getWorkloadMetrics } from "../bridge/workload-metrics";
@@ -93,7 +96,10 @@ type PendingRestart = { kind: "restart"; w: WorkloadDTO };
 type PendingScale = { kind: "scale"; w: WorkloadDTO; replicas: number; owner?: ReplicaOwnerDTO };
 type PendingScaleInput = { kind: "scale-input"; w: WorkloadDTO };
 type PendingDeletePod = { kind: "delete-pod"; w: WorkloadDTO; pod: PodDTO };
-type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO };
+// owner: the authoritative ownership read, undefined while in flight and null
+// when it failed (A3 §9 stage 1); opening identifies this opening of the
+// dialog, so a reply to a cancelled one never lands on a later one.
+type PendingUndo = { kind: "undo"; w: WorkloadDTO; rev: RolloutRevisionDTO; opening: number; owner?: GitOpsOwnershipDTO | null };
 type PendingPause = { kind: "pause"; w: WorkloadDTO; pause: boolean };
 type Pending = PendingRestart | PendingScale | PendingScaleInput | PendingDeletePod | PendingUndo | PendingPause;
 // A pending verb is pinned to the cluster it was raised on, independent of
@@ -136,6 +142,8 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
   const reloaderHealthy = useFleet((s) => s.clusters.find((c) => c.name === cluster)?.reloaderHealthy ?? false);
   const fleetSize = useFleet((s) => s.clusters.length);
   const [pinned, setPinned] = useState<PinnedPending | null>(null);
+  // each undo opening's identity: an ownership reply lands only on its own
+  const undoOpening = useRef(0);
   const setPending = useCallback((p: Pending | null) => setPinned(p ? { ...p, cluster } : null), [cluster]);
   // Auxiliary surfaces carry their origin cluster and render only on it, so a
   // cluster switch never queries A's object name against B.
@@ -571,7 +579,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
                 useFleet.getState().requestNavIntent({ kind: "select-flux", cluster, fluxKind: w.gitops.kind, namespace: w.gitops.namespace, name: w.gitops.name });
               }}
               onCompare={fleetSize > 1 ? (w) => setCompareTarget({ cluster, w }) : undefined}
-              onUndo={(w, rev) => setPending({ kind: "undo", w, rev })}
+              onUndo={(w, rev) => {
+                const opening = ++undoOpening.current;
+                setPending({ kind: "undo", w, rev, opening });
+                void gitOpsOwnership(cluster, { group: "apps", version: "v1", plural: "", kind: w.kind, scope: "Namespaced" }, { namespace: w.namespace, name: w.name }).then((owner) =>
+                  // lands only on this opening: its cluster, object and revision object
+                  setPinned((p) => (p && p.kind === "undo" && p.opening === opening && p.cluster === cluster && p.w.uid === w.uid && p.rev.objectUID === rev.objectUID && p.owner === undefined ? { ...p, owner } : p)),
+                );
+              }}
               onPause={(w, pause) => setPending({ kind: "pause", w, pause })}
             />
           ) : selectedKey && mine && pin.expected && pin.gone ? (
@@ -630,13 +645,14 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
           detail={
             `${pending.w.kind.toLowerCase()} ${pending.w.namespace}/${pending.w.name} → revision ${pending.rev.revision}` +
             (pending.rev.images.length > 0 ? ` (${pending.rev.images.join(", ")})` : "") +
-            (pending.w.gitops ? ` - GitOps-owned (${pending.w.gitops.kind}/${pending.w.gitops.name}): Flux will revert this on its next reconcile. Undo is incident response; make the real fix in Git.` : "")
+            undoOwnershipLine(pending.owner, pending.w.gitops ? { kind: pending.w.gitops.kind, name: pending.w.gitops.name } : undefined)
           }
           protected={isProtected}
           danger
           confirmLabel="Roll back"
+          waiting={pending.owner === undefined ? "Klyx is reading which GitOps unit manages it" : undefined}
           onCancel={() => setPending(null)}
-          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutUndo(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.rev.revision)); }}
+          onConfirm={() => { const p = pending; dispatchArmed(p, () => void rolloutUndo(p.cluster, p.w.kind, p.w.namespace, p.w.name, p.w.uid ?? "", p.rev.revision, p.rev.objectUID ?? "", p.rev.templateDigest ?? "")); }}
         />
       )}
       {pending?.kind === "pause" && (
@@ -878,6 +894,7 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
     return (
       <div style={{ padding: "0 8px 6px 32px", background: "var(--color-background-secondary)", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
         sparklines unavailable{spark.message ? `: ${spark.message}` : ""}
+        <EndpointSettingsLink text={spark.message} cluster={cluster} kind="metrics" />
       </div>
     );
   }
@@ -1063,13 +1080,16 @@ function RolloutSection({ cluster, workload, onUndo }: {
                 </span>
                 {r.current ? (
                   <span className="t-legend" style={{ color: "var(--color-text-success)", flexShrink: 0 }}>current</span>
-                ) : onUndo ? (
+                ) : onUndo && r.objectUID && r.templateDigest ? (
                   <button
                     className="l-btn"
                     onClick={() => onUndo(workload, r)}
                     title={`Roll back to revision ${r.revision}`}
                     style={{ height: 22, color: "var(--color-text-danger)", flexShrink: 0 }}
                   >undo →</button>
+                ) : onUndo ? (
+                  // an undo writes only a revision whose identity was read (A3 §4.5)
+                  <span className="t-legend" style={{ color: "var(--color-text-tertiary)", flexShrink: 0 }} title="Klyx could not read this revision's object or template, so it offers no undo to it">no undo</span>
                 ) : null}
               </div>
             ))}

@@ -15,6 +15,12 @@ import (
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/helmcli"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/readfence"
+	"sort"
+
+	"sync"
+
+	"time"
 )
 
 const (
@@ -51,18 +57,102 @@ type AIConn interface {
 // whole (SetAIState) and loaded once per call (spec 2026-10-13 §1.1).
 type AIService struct {
 	lookup       func(string) (AIConn, bool)
+	lease        leaser // an Explain's or a Suggest-fix's lease (Settings S2 §2.3)
 	state        atomic.Pointer[AIState]
 	rev          atomic.Uint64
 	isProtected  func(string) bool
 	capabilities func(string) capability.Set // per-cluster operator health; may be nil
+
+	// The AI section's Applying state and its in-flight calls (Settings
+	// slice F §5): while an Apply decides, no new AI work starts, and an
+	// Explain or a Suggest-fix is work it names until it returns.
+	gateMu   sync.Mutex
+	applying bool
+	calls    map[uint64]PlanWorkDTO
+	callSeq  uint64
+}
+
+// aiApplying refuses new AI work while an Apply of the AI settings decides.
+const aiApplying = "AI settings are being applied; try again in a moment"
+
+// beginApply enters the AI section's Applying state: new work is refused
+// until endApply. Running work is not touched: an Apply refused before its
+// write changes nothing (Settings slice F §11).
+func (s *AIService) beginApply() {
+	s.gateMu.Lock()
+	s.applying = true
+	s.gateMu.Unlock()
+}
+
+func (s *AIService) endApply() {
+	s.gateMu.Lock()
+	s.applying = false
+	s.gateMu.Unlock()
+}
+
+func (s *AIService) applyingNow() bool {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	return s.applying
+}
+
+// admitCall registers an Explain's or a Suggest-fix's call as work, unless
+// an Apply is deciding: atomically, so an Apply's plan either names the
+// call or refused it.
+//
+// The call takes a lease on the connection precheck found (Settings S2
+// §2.3): the lease's context ends with that connection, and a connection
+// replaced since precheck refuses the call.
+func (s *AIService) admitCall(kind, cluster string, conn AIConn) (func(), *Lease, string) {
+	what := map[string]string{"explain": "an Explain", "suggest-fix": "a Suggest-fix"}[kind]
+	le, err := s.lease(cluster, Work{Kind: kind, What: what + " on " + cluster})
+	if err != nil {
+		return nil, nil, err.Error()
+	}
+	if !le.Pins(conn) {
+		le.Release()
+		return nil, nil, "the cluster's connection changed; nothing was sent"
+	}
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	if s.applying {
+		le.Release()
+		return nil, nil, aiApplying
+	}
+	if s.calls == nil {
+		s.calls = map[uint64]PlanWorkDTO{}
+	}
+	s.callSeq++
+	id := s.callSeq
+	s.calls[id] = PlanWorkDTO{ID: fmt.Sprintf("%s:%d", kind, id), Kind: kind, Cluster: cluster, Started: time.Now().UTC().Format(time.RFC3339), What: what + " on " + cluster}
+	return func() {
+		s.gateMu.Lock()
+		delete(s.calls, id)
+		s.gateMu.Unlock()
+		le.Release()
+	}, le, ""
+}
+
+// callsWork is the in-flight Explain and Suggest-fix calls, by identity.
+func (s *AIService) callsWork() []PlanWorkDTO {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	out := make([]PlanWorkDTO, 0, len(s.calls))
+	for _, w := range s.calls {
+		out = append(out, w)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // NewAIService wires the read-only AI surface with its first snapshot.
 func NewAIService(lookup func(string) (AIConn, bool), initial *AIState, isProtected func(string) bool, capabilities func(string) capability.Set) *AIService {
-	s := &AIService{lookup: lookup, isProtected: isProtected, capabilities: capabilities}
+	s := &AIService{lookup: lookup, lease: plainLeaser(lookup), isProtected: isProtected, capabilities: capabilities}
 	SetAIState(s, initial)
 	return s
 }
+
+func (s *AIService) setLeaser(l leaser) { s.lease = l }
 
 // SetAIState publishes a new snapshot. A free function, not a method: every
 // exported method of a bound service is callable from the webview, and only
@@ -139,33 +229,73 @@ func (s *AIService) protected(cluster string) bool {
 	return s.isProtected != nil && s.isProtected(cluster)
 }
 
-// precheck is the shared gate: a provider exists, the cluster's context may
-// go to it, and the cluster is connected. It reads only the given snapshot.
-func (s *AIService) precheck(st *AIState, cluster string) (AIConn, string) {
+// fenceReason is a fence refusal's own reason, without its wrapping.
+func fenceReason(err error) string {
+	var fe *readfence.Error
+	if errors.As(err, &fe) {
+		return fe.Err.Error()
+	}
+	return err.Error()
+}
+
+// callFence pins an Explain or a Suggest-fix to the AI settings revision and
+// the cluster's epoch at its start (Settings slice F §4): the call starts
+// only on an Active cluster, and its fence refuses every later cluster read
+// and every send once either moves. "" refusal when admitted.
+func (s *AIService) callFence(st *AIState, cluster string) (func() error, string) {
+	epoch, notAdmitted := admitNow(cluster)
+	if notAdmitted != "" {
+		return nil, notAdmitted
+	}
+	return func() error {
+		if cur := s.load(); cur == nil || cur.Rev != st.Rev {
+			return errors.New("the AI settings changed")
+		}
+		if p := epochProblem(cluster, epoch); p != "" {
+			return errors.New(p)
+		}
+		return nil
+	}, ""
+}
+
+// precheck is the shared gate: a provider exists, the cluster is admitted
+// and its epoch pinned (callFence), the cluster's context may go to the
+// provider, and the cluster is connected. It reads only the given
+// snapshot. The epoch is pinned before egress is decided (Settings F1
+// review, finding F1): a protection change after the pin moves the epoch,
+// so the returned fence refuses every later read and send, and a
+// permission read before it can never pass under a newer epoch.
+func (s *AIService) precheck(st *AIState, cluster string) (AIConn, func() error, string) {
 	if st.Provider == nil {
 		if st.Problem != "" {
-			return nil, "AI is unavailable: " + st.Problem
+			return nil, nil, "AI is unavailable: " + st.Problem
 		}
-		return nil, "AI backend not configured"
+		return nil, nil, "AI backend not configured"
 	}
 	if problem := notReady(st); problem != "" {
-		return nil, "AI is unavailable: " + problem
+		return nil, nil, "AI is unavailable: " + problem
+	}
+	fence, notAdmitted := s.callFence(st, cluster)
+	if notAdmitted != "" {
+		return nil, nil, notAdmitted
 	}
 	if !s.egressAllowed(st, cluster) {
-		return nil, egressRefusal(cluster)
+		return nil, nil, egressRefusal(cluster)
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
-		return nil, "cluster not connected"
+		return nil, nil, "cluster not connected"
 	}
-	return conn, ""
+	return conn, fence, ""
 }
 
 // complete runs one completion on the snapshot's provider and folds the
 // outcome into a DTO: a refusal, a truncation or tool output is an error,
 // never an explanation (spec §1.2).
 func complete(ctx context.Context, st *AIState, req ai.Request, grounded string, redacted int) AIResultDTO {
-	res, err := st.Provider.Complete(ctx, req)
+	// one send, tracked: a fence refusal before any attempt was forwarded
+	// says nothing was sent (Settings slice F §4)
+	res, err := st.Provider.Complete(readfence.WithWriteTracker(ctx), req)
 	if err != nil {
 		return AIResultDTO{Error: modelError(err), Backend: string(st.ProviderID), Origin: st.Origin}
 	}
@@ -186,6 +316,12 @@ func modelError(err error) string {
 	var cli *ai.CLIRefusedError
 	var discarded *ai.CLIDiscardedError
 	switch {
+	case readfence.Failed(err) && errors.Is(err, readfence.ErrNotForwarded):
+		return "Nothing was sent: " + fenceReason(err) + "."
+	case readfence.Failed(err):
+		// an earlier attempt of this send was forwarded (a redirect, a
+		// retry): it may have reached the model
+		return "The request may have been sent before Klyx stopped it: " + fenceReason(err) + "."
 	case errors.As(err, &refused):
 		return "The model declined to answer" + refusalDetail(refused) + "."
 	case errors.As(err, &discarded):
@@ -223,10 +359,15 @@ func refusalDetail(r *ai.RefusedError) string {
 // upstream, credential-like values redacted, capped).
 func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid string) AIResultDTO {
 	st := s.load()
-	conn, refusal := s.precheck(st, cluster)
+	conn, fence, refusal := s.precheck(st, cluster)
 	if refusal != "" {
 		return AIResultDTO{Error: refusal}
 	}
+	done, le, refusal := s.admitCall("suggest-fix", cluster, conn)
+	if refusal != "" {
+		return AIResultDTO{Error: refusal}
+	}
+	defer done()
 	if uid == "" {
 		return AIResultDTO{Error: "the selected object has no identity yet; nothing was sent"}
 	}
@@ -240,7 +381,7 @@ func (s *AIService) SuggestFix(cluster, group, version, plural, ns, name, uid st
 		// selector IDs; no manifest of one is sent
 		return AIResultDTO{Error: "Suggest fix is not available for a Karpenter NodeClass: its spec holds the role, the instance profile and cloud IDs, which Klyx never sends to AI; nothing was sent"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ai.Deadline(ai.PurposeFix))
+	ctx, cancel := context.WithTimeout(readfence.With(le.Ctx, fence), ai.Deadline(ai.PurposeFix))
 	defer cancel()
 
 	bundle, root, err := buildResourceBundle(ctx, conn, group, version, plural, ns, name)

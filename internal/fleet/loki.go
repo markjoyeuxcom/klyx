@@ -67,12 +67,18 @@ type lokiState struct {
 // before Start.
 func (c *ClusterConn) WithLoki(cfg *config.EndpointConfig) *ClusterConn {
 	c.loki.cfg = cloneEndpoint(cfg)
-	c.loki.configured.Store(cfg != nil)
+	c.loki.configured.Store(lokiLocated(cfg))
 	return c
 }
 
-// logHistoryPresent is the LogHistory capability: a Loki configured.
+// logHistoryPresent is the LogHistory capability: a Loki configured where
+// Klyx can read it.
 func (c *ClusterConn) logHistoryPresent() bool { return c.loki.configured.Load() }
+
+// lokiLocated: a Loki block names a URL or a Service. Loki is never
+// discovered, so a block with neither - a match alone - is no log history,
+// and never advertised as one (Settings review slice 0).
+func lokiLocated(cfg *config.EndpointConfig) bool { return cfg != nil && cfg.Located() }
 
 // LokiConfig is the configured Loki as this connection uses it.
 func (c *ClusterConn) LokiConfig() *config.EndpointConfig {
@@ -87,7 +93,7 @@ func (c *ClusterConn) SetLokiConfig(cfg *config.EndpointConfig) {
 	c.loki.mu.Lock()
 	defer c.loki.mu.Unlock()
 	c.loki.cfg = cloneEndpoint(cfg)
-	c.loki.configured.Store(cfg != nil)
+	c.loki.configured.Store(lokiLocated(cfg))
 	if c.creds.Revisions != nil {
 		c.creds.Revisions.Bump(c.name, config.EndpointLoki, false)
 	}
@@ -102,7 +108,7 @@ func (c *ClusterConn) ChangeLokiCredential(cfg *config.EndpointConfig, install f
 		return err
 	}
 	c.loki.cfg = cloneEndpoint(cfg)
-	c.loki.configured.Store(cfg != nil)
+	c.loki.configured.Store(lokiLocated(cfg))
 	if c.creds.Revisions != nil {
 		c.creds.Revisions.Bump(c.name, config.EndpointLoki, true)
 	}

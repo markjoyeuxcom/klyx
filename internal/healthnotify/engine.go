@@ -799,3 +799,11 @@ var kinds = map[string]string{
 	// coverage S9
 	"horizontalpodautoscalers": "HorizontalPodAutoscaler", "scaledobjects": "ScaledObject", "scaledjobs": "ScaledJob",
 }
+
+// Forget drops a removed cluster (Settings S2 §2.5): its episodes close
+// silently, so no recovery is notified, and its pending onsets go.
+func (e *Engine) Forget(cluster string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.clusters, cluster)
+}

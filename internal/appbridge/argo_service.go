@@ -194,7 +194,7 @@ type ArgoProjectsResultDTO struct {
 // ArgoService is bound to JS: Application listing + the two imperative
 // triggers (refresh, sync). Like every write verb it returns ActionResultDTO.
 // On a protected cluster both consume the typed-confirmation grant the
-// frontend ConfirmDialog arms (checkProtected) - the backend, not the dialog,
+// frontend ConfirmDialog arms (guardFor) - the backend, not the dialog,
 // is the gate.
 type ArgoService struct {
 	lookup func(string) (ArgoConn, bool)
@@ -275,14 +275,15 @@ func toArgoResourceRuleDTOs(in []argo.ResourceRule) []ArgoResourceRuleDTO {
 // confirm dialog armed was left unconsumed for another verb to use).
 // uid is the Application the verb was armed against: only it is written.
 func (s *ArgoService) RefreshApp(cluster, namespace, name, uid string) ActionResultDTO {
-	if err := checkProtected(cluster); err != nil {
+	t, err := guardFor(cluster)
+	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
+	ctx, cancel := context.WithTimeout(t.Write(context.Background()), argoTimeout)
 	defer cancel()
 	if err := conn.RefreshArgoApp(ctx, namespace, name, uid); err != nil {
 		return failed(ctx, conn, err)
@@ -298,16 +299,19 @@ func (s *ArgoService) RefreshApp(cluster, namespace, name, uid string) ActionRes
 func (s *ArgoService) SyncApp(cluster, namespace, name, uid string, opts ArgoSyncOptionsDTO) ActionResultDTO {
 	// Dry-run mutates nothing; a real sync (prune/force/replace included)
 	// consumes the protection grant.
+	base := context.Background() // unfenced: a dry run writes nothing
 	if !opts.DryRun {
-		if err := checkProtected(cluster); err != nil {
+		t, err := guardFor(cluster)
+		if err != nil {
 			return ActionResultDTO{Error: err.Error()}
 		}
+		base = t.Write(base)
 	}
 	conn, ok := s.lookup(cluster)
 	if !ok {
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), argoTimeout)
+	ctx, cancel := context.WithTimeout(base, argoTimeout)
 	defer cancel()
 	if err := conn.SyncArgoApp(ctx, namespace, name, uid, toArgoSyncOptions(opts)); err != nil {
 		return failed(ctx, conn, err)

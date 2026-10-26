@@ -34,6 +34,62 @@ export type Finding = {
 export type Missing = { from: "klyx" | "model"; read?: string; text: string };
 export type Remedy = { git?: string; mitigation?: string; label: string };
 export type Findings = { window: string; findings: Finding[]; missing: Missing[]; remedy?: Remedy; note?: string; scope?: string };
+
+// AI A3: a turn's proposal as Klyx decided it. A step names a matrix verb on
+// an object Klyx read by UID; its state is Klyx's (offered, or refused,
+// unsupported, not offered, withdrawn or superseded, with the reason); a
+// step that ran carries its request's outcome and its effect.
+export type StepRunState = {
+  request?: "written" | "refused" | "unverified" | string;
+  notSent?: boolean;
+  error?: string;
+  effect?: "pending" | "established" | "unverified" | string;
+  effectWhy?: string;
+  ranAt?: string;
+};
+export type ActionStep = {
+  n: number;
+  verb: string;
+  target: ChatCheckSubject;
+  replicas?: number;
+  revision?: number;
+  why: string;
+  cites: string[];
+  state: string;
+  reason?: string;
+  danger?: boolean;
+  run?: StepRunState;
+  factsRead?: string;
+  factsAt?: string;
+  gvr?: string; // the bound object's API, for its chip
+};
+export type IncidentSubject = { kind: string; namespace?: string; name: string; uid: string; reading: string; verdict?: string; at?: string };
+export type Incident = { state: "pending" | "resolved" | "not resolved" | "unverified" | string; why?: string; subjects: IncidentSubject[] };
+export type ActionPlan = {
+  steps: ActionStep[];
+  note?: string;
+  status?: "" | "superseded" | "withdrawn" | "declined" | "held" | string;
+  statusWhy?: string;
+  incident?: Incident;
+};
+// What the ConfirmDialog shows for one step, read again by Klyx, with the
+// token RunStep requires (§4.1).
+export type StepReview = {
+  offered: boolean;
+  reason?: string;
+  token?: string;
+  expiresAt?: string;
+  n: number;
+  verb: string;
+  target: ChatCheckSubject;
+  change?: string;
+  consequence?: string[];
+  expected?: string;
+  danger: boolean;
+  observed?: { what: string; at: string }[];
+};
+export type StepResult = { ok?: boolean; error?: string; outcome?: string; notSent?: boolean };
+export type StepRun = { ran: boolean; reason?: string; result?: StepResult; plan?: ActionPlan };
 export type ChatExchange = {
   id: string;
   question: string;
@@ -46,6 +102,7 @@ export type ChatExchange = {
   note?: string;
   at: string;
   findings?: Findings;
+  plan?: ActionPlan;
 };
 export type ChatState = {
   conversationId?: string;
@@ -112,6 +169,28 @@ export async function investigationState(cluster: string): Promise<ChatState> {
 // first question (A-C2).
 export async function chatSetComparison(cluster: string, conversationId: string, members: string[]): Promise<ChatState> {
   return (await ChatService.SetComparison(cluster, conversationId, members)) as ChatState;
+}
+
+// The plan's steps run only through these (AI A3 §4): Review reads the step
+// again and returns a token; Run consumes the protected grant the dialog
+// armed, re-reads, and calls the verb's own code; Dismiss declines the
+// plan. Each throws only when the bridge itself failed.
+export async function reviewStep(cluster: string, conversationId: string, exchangeId: string, n: number): Promise<StepReview> {
+  return (await ChatService.ReviewStep(cluster, conversationId, exchangeId, n)) as StepReview;
+}
+
+export async function runStep(cluster: string, conversationId: string, exchangeId: string, n: number, token: string): Promise<StepRun> {
+  return (await ChatService.RunStep(cluster, conversationId, exchangeId, n, token)) as StepRun;
+}
+
+export async function dismissPlan(cluster: string, conversationId: string, exchangeId: string): Promise<StepRun> {
+  return (await ChatService.DismissPlan(cluster, conversationId, exchangeId)) as StepRun;
+}
+
+// onChatPlan subscribes to a conversation's plan changes made in the
+// background: a step's effect settled, its incident read.
+export function onChatPlan(conversationId: string, f: () => void): () => void {
+  return Events.On(`chat-plan:${conversationId}`, () => f());
 }
 
 // onChatRead subscribes to a conversation's ledger as reads finish.

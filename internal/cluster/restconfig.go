@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/readfence"
 )
@@ -81,8 +82,8 @@ func EffectiveKubeconfigPaths(configured string) []string {
 	switch {
 	case strings.TrimSpace(configured) != "":
 		raw = KubeconfigPaths(configured)
-	case os.Getenv(clientcmd.RecommendedConfigPathEnvVar) != "":
-		raw = KubeconfigPaths(os.Getenv(clientcmd.RecommendedConfigPathEnvVar))
+	case envread.Get(envread.Kubeconfig) != "":
+		raw = KubeconfigPaths(envread.Get(envread.Kubeconfig))
 	default:
 		raw = []string{clientcmd.RecommendedHomeFile}
 	}

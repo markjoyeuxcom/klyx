@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/gitcache"
 	"github.com/moomora/klyx/internal/gitcli"
 	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/localstore"
 )
 
 // GitService is The Line's read-only Git access (parent spec §7, slice 6
@@ -28,15 +27,31 @@ type GitService struct {
 	d   GitDeps
 	ctx context.Context
 
-	writeMu sync.Mutex // serialises Settings writes to fleet.yaml
+	writeMu sync.Mutex // serialises Settings plans and Applies
+	cache   *planCache
 
-	mu       sync.Mutex
-	ready    bool   // startup finished
-	off      string // why Git is off; "" when it is on
-	git      gitcli.Git
-	helpers  gitcli.Helpers
-	store    gitStore
-	fetching map[string]bool
+	mu      sync.Mutex
+	ready   bool   // startup finished
+	off     string // why Git is off; "" when it is on
+	git     gitcli.Git
+	helpers gitcli.Helpers
+	store   gitStore
+	// fetching: a history refresh in flight, by URL (one per repository),
+	// with its own admission number
+	fetching map[string]gitAcq
+	// acquiring: the consumers' commit and content acquisitions in flight
+	// (the cache diff's, chat's), by admission number
+	acquiring map[uint64]gitAcq
+	acqSeq    uint64
+	// applying: an Apply of the Git settings is deciding; no acquisition
+	// is admitted until it has published (F2b review, R1)
+	applying bool
+	// run is the running copy of fleet.yaml's git block (Settings slice F
+	// §5): initialized from the startup configuration, read by every
+	// consumer, replaced whole only by an Apply - never changed in place;
+	// runRev moves with each replacement.
+	run    config.GitConfig
+	runRev uint64
 	// The line, as LineService last pushed it (GitLineSink), and the
 	// ordering computed from it (6d).
 	line       LineDTO
@@ -62,40 +77,47 @@ type gitStore interface {
 // through GitLineSink, which LineService calls after every LineDTO.
 type GitDeps struct {
 	ConfigPath string
-	Override   *line.Key                                                    // fleet.yaml line.source, a tracked ref's other source
-	Emitter    Emitter                                                      // line:git
-	StartGit   func(context.Context) (gitcli.Runner, gitcli.Helpers, error) // nil: gitcli.Start with the owner's environment
-	NewStore   func(gitcli.Runner) gitStore                                 // nil: gitcache under the config dir
-	SaveGit    func(string, config.GitConfig) error                         // nil: config.SaveGit
-	Load       func(string) (*config.Config, error)                         // nil: config.Load
-	Now        func() time.Time                                             // nil: time.Now
+	// Initial is the startup configuration's git block (nil: none): the
+	// running copy until an Apply replaces it, never a second read
+	Initial  *config.GitConfig
+	Override *line.Key                                                      // fleet.yaml line.source, a tracked ref's other source
+	Emitter  Emitter                                                        // line:git
+	StartGit func(context.Context) (gitcli.Runner, gitcli.Helpers, error)   // nil: gitcli.Start with the owner's environment
+	NewStore func(gitcli.Runner) gitStore                                   // nil: gitcache under the config dir
+	SaveGit  func(path, version string, g config.GitConfig) (string, error) // nil: config.SaveGitAt
+	Load     func(string) (*config.Config, string, error)                   // nil: config.LoadVersioned
+	Now      func() time.Time                                               // nil: time.Now
 }
 
 // NewGitService prepares Git in the background - resolving git, reading
 // the owner's credential helpers once, recovering every cache - so startup
 // never waits on it.
 func NewGitService(ctx context.Context, d GitDeps) *GitService {
-	configDir := filepath.Dir(d.ConfigPath)
+	// "" (no fleet path) leaves Git off: gitcli.Start refuses the base.
+	cacheBase, _ := localstore.Beside(d.ConfigPath).Path(localstore.GitCache)
 	if d.StartGit == nil {
 		d.StartGit = func(ctx context.Context) (gitcli.Runner, gitcli.Helpers, error) {
-			return gitcli.Start(ctx, configDir, gitcli.OwnerEnv(os.Getenv, os.Environ()))
+			return gitcli.Start(ctx, cacheBase, gitcli.ProcessEnv())
 		}
 	}
 	if d.NewStore == nil {
-		d.NewStore = func(r gitcli.Runner) gitStore { return gitcache.New(gitcli.CacheBase(configDir), r) }
+		d.NewStore = func(r gitcli.Runner) gitStore { return gitcache.New(cacheBase, r) }
 	}
 	if d.SaveGit == nil {
-		d.SaveGit = config.SaveGit
+		d.SaveGit = config.SaveGitAt
 	}
 	if d.Load == nil {
-		d.Load = config.Load
+		d.Load = config.LoadVersioned
 	}
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &GitService{d: d, ctx: ctx, fetching: map[string]bool{}, wake: make(chan struct{}, 1),
+	s := &GitService{d: d, ctx: ctx, fetching: map[string]gitAcq{}, acquiring: map[uint64]gitAcq{}, wake: make(chan struct{}, 1), cache: newPlanCache(time.Now),
 		lineGit: LineGitDTO{State: LineGitChecking, Reason: "Git is still starting", Stations: []LineGitStationDTO{},
 			Ledger: []LineGitCommitDTO{}, Only: []LineGitOnlyDTO{}}}
+	if d.Initial != nil {
+		s.run = cloneGit(*d.Initial)
+	}
 	go s.lineLoop()
 	go s.start()
 	return s
@@ -151,7 +173,12 @@ type GitSettingsDTO struct {
 	Repos          []GitRepoDTO       `json:"repos"`
 	Unapproved     []GitUnapprovedDTO `json:"unapproved"`
 	Notes          []string           `json:"notes"` // fleet.yaml entries ignored, keys claimed twice
-	ConfigError    string             `json:"configError,omitempty"`
+	// ConfigError: fleet.yaml cannot be read, so whether it differs from
+	// what is in use is unknown
+	ConfigError string `json:"configError,omitempty"`
+	// Diverged: fleet.yaml's git block is not the one in use (a hand edit);
+	// "Use the file's values" plans it (Settings slice F §5)
+	Diverged bool `json:"diverged"`
 }
 
 // GitBinaryDTO is the binary line: the git in use, or why Git is off.
@@ -199,8 +226,19 @@ type GitUnapprovedDTO struct {
 	Refused string `json:"refused,omitempty"`
 }
 
-// GetGitSettings reads fleet.yaml's git block, the caches and the clusters'
-// Git sources.
+// BinaryState is the binary line alone, for Settings > Diagnostics.
+func (s *GitService) BinaryState() GitBinaryDTO {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := GitBinaryDTO{Ready: s.ready, Off: s.off}
+	if s.ready && s.off == "" {
+		b.Path, b.Version = s.git.Path, s.git.Version.Raw
+	}
+	return b
+}
+
+// GetGitSettings reports the git block in use, whether fleet.yaml's
+// differs, the caches and the clusters' Git sources.
 func (s *GitService) GetGitSettings() GitSettingsDTO {
 	dto := GitSettingsDTO{Path: s.d.ConfigPath, Helpers: []string{}, Repos: []GitRepoDTO{}, Unapproved: []GitUnapprovedDTO{}, Notes: []string{}}
 	s.mu.Lock()
@@ -215,14 +253,15 @@ func (s *GitService) GetGitSettings() GitSettingsDTO {
 	store := s.store
 	fetching := copyFlags(s.fetching)
 	sources, lk := s.sources, s.line.Key
+	run := s.run
 	s.mu.Unlock()
 
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
+	if cfg, _, err := s.d.Load(s.d.ConfigPath); err != nil {
 		dto.ConfigError = gitcli.Scrub(err.Error())
-		return dto
+	} else {
+		dto.Diverged = !config.GitReposEqual(fileGit(cfg).Repos, run.Repos)
 	}
-	repos, notes := cfg.ApprovedGitRepos()
+	repos, notes := approvedOf(run)
 	dto.Notes = append(dto.Notes, notes...)
 	owner, claimNotes := keyOwners(repos)
 	dto.Notes = append(dto.Notes, claimNotes...)
@@ -297,10 +336,41 @@ func shownURL(raw string) string {
 	return config.RedactURL(raw)
 }
 
-func copyFlags(m map[string]bool) map[string]bool {
+func copyFlags(m map[string]gitAcq) map[string]bool {
 	out := make(map[string]bool, len(m))
-	for k, v := range m {
-		out[k] = v
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+
+// approved is the running copy's approved repositories and its notes.
+func (s *GitService) approved() ([]config.GitRepoConfig, []string) {
+	s.mu.Lock()
+	run := s.run
+	s.mu.Unlock()
+	return approvedOf(run)
+}
+
+func approvedOf(g config.GitConfig) ([]config.GitRepoConfig, []string) {
+	return (&config.Config{Git: &g}).ApprovedGitRepos()
+}
+
+// fileGit is a loaded file's git block as written (none: empty).
+func fileGit(cfg *config.Config) config.GitConfig {
+	if cfg == nil || cfg.Git == nil {
+		return config.GitConfig{}
+	}
+	return cloneGit(*cfg.Git)
+}
+
+// cloneGit copies g deeply: a candidate is built from the running copy
+// without ever sharing a matches list with it.
+func cloneGit(g config.GitConfig) config.GitConfig {
+	out := config.GitConfig{Repos: make([]config.GitRepoConfig, 0, len(g.Repos))}
+	for _, r := range g.Repos {
+		r.Matches = slices.Clone(r.Matches)
+		out.Repos = append(out.Repos, r)
 	}
 	return out
 }
@@ -374,108 +444,55 @@ func trackedRefs(url string, owner map[string]string, chosen *LineKeyDTO, overri
 // ApproveGitRepo adds an approved repository: url is what will run, exactly
 // as written. serves, when set, is a cluster's repository key this entry
 // also serves (an SSH alias that does not normalise to it).
-func (s *GitService) ApproveGitRepo(url, web, serves string) ActionResultDTO {
+func (s *GitService) ApproveGitRepo(url, web, serves string) ApplyResultDTO {
 	url, web, serves = strings.TrimSpace(url), strings.TrimSpace(web), strings.TrimSpace(serves)
 	if err := gitcli.ValidateApprovedURL(url); err != nil {
-		return ActionResultDTO{Error: "not approved: " + err.Error()}
+		return ApplyResultDTO{Error: "not approved: " + err.Error()}
 	}
 	if web != "" {
 		if err := config.ValidWebLink(web); err != nil {
-			return ActionResultDTO{Error: "web link: " + err.Error()}
+			return ApplyResultDTO{Error: "web link: " + err.Error()}
 		}
 	}
 	if serves != "" {
 		if err := config.ValidRepoKey(serves); err != nil {
-			return ActionResultDTO{Error: "serves: " + err.Error()}
+			return ApplyResultDTO{Error: "serves: " + err.Error()}
 		}
 		if serves == line.NormalizeRepo(url) {
 			serves = ""
 		}
 	}
-	return s.editGit(func(g *config.GitConfig) error {
-		for _, r := range g.Repos {
-			if strings.TrimSpace(r.URL) == url {
-				return errors.New("this URL is already approved")
-			}
-		}
-		e := config.GitRepoConfig{URL: url, Web: strings.TrimRight(web, "/")}
-		if serves != "" {
-			e.Matches = []string{serves}
-		}
-		g.Repos = append(g.Repos, e)
-		return nil
-	})
+	return s.editGit(gitEdit{Op: gitApprove, URL: url, Web: strings.TrimRight(web, "/"), Key: serves})
 }
 
 // RemoveGitRepo withdraws an approval and clears its cache.
-func (s *GitService) RemoveGitRepo(url string) ActionResultDTO {
+func (s *GitService) RemoveGitRepo(url string) ApplyResultDTO {
 	url = strings.TrimSpace(url)
-	res := s.editGit(func(g *config.GitConfig) error {
-		i := slices.IndexFunc(g.Repos, func(r config.GitRepoConfig) bool { return strings.TrimSpace(r.URL) == url })
-		if i < 0 {
-			return errors.New("no approved repository has this URL")
-		}
-		g.Repos = slices.Delete(g.Repos, i, i+1)
-		return nil
-	})
-	if !res.OK {
-		return res
+	if !s.isApproved(url) {
+		return ApplyResultDTO{Error: "no approved repository has this URL"}
 	}
-	if store, err := s.gitOn(); err == nil {
-		if err := store.Clear(s.ctx, url); err != nil {
-			return ActionResultDTO{Error: "the approval was removed, but its cache could not be cleared: " + err.Error()}
-		}
-	}
-	return res
+	return s.editGit(gitEdit{Op: gitRemove, URL: url})
 }
 
 // SetGitRepoMatch adds (on) or removes an explicit repository key an entry
 // serves.
-func (s *GitService) SetGitRepoMatch(url, key string, on bool) ActionResultDTO {
+func (s *GitService) SetGitRepoMatch(url, key string, on bool) ApplyResultDTO {
 	url, key = strings.TrimSpace(url), strings.TrimSpace(key)
 	if err := config.ValidRepoKey(key); err != nil {
-		return ActionResultDTO{Error: "match: " + err.Error()}
+		return ApplyResultDTO{Error: "match: " + err.Error()}
 	}
-	return s.editGit(func(g *config.GitConfig) error {
-		i := slices.IndexFunc(g.Repos, func(r config.GitRepoConfig) bool { return strings.TrimSpace(r.URL) == url })
-		if i < 0 {
-			return errors.New("no approved repository has this URL")
-		}
-		r := &g.Repos[i]
-		has := slices.Contains(r.Matches, key)
-		switch {
-		case on && !has:
-			if key == line.NormalizeRepo(url) {
-				return errors.New("this entry already serves its own repository")
-			}
-			r.Matches = append(r.Matches, key)
-		case !on && has:
-			r.Matches = slices.DeleteFunc(r.Matches, func(m string) bool { return m == key })
-		}
-		return nil
-	})
+	if !s.isApproved(url) {
+		return ApplyResultDTO{Error: "no approved repository has this URL"}
+	}
+	return s.editGit(gitEdit{Op: gitMatch, URL: url, Key: key, On: on})
 }
 
-// editGit applies one change to fleet.yaml's git block, serialised.
-func (s *GitService) editGit(change func(*config.GitConfig) error) ActionResultDTO {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
-	}
-	var g config.GitConfig
-	if cfg.Git != nil {
-		g.Repos = append([]config.GitRepoConfig(nil), cfg.Git.Repos...)
-	}
-	if err := change(&g); err != nil {
-		return ActionResultDTO{Error: err.Error()}
-	}
-	if err := s.d.SaveGit(s.d.ConfigPath, g); err != nil {
-		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
-	}
-	s.wakeLine()
-	return ActionResultDTO{OK: true}
+// isApproved: url is an entry the running copy approves. Only such a URL
+// becomes an edit, so no plan or cache entry carries an entry Klyx
+// ignores, which may hold a token (F2b review, R4).
+func (s *GitService) isApproved(url string) bool {
+	repos, _ := s.approved()
+	return slices.ContainsFunc(repos, func(r config.GitRepoConfig) bool { return r.URL == url })
 }
 
 // FetchGitRepo is "Fetch now": a history refresh of the entry's tracked
@@ -486,13 +503,9 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 	if err != nil {
 		return ActionResultDTO{Error: err.Error()}
 	}
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return ActionResultDTO{Error: gitcli.Scrub(err.Error())}
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	if !slices.ContainsFunc(repos, func(r config.GitRepoConfig) bool { return r.URL == url }) {
-		return ActionResultDTO{Error: "only an approved repository is fetched"}
+		return ActionResultDTO{Error: errNotApprovedFetch.Error()}
 	}
 	owner, _ := keyOwners(repos)
 	refs, notes := trackedRefs(url, owner, s.lineKey(), s.d.Override)
@@ -503,19 +516,15 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 }
 
 // fetch runs one history refresh, one per repository at a time, and
-// recomputes the line's ordering after it.
+// recomputes the line's ordering after it. It is admitted when it starts,
+// under the running copy as it is then (F2b review, R1).
 func (s *GitService) fetch(store gitStore, url string, refs []gitcli.Ref) ActionResultDTO {
-	s.mu.Lock()
-	if s.fetching[url] {
-		s.mu.Unlock()
-		return ActionResultDTO{Error: "a fetch of this repository is already running"}
+	release, err := s.admitFetch(url)
+	if err != nil {
+		return ActionResultDTO{Error: err.Error()}
 	}
-	s.fetching[url] = true
-	s.mu.Unlock()
 	defer func() {
-		s.mu.Lock()
-		delete(s.fetching, url)
-		s.mu.Unlock()
+		release()
 		s.wakeLine()
 	}()
 	if err := store.RefreshHistory(s.ctx, url, refs); err != nil {
@@ -536,11 +545,7 @@ func (s *GitService) FetchDue() {
 	if err != nil {
 		return
 	}
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	for _, r := range repos {
 		refs, _ := trackedRefs(r.URL, owner, s.lineKey(), s.d.Override)
@@ -549,7 +554,7 @@ func (s *GitService) FetchDue() {
 		}
 		st := store.Status(r.URL)
 		s.mu.Lock()
-		running := s.fetching[r.URL]
+		_, running := s.fetching[r.URL]
 		s.mu.Unlock()
 		if running || st.NeedsRepair || (!st.AttemptedAt.IsZero() && s.d.Now().Sub(st.AttemptedAt) < fetchEvery) {
 			continue

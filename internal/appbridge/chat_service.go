@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/bounds"
+	"github.com/moomora/klyx/internal/policy"
 )
 
 // ChatService is the cluster chat (spec 2026-10-14 §5): one conversation per
@@ -20,23 +22,25 @@ import (
 // continuation stay in the backend. Read-only: no tool changes anything.
 
 const (
-	chatTurnDeadline   = 120 * time.Second
-	chatMaxModelCalls  = 6
-	chatMaxToolCalls   = 8
+	chatTurnDeadline   = bounds.ChatTurnDeadline
+	chatMaxModelCalls  = bounds.ChatModelCalls
+	chatMaxToolCalls   = bounds.ChatToolCalls
 	chatReadWorkers    = 4
-	chatQuestionMax    = 4 * 1024
-	chatAnswerMax      = 32 * 1024
-	chatRequestBudget  = 384 * 1024
+	chatQuestionMax    = bounds.ChatQuestionBytes
+	chatAnswerMax      = bounds.ChatAnswerBytes
+	chatRequestBudget  = bounds.ChatRequestBytes
 	chatRetainExchange = 20
 	chatRetainBytes    = 1024 * 1024
-	chatMaxConvs       = 8
-	chatSnapshotMax    = 48 * 1024
-	chatSnapshotPrior  = 16 * 1024
+	// chatStepRecords is AI A3 §2.4's cap on a conversation's step records
+	chatStepRecords   = 16
+	chatMaxConvs      = bounds.Conversations
+	chatSnapshotMax   = bounds.ChatSnapshotBytes
+	chatSnapshotPrior = 16 * 1024
 
 	// An investigation's turn reads more (AI A1 §1).
-	invTurnDeadline  = 300 * time.Second
-	invMaxModelCalls = 12
-	invMaxToolCalls  = 24
+	invTurnDeadline  = bounds.InvTurnDeadline
+	invMaxModelCalls = bounds.InvModelCalls
+	invMaxToolCalls  = bounds.InvToolCalls
 	invReadWorkers   = 6
 )
 
@@ -48,6 +52,9 @@ type ChatConnState func(cluster string) (conn ChatConn, usable bool)
 // ChatService holds conversations and runs turns.
 type ChatService struct {
 	state ChatConnState
+	// lease: a conversation's, a confirmed request's and a verification's
+	// lease (Settings S2 §2.3)
+	lease leaser
 	ai    *AIService
 	em    Emitter
 	now   func() time.Time
@@ -58,11 +65,77 @@ type ChatService struct {
 	mu      sync.Mutex
 	convs   map[string]*conversation // by cluster
 	version uint64                   // bumped on every change; orders state replies
+	// requests are the confirmed step requests admitted and not yet
+	// returned, by identity: an AI settings change does not stop them (A3
+	// §4.4), so a plan names each until it returns, whatever its
+	// conversation's revision (Settings F2a re-review, RR2)
+	requests map[string]PlanWorkDTO
+	// admissions numbers each admitted request, never reused: an attempt
+	// owns its entry, so an older attempt's cleanup can never remove a
+	// newer one's (F2a re-review 2, R2-1)
+	admissions uint64
 }
 
 // NewChatService wires the chat to the registry and the AI snapshot.
 func NewChatService(state ChatConnState, aiSvc *AIService, em Emitter) *ChatService {
-	return &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}}
+	s := &ChatService{state: state, ai: aiSvc, em: em, now: time.Now, convs: map[string]*conversation{}, requests: map[string]PlanWorkDTO{}}
+	s.lease = plainLeaser(func(cluster string) (ChatConn, bool) {
+		c, _ := state(cluster)
+		return c, c != nil
+	})
+	return s
+}
+
+func (s *ChatService) setLeaser(l leaser) { s.lease = l }
+
+// ChatEndedEvent tells the page a conversation ended because its cluster's
+// connection was replaced or removed (Settings S2 §2.3).
+const ChatEndedEvent = "chat:ended"
+
+// ChatEndedDTO is that notice.
+type ChatEndedDTO struct {
+	Cluster        string `json:"cluster"`
+	ConversationID string `json:"conversationId"`
+	Reason         string `json:"reason"`
+	Version        uint64 `json:"version"`
+}
+
+// endConversation ends c, whose connection was retired (S2 §2.3):
+// explicitly, with the reason, never left to its next read. Its turn is
+// cancelled and records why, its offers are withdrawn, the version moves,
+// and the page is told. c is the conversation the lease was taken for,
+// made before it: Start holds s.mu from the lease to c's registration, so
+// an end that comes in between waits here and finds c registered - or
+// refused, and ends nothing (Codex's review of S2a, F1).
+func (s *ChatService) endConversation(c *conversation, why string) {
+	s.mu.Lock()
+	ev, ok := s.endLocked(c, why)
+	s.mu.Unlock()
+	if ok && s.em != nil {
+		s.em.Emit(ChatEndedEvent, ev)
+	}
+}
+
+// endLocked is endConversation under s.mu: the notice to send after it is
+// released, and whether c ended now.
+func (s *ChatService) endLocked(c *conversation, why string) (ChatEndedDTO, bool) {
+	if s.convs[c.key] != c || c.ended != "" {
+		return ChatEndedDTO{}, false
+	}
+	reason := why + "; start a new conversation"
+	c.ended = reason
+	c.releaseLocked()
+	if c.active != nil {
+		c.active.endedWhy = reason
+		c.active.cancel()
+	}
+	for _, e := range c.exchanges {
+		if p := e.plan; p != nil && p.withdrawn == "" {
+			p.withdrawn = why
+		}
+	}
+	s.version++
+	return ChatEndedDTO{Cluster: c.cluster, ConversationID: c.id, Reason: reason, Version: s.version}, true
 }
 
 type conversation struct {
@@ -81,6 +154,8 @@ type conversation struct {
 	members     []member
 	membersRead bool
 	conn        ChatConn
+	lease       *Lease       // the conversation's (S2 §2.3), pinning conn; released with it
+	epoch       policy.Epoch // the cluster's, pinned at start (Settings slice F §4)
 	rev         uint64
 	provider    ai.ProviderID
 	model       string
@@ -95,6 +170,18 @@ type conversation struct {
 	// reads numbers the conversation's ledger for citation (AI A1 §2):
 	// never reset, so an ID removed by retention is never reused
 	reads int
+	// facts are what an investigation's reads established about their
+	// objects, for its action proposals (AI A3 §2.2): bounded on their own
+	facts *actionFacts
+	// stepRunning is the plan whose step's write or verification is in
+	// progress: one per conversation, across its plans (AI A3 §4.2, §5.2;
+	// stage 3 review, finding 2)
+	stepRunning *actionPlan
+	// turns numbers its exchanges as they are asked, never reused
+	turns int
+	// started is when it began: a plan names the work it ends by it
+	// (Settings slice F §5)
+	started time.Time
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -104,6 +191,9 @@ type activeTurn struct {
 	id      string
 	cancel  context.CancelFunc
 	stopped bool
+	// endedWhy: the conversation's connection was retired (S2 §2.3); the
+	// turn ends with that reason, never as merely stopped
+	endedWhy string
 }
 
 // exchange is one question and everything it caused.
@@ -130,6 +220,19 @@ type exchange struct {
 	findings     *FindingsDTO
 	reported     *findingsInput
 	findingCalls int
+	// plan is an investigation turn's action proposal as Klyx decided it
+	// (AI A3 §2); proposed holds the model's until the turn ends, when it
+	// is decided again against the turn's settled ledger and facts
+	plan        *actionPlan
+	proposed    *actionsInput
+	actionCalls int
+	// planRecord is Klyx's record of the steps the operator ran, sent with
+	// the next question (AI A3 §5.4): outcome words and ledger names only
+	planRecord string
+	// turn is the exchange's ordinal in its conversation, fixed when it is
+	// asked: retention can leave holes, so it is never derived from a
+	// position (AI A3 stage 4 review, finding 7)
+	turn int
 	// a snapshot investigation's sections left out to fit (read IDs) and
 	// the plan steps its budget stopped
 	snapshotDropped []string
@@ -160,6 +263,7 @@ type ChatExchangeDTO struct {
 	Note     string             `json:"note,omitempty"`
 	At       string             `json:"at"`
 	Findings *FindingsDTO       `json:"findings,omitempty"`
+	Plan     *ActionPlanDTO     `json:"plan,omitempty"`
 }
 
 // ChatStateDTO is the drawer's whole view of a cluster's conversation.
@@ -313,15 +417,38 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 		return ChatStateDTO{Cluster: cluster, Kind: kind, Error: msg, Protected: s.ai.protected(cluster), Exchanges: []ChatExchangeDTO{}, Version: s.version}
 	}
 	st := s.ai.load()
+	// Settings slice F §4: a conversation starts only on an Active cluster,
+	// and pins its epoch beside the settings revision - before egress is
+	// decided, so the decision is never older than the pin (F1 review, F1)
+	epoch, notAdmitted := admitNow(cluster)
 	if refusal := s.refusal(st, cluster); refusal != "" {
 		return refuse(refusal)
 	}
-	conn, usable := s.state(cluster)
-	if conn == nil || !usable {
+	if notAdmitted != "" {
+		return refuse(notAdmitted)
+	}
+	if s.ai.applyingNow() {
+		// slice F §5: no new work while an AI Apply decides
+		return refuse(aiApplying)
+	}
+	if cur, usable := s.state(cluster); cur == nil || !usable {
 		return refuse("the cluster is not connected")
 	}
 	if len(s.convs) >= chatMaxConvs && s.convs[key] == nil {
 		return refuse(fmt.Sprintf("at most %d conversations at once; clear one first", chatMaxConvs))
+	}
+	// the conversation's lease, admitted now and pinning the connection it
+	// runs on (S2 §2.3): ended explicitly with that connection
+	what := "the chat on " + cluster
+	if anchor != nil {
+		obj := anchor.Name
+		if anchor.Namespace != "" {
+			obj = anchor.Namespace + "/" + anchor.Name
+		}
+		if anchor.Plural != "" {
+			obj = anchor.Plural + " " + obj
+		}
+		what = "the investigation of " + obj
 	}
 	mode := "snapshot"
 	if _, ok := st.Provider.(ai.Converser); ok {
@@ -331,7 +458,20 @@ func (s *ChatService) startLocked(cluster, key, kind string, anchor *ChatSeedDTO
 	if kind == kindInvestigation {
 		id = invIDPrefix + id
 	}
-	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, conn: conn, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode}
+	c := &conversation{id: id, cluster: cluster, key: key, kind: kind, anchor: anchor, epoch: epoch, rev: st.Rev, provider: st.ProviderID, model: st.Model, origin: st.Origin, mode: mode, facts: newActionFacts(), started: s.now()}
+	le, err := s.lease(cluster, Work{Kind: kind, What: what, End: func(why string) { s.endConversation(c, why) }})
+	if err != nil {
+		return refuse(err.Error())
+	}
+	conn, ok := le.Conn.(ChatConn)
+	if !ok {
+		le.Release()
+		return refuse("the cluster is not connected")
+	}
+	if old := s.convs[key]; old != nil {
+		old.releaseLocked() // an ended conversation the new one replaces
+	}
+	c.conn, c.lease = conn, le
 	s.convs[key] = c
 	s.version++
 	return s.stateLocked(c)
@@ -397,16 +537,104 @@ func (s *ChatService) obsoleteLocked(cluster, key, msg string) ChatStateDTO {
 }
 
 func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
+	// a fence observed now withdraws the plans for good, under a new
+	// version, before the reply is built (stage 2 re-review)
+	s.withdrawFencedLocked(c)
 	out := ChatStateDTO{ConversationID: c.id, Cluster: c.cluster, Kind: c.kind, Anchor: c.anchor, Mode: c.mode, Provider: string(c.provider), Model: c.model, Origin: c.origin,
 		Protected: s.ai.protected(c.cluster), Ended: c.ended, Trimmed: c.trimmed, Removed: c.removed, Active: c.active != nil, Exchanges: []ChatExchangeDTO{},
 		Version: s.version}
-	for _, e := range c.exchanges {
-		out.Exchanges = append(out.Exchanges, e.dto())
+	// the latest proposal is the current plan; an earlier one is superseded
+	// (AI A3 §2.4)
+	latest := -1
+	for i, e := range c.exchanges {
+		if e.plan != nil && len(e.plan.dto.Steps) > 0 {
+			latest = i
+		}
+	}
+	for i, e := range c.exchanges {
+		d := e.dto()
+		if e.plan != nil {
+			p := planDTOLocked(c, e.plan, i == latest || latest < 0)
+			if e.plan.withdrawn != "" {
+				withdraw(&p, e.plan.withdrawn)
+			}
+			d.Plan = &p
+		}
+		out.Exchanges = append(out.Exchanges, d)
 	}
 	for _, m := range c.members {
 		out.Comparison = append(out.Comparison, m.cluster)
 	}
 	return out
+}
+
+// planFenceLocked is why an investigation's unrun steps are withdrawn (AI A3
+// §2.4, §6): the conversation ended, or its fence no longer holds - the AI
+// settings or the pinned connection changed - or proposals are off. ""
+// when none applies; a model's own failure is not a fence.
+func (s *ChatService) planFenceLocked(c *conversation) string {
+	if c.ended != "" {
+		return "the investigation ended (" + c.ended + ")"
+	}
+	st := s.ai.load()
+	switch {
+	case st == nil || st.Rev != c.rev:
+		return "AI settings changed"
+	case st.ProposalsOff:
+		return errActionsOff.Error()
+	}
+	if conn, usable := s.state(c.cluster); conn == nil || conn != c.conn || !usable {
+		return "the cluster disconnected"
+	}
+	// slice F §3: an offer stands only under the epoch it was made in
+	if p := epochProblem(c.cluster, c.epoch); p != "" {
+		return p
+	}
+	return ""
+}
+
+// withdrawFencedLocked records a failed fence on every plan of the
+// investigation that is not withdrawn yet: the withdrawal is canonical and
+// sticky - a connection that recovers never offers the plan again - and a
+// change to what is shown publishes a new version, so an older reply can
+// never restore the offer (stage 2 re-review).
+func (s *ChatService) withdrawFencedLocked(c *conversation) {
+	if c.kind != kindInvestigation {
+		return
+	}
+	fence := s.planFenceLocked(c)
+	if fence == "" {
+		return
+	}
+	changed := false
+	for _, e := range c.exchanges {
+		p := e.plan
+		if p == nil || p.withdrawn != "" {
+			continue
+		}
+		p.withdrawn = fence
+		for i, st := range p.dto.Steps {
+			if st.State == stepOffered && (i >= len(p.runs) || p.runs[i].request == "") {
+				changed = true
+			}
+		}
+	}
+	if changed {
+		s.version++
+	}
+}
+
+// withdraw shows a fenced plan's offered steps as withdrawn, with why: the
+// proposal stays readable, and nothing of it is offered.
+func withdraw(p *ActionPlanDTO, why string) {
+	for i := range p.Steps {
+		if p.Steps[i].State == stepOffered && p.Steps[i].Run == nil {
+			p.Steps[i].State, p.Steps[i].Reason = stepWithdrawn, "withdrawn: "+why
+		}
+	}
+	if p.Status != planStatusDeclined && p.Status != planStatusSuperseded {
+		p.Status, p.StatusWhy = planStatusWithdrawn, "its unrun steps are withdrawn: "+why
+	}
 }
 
 // dto is a detached copy: a running turn keeps appending reads and
@@ -428,6 +656,11 @@ func (e *exchange) dto() ChatExchangeDTO {
 	if e.findings != nil {
 		f := *e.findings // the turn never changes a recorded one; copied for the reply
 		out.Findings = &f
+	}
+	if e.plan != nil {
+		p := e.plan.dto
+		p.Steps = append([]ActionStepDTO(nil), p.Steps...)
+		out.Plan = &p
 	}
 	return out
 }
@@ -454,6 +687,43 @@ func (s *ChatService) Clear(cluster, conversationID string) {
 			c.active.cancel()
 		}
 		delete(s.convs, c.key)
+		c.releaseLocked()
+		s.version++
+	}
+}
+
+// releaseLocked ends the conversation's leases: on its own cluster and on
+// each comparison member. Idempotent. Under s.mu.
+func (c *conversation) releaseLocked() {
+	c.lease.Release()
+	for _, m := range c.members {
+		m.release()
+	}
+}
+
+// ForgetChats is the lifecycle's forget hook for conversations: a plain
+// function, never a method of the bound service, so the webview cannot
+// call it.
+func ForgetChats(s *ChatService) func(cluster string) { return s.forgetCluster }
+
+// forgetCluster forgets a removed cluster's conversations (Settings S2
+// §2.5), after the lifecycle has ended them: their slots are free again,
+// and their leases released. A reconnect keeps them, ended, to read; only
+// a removal forgets. A confirmed step still running keeps its own
+// continuing lease and runs to its end (Codex's review of S2a, F6).
+func (s *ChatService) forgetCluster(cluster string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, c := range s.convs {
+		if c.cluster != cluster {
+			continue
+		}
+		if c.active != nil {
+			c.active.stopped = true
+			c.active.cancel()
+		}
+		delete(s.convs, key)
+		c.releaseLocked()
 		s.version++
 	}
 }
@@ -488,6 +758,10 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		return notice("this conversation has ended; start a new one")
 	case c.active != nil:
 		return notice("a question is already being answered; stop it or wait")
+	case s.ai.applyingNow():
+		// slice F §5: no new turn while an AI Apply decides; checked under
+		// the lock the turn registers under, so an Apply's plan names it
+		return notice(aiApplying)
 	case question == "":
 		return notice("ask a question")
 	case len(question) > chatQuestionMax:
@@ -502,10 +776,18 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		seed = c.anchor // validated when the investigation started
 	}
 	lim := c.limits()
-	ctx, cancel := context.WithTimeout(context.Background(), lim.deadline)
+	parent := context.Background()
+	if c.lease != nil {
+		parent = c.lease.Ctx // ends with the conversation's connection (S2 §2.3)
+	}
+	ctx, cancel := context.WithTimeout(parent, lim.deadline)
 	turn := &activeTurn{id: newID(), cancel: cancel}
 	c.active = turn
-	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed}
+	c.turns++
+	ex := &exchange{id: newID(), question: question, at: s.now(), seed: seed, turn: c.turns}
+	if c.kind == kindInvestigation {
+		ex.planRecord = planRecordLocked(c)
+	}
 	c.exchanges = append(c.exchanges, ex)
 	s.version++
 	s.mu.Unlock()
@@ -533,6 +815,9 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 	if turn.stopped && err == nil {
 		err = context.Canceled // stopped: a late success is never an answer
 	}
+	if turn.endedWhy != "" {
+		err = &endError{reason: turn.endedWhy} // its connection was retired, said
+	}
 	switch {
 	case err == nil:
 		ex.answer, ex.outcome = capAnswer(answer), "answered"
@@ -554,6 +839,21 @@ func (s *ChatService) Ask(cluster, conversationID, question string, seed *ChatSe
 		ledger := ledgerLocked(c)
 		f := labelFindings(*ex.reported, ledger, anchorOf(c.anchor, ledger))
 		ex.findings, ex.reported = &f, nil
+	}
+	if c.kind == kindInvestigation && ex.proposed != nil {
+		// the same for a proposal: its citations and facts settle first
+		ledger := ledgerLocked(c)
+		p := validatePlan(*ex.proposed, c.facts, ledger, anchorOf(c.anchor, ledger))
+		p.dto.Note = ex.plan.dto.Note
+		// a withdrawal observed while the turn ran is irreversible, and so
+		// is a dismissal: the re-decision keeps both (stage 2 re-review 2;
+		// stage 3 review, finding 4)
+		p.withdrawn, p.declined = ex.plan.withdrawn, ex.plan.declined
+		ex.plan, ex.proposed = &p, nil
+	}
+	if c.kind == kindInvestigation && ex.plan != nil {
+		// a plan's steps are offered only once its turn has settled
+		ex.plan.settled = true
 	}
 	if c.kind == kindInvestigation && ex.findings == nil && ex.outcome == "answered" {
 		// the model reported nothing: Klyx's own missing evidence still shows
@@ -639,23 +939,63 @@ func (s *ChatService) retainLocked(c *conversation) {
 		}
 		return n
 	}
+	// a plan whose step is running keeps its exchange until the step
+	// settles (AI A3 stage 3 review, finding 5)
+	running := func(e *exchange) bool { return e.plan != nil && e.plan == c.stepRunning }
+	dropOldest := func() bool {
+		for i, e := range c.exchanges[:len(c.exchanges)-1] {
+			if !running(e) {
+				c.exchanges = append(c.exchanges[:i:i], c.exchanges[i+1:]...)
+				c.removed++
+				return true
+			}
+		}
+		return false
+	}
 	for len(c.exchanges) > 1 && (len(c.exchanges) > chatRetainExchange || size() > chatRetainBytes) {
-		c.exchanges = c.exchanges[1:]
-		c.removed++
+		if !dropOldest() {
+			break
+		}
 	}
 	if len(c.exchanges) == 1 && size() > chatRetainBytes {
 		e := c.exchanges[0]
 		e.msgs, e.seedData, e.seed, e.noHistory = nil, "", nil, true
 		e.note = "this exchange was too large to keep for follow-ups"
-		if exchangeBytes(e) > chatRetainBytes {
+		if exchangeBytes(e) > chatRetainBytes && !running(e) {
 			c.exchanges = nil
 			c.removed++
 		}
 	}
+	retainStepRecords(c, running)
+}
+
+// retainStepRecords keeps at most chatStepRecords step records (AI A3
+// §2.4): past that, the oldest superseded plan's are dropped from the
+// card, never the current plan's or a running one's.
+func retainStepRecords(c *conversation, running func(*exchange) bool) {
+	latest := -1
+	count := 0
+	for i, e := range c.exchanges {
+		if e.plan != nil && len(e.plan.dto.Steps) > 0 {
+			latest = i
+			count += len(e.plan.dto.Steps)
+		}
+	}
+	for i, e := range c.exchanges {
+		if count <= chatStepRecords {
+			return
+		}
+		if e.plan == nil || len(e.plan.dto.Steps) == 0 || i == latest || running(e) {
+			continue
+		}
+		count -= len(e.plan.dto.Steps)
+		e.plan = nil
+		e.note = strings.TrimPrefix(e.note+"; ", "; ") + fmt.Sprintf("its superseded plan was dropped from the card: a conversation keeps at most %d step records", chatStepRecords)
+	}
 }
 
 func exchangeBytes(e *exchange) int {
-	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note) + len(e.seedData)
+	n := len(e.question) + len(e.answer) + len(e.err) + len(e.note) + len(e.seedData) + len(e.planRecord)
 	if e.seed != nil {
 		b, _ := json.Marshal(e.seed)
 		n += len(b)
@@ -680,6 +1020,34 @@ func exchangeBytes(e *exchange) int {
 	}
 	if e.reported != nil {
 		b, _ := json.Marshal(e.reported)
+		n += len(b)
+	}
+	// and its action proposal, with the facts and partners it pins, which
+	// can outlive the conversation's facts record (AI A3 §2.4; stage 2
+	// review, finding 5)
+	if e.plan != nil {
+		b, _ := json.Marshal(e.plan.dto)
+		n += len(b)
+		b, _ = json.Marshal(e.plan.facts)
+		n += len(b)
+		b, _ = json.Marshal(e.plan.partner)
+		n += len(b)
+		// its incident, read in the background (stage 4 review, finding 6)
+		if e.plan.incident != nil {
+			b, _ := json.Marshal(e.plan.incident)
+			n += len(b)
+		}
+		// and its steps' reviews and runs (stage 3 review, finding 5)
+		for _, r := range e.plan.runs {
+			n += stepRunBytes
+			if r.review != nil {
+				n += len(r.review.token) + len(r.review.digest)
+			}
+			n += len(r.request) + len(r.errText) + len(r.effect) + len(r.effectWhy) + len(r.owner)
+		}
+	}
+	if e.proposed != nil {
+		b, _ := json.Marshal(e.proposed)
 		n += len(b)
 	}
 	return n

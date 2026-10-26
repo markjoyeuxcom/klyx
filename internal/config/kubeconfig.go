@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/moomora/klyx/internal/envread"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
@@ -14,7 +15,7 @@ import (
 // DefaultKubeconfigPath resolves the kubeconfig Klyx reads contexts from:
 // KUBECONFIG when set (including Kubernetes' path-list form), else ~/.kube/config.
 func DefaultKubeconfigPath() string {
-	if env := os.Getenv("KUBECONFIG"); env != "" {
+	if env := envread.Get(envread.Kubeconfig); env != "" {
 		return env
 	}
 	home, err := os.UserHomeDir()

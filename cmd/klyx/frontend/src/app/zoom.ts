@@ -1,3 +1,6 @@
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
+
 // App zoom (accessibility; redesign spec §6 "usable zoom"). The webview has
 // no reflowing zoom of its own - Wails' ZoomIn uses WKWebView magnification,
 // which enlarges pixels without reflow - so Klyx scales its own layout with
@@ -6,7 +9,7 @@
 // accordingly, so narrow-mode rules engage instead of content clipping.
 
 export const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2] as const;
-const KEY = "klyx.layout.v1.zoom";
+const KEY: StorageKey = "klyx.layout.v1.zoom";
 export const ZOOM_EVENT = "klyx:zoom";
 
 let current = 1;
@@ -25,17 +28,13 @@ function apply(z: number) {
 }
 
 function persist(z: number) {
-  try { localStorage.setItem(KEY, String(z)); } catch { /* best-effort */ }
+  writeStored(KEY, String(z));
 }
 
 // The persisted step, validated; anything else is 100%.
 export function loadZoom(): number {
-  try {
-    const v = Number(localStorage.getItem(KEY));
-    return (ZOOM_STEPS as readonly number[]).includes(v) ? v : 1;
-  } catch {
-    return 1;
-  }
+  const v = Number(readStored(KEY));
+  return (ZOOM_STEPS as readonly number[]).includes(v) ? v : 1;
 }
 
 export const getZoom = () => current;

@@ -193,12 +193,7 @@ func (s *GitService) computeLine(ctx context.Context, dto LineDTO) LineGitDTO {
 		}
 		return out
 	}
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		out.State, out.Reason = LineGitError, gitcli.Scrub(err.Error())
-		return out
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[k.Repo]
 	if url == "" {

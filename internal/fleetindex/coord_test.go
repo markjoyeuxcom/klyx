@@ -484,3 +484,53 @@ func TestCoordRelistsOnExpiredWatch(t *testing.T) {
 	api.ch("configmaps") <- `{"type":"ERROR","object":{"kind":"Status","code":410,"reason":"Expired"}}`
 	eventually(t, "relisted", func() bool { return fmt.Sprint(entryUIDs(ix, "a", "/configmaps")) == "[c2]" })
 }
+
+// Settings S1: the index says what it runs with, after the defaults.
+func TestConfiguredIsWhatRuns(t *testing.T) {
+	ix := New(Settings{})
+	defer ix.Stop()
+	kinds, l := ix.Configured()
+	if len(kinds) != len(DefaultKinds) || l != DefaultLimits {
+		t.Fatalf("%v %+v", kinds, l)
+	}
+}
+
+// Settings S2 §2.4-§2.5: a connection word only from the attached Observer;
+// the lifecycle's trusted end of a retired incarnation ends that
+// generation only; a removed cluster is forgotten, and a late word from it
+// recreates nothing.
+func TestCoordIdentityEndAndForget(t *testing.T) {
+	api := newFakeAPI(t)
+	old := newFakeObs(1)
+	old.set("pods", "v1/pods", observe.Live, meta1("p1", "a", "a", nil))
+	ix := New(testSettings(refPods))
+	defer ix.Stop()
+	ix.SetClusters([]string{"a"})
+	ix.Attach("a", old, api.acquire())
+	ix.SetConnectionOf("a", old, "connected")
+	eventually(t, "old", func() bool { return fmt.Sprint(entryUIDs(ix, "a", "/pods")) == "[p1]" })
+	next := newFakeObs(2)
+	next.set("pods", "v1/pods", observe.Live, meta1("p9", "a", "b", nil))
+	ix.Attach("a", next, api.acquire())
+	eventually(t, "new", func() bool { return fmt.Sprint(entryUIDs(ix, "a", "/pods")) == "[p9]" })
+	// the retired Observer's late word and its end never touch the new one
+	ix.SetConnectionOf("a", old, "unreachable")
+	ix.End("a", 1)
+	time.Sleep(20 * time.Millisecond)
+	if cov := ix.Coverage()[0]; !cov.Indexed || cov.Incarnation != 2 || cov.Connection != "connected" {
+		t.Fatalf("a retired identity touched the new generation: %+v", cov)
+	}
+	// the current incarnation's trusted end ends it, once
+	ix.End("a", 2)
+	ix.End("a", 2)
+	if cov := ix.Coverage()[0]; cov.Indexed {
+		t.Fatalf("the trusted end left the generation running: %+v", cov)
+	}
+	// forgotten: no coordinator, and a late word creates none
+	ix.SetClusters(nil)
+	ix.Forget("a")
+	ix.SetConnectionOf("a", next, "connected")
+	if cov := ix.Coverage(); len(cov) != 0 {
+		t.Fatalf("a forgotten cluster is still covered: %+v", cov)
+	}
+}

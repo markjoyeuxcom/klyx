@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/moomora/klyx/internal/envread"
 )
 
 func lookPathFor(available ...string) func(string) (string, error) {
@@ -19,7 +21,7 @@ func lookPathFor(available ...string) func(string) (string, error) {
 	}
 }
 
-func noEnv(string) string { return "" }
+func noEnv(envread.Name) string { return "" }
 
 func TestTerminalLaunchArgv_DarwinEscapesForAppleScript(t *testing.T) {
 	argv, err := posixTerminalArgv("darwin", lookPathFor(), noEnv, `kubectl exec -it 'my pod' -- sh`)
@@ -40,8 +42,8 @@ func TestTerminalLaunchArgv_DarwinEscapesForAppleScript(t *testing.T) {
 }
 
 func TestTerminalLaunchArgv_LinuxTERMINALWins(t *testing.T) {
-	env := func(k string) string {
-		if k == "TERMINAL" {
+	env := func(n envread.Name) string {
+		if n == envread.Terminal {
 			return "footerm"
 		}
 		return ""

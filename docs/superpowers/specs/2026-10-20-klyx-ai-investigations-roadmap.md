@@ -167,6 +167,8 @@ This is a programme roadmap, not a design. Each phase gets its own note, Codex-r
 - **Option 2:** A1 right after S10. It reuses chat's contract and needs the evidence S8a, S8b and S9 just added. A2 and A3 follow the coverage programme.
 - **Either way,** §6.1's Flux scenario needs only the A1-A3 machinery and one health-check parser. §6.2's Argo scenario also needs the Argo-parity work's hook results and any new Argo verbs.
 
+**Decided (owner, 2026-10-25):** A1 and A3 are built. One investigation workflow comes before A2. It joins what exists into one path, so an operator follows a failure without hunting through views: failure, then the affected workload and its dependencies, then the relevant Git or rollout change, then the evidence, then a reviewed A3 action, then the observed outcome. Then comes the onboarding milestone (an unfamiliar platform engineer configures Klyx and resolves a representative incident unaided), and then Settings S5 with A2 (Settings redesign §14). Codex's competitive-priorities note gives the reasoning (Prax `5d6d148c`). A2's contracts do not change, only its place.
+
 **Each phase's definition of done:**
 - its note with Codex review before and after;
 - the gates;
@@ -224,9 +226,9 @@ What it needs beyond §6.1:
 ## 7. Open owner decisions
 
 1. ~~**Sequencing:** §5's option 1 or 2.~~ Decided 2026-10-21 (§5): A1 now, then A2 and A3. The decisions below gate A2 and A3, not A1.
-2. **Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.
+2. ~~**Unattended egress for A2:** allowed per cluster at opt-in, and whether a local model is the default for proactive runs.~~ Decided 2026-10-25 (owner): allowed, opt-in (§3's consent model), and the user chooses the default model for proactive runs, local or a provider, in Settings.
 3. **A3's reach:** day-2 verbs only, or Git pull requests too (§4, and §6's approval step).
-4. **Report retention:** how many reports, and for how long.
+4. ~~**Report retention:** how many reports, and for how long.~~ Decided 2026-10-25 (owner): the user sets both in Settings, which describes what each setting does. The Settings work comes first (`2026-10-25-klyx-settings-slice0.md`).
 
 ## 8. Revision 1: Codex's review of 671c6b0
 

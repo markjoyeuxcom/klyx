@@ -5,7 +5,6 @@ import (
 	"embed"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -19,11 +18,14 @@ import (
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/execenv"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fleetindex"
 	"github.com/moomora/klyx/internal/line"
+	"github.com/moomora/klyx/internal/localstore"
 	"github.com/moomora/klyx/internal/observe"
+	"github.com/moomora/klyx/internal/policy"
 	"github.com/moomora/klyx/internal/secretstore"
 	"github.com/moomora/klyx/internal/winstate"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -38,7 +40,7 @@ import (
 var assets embed.FS
 
 func configPath() string {
-	if p := os.Getenv("KLYX_CONFIG"); p != "" {
+	if p := envread.Get(envread.KlyxConfig); p != "" {
 		return p
 	}
 	home, err := os.UserHomeDir()
@@ -50,17 +52,21 @@ func configPath() string {
 	return home + "/.config/klyx/fleet.yaml"
 }
 
-// windowStatePath lives beside the fleet config so a KLYX_CONFIG override
-// relocates both together.
-func windowStatePath() string {
-	return filepath.Join(filepath.Dir(configPath()), "window.json")
+// storePath is where a store Klyx keeps beside the fleet config lives
+// (localstore), so a KLYX_CONFIG override relocates them together.
+func storePath(s localstore.Store) string {
+	p, err := localstore.Beside(configPath()).Path(s)
+	if err != nil {
+		log.Fatalf("the %s beside the fleet config: %v", s.Name(), err)
+	}
+	return p
 }
 
-// claudeBuildsPath records the Claude Code builds that passed Test, beside
-// the fleet config like the window state.
-func claudeBuildsPath() string {
-	return filepath.Join(filepath.Dir(configPath()), "claude-builds.json")
-}
+// windowStatePath is the window's size and place.
+func windowStatePath() string { return storePath(localstore.Window) }
+
+// claudeBuildsPath records the Claude Code builds that passed Test.
+func claudeBuildsPath() string { return storePath(localstore.ClaudeBuilds) }
 
 func main() {
 	// The cache diff's confined build (The Line slice 6 note §7.1): Klyx's
@@ -70,9 +76,11 @@ func main() {
 	}
 	execenv.ApplyDesktopToolPath()
 
-	cfg, err := config.Load(configPath())
-	if err != nil {
-		log.Printf("warn: could not load fleet config (%v); starting with empty fleet", err)
+	cfg, loadErr := config.Load(configPath())
+	if loadErr != nil {
+		// a missing file is a first run; any other failure is kept, and
+		// Settings and the fleet say it (Settings review slice 0)
+		log.Printf("warn: could not load fleet config (%s); starting with empty fleet", config.DisplayError(loadErr))
 		cfg = &config.Config{}
 	}
 	// The AI eval (eval design §3) runs on the configuration its preflight
@@ -102,6 +110,13 @@ func main() {
 		factory = fleet.ResolvingConnFactory(clock.Real{}, endpointCreds, evalRun.Resolve)
 	}
 	reg := fleet.NewRegistry(cfg, factory)
+	// Settings slice F §1: each cluster's published admission state -
+	// protection, epoch, Active - seeded before any cluster connects, and
+	// a new connection incarnation each time one becomes usable again.
+	policyReg := policy.New()
+	for _, c := range cfg.Clusters {
+		policyReg.Seed(c.Name, c.IsProtected())
+	}
 	healthSink := appbridge.NewHealthSink(em)
 	reg.SetHealthSink(healthSink)
 	// The fleet metadata index (The Line slice 9): each cluster's Observer
@@ -118,6 +133,11 @@ func main() {
 	index := fleetindex.New(ixSettings)
 	defer index.Stop()
 	reg.SetIndex(index)
+	// Settings S2 §2: the cluster lifecycle publishes each connection's
+	// usability under its commit gate, gates the sink on identity, and
+	// retires, replaces and forgets clusters.
+	lifecycle := appbridge.NewLifecycle(reg, policyReg, healthSink, index)
+	go lifecycle.Run(ctx)
 	// Health notifications (The Line slice 10): the listener is in place
 	// before any cluster starts, so every connect's baseline is seen. The
 	// cluster lookups resolve once configSvc is published: they run on the
@@ -159,16 +179,23 @@ func main() {
 	// cluster's config (env, group, EFFECTIVE protection) from its live fleet,
 	// which includes clusters hot-added through Settings.
 	var lineSvc *appbridge.LineService // set below; a hot-add rescans the line at once
-	configSvc := appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
+	configSvc := appbridge.WithConfigLoadError(appbridge.NewConfigService(configPath(), cfg, func(cc config.ClusterConfig) error {
 		err := reg.Add(ctx, cc)
 		if lineSvc != nil {
 			lineSvc.Rescan()
 		}
 		return err
-	})
+	}), loadErr)
+	appbridge.WithPolicy(configSvc, policyReg)
 	liveConfig.Store(configSvc)
+	// Settings S2 §2.6-§2.7: the running fleet loses a removed cluster, and
+	// every reader of protection reads the published value
+	lifecycle.OnForget(func(name string) { appbridge.ForgetRunningCluster(configSvc, name) })
+	lifecycle.OnForget(appbridge.ForgetEndpointRevisions(endpointCreds.Revisions)) // old endpoint readers never current again (S2 §2.5)
+	appbridge.SetNotifyProtection(healthNotify, configSvc.IsProtected)
 
 	svc := appbridge.NewFleetService(reg, appbridge.LiveClusterConfig(configSvc), time.Now)
+	appbridge.SetFleetProtection(svc, configSvc.IsProtected)
 	healthSvc := appbridge.NewHealthService(func() []*observe.Observer {
 		var out []*observe.Observer
 		for _, s := range reg.Snapshots() {
@@ -334,9 +361,11 @@ func main() {
 
 	// The Line slice 6: read-only Git access through the system git, only
 	// from fleet.yaml's approved git.repos (Settings > Git); it orders the
-	// line against its history after every LineDTO (line:git).
+	// line against its history after every LineDTO (line:git). Its running
+	// copy is the startup configuration's block (Settings slice F §5).
 	gitSvc := appbridge.NewGitService(ctx, appbridge.GitDeps{
 		ConfigPath: configPath(),
+		Initial:    cfg.Git,
 		Override:   lineOverride,
 		Emitter:    em,
 	})
@@ -389,6 +418,9 @@ func main() {
 		ec, ok := c.(appbridge.EndpointConn)
 		return ec, ok
 	})
+	// Settings S2 §2.6: an endpoint activation publishes into the running
+	// fleet under the fleet Apply lock, so a reconnect keeps it
+	appbridge.WireEndpointActivation(endpointsSvc, configSvc)
 
 	workloadsSvc := appbridge.NewWorkloadsService(func(name string) (appbridge.WorkloadsConn, bool) {
 		c, ok := reg.Conn(name)
@@ -482,7 +514,9 @@ func main() {
 	// mid-session through Settings is gated immediately rather than fail-open
 	// until a restart. Installed here, after configSvc exists; the guard is not
 	// consulted until a destructive verb runs at request time.
-	appbridge.SetProtectGuard(appbridge.NewProtectGuard(configSvc.IsProtected, time.Now))
+	protectGuard := appbridge.NewProtectGuard(policyReg, time.Now)
+	appbridge.SetProtectGuard(protectGuard)
+	lifecycle.OnForget(protectGuard.Forget) // a removed cluster's grant goes with it (S2 §2.5)
 
 	// AI-assist (read-only Explain and Suggest-fix). Off unless fleet.yaml
 	// configures a provider. The snapshot is built once from the startup config:
@@ -490,7 +524,7 @@ func main() {
 	// default), and a problem leaves AI unavailable with that reason. The egress
 	// gate reuses configSvc.IsProtected (live) exactly like the ProtectGuard.
 	ai.UseClaudeBuildsFile(claudeBuildsPath())
-	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, os.Getenv)
+	aiState := appbridge.BuildAIState(cfg.AI, ai.OSKeyStore{}, envread.Dynamic(envread.AIKey))
 	if aiState.Problem != "" {
 		log.Printf("klyx: AI (%s) unavailable: %s", aiState.ProviderID, aiState.Problem)
 	}
@@ -534,9 +568,18 @@ func main() {
 	appbridge.SetChatGit(chatSvc, gitSvc)               // AI A1 §3.2: git_changes
 	appbridge.SetChatLogHistory(chatSvc, logHistorySvc) // AI A1 §3.6: get_log_history
 
+	// Settings S2 §2.3: every piece of work on a cluster takes a lease from
+	// the lifecycle - admitted only now, pinned to the current connection,
+	// ended (or continued) when that connection is replaced or removed.
+	appbridge.UseLeases(lifecycle, forwardsSvc, logsSvc, eventsSvc, logHistorySvc, chatSvc, aiSvc, nodeOpsSvc, helmSvc)
+	lifecycle.OnEnd(appbridge.EndLogHistory(logHistorySvc))
+	lifecycle.OnForget(appbridge.ForgetChats(chatSvc)) // a removed cluster's conversations free their slots (S2 §2.5)
+
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
-	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, os.Getenv, aiSvc, cfg.AI)
+	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, envread.Dynamic(envread.AIKey), aiSvc, cfg.AI)
+	// Settings slice F §5: an AI plan names the chat's work it ends
+	appbridge.WireAIWork(aiSettingsSvc, chatSvc)
 
 	argoSvc := appbridge.NewArgoService(func(name string) (appbridge.ArgoConn, bool) {
 		c, ok := reg.Conn(name)
@@ -646,6 +689,7 @@ func main() {
 		application.NewService(helmSvc),
 		application.NewService(windowsSvc),
 		application.NewService(configSvc),
+		application.NewService(appbridge.NewSettingsService(configSvc, gitSvc)),
 		application.NewService(argoSvc),
 		application.NewService(rbacSvc),
 		application.NewService(promotionSvc),

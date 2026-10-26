@@ -16,6 +16,12 @@ type RolloutRevision struct {
 	Images      []string
 	Current     bool
 	ChangeCause string
+	// ObjectUID is the revision object's UID (a ReplicaSet or a
+	// ControllerRevision) and TemplateDigest its pod template's canonical
+	// identity: an undo writes only the revision it was shown (A3 §4.5).
+	// TemplateDigest is empty when the template could not be read.
+	ObjectUID      string
+	TemplateDigest string
 }
 
 // TemplateImages lists a pod template's container images, init containers

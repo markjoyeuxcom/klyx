@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/clibin"
+	"github.com/moomora/klyx/internal/envread"
 	"github.com/moomora/klyx/internal/procrun"
 )
 
@@ -66,7 +66,10 @@ type Git struct {
 	Version Version
 }
 
-var gitBin = clibin.Binary{Name: "git", EnvVar: "KLYX_GIT_PATH", FallbackPaths: defaultGitFallbackPaths}
+var gitBin = clibin.Binary{Name: "git", Override: envread.KlyxGitPath, FallbackPaths: defaultGitFallbackPaths}
+
+// Binary is how Klyx resolves git, for Settings > Diagnostics.
+func Binary() clibin.Binary { return gitBin }
 
 func defaultGitFallbackPaths() []string {
 	switch runtime.GOOS {
@@ -75,7 +78,7 @@ func defaultGitFallbackPaths() []string {
 	case "linux":
 		return []string{"/usr/bin/git", "/usr/local/bin/git"}
 	case "windows":
-		if root := strings.TrimSpace(os.Getenv("ProgramFiles")); root != "" {
+		if root := strings.TrimSpace(envread.Get(envread.ProgramFiles)); root != "" {
 			return []string{filepath.Join(root, "Git", "cmd", "git.exe")}
 		}
 	}

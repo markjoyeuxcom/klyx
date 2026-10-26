@@ -12,11 +12,9 @@ import (
 )
 
 // aiEgressPhrase is what the operator types to turn on protected-cluster
-// egress (spec 2026-10-13 §2.3).
+// egress (spec 2026-10-13 §2.3): the AI plan's interlock (Settings slice F
+// §5).
 const aiEgressPhrase = "allow protected egress"
-
-// aiEgressGrantTTL bounds the one-shot egress grant, like ProtectGuard's.
-const aiEgressGrantTTL = 30 * time.Second
 
 // aiKeyMax bounds a pasted key.
 const aiKeyMax = 4096
@@ -35,6 +33,9 @@ type AISettingsDTO struct {
 	TLSSkipVerify        bool   `json:"tlsSkipVerify"`
 	RefusalFallback      bool   `json:"refusalFallback"`
 	CLIPath              string `json:"cliPath"` // claudeCLI: an explicit binary; empty finds claude
+	// ProposeActions is AI A3 §6's setting; nil (a draft that does not
+	// carry it) keeps the current value, never turns proposals off
+	ProposeActions *bool `json:"proposeActions,omitempty"`
 }
 
 // AISettingsStateDTO is everything the Settings > AI panel shows. It never
@@ -48,9 +49,13 @@ type AISettingsStateDTO struct {
 	KeychainError   string            `json:"keychainError,omitempty"`
 	Active          AIAvailabilityDTO `json:"active"`
 	ActiveRev       uint64            `json:"activeRev"`
-	// Diverged: the settings in fleet.yaml are not the ones the running
-	// provider was built from (an outside edit, or a failed apply).
+	// Diverged: the settings in fleet.yaml are not the ones in use (an
+	// outside edit); "Use the file's values" plans them (Settings slice F
+	// §5).
 	Diverged bool `json:"diverged"`
+	// SavedNotActive: the settings were saved and their activation failed,
+	// with why; Retry and Revert are offered.
+	SavedNotActive string `json:"savedNotActive,omitempty"`
 }
 
 // AIModelsDTO is a provider's model list for the picker.
@@ -69,40 +74,63 @@ type AITestDTO struct {
 }
 
 // AISettingsService is the Wails-bound AI settings writer (spec 2026-10-13
-// §2.3). Every operation is serialised; each save builds the new provider
-// first, writes fleet.yaml under the shared fleet write lock, then swaps the
-// AIService snapshot - so persisted and active settings never diverge
-// silently, and an invalid or unbuildable setting writes nothing.
+// §2.3; Settings slice F §5). A change is a plan from what runs, applied by
+// its digest: the block is written under the shared fleet write lock and
+// the file version the plan was made from, then the provider is built and
+// published. Every activation route - Apply, Retry, the credential actions
+// - holds one lock and the AI section's Applying state, so an older
+// publication never lands after a newer one.
 type AISettingsService struct {
 	path   string
 	keys   ai.KeyStore
 	getenv func(string) string
 	aiSvc  *AIService
 	now    func() time.Time
-	saveAI func(string, config.AIConfig) error // seam: config.SaveAI
-	loadAI func(string) (*config.AIConfig, error)
-	build  func(ai.Settings, ai.KeyStore, func(string) string) (*ai.Built, error) // seam: ai.Build, for drafts
+	saveAI func(path, version string, a config.AIConfig) (string, error)          // seam: config.SaveAIAt
+	loadAI func(string) (*config.AIConfig, string, error)                         // seam: the block and its file version
+	build  func(ai.Settings, ai.KeyStore, func(string) string) (*ai.Built, error) // seam: ai.Build
+	work   func() aiWorkList                                                      // the chat's AI work (WireAIWork); nil: none
+	cache  *planCache
 
-	mu          sync.Mutex
-	applied     config.AIConfig // what the active snapshot was built from
-	egressUntil time.Time       // one-shot egress grant
+	mu      sync.Mutex
+	applied config.AIConfig // the last terms activated
+	// notActive is a saved block whose activation failed: nothing runs
+	notActive *aiNotActive
+}
+
+// aiNotActive is a saved, not active candidate: never holding a key.
+type aiNotActive struct {
+	cand      config.AIConfig // without a legacy key
+	legacyKey bool
+	version   string // the file version it was saved as
+	rev       uint64 // the AI revision its failure published
+	reason    string
 }
 
 // NewAISettingsService wires the writer. initial is the ai block the startup
 // snapshot was built from (nil = off).
 func NewAISettingsService(path string, keys ai.KeyStore, getenv func(string) string, aiSvc *AIService, initial *config.AIConfig) *AISettingsService {
-	s := &AISettingsService{path: path, keys: keys, getenv: getenv, aiSvc: aiSvc, now: time.Now, saveAI: config.SaveAI, loadAI: loadAIBlock, build: ai.Build}
+	s := &AISettingsService{path: path, keys: keys, getenv: getenv, aiSvc: aiSvc, now: time.Now, saveAI: config.SaveAIAt, loadAI: loadAIBlock, build: ai.Build}
+	s.cache = newPlanCache(func() time.Time { return s.now() })
 	s.applied = normalizedAI(initial)
 	return s
 }
 
-// loadAIBlock reads the ai block currently in fleet.yaml.
-func loadAIBlock(path string) (*config.AIConfig, error) {
-	cfg, err := config.Load(path)
+// WireAIWork gives the writer the chat's AI work, which a plan names as
+// what it ends. A package function: every exported method of a bound
+// service reaches the webview.
+func WireAIWork(s *AISettingsService, chat *ChatService) {
+	s.work = chat.aiWork
+}
+
+// loadAIBlock reads the ai block currently in fleet.yaml, with the file's
+// version from the same read.
+func loadAIBlock(path string) (*config.AIConfig, string, error) {
+	cfg, version, err := config.LoadVersioned(path)
 	if err != nil {
-		return nil, err
+		return nil, version, err
 	}
-	return cfg.AI, nil
+	return cfg.AI, version, nil
 }
 
 // normalizedAI is a with defaults applied (nil = off), for comparison.
@@ -119,7 +147,7 @@ func toDTO(a config.AIConfig) AISettingsDTO {
 	return AISettingsDTO{
 		Provider: a.Provider, Model: a.Model, KeySource: a.KeySource, APIKeyEnv: a.APIKeyEnv, BaseURL: a.BaseURL,
 		AllowProtectedEgress: a.AllowProtectedEgress, TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.UsesRefusalFallback(),
-		CLIPath: a.CLIPath,
+		CLIPath: a.CLIPath, ProposeActions: boolPtr(a.UsesProposeActions()),
 	}
 }
 
@@ -127,10 +155,15 @@ func toDTO(a config.AIConfig) AISettingsDTO {
 // what the panel never edits (a legacy key).
 func fromDTO(d AISettingsDTO, cur config.AIConfig) config.AIConfig {
 	fallback := d.RefusalFallback
+	propose := cur.ProposeActions
+	if d.ProposeActions != nil {
+		propose = boolPtr(*d.ProposeActions)
+	}
 	a := config.AIConfig{
 		Provider: strings.TrimSpace(d.Provider), Model: strings.TrimSpace(d.Model), KeySource: d.KeySource,
 		APIKeyEnv: strings.TrimSpace(d.APIKeyEnv), BaseURL: strings.TrimSpace(d.BaseURL), CLIPath: strings.TrimSpace(d.CLIPath),
 		AllowProtectedEgress: d.AllowProtectedEgress, TLSSkipVerify: d.TLSSkipVerify, RefusalFallback: &fallback,
+		ProposeActions: propose,
 	}
 	if a.KeySource == string(ai.KeySourceLegacy) {
 		a.APIKey = cur.APIKey
@@ -144,14 +177,17 @@ func (s *AISettingsService) GetAISettings() AISettingsStateDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := AISettingsStateDTO{Path: s.path, KeysStored: map[string]bool{}}
-	cur, err := s.loadAI(s.path)
+	cur, _, err := s.loadAI(s.path)
 	persisted := normalizedAI(cur)
 	if err != nil {
 		st.PersistedError = ai.Scrub(err.Error())
 	} else {
 		st.Persisted = toDTO(persisted)
 		st.LegacyKeyInFile = persisted.APIKey != ""
-		st.Diverged = !config.AIEqual(persisted, s.applied)
+		st.Diverged = !config.AIEqual(persisted, s.inUseLocked(persisted))
+	}
+	if na := s.notActive; na != nil {
+		st.SavedNotActive = na.reason
 	}
 	for _, p := range keyedProviders {
 		_, kerr := s.keys.Get(p)
@@ -169,62 +205,19 @@ func (s *AISettingsService) GetAISettings() AISettingsStateDTO {
 	return st
 }
 
-// apply builds the provider for a, writes it, then swaps the snapshot. With
-// requireBuild a build failure writes nothing; without it (clearing a key) a
-// provider that can no longer be built is written and published as
-// unavailable with its reason - it never falls back.
-func (s *AISettingsService) apply(a config.AIConfig, requireBuild bool) error {
-	settings := AISettingsFromConfig(&a)
-	b, err := ai.Build(settings, s.keys, s.getenv)
-	if err != nil && requireBuild {
-		return errors.New(aiProblem(err))
+// inUseLocked is the terms the file is compared with: the active ones, or
+// the saved candidate whose activation failed (its key from file, the
+// version it was saved as).
+func (s *AISettingsService) inUseLocked(file config.AIConfig) config.AIConfig {
+	na := s.notActive
+	if na == nil {
+		return s.applied
 	}
-	if werr := s.saveAI(s.path, a); werr != nil {
-		return werr
+	c := na.cand
+	if na.legacyKey {
+		c.APIKey = file.APIKey
 	}
-	SetAIState(s.aiSvc, NewAIState(settings.Provider, b, err, a.AllowProtectedEgress))
-	s.applied = a
-	return nil
-}
-
-// consumeEgressGrant spends the one-shot grant, pass or fail.
-func (s *AISettingsService) consumeEgressGrant() bool {
-	ok := !s.egressUntil.IsZero() && s.now().Before(s.egressUntil)
-	s.egressUntil = time.Time{}
-	return ok
-}
-
-// ArmAIEgress records the typed confirmation for turning protected-cluster
-// egress on: a one-shot grant SaveAISettings consumes (spec §2.3 - enforced at
-// the backend, not only in the dialog).
-func (s *AISettingsService) ArmAIEgress(typed string) ActionResultDTO {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if strings.TrimSpace(typed) != aiEgressPhrase {
-		s.egressUntil = time.Time{}
-		return ActionResultDTO{Error: "type \"" + aiEgressPhrase + "\" to confirm"}
-	}
-	s.egressUntil = s.now().Add(aiEgressGrantTTL)
-	return ActionResultDTO{OK: true}
-}
-
-// SaveAISettings validates and applies the panel's draft.
-func (s *AISettingsService) SaveAISettings(d AISettingsDTO) ActionResultDTO {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cur, err := s.loadAI(s.path)
-	if err != nil {
-		return ActionResultDTO{Error: "fleet.yaml cannot be read, so nothing was saved: " + ai.Scrub(err.Error())}
-	}
-	curN := normalizedAI(cur)
-	next := fromDTO(d, curN)
-	if next.AllowProtectedEgress && !curN.AllowProtectedEgress && !s.consumeEgressGrant() {
-		return ActionResultDTO{Error: "Turning on protected-cluster egress needs the typed confirmation; nothing was saved."}
-	}
-	if err := s.apply(next, true); err != nil {
-		return ActionResultDTO{Error: err.Error()}
-	}
-	return ActionResultDTO{OK: true}
+	return c
 }
 
 func keyedProvider(p string) (ai.ProviderID, bool) {
@@ -236,10 +229,20 @@ func keyedProvider(p string) (ai.ProviderID, bool) {
 	return "", false
 }
 
-// SetAPIKey stores a key in the OS keychain. For the provider fleet.yaml
-// selects, the key source becomes the keychain (a legacy plain-text key is
-// removed from the file) and the provider is rebuilt, so the key the panel
-// describes is the key in use (spec §2.1).
+// keyOnlyDiffers: a and b are the same terms apart from where the key comes
+// from (Settings slice F §5, R5).
+func keyOnlyDiffers(a, b config.AIConfig) bool {
+	a.KeySource, a.APIKey, a.APIKeyEnv = "", "", ""
+	b.KeySource, b.APIKey, b.APIKeyEnv = "", "", ""
+	return config.AIEqual(a, b)
+}
+
+// SetAPIKey stores a key in the OS keychain. For the running provider it
+// activates the running terms with the keychain as the key source - never
+// the file's block (Settings slice F §5, R5): fleet.yaml is updated only
+// when its block is the running one apart from the key, and a block that
+// differs further stays drift. A key for another provider is stored for
+// when it is chosen.
 func (s *AISettingsService) SetAPIKey(provider, key string) ActionResultDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,23 +259,30 @@ func (s *AISettingsService) SetAPIKey(provider, key string) ActionResultDTO {
 	if err := s.keys.Set(p, key); err != nil {
 		return ActionResultDTO{Error: aiProblem(err)}
 	}
-	cur, err := s.loadAI(s.path)
-	if err != nil {
-		return ActionResultDTO{Error: "Key stored in the keychain, but fleet.yaml cannot be read to use it: " + ai.Scrub(err.Error(), key)}
+	if s.notActive != nil || s.applied.Provider != string(p) {
+		return ActionResultDTO{OK: true} // stored; nothing running uses it
 	}
-	curN := normalizedAI(cur)
-	if curN.Provider != string(p) {
-		return ActionResultDTO{OK: true} // stored for when this provider is chosen
-	}
-	next := curN
+	next := s.applied
 	next.KeySource, next.APIKey = string(ai.KeySourceKeychain), ""
-	if err := s.apply(next, true); err != nil {
-		return ActionResultDTO{Error: "Key stored in the keychain, but the provider could not use it: " + ai.Scrub(err.Error(), key)}
+	s.aiSvc.beginApply()
+	defer s.aiSvc.endApply()
+	cur, version, err := s.loadAI(s.path)
+	written := ""
+	if err == nil && keyOnlyDiffers(normalizedAI(cur), s.applied) {
+		w, werr := s.saveAI(s.path, version, next)
+		if werr != nil {
+			return ActionResultDTO{Error: "Key stored in the keychain, but fleet.yaml was not updated, so the provider in use was not changed: " + ai.Scrub(werr.Error(), key)}
+		}
+		written = w
+	}
+	if reason := s.activateLocked(next, written); reason != "" {
+		return ActionResultDTO{Error: "Key stored in the keychain, but the provider could not use it: " + ai.Scrub(reason, key)}
 	}
 	return ActionResultDTO{OK: true}
 }
 
-// ClearAPIKey deletes a keychain key. If the RUNNING provider used that
+// ClearAPIKey deletes a keychain key. It stays immediate (Settings slice F
+// §5, R5): a tightening takes no plan. If the RUNNING provider used that
 // keychain key, new calls stop at once - even if fleet.yaml cannot then be
 // updated - so a deleted credential is never used again (Codex review of
 // c488e34). For the provider fleet.yaml selects, the key source becomes none:
@@ -288,9 +298,12 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	if err := s.keys.Delete(p); err != nil {
 		return ActionResultDTO{Error: aiProblem(err)}
 	}
+	s.aiSvc.beginApply()
+	defer s.aiSvc.endApply()
 
 	// The running snapshot first, decided from the snapshot itself, not from
-	// the file. In-flight calls finish on the snapshot they loaded.
+	// the file. In-flight calls are refused at their next send: the
+	// revision moved.
 	if active := s.aiSvc.load(); active.ProviderID == p && active.KeySource == ai.KeySourceKeychain {
 		off := &AIState{ProviderID: p, AllowEgress: active.AllowEgress, Problem: "The API key was removed. Add one in Settings > AI."}
 		SetAIState(s.aiSvc, off)
@@ -299,7 +312,7 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 		}
 	}
 
-	cur, err := s.loadAI(s.path)
+	cur, version, err := s.loadAI(s.path)
 	if err != nil {
 		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml cannot be read: " + ai.Scrub(err.Error())}
 	}
@@ -309,19 +322,38 @@ func (s *AISettingsService) ClearAPIKey(provider string) ActionResultDTO {
 	}
 	next := curN
 	next.KeySource = string(ai.KeySourceNone)
-	if err := s.apply(next, false); err != nil {
+	// written against the version it was read from: an edit made since is
+	// left as it is, and the revocation above holds (F2a review, R3)
+	if _, err := s.saveAI(s.path, version, next); errors.Is(err, config.ErrFileChanged) {
+		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml changed meanwhile, so it was left as it is: check its AI settings."}
+	} else if err != nil {
 		return ActionResultDTO{Error: "Key removed from the keychain; AI no longer uses it, but fleet.yaml was not updated: " + err.Error()}
+	}
+	if s.notActive == nil && keyOnlyDiffers(next, s.applied) {
+		// the running terms, now without a key: published unavailable with
+		// its reason, never falling back to another key
+		settings := AISettingsFromConfig(&next)
+		b, berr := s.build(settings, s.keys, s.getenv)
+		st := NewAIState(settings.Provider, b, berr, next.AllowProtectedEgress)
+		st.ProposalsOff = !next.UsesProposeActions()
+		SetAIState(s.aiSvc, st)
+		s.applied = next
 	}
 	return ActionResultDTO{OK: true}
 }
 
 // MoveKeyToKeychain moves a legacy plain-text key into the keychain: the
-// keychain write first, then the removal from fleet.yaml. A failed removal is
-// reported, and the source stays legacy until it succeeds (spec §2.1).
+// keychain write first, then the removal from fleet.yaml, then the running
+// terms with the keychain as the key source (Settings slice F §5, R5). Its
+// block condition: the file's block is the running one apart from the key;
+// otherwise it refuses, and nothing moves.
 func (s *AISettingsService) MoveKeyToKeychain() ActionResultDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.loadAI(s.path)
+	if s.notActive != nil {
+		return ActionResultDTO{Error: "The AI settings are saved but not active: retry or revert them first."}
+	}
+	cur, version, err := s.loadAI(s.path)
 	if err != nil {
 		return ActionResultDTO{Error: "fleet.yaml cannot be read: " + ai.Scrub(err.Error())}
 	}
@@ -330,13 +362,22 @@ func (s *AISettingsService) MoveKeyToKeychain() ActionResultDTO {
 	if !ok || curN.APIKey == "" {
 		return ActionResultDTO{Error: "fleet.yaml holds no plain-text key to move"}
 	}
+	if !keyOnlyDiffers(curN, s.applied) {
+		return ActionResultDTO{Error: "fleet.yaml's AI settings differ from the ones in use: use the file's values, or save, first"}
+	}
 	if err := s.keys.Set(p, curN.APIKey); err != nil {
 		return ActionResultDTO{Error: "Nothing moved: " + aiProblem(err)}
 	}
-	next := curN
+	next := s.applied
 	next.KeySource, next.APIKey = string(ai.KeySourceKeychain), ""
-	if err := s.apply(next, true); err != nil {
+	s.aiSvc.beginApply()
+	defer s.aiSvc.endApply()
+	written, err := s.saveAI(s.path, version, next)
+	if err != nil {
 		return ActionResultDTO{Error: "Key copied to the keychain, but fleet.yaml still holds it in plain text: " + ai.Scrub(err.Error(), curN.APIKey)}
+	}
+	if reason := s.activateLocked(next, written); reason != "" {
+		return ActionResultDTO{Error: "Key moved to the keychain, but the provider could not use it: " + ai.Scrub(reason, curN.APIKey)}
 	}
 	return ActionResultDTO{OK: true}
 }
@@ -345,7 +386,7 @@ func (s *AISettingsService) MoveKeyToKeychain() ActionResultDTO {
 // provider for Test, or only the model lister (no model required) for the
 // picker.
 func (s *AISettingsService) draftBuild(d AISettingsDTO, listerOnly bool) (*ai.Built, error) {
-	cur, _ := s.loadAI(s.path)
+	cur, _, _ := s.loadAI(s.path)
 	next := fromDTO(d, normalizedAI(cur))
 	build := s.build
 	if listerOnly {
@@ -441,3 +482,5 @@ func (s *AISettingsService) CLIStatus(d AISettingsDTO) AICLIStatusDTO {
 	}
 	return out
 }
+
+func boolPtr(b bool) *bool { return &b }

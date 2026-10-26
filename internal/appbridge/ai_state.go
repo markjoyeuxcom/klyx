@@ -24,6 +24,9 @@ type AIState struct {
 	KeySource   ai.KeySource
 	Problem     string // why Provider is nil when ProviderID is not off
 	Rev         uint64 // assigned on publish
+	// ProposalsOff turns investigations' action proposals off (AI A3 §6):
+	// the zero value is the default, on
+	ProposalsOff bool
 }
 
 // NewAIState turns a build result into a snapshot. A build error leaves the
@@ -80,5 +83,7 @@ func BuildAIState(c *config.AIConfig, keys ai.KeyStore, getenv func(string) stri
 	s := AISettingsFromConfig(c)
 	b, err := ai.Build(s, keys, getenv)
 	allow := c != nil && c.AllowProtectedEgress
-	return NewAIState(s.Provider, b, err, allow)
+	st := NewAIState(s.Provider, b, err, allow)
+	st.ProposalsOff = !c.UsesProposeActions()
+	return st
 }

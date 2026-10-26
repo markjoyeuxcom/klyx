@@ -33,7 +33,7 @@ func (c *ClusterConn) startParamKinds(ctx context.Context, h *observe.Observer) 
 	c.mu.Lock()
 	c.paramKindsKick = func() { signal(observe.KindState{}) }
 	c.mu.Unlock()
-	go func() {
+	c.goTracked(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -45,7 +45,7 @@ func (c *ClusterConn) startParamKinds(ctx context.Context, h *observe.Observer) 
 				h.SetFact(healthsrc.FactParamKinds, pk)
 			}
 		}
-	}()
+	})
 }
 
 // referencedParamKinds is every exact group/version/kind the policies name,

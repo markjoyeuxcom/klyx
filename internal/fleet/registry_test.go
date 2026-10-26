@@ -256,7 +256,7 @@ func (f *fakeConn) SyncArgoApp(context.Context, string, string, string, argo.Syn
 func (f *fakeConn) RolloutHistory(context.Context, string, string, string) ([]workloads.RolloutRevision, types.UID, error) {
 	return nil, "", nil
 }
-func (f *fakeConn) RolloutUndo(context.Context, string, string, string, string, int64) error {
+func (f *fakeConn) RolloutUndo(context.Context, string, string, string, string, int64, *RevisionExpect) error {
 	return nil
 }
 func (f *fakeConn) RolloutPause(context.Context, string, string, string, bool) error { return nil }

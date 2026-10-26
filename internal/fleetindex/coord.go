@@ -70,6 +70,16 @@ type Index struct {
 
 // New builds an index. Each search admits its own working set (§2.6,
 // review of 9b).
+// Configured is what the index runs with: its kinds' keys and its limits,
+// after the defaults (Settings S1: the effective values, never the file's).
+func (ix *Index) Configured() ([]string, Limits) {
+	keys := make([]string, 0, len(ix.s.Kinds))
+	for _, k := range ix.s.Kinds {
+		keys = append(keys, k.Key())
+	}
+	return keys, ix.s.Limits
+}
+
 func New(s Settings) *Index {
 	if s.Kinds == nil {
 		s.Kinds = DefaultKinds
@@ -158,7 +168,9 @@ func (ix *Index) Attach(cluster string, obs Observed, acq Acquire) {
 }
 
 // SetConnection hands a cluster's connection word to the index, in the
-// same serialized handoff that gives it to the Observer (§2.7).
+// same serialized handoff that gives it to the Observer (§2.7). A
+// connection uses SetConnectionOf, bound to its Observer; this unbound
+// form serves tools and tests.
 func (ix *Index) SetConnection(cluster, word string) {
 	c := ix.coordFor(cluster)
 	if c == nil {
@@ -166,6 +178,66 @@ func (ix *Index) SetConnection(cluster, word string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setConnectionLocked(word)
+}
+
+// SetConnectionOf is SetConnection from the connection whose Observer is
+// obs (Settings S2 §2.4): dropped unless obs is the Observer the cluster's
+// coordinator holds, so a retired connection's late word never stops its
+// replacement's generation, and an unknown cluster gets no coordinator.
+func (ix *Index) SetConnectionOf(cluster string, obs Observed, word string) {
+	ix.mu.Lock()
+	c := ix.clusters[cluster]
+	ix.mu.Unlock()
+	if c == nil || obs == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.obs != obs {
+		return
+	}
+	c.setConnectionLocked(word)
+}
+
+// End is the trusted end of incarnation inc (Settings S2 §2.4): the
+// lifecycle's, delivered when it retires the connection, never left to the
+// retired Observer's own Final. It ends that generation only; a newer
+// Observer's is untouched. Idempotent.
+func (ix *Index) End(cluster string, inc uint64) {
+	ix.mu.Lock()
+	c := ix.clusters[cluster]
+	ix.mu.Unlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	obs := c.obs
+	c.mu.Unlock()
+	if obs != nil && obs.Incarnation() == inc {
+		c.end(obs)
+	}
+}
+
+// Forget drops a removed cluster (Settings S2 §2.5): its generation stops,
+// its entries are released to the budget, and coverage no longer names it.
+func (ix *Index) Forget(cluster string) {
+	ix.mu.Lock()
+	c := ix.clusters[cluster]
+	delete(ix.clusters, cluster)
+	ix.mu.Unlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopLocked()
+	c.store.release()
+	c.obs, c.ended, c.ran = nil, true, false
+}
+
+func (c *coord) setConnectionLocked(word string) {
+	ix := c.ix
 	c.word = word
 	usable := connectionUsable(word)
 	if usable == c.usable {

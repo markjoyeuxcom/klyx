@@ -18,14 +18,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/bounds"
 	"github.com/moomora/klyx/internal/gitcli"
 )
 
 // The caps (parent §7, §14).
 const (
-	DefaultRepoCap    = 1 << 30 // 1 GiB per repo
-	DefaultTotalCap   = 2 << 30 // 2 GiB across every repo
-	DefaultContentCap = 64 << 20
+	DefaultRepoCap    = bounds.GitRepoBytes  // 1 GiB per repo
+	DefaultTotalCap   = bounds.GitTotalBytes // 2 GiB across every repo
+	DefaultContentCap = bounds.GitContentBytes
 	DefaultSample     = 250 * time.Millisecond
 )
 

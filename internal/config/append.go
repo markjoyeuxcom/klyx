@@ -28,12 +28,60 @@ var beforeReplace func()
 // it, so the write was refused rather than overwriting that edit.
 var ErrFleetChangedOnDisk = errors.New("fleet config changed on disk while Klyx was updating it; nothing was written - reload and try again")
 
-// replaceUnchanged renames tmpPath over path only if path still holds
-// original (or still does not exist when it did not before). An edit made on
-// disk - by another tool or an editor - since the writer read the file is
-// refused, not overwritten. A narrow window remains between this check and
-// the rename; the in-process lock covers Klyx's own writers.
-func replaceUnchanged(path, tmpPath string, original []byte, existed bool) error {
+// fleetTarget is the file a fleet-file write replaces, and how (Settings
+// review slice 0): the fleet path itself, or the file its symlink names, so
+// a link - a dotfiles-managed config - stays a link and only its target
+// changes. mode is the target's own permission bits, which the write keeps;
+// a new file is created 0600. A link whose target does not resolve, or is
+// not a regular file, is refused: nothing is written through it.
+func fleetTarget(path string) (target string, mode os.FileMode, existed bool, err error) {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return path, 0o600, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("stat fleet config %q: %w", path, err)
+	}
+	target = path
+	if fi.Mode()&os.ModeSymlink != 0 {
+		if target, err = filepath.EvalSymlinks(path); err != nil {
+			return "", 0, false, fmt.Errorf("the fleet config %q is a symlink whose target cannot be resolved (%v); fix the link - nothing was written", path, err)
+		}
+	}
+	st, err := os.Stat(target)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("stat fleet config %q: %w", target, err)
+	}
+	if !st.Mode().IsRegular() {
+		return "", 0, false, fmt.Errorf("the fleet config %q is not a regular file; nothing was written", target)
+	}
+	return target, st.Mode().Perm(), true, nil
+}
+
+// fleetTemp creates the write's temporary file beside target, with mode:
+// the rename that follows replaces target in place.
+func fleetTemp(target string, mode os.FileMode) (*os.File, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".fleet-*.yaml")
+	if err != nil {
+		return nil, err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return nil, fmt.Errorf("set the temp config's mode: %w", err)
+	}
+	return tmp, nil
+}
+
+// replaceUnchanged renames tmpPath over target only if path still holds
+// original (or still does not exist when it did not before) and still
+// resolves to target. An edit made on disk - by another tool or an editor -
+// since the writer read the file is refused, not overwritten, and so is a
+// link repointed meanwhile, or its permissions changed (Codex's review of
+// slice 0, finding 4): the temp file carries the mode read with the
+// content. A narrow window remains between this check and the rename; the
+// in-process lock covers Klyx's own writers.
+func replaceUnchanged(path, target string, mode os.FileMode, tmpPath string, original []byte, existed bool) error {
 	if beforeReplace != nil {
 		beforeReplace()
 	}
@@ -46,7 +94,10 @@ func replaceUnchanged(path, tmpPath string, original []byte, existed bool) error
 	case err != nil && existed:
 		return ErrFleetChangedOnDisk // deleted meanwhile
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if now, nowMode, _, err := fleetTarget(path); err != nil || now != target || existed && nowMode != mode {
+		return ErrFleetChangedOnDisk
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
 		return fmt.Errorf("replace fleet config: %w", err)
 	}
 	return nil
@@ -71,6 +122,10 @@ func AppendClusters(path string, contexts []string) error {
 		entries = append(entries, ClusterConfigForContext(ctx))
 	}
 
+	target, mode, _, err := fleetTarget(path)
+	if err != nil {
+		return err
+	}
 	original, readErr := os.ReadFile(path)
 	exists := readErr == nil
 	if readErr != nil && !os.IsNotExist(readErr) {
@@ -130,13 +185,13 @@ func AppendClusters(path string, contexts []string) error {
 	}
 
 	// Validate the candidate by round-tripping it through the real loader.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
+	tmp, err := fleetTemp(target, mode)
 	if err != nil {
 		// Directory may not exist yet for the create-new path.
-		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
 			return fmt.Errorf("create config directory: %w", mkErr)
 		}
-		tmp, err = os.CreateTemp(filepath.Dir(path), ".fleet-*.yaml")
+		tmp, err = fleetTemp(target, mode)
 		if err != nil {
 			return fmt.Errorf("create temp config: %w", err)
 		}
@@ -172,7 +227,7 @@ func AppendClusters(path string, contexts []string) error {
 			return fmt.Errorf("appended config does not list cluster %q (file unchanged)", entry.Name)
 		}
 	}
-	return replaceUnchanged(path, tmpPath, original, exists)
+	return replaceUnchanged(path, target, mode, tmpPath, original, exists)
 }
 
 // insertClusters inserts entries into the top-level clusters list of an
@@ -190,7 +245,7 @@ func AppendClusters(path string, contexts []string) error {
 //     rewriting it would reformat the user's file.
 func insertClusters(original string, entries []ClusterConfig) (string, error) {
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(original), &doc); err != nil {
+	if err := unmarshalFleet([]byte(original), &doc); err != nil {
 		return "", fmt.Errorf("parse: %w", err)
 	}
 	lines := strings.SplitAfter(original, "\n")
@@ -289,10 +344,10 @@ func insertClusters(original string, entries []ClusterConfig) (string, error) {
 // R1: a block scalar lost content and still loaded).
 func onlyClustersAdded(original, candidate []byte, added int) error {
 	var before, after map[string]interface{}
-	if err := yaml.Unmarshal(original, &before); err != nil {
+	if err := unmarshalFleet(original, &before); err != nil {
 		return err
 	}
-	if err := yaml.Unmarshal(candidate, &after); err != nil {
+	if err := unmarshalFleet(candidate, &after); err != nil {
 		return err
 	}
 	if len(after) != len(before) && !(len(after) == len(before)+1 && before["clusters"] == nil) {
@@ -303,7 +358,7 @@ func onlyClustersAdded(original, candidate []byte, added int) error {
 			continue
 		}
 		if !reflect.DeepEqual(v, after[k]) {
-			return fmt.Errorf("field %q changed", k)
+			return fmt.Errorf("field %s changed", describeKey(k))
 		}
 	}
 	old, _ := before["clusters"].([]interface{})

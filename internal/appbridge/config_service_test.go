@@ -214,8 +214,8 @@ func TestProtectGuard_LiveSourceGatesHotAddedProdCluster(t *testing.T) {
 		t.Fatalf("hot-add: %+v", r)
 	}
 
-	SetProtectGuard(NewProtectGuard(s.IsProtected, time.Now))
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	SetProtectGuard(newGuardFor(s.IsProtected, time.Now))
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	svc := NewPodsService(func(string) (PodsConn, bool) { return &fakeLivePodConn{}, true })
 

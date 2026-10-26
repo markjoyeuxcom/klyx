@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { CopyButton } from "./CopyButton";
+import { readStored, writeStored } from "../settings/storage";
+import type { StorageKey } from "../settings/storageKeys";
 
 // YamlBlock — the read-only manifest surface: hand-rolled YAML syntax
 // highlighting (keys/strings/numbers/comments - ~60 lines, no dependency,
@@ -104,13 +106,9 @@ function LineView({ line, query, isCurrentLine }: { line: string; query: string;
 // Manifests read unwrapped by default - indentation is the structure, and
 // UIDs and timestamps never break mid-token - with a Wrap toggle the viewer's
 // choice remembers (UI review 2026-10-13).
-const WRAP_KEY = "klyx.yaml.wrap";
+const WRAP_KEY: StorageKey = "klyx.yaml.wrap";
 function loadWrap(): boolean {
-  try {
-    return localStorage.getItem(WRAP_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readStored(WRAP_KEY) === "1";
 }
 
 export function YamlBlock({ text, copyLabel, maxHeight }: { text: string; copyLabel: string; maxHeight?: number }) {
@@ -118,11 +116,7 @@ export function YamlBlock({ text, copyLabel, maxHeight }: { text: string; copyLa
   const [wrap, setWrap] = useState(loadWrap);
   const toggleWrap = () => {
     setWrap((w) => {
-      try {
-        localStorage.setItem(WRAP_KEY, w ? "0" : "1");
-      } catch {
-        // a per-viewer convenience: without storage the toggle still works
-      }
+      writeStored(WRAP_KEY, w ? "0" : "1"); // without storage the toggle still works
       return !w;
     });
   };

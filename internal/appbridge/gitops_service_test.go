@@ -18,6 +18,7 @@ import (
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/fluxcli"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -266,7 +267,7 @@ func TestProtectGuard_GatesFluxVerbs(t *testing.T) {
 	now := time.Now()
 	g := newTestGuard("prd-cluster", &now)
 	SetProtectGuard(g)
-	t.Cleanup(func() { SetProtectGuard(nil) })
+	t.Cleanup(func() { SetProtectGuard(defaultTestGuard) })
 
 	conn := &fakeGitOpsConn{}
 	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
@@ -422,3 +423,25 @@ func (f *fakeGitOpsConn) HealthRowsNow(_ context.Context, _, part string) (obser
 }
 
 func (f *fakeGitOpsConn) FluxNotifications(context.Context) notify.Read { return f.notifications }
+
+// Settings F1 review, finding F4: a composite's steps say each outcome; a
+// target the fence stopped never makes the whole result "nothing sent"
+// beside a written source. Alone, it does.
+func TestACompositesNotSentTargetKeepsItsWrittenSource(t *testing.T) {
+	fenced := readfence.Check(readfence.WithWriteTracker(readfence.With(context.Background(), func() error { return errors.New("x: its policy changed") })))
+	src := fleet.Step{Verb: "reconcile", Subject: "GitRepository flux-system/flux-system", Written: true}
+	tgt := fleet.Step{Verb: "reconcile", Subject: "Kustomization flux-system/app", Refused: true, NotSent: true, Err: fenced}
+	conn := &fakeGitOpsConn{reconcileErr: fenced, steps: []fleet.Step{src, tgt}}
+	svc := NewGitOpsService(func(string) (GitOpsConn, bool) { return conn, true }, time.Now)
+	r := svc.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-app")
+	if r.OK || r.NotSent || r.Outcome != "" {
+		t.Fatalf("a written source beside a not-sent target: %+v", r)
+	}
+	if len(r.Steps) != 2 || !r.Steps[0].Written || !r.Steps[1].NotSent || !r.Steps[1].Refused {
+		t.Fatalf("steps: %+v", r.Steps)
+	}
+	conn.steps = []fleet.Step{tgt}
+	if r := svc.ReconcileWithSource("x", "Kustomization", "flux-system", "app", "uid-app"); !r.NotSent || r.Outcome != fleet.OutcomeRefused {
+		t.Fatalf("a target alone: %+v", r)
+	}
+}

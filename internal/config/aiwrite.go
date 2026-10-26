@@ -23,6 +23,7 @@ type aiYAML struct {
 	AllowProtectedEgress bool   `yaml:"allowProtectedEgress"`
 	TLSSkipVerify        bool   `yaml:"tlsSkipVerify,omitempty"`
 	RefusalFallback      *bool  `yaml:"refusalFallback,omitempty"`
+	ProposeActions       *bool  `yaml:"proposeActions,omitempty"`
 }
 
 // SaveAI replaces the fleet file's top-level `ai:` block with a (or appends
@@ -34,16 +35,24 @@ type aiYAML struct {
 // AppendClusters and refuses to overwrite an edit made on disk meanwhile
 // (spec 2026-10-13 §2.3).
 func SaveAI(path string, a AIConfig) error {
+	_, err := SaveAIAt(path, "", a)
+	return err
+}
+
+// SaveAIAt is SaveAI from a plan: version is the file version it was made
+// from (ErrFileChanged for any other; "" checks none), and it returns the
+// written file's version (Settings slice F §5).
+func SaveAIAt(path, version string, a AIConfig) (string, error) {
 	if a.KeySource != "legacy" {
 		a.APIKey = "" // only a legacy source keeps a key in the file
 	}
 	block, err := renderAIBlock(a)
 	if err != nil {
-		return err
+		return "", err
 	}
 	want := a
 	want.applyDefaults()
-	return saveTopLevelBlock(path, "ai", block, "AI settings", func(got *Config) error {
+	return saveTopLevelBlock(path, "ai", block, "AI settings", version, nil, func(got *Config) error {
 		if got.AI == nil || !AIEqual(*got.AI, want) {
 			return errors.New("the written AI block does not read back as intended (file unchanged)")
 		}
@@ -57,7 +66,8 @@ func AIEqual(x, y AIConfig) bool {
 	return x.Provider == y.Provider && x.Model == y.Model && x.KeySource == y.KeySource &&
 		x.APIKeyEnv == y.APIKeyEnv && x.APIKey == y.APIKey && x.BaseURL == y.BaseURL &&
 		x.CLIPath == y.CLIPath && x.AllowProtectedEgress == y.AllowProtectedEgress &&
-		x.TLSSkipVerify == y.TLSSkipVerify && x.UsesRefusalFallback() == y.UsesRefusalFallback()
+		x.TLSSkipVerify == y.TLSSkipVerify && x.UsesRefusalFallback() == y.UsesRefusalFallback() &&
+		x.UsesProposeActions() == y.UsesProposeActions()
 }
 
 // renderAIBlock renders `ai:` plus its fields, indented two spaces, with
@@ -73,7 +83,7 @@ func renderAIBlock(a AIConfig) (string, error) {
 	if err := enc.Encode(aiYAML{
 		Provider: provider, Model: a.Model, KeySource: a.KeySource, APIKeyEnv: a.APIKeyEnv, APIKey: a.APIKey,
 		BaseURL: a.BaseURL, CLIPath: a.CLIPath, AllowProtectedEgress: a.AllowProtectedEgress,
-		TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.RefusalFallback,
+		TLSSkipVerify: a.TLSSkipVerify, RefusalFallback: a.RefusalFallback, ProposeActions: a.ProposeActions,
 	}); err != nil {
 		return "", fmt.Errorf("render ai block: %w", err)
 	}

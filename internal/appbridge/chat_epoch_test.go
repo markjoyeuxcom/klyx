@@ -1,0 +1,180 @@
+package appbridge
+
+import (
+	"strings"
+	"testing"
+)
+
+// Settings slice F §3-§4: A3's offers, reviews, runs and verification, and
+// the AI fences, under the cluster's epoch.
+
+// §3: a tightening between RunStep's guard and its write is refused at the
+// write; the cluster was unprotected at the guard, so no grant is spent.
+func TestATighteningBetweenTheGuardAndTheWriteIsRefusedAtTheWrite(t *testing.T) {
+	establish(t)
+	reg := installRegistry(t, false, "x")
+	sf := newStepsFixture(t, pauseWeb)
+	rv := sf.review(1)
+	if !rv.Offered {
+		t.Fatalf("%+v", rv)
+	}
+	sf.sc.getHook = func() { tighten(t, reg, "x"); sf.sc.getHook = nil }
+	r := sf.run(1, rv.Token)
+	if r.Ran || !strings.Contains(r.Reason, "policy changed") {
+		t.Fatalf("%+v", r)
+	}
+	if len(sf.sc.recorded()) != 0 {
+		t.Fatalf("written: %v", sf.sc.recorded())
+	}
+}
+
+// §3: a reconnect withdraws the offer, sticky, and its review cannot run.
+func TestAReconnectWithdrawsTheOfferAndItsReview(t *testing.T) {
+	establish(t)
+	reg := installRegistry(t, false, "x")
+	sf := newStepsFixture(t, pauseWeb)
+	rv := sf.review(1)
+	reg.ConnUp("x")
+	if r := sf.run(1, rv.Token); r.Ran {
+		t.Fatalf("a review from before the reconnect ran: %+v", r)
+	}
+	plan := sf.svc.InvestigationState("x").Exchanges[0].Plan
+	if plan == nil || plan.Status != planStatusWithdrawn || !strings.Contains(plan.StatusWhy, "connection restarted") {
+		t.Fatalf("withdrawn: %+v", plan)
+	}
+	if r := sf.review(1); r.Offered {
+		t.Fatalf("a withdrawn offer was reviewed again: %+v", r)
+	}
+	if len(sf.sc.recorded()) != 0 {
+		t.Fatal("written")
+	}
+}
+
+// §3: a held cluster withdraws its offers, and releasing it revives none.
+func TestAHoldWithdrawsOffersAndReleaseRevivesNone(t *testing.T) {
+	reg := installRegistry(t, false, "x")
+	sf := newStepsFixture(t, pauseWeb)
+	if _, err := reg.Hold("x", "the reconnect failed"); err != nil {
+		t.Fatal(err)
+	}
+	if r := sf.review(1); r.Offered || !strings.Contains(r.Reason, "saved but not active") {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := reg.Release("x", false); err != nil {
+		t.Fatal(err)
+	}
+	if r := sf.review(1); r.Offered {
+		t.Fatalf("released, the offer came back: %+v", r)
+	}
+}
+
+// §3: verification checks the epoch, so a move after the write ends it.
+func TestVerificationEndsOnAMove(t *testing.T) {
+	reg := installRegistry(t, false, "x")
+	sf := newStepsFixture(t, pauseWeb)
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	sf.svc.mu.Unlock()
+	fence := sf.svc.verifyFence(c)
+	if err := fence(); err != nil {
+		t.Fatalf("before the move: %v", err)
+	}
+	tighten(t, reg, "x")
+	if err := fence(); err == nil || !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("after the move: %v", err)
+	}
+}
+
+// §4: a conversation starts only on an Active cluster, and a move ends its
+// turn.
+func TestAChatStartsOnlyWhenActiveAndAMoveEndsIt(t *testing.T) {
+	reg := installRegistry(t, false, "x")
+	if _, err := reg.Begin("x"); err != nil {
+		t.Fatal(err)
+	}
+	f := newToolsFixture(t, answer("hello"))
+	if st := f.svc.StartInvestigation("x", ChatSeedDTO{Kind: "object", Group: "apps", Version: "v1", Plural: "deployments", Namespace: "shop", Name: "web", UID: "uid-web"}); st.ConversationID != "" || !strings.Contains(st.Error, "being applied") {
+		t.Fatalf("started while applying: %+v", st)
+	}
+	if _, err := reg.Publish("x", false); err != nil {
+		t.Fatal(err)
+	}
+	sf := newStepsFixture(t, pauseWeb) // starts under the new epoch
+	sf.svc.mu.Lock()
+	c := sf.svc.convs[invKey("x")]
+	sf.svc.mu.Unlock()
+	r := &turnRunner{s: sf.svc, c: c}
+	if _, err := r.guard(); err != nil {
+		t.Fatalf("the guard holds: %v", err)
+	}
+	reg.ConnUp("x")
+	if _, err := r.guard(); err == nil || !strings.Contains(err.Error(), "connection restarted") {
+		t.Fatalf("a move ends the turn: %v", err)
+	}
+}
+
+// §4: a comparison member is pinned to its own epoch; its move ends the
+// investigation's turn.
+func TestAMembersMoveEndsTheTurn(t *testing.T) {
+	reg := installRegistry(t, false, "x", "stg", "dev")
+	f := newFleetFixture(t, answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"stg"}); st.Notice != "" {
+		t.Fatalf("%+v", st)
+	}
+	f.svc.mu.Lock()
+	c := f.svc.convs[invKey("x")]
+	m := c.members[0]
+	f.svc.mu.Unlock()
+	st := f.svc.ai.load()
+	if p := f.svc.memberProblem(st, m); p != "" {
+		t.Fatalf("before the move: %s", p)
+	}
+	tighten(t, reg, "stg")
+	if p := f.svc.memberProblem(st, m); !strings.Contains(p, "comparison cluster stg: its policy changed") {
+		t.Fatalf("after the move: %q", p)
+	}
+	if _, err := reg.Begin("dev"); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"dev"}); !strings.Contains(st.Notice, "being applied") {
+		t.Fatalf("a member being applied: %+v", st)
+	}
+}
+
+// Settings F1 review, finding F1, for a conversation and a comparison
+// member: the epoch is pinned before egress is decided, so a protection
+// change that the start's own egress read missed ends the first turn as a
+// policy change.
+func TestAChatsEgressIsDecidedUnderItsPinnedEpoch(t *testing.T) {
+	reg := installRegistry(t, false, "x")
+	f := newToolsFixture(t, answer("hello"))
+	f.aiSvc.isProtected = racingProtection(t, reg, "x", true)
+	st := f.svc.Start("x")
+	if st.Error != "" {
+		t.Fatalf("control: %+v", st)
+	}
+	f.svc.mu.Lock()
+	c := f.svc.convs["x"]
+	f.svc.mu.Unlock()
+	r := &turnRunner{s: f.svc, c: c}
+	if _, err := r.guard(); err == nil || !strings.Contains(err.Error(), "policy changed") {
+		t.Fatalf("the start's pin is older than its egress read: %v", err)
+	}
+}
+
+func TestAMembersEgressIsDecidedUnderItsPinnedEpoch(t *testing.T) {
+	reg := installRegistry(t, false, "x", "stg")
+	f := newFleetFixture(t, answer("done"))
+	inv := f.svc.StartInvestigation("x", podAnchor)
+	f.svc.ai.isProtected = racingProtection(t, reg, "stg", true)
+	if st := f.svc.SetComparison("x", inv.ConversationID, []string{"stg"}); st.Notice != "" {
+		t.Fatalf("control: %+v", st)
+	}
+	f.svc.mu.Lock()
+	m := f.svc.convs[invKey("x")].members[0]
+	f.svc.mu.Unlock()
+	if p := f.svc.memberProblem(f.svc.ai.load(), m); !strings.Contains(p, "comparison cluster stg: its policy changed") {
+		t.Fatalf("the member's pin is older than its egress read: %q", p)
+	}
+}
