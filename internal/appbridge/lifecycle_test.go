@@ -3,6 +3,7 @@ package appbridge
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -213,5 +214,41 @@ func TestUsabilityIsPublishedBeforeItIsSeen(t *testing.T) {
 	r.life.applyUsable(fleet.UsabilityEvent{Cluster: "prd", ID: r.id() + 1000, Inc: 1})
 	if s, _ := r.pol.Snapshot("prd"); s.Epoch != after.Epoch {
 		t.Fatal("a move of an identity that is not current was published")
+	}
+}
+
+type endRec struct {
+	mu   sync.Mutex
+	ends int
+}
+
+func (e *endRec) OnSummary(observe.Summary) {}
+func (e *endRec) OnRows(observe.Rows)       {}
+func (e *endRec) OnTransitions(b observe.TransitionBatch) {
+	if b.Kind == observe.BatchEnd {
+		e.mu.Lock()
+		e.ends++
+		e.mu.Unlock()
+	}
+}
+
+// The sink takes a publication only from a cluster's current identity, one
+// it never saw included, and a trusted end is delivered once.
+func TestTheSinkTakesOnlyTheCurrentIdentityAndEndsOnce(t *testing.T) {
+	r := newLifeRig(t, true)
+	rec := &endRec{}
+	r.sink.AddListener(rec)
+	stranger := uint64(r.id()) + 1000
+	r.sink.Transitions(batchOf(stranger, 1, observe.BatchChanges, observe.Transition{Key: "u1", NS: "shop", Name: "web", From: "ok", To: "fault"}))
+	if len(r.sink.log.Recent("prd", 10)) != 0 {
+		t.Fatal("an identity that is not current published")
+	}
+	inc := uint64(r.id())
+	r.sink.EndIdentity("prd", inc, "unreachable")
+	r.sink.EndIdentity("prd", inc, "unreachable")
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.ends != 1 {
+		t.Fatalf("the trusted end was delivered %d times", rec.ends)
 	}
 }

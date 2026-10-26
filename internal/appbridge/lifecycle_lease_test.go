@@ -3,12 +3,16 @@ package appbridge
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/helmcli"
 )
 
 // Settings S2a §2.3: leases. Work is admitted only on an Active cluster's
@@ -220,5 +224,174 @@ func TestAConversationEndsExplicitlyWithItsConnection(t *testing.T) {
 	}
 	if again := f.svc.Ask("prd", st.ConversationID, "and now?", nil); !strings.Contains(again.Notice, "has ended") {
 		t.Fatalf("an ended conversation took a question: %+v", again)
+	}
+}
+
+// A log stream ends with its connection, and its final chunk says why.
+func TestALogStreamEndsWithItsConnectionAndSaysWhy(t *testing.T) {
+	r := newLifeRig(t, true)
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	c := &pipeConn{r: pr}
+	em := &captureEmitter{}
+	s := NewLogsService(lookupOf(c), em)
+	s.setLeaser(r.leasedVia(LogsConn(c)))
+	defer s.CloseAll()
+	if res := s.OpenLogStream("prd", "shop", "web-0", "web", false, 100, "s1"); res.Error != "" {
+		t.Fatal(res.Error)
+	}
+	r.reconnect()
+	if !waitUntil(t, 3*time.Second, em.sawEOF) {
+		t.Fatal("the stream did not end")
+	}
+	var why string
+	for _, ev := range em.snapshot() {
+		if ev.chunk.EOF {
+			why = ev.chunk.Error
+		}
+	}
+	if !strings.Contains(why, "prd reconnected") {
+		t.Fatalf("the final chunk does not say why: %q", why)
+	}
+	if ends, _ := r.life.ClusterWork("prd"); len(ends) != 0 {
+		t.Fatalf("an ended stream's lease is still listed: %+v", ends)
+	}
+}
+
+type liveStatusRec struct {
+	mu    sync.Mutex
+	ended []string
+}
+
+func (e *liveStatusRec) Emit(name string, data any) {
+	if st, ok := data.(liveStatusDTO); ok && st.Ended != "" {
+		e.mu.Lock()
+		e.ended = append(e.ended, st.Ended)
+		e.mu.Unlock()
+	}
+}
+
+// A live events subscription ends with its connection, and its status says
+// why.
+func TestLiveEventsEndWithTheirConnection(t *testing.T) {
+	r := newLifeRig(t, true)
+	c := &fakeEventsConn{}
+	em := &liveStatusRec{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, em)
+	s.setLeaser(r.leasedVia(EventsConn(c)))
+	defer s.CloseAll()
+	if res := s.OpenLiveEvents("prd", "shop"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if ends, _ := r.life.ClusterWork("prd"); len(ends) != 1 || ends[0].What != "live events in shop" {
+		t.Fatalf("listed: %+v", ends)
+	}
+	r.reconnect()
+	if !waitUntil(t, 3*time.Second, func() bool {
+		em.mu.Lock()
+		defer em.mu.Unlock()
+		return len(em.ended) == 1 && strings.Contains(em.ended[0], "prd reconnected")
+	}) {
+		t.Fatalf("not ended with its reason: %+v", em.ended)
+	}
+	if ends, _ := r.life.ClusterWork("prd"); len(ends) != 0 {
+		t.Fatalf("its lease is still listed: %+v", ends)
+	}
+}
+
+type blockingHelm struct {
+	*fakeHelmConn
+	reached, release chan struct{}
+}
+
+func (c *blockingHelm) HelmRollback(ctx context.Context, namespace, release string, revision int, opts helmcli.RollbackOptions) error {
+	close(c.reached)
+	<-c.release
+	return c.fakeHelmConn.HelmRollback(ctx, namespace, release, revision, opts)
+}
+
+// A drain and a Helm rollback continue through their connection's
+// retirement (S2 §10): listed under Continues from their start, never
+// ended by a reconnect, and gone once they finish.
+func TestADrainAndARollbackContinueThroughTheirConnection(t *testing.T) {
+	r := newLifeRig(t, true)
+	node := &fakeNodeOpsConn{cmdFunc: func(string) (*exec.Cmd, error) { return exec.Command("sh", "-c", "sleep 30"), nil }}
+	ops, em := newNodeOpsTestSvc(node)
+	ops.setLeaser(r.leasedVia(NodeOpsConn(node)))
+	drain := ops.StartDrain("prd", "node-3", "uid-3", DrainOptionsDTO{}, tid())
+	if drain.Error != "" {
+		t.Fatal(drain.Error)
+	}
+	defer ops.CancelDrain(drain.StreamID)
+	hc := &blockingHelm{fakeHelmConn: &fakeHelmConn{}, reached: make(chan struct{}), release: make(chan struct{})}
+	helm := newHelmTestSvc(hc)
+	helm.setLeaser(r.leasedVia(HelmConn(hc)))
+	done := make(chan ActionResultDTO, 1)
+	go func() { done <- helm.HelmRollback("prd", "shop", "web", 3, RollbackOptionsDTO{}) }()
+	<-hc.reached
+	kinds := func() (ends, continues []string) {
+		e, c := r.life.ClusterWork("prd")
+		for _, w := range e {
+			ends = append(ends, w.Kind)
+		}
+		for _, w := range c {
+			continues = append(continues, w.Kind)
+		}
+		sort.Strings(continues)
+		return ends, continues
+	}
+	if ends, continues := kinds(); len(ends) != 0 || strings.Join(continues, ",") != "drain,rollback" {
+		t.Fatalf("ends %v continues %v", ends, continues)
+	}
+	r.reconnect()
+	if ends, continues := kinds(); len(ends) != 0 || strings.Join(continues, ",") != "drain,rollback" {
+		t.Fatalf("after the reconnect: ends %v continues %v", ends, continues)
+	}
+	for _, ev := range em.events_() {
+		if c, ok := ev.data.(LogChunkDTO); ok && c.EOF {
+			t.Fatalf("the drain ended with its connection: %+v", c)
+		}
+	}
+	close(hc.release)
+	if res := <-done; !res.OK {
+		t.Fatalf("the rollback did not run to its end: %+v", res)
+	}
+	ops.CancelDrain(drain.StreamID)
+	if !waitUntil(t, 5*time.Second, func() bool { _, c := kinds(); return len(c) == 0 }) {
+		t.Fatal("finished work is still listed")
+	}
+}
+
+// pinConn is an AI connection whose identity is all a pin compares.
+type pinConn struct {
+	AIConn
+	n int
+}
+
+// Explain and Suggest-fix run only on the connection their precheck found:
+// a replaced one is refused before anything is sent, and an admitted call
+// is listed and ends with its connection.
+func TestAnAICallRunsOnlyOnTheConnectionItsPrecheckFound(t *testing.T) {
+	r := newLifeRig(t, true)
+	current, found := &pinConn{n: 1}, &pinConn{n: 2}
+	s := NewAIService(func(string) (AIConn, bool) { return current, true }, &AIState{}, nil, nil)
+	s.setLeaser(r.leasedVia(AIConn(current)))
+	if _, _, refusal := s.admitCall("explain", "prd", found); !strings.Contains(refusal, "connection changed") {
+		t.Fatalf("a replaced connection was admitted: %q", refusal)
+	}
+	if ends, _ := r.life.ClusterWork("prd"); len(ends) != 0 {
+		t.Fatalf("a refused call is listed: %+v", ends)
+	}
+	done, le, refusal := s.admitCall("suggest-fix", "prd", current)
+	if refusal != "" {
+		t.Fatal(refusal)
+	}
+	defer done()
+	if ends, _ := r.life.ClusterWork("prd"); len(ends) != 1 || ends[0].Kind != "suggest-fix" {
+		t.Fatalf("the call is listed: %+v", ends)
+	}
+	r.reconnect()
+	if le.Ctx.Err() == nil {
+		t.Fatal("an AI call outlived its connection")
 	}
 }

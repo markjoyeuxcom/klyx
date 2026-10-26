@@ -1,12 +1,15 @@
 package appbridge
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/policy"
 )
 
@@ -117,5 +120,50 @@ func TestEveryProtectionReaderReadsThePublishedValue(t *testing.T) {
 	}
 	if p := ns.protected.Load(); p == nil || (*p)("prd-a") {
 		t.Fatal("the notification scope still derives protection from the entry")
+	}
+}
+
+// The notification engine's protected scope reads the published value end
+// to end: prd-a, protected by its name, published unprotected, is out of
+// scope; dev-b, unprotected by its name, published protected, is in it.
+func TestTheNotificationScopeReadsThePublishedProtection(t *testing.T) {
+	start := time.Now()
+	var offset time.Duration
+	defer func(c func() time.Time) { notifyClock = c }(notifyClock)
+	notifyClock = func() time.Time { return start.Add(offset) }
+	cfg := &config.Config{Clusters: []config.ClusterConfig{{Name: "prd-a", Context: "prd-a"}, {Name: "dev-b", Context: "dev-b"}},
+		Notifications: &config.NotificationsConfig{Enabled: true, Scope: "protected"}}
+	pol := policy.New()
+	cs := WithPolicy(NewConfigService("", cfg, nil), pol)
+	cs.kubeconfigPath = func() string { return "/nonexistent/kubeconfig" } // never the owner's
+	cs.kubeContexts = func(string) ([]string, error) { return nil, nil }
+	var sent []string
+	ns := NewNotificationsService(filepath.Join(t.TempDir(), "fleet.yaml"), cfg, LiveClusterConfig(cs),
+		func(_, _, _ string, data map[string]any) error {
+			sent = append(sent, fmt.Sprint(data["cluster"]))
+			return nil
+		}, nil, nil)
+	SetNotifyProtection(ns, cs.IsProtected)
+	for name, protected := range map[string]bool{"prd-a": false, "dev-b": true} {
+		if _, err := pol.Begin(name); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pol.Publish(name, protected); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l := NotificationsListener(ns)
+	for _, name := range []string{"prd-a", "dev-b"} {
+		b := batchOf(1, 1, observe.BatchBaseline)
+		b.Cluster = name
+		l.OnTransitions(b)
+		b = batchOf(1, 2, observe.BatchChanges, observe.Transition{Key: "u-" + name, NS: "shop", Name: "web", From: "ok", To: "fault", Label: "CrashLoopBackOff"})
+		b.Cluster = name
+		l.OnTransitions(b)
+	}
+	offset = 2 * time.Minute
+	ns.engine.Flush()
+	if len(sent) != 1 || sent[0] != "dev-b" {
+		t.Fatalf("sent for %v, want dev-b alone", sent)
 	}
 }
