@@ -7,7 +7,7 @@ Opened 2026-10-26, on `feat/settings-s0`, after slice F was accepted (F §24). S
 
 It applies every change through F's plans and policy registry.
 
-This note is for Codex's review before it is built; revisions 1 and 2 the same day, after that review and its re-review (§9, §10).
+This note is for Codex's review before it is built; revisions 1 to 3 the same day, after that review and two re-reviews (§9 to §11).
 
 ## 0. What exists
 
@@ -324,18 +324,30 @@ The editor says what infers it, and what would change it: "inferred from the nam
 
 ### 4.5 Apply, and saved, not connected
 
+**The commit gate.** Each cluster's lifecycle has a commit gate: one mutex that orders every decision about the cluster's activation.
+- **Usability events pass through it.** A connection never calls into the policy registry from its own state machine. It queues its usability event (`ConnID`, not usable to usable) without blocking. The lifecycle applies the event under the gate: `Release` for a held attempt, or `ConnUp` for an Active cluster's recovery.
+- **No lock order between the gate and a connection's own locks.** The gate is never taken inside a connection's lock. A connection's locks are never taken while the gate is held, except to retire or swap a connection whose callbacks are already queued.
+- **The policy registry still never calls out** (F §1): the gate is the lifecycle's, not the registry's.
+
 **Apply** for every route takes the same locks, in the same order: an edit, `connect`, an addition, a removal, Revert and Retry.
 1. take the fleet Apply lock;
 2. `Reserve` the cluster;
-3. re-plan, and compare the digests;
+3. re-plan, and compare the digests. The plan binds the cluster's epoch and, while Held, the current attempt's `ConnID`;
 4. check the interlock;
-5. for a reconnect, Revert or Retry, prepare the connection from the running entry's terms (§2.6);
-6. write, against the plan's file version;
-7. commit by class (§4.2);
+5. for a reconnect, Revert or Retry, prepare the connection from the running entry's terms (§2.6), outside the gate;
+6. **enter the commit gate,** and decide there, finally:
+   - the cluster's epoch and current attempt are still the ones the plan bound. A usability applied since, a release or a recovery, has moved them: the Apply leaves the gate and refuses with a fresh plan. The file is unchanged, the recovered connection stays current, and its release is recorded exactly once;
+   - write, against the plan's file version;
+   - commit by class (§4.2). For a reconnect, Revert or Retry, that is: retire the old identity, delivering its trusted end (§2.4); then `Hold`, bound to the prepared attempt's `ConnID`;
+7. leave the gate; then swap in and start the prepared connection, and stop the retired one;
 8. `Unreserve`;
 9. release the fleet Apply lock.
 
-A refusal at any step before the write `Unreserve`s and releases the lock, and changes nothing: the activation state, its reason, its epoch and its attempt stay as they were. Endpoint activations take the fleet lock too (§2.6), so they never interleave with a preparation.
+**A usability that arrives after the decision is stale.** It was queued for the retired attempt, so the gate applies it after the decision, finds the hold bound to another attempt, and does nothing.
+
+**A refusal at any step before the write** `Unreserve`s and releases the lock, and changes nothing. The activation state, its reason, its epoch and its attempt stay as they were. A legitimate release that happened meanwhile stays released: `Unreserve` removes only the overlay.
+
+Endpoint activations take the fleet lock too (§2.6), so they never interleave with a preparation.
 
 **A reconnect is held until its connection is usable.**
 - After the write, the cluster is Held ("saved, not connected yet: connecting with context <ctx>"). The new connection is swapped in and starts.
@@ -425,6 +437,9 @@ A refusal at any step before the write `Unreserve`s and releases the lock, and c
   - a refusal before the write leaving the epoch, the arms, the offers and the conversations as they were;
   - Held, then a Retry or Revert refused before its write: still Held, with its reason, epoch and attempt;
   - the current attempt's first usability during another Apply's reservation: released exactly once, and the reserving Apply refused with the new plan;
+  - a Retry or Revert paused inside its preparation, after a successful re-plan, while the held attempt's first usability is delivered: refused with a fresh plan, the file unchanged, the recovered attempt still current, and its release recorded exactly once (Codex's probe);
+  - the same usability delivered at the commit gate, while the decision holds it: applied after the decision, and stale;
+  - an Active cluster's recovery during an edit's preparation: the edit refused with a fresh plan;
   - a refused `connect`: the name still absent;
   - existing AI reads, sends and verifications valid while reserved, and new starts refused;
   - a placement-only Apply leaving the epoch as it was;
@@ -501,3 +516,13 @@ Codex found R1 to R6 resolved as contracts, and requested changes: three residua
 - **Continuing work keeps its outcome.** A continuing request or CLI child keeps its written or unverified outcome and releases its bookkeeping after retirement. Rejecting a retired lease's late resource never discards an outcome already sent.
 - **Work through other connections is listed too.** A fleet comparison's members, and S3a's hosted sources later, depend on other clusters' connections. Their work is listed and ended under those connections as well as the home cluster. The existing read and send fences remain.
 - **A kept credential is usable only under the checks it already has:** its origin, and its credential type.
+
+## 11. Revision 3: Codex's second re-review (2026-10-26)
+
+Codex found RR2 and RR3 resolved, and RR1's state rules resolved. It requested changes: one P2, in the order of RR1's concurrent usability.
+
+| Finding | Change |
+|---|---|
+| **R2-1, P2:** the digest was compared before the preparation, and nothing ordered the write after it with a usability. So a held attempt that became usable during a Revert's preparation would be released, and then replaced by the stale Revert | §4.5: a commit gate per cluster, through which usability events pass. A connection queues its event without blocking, and the lifecycle applies it under the gate. Apply decides inside the gate, after its preparation: the bound epoch and attempt are still current, or it refuses with a fresh plan; then it writes and commits, retiring the old identity and rebinding the hold. A usability that wins first is kept and makes the Apply refuse. One that arrives after is for a retired attempt, and is stale |
+
+**Also noted from the re-review:** a preparation combines the candidate's S2 fields with the running entry's active endpoint terms. Revert restores the last connected S2 fields, without reverting independently activated endpoints.
