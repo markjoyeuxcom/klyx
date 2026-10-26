@@ -536,3 +536,7 @@ Codex requested changes on c0b525c: one P2. It closed RR1, found RR2's revision-
 **Mutation pass:** the shared key restored is caught, in two runs; §18's five are caught again.
 
 Every Go suite, the race suite of `appbridge` (the cleanup probe three times over as well) and golangci-lint (with and without the eval tag) pass; the frontend is unchanged. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit.
+
+## 20. F2a ACCEPT (2026-10-26)
+
+Codex accepted F2a at 8d48475, after the review of e04f25a and three re-reviews, with no remaining findings. R2-1 is closed: each reservation is numbered under the chat's lock and owns its key, so neither a run's result nor its deferred cleanup can remove a newer admission of the same step, and Clear or an AI revision change neither resets the count nor drops a continuing request. Its twelve probes passed three times over under the race detector. F2b builds next: notifications and Git's running copy.
