@@ -104,6 +104,8 @@ func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChanges
 	if !ok {
 		return out, errors.New("the Git cache cannot fetch commits")
 	}
+	// each fetch is admitted when it starts (F2b review, R1)
+	cs = admittedStore{cacheStore: cs, s: s, what: "chat's Git changes"}
 	applied, err := gitcli.SHA(req.Applied)
 	if err != nil {
 		return out, err

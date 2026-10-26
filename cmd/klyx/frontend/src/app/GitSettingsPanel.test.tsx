@@ -230,3 +230,28 @@ describe("GitSettingsPanel drift", () => {
     expect(bridge.applyGit).not.toHaveBeenCalled();
   });
 });
+
+// F2b review, R2-R3: a lost answer is not a refusal, and a removal whose
+// cache could not be cleared says so.
+describe("GitSettingsPanel outcomes", () => {
+  it("says a lost answer is not known, and reads again", async () => {
+    bridge.getGitSettings.mockResolvedValue(state());
+    bridge.removeGitRepo.mockResolvedValue({ ok: false, unknown: true, error: "lost bridge answer" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    const msg = await screen.findByTestId("git-message");
+    expect(msg.textContent).toContain("whether it applied is not known");
+    expect(msg.textContent).not.toContain("Removed");
+    await waitFor(() => expect(bridge.getGitSettings).toHaveBeenCalledTimes(2));
+  });
+
+  it("says a removal whose cache could not be cleared", async () => {
+    bridge.getGitSettings.mockResolvedValue(state());
+    bridge.removeGitRepo.mockResolvedValue({ ok: true, note: "the approval was removed, but its cache could not be cleared: busy" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    expect((await screen.findByTestId("git-message")).textContent).toContain("could not be cleared");
+  });
+});

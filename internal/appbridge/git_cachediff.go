@@ -72,6 +72,8 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 	if !ok {
 		return FluxDiffDTO{}, false
 	}
+	// each fetch is admitted when it starts (F2b review, R1)
+	cs = admittedStore{cacheStore: cs, s: s, what: "the cache diff"}
 	d := FluxDiffDTO{Available: true, Via: "cache"}
 	fail := func(format string, a ...any) (FluxDiffDTO, bool) {
 		d.Error = gitcli.Scrub(fmt.Sprintf(format, a...))

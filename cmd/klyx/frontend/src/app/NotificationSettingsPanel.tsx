@@ -7,7 +7,7 @@ import {
   type NotificationSettings,
   type NotificationsState,
 } from "../bridge/notifications";
-import type { ApplyResult, Plan } from "../bridge/plan";
+import { lostAnswer, type ApplyResult, type Plan } from "../bridge/plan";
 import { PlanView } from "../settings/PlanView";
 import { SettingField } from "../settings/SettingField";
 
@@ -33,29 +33,38 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
 
-  const load = async () => {
+  const load = async (): Promise<boolean> => {
     const v = await getNotificationSettings();
-    if (v) {
-      setSt(v);
-      onSettings?.(v.inUse);
-    } else setLoadFailed(true);
+    setLoadFailed(v === null);
+    if (!v) return false;
+    setSt(v);
+    onSettings?.(v.inUse);
+    return true;
   };
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // outcome says an Apply's result: a plan that came back is shown for
-  // review, never applied by this
-  const outcome = (r: ApplyResult, okText: string) => {
-    if (r.plan) {
+  // settle says an Apply's result and reads back what runs. A plan that
+  // came back is shown for review, never applied by this; a refusal
+  // restores what was shown; a lost answer is not a refusal, so what runs
+  // is read back and said as such (F2b review, R3).
+  const settle = async (r: ApplyResult, okText: string, prev?: NotificationsState) => {
+    if (r.unknown) {
+      const read = await load();
+      setMessage({ kind: "error", text: read ? `${lostAnswer(r)}: what is shown is what runs now.` : `${lostAnswer(r)}.` });
+    } else if (r.plan) {
       setPlan(r.plan);
       setMessage(r.error ? { kind: "error", text: `Not applied: ${r.error}` } : null);
+      if (prev) setSt(prev);
     } else if (!r.ok) {
       setMessage({ kind: "error", text: `Not applied: ${r.error ?? "unknown error"}` });
+      if (prev) setSt(prev);
     } else {
       setPlan(null);
       setMessage(r.note ? { kind: "warn", text: r.note } : { kind: "ok", text: okText });
+      await load();
     }
   };
 
@@ -66,9 +75,7 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
     setBusy(true);
     const r = await applyNotificationsQuiet(next);
     setBusy(false);
-    outcome(r, "Applied: nothing running ends.");
-    if (r.ok) await load();
-    else setSt(prev);
+    await settle(r, "Applied: nothing running ends.", prev);
   };
 
   const adoptFile = async () => {
@@ -84,6 +91,14 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
   const s = st.inUse;
   return (
     <div data-testid="notification-settings" style={{ display: "grid", gap: 4 }}>
+      {loadFailed && (
+        // a reread after a change failed: what is shown is no longer known
+        // to be what runs
+        <div data-testid="notifications-reread-failed" style={notice}>
+          <span>▲ Klyx could not read the notification settings again: what is shown is as last read and may be out of date.</span>
+          <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
       {st.fileError && <div data-testid="notifications-file-error" style={notice}>▲ fleet.yaml cannot be read: {st.fileError}</div>}
       {st.diverged && (
         <div data-testid="notifications-diverged" style={notice}>
@@ -124,8 +139,7 @@ export function NotificationSettingsPanel({ onSettings }: { onSettings?: (s: Not
             setBusy(true);
             const r = await applyNotifications(plan.digest);
             setBusy(false);
-            outcome(r, "Applied: these are the notification settings in use.");
-            if (r.ok) await load();
+            await settle(r, "Applied: these are the notification settings in use.");
             return r;
           }}
           onCancel={() => setPlan(null)}

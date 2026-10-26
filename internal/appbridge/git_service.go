@@ -36,7 +36,14 @@ type GitService struct {
 	git      gitcli.Git
 	helpers  gitcli.Helpers
 	store    gitStore
-	fetching map[string]time.Time // a fetch in flight, by URL: when it started
+	fetching map[string]time.Time // a history refresh in flight, by URL: when it started
+	// acquiring: the consumers' commit and content acquisitions in flight
+	// (the cache diff's, chat's), by admission number
+	acquiring map[uint64]gitAcq
+	acqSeq    uint64
+	// applying: an Apply of the Git settings is deciding; no acquisition
+	// is admitted until it has published (F2b review, R1)
+	applying bool
 	// run is the running copy of fleet.yaml's git block (Settings slice F
 	// §5): initialized from the startup configuration, read by every
 	// consumer, replaced whole only by an Apply - never changed in place;
@@ -103,7 +110,7 @@ func NewGitService(ctx context.Context, d GitDeps) *GitService {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &GitService{d: d, ctx: ctx, fetching: map[string]time.Time{}, wake: make(chan struct{}, 1), cache: newPlanCache(time.Now),
+	s := &GitService{d: d, ctx: ctx, fetching: map[string]time.Time{}, acquiring: map[uint64]gitAcq{}, wake: make(chan struct{}, 1), cache: newPlanCache(time.Now),
 		lineGit: LineGitDTO{State: LineGitChecking, Reason: "Git is still starting", Stations: []LineGitStationDTO{},
 			Ledger: []LineGitCommitDTO{}, Only: []LineGitOnlyDTO{}}}
 	if d.Initial != nil {
@@ -459,16 +466,10 @@ func (s *GitService) ApproveGitRepo(url, web, serves string) ApplyResultDTO {
 // RemoveGitRepo withdraws an approval and clears its cache.
 func (s *GitService) RemoveGitRepo(url string) ApplyResultDTO {
 	url = strings.TrimSpace(url)
-	res := s.editGit(gitEdit{Op: gitRemove, URL: url})
-	if !res.OK {
-		return res
+	if !s.isApproved(url) {
+		return ApplyResultDTO{Error: "no approved repository has this URL"}
 	}
-	if store, err := s.gitOn(); err == nil {
-		if err := store.Clear(s.ctx, url); err != nil {
-			return ApplyResultDTO{Error: "the approval was removed, but its cache could not be cleared: " + err.Error()}
-		}
-	}
-	return res
+	return s.editGit(gitEdit{Op: gitRemove, URL: url})
 }
 
 // SetGitRepoMatch adds (on) or removes an explicit repository key an entry
@@ -478,7 +479,18 @@ func (s *GitService) SetGitRepoMatch(url, key string, on bool) ApplyResultDTO {
 	if err := config.ValidRepoKey(key); err != nil {
 		return ApplyResultDTO{Error: "match: " + err.Error()}
 	}
+	if !s.isApproved(url) {
+		return ApplyResultDTO{Error: "no approved repository has this URL"}
+	}
 	return s.editGit(gitEdit{Op: gitMatch, URL: url, Key: key, On: on})
+}
+
+// isApproved: url is an entry the running copy approves. Only such a URL
+// becomes an edit, so no plan or cache entry carries an entry Klyx
+// ignores, which may hold a token (F2b review, R4).
+func (s *GitService) isApproved(url string) bool {
+	repos, _ := s.approved()
+	return slices.ContainsFunc(repos, func(r config.GitRepoConfig) bool { return r.URL == url })
 }
 
 // FetchGitRepo is "Fetch now": a history refresh of the entry's tracked
@@ -491,7 +503,7 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 	}
 	repos, _ := s.approved()
 	if !slices.ContainsFunc(repos, func(r config.GitRepoConfig) bool { return r.URL == url }) {
-		return ActionResultDTO{Error: "only an approved repository is fetched"}
+		return ActionResultDTO{Error: errNotApprovedFetch.Error()}
 	}
 	owner, _ := keyOwners(repos)
 	refs, notes := trackedRefs(url, owner, s.lineKey(), s.d.Override)
@@ -502,19 +514,15 @@ func (s *GitService) FetchGitRepo(url string) ActionResultDTO {
 }
 
 // fetch runs one history refresh, one per repository at a time, and
-// recomputes the line's ordering after it.
+// recomputes the line's ordering after it. It is admitted when it starts,
+// under the running copy as it is then (F2b review, R1).
 func (s *GitService) fetch(store gitStore, url string, refs []gitcli.Ref) ActionResultDTO {
-	s.mu.Lock()
-	if _, ok := s.fetching[url]; ok {
-		s.mu.Unlock()
-		return ActionResultDTO{Error: "a fetch of this repository is already running"}
+	release, err := s.admitFetch(url)
+	if err != nil {
+		return ActionResultDTO{Error: err.Error()}
 	}
-	s.fetching[url] = s.d.Now()
-	s.mu.Unlock()
 	defer func() {
-		s.mu.Lock()
-		delete(s.fetching, url)
-		s.mu.Unlock()
+		release()
 		s.wakeLine()
 	}()
 	if err := store.RefreshHistory(s.ctx, url, refs); err != nil {

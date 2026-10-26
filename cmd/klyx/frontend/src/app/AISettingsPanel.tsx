@@ -20,7 +20,7 @@ import {
   type AITest,
   type AIModel,
 } from "../bridge/aiSettings";
-import type { ApplyResult, Plan } from "../bridge/plan";
+import { lostAnswer, type ApplyResult, type Plan } from "../bridge/plan";
 import { SettingField } from "../settings/SettingField";
 import { PlanView } from "../settings/PlanView";
 import { setSectionDraft } from "../settings/navGuard";
@@ -208,6 +208,13 @@ export function AISettingsPanel({ onState }: { onState?: (s: AISettingsState) =>
     const work = (async () => {
       const r = await call();
       setBusy(false);
+      if (r.unknown) {
+        // the answer was lost: what is in use is read back, never said
+        // refused (F2b review, R3)
+        setMessage({ kind: "error", text: `${lostAnswer(r)}: what is in use was read again.` });
+        await load(true);
+        return false;
+      }
       if (r.ok) {
         setPlan(null);
         setMessage({ kind: "ok", text: okText });

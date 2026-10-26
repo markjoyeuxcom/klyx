@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,100 @@ import (
 // running copy and applied against the file version it was planned from.
 // An explicit action is its own confirmation: it applies at once when its
 // plan ends nothing and needs no interlock, which in F2 none does.
+//
+// Every acquisition from a repository - a history refresh, the cache
+// diff's and chat's commit and content fetches - is admitted when it
+// starts, under the running copy as it is then: refused while an Apply
+// decides, or once its repository is not approved, and registered before
+// the lock is released. So an Apply's plan names each acquisition in
+// flight, and none starts after a revocation (F2b review, R1).
+
+// gitAcq is one commit or content acquisition in flight.
+type gitAcq struct {
+	url, what string
+	started   time.Time
+}
+
+var (
+	errGitApplying      = errors.New("the Git settings are being applied; try again in a moment")
+	errNotApprovedFetch = errors.New("only an approved repository is fetched")
+)
+
+// admissibleLocked: an acquisition from url may start now.
+func (s *GitService) admissibleLocked(url string) error {
+	if s.applying {
+		return errGitApplying
+	}
+	repos, _ := approvedOf(s.run)
+	if !slices.ContainsFunc(repos, func(r config.GitRepoConfig) bool { return r.URL == url }) {
+		return errNotApprovedFetch
+	}
+	return nil
+}
+
+// admitFetch admits a history refresh of url, one per repository at a
+// time; release ends it.
+func (s *GitService) admitFetch(url string) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.admissibleLocked(url); err != nil {
+		return nil, err
+	}
+	if _, ok := s.fetching[url]; ok {
+		return nil, errors.New("a fetch of this repository is already running")
+	}
+	s.fetching[url] = s.d.Now()
+	return func() {
+		s.mu.Lock()
+		delete(s.fetching, url)
+		s.mu.Unlock()
+	}, nil
+}
+
+// admitAcquisition admits one commit or content acquisition from url for
+// what; release ends it.
+func (s *GitService) admitAcquisition(url, what string) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.admissibleLocked(url); err != nil {
+		return nil, err
+	}
+	s.acqSeq++
+	n := s.acqSeq
+	s.acquiring[n] = gitAcq{url: url, what: what, started: s.d.Now()}
+	return func() {
+		s.mu.Lock()
+		delete(s.acquiring, n)
+		s.mu.Unlock()
+	}, nil
+}
+
+// admittedStore is the cache as a consumer's acquisitions reach it: each
+// commit or content fetch is admitted when it starts. Reads of what is
+// cached never fetch (GIT_NO_LAZY_FETCH) and need no admission.
+type admittedStore struct {
+	cacheStore
+	s    *GitService
+	what string
+}
+
+func (a admittedStore) EnsureCommit(ctx context.Context, url, sha string) error {
+	release, err := a.s.admitAcquisition(url, a.what)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return a.cacheStore.EnsureCommit(ctx, url, sha)
+}
+
+func (a admittedStore) AcquireIDs(ctx context.Context, url string, ids []string) error {
+	release, err := a.s.admitAcquisition(url, a.what)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return a.cacheStore.AcquireIDs(ctx, url, ids)
+}
 
 // The edits Settings > Git makes.
 const (
@@ -119,9 +214,13 @@ func (s *GitService) planLocked(c gitCandidate, cand config.GitConfig, version s
 	for u, t := range s.fetching {
 		fetching[u] = t
 	}
+	acquiring := make(map[uint64]gitAcq, len(s.acquiring))
+	for n, a := range s.acquiring {
+		acquiring[n] = a
+	}
 	s.mu.Unlock()
 	p := PlanDTO{Section: "git", Kind: c.Kind, FileVersion: version, Changes: gitChanges(run, cand), Ends: []PlanWorkDTO{},
-		Continues: gitContinues(run, cand, fetching), Activates: !config.GitReposEqual(run.Repos, cand.Repos),
+		Continues: gitContinues(run, cand, fetching, acquiring), Activates: !config.GitReposEqual(run.Repos, cand.Repos),
 		Writes: c.Kind == planSave && !config.GitReposEqual(file.Repos, cand.Repos)}
 	if c.Kind == planSave && !config.GitReposEqual(file.Repos, run.Repos) {
 		p.Refused = gitDiverged
@@ -139,22 +238,43 @@ func (s *GitService) planLocked(c gitCandidate, cand config.GitConfig, version s
 // its own confirmation.
 func (s *GitService) editGit(e gitEdit) ApplyResultDTO {
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	r, clear := s.editLocked(e)
+	s.writeMu.Unlock()
+	return s.clearRemoved(r, clear)
+}
+
+func (s *GitService) editLocked(e gitEdit) (ApplyResultDTO, string) {
 	cfg, version, err := s.d.Load(s.d.ConfigPath)
 	if err != nil {
-		return ApplyResultDTO{Error: "fleet.yaml cannot be read, so nothing was written: " + gitcli.Scrub(err.Error())}
+		return ApplyResultDTO{Error: "fleet.yaml cannot be read, so nothing was written: " + gitcli.Scrub(err.Error())}, ""
 	}
 	file := fileGit(cfg)
 	c := gitCandidate{Kind: planSave, Edit: &e}
 	cand, err := s.candidateLocked(c, file)
 	if err != nil {
-		return ApplyResultDTO{Error: err.Error()}
+		return ApplyResultDTO{Error: err.Error()}, ""
 	}
 	p := s.planLocked(c, cand, version, file)
 	if p.Refused != "" {
-		return ApplyResultDTO{Error: p.Refused}
+		return ApplyResultDTO{Error: p.Refused}, ""
 	}
 	return s.applyLocked(p.Digest, true)
+}
+
+// clearRemoved clears a removed repository's cache once its removal has
+// applied, by whichever route applied it - the action, or a replacement
+// plan applied later (F2b review, R2). Outside the settings lock: a fetch
+// in flight finishes first. "Use the file's values" deletes nothing.
+func (s *GitService) clearRemoved(r ApplyResultDTO, url string) ApplyResultDTO {
+	if !r.OK || url == "" {
+		return r
+	}
+	if store, err := s.gitOn(); err == nil {
+		if err := store.Clear(s.ctx, url); err != nil {
+			r.Note = "the approval was removed, but its cache could not be cleared: " + gitcli.Scrub(err.Error())
+		}
+	}
+	return r
 }
 
 // PlanGitFromFile plans "Use the file's values": the file's block, from
@@ -175,43 +295,56 @@ func (s *GitService) PlanGitFromFile() PlanDTO {
 // plan's file version, then made the running copy.
 func (s *GitService) ApplyGit(digest string) ApplyResultDTO {
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.applyLocked(digest, false)
+	r, clear := s.applyLocked(digest, false)
+	s.writeMu.Unlock()
+	return s.clearRemoved(r, clear)
 }
 
-func (s *GitService) applyLocked(digest string, quiet bool) ApplyResultDTO {
+// applyLocked applies digest's plan under the Applying state: no
+// acquisition is admitted from the re-plan, which names those in flight,
+// until the new running copy is published. It returns the URL whose cache
+// a removal clears once applied.
+func (s *GitService) applyLocked(digest string, quiet bool) (ApplyResultDTO, string) {
 	v, ok := s.cache.get(digest)
 	if !ok {
-		return ApplyResultDTO{Error: "This plan expired or was already applied: review the changes again."}
+		return ApplyResultDTO{Error: "This plan expired or was already applied: review the changes again."}, ""
 	}
 	c := v.(gitCandidate)
+	s.mu.Lock()
+	s.applying = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.applying = false
+		s.mu.Unlock()
+	}()
 	cfg, version, err := s.d.Load(s.d.ConfigPath)
 	if err != nil {
-		return ApplyResultDTO{Error: "fleet.yaml cannot be read, so nothing was applied: " + gitcli.Scrub(err.Error())}
+		return ApplyResultDTO{Error: "fleet.yaml cannot be read, so nothing was applied: " + gitcli.Scrub(err.Error())}, ""
 	}
 	file := fileGit(cfg)
 	cand, err := s.candidateLocked(c, file)
 	if err != nil {
-		return ApplyResultDTO{Error: err.Error()}
+		return ApplyResultDTO{Error: err.Error()}, ""
 	}
 	re := s.planLocked(c, cand, version, file)
 	switch {
 	case re.Digest != digest:
-		return ApplyResultDTO{Error: "Something changed since this was planned: review the new plan.", Plan: &re}
+		return ApplyResultDTO{Error: "Something changed since this was planned: review the new plan.", Plan: &re}, ""
 	case re.Refused != "":
 		// unreachable while a refused plan is never cached and its refusal
 		// is in its digest; kept so no refused plan can ever apply
-		return ApplyResultDTO{Error: re.Refused}
+		return ApplyResultDTO{Error: re.Refused}, ""
 	case quiet && (len(re.Ends) > 0 || re.Interlock != nil):
-		return ApplyResultDTO{Plan: &re}
+		return ApplyResultDTO{Plan: &re}, ""
 	}
 	if re.Writes {
 		_, err := s.d.SaveGit(s.d.ConfigPath, version, cand)
 		if errors.Is(err, config.ErrFileChanged) {
-			return ApplyResultDTO{Error: "fleet.yaml changed while this was applied, so nothing was written: review the new plan.", Plan: s.replanLocked(c)}
+			return ApplyResultDTO{Error: "fleet.yaml changed while this was applied, so nothing was written: review the new plan.", Plan: s.replanLocked(c)}, ""
 		}
 		if err != nil {
-			return ApplyResultDTO{Error: gitcli.Scrub(err.Error())}
+			return ApplyResultDTO{Error: gitcli.Scrub(err.Error())}, ""
 		}
 	}
 	s.cache.consume(digest)
@@ -222,7 +355,11 @@ func (s *GitService) applyLocked(digest string, quiet bool) ApplyResultDTO {
 		s.mu.Unlock()
 		s.wakeLine()
 	}
-	return ApplyResultDTO{OK: true}
+	clear := ""
+	if c.Kind == planSave && c.Edit != nil && c.Edit.Op == gitRemove {
+		clear = c.Edit.URL
+	}
+	return ApplyResultDTO{OK: true}, clear
 }
 
 // replanLocked is c's plan from the file as it is now.
@@ -304,10 +441,10 @@ func gitChanges(from, to config.GitConfig) []PlanChangeDTO {
 	return out
 }
 
-// gitContinues is what a change does not stop: a fetch in flight of a
-// repository it stops approving finishes, and nothing reads that history
-// afterwards.
-func gitContinues(from, to config.GitConfig, fetching map[string]time.Time) []PlanWorkDTO {
+// gitContinues is what a change does not stop: an acquisition in flight
+// from a repository it stops approving finishes, and nothing reads that
+// history afterwards. A new one is refused from then on.
+func gitContinues(from, to config.GitConfig, fetching map[string]time.Time, acquiring map[uint64]gitAcq) []PlanWorkDTO {
 	out := []PlanWorkDTO{}
 	ta, _ := approvedOf(to)
 	still := map[string]bool{}
@@ -315,13 +452,23 @@ func gitContinues(from, to config.GitConfig, fetching map[string]time.Time) []Pl
 		still[r.URL] = true
 	}
 	fa, _ := approvedOf(from)
+	stops := map[string]bool{}
 	for _, r := range fa {
-		started, ok := fetching[r.URL]
-		if !ok || still[r.URL] {
-			continue
+		if !still[r.URL] {
+			stops[r.URL] = true
 		}
-		out = append(out, PlanWorkDTO{ID: "fetch:" + r.URL, Kind: "fetch", Started: started.UTC().Format(time.RFC3339),
-			What: "the fetch of " + r.URL + " in progress: it finishes, and its history is no longer used"})
+	}
+	const after = " in progress: it finishes, and its history is no longer used"
+	for url, started := range fetching {
+		if stops[url] {
+			out = append(out, PlanWorkDTO{ID: "fetch:" + url, Kind: "fetch", Started: started.UTC().Format(time.RFC3339), What: "the fetch of " + url + after})
+		}
+	}
+	for n, a := range acquiring {
+		if stops[a.url] {
+			out = append(out, PlanWorkDTO{ID: fmt.Sprintf("acquire:%d:%s", n, a.url), Kind: "fetch", Started: a.started.UTC().Format(time.RFC3339),
+				What: "a fetch from " + a.url + " for " + a.what + after})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

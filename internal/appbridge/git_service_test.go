@@ -31,6 +31,7 @@ type fakeGitStore struct {
 	err       error
 	read      func(url string, fn func(gitcli.Repo) error) error
 	gate      chan struct{} // set: a refresh waits for it to close
+	clearErr  error
 }
 
 func (f *fakeGitStore) Start(context.Context) error { return nil }
@@ -52,7 +53,7 @@ func (f *fakeGitStore) Clear(_ context.Context, url string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cleared = append(f.cleared, url)
-	return nil
+	return f.clearErr
 }
 func (f *fakeGitStore) Size(url string) int64 { return int64(len(url)) }
 func (f *fakeGitStore) Status(url string) gitcache.Status {

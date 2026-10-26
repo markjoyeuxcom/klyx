@@ -26,8 +26,9 @@ export type Plan = {
 
 // Applied; refused with the plan it was replaced by; a quiet Apply's plan,
 // returned for review; or saved, not active. note: applied, with something
-// to know (the OS has notifications off for Klyx).
-export type ApplyResult = { ok: boolean; error?: string; plan?: Plan; savedNotActive?: string; note?: string };
+// to know (the OS has notifications off for Klyx). unknown: the call failed
+// before any answer, so whether it applied is not known.
+export type ApplyResult = { ok: boolean; error?: string; plan?: Plan; savedNotActive?: string; note?: string; unknown?: boolean };
 
 export function refusedPlan(section: string, kind: Plan["kind"], why: string): Plan {
   return { section, kind, digest: "", fileVersion: "", runtime: {}, changes: [], ends: [], continues: [], writes: false, activates: false, refused: why };
@@ -45,11 +46,18 @@ export async function askPlan(section: string, kind: Plan["kind"], call: () => P
   }
 }
 
-// askApply runs an Apply: a failed call is a refusal.
+// askApply runs an Apply. A refusal is the backend's answer; a call that
+// failed before any answer is unknown, never a refusal: the backend may have
+// applied it, so the page reads back what runs (F2b review, R3).
 export async function askApply(call: () => Promise<unknown>): Promise<ApplyResult> {
   try {
     return (await call()) as ApplyResult;
   } catch (e) {
-    return { ok: false, error: why(e) };
+    return { ok: false, unknown: true, error: why(e) };
   }
+}
+
+// lostAnswer says an Apply whose answer was lost.
+export function lostAnswer(r: ApplyResult): string {
+  return `Klyx lost the answer to this (${r.error ?? "no answer"}), so whether it applied is not known`;
 }

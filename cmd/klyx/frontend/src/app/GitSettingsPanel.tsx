@@ -21,7 +21,7 @@ import {
   type GitSource,
   type GitUnapproved,
 } from "../bridge/gitSettings";
-import type { ApplyResult, Plan } from "../bridge/plan";
+import { lostAnswer, type ApplyResult, type Plan } from "../bridge/plan";
 
 // GitSettingsPanel is Settings > Git (The Line slice 6c, slice 6 note §5.3):
 // the repositories Klyx may fetch history from, approved one by one. What
@@ -95,9 +95,18 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
     setMessage(null);
     const r = await fn();
     setBusy(null);
-    if ("plan" in r && r.plan) setPlan(r.plan);
-    else if (r.ok) setPlan(null);
-    setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
+    const a: ApplyResult = r;
+    if (a.plan) setPlan(a.plan);
+    else if (a.ok) setPlan(null);
+    if (a.unknown) {
+      // a lost answer is not a refusal: what runs is read again below (F2b review, R3)
+      setMessage({ kind: "error", text: `${lostAnswer(a)}: what is shown was read again.` });
+    } else if (a.ok && a.note) {
+      // applied, with a part that did not happen (a removal's cache)
+      setMessage({ kind: "error", text: a.note });
+    } else {
+      setMessage(a.ok ? { kind: "ok", text: okText } : { kind: "error", text: a.error || "failed" });
+    }
     await load();
   };
 

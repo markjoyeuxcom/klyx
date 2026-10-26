@@ -1,5 +1,5 @@
 import { AISettingsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
-import { refusedPlan, type ApplyResult, type Plan } from "./plan";
+import { askApply, refusedPlan, type ApplyResult, type Plan } from "./plan";
 
 // Settings > AI (spec 2026-10-13 §2). A key goes in through setAPIKey and
 // never comes back: the state says only whether one is stored, and where.
@@ -68,13 +68,8 @@ async function plan(call: () => Promise<unknown>, kind: Plan["kind"]): Promise<P
   }
 }
 
-async function applied(call: () => Promise<unknown>): Promise<ApplyResult> {
-  try {
-    return (await call()) as ApplyResult;
-  } catch (e) {
-    return { ok: false, error: failed(e).error };
-  }
-}
+// a lost answer is unknown, never a refusal (F2b review, R3)
+const applied = (call: () => Promise<unknown>): Promise<ApplyResult> => askApply(call);
 
 export const planAI = (d: AISettings) => plan(() => AISettingsService.PlanAI(d), "save");
 // "Use the file's values": the file's block, from what runs, writing nothing

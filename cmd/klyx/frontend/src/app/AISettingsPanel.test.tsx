@@ -354,6 +354,18 @@ describe("AISettingsPanel: Claude Code CLI", () => {
     expect(screen.getByTestId("ai-unsaved").textContent).toContain("model-3-unsaved");
   });
 
+  it("says a lost Apply answer is not known, and reads what is in use again (F2b review, R3)", async () => {
+    bridge.getAISettings.mockResolvedValue(state());
+    bridge.applyAI.mockResolvedValue({ ok: false, unknown: true, error: "lost bridge answer" });
+    render(<AISettingsPanel />);
+    await screen.findByTestId("ai-status");
+    fireEvent.change(screen.getByLabelText("AI provider"), { target: { value: "anthropic" } });
+    await reviewAndApply();
+    await waitFor(() => expect(bridge.getAISettings).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/whether it applied is not known: what is in use was read again/)).toBeTruthy();
+    expect(screen.queryByText(/^Applied\./)).toBeNull();
+  });
+
   it("qualifies what is in use when the reread after a Save fails", async () => {
     bridge.getAISettings.mockResolvedValueOnce(state({ persisted: { ...state().persisted, provider: "anthropic", keySource: "keychain" }, active: { backend: "anthropic", ready: true, model: "claude-opus-5-5", origin: "https://api.anthropic.com" } }));
     render(<AISettingsPanel />);
