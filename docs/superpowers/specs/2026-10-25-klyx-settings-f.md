@@ -507,3 +507,18 @@ Codex requested changes on e04f25a: six P2. It accepted §16's differences - the
 **Mutation pass:** 11 mutants of the fixes - each kind's candidate and Revert's eligibility and key, Clear's version, the step's request and verification by phase, what continues, the activation flag and its use on the page, and the late replacement - 11 caught. §16's 34 that still apply, rerun on this revision (three re-specified where their lines moved): 34 caught.
 
 Every Go suite, the race suites of `appbridge` and `config`, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass, but for one flake outside this slice: `internal/observe`'s `TestRekeyStartsAnUnreadCollection` asserts the order of its keyed reads and fails about 3 in 40 runs, on main as well. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit.
+
+## 18. F2a revision 2: Codex's re-review (2026-10-25)
+
+Codex requested changes on 13fc529: two residual P2 in R4. It closed R1-R3, R5 and R6. §17 overstated R4 as bound "by plan": the step's identity held its conversation, number and phase only.
+
+| Finding | Change |
+|---|---|
+| **RR1:** two plans' steps with the same number shared an identity, so a stale confirmation applied after another plan's step took the first's place | a step is named by its conversation, the exchange that proposed its plan, its number and its phase (`step:<conversation>:<exchange>:<n>:request` and `…:verify`), and said by the turn that proposed it ("step 1 of the action plan proposed in turn 2 on lab") |
+| **RR2:** a confirmed request still in flight disappeared from Continues once an AI Apply moved its conversation's revision | the chat keeps the confirmed requests it admitted in their own record, from the run's reservation until its write returns or the run is refused, whatever the conversation's revision; a plan names each under Continues. The conversation, its turn, its offer and an already-ended verification stay out, as before |
+
+**Tests added:** Codex's two probes, adopted (`appbridge/ai_plan_review_test.go`): another plan's step 1 moves the digest, its identity differing as well as its words, and the stale Apply is refused; a request blocked across one AI Apply is still named by the next plan, and not once it returned. Beside them, a run refused before its write leaves no request named.
+
+**Mutation pass:** 5 mutants - a step named without its plan, the wording without its turn, the requests left unnamed, a request never recorded, and a refused run keeping its request - 5 caught. The first needed the test to compare the identities themselves: the turn in the wording alone already moved the digest.
+
+Every Go suite, the race suite of `appbridge` and golangci-lint (with and without the eval tag) pass; the frontend is unchanged in this revision. The native smoke passed 212/212, night and day at 1440 and 1024, on this revision before its commit.
