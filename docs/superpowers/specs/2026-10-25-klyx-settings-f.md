@@ -540,3 +540,75 @@ Every Go suite, the race suite of `appbridge` (the cleanup probe three times ove
 ## 20. F2a ACCEPT (2026-10-26)
 
 Codex accepted F2a at 8d48475, after the review of e04f25a and three re-reviews, with no remaining findings. R2-1 is closed: each reservation is numbered under the chat's lock and owns its key, so neither a run's result nor its deferred cleanup can remove a newer admission of the same step, and Clear or an AI revision change neither resets the count nor drops a continuing request. Its twelve probes passed three times over under the race detector. F2b builds next: notifications and Git's running copy.
+
+## 21. F2b as built (2026-10-26)
+
+F2b completes F2: notifications and Git, each run from a running copy, changed through plans, with drift and "Use the file's values".
+
+| Contract | Code |
+|---|---|
+| §5 file versions | `config.SaveNotificationsAt` and `config.SaveGitAt` write against a plan's file version; `config.GitReposEqual` |
+| §5 notifications' running copy | `NotificationsService.settings`, normalized, with its revision; initialized from the startup configuration as before. `Settings` returns it with `Diverged` and `FileError` |
+| §5 notification plans | `planLocked` from what runs; `ApplyNotificationsQuiet` (a toggle), `PlanNotificationsFromFile` and `ApplyNotifications(digest)`; activation sets the engine |
+| §5 Git's running copy | `GitService.run` and its revision, from `GitDeps.Initial` (`cfg.Git` in `main`). Every consumer reads it through `approved()`: the settings view, Fetch now, the fetch cadence, the line, the cache diff, chat's Git changes and "not here yet" |
+| §5 Git plans | `appbridge/git_settings_apply.go`: `gitEdit` (approve, remove, alias) as data, `editGit` applying it at once, `PlanGitFromFile` and `ApplyGit(digest)`. An Apply swaps the running copy and orders the line again |
+| §6 the frontend | `NotificationSettingsPanel`: toggles through `applyNotificationsQuiet`, saying "Applied: nothing running ends.". `GitSettingsPanel`: an action's returned plan is shown, never applied by the page. In both, a drift notice with "Use the file's values" and `PlanView`. `bridge/plan.ts`: `askPlan`, `askApply` and the result's `note` |
+
+**Where the build differs or adds:**
+- **The block condition is part of the plan.**
+  - The toggles and Git's actions start from what runs, unlike the AI draft, which starts from the file. Writing them over a hand edit would replace an edit the person never saw.
+  - So while the file's block differs from the one in use, a change is refused: "…differ from the ones in use, so nothing was written: use the file's values first, or undo that edit".
+  - This replaces notifications' "restart Klyx to use the file's settings". `ErrNotificationsEdited` is gone, and with it `SaveNotifications`' `prev`.
+  - The write's file version holds the condition until the moment of the write.
+- **An action is its own confirmation.** A toggle, an approval, a removal and an alias are each planned and applied in one call, when the plan ends nothing and needs no interlock; in F2 none ends anything. Otherwise the plan comes back and the page shows it, applying nothing.
+- **Neither section has a saved-not-active state.** Their activation (setting the engine, or swapping the running copy) cannot fail after the write, so there is nothing to Retry or Revert.
+- **Neither section takes an interlock:** the redesign's §1.5 names none for them.
+- **What a Git change continues:** a fetch in flight of a repository the change stops approving. It finishes, and nothing reads that history afterwards. A removal then clears its cache, as before; "Use the file's values" deletes nothing. Nothing ends.
+- **No Git plan or cache entry holds an ignored entry's text.** An entry Klyx ignores may carry a token.
+  - A Git candidate is the edit as data, or "the file's values", made again at Apply.
+  - The plan counts ignored entries ("Entries Klyx ignores: 2 → 3") and never names them.
+- **A failed read of fleet.yaml no longer empties Settings > Git:** the settings in use are shown, with "fleet.yaml cannot be read".
+- **The notifications service's API:**
+  - `Settings` returns `{inUse, diverged, fileError}`.
+  - `SetSettings` is replaced by `ApplyNotificationsQuiet`.
+  - The OS permission refusal is now the result's `note`, no longer an error on a successful save.
+- **The registry:** both sections' save text says a hand edit takes effect through "Use the file's values" or at a restart.
+- **The smoke** gains a step: Settings > Git adds an alias to one of the smoke fleet's entries and removes it again. Each is a plan applied by its own action, and the file and the running copy agree after both. Notifications are not toggled in the smoke: enabling them would ask the OS for permission on the screen.
+
+**Tests:**
+- **The file version:** a notifications or Git write under another version refuses, and leaves the file as it is.
+- **Notifications:**
+  - a hand edit is drift: the engine does not run it; a toggle is refused and the file left as it is;
+  - "Use the file's values" plans the file's values, writes nothing and applies them to the engine, consumed once;
+  - a toggle writes again once the file's values are adopted;
+  - a moved file refuses with a replacement that adopts the file as it is now;
+  - an earlier revision refuses, even with the same file version and changes;
+  - an edit between the re-plan and the write refuses the toggle, and leaves the engine as it was.
+- **Git:**
+  - a hand edit is drift for every consumer, until adoption: the settings view, Fetch now, the cadence, the line, chat's Git changes, "not here yet" and the cache diff;
+  - an edit under drift is refused, and a refused removal clears no cache;
+  - adoption writes nothing, and the line orders again without a new line;
+  - a moved file, and an earlier revision, refuse with a replacement;
+  - a write under another version refuses, and the running copy's aliases are untouched;
+  - a fetch in flight is named under Continues, and its ending moves the plan;
+  - no ignored entry's text appears in a plan or a cache entry;
+  - an applied plan leaves the cache.
+- **The frontend:**
+  - the toggle says nothing ends;
+  - the OS refusal is said;
+  - a failed toggle reverts;
+  - for both sections, the drift notice opens the file's plan, and Apply sends that digest;
+  - a replacement plan is shown unapplied;
+  - a plan a toggle or an action returns is shown, never applied.
+
+**Mutation pass:** 43 mutants, 43 caught:
+- the block conditions, writes, activation, revisions, digests, file versions and consumption of both sections;
+- the engine set on activation, and the permission note;
+- each of the seven Git consumers reading the file instead of the running copy;
+- the candidate and its aliases shared with the running copy;
+- the file plan running an edit;
+- the fetch under Continues, the line's wake, and the ignored-entry count;
+- both config writers ignoring the version;
+- the frontend's returned plans, drift notices, the toggle's wording and the digests Apply sends.
+
+Every Go suite, the race suites of `appbridge` and `config` (the F2b tests three times over as well), golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. Two tests outside this slice failed once while the frontend suite ran beside them and passed when rerun alone: `fleetindex`'s heap peak and an `observe` timeout. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
