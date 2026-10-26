@@ -109,8 +109,9 @@ func (g *ProtectGuard) Guard(cluster string) (Ticket, error) {
 		delete(g.armed, cluster)
 		g.mu.Unlock()
 	}
-	// a change in progress or a hold is the more useful refusal
-	if err := notActive(cluster, snap); err != nil {
+	// a change in progress, a hold or a reservation is the more useful
+	// refusal
+	if err := notAdmitting(cluster, snap); err != nil {
 		return Ticket{}, err
 	}
 	if snap.Protected {
@@ -132,6 +133,20 @@ func notActive(cluster string, snap policy.Snapshot) error {
 		return fmt.Errorf("%s's settings are being applied; try again in a moment", cluster)
 	case policy.Held:
 		return fmt.Errorf("%s's settings are saved but not active (%s), so nothing is admitted for it", cluster, snap.Reason)
+	}
+	return nil
+}
+
+// notAdmitting is why new work on the cluster is refused now (Settings S2
+// §4.1): it is not Active, or an Apply holds its reservation. Work admitted
+// before asks notActive and its epoch instead, so a reservation alone
+// leaves it valid.
+func notAdmitting(cluster string, snap policy.Snapshot) error {
+	if err := notActive(cluster, snap); err != nil {
+		return err
+	}
+	if snap.Reserved {
+		return fmt.Errorf("%s is applying a change to its settings; try again in a moment", cluster)
 	}
 	return nil
 }
@@ -205,7 +220,7 @@ func admitNow(cluster string) (policy.Epoch, string) {
 	if !ok {
 		return policy.Epoch{}, "Klyx does not know cluster " + cluster + ", so nothing is admitted for it"
 	}
-	if err := notActive(cluster, snap); err != nil {
+	if err := notAdmitting(cluster, snap); err != nil {
 		return policy.Epoch{}, err.Error()
 	}
 	return snap.Epoch, ""
