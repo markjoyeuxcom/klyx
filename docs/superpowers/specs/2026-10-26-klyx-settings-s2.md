@@ -7,7 +7,7 @@ Opened 2026-10-26, on `feat/settings-s0`, after slice F was accepted (F §24). S
 
 It applies every change through F's plans and policy registry.
 
-This note is for Codex's review before it is built; revision 1 the same day, after that review (§9).
+This note is for Codex's review before it is built; revisions 1 and 2 the same day, after that review and its re-review (§9, §10).
 
 ## 0. What exists
 
@@ -82,10 +82,7 @@ S2 is built in three stages, each leaving a working app and each reviewed on its
 ### 2.1 A connection that stops
 
 - `ClusterConn.Start` derives its own context from the one it is given. `Stop()` cancels it, then waits, bounded, for its loops to return: connect, refresh and reprobe, the capability informers, the node and pod informers, and the parameter kinds and episodes.
-- The health Observer gains `Stop()`: its existing cancel. It publishes its final summary and a BatchEnd, exactly as at quit, and every consumer already handles that end:
-  - the line detaches;
-  - the index ends that generation;
-  - the notification engine closes its episodes.
+- The health Observer gains `Stop()`: its existing cancel. What it publishes after its identity is retired is dropped (§2.4). The end of its generation is delivered by the lifecycle itself, never left to the retired producer (§2.4).
 - **A stopped connection is never usable again.** Its state is Stopped: not usable, never counted as Synced, and `ConnUp` is never called for it.
 
 ### 2.2 The registry: replace, remove, retry
@@ -165,6 +162,18 @@ A retired connection must not publish into its replacement, nor recreate state a
 - **No publication creates state for an unknown or retired identity.** The index's `coordFor` and the per-name maps in the sinks create an entry only for the current identity.
 - **Forgetting keeps the retirement.** A removed cluster's last `ConnID` stays in the retired set. So a late callback after a removal is dropped and recreates nothing, and a re-add installs a new identity above it.
 - **A `Stop` that times out** is logged. The connection is already retired, so whatever it publishes later is dropped.
+- **The binding.** The Observer's identity is bound to its connection's `ConnID` explicitly, when the connection builds it: the Observer is given the `ConnID` as its incarnation. Two counters that both happen to grow are not the same identity. The check and the handoff are one step under the sink's lock, so no publication passes between "is this identity current" and "deliver it".
+
+**The trusted end of a retired identity.** Dropping the retired producer's own final batch must not leave its generation open. So retiring an identity is an ordered, idempotent step of the lifecycle, before the swap:
+1. the identity is marked retired, and its callbacks are dropped from then on;
+2. the lifecycle delivers an end for that identity through the health sink: the same end a final batch carries, issued by the lifecycle, not by the producer. Each listener acts only on the generation it holds for that identity:
+   - the notification engine closes the identity's episodes and drops its pending onsets, so nothing queued by the old connection is sent;
+   - the index ends that generation's ownership;
+   - the line detaches that attachment;
+   - the rows lineage marks it final;
+3. only then is the replacement swapped in and started.
+
+Retained history is not deleted by this end; a reconnect forgets nothing by name. The end never acts on the replacement's state, which has another identity. Delivering it twice is a no-op. Late old final, down, up and data callbacks stay dropped: the new generation is never reopened to them.
 
 ### 2.5 Forgetting a removed cluster
 
@@ -185,6 +194,7 @@ Its endpoint credential revisions are kept as tombstones too, since revisions ar
 ### 2.6 The running fleet
 
 - `ConfigService` holds the running clusters as one list: the startup configuration, then each addition, edit and removal. It carries a revision, and each Apply replaces one entry under it, never the whole list from an older copy.
+- **The running entry's endpoint blocks are the active endpoint terms.** Today Observability's Test activates an endpoint on the connection alone (`SetMetricsConfig` and its siblings), so the startup copy can say an endpoint the connection no longer uses. In S2 every endpoint activation route publishes into the running entry as well: Test, a credential set, cleared or moved. It does so under the fleet lock, moving the running revision, with the credential revision it activated. The running entry and the connection then agree. A reconnect, Retry or Revert prepares its connection from those terms, read under the same lock, so it can never roll back an endpoint activated after startup. No endpoint is adopted from the file by this (§4.6), and the S3 editor is not built.
 - `LiveClusterConfig` and `LiveFleetClusters` read that list, and so does every other runtime reader of a cluster's configuration:
   - the fleet DTOs;
   - the line's placement;
@@ -233,20 +243,33 @@ Its endpoint credential revisions are kept as tombstones too, since revisions ar
 
 ### 4.1 The reservation, and what moves the epoch
 
-Applying a plan must change nothing when it is refused before the write: F §11, and Codex's ruling. F's `Begin` cannot be that gate, because it moves the epoch, and its `Publish` moves the epoch again even when protection is unchanged. So S2 adds a reservation to the policy registry, separate from the committed transition:
+Applying a plan must change nothing when it is refused before the write: F §11, and Codex's ruling. F's `Begin` cannot be that gate, because it moves the epoch, and its `Publish` moves the epoch again even when protection is unchanged. So S2 adds a reservation to the policy registry, separate from the committed transition.
 
-| State | New admissions | What was admitted before | Entered by | Epoch |
-|---|---|---|---|---|
-| **Reserved** | refused: no ticket, no lease, no AI start | stays valid under its epoch | `Reserve(cluster)`, at Apply | unchanged |
-| back to Active | admitted | valid | `Unreserve(cluster)`: a refusal, or a change that moves no epoch | unchanged |
-| Active, moved | admitted under the new epoch | stale | `Advance(cluster, protected)`: a committed protection change | moves once |
-| **Held** | refused | stale | `Hold(cluster, reason)`: a committed reconnect, until it is usable (§4.5) | moves |
-| Active, released | admitted under the new epoch | stale | `Release(cluster, protected)`, by the bound connection's first usability | moves |
+**The reservation is an overlay, not a state.** Each cluster's entry has its activation state (Active, Held, or absent: a name the running fleet does not have yet) and, separately, at most one reservation owned by the Apply that took it.
+- **New admissions** need the activation state Active and no reservation: no ticket, no lease and no AI start otherwise.
+- **What was admitted before** stays valid while only the reservation is added: under its epoch, with the activation state Active.
+- **`Reserve(cluster)`** adds the overlay to any activation state:
+  - Active, for an edit;
+  - Held, for Retry or Revert;
+  - absent, for a `connect` or an addition, which installs a placeholder that admits nothing and is published nowhere.
 
-- **A ticket stays valid while Reserved.** A ticket is valid while its cluster is Active or Reserved, under the epoch it captured. A Reserved cluster refuses new tickets, leases and AI starts. So a manual write admitted before the reservation is not refused by the reservation itself, only by a committed move.
-- **The reviewed baseline is the epoch before the reservation.** The re-plan under the reservation compares the epoch the plan bound with the cluster's epoch, which `Reserve` did not move.
-- **The work snapshot is final under the reservation.** No lease can be acquired while Reserved, so the re-plan's list of work is the list the Apply ends.
-- **F's `Begin`, `Publish` and `Hold` keep their meaning** for any other caller. S2 uses `Reserve`, `Unreserve`, `Advance`, `Hold` and `Release`.
+  It returns the owner token, and never changes the activation state or the epoch.
+- **`Unreserve(token)`** removes the overlay and nothing else. A refused Retry on a Held cluster leaves it Held, with its reason, its epoch and its current attempt's `ConnID`, exactly as it was. A refused `connect` leaves the name absent, the placeholder gone.
+- **The committed transitions** act on the activation state, inside the reservation, and the reservation is released last:
+
+| Transition | Activation state | Epoch |
+|---|---|---|
+| `Advance(cluster, protected)`: a committed protection change | Active, with the new protection | moves once |
+| `Hold(cluster, reason, attempt)`: a committed reconnect, Revert or Retry | Held, bound to that attempt's `ConnID` | moves |
+| `Release(cluster, protected, attempt)`: that attempt's first usability | Active, if the hold is still bound to that attempt; otherwise nothing | moves |
+| `Seed(cluster, protected)` over a placeholder: a committed `connect` or addition | Active, above any tombstone | starts |
+| `Forget(cluster)`: a committed removal | absent, tombstoned | gone |
+
+- **A usability during a reservation is not lost.** The held connection keeps retrying while another Apply holds the reservation, for instance a Revert being decided. Its first usability `Release`s the activation state as usual, bound to its attempt, exactly once, and moves the epoch. New admissions stay refused until the reservation is removed. The Apply holding the reservation then sees the epoch moved at its re-plan, and refuses with the new plan. Removing the reservation never restores an older snapshot over this release.
+- **The reviewed baseline is the epoch before the reservation.** The re-plan compares the epoch the plan bound with the cluster's epoch, which `Reserve` did not move. Only a committed transition, or a release by the current attempt, moves it.
+- **The work snapshot is final under the reservation.** No lease can be acquired while it is held, so the re-plan's list of work is the list the Apply ends.
+- **The predicates are separated.** A new admission asks "Active and not reserved". Existing work asks "its epoch is the cluster's epoch, and the state is not Held". The current `epochProblem` serves both today and is split. That applies to tickets, AI read and send fences and A3 verification alike.
+- **F's `Begin`, `Publish` and `Hold` keep their meaning** for any other caller. S2 uses the overlay and the transitions above.
 
 ### 4.2 The plan
 
@@ -301,20 +324,23 @@ The editor says what infers it, and what would change it: "inferred from the nam
 
 ### 4.5 Apply, and saved, not connected
 
-**Apply** for a plan:
-1. `Reserve` the cluster; on a removal or an addition, take the fleet Apply lock as well;
-2. re-plan, and compare the digests;
-3. check the interlock;
-4. for a reconnect, prepare the connection;
-5. write, against the plan's file version;
-6. commit by class (§4.2).
+**Apply** for every route takes the same locks, in the same order: an edit, `connect`, an addition, a removal, Revert and Retry.
+1. take the fleet Apply lock;
+2. `Reserve` the cluster;
+3. re-plan, and compare the digests;
+4. check the interlock;
+5. for a reconnect, Revert or Retry, prepare the connection from the running entry's terms (§2.6);
+6. write, against the plan's file version;
+7. commit by class (§4.2);
+8. `Unreserve`;
+9. release the fleet Apply lock.
 
-A refusal at any step before the write `Unreserve`s, and changes nothing.
+A refusal at any step before the write `Unreserve`s and releases the lock, and changes nothing: the activation state, its reason, its epoch and its attempt stay as they were. Endpoint activations take the fleet lock too (§2.6), so they never interleave with a preparation.
 
 **A reconnect is held until its connection is usable.**
 - After the write, the cluster is Held ("saved, not connected yet: connecting with context <ctx>"). The new connection is swapped in and starts.
 - Nothing new is admitted while it is held: no ticket, no lease and no AI start, even though the connection's clients exist.
-- **The release is bound to this attempt.** Only the first usability of the connection this attempt prepared releases the hold, identified by its `ConnID`. `Release` then publishes the new protection, and the new terms become the last terms that connected.
+- **The release is bound to this attempt.** Only the first usability of the connection this attempt prepared releases the hold, identified by its `ConnID`. `Release` then publishes the new protection, and the new terms become the last terms that connected. It does so even during another Apply's reservation, as §4.1 says.
 - **A stale attempt changes nothing.** A usability from an earlier attempt, or from a connection Revert or Retry has since replaced, is retired (§2.4), so it neither releases the hold nor replaces the last connected terms.
 - **While held,** Settings says both states, and offers two ways on:
   - **Revert:** a plan back to the last terms that connected. It writes them, and prepares and swaps a connection of its own, held the same way;
@@ -327,7 +353,7 @@ A refusal at any step before the write `Unreserve`s, and changes nothing.
 
 **The field boundary.** "Use the file's values" adopts S2's fields only: context, kubeconfig, group, environment, tags and `protected`.
 - An entry's endpoint blocks (metrics, Alertmanager and Loki) keep their existing route: Observability's Test applies them, as today, until S3. Endpoint drift stays reported where it is now.
-- A reconnect's new connection takes the running entry's endpoint terms, never the file's. So adopting a context never silently adopts an endpoint as well.
+- A reconnect's new connection takes the running entry's endpoint terms: the active ones, including any activated through Observability since startup (§2.6), never the file's. So adopting a context never silently adopts an endpoint, and never rolls one back.
 - The candidate cache holds S2's fields only. A plan that needs the file's whole entry (`connect`) binds the file version, and re-reads the entry at Apply. It never caches the raw entry, which may hold a legacy `metrics.token`.
 
 **The cases:**
@@ -379,6 +405,8 @@ A refusal at any step before the write `Unreserve`s, and changes nothing.
   - every worker acquires one;
   - none is admitted while Reserved or Held.
 - **Retirement:** delayed down, up, final and batch callbacks from a retired connection, across a swap, a removal and a re-add, including after a `Stop` that timed out. Each is dropped, and none recreates state.
+- **The trusted end:** a retired connection's pending notification onset is dropped by the lifecycle's end, never sent while the replacement connects (Codex's probe). The end does not touch the replacement's generation, and delivering it twice is a no-op.
+- **Endpoint terms:** an endpoint activated through Test after startup is in the running entry, and a later reconnect keeps it (Codex's probe). An activation racing a preparation is serialized by the fleet lock.
 - **Protection readers:** all of them agree after a publication.
 
 **S2b:**
@@ -395,6 +423,10 @@ A refusal at any step before the write `Unreserve`s, and changes nothing.
   - protection's effect line, including protection inferred from the name that cannot be loosened;
   - a context that cannot be resolved, refused at plan time, and at Apply before the write;
   - a refusal before the write leaving the epoch, the arms, the offers and the conversations as they were;
+  - Held, then a Retry or Revert refused before its write: still Held, with its reason, epoch and attempt;
+  - the current attempt's first usability during another Apply's reservation: released exactly once, and the reserving Apply refused with the new plan;
+  - a refused `connect`: the name still absent;
+  - existing AI reads, sends and verifications valid while reserved, and new starts refused;
   - a placement-only Apply leaving the epoch as it was;
   - a guard during the reservation refused, and a ticket admitted before it still valid;
   - a reconnect held until its own connection's first usability; a stale usability from an earlier attempt neither releasing nor recording terms; Revert and Retry bound the same way;
@@ -453,3 +485,19 @@ Codex requested changes: five P2 and one P3. It accepted the staging, the founda
 - **The writer's extra cases:** trailing comments, CRLF, document boundaries, and the defaults after a cleared field.
 - **The host check** gates a removal through "Use the file's values" too.
 - **A file emptied by hand** does not load, so it is never adopted as a removal.
+
+## 10. Revision 2: Codex's re-review (2026-10-26)
+
+Codex found R1 to R6 resolved as contracts, and requested changes: three residual P2, where the new reservation, retirement and endpoint rules meet.
+
+| Finding | Change |
+|---|---|
+| **RR1, P2:** `Unreserve` meant "back to Active", so a refused Retry or Revert on a Held cluster would activate it. A usability during a reservation had no rule, and an absent cluster had no reservation | §4.1: the reservation is an overlay owned by its Apply, over an activation state it never changes: Active, Held, or absent with a placeholder. `Unreserve` removes the overlay only. A refused Retry stays Held with its reason, epoch and attempt, and a refused `connect` leaves the name absent. The current attempt's usability during a reservation is released exactly once, and the reserving Apply then refuses with the new plan. §4.5: one lock order for every route |
+| **RR2, P2:** retirement dropped the retired producer's final batch, the only end of its generation, so its pending notifications could still fire | §2.4: retiring is an ordered, idempotent step. The identity is marked retired; then the lifecycle delivers the end of that identity's generation through the health sink, for each listener's generation of that identity only; then the replacement starts. Late producer callbacks stay dropped. The Observer's identity is bound to the `ConnID` explicitly, and the check and the handoff are one step |
+| **RR3, P2:** the running entry's endpoint blocks were not the active endpoint terms. An endpoint activated through Test after startup lived only on the connection, so a reconnect would roll it back | §2.6: every endpoint activation route publishes into the running entry under the fleet lock, with its credential revision. A reconnect, Retry or Revert prepares from those active terms. No file endpoint is adopted by this |
+
+**Also adopted, as acceptance details:**
+- **Separate predicates for new and existing work.** Reserved preserves everything admitted before it: tickets, AI read and send fences, and A3 verification. So `epochProblem`'s single Active-only predicate is split into one for new admissions and one for existing work.
+- **Continuing work keeps its outcome.** A continuing request or CLI child keeps its written or unverified outcome and releases its bookkeeping after retirement. Rejecting a retired lease's late resource never discards an outcome already sent.
+- **Work through other connections is listed too.** A fleet comparison's members, and S3a's hosted sources later, depend on other clusters' connections. Their work is listed and ended under those connections as well as the home cluster. The existing read and send fences remain.
+- **A kept credential is usable only under the checks it already has:** its origin, and its credential type.
