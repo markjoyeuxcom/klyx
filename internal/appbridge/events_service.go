@@ -30,6 +30,7 @@ type EventsService struct {
 	lmu    sync.Mutex
 	leases map[string]*liveEntry // the adopted open, by subscription key
 	seqs   map[string]uint64     // each key's newest open or close
+	closed bool                  // CloseAll: nothing more is admitted
 }
 
 // NewEventsService creates an EventsService with the given cluster-lookup
@@ -57,10 +58,14 @@ const (
 	liveClosed   = "the live events were closed"
 )
 
-// begin makes a new open's entry: the newest for key.
+// begin makes a new open's entry: the newest for key. Nil once CloseAll
+// has run: nothing more is admitted.
 func (s *EventsService) begin(key string) *liveEntry {
 	s.lmu.Lock()
 	defer s.lmu.Unlock()
+	if s.closed {
+		return nil
+	}
 	s.seqs[key]++
 	return &liveEntry{seq: s.seqs[key]}
 }
@@ -211,6 +216,9 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 		where = namespace
 	}
 	e := s.begin(key)
+	if e == nil {
+		return ActionResultDTO{Error: "the live events are shutting down"}
+	}
 	le, err := s.lease(cluster, Work{Kind: "events", What: "live events in " + where + ", opening",
 		End: func(why string) { s.endLive(key, e, liveEvent, why) }})
 	if err != nil {
@@ -255,7 +263,8 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 }
 
 // CloseLiveEvents stops the live subscription - one still opening too.
-// Idempotent.
+// Idempotent. It stops only what it captured: an open admitted after it
+// keeps running (Codex's re-review of S2a, R4-1).
 func (s *EventsService) CloseLiveEvents(cluster, namespace string) {
 	key := "events:" + cluster + ":" + namespace
 	s.lmu.Lock()
@@ -265,12 +274,12 @@ func (s *EventsService) CloseLiveEvents(cluster, namespace string) {
 	if e != nil {
 		s.invalidate(key, e, liveClosed, nil)
 	}
-	s.live.close(key)
 }
 
 // CloseAll stops every live events subscription. Called on app shutdown.
 func (s *EventsService) CloseAll() {
 	s.lmu.Lock()
+	s.closed = true // nothing more is admitted, so the sweep below stops only what this closes (R4-1)
 	for key := range s.seqs {
 		s.seqs[key]++ // opens still taking their lease lose
 	}

@@ -83,7 +83,7 @@ func (s *liveSub) cancelled() bool {
 // Lifecycle / leak-safety: each open spawns exactly one loop goroutine plus the
 // WatchDirty supervisor goroutines. The loop exits on exactly one signal
 // (sub.cancel closed), at which point it stops the watch and closes done. open
-// replacing the same key, close(key), and closeAll all converge on that single
+// replacing the same key, detach, and closeAll all converge on that single
 // exit path. interval is a field (not a const) so tests can drive a 10ms ticker.
 type liveRegistry struct {
 	interval time.Duration
@@ -397,17 +397,6 @@ func (r *liveRegistry) detach(key string, sub *liveSub, detached func()) bool {
 		detached()
 	}
 	return true
-}
-
-// close stops the subscription for key. Idempotent: an unknown key is a no-op.
-func (r *liveRegistry) close(key string) {
-	r.mu.Lock()
-	sub := r.subs[key]
-	delete(r.subs, key)
-	r.mu.Unlock()
-	if sub != nil {
-		r.stopSub(sub)
-	}
 }
 
 // closeAll stops every subscription and waits briefly for each to drain. Called

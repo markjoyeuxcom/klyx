@@ -697,3 +697,27 @@ Codex found R2-2 resolved, and R2-1's registration window fixed. It requested ch
 - One case of its own: a reopen refused at admission keeps the working subscription.
 
 **Mutation pass:** 4 mutants of the fixes, all caught.
+
+## 18. S2a revision 5: Codex's fourth re-review (2026-10-26)
+
+Codex found R3-1 and R3-2 resolved: the order of opens and the atomic adoption close the handoff. It requested changes: one P2 in the closes.
+
+| Finding | Fix |
+|---|---|
+| **R4-1:** `CloseLiveEvents` and `CloseAll` ended with a sweep of the key, or of the whole registry. Neither sweep was bound to the entries the close had captured, so an open admitted while the close finished could be stopped, while its entry stayed current and its lease held | `CloseLiveEvents` stops only what it captured: invalidating the entry already stops and detaches that entry's own subscription, so the key-wide sweep is gone, and with it the registry's key-wide `close`. An open admitted after it keeps running. `CloseAll`, at shutdown, marks the service closed in the same step as its snapshot, so nothing more is admitted, and its sweep can stop only what it closes |
+
+**Tests:** Codex's probe, for both closes, as a regression test. **Mutation pass:** 2 mutants, both caught.
+
+## 19. ACCEPT: S2a (2026-10-26)
+
+Codex accepted S2a at revision 5 (3c08253), with no remaining findings. That came after the review of 50fa962 (seven P2) and five re-reviews (§14-§18).
+
+It checked the shutdown path with a probe of its own:
+- an adopted subscription drains;
+- an acquisition still returning is refused and releases its lease;
+- later opens on old and new keys are refused before any lease is taken;
+- a repeated `CloseAll` stays closed.
+
+The earlier fixes (the lease handoff, member admissions, the token transfer and the delivery fence) remain supported by their regression tests.
+
+S2a was merged to `main` in #57 at revision 4, at the owner's request; revision 5 follows in #58. S2b builds next.
