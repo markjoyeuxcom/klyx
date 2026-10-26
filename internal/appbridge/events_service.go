@@ -28,22 +28,25 @@ type EventsService struct {
 	live   *liveRegistry
 
 	lmu    sync.Mutex
-	leases map[string]*liveEntry // by subscription key
+	leases map[string]*liveEntry // the adopted open, by subscription key
+	seqs   map[string]uint64     // each key's newest open or close
 }
 
 // NewEventsService creates an EventsService with the given cluster-lookup
 // function and event emitter (for the live-list subscription).
 func NewEventsService(lookup func(string) (EventsConn, bool), em Emitter) *EventsService {
-	return &EventsService{lookup: lookup, lease: plainLeaser(lookup), em: em, live: newLiveRegistry(), leases: map[string]*liveEntry{}}
+	return &EventsService{lookup: lookup, lease: plainLeaser(lookup), em: em, live: newLiveRegistry(), leases: map[string]*liveEntry{}, seqs: map[string]uint64{}}
 }
 
 func (s *EventsService) setLeaser(l leaser) { s.lease = l }
 
-// liveEntry is one live subscription and the lease it runs on, made before
-// the lease is taken: its End finds the subscription by this identity,
-// never by key, so an old connection's end never touches a replacement
-// opened on the same key (Codex's review of S2a, F1-F2). Guarded by lmu.
+// liveEntry is one live events open, made - with its place in the key's
+// order of opens - before its lease is taken (Codex's re-review of S2a,
+// R3-1): its End finds it by this identity; a newer open or a close
+// displaces it wherever it is; and it adopts its lease only while it has
+// not ended and is still the newest open. Every field is guarded by lmu.
 type liveEntry struct {
+	seq   uint64
 	le    *Lease
 	sub   *liveSub
 	ended string // why it may not run: its connection ended it, or it was replaced or closed
@@ -54,40 +57,51 @@ const (
 	liveClosed   = "the live events were closed"
 )
 
-// keep makes e key's entry. The entry it replaces is invalidated - marked,
-// its own subscription stopped, its lease released - so an older open
-// still starting never registers over e (Codex's re-review of S2a, R2-1).
-func (s *EventsService) keep(key string, e *liveEntry) {
+// begin makes a new open's entry: the newest for key.
+func (s *EventsService) begin(key string) *liveEntry {
 	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	s.seqs[key]++
+	return &liveEntry{seq: s.seqs[key]}
+}
+
+// adopt makes e, with its lease, key's entry - only while e has not ended
+// and no newer open or close came since; the entry it replaces is
+// invalidated. Refused, e takes nothing, the current entry is untouched,
+// and the caller releases le.
+func (s *EventsService) adopt(key string, e *liveEntry, le *Lease) string {
+	s.lmu.Lock()
+	if e.ended == "" && s.seqs[key] != e.seq {
+		e.ended = liveReplaced
+	}
+	if e.ended != "" {
+		why := e.ended
+		s.lmu.Unlock()
+		return why
+	}
 	old := s.leases[key]
-	s.leases[key] = e
+	s.leases[key], e.le = e, le
 	s.lmu.Unlock()
 	if old != nil && old != e {
 		s.invalidate(key, old, liveReplaced, nil)
 	}
+	return ""
 }
 
-// take removes key's entry, and returns it (nil: none).
-func (s *EventsService) take(key string, e *liveEntry) *liveEntry {
-	s.lmu.Lock()
-	defer s.lmu.Unlock()
-	cur := s.leases[key]
-	if cur == nil || (e != nil && cur != e) {
-		return nil
-	}
-	delete(s.leases, key)
-	return cur
-}
-
-// invalidate stops e for why: marked first, so its open - wherever it is -
-// refuses; then its own subscription is stopped and detached, never
-// another's, with notice sent as it detaches; then its lease is released.
+// invalidate stops e for why: marked, out of key's place if it holds it,
+// its own subscription stopped and detached - never another's - with
+// notice sent as it detaches, then its lease released. What it stops is
+// captured under the lock; a lease not adopted yet is released by its
+// open, which finds e ended (Codex's re-review of S2a, R3-2).
 func (s *EventsService) invalidate(key string, e *liveEntry, why string, notice func()) {
 	s.lmu.Lock()
 	if e.ended == "" {
 		e.ended = why
 	}
-	sub := e.sub
+	if s.leases[key] == e {
+		delete(s.leases, key)
+	}
+	sub, le := e.sub, e.le
 	s.lmu.Unlock()
 	if sub != nil {
 		if s.live.detach(key, sub, notice) {
@@ -100,8 +114,8 @@ func (s *EventsService) invalidate(key string, e *liveEntry, why string, notice 
 			}
 		}
 	}
-	if e.le != nil {
-		e.le.Release()
+	if le != nil {
+		le.Release()
 	}
 }
 
@@ -112,19 +126,15 @@ func (s *EventsService) endedWhy(e *liveEntry) string {
 	return e.ended
 }
 
-// bind records e's subscription, and says why it must not run: its
-// connection ended it, or it no longer holds key's place - a newer open
-// replaced it, or it was closed. Then e is dropped, and the caller
-// releases its lease; the subscription never starts.
+// bind records e's subscription, and says why it must not run: e ended,
+// or no longer holds key's place. The caller then invalidates e; the
+// subscription never starts.
 func (s *EventsService) bind(key string, e *liveEntry, sub *liveSub) string {
 	s.lmu.Lock()
 	defer s.lmu.Unlock()
 	e.sub = sub
 	if e.ended == "" && s.leases[key] != e {
 		e.ended = liveReplaced
-	}
-	if e.ended != "" && s.leases[key] == e {
-		delete(s.leases, key)
 	}
 	return e.ended
 }
@@ -133,10 +143,9 @@ func (s *EventsService) bind(key string, e *liveEntry, sub *liveSub) string {
 // subscription is detached and the page told why, under the registry's
 // lock, so the notice never lands after a replacement opened; the watch
 // stops off the lifecycle's path. A subscription still starting is
-// stopped, so it never registers, reads or emits; not yet bound, e is
-// marked, and bind refuses it (Codex's re-review of S2a, RR1).
+// stopped, so it never registers, reads or emits; an open not yet adopted
+// finds itself ended and refuses (Codex's re-reviews of S2a, RR1, R3-1).
 func (s *EventsService) endLive(key string, e *liveEntry, liveEvent, why string) {
-	s.take(key, e)
 	s.invalidate(key, e, why, func() { s.em.Emit(liveEvent, liveStatusDTO{Live: false, Ended: why}) })
 }
 
@@ -201,7 +210,7 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 	if namespace != "" {
 		where = namespace
 	}
-	e := &liveEntry{}
+	e := s.begin(key)
 	le, err := s.lease(cluster, Work{Kind: "events", What: "live events in " + where + ", opening",
 		End: func(why string) { s.endLive(key, e, liveEvent, why) }})
 	if err != nil {
@@ -212,8 +221,10 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 		le.Release()
 		return ActionResultDTO{Error: "cluster not connected: " + cluster}
 	}
-	e.le = le
-	s.keep(key, e)
+	if why := s.adopt(key, e, le); why != "" {
+		le.Release()
+		return ActionResultDTO{Error: "the live events ended: " + why}
+	}
 
 	// the subscription is named and bound before anything starts: one whose
 	// connection ended it already starts nothing, and an end that comes
@@ -221,7 +232,7 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 	// of S2a, RR1). Its reads run under the lease's context.
 	sub := newLiveSub()
 	if why := s.bind(key, e, sub); why != "" {
-		le.Release()
+		s.invalidate(key, e, why, nil)
 		return ActionResultDTO{Error: "the live events ended: " + why}
 	}
 	s.live.openSub(key, sub,
@@ -237,7 +248,6 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 	}
 	if err := le.Settle("live events in " + where); err != nil {
 		// retired meanwhile: this subscription, never a replacement
-		s.take(key, e)
 		s.invalidate(key, e, err.Error(), nil)
 		return ActionResultDTO{Error: err.Error()}
 	}
@@ -248,7 +258,11 @@ func (s *EventsService) OpenLiveEvents(cluster, namespace string) ActionResultDT
 // Idempotent.
 func (s *EventsService) CloseLiveEvents(cluster, namespace string) {
 	key := "events:" + cluster + ":" + namespace
-	if e := s.take(key, nil); e != nil {
+	s.lmu.Lock()
+	s.seqs[key]++ // an open still taking its lease loses
+	e := s.leases[key]
+	s.lmu.Unlock()
+	if e != nil {
 		s.invalidate(key, e, liveClosed, nil)
 	}
 	s.live.close(key)
@@ -257,6 +271,9 @@ func (s *EventsService) CloseLiveEvents(cluster, namespace string) {
 // CloseAll stops every live events subscription. Called on app shutdown.
 func (s *EventsService) CloseAll() {
 	s.lmu.Lock()
+	for key := range s.seqs {
+		s.seqs[key]++ // opens still taking their lease lose
+	}
 	ls := s.leases
 	s.leases = map[string]*liveEntry{}
 	s.lmu.Unlock()

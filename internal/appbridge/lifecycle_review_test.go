@@ -896,3 +896,117 @@ func TestAPanicCannotDeliverAfterTheEndedNotice(t *testing.T) {
 		t.Fatalf("the old subscription spoke after its notice and the replacement: %v", said)
 	}
 }
+
+// Codex's third re-review of S2a (2026-10-26): its three probes, and a
+// reopen refused at admission.
+
+// R3-2: an end allowed before the acquisition returns does not race the
+// lease's adoption.
+func TestAnEarlyEndDoesNotRaceTheLeaseHandoff(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		c := &countingEvents{}
+		s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+		endStarted, endDone := make(chan struct{}), make(chan struct{})
+		s.setLeaser(func(cluster string, w Work) (*Lease, error) {
+			le := PlainLease(cluster, EventsConn(c))
+			go func() {
+				close(endStarted)
+				w.End("the connection retired before the acquisition returned")
+				close(endDone)
+			}()
+			<-endStarted
+			runtime.Gosched()
+			return le, nil
+		})
+		s.OpenLiveEvents("prd", "shop")
+		<-endDone
+		s.CloseAll()
+	}
+}
+
+// R3-1: an open retired while it took its lease, returning late, cannot
+// evict the subscription already opened on the replacement connection.
+func TestAnEndedOpeningCannotReplaceANewConnection(t *testing.T) {
+	r := newLifeRig(t, true)
+	c := &countingEvents{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+	defer s.CloseAll()
+	acquired, returnLease := make(chan struct{}), make(chan struct{})
+	var acquisitions atomic.Int32
+	s.setLeaser(func(cluster string, w Work) (*Lease, error) {
+		le, err := r.life.Acquire(cluster, w)
+		if err != nil {
+			return nil, err
+		}
+		le.Conn = EventsConn(c)
+		if acquisitions.Add(1) == 1 {
+			close(acquired)
+			<-returnLease
+		}
+		return le, nil
+	})
+	oldDone := make(chan ActionResultDTO, 1)
+	go func() { oldDone <- s.OpenLiveEvents("prd", "shop") }()
+	<-acquired
+	r.reconnect()
+	newResult := s.OpenLiveEvents("prd", "shop")
+	if !newResult.OK {
+		close(returnLease)
+		<-oldDone
+		t.Fatalf("the new connection's open: %+v", newResult)
+	}
+	s.live.mu.Lock()
+	wanted := s.live.subs["events:prd:shop"]
+	s.live.mu.Unlock()
+	close(returnLease)
+	oldResult := <-oldDone
+	s.live.mu.Lock()
+	kept := s.live.subs["events:prd:shop"] == wanted
+	s.live.mu.Unlock()
+	if oldResult.OK || !kept || wanted.cancelled() {
+		t.Fatalf("the old open %+v; the replacement kept %v, stopped %v", oldResult, kept, wanted.cancelled())
+	}
+}
+
+// R3-1: a close while an open still takes its lease stops that open.
+func TestACloseBeforeTheLeaseReturnsStartsNothing(t *testing.T) {
+	c := &countingEvents{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+	defer s.CloseAll()
+	acquired, returnLease := make(chan struct{}), make(chan struct{})
+	s.setLeaser(func(cluster string, _ Work) (*Lease, error) {
+		le := PlainLease(cluster, EventsConn(c))
+		close(acquired)
+		<-returnLease
+		return le, nil
+	})
+	done := make(chan ActionResultDTO, 1)
+	go func() { done <- s.OpenLiveEvents("prd", "shop") }()
+	<-acquired
+	s.CloseLiveEvents("prd", "shop")
+	close(returnLease)
+	if res := <-done; res.OK || s.live.count() != 0 || c.readCount() != 0 {
+		t.Fatalf("an open after its close: %+v; subscriptions %d, reads %d", res, s.live.count(), c.readCount())
+	}
+}
+
+// A reopen refused at admission leaves the working subscription running.
+func TestARefusedReopenKeepsTheWorkingSubscription(t *testing.T) {
+	r := newLifeRig(t, true)
+	c := &countingEvents{}
+	s := NewEventsService(func(string) (EventsConn, bool) { return c, true }, &eventsEm{})
+	defer s.CloseAll()
+	s.setLeaser(r.leasedVia(EventsConn(c)))
+	if res := s.OpenLiveEvents("prd", "shop"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if _, err := r.pol.Hold("prd", "saved, not connected yet"); err != nil {
+		t.Fatal(err)
+	}
+	if res := s.OpenLiveEvents("prd", "shop"); res.OK {
+		t.Fatal("admitted while held")
+	}
+	if s.live.count() != 1 {
+		t.Fatal("a refused reopen stopped the working subscription")
+	}
+}
