@@ -792,3 +792,35 @@ S2b is the writers and the plans, backend only. The page is S2c. It was built in
   - an arm not surviving a reconnect.
 
 **Mutation pass:** writers 20 of 20, overlay and admission 18 of 18, decision 12 of 12, plans 20 of 20.
+
+## 21. S2b revision 1: Codex's review (2026-10-26)
+
+Codex requested changes at c155378: seven P2 and one P3. It found sound:
+- the overlay and the split predicates;
+- `Switch`'s bound hold;
+- the writers;
+- effective comparison with raw writes;
+- the order of the keychain choices;
+- a protection change ending its conversations outside the gate;
+- the nil hosts hook and the decision seam.
+
+Each finding is fixed, and its probe is a regression test (`fleet_review_test.go`).
+
+| Finding | Fix |
+|---|---|
+| **R1:** a plan that writes nothing (file adoption, Connect, Retry, a file-driven removal) did not check its file version at the final decision | The write step checks the plan's file version under the gate even when it writes nothing, and an addition checks it before its seed. A file moved since the re-plan refuses with the new plan, having changed nothing |
+| **R2:** a committed removal left earlier tickets valid until its cleanup finished | `Unseat`, and S2a's `Remove`, forget the cluster in the policy registry under the gate, with the retirement. A ticket or fence admitted before is refused at once, before any callback can block |
+| **R3:** a protection edit while Held wrote the file and the running entry, then failed | It is refused at plan time: "saved, not connected yet: change its protection once it connects, or Revert or Retry first" |
+| **R4:** the removal and loosening interlocks read the pending entry, not the published protection | The published protection is the baseline: for the class, both interlocks, and protection's effect line ("on, until the pending connection is usable") |
+| **R5:** Revert and Retry recorded the file's entry as terms that connected | Raw terms are kept by connection identity: the startup connections' from fleet.yaml as Klyx started, and each new attempt's when it commits. A connection's terms become the last connected ones only when its usability is published (`Lifecycle.OnPublished`). Retry connects with the saved terms that run, never a hand edit made since |
+| **R6:** `AddClusters` wrote before preparing | Each connection is prepared before the file is written, so one that cannot be built adds nothing. Each addition then commits under its cluster's gate, and its connection is installed |
+| **R7:** writer refusals echoed anchor and alias names | A refusal names the structure and its line, never the name |
+| **R8 (P3):** Connect did not name its endpoints | A Connect's plan names the endpoint kinds the entry configures, without secrets |
+
+**Tests:**
+- Codex's nine probes, as regression tests.
+- An addition re-checking the file at its decision.
+- While Held, the published protection deciding the class, the interlock and the effect line.
+- Revert's test now has its startup connection connect first: terms count as connected only once their connection's usability is published.
+
+**Mutation pass:** 13 mutants of the fixes, all caught.
