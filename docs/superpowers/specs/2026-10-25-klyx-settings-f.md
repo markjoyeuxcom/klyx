@@ -659,3 +659,29 @@ The AI panel's lost answer is the same class as R3 and changed with it: its appl
 §21's 43 mutants, rerun on this revision (five re-specified where their lines moved): 43 caught.
 
 Every Go suite, the race suites of `appbridge` and `config`, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
+
+## 23. F2b revision 2: Codex's re-review (2026-10-26)
+
+Codex requested changes on 12d8901: two residual P2. It closed R1-R4. It also ruled that cached reads need no admission: Git runs every command that does not fetch with `GIT_NO_LAZY_FETCH=1`, so a missing object fails rather than being fetched. That holds as long as the no-lazy-fetch environment stays, and any future explicit fetch goes through admission.
+
+| Finding | Change |
+|---|---|
+| **RR1:** a history refresh was identified only by its URL and its start time in whole seconds. A refresh that replaced an ended one, of the same repository within the same second, gave an identical plan, so the earlier confirmation applied to other work | Each refresh carries an admission number that is never reused, and that number is its identity in a plan (`fetch:<n>:<url>`), as it already was for the other acquisitions. The URL still keeps one refresh per repository |
+| **RR2:** the notifications panel cleared its busy state before reading back, and took every read's reply as it came. So an earlier lost-answer readback could replace a later confirmed toggle and its message | A change in the notifications panel stays busy through its settlement and readback. That covers a toggle, a plan's Apply and Retry, and stops another change from starting while an outcome is being read. Reads are numbered too, so an older reply never replaces what a newer read found. The Git panel had the same order problem, but there actions on different repositories may overlap (a fetch can take minutes). So it numbers its reads and its actions: an older read's reply, or an older action's outcome, never replaces a newer one's. A plan requested from the file is still shown when it arrives after a newer action: it is a review, and Apply refuses it with a replacement if what runs moved |
+
+**Also fixed:** 3b27dff committed `appbridge/git_plan_review_test.go` without gofmt. The gates' gofmt check had named it, but its output went unread. The file is now formatted.
+
+**Tests added:**
+- **Codex's two probes** (`appbridge/git_plan_rereview_test.go`; `app/NotificationSettingsRereview.test.tsx`).
+- **Beside them:**
+  - the notifications panel busy until a toggle's readback answers, and until an applied plan's;
+  - the Git panel keeping a newer readback and outcome over an older action's.
+
+**Mutation pass:** 8 mutants, 6 caught after one fix:
+- **Caught:** the refresh's number left out, its identity by URL, busy cleared before a toggle's settlement, busy cleared before a plan Apply's settlement (caught once its test was added), and the Git panel's read and outcome order.
+- **Removed:** the Git panel's check that dropped a plan answered after a newer action. It is no longer in the code, for the reason above.
+- **Kept as equivalent:** the notifications panel's read order. While every change holds busy through its readback, no route starts a read while another is pending. It stays as defence in depth.
+
+§21's and §22's mutants, rerun on this revision: all caught.
+
+Every Go suite, the race suites of `appbridge` and `config`, gofmt, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
