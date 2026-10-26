@@ -139,7 +139,7 @@ Claude and Codex reviewed the Settings page and its coverage, independently and 
 - [Klyx Settings: the redesign](specs/2026-10-25-klyx-settings-redesign.md) (spec, accepted)
 - [Klyx Settings S1: sections, the registry and its coverage](specs/2026-10-25-klyx-settings-s1.md) (spec, built and accepted)
 - [Klyx Settings F: the activation foundation](specs/2026-10-25-klyx-settings-f.md) (spec, built and accepted)
-- [Klyx Settings S2: Fleet - the cluster lifecycle, editor, reconnect and remove](specs/2026-10-26-klyx-settings-s2.md) (spec, design accepted; S2a built, in review)
+- [Klyx Settings S2: Fleet - the cluster lifecycle, editor, reconnect and remove](specs/2026-10-26-klyx-settings-s2.md) (spec, design accepted; S2a built and accepted)
 
 ## Next
 

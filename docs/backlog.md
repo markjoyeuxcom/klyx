@@ -270,8 +270,8 @@ specs `docs/superpowers/specs/2026-10-24-klyx-ai-a3-guarded-execution.md`
 - S2a, the cluster lifecycle: connection identity and stop, retirement
   with a trusted end, leases for every worker on a cluster, forgetting a
   removed cluster everywhere, the running fleet and one protection
-  reader. Merged at revision 4 with Codex's re-review in progress; native
-  smoke 213/213 four ways. S2b and S2c follow
+  reader. Codex-accepted at revision 5 (#57, then #58); native smoke
+  213/213 four ways. S2b and S2c follow
 
 **2026-10-24 - AI A1.1 rollout history and the scored eval (untagged; specs
 `docs/superpowers/specs/2026-10-24-klyx-ai-a1-1-rollout-history.md` §13 and
