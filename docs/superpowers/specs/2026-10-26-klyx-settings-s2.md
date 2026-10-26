@@ -535,3 +535,83 @@ Codex accepted the design at revision 3 (8a4a907), after the review of dc54655 a
 - **The gate takes no reentrant lifecycle callback.** Sink delivery during a trusted retirement, and a connection's start and stop, run outside the gate, and the tests run them under the race detector. A refused Apply releases both its gate and its reservation.
 
 S2a builds next.
+
+## 13. S2a as built (2026-10-26)
+
+S2a is the cluster lifecycle, backend only. Nothing in the page changes yet, and S2b drives it from plans.
+
+| Contract | Code |
+|---|---|
+| §2.1 a connection that stops | `fleet.ClusterConn`: its own context from `Start`, its loops tracked, its informer factories recorded and shut down. `Stop(timeout)` sets the terminal state `Stopped`, which never moves and is never usable. `Start` and `Stop` are serialized, so no loop is added once `Stop` is waiting. `observe.Observer.Stop` |
+| §2.2 identities and the registry | `fleet.ConnID` is drawn from the Observer's process-wide counter (`observe.NextIncarnation`) and handed to the Observer (`observe.Config.Incarnation`). The registry offers `Prepare`, `Retire`, `Install`, `Drop`, `Retry`, `IsCurrent` and `IsRetired`. A retired identity is never current again, and the index order follows the running fleet |
+| §2.3 leases | `appbridge/lifecycle_lease.go`: `Lifecycle.Acquire`, `Lease.Settle`, `Release`, `Pins` and `ClusterWork`, and `endLeases` on a retirement. The workers acquire through `UseLeases` |
+| §2.4 retirement | `appbridge/lifecycle.go`: queued usability events are applied under each cluster's commit gate. `Reconnect` and `Remove` retire under the gate, then deliver the end outside it: the leases, then `HealthSink.EndIdentity` and `fleetindex.Index.End`. The health sink checks identity and delivers under a per-cluster handoff lock, and the index takes a connection's word only from its attached Observer (`SetConnectionOf`) |
+| §2.5 forgetting | `policy.Registry.Forget`, with a tombstone that a later `Seed` starts above. Also `HealthSink.ForgetCluster` (the log, the lineage and every listener keeping a cluster: route and applied histories, the line tap, the notification engine), `fleetindex.Index.Forget`, `ProtectGuard.Forget` and `ForgetRunningCluster`. The line drops a removed cluster's history with its station |
+| §2.6 the running fleet | `ConfigService.running` with its revision. `addMu` becomes the fleet Apply lock, `applyMu`. `WireEndpointActivation`: every endpoint activation runs under that lock and publishes into the running entry (`SetRunningEndpoint`) |
+| §2.7 one protection reader | `SetFleetProtection`, `SetNotifyProtection`, and the Settings table through `ConfigService.IsProtected` |
+
+**Where the build differs or adds:**
+- **Usability, pending until published** (§12's first checkpoint):
+  - A move into usable is pending until the lifecycle applies its event under the gate. Until then `Snapshot` reports the state before it.
+  - The lifecycle publishes the incarnation (`policy.ConnUp`), then acknowledges the move (`ClusterConn.AckUsable`), and only then is it visible. An old ticket or AI pin therefore never reaches a newly usable connection under the old epoch.
+  - A tool or test connection without a lifecycle has no hook, so its move is visible at once.
+- **The lease API takes no context, and nothing returns one.**
+  - A lease's context is its own root: cancelled at retirement unless the work continues.
+  - This keeps F's typed guard scan whole:
+    - a guarded method (`RunStep`, `StartDrain`, `HelmRollback`) acquires its lease without any context reaching it;
+    - `admitCall` returns the `*Lease` rather than a context.
+- **A lease's `End` is told why before its context is cancelled.** So a worker records the reason first, and its final chunk, status or turn says it.
+- **What each worker does when its connection is retired:**
+  - **A port-forward** stays listed as `ended`, with its reason, until it is stopped.
+  - **A log stream** ends with "the stream ended: …" in its final chunk.
+  - **Live events** send a status with `ended`.
+  - **A conversation or investigation** ends explicitly:
+    - its turn ends with the reason, never as stopped;
+    - its offers are withdrawn, and the version moves;
+    - a `chat:ended` event tells the page.
+  - **Explain and Suggest-fix** are refused if the connection precheck found has been replaced.
+  - **A confirmed A3 request, a drain and a Helm rollback** continue, with continuing leases. Their processes already run on their own contexts (the ticket's write context, or the drain stream's), so the lease lists them under Continues and keeps their outcome; it never cancels them.
+  - **An A3 verification** ends with its connection, unverified.
+- **Log history.** A page read takes a lease, so a read in flight ends with its connection. An idle view holds no connection and is not running work, so it is not listed. The lifecycle's end hook ends its page set, and its next page says why: "the log history view ended: …; read it again". Chat's history reads ride on the conversation's own lease.
+- **One-shot reads keep their lookups:** event lists, inspector reads and describe. A lease covers the work §2.3 lists, the work that holds a connection.
+- **`Lease.Pins`.** A worker that found its connection before acquiring its lease (Explain's precheck, a conversation's step) refuses when the two differ. A plain lease, outside any lifecycle, pins what its worker found, so tools and tests run as before.
+- **Not yet used:** S2a's `Reconnect` and `Remove` are the primitives S2b's plans wrap in the reservation, the commit gate's final decision and the writes. In S2a only the tests drive them.
+
+**Tests:**
+- **The connection:**
+  - a stopped connection leaves no goroutine above its starting count, with and without an Observer;
+  - a connection stopped before it starts runs nothing;
+  - the Observer carries the connection's identity, and a later connection's is above it;
+  - a usability move is pending until acknowledged, a superseded acknowledgement is ignored, and a move out of usable clears it.
+- **The registry:** retire, install, drop and retry, including installing over a current connection, dropping one, and retrying a running one, all refused. A removed identity never returns on a re-add.
+- **The lifecycle:**
+  - usability is published before it is seen, and a retired identity's queued move is never published;
+  - Codex's re-review probe, end to end: a retired connection's pending onset is never sent;
+  - a removal forgets the cluster in the policy registry, the guard, the registry, the index and the log, a late publication recreates nothing, and a re-add publishes;
+  - the sink takes only the current identity, and delivers a trusted end once;
+  - the index takes a word only from its Observer, ends only the retired incarnation's generation, and forgets.
+- **Leases:**
+  - Codex's design-review probe: a forward still opening cannot outlive its connection;
+  - a settled forward, a log stream, live events and a conversation each end with their connection and say why;
+  - a continuing lease runs to its end, while an ending one is told why before its context ends;
+  - a drain and a Helm rollback are listed under Continues from their start, run through a reconnect, and leave the list when they finish;
+  - an AI call is refused on a connection its precheck did not find, and an admitted one is listed and ends with its connection;
+  - a lease is admitted only on an Active cluster's current connection.
+- **The running fleet:**
+  - it is one list with a revision;
+  - Codex's re-review probe, inverted: an endpoint activated through Test is in the running entry, and an activation waits for the fleet lock;
+  - every protection reader reads the published value, and the notification engine's protected scope follows it end to end.
+
+**Mutation pass:** 37 of 37 caught. The 37 cover:
+- the connection's stop and its pending usability;
+- the registry's records;
+- the policy tombstone;
+- the lifecycle's publication, end and forgetting;
+- the sink's identity check and single end;
+- lease admission, cancellation, continuation and settling;
+- each worker's end;
+- endpoint publication and the fleet lock;
+- the protection readers;
+- the index's attached word, end and forgetting.
+
+The first run left one survivor: the notification scope was tested only through its stored reader. Five more mutants did not compile at first. The end-to-end scope test, the continuing-work test and the AI pin test came from that run.
