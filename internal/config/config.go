@@ -176,6 +176,41 @@ func (c ClusterConfig) IsProtected() bool {
 	return looksProd(env) || looksProd(c.Name) || looksProd(c.Context)
 }
 
+// Effective is the entry as Load reads it (Settings S2 §4.2): the context
+// defaulted to the name, and the tags its context derives. A plan compares
+// effective entries; it writes raw ones.
+func (c ClusterConfig) Effective() ClusterConfig {
+	if c.Context == "" {
+		c.Context = c.Name
+	}
+	c.Tags = copyTags(c.Tags)
+	c.applyDerivedDefaults()
+	return c
+}
+
+// ProtectedBy says what makes the entry protected, "" when nothing does:
+// protected: true, or the environment, the name or the context that looks
+// like production (Settings S2 §4.3). The inputs are ORed; this names the
+// first that holds.
+func (c ClusterConfig) ProtectedBy() string {
+	e := c.Effective()
+	env, src := e.Environment, "the environment "
+	if env == "" {
+		env, src = e.Tags["env"], "the env tag "
+	}
+	switch {
+	case e.Protected:
+		return "protected: true"
+	case looksProd(env):
+		return src + env
+	case looksProd(e.Name):
+		return "the name " + e.Name
+	case looksProd(e.Context):
+		return "the context " + e.Context
+	}
+	return ""
+}
+
 // looksProd reports whether an environment/name string carries a production
 // token. It splits on non-alphanumeric separators and matches whole tokens
 // (prd/prod/production) rather than substrings, so "reproducer" or "productivity"
@@ -281,6 +316,32 @@ func LoadVersioned(path string) (*Config, string, error) {
 		return nil, version, fmt.Errorf("invalid config %q: %w", path, err)
 	}
 	return c, version, nil
+}
+
+// LoadRaw is LoadVersioned with each cluster's entry as written, before any
+// default (Settings S2 §3): what a plan's edit is computed against. The
+// file must load; raw is keyed by cluster name.
+func LoadRaw(path string) (*Config, map[string]ClusterConfig, string, error) {
+	b, err := readFleetFile(path)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("read config %q: %w", path, err)
+	}
+	version := versionOf(b)
+	c, err := decode(b)
+	if err != nil {
+		return nil, nil, version, fmt.Errorf("invalid config %q: %w", path, err)
+	}
+	var r struct {
+		Clusters []ClusterConfig `yaml:"clusters"`
+	}
+	if err := unmarshalFleet(b, &r); err != nil {
+		return nil, nil, version, fmt.Errorf("invalid config %q: %w", path, shown(err))
+	}
+	raw := make(map[string]ClusterConfig, len(r.Clusters))
+	for _, cl := range r.Clusters {
+		raw[cl.Name] = cl
+	}
+	return c, raw, version, nil
 }
 
 func (c *Config) applyDefaults() {

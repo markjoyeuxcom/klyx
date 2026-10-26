@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -449,6 +450,46 @@ func (s *EndpointsService) MoveToKeychain(cluster, revision string) EndpointActi
 		return nil
 	})
 	return res
+}
+
+// EndpointRecords is a cluster's keychain records present now, each with
+// its credential revision, for a removal's choices (Settings S2 §4.4): by
+// kind, never a secret.
+func EndpointRecords(es *EndpointsService) func(cluster string) []PlanRecordDTO {
+	return func(cluster string) []PlanRecordDTO {
+		out := []PlanRecordDTO{}
+		if es.store == nil {
+			return out
+		}
+		for _, kind := range config.EndpointKinds {
+			if _, err := es.store.Get(endpointcred.Account(cluster, kind)); err == nil {
+				out = append(out, PlanRecordDTO{Kind: kind, Revision: strconv.FormatUint(es.revs.Revision(cluster, kind), 10)})
+			}
+		}
+		return out
+	}
+}
+
+// EndpointCredLock takes the endpoint actions' lock and returns its
+// release: a removal's keychain deletion is serialized with the credential
+// actions (S2 §4.4). Taken before the fleet Apply lock, never after.
+func EndpointCredLock(es *EndpointsService) func() func() {
+	return func() func() {
+		es.mu.Lock()
+		return es.mu.Unlock
+	}
+}
+
+// DeleteEndpointRecord revokes and deletes one keychain record of a
+// removed cluster; the caller holds EndpointCredLock.
+func DeleteEndpointRecord(es *EndpointsService) func(cluster, kind string) error {
+	return func(cluster, kind string) error {
+		if es.store == nil {
+			return errors.New("no credential store")
+		}
+		es.revs.Revoke(cluster, kind)
+		return es.store.Delete(endpointcred.Account(cluster, kind))
+	}
 }
 
 // errNotActivated: an activation that stopped part-way, having said what

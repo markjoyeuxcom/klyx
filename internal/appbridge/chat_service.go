@@ -701,6 +701,37 @@ func (c *conversation) releaseLocked() {
 	}
 }
 
+// EndChatsOnPolicy is the fleet plans' hook for a committed protection
+// change (Settings S2 §8, ruling 1): the conversations on the cluster, and
+// the investigations comparing it, end explicitly with why. A plain
+// function, never a method of the bound service.
+func EndChatsOnPolicy(s *ChatService) func(cluster, why string) { return s.endOnPolicy }
+
+func (s *ChatService) endOnPolicy(cluster, why string) {
+	s.mu.Lock()
+	var evs []ChatEndedDTO
+	for _, c := range s.convs {
+		hit := c.cluster == cluster
+		for _, m := range c.members {
+			if m.cluster == cluster && m.adm != nil && m.adm.committed {
+				hit = true
+			}
+		}
+		if !hit {
+			continue
+		}
+		if ev, ok := s.endLocked(c, why); ok {
+			evs = append(evs, ev)
+		}
+	}
+	s.mu.Unlock()
+	if s.em != nil {
+		for _, ev := range evs {
+			s.em.Emit(ChatEndedEvent, ev)
+		}
+	}
+}
+
 // ForgetChats is the lifecycle's forget hook for conversations: a plain
 // function, never a method of the bound service, so the webview cannot
 // call it.

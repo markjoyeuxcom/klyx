@@ -86,6 +86,9 @@ type ConfigService struct {
 	// it loaded, or did not exist yet (a first run)
 	loadErr string
 
+	// fp is the fleet plans (S2 §4); nil until WireFleetPlans
+	fp *fleetPlans
+
 	// seams for tests
 	kubeconfigPath func() string
 	kubeContexts   func(string) ([]string, error)

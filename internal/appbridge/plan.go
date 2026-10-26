@@ -25,8 +25,12 @@ const (
 
 // PlanDTO is one activation plan.
 type PlanDTO struct {
-	Section     string            `json:"section"` // ai | notifications | git
-	Kind        string            `json:"kind"`    // save | file | revert
+	Section string `json:"section"` // ai | notifications | git | fleet
+	Kind    string `json:"kind"`    // save | file | revert | connect | remove | retry
+	// Cluster and Class: a fleet plan's cluster, and what its Apply does
+	// (Settings S2 §4.2)
+	Cluster     string            `json:"cluster,omitempty"`
+	Class       string            `json:"class,omitempty"`
 	Digest      string            `json:"digest"`
 	FileVersion string            `json:"fileVersion"`
 	Runtime     map[string]string `json:"runtime"`
@@ -44,6 +48,8 @@ type PlanDTO struct {
 	// Refused: a candidate that cannot be applied, and why; nothing is
 	// written
 	Refused string `json:"refused,omitempty"`
+	// Records: a removal's keychain records, each its own choice (S2 §4.4)
+	Records []PlanRecordDTO `json:"records,omitempty"`
 }
 
 // PlanChangeDTO is one effective change, by registry id, as shown: never a
