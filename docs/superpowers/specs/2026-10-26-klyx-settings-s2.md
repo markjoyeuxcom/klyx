@@ -721,3 +721,74 @@ It checked the shutdown path with a probe of its own:
 The earlier fixes (the lease handoff, member admissions, the token transfer and the delivery fence) remain supported by their regression tests.
 
 S2a was merged to `main` in #57 at revision 4, at the owner's request; revision 5 follows in #58. S2b builds next.
+
+## 20. S2b as built (2026-10-26)
+
+S2b is the writers and the plans, backend only. The page is S2c. It was built in four commits, with a fifth for its last tests. It was built on S2a while S2a's reviews ran, then rebased onto each revision.
+
+| Contract | Code |
+|---|---|
+| §3.1 editing an entry | `config.EditClusterAt(path, version, name, ClusterEdit)` (`internal/config/clusterwrite.go`). It writes the changed S2 fields only, line by line, finding them in the node tree. A value is replaced on its own line, keeping its key, indentation, trailing comment and line ending. An absent field is inserted after the entry's last one-line key, and a cleared field's line goes. Tags are rewritten as one block in Klyx's form, sorted. A value is quoted when YAML would not read it back as the same string |
+| §3.1 refusals | Each is a `HandEditError`, saying to edit the entry by hand and why: a flow list or entry, an anchor, an alias, a merge key, a changed value written over several lines, inline tags, and a key sharing the list dash's line that would have to go. A duplicated key, and tags that are not a mapping, do not load, so they are refused as a file that does not load. The error never echoes a value |
+| §3.1 the candidate | It must load strictly. Decoded, every top-level key and every other cluster is unchanged, and the entry reads back as intended. It is written against the plan's file version through slice 0's policy: the symlink, the mode and the compare-and-swap |
+| §3.2 removing an entry | `config.RemoveClusterAt`: the entry's lines from its dash to its last line of content go, with the comments indented inside it. A comment above it, or one at the dash's column after it, stays. One blank line is kept between items. The last cluster is refused (`ErrLastCluster`) |
+| §4.1 the overlay | `policy.Registry`: `Reserve` over Active, Held or absent (a placeholder that admits nothing and is published nowhere), `Unreserve`, `Advance`, `HoldAttempt` (bound to the attempt's identity, with the protection its release publishes), `ReleaseAttempt` (exactly once, during another reservation too), and `Seed` over a placeholder. F's own steps drop an attempt binding |
+| §4.1 the split predicates | New admissions (a guard, an AI start, a lease) refuse while a reservation is held (`notAdmitting`). Existing work keeps `notActive` and its epoch |
+| §4.5 the commit gate's decision | `Lifecycle.Decide` refuses with `ErrMoved` unless the epoch and the held attempt are still the ones the plan bound. Then it runs the write and the class's transition under the gate. `Switch` is the reconnect class: write, hold for the prepared attempt, retire; then, after the gate, end the retired identity, install and start the attempt, stop the old. `Unseat` is the removal class |
+| §4.5 usability | A held attempt's first usability releases it under the gate (`ReleaseAttempt`). `OnReleased` records it after the gate: the attempt's terms become the last connected ones |
+| §4.5 at start | `HoldBuildFailures`: a cluster whose connection failed to build starts Held, with why |
+| §4.2 plans | `ConfigService.PlanClusterEdit`, `PlanClusterFromFile` (`file`, or `connect` for a cluster not running), `PlanClusterRemove` (with the chosen keychain kinds), `PlanClusterRevert` and `PlanClusterRetry`, then `ApplyClusterPlan(digest, typed)` (`fleet_plan.go`, `fleet_apply.go`). `PlanDTO` gains `Cluster`, `Class` and `Records` |
+| §4.2 one Apply at a time | `AddClusters` reserves each name, seeds it over its placeholder and unreserves last; a failed connect forgets the name. Every plan's Apply takes the fleet Apply lock, and a removal with chosen records takes the credential lock first. Each re-plan binds the file version, the running fleet's revision, the epoch, the held attempt, the work identities and the records' revisions |
+
+**Where the build differs or adds:**
+- **Effective in, raw out.** The running fleet holds effective entries: the context defaulted, and the tags a context derives. So a plan compares effective entries to class its change and show it, and writes the file's raw entry: only the fields the person changed, against the file's own values. Otherwise a save would write derived tags into fleet.yaml. `config.LoadRaw` reads both, `ClusterConfig.Effective` applies the defaults, and `ProtectedBy` names the input that decides protection.
+- **A save is refused while the file differs:** "use the file's values first, or undo that edit". F's block condition, per entry.
+- **What a protection change ends.** The work pinned to the epoch: the cluster's conversations and investigations, those comparing it, and its Explain and Suggest-fix calls. They are listed in the plan and ended explicitly at the Apply (`EndChatsOnPolicy`). Other work runs on.
+- **The last terms that connected.** They are kept per cluster: the terms running at a reconnect, when the cluster was Active, and then each released attempt's terms. Revert writes them back, and is refused while nothing has connected under other terms this session.
+- **Retry.** It is planned from the saved terms, writes nothing, and goes through `Switch`. For a cluster whose build failed, the attempt is installed into the failed slot.
+- **Keychain choices.** `EndpointRecords` lists the records present, with their revisions. The chosen ones are deleted under the credential lock (`EndpointCredLock`, `DeleteEndpointRecord`: revoked, then deleted), after the cluster is removed. A failure is said in the result's note, record by record.
+- **Hooks for later stages.** S3a fills the host check (`FleetPlanDeps.Hosts`); in S2 it is nil, so there are no hosts. After a commit, the line is told (`Changed`).
+- **Test seams.** `fleetPlans.beforeDecide` runs just before the class's decision. It is nil in production.
+
+**Tests:**
+- **The writers:**
+  - exact output for comments, nested blocks, CRLF, document markers and a file without a final newline;
+  - quoting;
+  - each refusal;
+  - an unchanged multi-line field left alone;
+  - a cleared field taking its default;
+  - the version, the compare-and-swap, the mode and the symlink;
+  - removals of the first, a middle and the last item, blank-separated, with the comments inside going;
+  - the candidate checks themselves.
+- **The overlay:**
+  - reservation without an epoch move;
+  - a Held cluster unreserved still Held;
+  - placeholders;
+  - `Advance` and `HoldAttempt` under the token;
+  - the bound attempt's release exactly once, during another reservation;
+  - new work refused, and existing work kept, while reserved.
+- **The decision:**
+  - a moved activation refused, a forgotten cluster too;
+  - the release during another Apply's reservation;
+  - a usability at the gate, stale after a committed retirement and applied once after a failed write;
+  - an identity kept by a protection change;
+  - the removal flow, the addition's reservation, and a build failure held until a Retry connects it.
+- **The plans:**
+  - a placement keeping its epoch;
+  - tightening without an interlock, which ends the conversations, invalidates a ticket from before it and moves the epoch once;
+  - loosening with its interlock;
+  - the name's protection that cannot be loosened;
+  - a context that cannot resolve;
+  - a reconnect held until its own connection is usable;
+  - Revert to the last connected terms, which follow each release;
+  - a refused Retry still Held;
+  - Codex's design probe: a release during a Retry's preparation;
+  - a removal with its interlock and only its chosen records, a failed deletion said, a removal refused at its decision deleting nothing;
+  - a record bound to its revision;
+  - a save refused over a hand edit;
+  - "Use the file's values": adopting S2's fields with the running endpoint kept, connecting a file-only cluster, removing one gone from the file;
+  - two clusters' Applies keeping each other;
+  - the digest moving when work starts;
+  - an arm not surviving a reconnect.
+
+**Mutation pass:** writers 20 of 20, overlay and admission 18 of 18, decision 12 of 12, plans 20 of 20.
