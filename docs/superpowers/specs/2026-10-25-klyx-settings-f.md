@@ -563,7 +563,7 @@ F2b completes F2: notifications and Git, each run from a running copy, changed t
 - **An action is its own confirmation.** A toggle, an approval, a removal and an alias are each planned and applied in one call, when the plan ends nothing and needs no interlock; in F2 none ends anything. Otherwise the plan comes back and the page shows it, applying nothing.
 - **Neither section has a saved-not-active state.** Their activation (setting the engine, or swapping the running copy) cannot fail after the write, so there is nothing to Retry or Revert.
 - **Neither section takes an interlock:** the redesign's §1.5 names none for them.
-- **What a Git change continues:** a fetch in flight of a repository the change stops approving. It finishes, and nothing reads that history afterwards. A removal then clears its cache, as before; "Use the file's values" deletes nothing. Nothing ends.
+- **What a Git change continues:** a fetch in flight of a repository the change stops approving. It finishes, and nothing reads that history afterwards. A removal then clears its cache, as before; "Use the file's values" deletes nothing. Nothing ends. (§22, R1: every acquisition is now admitted, so a plan names each one in flight.)
 - **No Git plan or cache entry holds an ignored entry's text.** An entry Klyx ignores may carry a token.
   - A Git candidate is the edit as data, or "the file's values", made again at Apply.
   - The plan counts ignored entries ("Entries Klyx ignores: 2 → 3") and never names them.
@@ -612,3 +612,50 @@ F2b completes F2: notifications and Git, each run from a running copy, changed t
 - the frontend's returned plans, drift notices, the toggle's wording and the digests Apply sends.
 
 Every Go suite, the race suites of `appbridge` and `config` (the F2b tests three times over as well), golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. Two tests outside this slice failed once while the frontend suite ran beside them and passed when rerun alone: `fleetindex`'s heap peak and an `observe` timeout. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
+
+## 22. F2b revision 1: Codex's review (2026-10-26)
+
+Codex requested changes on 97ad5f6: three P2 and one P3. It accepted §21's differences:
+- the block condition as part of the plan;
+- an action as its own confirmation;
+- no saved-not-active state and no interlock;
+- a fetch in flight continuing, with "Use the file's values" deleting nothing;
+- Git's view kept when fleet.yaml cannot be read;
+- the notifications API and the OS note.
+
+| Finding | Change |
+|---|---|
+| **R1:** a fetch was admitted outside an Apply. A cadence fetch queued before a revocation started after it, and a fetch admitted during an Apply's write was missing from its plan | Every acquisition from a repository is admitted when it starts, under the running copy as it is then. That covers a history refresh (`admitFetch`), and the cache diff's and chat's commit and content fetches (`admittedStore`). Admission is refused in two cases: while an Apply decides (the Git section's Applying state, from its re-plan to its publication), and once the repository is no longer approved. The acquisition is registered before the lock is released, so a plan names each one in flight under Continues. Reads of what is cached never fetch (`GIT_NO_LAZY_FETCH`), so they need no admission |
+| **R2:** a removal applied through its replacement plan left its cache behind | A removed repository's cache is cleared from the shared Apply path, using the cached edit, whichever route applied it. A clear that fails is reported as applied, with a note ("the approval was removed, but its cache could not be cleared"), never as a refusal. "Use the file's values" still deletes nothing |
+| **R3:** a lost answer was reported as "Not applied", and the previous values were restored. A failed readback after a success went unsaid | `askApply` marks a call that failed before any answer as unknown, never as a refusal. The notifications, Git and AI panels read back what runs, and say that whether it applied is not known. A failed readback after an Apply is said beside it ("could not read the notification settings again: what is shown is as last read and may be out of date") |
+| **R4:** Remove and an alias accepted an ignored, possibly credential-bearing URL as their target | Both now refuse a URL the running copy does not approve, before an edit is built. Only a validated, approved URL becomes an edit, so no plan or cache entry holds an ignored entry's text, whatever the route |
+
+The AI panel's lost answer is the same class as R3 and changed with it: its apply helper is now `askApply`.
+
+**Tests added:**
+- **Codex's backend probes** (`appbridge/git_plan_review_test.go`):
+  - a queued fetch after a revocation;
+  - admission during an Apply's write;
+  - a removal through its replacement plan, with an ordinary removal as the control;
+  - an ignored entry as the target of a removal and of an alias.
+- **Codex's two frontend probes** (`app/NotificationSettingsReview.test.tsx`).
+- **Beside them:**
+  - the consumers' acquisitions: admitted, named under Continues, and refused during an Apply and after a revocation;
+  - the cache diff and chat fetching nothing during an Apply;
+  - a removal whose cache stays, said as such;
+  - the Git and AI panels on a lost answer;
+  - a removal's note shown.
+
+**Mutation pass:** 21 mutants of the fixes, 21 caught:
+- admission during the Applying state, and the approval check at admission;
+- the Applying state itself;
+- each admitted acquisition and its release;
+- the cache diff's and chat's wrapping, and Continues for acquisitions;
+- the clear by route, and its note;
+- the approval check on both targets;
+- the unknown outcome in the bridge and in each panel;
+- the reread notice.
+
+§21's 43 mutants, rerun on this revision (five re-specified where their lines moved): 43 caught.
+
+Every Go suite, the race suites of `appbridge` and `config`, golangci-lint (with and without the eval tag), tsc, eslint (no errors) and the frontend suite pass. The native smoke passed 213/213, night and day at 1440 and 1024, on this revision before its commit.
