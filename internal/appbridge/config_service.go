@@ -392,6 +392,20 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 			toks = append(toks, tok)
 		}
 	}
+	// an addition is for a name that does not run: one that does - its entry
+	// removed from fleet.yaml by hand, say - is refused before anything is
+	// written; the file's values remove it (Codex's re-review of S2b, RR4)
+	for _, name := range contexts {
+		n := config.ClusterConfigForContext(name).Name
+		_, running := s.runningEntry(n)
+		known := false
+		if s.policy != nil {
+			_, known = s.policy.Snapshot(n)
+		}
+		if running || known {
+			return ActionResultDTO{Error: n + " is already running, so nothing was added: use the file's values to remove it first"}
+		}
+	}
 	// each connection is prepared before anything is written, so one that
 	// cannot be built adds nothing (S2 §4.5; Codex's review of S2b, R6)
 	var prepared []*fleet.Prepared

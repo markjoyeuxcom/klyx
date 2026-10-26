@@ -102,6 +102,9 @@ type fleetPlans struct {
 	terms     map[fleet.ConnID]attemptTerms
 	current   map[string]s2Fields
 	connected map[string]s2Fields
+	// connectedBy is the identity whose publication recorded connected: an
+	// edit committed on that identity keeps them coherent
+	connectedBy map[string]fleet.ConnID
 }
 
 type attemptTerms struct {
@@ -114,17 +117,32 @@ type attemptTerms struct {
 // started; a connection's terms become its cluster's last connected terms
 // when its usability is published - when it really connected.
 func WireFleetPlans(cs *ConfigService, d FleetPlanDeps) {
-	fp := &fleetPlans{d: d, cache: newPlanCache(time.Now), terms: map[fleet.ConnID]attemptTerms{}, current: map[string]s2Fields{}, connected: map[string]s2Fields{}}
-	if _, raw, _, err := config.LoadRaw(cs.path); err == nil {
+	fp := &fleetPlans{d: d, cache: newPlanCache(time.Now), terms: map[fleet.ConnID]attemptTerms{}, current: map[string]s2Fields{},
+		connected: map[string]s2Fields{}, connectedBy: map[string]fleet.ConnID{}}
+	// a startup connection's raw terms are its file entry - only while that
+	// entry still says what started, never a hand edit made since
+	type started struct {
+		name string
+		conn fleet.Conn
+		id   fleet.ConnID
+	}
+	var conns []started
+	if eff, raw, _, err := config.LoadRaw(cs.path); err == nil {
+		inFile := map[string]config.ClusterConfig{}
+		for _, c := range eff.Clusters {
+			inFile[c.Name] = c
+		}
 		for _, cc := range cs.fleetClusters() {
 			entry, ok := raw[cc.Name]
-			if !ok {
+			fileEff, still := inFile[cc.Name]
+			if !ok || !still || !sameS2(fileEff, cc) {
 				continue
 			}
 			fp.current[cc.Name] = s2Of(entry)
 			if c, ok := d.Life.reg.Conn(cc.Name); ok {
 				if id, ok := connID(c); ok {
 					fp.terms[id] = attemptTerms{cluster: cc.Name, terms: s2Of(entry)}
+					conns = append(conns, started{cc.Name, c, id})
 				}
 			}
 		}
@@ -132,6 +150,14 @@ func WireFleetPlans(cs *ConfigService, d FleetPlanDeps) {
 	cs.fp = fp
 	d.Life.OnPublished(fp.published)
 	d.Life.OnForget(fp.forget)
+	// subscribed: a startup connection whose usability was published before
+	// now connected all the same (Codex's re-review of S2b, RR2); one
+	// published since is recorded twice, the same
+	for _, st := range conns {
+		if st.conn.Snapshot().State.Usable() {
+			fp.published(st.name, st.id)
+		}
+	}
 }
 
 // published records that connection id of cluster connected: its terms are
@@ -140,7 +166,21 @@ func (fp *fleetPlans) published(cluster string, id fleet.ConnID) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	if a, ok := fp.terms[id]; ok && a.cluster == cluster {
-		fp.connected[cluster] = a.terms
+		fp.connected[cluster], fp.connectedBy[cluster] = a.terms, id
+	}
+}
+
+// edited records an S2 change committed on connection id, which keeps its
+// identity (a placement or protection change): its terms, the cluster's
+// current terms and - when id is the connection that connected - its last
+// connected terms all say the change (Codex's re-review of S2b, RR3).
+func (fp *fleetPlans) edited(cluster string, id fleet.ConnID, terms s2Fields) {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	fp.terms[id] = attemptTerms{cluster: cluster, terms: terms}
+	fp.current[cluster] = terms
+	if by, ok := fp.connectedBy[cluster]; ok && by == id {
+		fp.connected[cluster] = terms
 	}
 }
 
@@ -148,6 +188,7 @@ func (fp *fleetPlans) forget(cluster string) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	delete(fp.connected, cluster)
+	delete(fp.connectedBy, cluster)
 	delete(fp.current, cluster)
 	for id, a := range fp.terms {
 		if a.cluster == cluster {
@@ -473,9 +514,12 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		x.class = classPlacement
 	}
 	x.plan.Class = x.class
-	if held && x.class == classProtection {
-		// the hold publishes its attempt's protection when it connects: a
-		// change now is refused before anything is written (S2b review, R3)
+	if held && x.class != classReconnect && x.class != classRemoval &&
+		(x.cand.IsProtected() != published || x.cand.IsProtected() != run.IsProtected()) {
+		// the hold publishes its pending attempt's protection when it
+		// connects: a change of either the published or the pending value
+		// now is refused before anything is written (S2b review, R3; its
+		// re-review, RR1)
 		return refuse(name + " is saved, not connected yet: change its protection once it connects, or Revert or Retry first")
 	}
 

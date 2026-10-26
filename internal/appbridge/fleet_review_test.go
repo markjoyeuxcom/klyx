@@ -262,3 +262,93 @@ func TestWhileHeldThePublishedProtectionDecides(t *testing.T) {
 		t.Fatalf("protection's effect from the published value: %+v", p.Changes)
 	}
 }
+
+// Codex's re-review of S2b (2026-10-26): its probes, RR1-RR4.
+
+func TestAStartupConnectionPublishedBeforeWiringIsRemembered(t *testing.T) {
+	r := newFleetRig(t, true)
+	last, ok := r.cs.fp.lastConnected("dev")
+	if !ok || last.Context != "dev-ctx" {
+		t.Fatalf("startup usability was published before WireFleetPlans and is forgotten: known=%v last=%+v", ok, last)
+	}
+}
+
+func TestRetryRecordsTheTermsItActuallyBuilds(t *testing.T) {
+	r := newFleetRig(t, false)
+	connectNow(t, r, "dev")
+	d := devDraft()
+	d.Context = "dev-2"
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	d.Group = "new-platform"
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if res := r.apply(r.cs.PlanClusterRetry("dev"), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	connectNow(t, r, "dev")
+	last, ok := r.cs.fp.lastConnected("dev")
+	if !ok || last.Group != r.running("dev").Group {
+		t.Fatalf("Retry's recorded terms differ from its actual terms: last=%+v running=%+v", last, r.running("dev"))
+	}
+}
+
+func TestCancellingAPendingLooseningKeepsProtection(t *testing.T) {
+	r := newFleetRig(t, false)
+	d := devDraft()
+	d.Protected = true
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	d.Context = "dev-2"
+	d.Protected = false
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), "dev"); !res.OK {
+		t.Fatal(res.Error)
+	}
+	d.Protected = true
+	p := r.cs.PlanClusterEdit("dev", d)
+	if p.Refused != "" {
+		return
+	}
+	if res := r.apply(p, ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	connectNow(t, r, "dev")
+	if !r.snap("dev").Protected {
+		t.Fatalf("restored protection was applied to file and running entry, yet usability loosened it: plan=%+v running=%+v published=%+v", p, r.running("dev"), r.snap("dev"))
+	}
+}
+
+func TestAddRefusesARunningNameBeforeWriting(t *testing.T) {
+	r := newFleetRig(t, false)
+	r.handEdit("  - name: dev\n    context: dev-ctx\n", "")
+	before := r.file()
+	res := r.cs.AddClusters([]string{"dev"})
+	if !res.OK && r.file() != before {
+		t.Fatalf("a name still running was appended before the addition was refused: %+v", res)
+	}
+}
+
+// RR3: an edit committed on the connection that connected keeps its last
+// connected terms coherent - a placement and a protection change alike.
+func TestAnEditOnTheConnectedIdentityKeepsItsTerms(t *testing.T) {
+	r := newFleetRig(t, false)
+	connectNow(t, r, "dev")
+	d := devDraft()
+	d.Group = "web"
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if last, _ := r.cs.fp.lastConnected("dev"); last.Group != "web" {
+		t.Fatalf("after a placement: %+v", last)
+	}
+	d.Protected = true
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if last, _ := r.cs.fp.lastConnected("dev"); !last.Protected || last.Group != "web" {
+		t.Fatalf("after a protection change: %+v", last)
+	}
+}

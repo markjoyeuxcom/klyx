@@ -72,6 +72,7 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 				return err
 			}
 			s.swapRunning(x.cand)
+			fp.editedNow(life, name, x.terms)
 			return nil
 		})
 	case classProtection:
@@ -80,8 +81,11 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 				return err
 			}
 			s.swapRunning(x.cand)
-			_, err := s.policy.Advance(tok, x.cand.IsProtected())
-			return err
+			if _, err := s.policy.Advance(tok, x.cand.IsProtected()); err != nil {
+				return err
+			}
+			fp.editedNow(life, name, x.terms)
+			return nil
 		})
 		if err == nil && fp.d.EndEpochWork != nil {
 			fp.d.EndEpochWork(name, name+"'s protection changed")
@@ -152,6 +156,16 @@ func (fp *fleetPlans) attempt(cluster string, id fleet.ConnID, terms s2Fields) {
 	defer fp.mu.Unlock()
 	fp.terms[id] = attemptTerms{cluster: cluster, terms: terms}
 	fp.current[cluster] = terms
+}
+
+// editedNow records a change committed on the cluster's current
+// connection, under its gate.
+func (fp *fleetPlans) editedNow(life *Lifecycle, cluster string, terms s2Fields) {
+	if c, ok := life.reg.Conn(cluster); ok {
+		if id, ok := connID(c); ok {
+			fp.edited(cluster, id, terms)
+		}
+	}
 }
 
 // fileIs checks fleet.yaml is still the version a plan was made from.
