@@ -25,7 +25,7 @@ const (
 
 // PlanDTO is one activation plan.
 type PlanDTO struct {
-	Section     string            `json:"section"` // ai (F2b: notifications, git)
+	Section     string            `json:"section"` // ai | notifications | git
 	Kind        string            `json:"kind"`    // save | file | revert
 	Digest      string            `json:"digest"`
 	FileVersion string            `json:"fileVersion"`
@@ -59,7 +59,7 @@ type PlanChangeDTO struct {
 // identity: "an investigation on aks-we-prd, started 10:42".
 type PlanWorkDTO struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"` // chat | investigation | turn | offer | step | explain | suggest-fix
+	Kind    string `json:"kind"` // chat | investigation | turn | offer | step | explain | suggest-fix | fetch
 	Cluster string `json:"cluster"`
 	Started string `json:"started,omitempty"` // RFC 3339
 	What    string `json:"what"`
@@ -72,13 +72,17 @@ type InterlockDTO struct {
 }
 
 // ApplyResultDTO is an Apply's outcome: applied; refused with the plan it
-// was replaced by, which never inherits the confirmation; or saved, not
-// active, with the reason.
+// was replaced by, which never inherits the confirmation; a quiet Apply's
+// plan, returned unapplied for review; or saved, not active, with the
+// reason.
 type ApplyResultDTO struct {
 	OK             bool     `json:"ok"`
 	Error          string   `json:"error,omitempty"`
 	Plan           *PlanDTO `json:"plan,omitempty"`
 	SavedNotActive string   `json:"savedNotActive,omitempty"`
+	// Note: applied, with something to know (the OS has notifications off
+	// for Klyx)
+	Note string `json:"note,omitempty"`
 }
 
 // seal sets the plan's digest over everything in it the person reviews,

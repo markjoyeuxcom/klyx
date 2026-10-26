@@ -58,11 +58,7 @@ func (s *GitService) cacheDiff(ctx context.Context, conn GitOpsConn, ns, name st
 		return FluxDiffDTO{}, false
 	}
 	rawURL, _, _ := unstructured.NestedString(src.Object, "spec", "url")
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return FluxDiffDTO{}, false
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[line.NormalizeRepo(rawURL)]
 	if url == "" {

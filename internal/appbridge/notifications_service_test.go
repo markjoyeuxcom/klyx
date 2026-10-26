@@ -52,18 +52,18 @@ func TestNotificationsService(t *testing.T) {
 		return nil
 	}, func() (bool, error) { return authorized, nil }, func(name string, d any) { events = append(events, name); lastEvent = d })
 
-	if st := s.Settings(); st.Enabled || st.Scope != "protected" {
+	if st := s.Settings().InUse; st.Enabled || st.Scope != "protected" {
 		t.Fatalf("absent block: off, protected: %+v", st)
 	}
 	// enabling writes the block and asks the OS; a refusal keeps the setting and says so
-	if r := s.SetSettings(NotificationSettingsDTO{Enabled: true, Scope: "protected"}); !r.OK || !strings.Contains(r.Error, "notifications off") {
+	if r := s.ApplyNotificationsQuiet(NotificationSettingsDTO{Enabled: true, Scope: "protected"}); !r.OK || !strings.Contains(r.Note, "notifications off") {
 		t.Fatalf("refused: %+v", r)
 	}
 	if c, _ := config.Load(path); c.Notifications == nil || !c.Notifications.Enabled {
 		t.Fatal("not written")
 	}
 	authorized = true
-	if r := s.SetSettings(NotificationSettingsDTO{Enabled: true, Scope: "protected"}); !r.OK || r.Error != "" {
+	if r := s.ApplyNotificationsQuiet(NotificationSettingsDTO{Enabled: true, Scope: "protected"}); !r.OK || r.Error != "" || r.Note != "" {
 		t.Fatalf("allowed: %+v", r)
 	}
 	l := NotificationsListener(s)
@@ -269,22 +269,19 @@ func TestNotificationSettingsChangesAreSerialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	paused, release := make(chan struct{}), make(chan struct{})
-	defer func(f func(string, config.NotificationsConfig, config.NotificationsConfig) error) {
-		saveNotifications = f
-	}(saveNotifications)
-	saveNotifications = func(p string, c, prev config.NotificationsConfig) error {
-		err := config.SaveNotifications(p, c, prev)
+	s := NewNotificationsService(path, &config.Config{}, func(string) (config.ClusterConfig, bool) { return config.ClusterConfig{}, false }, nil, nil, nil)
+	s.save = func(p, version string, c config.NotificationsConfig) (string, error) {
+		v, err := config.SaveNotificationsAt(p, version, c)
 		if c.Enabled {
 			close(paused)
 			<-release
 		}
-		return err
+		return v, err
 	}
-	s := NewNotificationsService(path, &config.Config{}, func(string) (config.ClusterConfig, bool) { return config.ClusterConfig{}, false }, nil, nil, nil)
 	done := make(chan struct{}, 2)
-	go func() { s.SetSettings(NotificationSettingsDTO{Enabled: true}); done <- struct{}{} }()
+	go func() { s.ApplyNotificationsQuiet(NotificationSettingsDTO{Enabled: true}); done <- struct{}{} }()
 	<-paused
-	go func() { s.SetSettings(NotificationSettingsDTO{Enabled: false}); done <- struct{}{} }()
+	go func() { s.ApplyNotificationsQuiet(NotificationSettingsDTO{Enabled: false}); done <- struct{}{} }()
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	<-done
@@ -293,7 +290,7 @@ func TestNotificationSettingsChangesAreSerialized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if live := s.Settings().Enabled; c.Notifications == nil || live != c.Notifications.Enabled || live {
+	if live := s.Settings().InUse.Enabled; c.Notifications == nil || live != c.Notifications.Enabled || live {
 		t.Fatalf("live %v, written %+v: the later disable must win both", live, c.Notifications)
 	}
 }

@@ -85,6 +85,7 @@ const git: GitSettings = {
   ],
   unapproved: [{ key: "github.com/acme/tools", serves: "github.com/acme/tools", sources: [], suggest: "https://github.com/acme/tools.git" }],
   notes: [],
+  diverged: false,
 };
 
 const endpoint = (over: Partial<EndpointRow>): EndpointRow => ({
@@ -118,7 +119,7 @@ beforeEach(() => {
   b.applyAI.mockImplementation(() => b.saveAISettings());
   b.getCLIStatus.mockResolvedValue({ path: "/usr/local/bin/claude", tested: false, admitted: false });
   b.getGitSettings.mockResolvedValue(git);
-  b.getNotificationSettings.mockResolvedValue({ enabled: true, scope: "protected", recoveries: false });
+  b.getNotificationSettings.mockResolvedValue({ inUse: { enabled: true, scope: "protected", recoveries: false }, diverged: false });
   b.getDiagnostics.mockResolvedValue(diagnostics);
   b.getIndexSettings.mockResolvedValue({ kinds: ["apps/deployments"], entriesPerCluster: 50000, mibPerCluster: 32, entriesFleet: 200000, mibFleet: 128, podPercent: 80 });
   _resetNavGuardForTest();

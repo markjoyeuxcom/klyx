@@ -30,10 +30,17 @@ type fakeGitStore struct {
 	status    map[string]gitcache.Status
 	err       error
 	read      func(url string, fn func(gitcli.Repo) error) error
+	gate      chan struct{} // set: a refresh waits for it to close
 }
 
 func (f *fakeGitStore) Start(context.Context) error { return nil }
 func (f *fakeGitStore) RefreshHistory(_ context.Context, url string, refs []gitcli.Ref) error {
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, r := range refs {
@@ -127,6 +134,7 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 	}
 	h.svc = NewGitService(context.Background(), GitDeps{
 		ConfigPath: path,
+		Initial:    startupGit(t, path),
 		Override:   &line.Key{Kind: line.KeyGit, Repo: "github.com/acme/platform", RefKind: "semver", RefName: ">=1.0"},
 		Emitter:    h.em,
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
@@ -147,6 +155,17 @@ func newGitHarness(t *testing.T, fleet string, startErr error) *gitHarness {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return h
+}
+
+// startupGit is path's git block as the app reads it at startup: the
+// running copy (Settings slice F §5).
+func startupGit(t *testing.T, path string) *config.GitConfig {
+	t.Helper()
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.Git
 }
 
 func (h *gitHarness) fleet() string {

@@ -77,8 +77,8 @@ const (
 const (
 	clusterSave = "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs."
 	aiSave      = "Save rewrites fleet.yaml's ai block (comments inside it are not kept) and rebuilds the AI in use."
-	gitSave     = "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once."
-	notifySave  = "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept)."
+	gitSave     = "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
+	notifySave  = "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
 	envSave     = "Set it in the environment Klyx is launched from; a GUI launch may not see shell exports."
 	harnessNote = "A build harness's variable, not a product setting: only a smoke or eval build reads it."
 )

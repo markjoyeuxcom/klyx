@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { GitRepo, GitSettings } from "../bridge/gitSettings";
+import type { Plan } from "../bridge/plan";
 
 const bridge = vi.hoisted(() => ({
   getGitSettings: vi.fn(),
@@ -9,6 +10,8 @@ const bridge = vi.hoisted(() => ({
   setGitRepoMatch: vi.fn(),
   fetchGitRepo: vi.fn(),
   clearGitCache: vi.fn(),
+  planGitFromFile: vi.fn(),
+  applyGit: vi.fn(),
 }));
 vi.mock("../bridge/gitSettings", async (orig) => ({ ...(await orig<typeof import("../bridge/gitSettings")>()), ...bridge }));
 vi.mock("../bridge/configsvc", () => ({ armProtected: vi.fn() }));
@@ -53,6 +56,7 @@ function state(over: Partial<GitSettings> = {}): GitSettings {
       },
     ],
     notes: [],
+    diverged: false,
     ...over,
   };
 }
@@ -176,5 +180,53 @@ describe("GitSettingsPanel without a repository key", () => {
     render(<GitSettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Fetch now" }));
     expect((await screen.findByTestId("git-reread-failed")).textContent).toContain("as last read");
+  });
+});
+
+// Settings slice F2b: what is shown is the running copy; a hand edit is
+// drift, adopted with "Use the file's values".
+describe("GitSettingsPanel drift", () => {
+  const filePlan = (over: Partial<Plan> = {}): Plan => ({
+    section: "git", kind: "file", digest: "g1", fileVersion: "v1", runtime: { git: "0", work: "" },
+    changes: [{ id: "git.repos[git@github.com:acme/fleet.git].url", label: "Repository git@github.com:acme/fleet.git", from: "approved", to: "not approved" }],
+    ends: [], continues: [{ id: "fetch:git@github.com:acme/fleet.git", kind: "fetch", cluster: "", started: "2026-10-26T10:42:00Z", what: "the fetch of git@github.com:acme/fleet.git in progress: it finishes, and its history is no longer used" }],
+    writes: false, activates: true, ...over,
+  });
+
+  it("offers the file's values as a plan, and applies only its digest", async () => {
+    bridge.getGitSettings.mockResolvedValue(state({ diverged: true }));
+    bridge.planGitFromFile.mockResolvedValue(filePlan());
+    bridge.applyGit.mockResolvedValue({ ok: true });
+    render(<GitSettingsPanel />);
+    const notice = await screen.findByTestId("git-diverged");
+    expect(notice.textContent).toContain("differ from the ones in use");
+    fireEvent.click(within(notice).getByRole("button", { name: "Use the file's values" }));
+    const plan = await screen.findByTestId("settings-plan");
+    expect(plan.getAttribute("data-plan-digest")).toBe("g1");
+    expect(plan.textContent).toContain("fleet.yaml already says this");
+    expect(plan.textContent).toContain("Continues");
+    expect(plan.textContent).toContain("it finishes, and its history is no longer used");
+    expect(bridge.applyGit).not.toHaveBeenCalled();
+    bridge.getGitSettings.mockResolvedValue(state({ repos: [] }));
+    fireEvent.click(within(plan).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(bridge.applyGit).toHaveBeenCalledWith("g1"));
+    await waitFor(() => expect(screen.queryByTestId("settings-plan")).toBeNull());
+    expect(screen.queryByTestId("git-diverged")).toBeNull();
+    expect(screen.getByTestId("git-message").textContent).toContain("Applied");
+  });
+
+  it("an action refused for drift says so; a plan it returns is shown, never applied", async () => {
+    bridge.getGitSettings.mockResolvedValue(state({ diverged: true }));
+    bridge.removeGitRepo.mockResolvedValue({ ok: false, error: "fleet.yaml's Git settings differ from the ones in use, so nothing was written: use the file's values first, or undo that edit" });
+    render(<GitSettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }));
+    expect((await screen.findByTestId("git-message")).textContent).toContain("use the file's values first");
+
+    bridge.setGitRepoMatch.mockResolvedValue({ ok: false, error: "Something changed since this was planned: review the new plan.", plan: filePlan({ kind: "save", digest: "g2", writes: true }) });
+    fireEvent.change(screen.getByLabelText(/^Also serves \(/), { target: { value: "github.com/acme/fleet-mirror" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect((await screen.findByTestId("settings-plan")).getAttribute("data-plan-digest")).toBe("g2");
+    expect(bridge.applyGit).not.toHaveBeenCalled();
   });
 });

@@ -2,14 +2,17 @@ import { useEffect, useState } from "react";
 import { IconAlertTriangle, IconX } from "@tabler/icons-react";
 import { ConfirmDialog } from "../chrome/ConfirmDialog";
 import { OperationDialog } from "../chrome/OperationDialog";
+import { PlanView } from "../settings/PlanView";
 import { SettingField } from "../settings/SettingField";
 import { anchorOf } from "../settings/registry";
 import { setSectionDraft } from "../settings/navGuard";
 import {
+  applyGit,
   approveGitRepo,
   clearGitCache,
   fetchGitRepo,
   getGitSettings,
+  planGitFromFile,
   removeGitRepo,
   setGitRepoMatch,
   type ActionResult,
@@ -18,12 +21,17 @@ import {
   type GitSource,
   type GitUnapproved,
 } from "../bridge/gitSettings";
+import type { ApplyResult, Plan } from "../bridge/plan";
 
 // GitSettingsPanel is Settings > Git (The Line slice 6c, slice 6 note §5.3):
 // the repositories Klyx may fetch history from, approved one by one. What
 // runs is always the approved URL exactly as written, through the system git
 // with the owner's SSH agent or credential helper; a URL read from a cluster
 // is only matched to an entry and shown scrubbed. Klyx stores no token.
+//
+// Settings slice F: what is shown is the running copy. Each action is a
+// plan applied by the action's own confirmation; a hand edit of the block
+// is drift, adopted with "Use the file's values".
 
 const row: React.CSSProperties = { display: "flex", alignItems: "baseline", gap: 8, padding: "2px 0" };
 const labelStyle: React.CSSProperties = { fontSize: 10, color: "var(--color-text-tertiary)", width: 70, flexShrink: 0 };
@@ -60,6 +68,7 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [approving, setApproving] = useState<GitUnapproved | null>(null);
   const [removing, setRemoving] = useState<GitRepo | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
 
   const load = async () => {
     const s = await getGitSettings();
@@ -79,13 +88,25 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
     return () => clearTimeout(t);
   }, [state]);
 
-  const run = async (url: string, fn: () => Promise<ActionResult>, okText: string) => {
+  // run says an action's result; a plan that came back is shown for
+  // review, never applied by this
+  const run = async (url: string, fn: () => Promise<ActionResult | ApplyResult>, okText: string) => {
     setBusy(url);
     setMessage(null);
     const r = await fn();
     setBusy(null);
+    if ("plan" in r && r.plan) setPlan(r.plan);
+    else if (r.ok) setPlan(null);
     setMessage(r.ok ? { kind: "ok", text: okText } : { kind: "error", text: r.error || "failed" });
     await load();
+  };
+
+  const adoptFile = async () => {
+    setBusy("plan");
+    setMessage(null);
+    const p = await planGitFromFile();
+    setBusy(null);
+    setPlan(p);
   };
 
   if (loadFailed && !state) {
@@ -133,12 +154,32 @@ export function GitSettingsPanel({ onSettings }: { onSettings?: (g: GitSettings)
           {state.refusedHelpers === 1 ? "A credential helper given as a shell snippet (!…) is" : `${state.refusedHelpers} credential helpers given as shell snippets (!…) are`} not used.
         </Notice>
       )}
-      {state.configError && <Notice testId="git-config-error">fleet.yaml cannot be read: {state.configError}</Notice>}
+      {state.configError && <Notice testId="git-config-error">fleet.yaml cannot be read: {state.configError}. What is shown is in use.</Notice>}
+      {state.diverged && (
+        <Notice testId="git-diverged">
+          fleet.yaml&apos;s Git settings differ from the ones in use: an action is refused until you use the file&apos;s values, or undo that edit.{" "}
+          <button className="l-btn" disabled={busy !== null} onClick={() => void adoptFile()}>Use the file&apos;s values</button>
+        </Notice>
+      )}
       {state.notes.map((n, i) => <Notice key={i} testId="git-note">{n}</Notice>)}
       {message && (
         <div data-testid="git-message" role="status" style={{ fontSize: 11, margin: "4px 0 8px", color: message.kind === "error" ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
           {message.kind === "error" ? "▲ " : ""}{message.text}
         </div>
+      )}
+      {plan && (
+        <PlanView
+          key={plan.digest}
+          plan={plan}
+          busy={busy !== null}
+          interlockTitle="Apply the Git settings?"
+          onApply={async () => {
+            let result: ApplyResult = { ok: false };
+            await run("plan", async () => (result = await applyGit(plan.digest)), "Applied: these are the Git settings in use.");
+            return result;
+          }}
+          onCancel={() => setPlan(null)}
+        />
       )}
 
       <Subhead>Approved repositories</Subhead>

@@ -150,6 +150,7 @@ func TestAnEndpointRowShowsItsTLSAndScope(t *testing.T) {
 
 // Codex's cross-check probe: a hand edit to the notifications block before
 // a toggle survives it - the toggle is refused, and the file is unchanged.
+// Under slice F the edit is drift, adopted with "Use the file's values".
 func TestANotificationToggleNeverOverwritesAHandEdit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.yaml")
 	if err := os.WriteFile(path, []byte("clusters:\n  - name: prd\n    context: prd\n"), 0o600); err != nil {
@@ -160,14 +161,14 @@ func TestANotificationToggleNeverOverwritesAHandEdit(t *testing.T) {
 	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := s.SetSettings(NotificationSettingsDTO{Enabled: true})
-	if r.OK || !strings.Contains(r.Error, "edited after Klyx read it") {
+	r := s.ApplyNotificationsQuiet(NotificationSettingsDTO{Enabled: true})
+	if r.OK || !strings.Contains(r.Error, "use the file's values first") {
 		t.Fatalf("%+v", r)
 	}
 	if b, _ := os.ReadFile(path); string(b) != edited {
 		t.Fatalf("the hand edit was overwritten:\n%s", b)
 	}
-	if got := s.Settings(); got.Enabled {
+	if got := s.Settings(); got.InUse.Enabled || !got.Diverged {
 		t.Fatalf("a refused save applied: %+v", got)
 	}
 }

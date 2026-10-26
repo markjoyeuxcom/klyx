@@ -351,9 +351,11 @@ func main() {
 
 	// The Line slice 6: read-only Git access through the system git, only
 	// from fleet.yaml's approved git.repos (Settings > Git); it orders the
-	// line against its history after every LineDTO (line:git).
+	// line against its history after every LineDTO (line:git). Its running
+	// copy is the startup configuration's block (Settings slice F §5).
 	gitSvc := appbridge.NewGitService(ctx, appbridge.GitDeps{
 		ConfigPath: configPath(),
+		Initial:    cfg.Git,
 		Override:   lineOverride,
 		Emitter:    em,
 	})

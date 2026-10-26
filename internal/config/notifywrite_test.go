@@ -20,7 +20,7 @@ func TestSaveNotifications(t *testing.T) {
 	if err != nil || c.Notifications != nil {
 		t.Fatalf("absent: %+v %v", c.Notifications, err)
 	}
-	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "nonsense", Recoveries: true}, NotificationsConfig{}); err != nil {
+	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "nonsense", Recoveries: true}); err != nil {
 		t.Fatal(err)
 	}
 	c, err = Load(path)
@@ -31,7 +31,7 @@ func TestSaveNotifications(t *testing.T) {
 	if !strings.HasPrefix(string(b), orig) {
 		t.Fatalf("other content changed:\n%s", b)
 	}
-	if err := SaveNotifications(path, NotificationsConfig{Enabled: false, Scope: "all"}, NotificationsConfig{Enabled: true, Recoveries: true}); err != nil {
+	if err := SaveNotifications(path, NotificationsConfig{Enabled: false, Scope: "all"}); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = Load(path)
@@ -40,21 +40,31 @@ func TestSaveNotifications(t *testing.T) {
 	}
 }
 
-// Settings review slice 0 (Codex's cross-check probe): a save made from an
-// earlier read refuses a block edited by hand since, and writes nothing.
+// Settings review slice 0 (Codex's cross-check probe), under slice F: a
+// save made from the version read before a hand edit refuses it and writes
+// nothing; from the file's own version it goes ahead.
 func TestANotificationsSaveNeverOverwritesAHandEdit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	if err := os.WriteFile(path, []byte("clusters:\n  - name: prd\n    context: prd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read, err := FileVersion(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	edited := "clusters:\n  - name: prd\n    context: prd\nnotifications:\n  enabled: false\n  scope: all\n  recoveries: true\n"
 	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Klyx read the block before the edit: absent, so off and protected
-	err := SaveNotifications(path, NotificationsConfig{Enabled: true}, NotificationsConfig{})
-	if !errors.Is(err, ErrNotificationsEdited) || string(mustRead(t, path)) != edited {
+	if _, err := SaveNotificationsAt(path, read, NotificationsConfig{Enabled: true}); !errors.Is(err, ErrFileChanged) || string(mustRead(t, path)) != edited {
 		t.Fatalf("%v\n%s", err, mustRead(t, path))
 	}
-	// from the file's own block, the save goes ahead
-	if err := SaveNotifications(path, NotificationsConfig{Enabled: true, Scope: "all", Recoveries: true}, NotificationsConfig{Scope: "all", Recoveries: true}); err != nil {
+	now, _ := FileVersion(path)
+	written, err := SaveNotificationsAt(path, now, NotificationsConfig{Enabled: true, Scope: "all", Recoveries: true})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if v, _ := FileVersion(path); v != written {
+		t.Fatalf("returned version %s, file %s", written, v)
 	}
 }

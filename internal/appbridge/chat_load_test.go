@@ -190,7 +190,7 @@ func TestInvestigationsAtTheirBoundsAtOnce(t *testing.T) {
 	if err := os.WriteFile(path, []byte(diffFleet), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git := NewGitService(context.Background(), GitDeps{ConfigPath: path,
+	git := NewGitService(context.Background(), GitDeps{ConfigPath: path, Initial: startupGit(t, path),
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
 			return gitcli.Runner{Git: gitcli.Git{Path: "/usr/bin/git"}}, gitcli.Helpers{}, nil
 		},

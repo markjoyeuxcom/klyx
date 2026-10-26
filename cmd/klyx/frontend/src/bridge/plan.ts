@@ -24,9 +24,32 @@ export type Plan = {
   refused?: string;
 };
 
-// Applied; refused with the plan it was replaced by; or saved, not active.
-export type ApplyResult = { ok: boolean; error?: string; plan?: Plan; savedNotActive?: string };
+// Applied; refused with the plan it was replaced by; a quiet Apply's plan,
+// returned for review; or saved, not active. note: applied, with something
+// to know (the OS has notifications off for Klyx).
+export type ApplyResult = { ok: boolean; error?: string; plan?: Plan; savedNotActive?: string; note?: string };
 
 export function refusedPlan(section: string, kind: Plan["kind"], why: string): Plan {
   return { section, kind, digest: "", fileVersion: "", runtime: {}, changes: [], ends: [], continues: [], writes: false, activates: false, refused: why };
+}
+
+const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// askPlan asks the backend for a plan: a failed call is a refused plan,
+// which nothing applies.
+export async function askPlan(section: string, kind: Plan["kind"], call: () => Promise<unknown>): Promise<Plan> {
+  try {
+    return (await call()) as Plan;
+  } catch (e) {
+    return refusedPlan(section, kind, why(e));
+  }
+}
+
+// askApply runs an Apply: a failed call is a refusal.
+export async function askApply(call: () => Promise<unknown>): Promise<ApplyResult> {
+  try {
+    return (await call()) as ApplyResult;
+  } catch (e) {
+    return { ok: false, error: why(e) };
+  }
 }

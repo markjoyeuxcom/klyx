@@ -90,11 +90,7 @@ func SetChatGit(c *ChatService, g *GitService) {
 
 func (s *GitService) changes(ctx context.Context, req gitChangesReq) (gitChangesOut, error) {
 	var out gitChangesOut
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return out, fmt.Errorf("reading the Git settings: %w", err)
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[line.NormalizeRepo(req.RepoURL)]
 	if url == "" {

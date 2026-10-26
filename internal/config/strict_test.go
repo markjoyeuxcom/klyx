@@ -99,7 +99,7 @@ func TestFleetWritersKeepASymlink(t *testing.T) {
 		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
 		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
 		"notifications": func(p string) error {
-			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+			return SaveNotifications(p, NotificationsConfig{Enabled: true})
 		},
 		"metrics token": func(p string) error {
 			snap, err := ReadSnapshot(p)
@@ -264,7 +264,7 @@ func TestAWriterRefusesAPermissionChange(t *testing.T) {
 		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
 		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
 		"notifications": func(p string) error {
-			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+			return SaveNotifications(p, NotificationsConfig{Enabled: true})
 		},
 	}
 	for name, write := range writers {
@@ -379,7 +379,7 @@ func TestNoYAMLErrorCarriesTheFilesContent(t *testing.T) {
 		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
 		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
 		"notifications": func(p string) error {
-			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+			return SaveNotifications(p, NotificationsConfig{Enabled: true})
 		},
 		"metrics token": func(p string) error {
 			snap, err := ReadSnapshot(p)
@@ -467,7 +467,7 @@ func TestATaggedScalarIsWithheld(t *testing.T) {
 		"ai":           func(p string) error { return SaveAI(p, AIConfig{Provider: "off"}) },
 		"git":          func(p string) error { return SaveGit(p, GitConfig{}) },
 		"notifications": func(p string) error {
-			return SaveNotifications(p, NotificationsConfig{Enabled: true}, NotificationsConfig{})
+			return SaveNotifications(p, NotificationsConfig{Enabled: true})
 		},
 		"metrics token": func(p string) error {
 			snap, err := ReadSnapshot(p)

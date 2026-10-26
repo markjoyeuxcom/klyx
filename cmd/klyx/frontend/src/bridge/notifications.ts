@@ -2,6 +2,7 @@ import { Events } from "@wailsio/runtime";
 import { NotificationsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 import { useFleet } from "../store/fleet";
 import { reveal } from "../nav/reveal";
+import { askApply, askPlan } from "./plan";
 
 // Health notifications (The Line slice 10, parent §8.6): the settings, the
 // app's focus (nothing is sent while the app shows that cluster), faults
@@ -15,22 +16,27 @@ export type HealthBaseline = { seq: number; cluster: string; reason: "connect" |
 export const BASELINE_EVENT = "health:baseline";
 export const OPEN_EVENT = "health:notification-open";
 
-export async function getNotificationSettings(): Promise<NotificationSettings | null> {
+// The settings in use, and whether fleet.yaml's block differs from them
+// (Settings slice F §5): a hand edit is drift until "Use the file's
+// values" or a restart.
+export type NotificationsState = { inUse: NotificationSettings; diverged: boolean; fileError?: string };
+
+export async function getNotificationSettings(): Promise<NotificationsState | null> {
   try {
-    return (await NotificationsService.Settings()) as NotificationSettings;
+    const r = (await NotificationsService.Settings()) as NotificationsState;
+    return r?.inUse ? r : null;
   } catch {
     return null;
   }
 }
 
-export async function setNotificationSettings(s: NotificationSettings): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const r = await NotificationsService.SetSettings(s);
-    return { ok: !!r?.ok, error: r?.error || undefined };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
+// A toggle (Settings slice F §6): a plan from what runs, applied at once
+// when it ends nothing and needs no interlock; otherwise its plan comes back
+// for review.
+export const applyNotificationsQuiet = (s: NotificationSettings) => askApply(() => NotificationsService.ApplyNotificationsQuiet(s));
+// "Use the file's values": the file's block, from what runs, writing nothing
+export const planNotificationsFromFile = () => askPlan("notifications", "file", () => NotificationsService.PlanNotificationsFromFile());
+export const applyNotifications = (digest: string) => askApply(() => NotificationsService.ApplyNotifications(digest));
 
 const nameOf = (o: NotificationObject) => `${o.kind ?? ""} ${o.namespace ? `${o.namespace}/` : ""}${o.name ?? ""}`.trim();
 

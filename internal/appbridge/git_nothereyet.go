@@ -95,11 +95,7 @@ func (s *GitService) NotHereYet(ctx context.Context, nodes []NotHereYetNodeDTO) 
 	if err != nil {
 		return all(err.Error())
 	}
-	cfg, err := s.d.Load(s.d.ConfigPath)
-	if err != nil {
-		return all(gitcli.Scrub(err.Error()))
-	}
-	repos, _ := cfg.ApprovedGitRepos()
+	repos, _ := s.approved()
 	owner, _ := keyOwners(repos)
 	url := owner[key.Repo]
 	if url == "" || url != lg.Repo {

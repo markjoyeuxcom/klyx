@@ -28,17 +28,24 @@ type gitYAML struct {
 // wrote it, and the caller (Settings > Git) validates every entry it adds.
 // Comments inside the git block are not kept.
 func SaveGit(path string, g GitConfig) error {
+	_, err := SaveGitAt(path, "", g)
+	return err
+}
+
+// SaveGitAt is SaveGit from a plan: version is the file version it was made
+// from (ErrFileChanged for any other; "" checks none), and it returns the
+// written file's version (Settings slice F §5).
+func SaveGitAt(path, version string, g GitConfig) (string, error) {
 	block, err := renderGitBlock(g)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = saveTopLevelBlock(path, "git", block, "Git settings", "", nil, func(got *Config) error {
-		if got.Git == nil || !gitReposEqual(got.Git.Repos, g.Repos) {
+	return saveTopLevelBlock(path, "git", block, "Git settings", version, nil, func(got *Config) error {
+		if got.Git == nil || !GitReposEqual(got.Git.Repos, g.Repos) {
 			return errors.New("the written git block does not read back as intended (file unchanged)")
 		}
 		return nil
 	})
-	return err
 }
 
 func renderGitBlock(g GitConfig) (string, error) {
@@ -63,7 +70,9 @@ func renderGitBlock(g GitConfig) (string, error) {
 	return b.String(), nil
 }
 
-func gitReposEqual(a, b []GitRepoConfig) bool {
+// GitReposEqual compares two git.repos lists as written, an empty matches
+// list being none.
+func GitReposEqual(a, b []GitRepoConfig) bool {
 	norm := func(rs []GitRepoConfig) []GitRepoConfig {
 		out := make([]GitRepoConfig, 0, len(rs))
 		for _, r := range rs {

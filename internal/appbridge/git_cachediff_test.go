@@ -192,7 +192,7 @@ func newDiffService(t *testing.T, store *cacheFake) *GitService {
 	if err := os.WriteFile(path, []byte(diffFleet), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewGitService(context.Background(), GitDeps{ConfigPath: path,
+	svc := NewGitService(context.Background(), GitDeps{ConfigPath: path, Initial: startupGit(t, path),
 		StartGit: func(context.Context) (gitcli.Runner, gitcli.Helpers, error) {
 			return gitcli.Runner{Git: gitcli.Git{Path: "/usr/bin/git"}}, gitcli.Helpers{}, nil
 		},

@@ -817,7 +817,7 @@
       "default": "none",
       "validation": "host/org/repo keys.",
       "takesEffect": "on Save",
-      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once.",
+      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },
@@ -843,7 +843,7 @@
       "default": "none",
       "validation": "https or ssh, with no token in it.",
       "takesEffect": "on Save",
-      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once.",
+      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },
@@ -856,7 +856,7 @@
       "default": "none",
       "validation": "An https URL, optional.",
       "takesEffect": "on Save",
-      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once.",
+      "save": "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },
@@ -869,7 +869,7 @@
       "default": "false",
       "validation": "true or false.",
       "takesEffect": "now",
-      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept).",
+      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },
@@ -882,7 +882,7 @@
       "default": "false",
       "validation": "true or false.",
       "takesEffect": "now",
-      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept).",
+      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },
@@ -895,7 +895,7 @@
       "default": "protected",
       "validation": "protected or all.",
       "takesEffect": "now",
-      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept).",
+      "save": "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart.",
       "disposition": "editable",
       "source": "schema"
     },

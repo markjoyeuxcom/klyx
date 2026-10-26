@@ -1170,6 +1170,24 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await within(20_000, "Loki's answer", () => byText<HTMLElement>("[data-testid='endpoints-settings'] *", /Available: Loki 3\.7\.8/));
     return { endpoints: ep.querySelectorAll("[data-testid='endpoint-row']").length, test: result.textContent?.trim().slice(0, 120) };
   });
+  // Settings slice F2b: a Git alias is a plan from the running copy,
+  // applied by its own action against the file version it was planned
+  // from; removed again, so the smoke fleet ends as it began.
+  await step(steps, "Settings > Git: an alias applied as a plan, then removed", async () => {
+    useFleet.getState().openSettings("git");
+    const entry = () => [...document.querySelectorAll<HTMLElement>("[data-testid='git-repo']")].find((r) => (r.textContent ?? "").includes("gl-work:platform/workloads.git")) ?? null;
+    await within(8000, "the workloads entry", entry);
+    if ($("[data-testid='git-diverged']")) throw new Error("the smoke fleet's git block differs from the one in use");
+    const alias = "gitlab.example.com/platform/workloads-mirror";
+    const chip = () => [...(entry()?.querySelectorAll("[data-testid='git-match']") ?? [])].some((m) => m.textContent === alias);
+    typeInto(entry()!.querySelector<HTMLInputElement>("input.l-input")!, alias);
+    (await within(4000, "Add", () => [...(entry()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((b) => b.textContent === "Add" && !b.disabled) ?? null)).click();
+    const added = await within(8000, "the alias applied", () => chip() ? byText<HTMLElement>("[data-testid='git-message']", /now also serves/) ?? null : null);
+    (await within(4000, "the alias's remove", () => entry()?.querySelector<HTMLButtonElement>(`button[aria-label='stop serving ${alias}']`) ?? null)).click();
+    await within(8000, "the alias removed", () => !chip() && byText<HTMLElement>("[data-testid='git-message']", /^Removed /));
+    if ($("[data-testid='git-diverged']")) throw new Error("the running copy and fleet.yaml differ after the actions");
+    return { added: added.textContent?.trim() };
+  });
   await step(steps, "chat drawer opens and closes, asked nothing", async () => {
     await open("overview");
     (await within(4000, "Ask", () => $<HTMLButtonElement>(".locbar-ask"))).click();
