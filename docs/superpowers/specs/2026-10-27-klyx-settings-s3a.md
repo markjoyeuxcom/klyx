@@ -672,3 +672,9 @@ S3a-3 is §4: every AI read of alerts records the terms it was read under, and e
 **Smoke:** 216/216 four ways at 1bd4484, the smoke fleet.yaml as it began after every walk.
 
 **Gates:** one existing observe test, `TestErrorThenRecoveryWithoutObjectChangesAdvancesVer`, timed out once in a plain run while other suites loaded the machine; it passed in the same gate's race run and five times alone. S3a-3 does not touch observe.
+
+## 25. ACCEPT: S3a-3 (2026-10-27)
+
+Codex accepted S3a-3 at its first review (418d53b), with no findings. It checked each read's own lineage through its rows, empty and stale outcomes and the summary counts, the cumulative tokens, the sticky guard and the A3 withdrawal. Its probes ran the real OpenAI-compatible provider over an in-memory transport: a moved lineage blocks a redirected request in a chat and in Explain, and the conversation stays ended.
+
+It ruled both refinements of §24 acceptable: rows whose terms have already moved are refused before they are recorded (rows that are only stale, under terms that still hold, stay usable as qualified history), and a direct installation's outcome is served only under its current credential. It agreed the installation's revision and id checks are equivalent behind the subscription's revision. S3a-4, the Settings page, is next.
