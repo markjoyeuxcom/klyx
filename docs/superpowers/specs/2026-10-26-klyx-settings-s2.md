@@ -857,3 +857,48 @@ Codex accepted S2b at revision 3 (3196a4e), with no remaining findings. That cam
 Its last re-review checked the failed-startup case end to end: a placement edit, a Retry that connects, the real usability publication, a pending reconnect, then Revert, with the edit kept. All fourteen of its independent probes pass under the race detector. It accepted the equivalent mutant §23 names, and no native smoke for that bookkeeping fix: the S2c smoke runs on top of it.
 
 S2c, the page, builds on S2b next. The two are proposed for `main` together.
+
+## 25. S2c as built (2026-10-27)
+
+S2c is the page: Settings > Fleet edits a cluster through its plans. It was built on S2b and rebased onto its accepted revision 3 (§24).
+
+| Contract (§5) | Code |
+|---|---|
+| The table | `FleetSection`: a real table with header semantics, plus an actions column on each row: Edit, and Remove… |
+| The editor | `ClusterEditor`, inline under its row. It opens on the cluster's entry as fleet.yaml says it (`ConfigService.GetClusterEntry`: the raw S2 fields, what decides protection, and the contexts the entry's kubeconfig offers) and edits a draft: context (offered from those contexts), kubeconfig, region (`tags.region`), group, environment, other tags (one `key=value` a line; a bad line is named, and Review waits until it is fixed), and `protected: true`. The name is read-only: renaming is a later slice. Each field is the registry's `SettingField`, with its effect and its takes-effect chip |
+| Protection's effect | The editor says what decides protection now (`ProtectedBy`), and why it cannot be loosened here when the name infers it (`Locked`). The plan says the effect of the draft |
+| Review and apply | `PlanView` for every route: the changes, protection's effect line, what ends and what continues, the class's consequence (a reconnect is held until its new connection is usable; a protection change makes earlier confirmations stale and ends the conversations), and the interlock: the existing dialog, typed with the cluster's name, its lock named "protection lock" |
+| Remove… | The removal plan, with each keychain record present as its own choice. A toggle re-plans with the kinds chosen, so the digest binds the choice. The interlock applies when the cluster is protected |
+| The notices | A held cluster: its hold's reason as it is - a reconnect's "Saved, not connected yet: connecting with context …" or a failed build's "Failed to connect: …" - and that nothing new starts on it, with Revert (when other terms connected before) and Retry. Drift: "Use the file's values". A file-only cluster: Connect. A failed build is held from the start, so it offers Retry |
+| The registry | Context, kubeconfig, group, environment, tags and protection are editable: on Save, a context or kubeconfig at reconnect. The name stays file-only, "a later slice". An endpoint's fields keep their file-only text until S3 |
+| After a removal | A route on the removed cluster goes back to the fleet, with a note in Activity. View preferences keyed by its name are kept, so a cluster added again under that name has them back |
+| After a reconnect | The lens views follow the new connection: they read through the registry's current connection by name, so nothing needs re-pointing. The smoke checks it |
+
+**Backend additions:**
+- `FleetClusterDTO` gains `ProtectedBy`, `Held`, `CanRevert` and `CanRetry`, from the published policy and the last connected terms.
+- `GetClusterEntry` reads fleet.yaml now, so the editor's draft is what the file says. It is never the effective entry, with its defaulted context and derived tags.
+- `PlanDTO`'s new kinds and fields reach the page through `bridge/fleetPlans.ts`.
+
+**Settling an Apply:** as in F's sections:
+- a replacement plan is shown, never applied by the page;
+- a refusal says why;
+- a lost answer reads back what runs and says so;
+- an applied plan closes the editor and reads the fleet again.
+
+**The native smoke** (`smoke/run.ts`, on kind-klyx; every edit undone, and the gate restores and compares the smoke fleet.yaml around each walk):
+- **A placement edit:** the region moves, and the line's station moves to the new track; it is moved back.
+- **Protection:** tightened without an interlock, then loosened back through the typed interlock.
+- **A reconnect:** to the same context through an explicit kubeconfig path. It is held until it connects, the Flux lens shows the lab's units on the new connection, and it is restored the same way.
+
+S2 §6 lists the protection walk the other way round, loosened then tightened back. The lab cluster starts unprotected, so the walk goes from unprotected and back.
+
+**Tests:**
+- The page: a held notice says its reason once, for a reconnect and a failed build; an edit planned with exactly the draft, applied, then read back; loosening through the typed interlock with the cluster's name; a removal's choices re-planned; Revert and Retry on a held cluster; the file's values for drift, and Connect for a file-only cluster; a replacement plan shown and not applied; a lost answer read back; the name's protection that cannot be loosened; tags parsed.
+- The backend: a held row's state and plans, and no Revert when nothing connected before; the editor's raw entry (a context left out stays out), its contexts, and protection set in the file never locked.
+- The store: a removed cluster's route.
+
+**Mutation pass:** 24 mutants over the row's held state, the editor's raw entry, the notices, settling, the plan's lines and records, the editor's tags and the store's route. 18 were caught at first; the six survivors - Connect's plan above the table, the reconnect's banner, a second keychain choice keeping the first, the protection lock's name, the plan's removal and revert lines, and Review waiting for a bad tag line - each got a test, and all 24 are caught.
+
+**Also in this slice:** `TestRekeyStartsAnUnreadCollection` (coverage S8a) failed about one run in seven, on `main` as well. A re-key is published at the next evaluation, so its "A read empty" wait could pass on the state the "" read left; the test now waits for A's read to start. It is a test fix only: a stopped generation's one read, made with its context already cancelled, is discarded as before.
+
+**Smoke:** 216/216 four ways (night and day, 1440 and 1024) at d412450, the smoke fleet.yaml as it began after every walk. An earlier run at 9ecfaaf passed 216/216 three ways; its day 1024 walk ran out of its budget after three stalls of about five minutes each, while it competed with a mutation run and overnight. Run alone, every walk takes about five minutes, as S2a's and S2b's did.
