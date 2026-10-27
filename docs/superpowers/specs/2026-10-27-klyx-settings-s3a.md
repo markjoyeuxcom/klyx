@@ -517,3 +517,20 @@ S3a-1 is §2: the schema, its strict decoding and validation, resolution, and th
 **Mutation pass:** 26 mutants over the validation, resolution and scopes, the connection, the factory, S2's checks and the row text, all caught.
 
 **Smoke:** 216/216 four ways at a8824ff, the smoke fleet.yaml as it began after every walk. The smoke fleet has no installations, so this is the regression check: nothing changes for a file without `sources`.
+
+## 16. S3a-1 revision 1: Codex's review (2026-10-27)
+
+Codex found the scopes, the tenant and member-label overrides, the disjointness checks, the stage boundary for valid subscriptions, the factory's copy, the S2 refusal and `SourceHosts` as specified. It accepted keeping the pure model in `internal/config`. It requested changes: two P2 and two P3.
+
+| Finding | Fix |
+|---|---|
+| **R1, P2:** validation read decoded values, so `alertmanager: {source: ""}` loaded and became legacy discovery, and Loki's `source`, `scope` and `off` loaded at their zero values | An endpoint block records the keys it wrote (`UnmarshalYAML`), and the subscription fields are judged as written. A `source` written empty, an `off` written false or a `scope` written empty is refused. So is any key beside `off`, or a locator beside `source`, even at its zero value. On Loki the three keys are refused whatever their value. The legacy `{}` block still loads |
+| **R2, P2:** the new diagnostics echoed file values (hosts, source references, tenants, member-label values, serves entries) whole, outside slice 0's redaction | `describeValue` names a value as `describeKey` names a key: quoted, or by its length alone at 25 characters or more, which may be a pasted credential. Every new diagnostic and warning uses it |
+| **R3, P3:** Observability's row called off and subscribed blocks unscoped | Only a legacy reader that filters nothing is unscoped |
+| **R4, P3:** the registry said an installation's serviceRef port defaulted to the Service's first port, but the loader requires it | The port is required, as the loader says |
+
+Codex also asked that one rule be stated, which this note does: **two installations at one step are a load error even when another step wins.** Two group installations for one group are refused even for a cluster served by name, or with its own block. The conflict is in the file whichever cluster it reaches, and §2.2 lists it without limiting it to the step that applies.
+
+**Tests:** Codex's probes, as regression tests: every key written at its zero value, by kind; a 41-character canary withheld from every new error and warning; the row's scope by mode. **Mutation pass:** 6 mutants over the fixes, all caught.
+
+**Smoke:** 216/216 four ways at 4580148, the smoke fleet.yaml as it began after every walk: every endpoint block now decodes through `UnmarshalYAML`.
