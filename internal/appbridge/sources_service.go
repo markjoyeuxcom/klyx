@@ -648,13 +648,19 @@ func installationChanges(from, to []config.SourceConfig) []PlanChangeDTO {
 		case !has:
 			out = append(out, PlanChangeDTO{ID: "sources." + id, Label: "Installation " + shownInstallation(id), From: sourceWords(o), To: "removed"})
 		default:
-			// each material input that changed, in its own line (R4)
+			// each material input that changed, in its own line (R4),
+			// decided by the inputs themselves, never by their words: a
+			// change the words cannot show is named (Codex's re-review of
+			// S3a-4a, RR1)
 			of, nf := fieldMap(installationFields(o)), fieldMap(installationFields(n))
+			oi, ni := installationInputs(o), installationInputs(n)
 			for _, f := range sourceFieldOrder {
-				if of[f] != nf[f] {
-					out = append(out, PlanChangeDTO{ID: "sources." + id + "." + strings.ReplaceAll(f, " ", "-"), Label: shownInstallation(id) + "'s " + f,
-						From: orNone(of[f]), To: orNone(nf[f])})
+				if oi[f] == ni[f] {
+					continue
 				}
+				from, to := orNone(of[f]), orNone(nf[f])
+				to += unshownChange(f, oi[f], ni[f], from == to)
+				out = append(out, PlanChangeDTO{ID: "sources." + id + "." + strings.ReplaceAll(f, " ", "-"), Label: shownInstallation(id) + "'s " + f, From: from, To: to})
 			}
 		}
 	}
@@ -751,6 +757,62 @@ func endpointWords(endpoint string) string {
 		w += " (with a query)"
 	}
 	return w
+}
+
+// installationInputs are an installation's inputs as written, by field: a
+// plan decides what changed from them.
+func installationInputs(src config.SourceConfig) map[string]string {
+	m := map[string]string{"name": src.Name, "host": src.Host, "endpoint": src.Endpoint, "tenant": src.Tenant, "member label": src.MemberLabel}
+	if r := src.ServiceRef; r != nil {
+		m["Service"] = strings.Join([]string{r.Scheme, r.Namespace, r.Name, r.Port, r.Path}, "\x00")
+	}
+	if src.Discover {
+		m["discovery"] = "true"
+	}
+	if src.TLSSkipVerify {
+		m["certificate"] = "true"
+	}
+	if a := src.Auth; a != nil {
+		m["auth"] = a.Type + "\x00" + a.Username
+	}
+	m["serves"] = fieldMap(installationFields(src))["serves"]
+	return m
+}
+
+// unshownChange names what changed in a field that its words do not show:
+// an endpoint's query or fragment, whose contents are never shown, or only
+// how a field is written. same is that its words are the same.
+func unshownChange(field, was, now string, same bool) string {
+	if field != "endpoint" {
+		if same {
+			return ": written differently, with the same effect"
+		}
+		return ""
+	}
+	wu, werr := url.Parse(was)
+	nu, nerr := url.Parse(now)
+	if werr != nil || nerr != nil {
+		if same {
+			return ": changed, and is not shown"
+		}
+		return ""
+	}
+	var parts []string
+	if wu.RawQuery != "" && nu.RawQuery != "" && wu.RawQuery != nu.RawQuery {
+		parts = append(parts, "query")
+	}
+	if wu.EscapedFragment() != nu.EscapedFragment() {
+		parts = append(parts, "fragment")
+	}
+	switch {
+	case len(parts) == 2:
+		return ": its query and fragment changed, and are not shown"
+	case len(parts) == 1:
+		return ": its " + parts[0] + " changed, and is not shown"
+	case same:
+		return ": written differently, to the same origin and path"
+	}
+	return ""
 }
 
 func fieldMap(fields [][2]string) map[string]string {

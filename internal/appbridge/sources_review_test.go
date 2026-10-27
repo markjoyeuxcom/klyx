@@ -306,3 +306,73 @@ func TestReorderedInstallationsAreNotADifference(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 }
+
+// Codex's re-review of S3a-4a, RR1: a change is decided from the inputs,
+// never from their words, and what the words cannot show is named - a
+// query or fragment withheld, or that only the writing changed - alone and
+// beside another change.
+func TestAChangeTheWordsCannotShowIsNamed(t *testing.T) {
+	const at = "https://am.example:443/prefix"
+	for _, tc := range []struct {
+		name, from, to string
+		edit           func(*SourceDraftDTO)
+		id, was, now   string
+	}{
+		{name: "the query alone", from: "https://am.example/prefix?route=before", to: "https://am.example/prefix?route=after",
+			id: "endpoint", was: at + " (with a query)", now: at + " (with a query): its query changed, and is not shown"},
+		{name: "the query and the name", from: "https://am.example/prefix?route=before", to: "https://am.example/prefix?route=after",
+			edit: func(d *SourceDraftDTO) { d.Name = "shared AM" },
+			id:   "endpoint", was: at + " (with a query)", now: at + " (with a query): its query changed, and is not shown"},
+		{name: "the query and the path", from: "https://am.example/prefix?route=before", to: "https://am.example/other?route=after",
+			id: "endpoint", was: at + " (with a query)", now: "https://am.example:443/other (with a query): its query changed, and is not shown"},
+		{name: "the fragment alone", from: "https://am.example/prefix#before", to: "https://am.example/prefix#after",
+			id: "endpoint", was: at, now: at + ": its fragment changed, and is not shown"},
+		{name: "the query and the fragment", from: "https://am.example/prefix?route=before#before", to: "https://am.example/prefix?route=after",
+			id: "endpoint", was: at + " (with a query)", now: at + " (with a query): its query and fragment changed, and are not shown"},
+		{name: "only the writing", from: "https://AM.example/prefix", to: "https://am.example:443/prefix",
+			id: "endpoint", was: at, now: at + ": written differently, to the same origin and path"},
+		{name: "a query added", from: "https://am.example/prefix", to: "https://am.example/prefix?route=after",
+			id: "endpoint", was: at, now: at + " (with a query)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := directSource("shared", tc.from)
+			r := newSourcesRig(t, old)
+			d := sourceDraftOf(old)
+			d.Endpoint = tc.to
+			if tc.edit != nil {
+				tc.edit(&d)
+			}
+			p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+			if p.Refused != "" {
+				t.Fatalf("refused: %s", p.Refused)
+			}
+			c, ok := change(p, "sources.shared."+tc.id)
+			if !ok || c.From != tc.was || c.To != tc.now {
+				t.Fatalf("%+v", p.Changes)
+			}
+			for _, ch := range p.Changes {
+				if strings.Contains(ch.From+ch.To, "route=") || strings.Contains(ch.From+ch.To, "before") || strings.Contains(ch.From+ch.To, "after") {
+					t.Fatalf("a withheld part is shown: %+v", ch)
+				}
+			}
+			if _, ok := change(p, "sources.shared.name"); ok != (tc.edit != nil) {
+				t.Fatalf("the name: %+v", p.Changes)
+			}
+			if res := r.svc.ApplySources(p.Digest); !res.OK {
+				t.Fatalf("apply: %+v", res)
+			}
+		})
+	}
+	t.Run("a Service scheme written out", func(t *testing.T) {
+		old := hostedOnPrd("shared", config.ServeConfig{Cluster: "dev"})
+		old.ServiceRef.Scheme = ""
+		r := newSourcesRig(t, old)
+		d := sourceDraftOf(old)
+		d.ServiceRef.Scheme = "http"
+		p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+		c, ok := change(p, "sources.shared.Service")
+		if p.Refused != "" || !ok || c.From == "" || c.To != c.From+": written differently, with the same effect" {
+			t.Fatalf("%+v %+v", p.Refused, p.Changes)
+		}
+	})
+}
