@@ -928,3 +928,21 @@ Codex found the plans bound and the interlock, the keychain choices, the removed
 **Mutation pass:** 22 mutants over the fixes, frontend and backend, all caught. Dropping a plan answered for an older draft is not among them: the editor's inputs are disabled while a plan is asked for, so the draft cannot move meanwhile, and that check is kept as a defence.
 
 **Smoke:** 216/216 four ways at 9ad1afe, the smoke fleet.yaml as it began after every walk.
+
+## 27. S2c revision 2: Codex's re-review (2026-10-27)
+
+Codex found R1, R3 and R5 to R8 resolved, and R2 and R4 resolved in part. Its two original probes that still failed were test assumptions, which it adapted: an empty `protectedBy` no longer means unprotected, and a read-failure message now appears twice. It requested changes: two P2 and one P3, each across clusters or with an editor kept open.
+
+| Finding | Fix |
+|---|---|
+| **RR1, P2:** a successful Apply of any plan closed the editor, so removing another cluster discarded an unrelated draft without asking | Settling closes only the draft the Apply was for: the editor's own plan, or its cluster's. An action on the cluster whose editor holds a changed draft (Remove, Revert, Retry, the file's values) asks first. Another cluster's actions leave the editor and its draft alone |
+| **RR2, P2:** an open editor kept the protection it was opened with while the table read the fleet again | The editor's protection is the row's, read again with the fleet: "Not protected now" once a held attempt that loosens it connects. The draft stays the editor's own |
+| **RR3, P3:** the reconnect banner went on saying "not connected yet" after the connection succeeded | The banner is a receipt of what was done ("Klyx began connecting dev with the new terms"), and the row says whether it has connected since. An addition's says the same |
+
+**Tests:** Codex's three probes, as regression tests, and:
+- an action on the edited cluster asking, with Stay keeping the draft and Discard proceeding;
+- an Apply for the edited cluster from elsewhere closing its unchanged editor.
+
+**Mutation pass:** 6 mutants over the fixes, all caught; the last, an unchanged editor kept open over a replaced entry, after a test was added for it.
+
+**Smoke:** 216/216 four ways at c5a9dda, the smoke fleet.yaml as it began after every walk.
