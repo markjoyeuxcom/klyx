@@ -83,6 +83,16 @@ type bucket struct {
 	cohort  map[ConnID]memberScope
 	outcome *outcome
 	waiters []chan struct{}
+	// pending: an early read was asked for and has not started; inflight:
+	// the cohort of the read in progress. A member asks once (Codex's
+	// review of S3a-2, R4).
+	pending  bool
+	inflight map[ConnID]bool
+
+	// the bucket's dependency on its host's connection for its whole life
+	// (R6); its run goroutine's alone
+	hostRelease func()
+	hostStop    func() bool
 }
 
 // alertBuckets are the fleet's bucket readers.
@@ -100,7 +110,11 @@ type alertBuckets struct {
 	leaser  HostLeaser
 	buckets map[bucketKey]*bucket
 	members map[ConnID]bucketKey
-	gates   map[string]*sync.Mutex
+	// retired are the connections that stopped: they never join again, so
+	// a late read of an ended generation registers nothing (R3). A
+	// connection's identity is never reused.
+	retired map[ConnID]bool
+	gates   map[string]chan struct{}
 	disc    map[discKey]*amDiscovery
 }
 
@@ -112,7 +126,7 @@ type discKey struct {
 func newAlertBuckets(ctx context.Context, sources *AlertSources, creds Credentials, clk clock.Clock, host func(string) (*ClusterConn, bool)) *alertBuckets {
 	return &alertBuckets{ctx: ctx, sources: sources, creds: creds, clk: clk, host: host,
 		cadence: healthsrc.AlertsCadence, timeout: healthsrc.AlertsReadTimeout,
-		buckets: map[bucketKey]*bucket{}, members: map[ConnID]bucketKey{}, gates: map[string]*sync.Mutex{}, disc: map[discKey]*amDiscovery{}}
+		buckets: map[bucketKey]*bucket{}, members: map[ConnID]bucketKey{}, retired: map[ConnID]bool{}, gates: map[string]chan struct{}{}, disc: map[discKey]*amDiscovery{}}
 }
 
 // access is an installation's access generation now (S3a §3.4): a hosted
@@ -149,15 +163,34 @@ func (b *alertBuckets) memberKey(cluster string) (key string, sub Subscription, 
 	return fmt.Sprintf("source|%s|r%d|s%d|a%s|tenant=%s|%s", sub.Source.ID, sub.InstRev, sub.SubRev, access, sub.Tenant, scope), sub, access, true
 }
 
+// errSubscriptionMoved is a member whose subscription changed while it
+// read: it is re-keyed, never served a share read under the old one.
+var errSubscriptionMoved = errors.New("the subscription changed")
+
+// errMemberStopped is a read of a connection that stopped.
+var errMemberStopped = errors.New("the connection stopped")
+
 // read is a member's read of its share (S3a §3.2): served from the
 // bucket's latest outcome when that read covered the member under its
-// subscription revision; otherwise the member waits, within ctx, for the
-// early read its join asked for. A member that joins while a read is in
-// flight is not in that read's cohort.
+// subscription revision, still the one in force; otherwise the member
+// waits, within ctx, for the early read its join asked for. A member that
+// joins while a read is in flight is not in that read's cohort.
 func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription, key, access string) (alertmanager.Read, time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		// an ended read registers nothing (Codex's review of S3a-2, R3)
+		return alertmanager.Read{Identity: key}, time.Time{}, fmt.Errorf("%s was not read in time: %w", sub.Source.ID, err)
+	}
 	bk := bucketKey{Source: sub.Source.ID, InstRev: sub.InstRev, Access: access, Tenant: sub.Tenant}
-	bu := b.join(member, bk, sub, key)
+	bu, ok := b.join(member, bk, sub, key)
+	if !ok {
+		return alertmanager.Read{Identity: key}, time.Time{}, errMemberStopped
+	}
 	for {
+		// the subscription in force now: a share read under another is
+		// never served (R1)
+		if cur, ok := b.sources.Subscription(sub.Cluster); !ok || cur.SubRev != sub.SubRev {
+			return alertmanager.Read{Identity: key}, time.Time{}, errSubscriptionMoved
+		}
 		bu.mu.Lock()
 		if o := bu.outcome; o != nil {
 			if rev, in := o.cohort[member]; in && rev == sub.SubRev {
@@ -168,8 +201,13 @@ func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription
 		}
 		ch := make(chan struct{})
 		bu.waiters = append(bu.waiters, ch)
+		// one early read per join: none while a read that covers the member
+		// is in flight, or one is already asked for (R4)
+		if !bu.inflight[member] && !bu.pending {
+			bu.pending = true
+			bu.nudge()
+		}
 		bu.mu.Unlock()
-		bu.nudge()
 		select {
 		case <-ch:
 		case <-ctx.Done():
@@ -223,9 +261,15 @@ func (bu *bucket) sentence(o *outcome, s memberScope) string {
 
 // join puts a member in its bucket's cohort, leaving any other bucket
 // first. Its read asks for the early read, once, when the latest outcome
-// did not cover it.
-func (b *alertBuckets) join(member ConnID, bk bucketKey, sub Subscription, key string) *bucket {
+// did not cover it. A retired connection joins nothing: ok is false. The
+// cohort entry is added under the fleet lock, so a retirement or a leave
+// never interleaves with it.
+func (b *alertBuckets) join(member ConnID, bk bucketKey, sub Subscription, key string) (*bucket, bool) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.retired[member] {
+		return nil, false
+	}
 	if prev, ok := b.members[member]; ok && prev != bk {
 		b.leaveLocked(member)
 	}
@@ -234,11 +278,19 @@ func (b *alertBuckets) join(member ConnID, bk bucketKey, sub Subscription, key s
 		bu = b.newBucketLocked(bk, sub.Source)
 	}
 	b.members[member] = bk
-	b.mu.Unlock()
 	bu.mu.Lock()
 	bu.cohort[member] = memberScope{cluster: sub.Cluster, subRev: sub.SubRev, match: sub.Match, scopeTenant: sub.ScopeTenant, key: key}
 	bu.mu.Unlock()
-	return bu
+	return bu, true
+}
+
+// retire takes a stopped connection out of its bucket for good: it never
+// joins again (R3).
+func (b *alertBuckets) retire(member ConnID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.retired[member] = true
+	b.leaveLocked(member)
 }
 
 // leave takes a member out of its bucket: its snapshot generation stopped
@@ -280,13 +332,15 @@ func (b *alertBuckets) newBucketLocked(bk bucketKey, src config.SourceConfig) *b
 
 // gate serializes an installation's acquisitions across its buckets: a
 // re-keyed bucket's read never overlaps the previous one's worker, which
-// may still be returning after its cancellation (S3a §13).
-func (b *alertBuckets) gate(id string) *sync.Mutex {
+// may still be returning after its cancellation (S3a §13). A one-slot
+// channel, so waiting for it is within the read's budget and ends with its
+// bucket (Codex's review of S3a-2, R2).
+func (b *alertBuckets) gate(id string) chan struct{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	g := b.gates[id]
 	if g == nil {
-		g = &sync.Mutex{}
+		g = make(chan struct{}, 1)
 		b.gates[id] = g
 	}
 	return g
@@ -300,9 +354,12 @@ func (bu *bucket) nudge() {
 }
 
 // run reads on the bucket's cadence, and early when a join asks; the
-// interval restarts from every read.
+// interval restarts from every read. It holds the bucket's dependency on
+// its host for the bucket's life.
 func (bu *bucket) run() {
 	defer close(bu.done)
+	defer bu.releaseHost()
+	bu.holdHost()
 	for {
 		bu.b.mu.Lock()
 		cadence := bu.b.cadence
@@ -316,14 +373,82 @@ func (bu *bucket) run() {
 			t.Stop()
 		case <-t.C:
 		}
+		bu.holdHost() // a host that could not be leased before is tried again
 		bu.readOnce()
 	}
 }
 
+// holdHost keeps a hosted bucket's dependency on its host's connection for
+// its whole life, between reads too (Codex's review of S3a-2, R6): a lease
+// listed under the host's plans, whose retirement ends the bucket. Each
+// read still takes its own admission. A host that is reserved or not
+// connected is tried again before the next read; its reads say why.
+func (bu *bucket) holdHost() {
+	if bu.src.Host == "" || bu.hostRelease != nil || bu.ctx.Err() != nil {
+		return
+	}
+	conn, lctx, release, err := bu.b.lease(bu.src.Host, "the alerts "+bu.src.ID+" reads for its members")
+	if err != nil {
+		return
+	}
+	if c, ok := conn.(*ClusterConn); !ok || !strings.HasPrefix(bu.key.Access, fmt.Sprintf("%d.", c.ID())) {
+		// the host's connection is not the one the bucket is keyed to: the
+		// bucket is already obsolete, and its members re-key
+		release()
+		bu.retire()
+		return
+	}
+	bu.hostRelease = release
+	bu.hostStop = context.AfterFunc(lctx, bu.retire)
+}
+
+func (bu *bucket) releaseHost() {
+	if bu.hostStop != nil {
+		bu.hostStop()
+	}
+	if bu.hostRelease != nil {
+		bu.hostRelease()
+	}
+}
+
+// retire ends this bucket: its host's connection was retired, or is not
+// the one it is keyed to. Its members leave it, and re-key at their next
+// read; a newer bucket under the same key is never touched.
+func (bu *bucket) retire() {
+	b := bu.b
+	b.mu.Lock()
+	if b.buckets[bu.key] == bu {
+		delete(b.buckets, bu.key)
+		for m, k := range b.members {
+			if k == bu.key {
+				delete(b.members, m)
+			}
+		}
+	}
+	b.mu.Unlock()
+	bu.cancel()
+}
+
 func (bu *bucket) readOnce() {
 	bu.mu.Lock()
+	// this read covers everyone in the cohort now, so an early read asked
+	// for meanwhile is spent (R4)
+	select {
+	case <-bu.early:
+	default:
+	}
 	cohort := maps.Clone(bu.cohort)
+	bu.pending = false
+	bu.inflight = make(map[ConnID]bool, len(cohort))
+	for m := range cohort {
+		bu.inflight[m] = true
+	}
 	bu.mu.Unlock()
+	defer func() {
+		bu.mu.Lock()
+		bu.inflight = nil
+		bu.mu.Unlock()
+	}()
 	if len(cohort) == 0 {
 		return
 	}
@@ -360,19 +485,33 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 		o.cohort[m] = s.subRev
 	}
 	fail := func(err error) *outcome { o.err = err; return o }
-	gate := b.gate(src.ID)
-	gate.Lock()
-	defer gate.Unlock()
+	// the whole read's budget starts before its turn at the installation
 	ctx, cancel := context.WithTimeout(bu.ctx, b.timeout)
 	defer cancel()
+	gate := b.gate(src.ID)
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	case <-ctx.Done():
+		return fail(fmt.Errorf("%s was not read in time: %w", src.ID, ctx.Err()))
+	}
 	select {
 	case amReads <- struct{}{}:
 		defer func() { <-amReads }()
 	case <-ctx.Done():
 		return fail(fmt.Errorf("%s was not read in time: %w", src.ID, ctx.Err()))
 	}
-	// still in force, at the access generation the bucket is keyed to
+	// a member whose subscription moved since the read began is not
+	// served it, nor given its rows (Codex's review of S3a-2, R1)
+	moved := map[ConnID]bool{}
+	// still in force, at the access generation the bucket is keyed to, for
+	// the subscriptions it read for
 	check := func() error {
+		for m, s := range cohort {
+			if cur, ok := b.sources.Subscription(s.cluster); !ok || cur.SubRev != s.subRev {
+				moved[m] = true
+			}
+		}
 		if _, rev, ok := b.sources.Installation(src.ID); !ok || rev != bu.key.InstRev {
 			return fmt.Errorf("%s changed; it is read again for its new terms", src.ID)
 		}
@@ -471,7 +610,12 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 			if appearances > amMaxAppearances {
 				return fail(fmt.Errorf("%s's alert groups held more than %d appearances; mutes would be incomplete", src.ID, amMaxAppearances))
 			}
-			bu.split(o, cohort, alertmanager.Reduce(alerts, groups), am.redactor)
+			live := maps.Clone(cohort)
+			for m := range moved {
+				delete(live, m)
+				delete(o.cohort, m)
+			}
+			bu.split(o, live, alertmanager.Reduce(alerts, groups), am.redactor)
 		}
 	}
 	if errors.Is(err, errAccessDenied) {

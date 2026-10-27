@@ -683,7 +683,21 @@ func (c *ClusterConn) readSubscribed(ctx context.Context, key string) (alertmana
 	if !ok {
 		return alertmanager.Read{Identity: id}, time.Time{}, errors.New("this cluster's subscription is not in force; Klyx reads it once it is applied")
 	}
-	return b.read(ctx, c.ID(), sub, key, access)
+	r, at, err := b.read(ctx, c.ID(), sub, key, access)
+	if errors.Is(err, errSubscriptionMoved) {
+		// re-keyed to the subscription now in force, as at the start of a
+		// read (Codex's review of S3a-2, R1)
+		c.am.mu.Lock()
+		id, _, _, _ := b.memberKey(c.name)
+		c.am.identity = id
+		if c.am.rekey != nil {
+			c.am.rekey(id)
+		}
+		c.am.mu.Unlock()
+		b.leave(c.ID())
+		return alertmanager.Read{Identity: id}, time.Time{}, ErrSourceChanged
+	}
+	return r, at, err
 }
 
 // readOwn is the read of the cluster's own block, or discovery (S8a).

@@ -460,6 +460,23 @@ func TestRetainedRowsStayWithinTheBound(t *testing.T) {
 	r.am.mu.Lock()
 	r.am.code = http.StatusInternalServerError
 	r.am.mu.Unlock()
+	// a failed read: it keeps the last good shares, with its failure
+	// (Codex's review of S3a-2: the failure is waited for, not assumed)
+	r.b.mu.Lock()
+	var all []*bucket
+	for _, bu := range r.b.buckets {
+		all = append(all, bu)
+	}
+	r.b.mu.Unlock()
+	for _, bu := range all {
+		bu.readOnce()
+		bu.mu.Lock()
+		failed := bu.outcome != nil && bu.outcome.err != nil && bu.outcome.good
+		bu.mu.Unlock()
+		if !failed {
+			t.Fatal("fixture: the failed read did not land")
+		}
+	}
 	unique := map[string]bool{}
 	for _, share := range held {
 		for _, it := range share {

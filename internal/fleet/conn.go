@@ -526,7 +526,7 @@ func (c *ClusterConn) Stop(timeout time.Duration) bool {
 	cancel, h := c.cancel, c.health
 	c.mu.Unlock()
 	if b := c.am.buckets; b != nil {
-		b.leave(c.id) // its subscription's bucket: a stopped generation reads nothing (S3a §13)
+		b.retire(c.id) // its subscription's bucket, for good: a stopped generation reads nothing and never joins again (S3a §13)
 	}
 	if cancel != nil {
 		cancel()

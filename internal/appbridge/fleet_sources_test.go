@@ -4,7 +4,9 @@ package appbridge
 // that would move a running connection's alerts.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/secretstore"
 )
 
@@ -187,4 +190,96 @@ func TestPlanRefusalsWithholdLongInstallationIDs(t *testing.T) {
 			t.Fatalf("distinct installations are one source: %+v", p)
 		}
 	})
+}
+
+// addRig is a fleet rig whose Settings deps read real installations in
+// force: lgtm-we serving lab and lab2 by name, hosted by prd.
+func addRig(t *testing.T) (*fleetRig, *fleet.AlertSources) {
+	t.Helper()
+	r := newFleetRig(t, true)
+	src := servesGroup("lgtm-we", "prd", "web")
+	src.Serves = []config.ServeConfig{{Cluster: "lab"}, {Cluster: "lab2"}}
+	a, err := fleet.NewAlertSources([]config.SourceConfig{src}, r.cs.fleetClusters())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cs.fp.d.ResolveSources = a.Resolve
+	r.cs.fp.d.SourcesRevision = a.Revision
+	r.cs.fp.d.Resubscribe = func(run []config.ClusterConfig) error { _, err := a.Apply(a.Sources(), run); return err }
+	return r, a
+}
+
+// Codex's review of S3a-2, R5: adding clusters puts their subscriptions in
+// force, as a fleet Apply does - every one that joined the running fleet,
+// none that failed to.
+func TestAddClustersPutsTheirSubscriptionsInForce(t *testing.T) {
+	t.Run("two additions", func(t *testing.T) {
+		r, a := addRig(t)
+		if out := r.cs.AddClusters([]string{"lab", "lab2"}); !out.OK {
+			t.Fatalf("%+v", out)
+		}
+		for _, c := range []string{"lab", "lab2"} {
+			if _, ok := a.Subscription(c); !ok {
+				t.Fatalf("%s's subscription is not in force", c)
+			}
+		}
+	})
+	t.Run("one fails to install", func(t *testing.T) {
+		r, a := addRig(t)
+		install := r.cs.fp.d.Install
+		r.cs.fp.d.Install = func(ctx context.Context, p *fleet.Prepared) error {
+			if p.Name() == "lab2" {
+				return errors.New("the connection could not start")
+			}
+			return install(ctx, p)
+		}
+		out := r.cs.AddClusters([]string{"lab", "lab2"})
+		if out.OK || !strings.Contains(out.Error, "lab2: the connection could not start") {
+			t.Fatalf("%+v", out)
+		}
+		if _, ok := a.Subscription("lab"); !ok {
+			t.Fatal("the cluster that joined has no subscription in force")
+		}
+		if _, ok := a.Subscription("lab2"); ok {
+			t.Fatal("a cluster that failed to join has a subscription in force")
+		}
+	})
+	t.Run("one fails to prepare", func(t *testing.T) {
+		r, a := addRig(t)
+		before, rev := r.file(), a.Revision()
+		r.cs.fp.d.Prepare = func(cc config.ClusterConfig) (*fleet.Prepared, error) {
+			if cc.Name == "lab2" {
+				return nil, errors.New("exec plugin not found")
+			}
+			return r.reg.Prepare(cc)
+		}
+		if out := r.cs.AddClusters([]string{"lab", "lab2"}); out.OK {
+			t.Fatalf("%+v", out)
+		}
+		if r.file() != before || a.Revision() != rev {
+			t.Fatal("a refused addition wrote the file or moved the subscriptions")
+		}
+	})
+}
+
+// R5: the running fleet with the additions must resolve against the
+// installations in force before anything is written.
+func TestAddClustersChecksTheInstallationsBeforeWriting(t *testing.T) {
+	r := newFleetRig(t, true)
+	src := config.SourceConfig{ID: "solo", Kind: config.SourceKindAlertmanager, Endpoint: "https://am.example", Serves: []config.ServeConfig{{Cluster: "dev"}, {Cluster: "lab"}}}
+	SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Source: "solo", Scope: config.ScopeTenant})
+	a, err := fleet.NewAlertSources([]config.SourceConfig{src}, r.cs.fleetClusters())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.cs.fp.d.ResolveSources = a.Resolve
+	r.cs.fp.d.Resubscribe = func(run []config.ClusterConfig) error { _, err := a.Apply(a.Sources(), run); return err }
+	before := r.file()
+	out := r.cs.AddClusters([]string{"lab"})
+	if out.OK || !strings.Contains(out.Error, "the alert installations do not resolve, so nothing was added") || !strings.Contains(out.Error, "scope") {
+		t.Fatalf("%+v", out)
+	}
+	if r.file() != before {
+		t.Fatal("a refused addition was written")
+	}
 }

@@ -30,11 +30,21 @@ func TestABucketReadIsWorkOnItsHost(t *testing.T) {
 		t.Fatal("a reserved host admitted a new read")
 	}
 	r.pol.Unreserve(tok)
-	_, ctx, rel, err := lease("prd", "the alerts of lgtm-we")
+	_, ctx, rel, err := lease("prd", "the alerts lgtm-we reads for its members")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rel()
+	// a bucket's lease is held between its reads too: the host's plans name
+	// it (Codex's review of S3a-2, R6)
+	ends, _ := r.life.ClusterWork("prd")
+	named := false
+	for _, w := range ends {
+		named = named || w.Kind == "alerts" && w.What == "the alerts lgtm-we reads for its members"
+	}
+	if !named {
+		t.Fatalf("the host's plan does not name the bucket: %+v", ends)
+	}
 	r.reconnect()
 	select {
 	case <-ctx.Done():
