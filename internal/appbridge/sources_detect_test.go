@@ -115,7 +115,7 @@ func TestMigrationOffers(t *testing.T) {
 	if len(o.Conflicts) != 1 || !strings.Contains(o.Conflicts[0], "prd bearer, dev basic") {
 		t.Fatalf("conflicts: %v", o.Conflicts)
 	}
-	if len(o.Choices) != 1 || o.Scopes[1].After != "not valid yet" || o.Scopes[1].Before != "its own endpoint, tenant ops, unfiltered: everything there is read as its own" {
+	if len(o.Choices) != 1 || o.Scopes[1].After != "not valid yet" || o.Scopes[1].Before != "from its own endpoint at https://am.example:443, tenant ops, unfiltered: everything there is read as this cluster's" {
 		t.Fatalf("an unscoped block: %+v %+v", o.Choices, o.Scopes)
 	}
 	if o.Draft.Installation.Source.AuthType != "" || o.Draft.Installation.Source.Tenant != "ops" || !strings.Contains(o.Credential, "none is copied") {

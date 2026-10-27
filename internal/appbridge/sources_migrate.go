@@ -168,34 +168,17 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	}
 	for _, m := range members {
 		b := m.Alertmanager
-		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacyScope(b)}
+		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacySentence(config.AMDirect, b)}
 		if err != nil {
 			sc.After, sc.Change = "not valid yet", "a choice is needed"
 		} else {
 			r := after[m.Name]
-			sc.After = scopeSentence(r, sourceOf(src))
+			sc.After = scopeSentence(r, sourceOf(src), nil)
 			sc.Change = scopeChange(b.Match, r)
 		}
 		o.Scopes = append(o.Scopes, sc)
 	}
 	return o
-}
-
-// legacyScope is a legacy direct block's scope, in words.
-func legacyScope(b *config.EndpointConfig) string {
-	parts := []string{"its own endpoint"}
-	if b.Tenant != "" {
-		parts = append(parts, "tenant "+b.Tenant)
-	}
-	if len(b.Match) == 0 {
-		return strings.Join(append(parts, "unfiltered: everything there is read as its own"), ", ")
-	}
-	words := make([]string, 0, len(b.Match))
-	for k, v := range b.Match {
-		words = append(words, k+"="+v)
-	}
-	sort.Strings(words)
-	return strings.Join(append(parts, "filtered by "+strings.Join(words, ", ")), ", ")
 }
 
 // scopeChange compares a legacy match with a subscription's effective

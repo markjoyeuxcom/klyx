@@ -193,7 +193,7 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 	subscribers := map[string][]string{}
 	for _, cl := range running {
 		r := res[cl.Name]
-		row := SubscriptionRowDTO{Cluster: cl.Name, Mode: r.Mode, Via: r.Via, Source: r.Source, Sentence: scopeSentence(r, byID[r.Source]), Shadowed: r.Shadowed}
+		row := SubscriptionRowDTO{Cluster: cl.Name, Mode: r.Mode, Via: r.Via, Source: r.Source, Sentence: scopeSentence(r, byID[r.Source], cl.Alertmanager), Shadowed: r.Shadowed}
 		if b := cl.Alertmanager; b != nil {
 			if b.Source != "" || b.Off {
 				row.Block = subscriptionOf(b)
@@ -441,7 +441,11 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 	var affected []string
 	for _, cl := range running {
 		rb, ra := before[cl.Name], after[cl.Name]
-		sb, sa := scopeSentence(rb, oldByID[rb.Source]), scopeSentence(ra, newByID[ra.Source])
+		blockAfter := cl.Alertmanager
+		if nb, ok := out.runBlocks[cl.Name]; ok {
+			blockAfter = nb
+		}
+		sb, sa := scopeSentence(rb, oldByID[rb.Source], cl.Alertmanager), scopeSentence(ra, newByID[ra.Source], blockAfter)
 		if sb != sa {
 			p.Changes = append(p.Changes, PlanChangeDTO{ID: "alerts." + cl.Name, Label: "Alerts for " + cl.Name, From: sb, To: sa})
 		}
@@ -546,18 +550,15 @@ func fileTerms(file *config.Config, running []config.ClusterConfig) ([]config.So
 }
 
 // scopeSentence is where a cluster's alerts come from (S3a §3.5), in
-// words; a long installation id is named by its length.
-func scopeSentence(r config.AMResolution, src config.SourceConfig) string {
+// words; a long installation id is named by its length. block is the
+// cluster's own block, which a legacy mode's sentence says.
+func scopeSentence(r config.AMResolution, src config.SourceConfig, block *config.EndpointConfig) string {
 	switch r.Mode {
 	case config.AMOff:
 		return "off"
-	case config.AMDirect:
-		return "its own endpoint"
-	case config.AMService:
-		return "its own Service"
 	case config.AMSubscribed:
 	default:
-		return "discovery in the cluster"
+		return legacySentence(r.Mode, block)
 	}
 	head := "from " + shownInstallation(r.Source)
 	if src.Host != "" {
@@ -580,6 +581,44 @@ func scopeSentence(r config.AMResolution, src config.SourceConfig) string {
 		parts = append(parts, "filtered by "+strings.Join(words, ", "))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// legacySentence is the scope sentence of a cluster's own block, or of
+// discovery in it (S3a §3.5), as fleet.yaml says it: where, the tenant,
+// and the filter, or that nothing is filtered. An endpoint is named by its
+// origin alone.
+func legacySentence(mode string, b *config.EndpointConfig) string {
+	var where string
+	switch mode {
+	case config.AMService:
+		where = "from its own Service"
+		if b != nil && b.ServiceRef != nil {
+			r := b.ServiceRef
+			where = fmt.Sprintf("from the Service %s/%s:%s on this cluster", wordOf(r.Namespace), wordOf(r.Name), wordOf(r.Port))
+		}
+	case config.AMDirect:
+		where = "from its own endpoint"
+		if b != nil {
+			if o, err := safehttp.OriginOf(b.Endpoint); err == nil {
+				where += " at " + o
+			}
+		}
+	default:
+		where = "discovered in this cluster"
+	}
+	parts := []string{where}
+	if b != nil && b.Tenant != "" {
+		parts = append(parts, "tenant "+b.Tenant)
+	}
+	if b == nil || len(b.Match) == 0 {
+		return strings.Join(append(parts, "unfiltered: everything there is read as this cluster's"), ", ")
+	}
+	words := make([]string, 0, len(b.Match))
+	for k, v := range b.Match {
+		words = append(words, k+"="+v)
+	}
+	sort.Strings(words)
+	return strings.Join(append(parts, "filtered by "+strings.Join(words, ", ")), ", ")
 }
 
 // sourcesSentence is Observability's sentence (S3a §8): "Alerts: 9

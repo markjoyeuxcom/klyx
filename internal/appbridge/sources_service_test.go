@@ -100,7 +100,7 @@ func TestASourcesPlanAddsAnInstallationAndASubscription(t *testing.T) {
 	if c, ok := change(p, "clusters.dev.alertmanager"); !ok || c.To != "subscribed to lgtm-we" {
 		t.Fatalf("block: %+v", p.Changes)
 	}
-	if c, ok := change(p, "alerts.dev"); !ok || c.From != "discovery in the cluster" || c.To != "from lgtm-we, hosted by prd, filtered by cluster=dev" {
+	if c, ok := change(p, "alerts.dev"); !ok || c.From != "discovered in this cluster, unfiltered: everything there is read as this cluster's" || c.To != "from lgtm-we, hosted by prd, filtered by cluster=dev" {
 		t.Fatalf("dev's alerts: %+v", p.Changes)
 	}
 	if c, ok := change(p, "alerts.prd"); !ok || c.To != "from lgtm-we, hosted by prd, filtered by cluster=prd" {
@@ -242,7 +242,7 @@ func TestAnInstallationsRemovalIsOneTransaction(t *testing.T) {
 		t.Fatalf("a block still names it: %+v", p)
 	}
 	p := r.svc.PlanSources(SourcesDraftDTO{Installation: remove, Subscriptions: []SubscriptionEditDTO{{Cluster: "dev", Block: nil}}})
-	if c, ok := change(p, "alerts.prd"); !ok || c.To != "discovery in the cluster" {
+	if c, ok := change(p, "alerts.prd"); !ok || c.To != "discovered in this cluster, unfiltered: everything there is read as this cluster's" {
 		t.Fatalf("prd's alerts after the removal: %+v", p.Changes)
 	}
 	if res := r.applySources(p); !res.OK {
@@ -336,5 +336,60 @@ func TestAnEditOfAnInstallationTheFileLostIsRefused(t *testing.T) {
 	p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: sourceDraftOf(hostedOnPrd("lgtm-we", config.ServeConfig{Cluster: "dev"}))}})
 	if !strings.Contains(p.Refused, "fleet.yaml no longer has lgtm-we") || r.file() != before {
 		t.Fatalf("%+v", p)
+	}
+}
+
+// A legacy row says its scope sentence (S3a §3.5, §8), as fleet.yaml says
+// its block: where, the tenant, and the filter or that nothing is filtered;
+// an endpoint by its origin alone.
+func TestALegacyRowSaysItsScopeSentence(t *testing.T) {
+	const unfiltered = "unfiltered: everything there is read as this cluster's"
+	for _, tc := range []struct {
+		name, mode string
+		block      *config.EndpointConfig
+		want       string
+	}{
+		{"its own Service, filtered", config.AMService, &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "monitoring", Name: "alertmanager-main", Port: "web"}, Match: map[string]string{"cluster": "dev", "env": "dev"}},
+			"from the Service monitoring/alertmanager-main:web on this cluster, filtered by cluster=dev, env=dev"},
+		{"its own endpoint, a tenant", config.AMDirect, &config.EndpointConfig{Endpoint: "https://am.example/prefix?token=never", Tenant: "ops"},
+			"from its own endpoint at https://am.example:443, tenant ops, " + unfiltered},
+		{"discovery, scoped by its block", config.AMDiscovered, &config.EndpointConfig{Tenant: "ops", Match: map[string]string{"cluster": "dev"}},
+			"discovered in this cluster, tenant ops, filtered by cluster=dev"},
+		{"discovery, no block", config.AMDiscovered, nil, "discovered in this cluster, " + unfiltered},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scopeSentence(config.AMResolution{Mode: tc.mode}, config.SourceConfig{}, tc.block); got != tc.want {
+				t.Fatalf("%q", got)
+			}
+		})
+	}
+	// and the page's row says it
+	r := newSourcesRig(t)
+	SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "monitoring", Name: "alertmanager-main", Port: "web"}, Match: map[string]string{"cluster": "dev"}})
+	seen := false
+	for _, row := range r.svc.GetSources().Subscriptions {
+		if row.Cluster == "dev" {
+			seen = true
+			if row.Sentence != "from the Service monitoring/alertmanager-main:web on this cluster, filtered by cluster=dev" || !row.Legacy {
+				t.Fatalf("dev's row: %+v", row)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no row for dev")
+	}
+}
+
+// A plan's member sentence after the change reads the cluster's block as
+// the plan leaves it: a subscription block with a match removed leaves
+// discovery, unfiltered - never the old block's match.
+func TestAPlansSentenceAfterReadsTheBlockItLeaves(t *testing.T) {
+	r := newSourcesRig(t, hostedOnPrd("lgtm-we"))
+	block := &SubscriptionDTO{Source: "lgtm-we", Match: map[string]string{"team": "platform"}}
+	r.applySources(r.svc.PlanSources(SourcesDraftDTO{Subscriptions: []SubscriptionEditDTO{{Cluster: "dev", Block: block}}}))
+	p := r.svc.PlanSources(SourcesDraftDTO{Subscriptions: []SubscriptionEditDTO{{Cluster: "dev", Block: nil}}})
+	c, ok := change(p, "alerts.dev")
+	if p.Refused != "" || !ok || c.From != "from lgtm-we, hosted by prd, filtered by cluster=dev, team=platform" || c.To != "discovered in this cluster, unfiltered: everything there is read as this cluster's" {
+		t.Fatalf("%+v %+v", p.Refused, p.Changes)
 	}
 }
