@@ -3,12 +3,15 @@ package fleet
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	typedfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/moomora/klyx/internal/config"
@@ -112,5 +115,31 @@ func TestSubscribingFactory(t *testing.T) {
 	_, _ = f(config.ClusterConfig{Name: "dev", Group: "we", Alertmanager: own})
 	if got != own {
 		t.Fatal("its own block did not win")
+	}
+}
+
+// S3a-2 §3.4, §3.5: a legacy read carries the scope sentence and its
+// lineage - its mode, its source identity and its credential revision.
+func TestALegacyReadSaysItsScope(t *testing.T) {
+	f := newAMFake()
+	f.alerts = `[{"fingerprint":"f1","labels":{"alertname":"A","cluster":"prd"},"status":{"state":"active"},"receivers":[{"name":"r"}]}]`
+	api := httptest.NewServer(http.StripPrefix("/api/v1/namespaces/mimir/services/http:alertmanager:8080/proxy", f))
+	defer api.Close()
+	for _, tc := range []struct {
+		match map[string]string
+		want  string
+	}{
+		{nil, "from the Service mimir/alertmanager:8080/alertmanager on this cluster, tenant t, unfiltered: everything there is read as this cluster's"},
+		{map[string]string{"cluster": "prd"}, "from the Service mimir/alertmanager:8080/alertmanager on this cluster, tenant t, filtered by cluster=prd"},
+	} {
+		e := newAMEnv(t, &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "mimir", Name: "alertmanager", Port: "8080", Path: "/alertmanager"}, Tenant: "t", Match: tc.match}, nil, nil)
+		e.c.restConfig = &rest.Config{Host: api.URL}
+		r := e.read(t)
+		if r.Source != tc.want {
+			t.Errorf("sentence: %q, want %q", r.Source, tc.want)
+		}
+		if r.Lineage.Mode != config.AMService || r.Lineage.Identity != r.Identity || r.Lineage.Tenant != "t" {
+			t.Errorf("lineage: %+v", r.Lineage)
+		}
 	}
 }

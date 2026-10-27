@@ -19,6 +19,10 @@ import (
 // Account is the keychain account an endpoint's credential is stored under.
 func Account(cluster, kind string) string { return "endpoint/" + cluster + "/" + kind }
 
+// SourceAccount is an installation's account (Settings S3a §5): the
+// installation's credential, stored once, never a cluster's copied.
+func SourceAccount(id string) string { return "source/" + id }
+
 // recordVersion is the stored record's version.
 const recordVersion = 1
 
@@ -99,9 +103,12 @@ func (c Credential) Redactor() safehttp.Redactor {
 // Input is what resolving one endpoint's credential reads.
 type Input struct {
 	Cluster, Kind string
-	Spec          config.EndpointConfig
-	LegacyToken   string // metrics.token from the file, or ""
-	Revoked       bool   // the registry's tombstone (C5 §7)
+	// Account overrides the cluster's account: an installation's
+	// (SourceAccount)
+	Account     string
+	Spec        config.EndpointConfig
+	LegacyToken string // metrics.token from the file, or ""
+	Revoked     bool   // the registry's tombstone (C5 §7)
 }
 
 // Resolve reads the endpoint's credential (C5 §3, §6). The legacy token wins
@@ -147,7 +154,11 @@ func Resolve(store secretstore.Store, in Input) Credential {
 		out.State, out.Why = Unavailable, "keychain unavailable: no credential store"
 		return out
 	}
-	raw, err := store.Get(Account(in.Cluster, in.Kind))
+	account := in.Account
+	if account == "" {
+		account = Account(in.Cluster, in.Kind)
+	}
+	raw, err := store.Get(account)
 	var kc *secretstore.KeychainError
 	switch {
 	case errors.Is(err, secretstore.ErrNoKey):

@@ -40,6 +40,10 @@ const (
 type AlertsDeps struct {
 	Cluster string
 	Read    func(ctx context.Context, key string) (alertmanager.Read, error)
+	// ReadAt, when set, is Read with the time the alerts were acquired: a
+	// share of an installation's read keeps that read's time (Settings S3a
+	// §3.2)
+	ReadAt func(ctx context.Context, key string) (alertmanager.Read, time.Time, error)
 }
 
 // subjectKinds are the held kinds an alert's subject can be looked up in.
@@ -58,6 +62,15 @@ func Alerts(d AlertsDeps) ([]observe.SnapshotSpec, []observe.DomainSpec) {
 			}
 			return []any{r}, r.Truncated, nil
 		}}
+	if d.ReadAt != nil {
+		snap.ReadKeyed, snap.ReadKeyedAt = nil, func(ctx context.Context, key string) ([]any, bool, time.Time, error) {
+			r, at, err := d.ReadAt(ctx, key)
+			if err != nil {
+				return nil, false, time.Time{}, err
+			}
+			return []any{r}, r.Truncated, at, nil
+		}
+	}
 	domains := []observe.DomainSpec{{ID: TaskAlerts, Parts: []observe.PartSpec{{
 		ID: "alerts", Entity: "Alertmanager alerts", Scope: "this cluster's alerts", Classifier: "alerts",
 		Counted:  []string{SnapAlerts},

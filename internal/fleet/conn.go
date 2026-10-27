@@ -525,6 +525,9 @@ func (c *ClusterConn) Stop(timeout time.Duration) bool {
 	c.state, c.pending = Stopped, false
 	cancel, h := c.cancel, c.health
 	c.mu.Unlock()
+	if b := c.am.buckets; b != nil {
+		b.leave(c.id) // its subscription's bucket: a stopped generation reads nothing (S3a §13)
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -1074,7 +1077,7 @@ func (c *ClusterConn) startHealth(ctx context.Context) {
 	}
 	snaps, hd := healthsrc.Helm(healthsrc.HelmDeps{Cluster: c.name, Detect: helmDetect, List: c.listHelm})
 	es, ed := healthsrc.Events(healthsrc.EventsDeps{Cluster: c.name, Typed: c.typed})
-	as, ad := healthsrc.Alerts(healthsrc.AlertsDeps{Cluster: c.name, Read: c.ReadAlerts}) // S8a
+	as, ad := healthsrc.Alerts(healthsrc.AlertsDeps{Cluster: c.name, Read: c.ReadAlerts, ReadAt: c.ReadAlertsAt}) // S8a, S3a
 	snaps = append(append(snaps, es...), as...)
 	domains = append(append(append(domains, hd...), ed...), ad...)
 	o := observe.New(observe.Config{Cluster: c.name, Sink: sink, Kinds: kinds, Snapshots: snaps, Domains: domains, NamespacesKind: healthsrc.KindNamespaces,

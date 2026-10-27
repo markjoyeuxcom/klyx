@@ -4,6 +4,7 @@ package appbridge
 // that would move a running connection's alerts.
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,7 +20,10 @@ func servesGroup(id, host, group string) config.SourceConfig {
 	return config.SourceConfig{ID: id, Kind: config.SourceKindAlertmanager, Host: host, Discover: true, MemberLabel: "cluster", Serves: []config.ServeConfig{{Group: group}}}
 }
 
-func TestAPlacementThatMovesTheAlertSourceIsRefused(t *testing.T) {
+// S3a-2: a placement that moves where a cluster's alerts come from is
+// listed, and its commit puts the running fleet's subscriptions in force; a
+// change under which the installations would not resolve is refused.
+func TestAPlacementThatMovesTheAlertSourceIsListedAndResubscribed(t *testing.T) {
 	r := newFleetRig(t, true)
 	r.mu.Lock()
 	r.sources = []config.SourceConfig{servesGroup("lgtm-we", "prd", "web")}
@@ -27,19 +31,51 @@ func TestAPlacementThatMovesTheAlertSourceIsRefused(t *testing.T) {
 	d := devDraft()
 	d.Group = "web"
 	p := r.cs.PlanClusterEdit("dev", d)
-	if !strings.Contains(p.Refused, "this changes where dev's alerts come from (discovery in the cluster to the installation lgtm-we)") {
+	if p.Refused != "" || !hasChange(p, "fleet.alerts", "discovery in the cluster", "the installation lgtm-we") {
 		t.Fatalf("a group the installation serves: %+v", p)
 	}
-	d.Group = "unserved"
-	if p := r.cs.PlanClusterEdit("dev", d); p.Refused != "" {
-		t.Fatalf("a group no installation serves: %s", p.Refused)
+	if res := r.apply(p, ""); !res.OK {
+		t.Fatal(res.Error)
 	}
-	// a cluster with its own block keeps it whatever its group
+	r.mu.Lock()
+	runs := r.resubscribed
+	r.mu.Unlock()
+	if len(runs) == 0 {
+		t.Fatal("the commit put no subscription in force")
+	}
+	group := ""
+	for _, c := range runs[len(runs)-1] {
+		if c.Name == "dev" {
+			group = c.Group
+		}
+	}
+	if group != "web" {
+		t.Fatalf("resubscribed with dev's group %q", group)
+	}
+	// its own block keeps it whatever its group: nothing about its alerts moves
 	r.handEdit("    context: dev-ctx\n", "    context: dev-ctx\n    alertmanager: {endpoint: https://am.example}\n")
 	SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example"})
-	d.Group = "web"
-	if p := r.cs.PlanClusterEdit("dev", d); p.Refused != "" {
+	d.Group = "other"
+	p = r.cs.PlanClusterEdit("dev", d)
+	if p.Refused != "" {
 		t.Fatalf("its own block wins: %s", p.Refused)
+	}
+	for _, c := range p.Changes {
+		if c.ID == "fleet.alerts" {
+			t.Fatalf("its own block's alerts moved: %+v", c)
+		}
+	}
+}
+
+func TestAChangeTheInstallationsCannotResolveIsRefused(t *testing.T) {
+	r := newFleetRig(t, true)
+	r.mu.Lock()
+	r.sources = []config.SourceConfig{servesGroup("a", "prd", "web"), servesGroup("b", "prd", "web")}
+	r.mu.Unlock()
+	d := devDraft()
+	d.Group = "web"
+	if p := r.cs.PlanClusterEdit("dev", d); !strings.Contains(p.Refused, "the alert installations do not resolve") {
+		t.Fatalf("two installations serve web: %+v", p)
 	}
 }
 
@@ -56,7 +92,10 @@ func TestAHostIsNotRemoved(t *testing.T) {
 	if p := r.cs.PlanClusterRemove("prd", nil); !strings.Contains(p.Refused, "prd hosts file-am") {
 		t.Fatalf("a file installation's host: %+v", p)
 	}
-	if got := SourceHosts(r.path, []config.SourceConfig{servesGroup("b-am", "prd", "x"), servesGroup("file-am", "prd", "x")})("prd"); !reflect.DeepEqual(got, []string{"b-am", "file-am"}) {
+	active := func() []config.SourceConfig {
+		return []config.SourceConfig{servesGroup("b-am", "prd", "x"), servesGroup("file-am", "prd", "x")}
+	}
+	if got := SourceHosts(r.path, active)("prd"); !reflect.DeepEqual(got, []string{"b-am", "file-am"}) {
 		t.Fatalf("active and file hosts, once each, sorted: %v", got)
 	}
 }
@@ -96,7 +135,8 @@ func TestOnlyALegacyUnfilteredRowIsUnscoped(t *testing.T) {
 
 // Codex's re-review 2 of S3a-1, R2-1: a plan's refusals name a long
 // installation id by its length alone, as the loader's diagnostics do,
-// while two distinct ids of one length still differ.
+// while two distinct ids of one length still differ. In S3a-2 a source
+// move is a change line, under the same rule.
 func TestPlanRefusalsWithholdLongInstallationIDs(t *testing.T) {
 	const canary = "s3a1canary012345678901234567890123456789"
 	withheld := "an installation whose id has 40 characters"
@@ -126,7 +166,7 @@ func TestPlanRefusalsWithholdLongInstallationIDs(t *testing.T) {
 		d := devDraft()
 		d.Group = "web"
 		p := r.cs.PlanClusterEdit("dev", d)
-		if strings.Contains(p.Refused, canary) || !strings.Contains(p.Refused, "(discovery in the cluster to "+withheld+")") {
+		if b, _ := json.Marshal(p); strings.Contains(string(b), canary) || !hasChange(p, "fleet.alerts", "discovery in the cluster", withheld) {
 			t.Fatalf("%+v", p)
 		}
 	})
@@ -143,7 +183,7 @@ func TestPlanRefusalsWithholdLongInstallationIDs(t *testing.T) {
 		r.mu.Unlock()
 		d := devDraft()
 		d.Group = "web"
-		if p := r.cs.PlanClusterEdit("dev", d); !strings.Contains(p.Refused, "this changes where dev's alerts come from") {
+		if p := r.cs.PlanClusterEdit("dev", d); !hasChange(p, "fleet.alerts", "an installation whose id has 30 characters", "an installation whose id has 30 characters") {
 			t.Fatalf("distinct installations are one source: %+v", p)
 		}
 	})

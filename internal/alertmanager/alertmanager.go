@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -221,6 +222,21 @@ func FilterParams(match map[string]string) []string {
 		out = append(out, k+`="`+v+`"`)
 	}
 	return out
+}
+
+// RegexpFilter is one anchored regular-expression matcher for label equal
+// to any of values (Settings S3a §3.2): a bucket's member-label values,
+// sorted, each regexp-quoted, the whole quoted as FilterParams quotes.
+// Alertmanager anchors its regular-expression matchers.
+func RegexpFilter(label string, values []string) string {
+	vs := append([]string(nil), values...)
+	sort.Strings(vs)
+	quoted := make([]string, 0, len(vs))
+	for _, v := range vs {
+		quoted = append(quoted, regexp.QuoteMeta(v))
+	}
+	re := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(strings.Join(quoted, "|"))
+	return label + `=~"` + re + `"`
 }
 
 // Matches reports whether the alert carries every match label: the check

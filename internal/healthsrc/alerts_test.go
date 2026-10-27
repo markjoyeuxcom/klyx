@@ -250,3 +250,20 @@ func TestAlertsSubjectNeedsALiveCompleteKind(t *testing.T) {
 		t.Fatalf("hpa: %+v", rows.Alerts[1])
 	}
 }
+
+// Settings S3a §3.2: with ReadAt, the snapshot reads with the share's
+// acquisition time.
+func TestAlertsReadAtCarriesTheReadTime(t *testing.T) {
+	at := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	snaps, _ := Alerts(AlertsDeps{Cluster: "c", Read: func(context.Context, string) (alertmanager.Read, error) { return alertmanager.Read{}, nil },
+		ReadAt: func(context.Context, string) (alertmanager.Read, time.Time, error) {
+			return alertmanager.Read{Identity: "k"}, at, nil
+		}})
+	if snaps[0].ReadKeyedAt == nil || snaps[0].ReadKeyed != nil {
+		t.Fatal("the snapshot does not read with its time")
+	}
+	_, _, got, err := snaps[0].ReadKeyedAt(context.Background(), "k")
+	if err != nil || !got.Equal(at) {
+		t.Fatalf("read time: %v %v", got, err)
+	}
+}

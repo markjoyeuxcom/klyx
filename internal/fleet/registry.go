@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/fleetindex"
@@ -40,10 +41,94 @@ type Registry struct {
 	healthSink observe.Sink
 	index      *fleetindex.Index
 	onUsable   func(UsabilityEvent)
+	// alerts are the bucket readers of the installations in force
+	// (Settings S3a §3.2); nil without any
+	alerts *alertBuckets
 }
 
 func NewRegistry(cfg *config.Config, factory ConnFactory) *Registry {
 	return &Registry{cfg: cfg, factory: factory, retired: map[ConnID]bool{}}
+}
+
+// EnableAlertSources gives every connection built from now on the bucket
+// readers of the installations in force (Settings S3a §3.2). Call it
+// before Start.
+func (r *Registry) EnableAlertSources(ctx context.Context, a *AlertSources, creds Credentials, clk clock.Clock) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.alerts = newAlertBuckets(ctx, a, creds, clk, func(name string) (*ClusterConn, bool) {
+		c, ok := r.Conn(name)
+		cc, is := c.(*ClusterConn)
+		return cc, ok && is
+	})
+}
+
+// SetHostLeaser admits every bucket read on its host through S2's
+// admission (Settings S3a §13).
+func (r *Registry) SetHostLeaser(l HostLeaser) {
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if b != nil {
+		b.mu.Lock()
+		b.leaser = l
+		b.mu.Unlock()
+	}
+}
+
+// AlertSources are the installations in force, nil without the bucket
+// readers.
+func (r *Registry) AlertSources() *AlertSources {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.alerts == nil {
+		return nil
+	}
+	return r.alerts.sources
+}
+
+// Resubscribe puts the running fleet's subscriptions in force after an S2
+// commit (Settings S3a §3.6): the subscriptions that changed move their
+// revisions, and each connection whose block changes adopts it, re-keying
+// its alerts.
+func (r *Registry) Resubscribe(running []config.ClusterConfig) error {
+	a := r.AlertSources()
+	if a == nil {
+		return nil
+	}
+	sources := a.Sources()
+	if _, err := a.Apply(sources, running); err != nil {
+		return err
+	}
+	for _, cc := range running {
+		c, ok := r.Conn(cc.Name)
+		cl, is := c.(*ClusterConn)
+		if !ok || !is {
+			continue
+		}
+		if want := config.ConnectionAlertmanager(sources, cc); !sameEndpoint(cl.AlertmanagerConfig(), want) {
+			cl.SetAlertmanagerConfig(want)
+		}
+	}
+	return nil
+}
+
+// InstallationRead is an installation's latest read (S3a §8).
+func (r *Registry) InstallationRead(id string) (InstallationRead, bool) {
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if b == nil {
+		return InstallationRead{}, false
+	}
+	return b.lastRead(id)
+}
+
+// withAlerts gives a connection the bucket readers, when there are any.
+func (r *Registry) withAlerts(c Conn) {
+	if cc, ok := c.(*ClusterConn); ok && r.alerts != nil {
+		cc.withAlertBuckets(r.alerts)
+	}
 }
 
 // identityOf is a connection's identity: its own, or one drawn for a
@@ -68,6 +153,9 @@ func (r *Registry) Start(ctx context.Context) {
 	defer r.indexClustersLocked()
 	for _, cc := range r.cfg.Clusters {
 		conn, err := r.factory(cc)
+		if err == nil {
+			r.withAlerts(conn)
+		}
 		if err != nil {
 			r.entries = append(r.entries, &entry{name: cc.Name, cc: cc, failed: true, failMsg: failedMsg(err)})
 			continue
@@ -123,6 +211,9 @@ func (r *Registry) Prepare(cc config.ClusterConfig) (*Prepared, error) {
 	if err != nil {
 		return nil, errors.New(failedMsg(err))
 	}
+	r.mu.RLock()
+	r.withAlerts(conn)
+	r.mu.RUnlock()
 	return &Prepared{conn: conn, cc: cc, id: identityOf(conn)}, nil
 }
 

@@ -116,6 +116,14 @@ func main() {
 	// for discovery. The installations in force are those read at start.
 	factory = fleet.SubscribingFactory(cfg.Sources, factory)
 	reg := fleet.NewRegistry(cfg, factory)
+	// Settings S3a §3: the installations in force, and the buckets their
+	// subscribers read through - before any cluster connects
+	alertSources, err := fleet.NewAlertSources(cfg.Sources, cfg.Clusters)
+	if err != nil {
+		log.Printf("warn: the alert installations do not resolve (%s); none is read", config.DisplayError(err))
+		alertSources, _ = fleet.NewAlertSources(nil, cfg.Clusters)
+	}
+	reg.EnableAlertSources(ctx, alertSources, endpointCreds, clock.Real{})
 	// Settings slice F §1: each cluster's published admission state -
 	// protection, epoch, Active - seeded before any cluster connects, and
 	// a new connection incarnation each time one becomes usable again.
@@ -143,6 +151,8 @@ func main() {
 	// usability under its commit gate, gates the sink on identity, and
 	// retires, replaces and forgets clusters.
 	lifecycle := appbridge.NewLifecycle(reg, policyReg, healthSink, index)
+	// a bucket's read through its host is work on the host (S3a §13)
+	reg.SetHostLeaser(appbridge.AlertHostLeaser(lifecycle))
 	go lifecycle.Run(ctx)
 	// Health notifications (The Line slice 10): the listener is in place
 	// before any cluster starts, so every connect's baseline is seen. The
@@ -593,10 +603,13 @@ func main() {
 		EndEpochWork: appbridge.EndChatsOnPolicy(chatSvc),
 		// Settings S3a §3.6: the host check, and the Alertmanager a
 		// connection for an entry uses
-		Hosts: appbridge.SourceHosts(configPath(), cfg.Sources),
+		Hosts: appbridge.SourceHosts(configPath(), alertSources.Sources),
 		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
-			return config.ConnectionAlertmanager(cfg.Sources, cc)
+			return config.ConnectionAlertmanager(alertSources.Sources(), cc)
 		},
+		ResolveSources:  alertSources.Resolve,
+		SourcesRevision: alertSources.Revision,
+		Resubscribe:     reg.Resubscribe,
 		Changed: func() {
 			if lineSvc != nil {
 				lineSvc.Rescan()

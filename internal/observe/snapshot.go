@@ -21,6 +21,11 @@ type SnapshotSpec struct {
 	// generation's key (coverage S8a §4): a source whose identity can change
 	// reads only the identity its generation was keyed to.
 	ReadKeyed func(ctx context.Context, key string) (items []any, truncated bool, err error)
+	// ReadKeyedAt, when set, is ReadKeyed with the time its items were
+	// acquired: a share of a read made earlier for several readers keeps
+	// that read's time, and its freshness follows it (Settings S3a §3.2).
+	// A zero time is the time the read lands.
+	ReadKeyedAt func(ctx context.Context, key string) (items []any, truncated bool, readAt time.Time, err error)
 }
 
 // ErrSourceAbsent: a snapshot read found its source not installed - a
@@ -60,6 +65,9 @@ type SnapshotRead struct {
 	Items     []any
 	Truncated bool
 	Err       error
+	// ReadAt is when the items were acquired, when that is before the read
+	// landed (ReadKeyedAt); zero otherwise.
+	ReadAt time.Time
 }
 
 // ErrSnapshotNotRunning: the snapshot has no running generation (the
@@ -158,9 +166,12 @@ func (g *snapGen) read() {
 	done := make(chan SnapshotRead, 1)
 	g.o.goSafe(func() {
 		var r SnapshotRead
-		if g.ss.spec.ReadKeyed != nil {
+		switch {
+		case g.ss.spec.ReadKeyedAt != nil:
+			r.Items, r.Truncated, r.ReadAt, r.Err = g.ss.spec.ReadKeyedAt(rctx, g.key)
+		case g.ss.spec.ReadKeyed != nil:
 			r.Items, r.Truncated, r.Err = g.ss.spec.ReadKeyed(rctx, g.key)
-		} else {
+		default:
 			r.Items, r.Truncated, r.Err = g.ss.spec.Read(rctx)
 		}
 		done <- r
@@ -232,8 +243,17 @@ func (g *snapGen) apply(r SnapshotRead) bool {
 		g.items = r.Items
 		o.bumpSnapLocked(g.ss)
 	}
-	// A successful read advances freshness even when nothing changed.
-	g.fresh = freshness{cov: Live, readAt: &now, truncated: r.Truncated}
+	// A successful read advances freshness even when nothing changed, to
+	// the time its items were acquired: a share of an earlier read is as
+	// fresh as that read, and one already overdue is stale at once.
+	at := now
+	if !r.ReadAt.IsZero() && r.ReadAt.Before(now) {
+		at = r.ReadAt
+	}
+	g.fresh = freshness{cov: Live, readAt: &at, truncated: r.Truncated}
+	if !now.Before(at.Add(2 * g.ss.spec.Cadence)) {
+		g.overdue(now)
+	}
 	o.markSnapLocked(g.ss)
 	return true
 }

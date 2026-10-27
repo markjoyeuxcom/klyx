@@ -76,6 +76,8 @@ export function useInspectorAlerts(cluster: string, target: AlertTarget | null):
         {why === null ? "No alert matches this object." : rows === null ? "Alerts not read yet." : `No alert matched; not established: ${why}.`}
       </div>}
       {total > 0 && <div className="t-secondary">Matched by label from Alertmanager, not by UID.</div>}
+      {/* the scope sentence: where the alerts come from, and what makes them this cluster's (Settings S3a §3.5) */}
+      {facts?.source && <div className="t-secondary" data-testid="insp-alerts-source">{facts.source}</div>}
     </InspectorBlock>
   );
 }
