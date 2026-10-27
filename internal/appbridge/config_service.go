@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/policy"
 )
 
@@ -27,9 +28,22 @@ type FleetClusterDTO struct {
 	ProtectedInferred bool `json:"protectedInferred"`
 	HasMetrics        bool `json:"hasMetrics"`
 	// Drift says how fleet.yaml now differs from this running entry, which
-	// a cluster's settings take only at a restart (Settings review slice 0);
-	// "" when they agree.
+	// "Use the file's values" plans (Settings review slice 0, S2 §4.6); ""
+	// when they agree.
 	Drift string `json:"drift,omitempty"`
+	// ProtectedBy names the input that decides protection (S2 §4.3), ""
+	// when it is off or the running entry no longer says what did;
+	// PendingProtected is a held attempt's different protection (Codex's
+	// review of S2c, R5).
+	ProtectedBy        string `json:"protectedBy,omitempty"`
+	PendingProtected   *bool  `json:"pendingProtected,omitempty"`
+	PendingProtectedBy string `json:"pendingProtectedBy,omitempty"`
+	// Held: saved, not connected yet, or a connection that failed to build,
+	// with why (S2 §4.5); "" while active. CanRevert and CanRetry say which
+	// plans it offers.
+	Held      string `json:"held,omitempty"`
+	CanRevert bool   `json:"canRevert,omitempty"`
+	CanRetry  bool   `json:"canRetry,omitempty"`
 }
 
 // KubeContextDTO is one kubeconfig context with its fleet membership.
@@ -85,6 +99,9 @@ type ConfigService struct {
 	// loadErr is why fleet.yaml did not load at startup, as shown; "" when
 	// it loaded, or did not exist yet (a first run)
 	loadErr string
+
+	// fp is the fleet plans (S2 §4); nil until WireFleetPlans
+	fp *fleetPlans
 
 	// seams for tests
 	kubeconfigPath func() string
@@ -292,6 +309,7 @@ func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 		inFleet[c.Name] = true
 		inFleet[c.Context] = true
 		tags := c.EffectiveTags()
+		v := s.protectionOf(c)
 		dto.Clusters = append(dto.Clusters, FleetClusterDTO{
 			Name:     c.Name,
 			Context:  c.Context,
@@ -301,12 +319,17 @@ func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 			Account:  tags["account"],
 			Group:    c.Group,
 			// the published value (S2 §2.7): every reader agrees with the guard
-			Protected: s.IsProtected(c.Name),
-			// Inferred = locked by a prd/prod/production token, not the flag.
-			ProtectedInferred: s.IsProtected(c.Name) && !c.Protected,
-			HasMetrics:        c.Metrics != nil,
-			Drift:             clusterDrift(c, disk),
+			Protected: v.now,
+			// Inferred = locked by a prd/prod/production token, not the
+			// flag - said only while the running entry is what decided it
+			ProtectedInferred:  v.now && v.pending == nil && !c.Protected,
+			HasMetrics:         c.Metrics != nil,
+			Drift:              clusterDrift(c, disk),
+			ProtectedBy:        v.by,
+			PendingProtected:   v.pending,
+			PendingProtectedBy: v.pendingBy,
 		})
+		s.heldOf(&dto.Clusters[len(dto.Clusters)-1])
 	}
 	sort.Slice(dto.Clusters, func(a, b int) bool { return dto.Clusters[a].Name < dto.Clusters[b].Name })
 
@@ -370,8 +393,62 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	// Settings S2 §4.1: each name is reserved first - absent, a placeholder
+	// that admits nothing and is published nowhere - and unreserved last,
+	// so nothing is admitted on a cluster until its addition is committed
+	if s.policy != nil {
+		var toks []policy.Token
+		defer func() {
+			for _, t := range toks {
+				s.policy.Unreserve(t)
+			}
+		}()
+		for _, name := range contexts {
+			tok, err := s.policy.Reserve(config.ClusterConfigForContext(name).Name)
+			if err != nil {
+				return ActionResultDTO{Error: name + " is applying a change to its settings; try again in a moment"}
+			}
+			toks = append(toks, tok)
+		}
+	}
+	// an addition is for a name that does not run: one that does - its entry
+	// removed from fleet.yaml by hand, say - is refused before anything is
+	// written; the file's values remove it (Codex's re-review of S2b, RR4)
+	for _, name := range contexts {
+		n := config.ClusterConfigForContext(name).Name
+		_, running := s.runningEntry(n)
+		known := false
+		if s.policy != nil {
+			_, known = s.policy.Snapshot(n)
+		}
+		if running || known {
+			return ActionResultDTO{Error: n + " is already running, so nothing was added: use the file's values to remove it first"}
+		}
+	}
+	// each connection is prepared before anything is written, so one that
+	// cannot be built adds nothing (S2 §4.5; Codex's review of S2b, R6)
+	var prepared []*fleet.Prepared
+	discard := func() {
+		for _, p := range prepared {
+			p.Discard()
+		}
+	}
+	if s.fp != nil {
+		for _, name := range contexts {
+			p, err := s.fp.d.Prepare(config.ClusterConfigForContext(name))
+			if err != nil {
+				discard()
+				return ActionResultDTO{Error: "Klyx cannot connect to " + name + ", so nothing was added: " + config.DisplayError(err)}
+			}
+			prepared = append(prepared, p)
+		}
+	}
 	if err := s.appendClusters(s.path, contexts); err != nil {
+		discard()
 		return ActionResultDTO{Error: err.Error()}
+	}
+	if s.fp != nil {
+		return s.installAdded(contexts, prepared)
 	}
 	var failed []string
 	for _, name := range contexts {
@@ -384,15 +461,53 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 		s.runningRev++
 		s.mu.Unlock()
 		if s.policy != nil {
-			s.policy.Seed(cc.Name, cc.IsProtected())
+			s.policy.Seed(cc.Name, cc.IsProtected()) // over its placeholder: still reserved
 		}
 		if s.connect != nil {
 			if err := s.connect(cc); err != nil {
 				s.dropRunning(cc.Name)
+				if s.policy != nil {
+					s.policy.Forget(cc.Name) // nothing of it runs
+				}
 				failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
 				continue
 			}
 		}
+	}
+	if len(failed) > 0 {
+		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}
+	}
+	return ActionResultDTO{OK: true}
+}
+
+// installAdded commits each prepared addition under its cluster's commit
+// gate - seeded over its placeholder, still reserved - then installs and
+// starts its connection.
+func (s *ConfigService) installAdded(contexts []string, prepared []*fleet.Prepared) ActionResultDTO {
+	var failed []string
+	for i, name := range contexts {
+		cc := config.ClusterConfigForContext(name)
+		p := prepared[i]
+		err := s.fp.d.Life.Decide(cc.Name, Bound{}, func() error {
+			s.appendRunning(cc)
+			s.policy.Seed(cc.Name, cc.IsProtected())
+			s.fp.attempt(cc.Name, p.ID(), s2Of(cc))
+			return nil
+		})
+		if err == nil {
+			err = s.fp.d.Install(s.fp.d.Ctx, p)
+			if err != nil {
+				s.dropRunning(cc.Name)
+				s.policy.Forget(cc.Name)
+			}
+		}
+		if err != nil {
+			p.Discard()
+			failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
+		}
+	}
+	if s.fp.d.Changed != nil {
+		s.fp.d.Changed()
 	}
 	if len(failed) > 0 {
 		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}

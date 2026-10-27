@@ -12,6 +12,23 @@ const KIND_LINE: Record<Plan["kind"], string> = {
   save: "Applying writes these settings to fleet.yaml, then uses them.",
   file: "fleet.yaml already says this: applying uses it and writes nothing.",
   revert: "Reverting writes the settings last in use back to fleet.yaml, then uses them.",
+  connect: "fleet.yaml already lists this cluster: applying connects it and writes nothing.",
+  remove: "Applying disconnects the cluster and removes its entry from fleet.yaml.",
+  retry: "Retrying makes a fresh connection with the saved terms and writes nothing.",
+};
+
+// kindLine is what applying the plan does, in words (Settings S2 §4.2).
+function kindLine(plan: Plan): string {
+  if (plan.kind === "file" && plan.class === "removal") return "fleet.yaml no longer lists this cluster: applying disconnects it and writes nothing.";
+  if (plan.kind === "revert" && plan.section === "fleet") return "Reverting writes the terms that last connected back to fleet.yaml, then connects with them.";
+  if (plan.kind === "remove" && !plan.writes) return "Applying disconnects the cluster; fleet.yaml has no entry for it to remove.";
+  return KIND_LINE[plan.kind];
+}
+
+// the class's consequence a plan states beside its changes (S2 §4.2, §4.5)
+const CLASS_NOTE: Partial<Record<NonNullable<Plan["class"]>, string>> = {
+  reconnect: "The cluster is held until its new connection is usable: nothing new starts on it meanwhile, and its views follow the new connection.",
+  protection: "Confirmations, reviews and offers made before this are stale, and the cluster's conversations end.",
 };
 
 const box: React.CSSProperties = {
@@ -39,7 +56,7 @@ function WorkList({ work }: { work: PlanWork[] }) {
   );
 }
 
-export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyLabel = "Apply" }: {
+export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyLabel = "Apply", onRecords, title }: {
   plan: Plan;
   busy: boolean;
   // applies this plan's digest, with the typed phrase when it has an
@@ -48,20 +65,26 @@ export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyL
   onCancel: () => void;
   interlockTitle: string;
   applyLabel?: string;
+  // a removal's keychain choices: each toggle re-plans with the kinds
+  // chosen (Settings S2 §4.4)
+  onRecords?: (chosen: string[]) => void;
+  title?: string;
 }) {
   const [confirming, setConfirming] = useState(false);
   // the backend says whether applying does anything: a plan with nothing
   // to show can still start what is saved (F2a review, R5)
   const nothing = !plan.activates && !plan.writes;
   return (
-    <div data-testid="settings-plan" data-plan-digest={plan.digest} style={box} role="region" aria-label="Review the changes">
+    <div data-testid="settings-plan" data-plan-digest={plan.digest} style={box} role="region" aria-label={title ?? "Review the changes"}>
+      {title && <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>}
       {plan.refused ? (
         <div data-testid="plan-refused" style={{ color: "var(--color-text-danger)" }}>
           ▲ This cannot be applied, and nothing was written: {plan.refused}
         </div>
       ) : (
         <>
-          <div style={{ color: "var(--color-text-secondary)" }}>{nothing ? "Nothing changes: these are the settings in use." : KIND_LINE[plan.kind]}</div>
+          <div style={{ color: "var(--color-text-secondary)" }}>{nothing ? "Nothing changes: these are the settings in use." : kindLine(plan)}</div>
+          {plan.class && CLASS_NOTE[plan.class] && <div data-testid="plan-class-note" style={{ color: "var(--color-text-secondary)" }}>{CLASS_NOTE[plan.class]}</div>}
           {plan.activates && plan.changes.length === 0 && (
             <div data-testid="plan-activates" style={{ color: "var(--color-text-secondary)" }}>The settings in fleet.yaml are not in use: applying starts them.</div>
           )}
@@ -85,6 +108,23 @@ export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyL
             <>
               <div style={head}>Continues</div>
               <WorkList work={plan.continues} />
+            </>
+          )}
+          {plan.records && plan.records.length > 0 && (
+            <>
+              <div style={head}>Keychain credentials</div>
+              <div style={{ color: "var(--color-text-tertiary)" }}>Each is kept unless you choose to delete it. A kept one is found again if a cluster is added under this name, for the same endpoint.</div>
+              <ul data-testid="plan-records" style={{ ...list, listStyle: "none", paddingLeft: 0 }}>
+                {plan.records.map((r) => (
+                  <li key={r.kind}>
+                    <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      <input type="checkbox" data-setting-exempt="action" checked={r.chosen} disabled={busy || !onRecords}
+                        onChange={(e) => onRecords?.(plan.records!.filter((x) => (x.kind === r.kind ? e.target.checked : x.chosen)).map((x) => x.kind))} />
+                      delete the {r.kind} credential
+                    </label>
+                  </li>
+                ))}
+              </ul>
             </>
           )}
           {plan.interlock && (
@@ -114,7 +154,7 @@ export function PlanView({ plan, busy, onApply, onCancel, interlockTitle, applyL
           cluster={plan.interlock.phrase}
           protected
           danger
-          lockName="egress lock"
+          lockName={plan.section === "fleet" ? "protection lock" : "egress lock"}
           showScope={false}
           confirmLabel={`Confirm and ${applyLabel.toLowerCase()}`}
           // the typed phrase goes to the backend with this plan's digest:

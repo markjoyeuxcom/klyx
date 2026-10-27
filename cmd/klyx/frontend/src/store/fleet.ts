@@ -1327,7 +1327,16 @@ function guardRoute(config: StateCreator<FleetState>): StateCreator<FleetState> 
 
 export const useFleet = create<FleetState>()(guardRoute((set, get) => ({
   clusters: [],
-  setClusters: (clusters) => set({ clusters }),
+  // Settings S2 §5: a cluster removed while its route is open goes back to
+  // the fleet, with a note; view preferences keyed by its name are kept, so
+  // a cluster added again under that name has them back
+  setClusters: (clusters) => {
+    const s = get();
+    const r = s.route;
+    const gone = r.name === "cluster" && s.clusters.some((c) => c.name === r.cluster) && !clusters.some((c) => c.name === r.cluster);
+    set(gone ? { clusters, route: { name: "fleet" } } : { clusters });
+    if (gone) get().setActionStatus({ kind: "info", message: `${r.cluster} was removed from the fleet: back to the fleet` });
+  },
   route: { name: "fleet" },
   openFleet: (view) => set({ route: view ? { name: "fleet", view } : { name: "fleet" } }),
   openForwards: () => set({ route: { name: "forwards" } }),

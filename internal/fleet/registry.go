@@ -232,6 +232,20 @@ func (r *Registry) Retry(ctx context.Context, name string) error {
 	return nil
 }
 
+// BuildFailures is each cluster whose connection failed to build, with
+// why (Settings S2 §4.5): it is held until a Retry connects it.
+func (r *Registry) BuildFailures() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := map[string]string{}
+	for _, e := range r.entries {
+		if e.failed {
+			out[e.name] = e.failMsg
+		}
+	}
+	return out
+}
+
 // IsCurrent reports whether id is name's current connection: neither
 // retired nor replaced (Settings S2 §2.4).
 func (r *Registry) IsCurrent(name string, id ConnID) bool {

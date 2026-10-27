@@ -253,6 +253,19 @@ See `docs/history/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-27 - Settings S2b and S2c (untagged; spec
+`docs/superpowers/specs/2026-10-26-klyx-settings-s2.md` §20-§28):**
+- S2b: the cluster entry writers (only the changed fields, every other
+  line as written), the reservation overlay, the commit gate's decision,
+  and fleet plans - edit, the file's values, connect, remove, Revert and
+  Retry - against the published protection, with the raw terms that last
+  connected. Codex-accepted at revision 3
+- S2c, Settings > Fleet: the cluster editor on the raw entry, Review and
+  apply through the plans and the typed interlock, removal with its
+  keychain choices, the held, drift and file-only notices, the leave
+  guard and awaited readback. Codex-accepted at revision 2; native smoke
+  216/216 four ways
+
 **2026-10-26 - AI A3 guarded execution and Settings through S2a (untagged;
 specs `docs/superpowers/specs/2026-10-24-klyx-ai-a3-guarded-execution.md`
 §15-§20, `docs/superpowers/specs/2026-10-25-klyx-settings-*.md` and

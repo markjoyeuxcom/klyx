@@ -81,7 +81,7 @@ func (l *Lifecycle) Acquire(cluster string, w Work) (*Lease, error) {
 	switch {
 	case !ok:
 		return nil, fmt.Errorf("Klyx does not run a cluster named %q", cluster)
-	case snap.State != policy.Active:
+	case snap.State != policy.Active || snap.Reserved: // a new admission (S2 §4.1)
 		return nil, admissionRefusal(cluster, snap)
 	}
 	c, ok := l.reg.Conn(cluster)

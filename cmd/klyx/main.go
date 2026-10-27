@@ -15,6 +15,7 @@ import (
 	"github.com/moomora/klyx/internal/cachediff"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
+	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/clustermesh"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
@@ -105,9 +106,11 @@ func main() {
 	// the in-memory revisions Settings > Endpoints moves.
 	endpointCreds := fleet.Credentials{Store: secretstore.OS{}, Revisions: endpointcred.NewRegistry()}
 	factory := fleet.DefaultConnFactory(clock.Real{}, endpointCreds)
+	resolveREST := cluster.RESTConfig // a fleet plan checks its terms resolve the same way (Settings S2 §4.4)
 	if evalRun != nil {
 		// the connection the preflight resolved, and no other
 		factory = fleet.ResolvingConnFactory(clock.Real{}, endpointCreds, evalRun.Resolve)
+		resolveREST = evalRun.Resolve
 	}
 	reg := fleet.NewRegistry(cfg, factory)
 	// Settings slice F §1: each cluster's published admission state -
@@ -187,6 +190,7 @@ func main() {
 		return err
 	}), loadErr)
 	appbridge.WithPolicy(configSvc, policyReg)
+	appbridge.HoldBuildFailures(reg, policyReg) // saved, not active, until a Retry connects it (S2 §4.5)
 	liveConfig.Store(configSvc)
 	// Settings S2 §2.6-§2.7: the running fleet loses a removed cluster, and
 	// every reader of protection reads the published value
@@ -574,6 +578,22 @@ func main() {
 	appbridge.UseLeases(lifecycle, forwardsSvc, logsSvc, eventsSvc, logHistorySvc, chatSvc, aiSvc, nodeOpsSvc, helmSvc)
 	lifecycle.OnEnd(appbridge.EndLogHistory(logHistorySvc))
 	lifecycle.OnForget(appbridge.ForgetChats(chatSvc)) // a removed cluster's conversations free their slots (S2 §2.5)
+
+	// Settings S2 §4: fleet plans - edit, use the file's values, connect,
+	// remove, Revert and Retry - applied through the lifecycle's commit gate
+	appbridge.WireFleetPlans(configSvc, appbridge.FleetPlanDeps{
+		Ctx: ctx, Life: lifecycle, Prepare: reg.Prepare, Install: reg.Install,
+		Resolve:      func(cc config.ClusterConfig) error { _, err := resolveREST(cc); return err },
+		Records:      appbridge.EndpointRecords(endpointsSvc),
+		CredLock:     appbridge.EndpointCredLock(endpointsSvc),
+		Delete:       appbridge.DeleteEndpointRecord(endpointsSvc),
+		EndEpochWork: appbridge.EndChatsOnPolicy(chatSvc),
+		Changed: func() {
+			if lineSvc != nil {
+				lineSvc.Rescan()
+			}
+		},
+	})
 
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.

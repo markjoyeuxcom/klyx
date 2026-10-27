@@ -88,6 +88,11 @@ func TestRekeyStartsAnUnreadCollection(t *testing.T) {
 	h := keyedHarness(t, src)
 	<-src.entered // the initial generation's read ("")
 	h.o.RekeySnapshot("alerts", "A")
+	// A's own read, not the published state of "" before the re-key is
+	// evaluated: that one is live and empty too
+	if k := <-src.entered; k != "A" {
+		t.Fatalf("the re-key read %q", k)
+	}
 	h.eventually(h.partIs("alerts", "alerts", func(p Part) bool { return p.Coverage == Live && evidence(p) == 0 && p.AsOf != nil }), "A read empty")
 	holdB := src.holdKey("B")
 	src.set("B", SnapshotRead{Err: errors.New("B unreachable")})

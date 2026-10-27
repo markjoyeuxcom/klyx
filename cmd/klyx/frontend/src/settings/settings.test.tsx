@@ -561,10 +561,11 @@ describe("SettingField (S1 §4)", () => {
   });
 
   it("renders a file-only entry as a read-only row that says where to change it", () => {
-    render(<SettingField id="clusters[].group" instance="aks-we-prd" value="prd" />);
-    const row = screen.getByRole("group", { name: "Group" });
-    expect(row.getAttribute("data-anchor")).toBe("clusters[].group@aks-we-prd");
-    expect(row.textContent).toContain("prd");
+    // a cluster's name stays file-only in S2: renaming is a later slice
+    render(<SettingField id="clusters[].name" instance="aks-we-prd" value="aks-we-prd" />);
+    const row = screen.getByRole("group", { name: "Name" });
+    expect(row.getAttribute("data-anchor")).toBe("clusters[].name@aks-we-prd");
+    expect(row.textContent).toContain("aks-we-prd");
     expect(row.textContent).toContain("fleet.yaml");
     expect(screen.getByText("file only")).toBeTruthy();
   });

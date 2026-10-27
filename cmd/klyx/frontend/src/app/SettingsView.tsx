@@ -25,7 +25,7 @@ const quote = (s: string) => `"${s.replace(/["\\]/g, "\\$&")}"`;
 // applyAnchor scrolls to the setting an anchor names and focuses its
 // control, or its read-only row; a repeated field's id marks every
 // instance's row. It returns what to say when the anchor names nothing here.
-function applyAnchor(root: HTMLElement, anchor: string): string | null {
+export function applyAnchor(root: HTMLElement, anchor: string): string | null {
   root.querySelectorAll("[data-anchored]").forEach((el) => el.removeAttribute("data-anchored"));
   const { id, instance } = parseAnchor(anchor);
   const e = settingEntry(id);
@@ -42,9 +42,13 @@ function applyAnchor(root: HTMLElement, anchor: string): string | null {
     el.setAttribute("data-anchored", "");
     for (let p = el.parentElement; p && p !== root; p = p.parentElement) if (p instanceof HTMLDetailsElement) p.open = true;
   });
-  const first = targets[0];
+  // an instance with a control open - a cluster's editor beside its table
+  // row - is focused at its control, never at the read-only cell (Codex's
+  // review of S2c, R7)
+  const editable = ".setting-control input:not([type=hidden]), .setting-control select, .setting-control textarea";
+  const first = targets.find((t) => t.querySelector(editable)) ?? targets[0];
   first.scrollIntoView?.({ block: "center" });
-  const control = first.querySelector<HTMLElement>(".setting-control input:not([type=hidden]), .setting-control select, .setting-control textarea");
+  const control = first.querySelector<HTMLElement>(editable);
   (control ?? first).focus();
   return null;
 }
@@ -68,15 +72,35 @@ export function SettingsView() {
   const [sentence, setSentence] = useState<{ gen: number; text: string }>({ gen: 0, text: "" });
   const [readyGen, setReadyGen] = useState(0);
 
-  const load = async () => {
+  // Reading the fleet: the latest read decides what is shown, an older one
+  // never wins, and a read that fails keeps the rows read before, said as
+  // not current, rather than dropping the page and what it was saying
+  // (Codex's review of S2c, R3). The promise is whether what is shown is
+  // now current.
+  const [rereadFailed, setRereadFailed] = useState(false);
+  const loadSeq = useRef(0);
+  const latest = useRef<Promise<boolean> | null>(null);
+  const load = useCallback((): Promise<boolean> => {
+    const seq = ++loadSeq.current;
     setLoading(true);
-    const dto = await getFleetConfig();
-    setCfg(dto);
-    setLoading(false);
-  };
+    const read: Promise<boolean> = (async () => {
+      const dto = await getFleetConfig();
+      if (seq !== loadSeq.current) return latest.current ?? false; // a newer read decides
+      setLoading(false);
+      if (!dto) {
+        setRereadFailed(true);
+        return false;
+      }
+      setCfg(dto);
+      setRereadFailed(false);
+      return true;
+    })();
+    latest.current = read;
+    return read;
+  }, []);
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   // a notice belongs to the section it was said on
   useEffect(() => {
@@ -105,7 +129,7 @@ export function SettingsView() {
   const content = (() => {
     switch (section) {
       case "fleet":
-        return cfg ? <FleetSection cfg={cfg} reload={() => void load()} say={say} ready={ready} /> : null;
+        return cfg ? <FleetSection cfg={cfg} reload={load} say={say} ready={ready} /> : null;
       case "observability":
         return <ObservabilitySection say={say} ready={ready} />;
       case "ai":
@@ -140,6 +164,12 @@ export function SettingsView() {
   return frame("ready", null, (
     <div ref={page} className="ov-page settings-page" data-section={section}>
       {notice && <p className="settings-notice" role="status" data-testid="settings-notice">{notice}</p>}
+      {section === "fleet" && rereadFailed && cfg && (
+        <div data-testid="settings-reread-failed" role="status" style={{ ...problem, color: "var(--color-text-warning)" }}>
+          <IconAlertTriangle size={13} stroke={1.7} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
+          <div>Could not read the fleet configuration again: what is shown is from the last read, and may not be what runs.</div>
+        </div>
+      )}
       {cfg?.loadError && (
         // Settings review slice 0: never an empty fleet without saying why
         <div data-testid="settings-load-error" role="alert" style={{ ...problem, color: "var(--color-text-danger)" }}>

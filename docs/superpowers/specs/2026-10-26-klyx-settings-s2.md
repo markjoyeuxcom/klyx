@@ -721,3 +721,236 @@ It checked the shutdown path with a probe of its own:
 The earlier fixes (the lease handoff, member admissions, the token transfer and the delivery fence) remain supported by their regression tests.
 
 S2a was merged to `main` in #57 at revision 4, at the owner's request; revision 5 follows in #58. S2b builds next.
+
+## 20. S2b as built (2026-10-26)
+
+S2b is the writers and the plans, backend only. The page is S2c. It was built in four commits, with a fifth for its last tests. It was built on S2a while S2a's reviews ran, then rebased onto each revision.
+
+| Contract | Code |
+|---|---|
+| §3.1 editing an entry | `config.EditClusterAt(path, version, name, ClusterEdit)` (`internal/config/clusterwrite.go`). It writes the changed S2 fields only, line by line, finding them in the node tree. A value is replaced on its own line, keeping its key, indentation, trailing comment and line ending. An absent field is inserted after the entry's last one-line key, and a cleared field's line goes. Tags are rewritten as one block in Klyx's form, sorted. A value is quoted when YAML would not read it back as the same string |
+| §3.1 refusals | Each is a `HandEditError`, saying to edit the entry by hand and why: a flow list or entry, an anchor, an alias, a merge key, a changed value written over several lines, inline tags, and a key sharing the list dash's line that would have to go. A duplicated key, and tags that are not a mapping, do not load, so they are refused as a file that does not load. The error never echoes a value |
+| §3.1 the candidate | It must load strictly. Decoded, every top-level key and every other cluster is unchanged, and the entry reads back as intended. It is written against the plan's file version through slice 0's policy: the symlink, the mode and the compare-and-swap |
+| §3.2 removing an entry | `config.RemoveClusterAt`: the entry's lines from its dash to its last line of content go, with the comments indented inside it. A comment above it, or one at the dash's column after it, stays. One blank line is kept between items. The last cluster is refused (`ErrLastCluster`) |
+| §4.1 the overlay | `policy.Registry`: `Reserve` over Active, Held or absent (a placeholder that admits nothing and is published nowhere), `Unreserve`, `Advance`, `HoldAttempt` (bound to the attempt's identity, with the protection its release publishes), `ReleaseAttempt` (exactly once, during another reservation too), and `Seed` over a placeholder. F's own steps drop an attempt binding |
+| §4.1 the split predicates | New admissions (a guard, an AI start, a lease) refuse while a reservation is held (`notAdmitting`). Existing work keeps `notActive` and its epoch |
+| §4.5 the commit gate's decision | `Lifecycle.Decide` refuses with `ErrMoved` unless the epoch and the held attempt are still the ones the plan bound. Then it runs the write and the class's transition under the gate. `Switch` is the reconnect class: write, hold for the prepared attempt, retire; then, after the gate, end the retired identity, install and start the attempt, stop the old. `Unseat` is the removal class |
+| §4.5 usability | A held attempt's first usability releases it under the gate (`ReleaseAttempt`). `OnReleased` records it after the gate: the attempt's terms become the last connected ones |
+| §4.5 at start | `HoldBuildFailures`: a cluster whose connection failed to build starts Held, with why |
+| §4.2 plans | `ConfigService.PlanClusterEdit`, `PlanClusterFromFile` (`file`, or `connect` for a cluster not running), `PlanClusterRemove` (with the chosen keychain kinds), `PlanClusterRevert` and `PlanClusterRetry`, then `ApplyClusterPlan(digest, typed)` (`fleet_plan.go`, `fleet_apply.go`). `PlanDTO` gains `Cluster`, `Class` and `Records` |
+| §4.2 one Apply at a time | `AddClusters` reserves each name, seeds it over its placeholder and unreserves last; a failed connect forgets the name. Every plan's Apply takes the fleet Apply lock, and a removal with chosen records takes the credential lock first. Each re-plan binds the file version, the running fleet's revision, the epoch, the held attempt, the work identities and the records' revisions |
+
+**Where the build differs or adds:**
+- **Effective in, raw out.** The running fleet holds effective entries: the context defaulted, and the tags a context derives. So a plan compares effective entries to class its change and show it, and writes the file's raw entry: only the fields the person changed, against the file's own values. Otherwise a save would write derived tags into fleet.yaml. `config.LoadRaw` reads both, `ClusterConfig.Effective` applies the defaults, and `ProtectedBy` names the input that decides protection.
+- **A save is refused while the file differs:** "use the file's values first, or undo that edit". F's block condition, per entry.
+- **What a protection change ends.** The work pinned to the epoch: the cluster's conversations and investigations, those comparing it, and its Explain and Suggest-fix calls. They are listed in the plan and ended explicitly at the Apply (`EndChatsOnPolicy`). Other work runs on.
+- **The last terms that connected.** They are kept per cluster: the terms running at a reconnect, when the cluster was Active, and then each released attempt's terms. Revert writes them back, and is refused while nothing has connected under other terms this session.
+- **Retry.** It is planned from the saved terms, writes nothing, and goes through `Switch`. For a cluster whose build failed, the attempt is installed into the failed slot.
+- **Keychain choices.** `EndpointRecords` lists the records present, with their revisions. The chosen ones are deleted under the credential lock (`EndpointCredLock`, `DeleteEndpointRecord`: revoked, then deleted), after the cluster is removed. A failure is said in the result's note, record by record.
+- **Hooks for later stages.** S3a fills the host check (`FleetPlanDeps.Hosts`); in S2 it is nil, so there are no hosts. After a commit, the line is told (`Changed`).
+- **Test seams.** `fleetPlans.beforeDecide` runs just before the class's decision. It is nil in production.
+
+**Tests:**
+- **The writers:**
+  - exact output for comments, nested blocks, CRLF, document markers and a file without a final newline;
+  - quoting;
+  - each refusal;
+  - an unchanged multi-line field left alone;
+  - a cleared field taking its default;
+  - the version, the compare-and-swap, the mode and the symlink;
+  - removals of the first, a middle and the last item, blank-separated, with the comments inside going;
+  - the candidate checks themselves.
+- **The overlay:**
+  - reservation without an epoch move;
+  - a Held cluster unreserved still Held;
+  - placeholders;
+  - `Advance` and `HoldAttempt` under the token;
+  - the bound attempt's release exactly once, during another reservation;
+  - new work refused, and existing work kept, while reserved.
+- **The decision:**
+  - a moved activation refused, a forgotten cluster too;
+  - the release during another Apply's reservation;
+  - a usability at the gate, stale after a committed retirement and applied once after a failed write;
+  - an identity kept by a protection change;
+  - the removal flow, the addition's reservation, and a build failure held until a Retry connects it.
+- **The plans:**
+  - a placement keeping its epoch;
+  - tightening without an interlock, which ends the conversations, invalidates a ticket from before it and moves the epoch once;
+  - loosening with its interlock;
+  - the name's protection that cannot be loosened;
+  - a context that cannot resolve;
+  - a reconnect held until its own connection is usable;
+  - Revert to the last connected terms, which follow each release;
+  - a refused Retry still Held;
+  - Codex's design probe: a release during a Retry's preparation;
+  - a removal with its interlock and only its chosen records, a failed deletion said, a removal refused at its decision deleting nothing;
+  - a record bound to its revision;
+  - a save refused over a hand edit;
+  - "Use the file's values": adopting S2's fields with the running endpoint kept, connecting a file-only cluster, removing one gone from the file;
+  - two clusters' Applies keeping each other;
+  - the digest moving when work starts;
+  - an arm not surviving a reconnect.
+
+**Mutation pass:** writers 20 of 20, overlay and admission 18 of 18, decision 12 of 12, plans 20 of 20.
+
+## 21. S2b revision 1: Codex's review (2026-10-26)
+
+Codex requested changes at c155378: seven P2 and one P3. It found sound:
+- the overlay and the split predicates;
+- `Switch`'s bound hold;
+- the writers;
+- effective comparison with raw writes;
+- the order of the keychain choices;
+- a protection change ending its conversations outside the gate;
+- the nil hosts hook and the decision seam.
+
+Each finding is fixed, and its probe is a regression test (`fleet_review_test.go`).
+
+| Finding | Fix |
+|---|---|
+| **R1:** a plan that writes nothing (file adoption, Connect, Retry, a file-driven removal) did not check its file version at the final decision | The write step checks the plan's file version under the gate even when it writes nothing, and an addition checks it before its seed. A file moved since the re-plan refuses with the new plan, having changed nothing |
+| **R2:** a committed removal left earlier tickets valid until its cleanup finished | `Unseat`, and S2a's `Remove`, forget the cluster in the policy registry under the gate, with the retirement. A ticket or fence admitted before is refused at once, before any callback can block |
+| **R3:** a protection edit while Held wrote the file and the running entry, then failed | It is refused at plan time: "saved, not connected yet: change its protection once it connects, or Revert or Retry first" |
+| **R4:** the removal and loosening interlocks read the pending entry, not the published protection | The published protection is the baseline: for the class, both interlocks, and protection's effect line ("on, until the pending connection is usable") |
+| **R5:** Revert and Retry recorded the file's entry as terms that connected | Raw terms are kept by connection identity: the startup connections' from fleet.yaml as Klyx started, and each new attempt's when it commits. A connection's terms become the last connected ones only when its usability is published (`Lifecycle.OnPublished`). Retry connects with the saved terms that run, never a hand edit made since |
+| **R6:** `AddClusters` wrote before preparing | Each connection is prepared before the file is written, so one that cannot be built adds nothing. Each addition then commits under its cluster's gate, and its connection is installed |
+| **R7:** writer refusals echoed anchor and alias names | A refusal names the structure and its line, never the name |
+| **R8 (P3):** Connect did not name its endpoints | A Connect's plan names the endpoint kinds the entry configures, without secrets |
+
+**Tests:**
+- Codex's nine probes, as regression tests.
+- An addition re-checking the file at its decision.
+- While Held, the published protection deciding the class, the interlock and the effect line.
+- Revert's test now has its startup connection connect first: terms count as connected only once their connection's usability is published.
+
+**Mutation pass:** 13 mutants of the fixes, all caught.
+
+## 22. S2b revision 2: Codex's re-review (2026-10-26)
+
+Codex found R1, R2, R7 and R8 closed, and R3 to R6's original probes passing. It requested changes: four residual P2s, in the Held classification, the connection terms' bookkeeping, and the addition's admission.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** while Held, an edit whose protection equalled the published value, but not the pending attempt's, was classed as placement. The hold's release then published the pending value, undoing the edit | While Held, any edit that is not a reconnect is refused when its protection differs from either the published value or the pending attempt's, before anything is written |
+| **RR2:** a startup connection could publish its usability before the plans subscribed, so its terms were never remembered | Wiring seeds each startup connection's terms, subscribes, then records any startup connection already published, so there is no gap. A startup connection's terms are its file entry only while that entry still says what started, never a hand edit made since |
+| **RR3:** a placement or protection change on an existing connection left its tracked terms stale, so Retry recorded terms other than those it built | Every committed placement or protection change updates its connection's terms and the cluster's current terms. It updates the last connected terms too, when that connection is the one that connected |
+| **RR4:** `AddClusters` found a name already running only after writing it | Every name is checked before anything is prepared or written. A name that runs, or is published, is refused, and the file's values remove it |
+
+**Tests:** Codex's four probes, as regression tests, and an edit on the connected identity keeping its last connected terms. **Mutation pass:** 6 mutants, all caught.
+
+## 23. S2b revision 3: Codex's second re-review (2026-10-26)
+
+Codex found RR1, RR2 and RR4 closed, and RR3 correct for a cluster with a connection. It requested changes: one residual P2.
+
+| Finding | Fix |
+|---|---|
+| **R2-1:** a cluster whose first build failed has no connection. A placement edit committed then updated nothing, so Retry built the edit's terms but recorded the startup ones, and a later Revert undid the edit | Every committed placement or protection change updates the cluster's current terms, connection or not. Its connection's terms, and the last connected terms, change only when a connection exists, the latter only for the connection that connected: an edit before any connection invents no history |
+
+§22's RR3 line holds with that correction: the current terms follow every committed change, not only those on a connection.
+
+**Tests:** Codex's probe, as a regression test covering a save and a file adoption before the first build: the edit is Retry's terms, no connected terms exist until Retry connects, and Revert restores the connection that succeeded. **Mutation pass:** 5 mutants, 4 caught. The survivor, dropping the return after an edit on a connection, is equivalent: the current terms are then written twice with the same value. No native smoke for this revision alone: the change is bookkeeping on paths the unit tests drive, and the S2c smoke runs on top of it.
+
+## 24. ACCEPT: S2b (2026-10-27)
+
+Codex accepted S2b at revision 3 (3196a4e), with no remaining findings. That came after the review of c155378 (seven P2, one P3) and three re-reviews (§21-§23).
+
+Its last re-review checked the failed-startup case end to end: a placement edit, a Retry that connects, the real usability publication, a pending reconnect, then Revert, with the edit kept. All fourteen of its independent probes pass under the race detector. It accepted the equivalent mutant §23 names, and no native smoke for that bookkeeping fix: the S2c smoke runs on top of it.
+
+S2c, the page, builds on S2b next. The two are proposed for `main` together.
+
+## 25. S2c as built (2026-10-27)
+
+S2c is the page: Settings > Fleet edits a cluster through its plans. It was built on S2b and rebased onto its accepted revision 3 (§24).
+
+| Contract (§5) | Code |
+|---|---|
+| The table | `FleetSection`: a real table with header semantics, plus an actions column on each row: Edit, and Remove… |
+| The editor | `ClusterEditor`, inline under its row. It opens on the cluster's entry as fleet.yaml says it (`ConfigService.GetClusterEntry`: the raw S2 fields, what decides protection, and the contexts the entry's kubeconfig offers) and edits a draft: context (offered from those contexts), kubeconfig, region (`tags.region`), group, environment, other tags (one `key=value` a line; a bad line is named, and Review waits until it is fixed), and `protected: true`. The name is read-only: renaming is a later slice. Each field is the registry's `SettingField`, with its effect and its takes-effect chip |
+| Protection's effect | The editor says what decides protection now (`ProtectedBy`), and why it cannot be loosened here when the name infers it (`Locked`). The plan says the effect of the draft |
+| Review and apply | `PlanView` for every route: the changes, protection's effect line, what ends and what continues, the class's consequence (a reconnect is held until its new connection is usable; a protection change makes earlier confirmations stale and ends the conversations), and the interlock: the existing dialog, typed with the cluster's name, its lock named "protection lock" |
+| Remove… | The removal plan, with each keychain record present as its own choice. A toggle re-plans with the kinds chosen, so the digest binds the choice. The interlock applies when the cluster is protected |
+| The notices | A held cluster: its hold's reason as it is - a reconnect's "Saved, not connected yet: connecting with context …" or a failed build's "Failed to connect: …" - and that nothing new starts on it, with Revert (when other terms connected before) and Retry. Drift: "Use the file's values". A file-only cluster: Connect. A failed build is held from the start, so it offers Retry |
+| The registry | Context, kubeconfig, group, environment, tags and protection are editable: on Save, a context or kubeconfig at reconnect. The name stays file-only, "a later slice". An endpoint's fields keep their file-only text until S3 |
+| After a removal | A route on the removed cluster goes back to the fleet, with a note in Activity. View preferences keyed by its name are kept, so a cluster added again under that name has them back |
+| After a reconnect | The lens views follow the new connection: they read through the registry's current connection by name, so nothing needs re-pointing. The smoke checks it |
+
+**Backend additions:**
+- `FleetClusterDTO` gains `ProtectedBy`, `Held`, `CanRevert` and `CanRetry`, from the published policy and the last connected terms.
+- `GetClusterEntry` reads fleet.yaml now, so the editor's draft is what the file says. It is never the effective entry, with its defaulted context and derived tags.
+- `PlanDTO`'s new kinds and fields reach the page through `bridge/fleetPlans.ts`.
+
+**Settling an Apply:** as in F's sections:
+- a replacement plan is shown, never applied by the page;
+- a refusal says why;
+- a lost answer reads back what runs and says so;
+- an applied plan closes the editor and reads the fleet again.
+
+**The native smoke** (`smoke/run.ts`, on kind-klyx; every edit undone, and the gate restores and compares the smoke fleet.yaml around each walk):
+- **A placement edit:** the region moves, and the line's station moves to the new track; it is moved back.
+- **Protection:** tightened without an interlock, then loosened back through the typed interlock.
+- **A reconnect:** to the same context through an explicit kubeconfig path. It is held until it connects, the Flux lens shows the lab's units on the new connection, and it is restored the same way.
+
+S2 §6 lists the protection walk the other way round, loosened then tightened back. The lab cluster starts unprotected, so the walk goes from unprotected and back.
+
+**Tests:**
+- The page: a held notice says its reason once, for a reconnect and a failed build; an edit planned with exactly the draft, applied, then read back; loosening through the typed interlock with the cluster's name; a removal's choices re-planned; Revert and Retry on a held cluster; the file's values for drift, and Connect for a file-only cluster; a replacement plan shown and not applied; a lost answer read back; the name's protection that cannot be loosened; tags parsed.
+- The backend: a held row's state and plans, and no Revert when nothing connected before; the editor's raw entry (a context left out stays out), its contexts, and protection set in the file never locked.
+- The store: a removed cluster's route.
+
+**Mutation pass:** 24 mutants over the row's held state, the editor's raw entry, the notices, settling, the plan's lines and records, the editor's tags and the store's route. 18 were caught at first; the six survivors - Connect's plan above the table, the reconnect's banner, a second keychain choice keeping the first, the protection lock's name, the plan's removal and revert lines, and Review waiting for a bad tag line - each got a test, and all 24 are caught.
+
+**Also in this slice:** `TestRekeyStartsAnUnreadCollection` (coverage S8a) failed about one run in seven, on `main` as well. A re-key is published at the next evaluation, so its "A read empty" wait could pass on the state the "" read left; the test now waits for A's read to start. It is a test fix only: a stopped generation's one read, made with its context already cancelled, is discarded as before.
+
+**Smoke:** 216/216 four ways (night and day, 1440 and 1024) at d412450, the smoke fleet.yaml as it began after every walk. An earlier run at 9ecfaaf passed 216/216 three ways; its day 1024 walk ran out of its budget after three stalls of about five minutes each, while it competed with a mutation run and overnight. Run alone, every walk takes about five minutes, as S2a's and S2b's did.
+
+## 26. S2c revision 1: Codex's review (2026-10-27)
+
+Codex found the plans bound and the interlock, the keychain choices, the removed cluster's route and the registry sound. It rejected one candidate of its own (the generated binding turns a null tags map into an empty one). It requested changes: five P2 and three P3.
+
+| Finding | Fix |
+|---|---|
+| **R1, P2:** after Review, the draft stayed editable and its older plan stayed applicable: Apply sent the old digest and dropped the newer draft | Every change to the draft withdraws the plan it made, so the page never offers a plan for another draft. A plan answered for an older draft is dropped too |
+| **R2, P2:** the cluster editor was not a draft to the leave guard, so leaving Settings, changing section or opening another editor dropped it without asking | A changed draft is a draft to the guard: leaving, or opening another editor, asks to discard it or stay. There is no Save and leave, since a cluster changes only through its plan. Cancel discards it. An Apply being settled holds leaving until its readback ends |
+| **R3, P2:** the readback after an Apply was not awaited: the old rows were called current and the actions came back at once. A failed read dropped the page, and the lost answer with it | Settling awaits the readback before saying anything is current, and keeps the actions disabled until it ends. A failed read is said beside the outcome. Settings keeps the rows read before, said as not current, and the newest read always decides |
+| **R4, P2:** the held notice never followed the connection: it stayed after the attempt connected | While a cluster is held, the page reads the fleet again on every change in the live fleet, and every ten seconds. Drafts and open plans are kept |
+| **R5, P2:** the editor and the row took protection from the running entry, which holds a held attempt's pending terms: "Not protected now" while the guard still protected the cluster | The published protection is the one in force, named with what decides it while the running entry still says the same. A held attempt's different protection is said apart: "Once its new connection is usable: not protected" |
+| **R6, P3:** the contexts offered came from the kubeconfig the cluster runs with, not the one the draft names, and stayed when the kubeconfig was edited | The contexts are read from the kubeconfig the file's entry names. A kubeconfig typed since has not been read: nothing is suggested from it, and the plan checks the context against it |
+| **R7, P3:** with an editor open, the table's cells and the editor's fields had the same DOM ids | A cell's id is its own. An anchor with an editor open focuses the editor's control |
+| **R8, P3:** S2 §5's link from the editor to the cluster's endpoints was missing | The editor links each endpoint the cluster configures to its row in Observability, or opens Observability when it has none. Leaving goes through the guard |
+
+**Tests:** Codex's probes, as regression tests, and:
+- the guard's paths: Stay, opening another editor, Discard, Cancel;
+- the leave guard holding while an Apply is read back;
+- the newest of two overlapping reads deciding;
+- the ten-second read while held, and none when nothing is held;
+- the anchor's focus, and the endpoint links' route.
+
+**Mutation pass:** 22 mutants over the fixes, frontend and backend, all caught. Dropping a plan answered for an older draft is not among them: the editor's inputs are disabled while a plan is asked for, so the draft cannot move meanwhile, and that check is kept as a defence.
+
+**Smoke:** 216/216 four ways at 9ad1afe, the smoke fleet.yaml as it began after every walk.
+
+## 27. S2c revision 2: Codex's re-review (2026-10-27)
+
+Codex found R1, R3 and R5 to R8 resolved, and R2 and R4 resolved in part. Its two original probes that still failed were test assumptions, which it adapted: an empty `protectedBy` no longer means unprotected, and a read-failure message now appears twice. It requested changes: two P2 and one P3, each across clusters or with an editor kept open.
+
+| Finding | Fix |
+|---|---|
+| **RR1, P2:** a successful Apply of any plan closed the editor, so removing another cluster discarded an unrelated draft without asking | Settling closes only the draft the Apply was for: the editor's own plan, or its cluster's. An action on the cluster whose editor holds a changed draft (Remove, Revert, Retry, the file's values) asks first. Another cluster's actions leave the editor and its draft alone |
+| **RR2, P2:** an open editor kept the protection it was opened with while the table read the fleet again | The editor's protection is the row's, read again with the fleet: "Not protected now" once a held attempt that loosens it connects. The draft stays the editor's own |
+| **RR3, P3:** the reconnect banner went on saying "not connected yet" after the connection succeeded | The banner is a receipt of what was done ("Klyx began connecting dev with the new terms"), and the row says whether it has connected since. An addition's says the same |
+
+**Tests:** Codex's three probes, as regression tests, and:
+- an action on the edited cluster asking, with Stay keeping the draft and Discard proceeding;
+- an Apply for the edited cluster from elsewhere closing its unchanged editor.
+
+**Mutation pass:** 6 mutants over the fixes, all caught; the last, an unchanged editor kept open over a replaced entry, after a test was added for it.
+
+**Smoke:** 216/216 four ways at c5a9dda, the smoke fleet.yaml as it began after every walk.
+
+## 28. ACCEPT: S2c (2026-10-27)
+
+Codex accepted S2c at revision 2 (95d2a99), with no remaining findings. That came after the review of 10253e1 (five P2, three P3) and two re-reviews (§26, §27).
+
+It ran its earlier probes unchanged: an unrelated cluster's removal keeps a dirty editor, the open editor's protection follows the row at release with its draft kept, and the reconnect banner no longer claims a pending connection once it has connected. It found the draft generation, the explicit replacement plans, the digest and typed phrase, the keychain choices, the awaited readback, read sequencing, the held refresh, the kubeconfig suggestions, unique anchors and the endpoint links intact.
+
+S2 is complete: S2a, S2b and S2c are each accepted. S3a builds next.

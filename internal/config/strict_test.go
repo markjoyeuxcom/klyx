@@ -101,6 +101,14 @@ func TestFleetWritersKeepASymlink(t *testing.T) {
 		"notifications": func(p string) error {
 			return SaveNotifications(p, NotificationsConfig{Enabled: true})
 		},
+		"cluster entry": func(p string) error {
+			v, err := FileVersion(p)
+			if err != nil {
+				return err
+			}
+			_, err = EditClusterAt(p, v, "a", ClusterEdit{Group: strp("g")})
+			return err
+		},
 		"metrics token": func(p string) error {
 			snap, err := ReadSnapshot(p)
 			if err != nil {
