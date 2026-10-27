@@ -479,3 +479,41 @@ Codex accepted the design at revision 2 (b28c0a4), after the review of cce38ba a
 The historical memory description in §12 records revision 1. §3.2 and §13 supersede it: the load test uses the bound per reading member plus one outcome per bucket.
 
 S3a-1, the model, builds next.
+
+## 15. S3a-1 as built: the model (2026-10-27)
+
+S3a-1 is §2: the schema, its strict decoding and validation, resolution, and the effective scopes. It was built on S2c's revision 1. The design's commits were rebased onto it unchanged, so its accepted text is the same under new hashes.
+
+| Contract | Code |
+|---|---|
+| The schema (§2.1) | `config.SourceConfig` and `ServeConfig` under `Config.Sources`; `EndpointConfig` gains `Source`, `Scope` and `Off`. The strict decoder knows every key, so an unknown key under `sources` is a load error, and `sources` is no longer an ignored top-level key |
+| The installation's refusals (§2.1) | `validateSources`: the id a DNS label, unique; `kind` alertmanager (loki and metrics "not built yet"); exactly one locator; `host` with a serviceRef or discovery, never with an endpoint, and a cluster of the fleet; auth and TLS with an endpoint only; an endpoint URL with a credential refused, never echoed; serviceRef, auth and tenant by today's checks; the member label a label name; one key per `serves` entry |
+| The subscription's refusals (§2.1, §12 R6) | `validateSubscription`: `off` alone; `source` with no locator, auth or TLS beside it; `scope` only with `source`, only `tenant`, with no match beside it. On Loki, `source`, `scope` and `off` are each a load error naming the key |
+| Resolution (§2.2) | `config.ResolveAlertmanager`, pure, run at load: a cluster's own block always wins, an empty one included; then an installation by name, then by group, then discovery. Each own block is its mode (subscribed, off, direct, service, discovered). A block that wins over an installation records it as shadowed. Two installations at one step, or a source naming none, is a load error |
+| Scopes (§2.3) | The effective tenant, and the match from the member label, extended by the block's match; `scope: tenant` takes the tenant. A subscription with neither is refused. Subscriptions sharing an installation's tenant must carry the member label with distinct values, and `scope: tenant` shares with none |
+| Warnings | A `serves` entry naming a cluster or group the fleet does not have |
+| The registry (§8, §12 R6) | Every `sources[]` path, scope `installation`; `clusters[].alertmanager.source`, `scope`, `off`, scope `subscription`; all file-only in this stage. Loki's three are deferred: "not built yet". Observability describes the installation fields under the endpoint fields |
+
+**What a connection does in this stage.** Reading through an installation is S3a-2. Until then, nothing an installation serves is ever read by discovery in its member:
+- `fleet.SubscribingFactory` gives each connection its block resolved against the installations read at start: its own block, or the subscription an installation implies for it. The running fleet's entry is not changed.
+- `off` reads as absent ("alerts are off for this cluster in fleet.yaml"), with no Alerting capability.
+- A subscription is unreadable, said as such: "this cluster's alerts come from the installation lgtm-we, and this version of Klyx does not read through installations yet". It keeps the Alerting capability.
+- Their identities are `off` and `source|<id>`, so adopting another block re-keys, and `sameEndpoint` tells the blocks apart.
+- Observability's row says "subscribed to the installation …" or "off in fleet.yaml", never "discovered".
+
+**S2's plans** (§3.6, in this stage's form):
+- **The host check:** `FleetPlanDeps.Hosts` is `SourceHosts`: the installations in force and those in fleet.yaml now, each once. A removal of their host is refused.
+- **A placement or protection edit** that would move a cluster's alerts (a group an installation serves, or no longer serves) is refused, naming both sources: the running connection cannot follow until S3a-2 re-resolves on commit. Reconnects and additions build their connection through the resolving factory, so they follow.
+
+**Tests:**
+- every load error of §2.1 to §2.3, by place;
+- §2.2's two tables, by name over by group, shadowing, both conflicts;
+- the scopes: an override, an added key, `scope: tenant`, a lone subscription without a member label taking its match, and the disjointness refusals;
+- warnings and strict decoding;
+- the connection: off absent without discovery, a subscription never discovered, with a control that sees discovery counted; the factory's block, never written back;
+- S2: a placement moving the source refused, its own block winning, the host check over active and file installations;
+- the row's text, and the registry's coverage.
+
+**Mutation pass:** 26 mutants over the validation, resolution and scopes, the connection, the factory, S2's checks and the row text, all caught.
+
+**Smoke:** 216/216 four ways at a8824ff, the smoke fleet.yaml as it began after every walk. The smoke fleet has no installations, so this is the regression check: nothing changes for a file without `sources`.
