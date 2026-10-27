@@ -548,3 +548,15 @@ Codex found R3 and R4 closed, R1 fixed for keys written in the block itself, and
 **Tests:** Codex's probes, as regression tests: seven inherited forms, plus a merge sequence and a nested merge, all refused, with valid merges and aliases still loading; six long identities and label names withheld; the registry's text for `off`. **Mutation pass:** 6 mutants over the fixes, all caught.
 
 **Smoke:** 216/216 four ways at 85cf6e8, the smoke fleet.yaml as it began after every walk.
+
+## 18. S3a-1 revision 3: Codex's second re-review (2026-10-27)
+
+Codex closed RR1 (merged keys) and RR3 (the registry's text for `off`), and RR2 in the loader's diagnostics. It requested changes: one P2.
+
+| Finding | Fix |
+|---|---|
+| **R2-1, P2:** the same ids reached Settings through S2's plan refusals: a host's removal named its installations whole ("dev hosts <id>: remove those first"), and a source move named "the installation <id>" | A plan's refusal names an installation by its id, or, at 25 characters or more, as "an installation whose id has 40 characters": the loader's rule (`config.Withheld`). Where a cluster's alerts come from is compared by the id itself (`amSourceKey`), never by those words, so two distinct ids of one length still differ. `SourceHosts` keeps the ids whole for its dependency check |
+
+**Tests:** Codex's probes, as regression tests: an active host and a host in the file, a source move, and two long ids of one length still refusing the move. **Mutation pass:** 5 mutants over the fix, all caught.
+
+**Smoke:** 216/216 four ways at 2f9324e, the smoke fleet.yaml as it began after every walk.
