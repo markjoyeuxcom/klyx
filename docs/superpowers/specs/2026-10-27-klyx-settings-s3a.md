@@ -7,7 +7,7 @@ Opened 2026-10-27, on `feat/settings-s3a`, after S2b was accepted (S2 §24) and 
 - the host fence on reads and on later sends;
 - Detect, and the migration offer.
 
-Loki and metrics follow on the same model in S3b. This note is for Codex's review before anything is built.
+Loki and metrics follow on the same model in S3b. This note is for Codex's review before anything is built; revision 1 the same day, after that review (§12).
 
 ## 0. What exists
 
@@ -102,7 +102,7 @@ clusters:
 - `serves`: entries of exactly one key, `group` or `cluster`. A name or group that no cluster has is a warning, not an error: a cluster can be added later.
 - A subscription block with `source` refuses `endpoint`, `serviceRef`, `auth` and `tlsSkipVerify`; it allows `tenant`, `match` and `scope`. `off: true` allows nothing beside it. `scope` is allowed only with `source`.
 
-`config.EndpointConfig` gains `Source`, `Scope` and `Off`, so the strict decoder knows every key. `config.Config` gains `Sources []SourceConfig`.
+`config.EndpointConfig` gains `Source`, `Scope` and `Off`, so the strict decoder knows every key. `config.Config` gains `Sources []SourceConfig`. **`EndpointConfig` is Loki's shape too,** so `clusters[].loki.source`, `scope` and `off` become schema paths as well. Until S3b builds them, each is a load error naming the key ("loki.source is built in S3b"), never a source-less Loki, and the registry gives each the disposition deferred, with S3b as its slice.
 
 ### 2.2 Resolution
 
@@ -168,28 +168,36 @@ The legacy modes keep their transports: their own connection, or their own direc
 
 ### 3.2 Buckets
 
-**A bucket** is an installation's resolved subscriptions with one effective tenant. Its key is the installation's id and revision, the host's connection identity when it is hosted, and the tenant. The credential revision is checked on every read, before and after, as today; it is not in the key. **Only resolved subscriptions are in a bucket:** a shadowed or `off` cluster adds nothing.
+**A bucket** is an installation's resolved subscriptions with one effective tenant. Its key is the installation's id and revision, the host's access generation when it is hosted (§3.4), and the tenant. The credential revision is checked on every request, before and after, as today, and recorded with each read; it is not in the key. **Only resolved subscriptions are in a bucket:** a shadowed or `off` cluster adds nothing.
 
-**One reader per bucket** lives in `internal/fleet`, beside the registry, and serves its members:
-- A member's alerts snapshot still reads on its own Observer's cadence. Its read asks the bucket for its share.
-- A request is served by the bucket's latest read when that read started within the cadence and was filtered for the asking member. Otherwise the request starts a read, and requests made meanwhile coalesce into it. Members on staggered cadences therefore share one read per bucket per interval, single flight across re-keys.
-- **A share's freshness is its bucket read's time,** never the time the member asked: observe's `SnapshotRead` gains the read's time, and the snapshot's as-of and staleness use it.
-- The bucket read takes one of today's four fleet-wide slots. **Buckets add no slots** (redesign §17a). The wait for the slot and for the bucket's read count against the asking member's 10-second timer, as today.
-- The read asks for `/api/v2/alerts` and `/api/v2/alerts/groups` with one filter: the member label matching the bucket's member values, as one anchored regular-expression matcher of the escaped values (`cluster=~"aks-we-dev|aks-we-stg"`). Other match keys are not sent, because they differ by member; they are checked after the read. A `scope: tenant` bucket sends no filter.
-- **Alerts and groups take the same filter,** so mute reduction stays complete for every row read (redesign §17a).
+**A bucket reads on its own cadence,** with one owner, in `internal/fleet` beside the registry:
+- A member's alerts snapshot registers with its bucket when its Observer reads it, and leaves when the Observer stops (a disconnect, a retirement, a re-key). The **cohort** is the registered members, each with its subscription revision.
+- The bucket exists while its cohort is not empty. It reads every 30 seconds, S8a's cadence, and at once when a member joins whose subscription revision the latest read did not cover: one read per bucket per interval, single flight.
+- A re-key makes a new bucket and cancels the old one: its worker ends within the read's timeout, and its outcome is never served.
+- The read takes one of today's four fleet-wide slots. **Buckets add no slots** (redesign §17a). The read's own 10-second timeout covers its wait for a slot.
 
-**The split** (redesign §6.4):
+**The acquisition filter** is the same for `/api/v2/alerts` and `/api/v2/alerts/groups`, so mute reduction stays complete for every row read (redesign §17a):
+- an installation with a `memberLabel`: one anchored regular-expression matcher of the cohort's escaped member-label values (`cluster=~"aks-we-dev|aks-we-stg"`). Other match keys differ by member, so they are checked after the read;
+- an installation without one: its subscription in that tenant is alone (§2.3), so its full effective match is sent as equality filters, as today's direct block does;
+- `scope: tenant`: no filter.
+
+**The split, and what is kept** (redesign §6.4):
 1. The bucket's read is reduced once (`alertmanager.Reduce`) and capped once.
-2. Each reduced row's labels are checked against each member's full effective match. Disjoint scopes mean at most one matches.
-3. A member's share is its matching rows, projected for display only after the split. Identity and matching facts are split before any member row is projected.
-4. **A row matching no member is counted on the installation as not attributed,** never added to a member. Rows of a member that is not reading now (not connected, or not asked yet) are dropped without being counted as not attributed.
+2. Each reduced row's labels are checked against each cohort member's full effective match. Disjoint scopes mean at most one matches.
+3. The bucket keeps the read's **outcome**: its time, its cohort with each member's subscription revision, the credential revision, the lineage (§3.4), and each cohort member's share. A share is the member's matching rows, projected for display only after the split. Raw identities and matching facts stay in the bucket: members receive projected rows only.
+4. **A row matching no cohort member's scope is counted on the installation** as "matched no member in this read", never added to a member, and never in any member's AI evidence. Rows of a cluster outside the cohort never reach the read: the filter leaves them out. The count is of rows this filtered read returned, never of every alert the installation holds.
+5. Each read replaces the outcome. A failed read keeps the last good shares, said with the failure: the members become stale, as today's rule for a failed read.
+
+**A member's read** is served the bucket's latest outcome at once when the outcome's cohort included that member under its current subscription revision. The share keeps the read's own time, credential revision and lineage, never a later one: observe's `SnapshotRead` gains the read's time, and the snapshot's as-of and staleness use it. A member not in the outcome's cohort, under its current revision, waits for the next read, which its joining asked for, within its own 10-second timer; a timeout is an ordinary failed read. No other member read waits on the bucket.
 
 **Caps:** S8a's bounds apply to the bucket's read, once:
-- 5,000 entries after reduction is a truncation. A truncated bucket qualifies **every** member in it: "lower bound: lgtm-we's read reached its cap". A member's share is never presented as complete when its bucket was cut.
-- 8 MiB and 20,000 group appearances fail the bucket's read whole. Every member's alerts become stale or unreadable, as today's rules for a failed read.
-- The not-attributed count is of rows actually read, with "of a read cut at its cap" when it was.
+- 5,000 entries after reduction is a truncation. A truncated read qualifies **every** member of its cohort: "lower bound: lgtm-we's read reached its cap". A member's share is never presented as complete when its read was cut, and the unmatched count says "of a read cut at its cap".
+- 8 MiB, per response as today, and 20,000 group appearances fail the bucket's read whole. Every member's alerts become stale or unreadable.
 
-**Memory:** a bucket keeps its last read only until it is split; the members' shares are disjoint, so the sum of the shares is at most the bucket's read. No member holds a copy of another's rows. A load test measures the worst admitted shape: eight installations, each serving eight members, each read at the cap (§9).
+**Memory:**
+- A bucket holds one outcome: at most one capped read, split. A member's Observer holds the share it was last served, from the latest or the previous outcome: members are served each cadence, and a failed read leaves every member on the same last good outcome. So a bucket's rows, held anywhere, are at most two capped reads.
+- A member's share is at most the cap, as a cluster's own read is today. The fleet therefore holds at most today's bound, 5,000 rows for each reading member, plus one outcome for each bucket. In flight: at most four reads fleet-wide, each with two responses of at most 8 MiB and its reduction.
+- These bounds are per bucket and per member, so no admission limit is needed. The load test (§9) runs a representative shape (eight installations of eight members, hot members rotating, reads failing) and checks the bounds. It does not claim to be the worst shape.
 
 ### 3.3 Coverage for a member
 
@@ -204,13 +212,19 @@ The legacy modes keep their transports: their own connection, or their own direc
 
 ### 3.4 Keys and lineage
 
-**Revisions** are counters held by a runtime `sources` registry. An installation's revision moves whenever its effective record changes; a subscription's moves whenever its member's resolution changes (a new installation, tenant, match, scope or mode). A change and its undo are two moves, never a return to an old revision.
+**Revisions** are counters from one process-wide sequence, held by a runtime `sources` registry, and never reused: a removed installation re-created under the same id gets new revisions. An installation's revision moves whenever its effective record changes; a subscription's moves whenever its member's resolution changes (a new installation, tenant, match, scope or mode). A change and its undo are two moves.
 
-**The snapshot's key** for a subscribed member is its lineage: `source|<id>|r<installation revision>|s<subscription revision>|host=<host connection identity>|tenant=…|match=…`. A changed installation, subscription or host connection therefore re-keys the member's snapshot: a new generation starts at checking, and nothing of the old one is shown as current. The legacy modes keep today's key. A credential change does not re-key any mode, as today: the lens keeps its rows until the next read, and the credential revision is in the lineage (below), where the fences check it.
+**The host's access generation** is what a hosted read pins. Its connection identity alone is not enough, since a connection recovers in place under the same identity (S2a). The generation moves, and never returns, when:
+- the host's usability is published again: the usability incarnation S2a publishes into its policy epoch, which moves at a reconnect and at a recovery in place alike;
+- a read through the host is refused by the API server or the proxied Service (401 or 403): an observed loss of access.
+
+A direct installation's access generation moves with its credential revision, and on a 401 or 403 from its endpoint. What a lineage certifies is that no change was observed since the read. Access between reads is not probed, and the scope sentence carries the read's time.
+
+**The snapshot's key** for a subscribed member is its lineage: `source|<id>|r<installation revision>|s<subscription revision>|a<access generation>|tenant=…|match=…`. A changed installation, subscription or access generation therefore re-keys the member's snapshot: a new generation starts at checking, and nothing of the old one is shown as current. The legacy modes keep today's key. A credential change does not re-key any mode, as today: the lens keeps its rows until the next read, and the credential revision is in the lineage, where the fences check it.
 
 **The opaque row identity** (`AlertKey`) is taken over this key, so it carries the installation, tenant and revision (redesign §17a). A revision change clears the lens's selection, as a source change does today.
 
-**Every alerts read carries its lineage** (`alertmanager.Read.Lineage`): the mode, the installation's id and revision, the subscription's revision, the host's name and connection identity, the tenant, the effective match as display, and the credential revision. It is kept with the snapshot's items, and the alert rows expose it.
+**Every alerts read carries its lineage** (`alertmanager.Read.Lineage`): the mode, the installation's id and revision, the subscription's revision, the host's name, connection identity and access generation, the tenant, the effective match as display, the credential revision, and the read's time. It belongs to the read's outcome: its rows, stale ones included, an empty success and its counts alike. The alert rows and parts expose it. A lineage is never looked up again later: the read's own is the one checked.
 
 ### 3.5 The scope sentence
 
@@ -224,8 +238,9 @@ v0.15.1's shared-Alertmanager hint stays for the legacy unscoped modes only. A s
 
 ### 3.6 Hosts and the fleet
 
-- **S2's removal check:** `FleetPlanDeps.Hosts` returns the installations naming the cluster as host, from the candidate configuration. A removal of a host, including one through "Use the file's values", is refused before anything disconnects (S2 §4.4).
-- **A host's reconnect** (S2's reconnect class) changes its connection identity, so its members re-key. The plan lists the members' alerts from the host's installations among what ends.
+- **The active sources.** The runtime `sources` registry holds the installations and subscriptions in force, with a revision. Only Observability's plan changes it (§5): S2's plans never adopt a source change from the file. An S2 plan composes its candidate from the active sources and its own fleet change, binds the active sources' revision, and its Apply checks it again under the fleet Apply lock.
+- **S2's removal check:** `FleetPlanDeps.Hosts` returns the installations naming the cluster as host: the active ones, and those in the file, a file-only or changed installation included. A removal of a host, including one through "Use the file's values", is refused before anything disconnects (S2 §4.4), so neither a running dependency nor one the person may still apply is left without its host. A plan removing an installation and its host together would name both; S3a builds none.
+- **A host's reconnect, or its recovery in place,** moves its access generation, so its members re-key. S2's reconnect plan lists the members' alerts from the host's installations among what ends, by the connections they use.
 - **A placement edit that changes a cluster's group** can change which installation serves it. S2's placement plan lists the change ("Alerts: from lgtm-we → discovered in this cluster"), and the commit re-resolves and re-keys under the fleet Apply lock.
 - **A cluster added or removed** changes its installations' members: the commit re-resolves, so the bucket filters follow.
 
@@ -242,22 +257,25 @@ A member's conversation reads the member's share, through the member's snapshot.
 
 ### 4.2 Lineage recorded by every AI read
 
-- `get_alerts` records its read's lineage on the `ChatRead`, in a field that is never sent to the model.
+- `get_alerts` records its read's lineage as a bounded token: identities and counters, never data, in a field never sent to the model.
 - Explain records it on the call.
 - Snapshot mode and attention carry alert counts, so they record the alerts part's lineage too.
+- **A conversation keeps every token it has recorded,** cumulatively. Trimming its oldest exchanges drops their reads but keeps their tokens, since a later send still carries what those reads informed.
 
 ### 4.3 The checks
 
-**Before every component read** of a bucket: the host's pinned connection is the registry's current connection and usable, and the installation's and subscription's revisions are the ones the read started under. A direct transport keeps C5's endpoint and credential revision checks instead of the host's (redesign §17a). A mismatch after the read discards it, as a credential change does today.
+**Before and after every component request** of a bucket's read, both of its two: the host's access generation is the one the read started under, and the installation's and subscription's revisions are unchanged. A direct transport checks its access generation and credential revision instead (redesign §17a). A mismatch discards the read, as a credential change does today; an observed 401 or 403 moves the access generation first.
 
-**Before every later send of retained data** (tools mode, snapshot mode, Explain and, later, A2), the turn's guard checks each recorded alerts lineage against the current one:
+**Before every later send of retained data,** the turn's guard (`check` in `chat_turn.go`) compares each of the conversation's tokens with the current terms. It runs inside the existing fence, so it is checked at every model request the AI transport makes (retries and redirects included) and at the Claude Code CLI's release of its input, in tools mode, snapshot mode and Explain alike, and later in A2. Each token checks:
 - the installation and the subscription are unchanged;
-- for a hosted lineage, the host's current connection is the recorded one, and usable;
-- for a direct lineage, the credential revision is unchanged;
+- for a hosted lineage, the host's access generation is unchanged;
+- for a direct lineage, its access generation and credential revision are unchanged;
 - for a legacy lineage, the source identity and the credential revision are unchanged;
 - the subject member's own connection, as today.
 
-A mismatch ends the conversation's later sends, as a reconnect does: "lgtm-we changed since its alerts were read: start a new conversation". Recovery is new work under the new lineage. A request already sent cannot be recalled.
+A mismatch ends the conversation, as a reconnect does: "lgtm-we changed since its alerts were read: start a new conversation". Recovery is new work under the new lineage. A request already sent cannot be recalled. Canary tests show that a token never enters an outgoing request.
+
+**A3's offered plans** (ruling 2, §12): the lineage check joins the fences that withdraw an investigation's unrun steps (`planFenceLocked`). A plan offered by a conversation whose tokens no longer hold is withdrawn for good, when its state is next read or before its next send, whichever comes first. An alert alone never justifies a step, which needs a citation of its target by UID. But an alert can be cited beside one, so a plan may rest partly on alerts; Review and Run keep their target-fact and consequence checks.
 
 **The member's consent** belongs to S5 and A2. S3a checks the member's connection only, as today.
 
@@ -267,9 +285,10 @@ A legacy block's lineage is its source identity and credential revision. A chang
 
 ## 5. Plans and Apply (S3a-4)
 
-**Observability's plan** follows slice F: planned from what runs, confirmed by its digest, applied in order, and refused when the file or a revision moved in between. It covers:
+**Observability's plan** follows slice F: planned from what runs, confirmed by its digest, applied in order, and refused when the file, a revision or the active sources moved in between. It covers:
 - an installation added, edited or removed;
-- a cluster's subscription block written, changed or removed, `off` included.
+- a cluster's subscription block written, changed or removed, `off` included;
+- the file's sources and subscription blocks as they are, when they differ from the active ones ("Use the file's values").
 
 Legacy blocks stay file-only, except through the migration offer (§7).
 
@@ -281,13 +300,13 @@ Legacy blocks stay file-only, except through the migration offer (§7).
 
 There is no interlock: alerts are read-only, and none of redesign §1.5's dangers applies.
 
-**Apply,** under the fleet Apply lock, so it is serialized with S2's plans, whose group and membership changes also move resolution:
-1. Write: the `sources` block through the block writer (`saveTopLevelBlock`), and each cluster's `alertmanager` block through S2's entry writer, extended to that one block. Both keep the write policy: a symlink kept, the mode kept, compare-and-swap, the lock.
-2. Re-resolve from the written candidate, and move the changed revisions.
-3. Re-key the affected members' snapshots and update the bucket readers.
-4. Publish: Observability, the lenses and the scope sentences read the new resolution.
+**Apply is one transaction,** under the fleet Apply lock, so it is serialized with S2's plans, whose group and membership changes also move resolution:
+1. **Build:** every edit of the plan (the `sources` block, each cluster's `alertmanager` block) is applied in memory to the reviewed file's bytes, by the existing edit builders (the block replacement, S2's entry edits), into one candidate.
+2. **Validate the whole candidate:** it loads, it resolves, and only the intended blocks changed. A refusal here writes nothing.
+3. **Write once:** one compare-and-swap of the candidate against the reviewed file version, with the write policy: a symlink kept, the mode kept, the lock.
+4. **Publish:** the active sources take the resolution computed in step 2; the changed revisions move; the affected members' snapshots re-key, and the bucket readers follow. Publication is in memory, from a resolution already computed, so it cannot fail after the write. A process that dies after the write leaves the written file, which the next start loads.
 
-A write that fails changes nothing. Re-resolution cannot fail after a successful write, since the candidate was validated before it.
+An edit that cannot be built (an unsupported YAML shape in one block, or a hand edit since the review) refuses the whole plan before anything is written.
 
 **An installation's credential** (`source/<id>`) is an immediate action, as the cluster endpoints' are: Store, Remove and Test under the endpoint lock, then the fleet Apply lock. Its revision is the installation's credential revision. A credential is never copied from a cluster's record.
 
@@ -295,7 +314,7 @@ A write that fails changes nothing. Re-resolution cannot fail after a successful
 
 Detect, per group or per cluster, proposes. It never proves (redesign §6.7):
 1. In each member, Klyx runs the existing discovery, with its proof of one installation.
-2. For each installation found, it reads one bounded sample: `/api/v2/alerts`, capped at 1 MiB and 500 alerts. The parser keeps label names, and the values of labels whose values equal a fleet cluster's name. Annotations and every other value are discarded as they are parsed: never kept, shown or sent. Loki lines are never read for this.
+2. For each installation found, it reads one bounded sample: `/api/v2/alerts`, capped at 1 MiB and 500 alerts. Receiving and parsing that response is reading alert bodies. The redesign's §6.7 is amended to allow it for this one sample, which the person asks for (§12, ruling 3). The parser keeps label names, and the values of labels whose values equal a fleet cluster's name; it keeps no decoded alert. Annotations and every other value are never kept, shown or sent. What the sample could not show, or showed ambiguously, is said. Loki lines are never read for this.
 3. It proposes an installation for each host it found one in:
    - the host and the proven Service;
    - a member label: a label whose values in the sample equal members' names;
@@ -313,6 +332,8 @@ Detect runs only when the person asks, one group or cluster at a time, and throu
 - Today's per-cluster blocks keep their behaviour unchanged. Nothing is migrated on its own.
 - Settings offers **"Make a shared installation"** when it sees one direct URL, with the same origin and path, on several clusters, or `sharedWithoutMatch`'s warning. The offer is a proposal: an installation with that endpoint and each cluster's subscription, its existing tenant and match carried over as the subscription's. The person reviews it, edits it (the member label above all) and applies it as an ordinary plan.
 - Equal URLs are never merged automatically. Equal Service names on different clusters are not offered at all: they are different installations.
+- The proposal validates the result's disjoint scopes, and says each cluster's scope before and after, broadened or narrowed. Two unscoped blocks on one URL and tenant cannot become valid subscriptions as they are: the proposal says what the person must choose, a member label or the matches.
+- Different `auth` or `tlsSkipVerify` on equal URLs is a conflict the proposal names, with no default winner.
 - **Secrets are never copied between accounts.** The installation's credential is stored once, by the person. Until it is, the plan says so, and the installation's reads fail as "no credential stored for lgtm-we". The clusters' old records stay until the person removes them.
 
 ## 8. The page (S3a-4)
@@ -324,6 +345,8 @@ Detect runs only when the person asks, one group or cluster at a time, and throu
 **Subscriptions,** per cluster: the mode and how it resolved (its own block, by name, by group, discovered, none, off), the scope sentence, and what shadows what. A subscribed cluster's row edits its subscription block; a legacy row is shown as today, with the migration offer where it applies.
 
 **Detect,** per group or cluster, opens its proposal in the plan panel.
+
+**The page keeps S2c's discipline** (S2 §26): a change to a draft withdraws its plan, a changed draft is a draft to the leave guard, nothing is called current before the readback, and drafts are kept across live refreshes of scope and credential state.
 
 **The registry** gains every new path, so the coverage tests hold:
 - `sources[].id`, `kind`, `name`, `host`, `serviceRef.*`, `discover`, `endpoint`, `tlsSkipVerify`, `auth.type`, `auth.username`, `tenant`, `memberLabel`, `serves[].group`, `serves[].cluster`;
@@ -339,34 +362,38 @@ Their dispositions: editable through Observability's plan, taking effect on Appl
 **The model (S3a-1):**
 - every load error of §2.2 and §2.3, each naming its place;
 - resolution: every row of §2.2's two tables, an empty block shadowing a group installation, by name over by group, `off`;
-- scopes: an override replacing the member label's value, an added key, `scope: tenant` alone and shared, the redesign's R3 cases (wrong or missing labels, an empty override, overlapping matches, duplicate values, escaped values).
+- scopes: an override replacing the member label's value, an added key, `scope: tenant` alone and shared, the redesign's R3 cases (wrong or missing labels, an empty override, overlapping matches, duplicate values, escaped values);
+- `loki.source`, `scope` and `off` refused until S3b, and every new key's disposition, by endpoint kind.
 
 **Reading (S3a-2):**
 - R2: one URL with different tenants (two buckets); a tenant-isolated member without a cluster label (`scope: tenant`);
-- one read per bucket per interval for several members; coalescing; the fleet-wide limit of four held with buckets;
-- the split: rows to their members, not attributed counted, a non-reading member's rows dropped uncounted;
+- one read per bucket per interval for staggered members; a member joining waits for the next read, then is served; a member under a changed subscription revision is never served an older outcome; a re-keyed bucket's outcome is never served; the fleet-wide limit of four held with buckets;
+- the split: rows to their members; unmatched rows counted, and never in a member's evidence; a cluster outside the cohort left out by the filter; a lone subscription without a member label sending its full match;
 - R3: a hot member filling its bucket's cap qualifies every member;
 - the 8 MiB and appearances failures fail every member's read;
 - the host disconnected: "not connected", never "no alerts"; the host's discovery finding none: unreadable, never absent;
-- re-keys: an installation, a subscription and a host reconnect each start a new generation;
-- the host check refusing a host's removal;
-- the load test at §3.2's shape, with the retained bytes measured;
-- the lab: a real Alertmanager in the kind lab serving two named members by label, through a host, with a row for neither.
+- re-keys: an installation, a subscription, a host's reconnect, its recovery in place, and an observed 401 or 403 each start a new generation; a revision never reused after an id is removed and re-created;
+- S2 with sources: the host check over active and file installations; an active source removed from the file, a file-only source added, a group edit over source drift, and a source Apply between an S2 plan and its Apply;
+- the load test at §3.2's representative shape, hot members rotating across failed reads, with the retained bytes checked against §3.2's bounds;
+- the lab: a real Alertmanager in the kind lab, read through a host, serving members by label, with an alert that passes the acquisition filter and matches no member's full scope.
 
 **The fences (S3a-3):**
 - R2: a scope change ends a retained read's later sends;
 - R4: the host disconnecting or losing access between a read and a send; a failed component read; retained history; an installation changing; recovery after a fence ended the old work;
 - a legacy block's endpoint, match, tenant or credential changing ends later sends (today's gap);
-- the host is never added to a comparison set, and a member's conversation never sees another member's rows or the not-attributed rows.
+- the host is never added to a comparison set, and a member's conversation never sees another member's rows or the unmatched rows;
+- every model request attempt (retries and redirects included) and the CLI's release, checked; canaries showing no token in an outgoing request; tokens kept past trimming;
+- A3: an offered plan withdrawn, for good, when its conversation's lineage fails.
 
 **Settings (S3a-4):**
-- plans: each change's members, sentences and endings; a refusal on a moved file or revision; Apply's order;
+- plans: each change's members, sentences and endings; a refusal on a moved file, revision or active sources; Apply's order;
+- one transaction: a migration across several clusters, and an installation's removal with its subscribers, each written whole; a block that cannot be built, last, writing nothing;
 - an installation's credential: stored, removed, and refused for another origin;
 - Detect: the sample's bounds, annotations never kept, two clusters with equal Service names proposed apart, a missing member not said to have no alerts;
-- the migration offer: proposed, never applied on its own, no secret copied;
-- the page: fixtures for long names and URLs, 200% zoom, a narrow window, keyboard and focus, night and day.
+- the migration offer: proposed, never applied on its own, no secret copied; a scope broadened or narrowed, said; unscoped same-tenant blocks and differing auth or TLS named as choices;
+- the page: S2c's discipline, a refusal, and an unknown outcome after a failed reread; fixtures for long names and URLs, 200% zoom, a narrow window, keyboard and focus, night and day.
 
-**The native smoke** gains a walk: an installation hosted by the lab cluster serving it by group, its scope sentence in the Alerts lens, and the lab's planted alert for another member counted as not attributed. The walk restores the smoke fleet.
+**The native smoke** gains a walk: an installation hosted by the lab cluster, serving it by group with an extra match key (`team: platform`); its scope sentence in the Alerts lens; and a planted alert with the lab's cluster label and `team: other`, which passes the acquisition filter and matches no member, counted as unmatched in the read. The walk restores the smoke fleet.
 
 ## 10. Not in S3a
 
@@ -383,3 +410,34 @@ Their dispositions: editable through Observability's plan, taking effect on Appl
 4. **Every subscription states its scope** (§2.3): an installation without a member label needs a match or `scope: tenant`. The unscoped "everything there" stays a legacy mode only.
 5. **A configured installation that resolves nothing is unreadable, never absent** (§3.3).
 6. **The host's connection identity is part of the lineage key** (§3.4), so a host's reconnect re-keys all of its members.
+
+## 12. Revision 1: Codex's review (2026-10-27)
+
+Codex found the inventory (§0) faithful to the code, with one size qualification, now in §3.2: the 8 MiB limit is per response. It ruled on §11 and requested changes: five P2 and two P3.
+
+| Finding | Change |
+|---|---|
+| **R1, P2:** Apply's separate writers could leave some blocks written when a later one refused, and an installation's removal could not be written before its subscribers | §5: Apply is one transaction. Every edit is built in memory into one candidate, validated whole, written by one compare-and-swap, then published from the resolution already computed. A block that cannot be built refuses the whole plan before anything is written |
+| **R2, P2:** a connection identity and present usability do not fence a host that failed and recovered in place, or an observed loss of access | §3.4: the host's access generation, moved by every publication of its usability (a recovery in place included) and by an observed 401 or 403, never returning. It is pinned in the key and the lineage, and checked before and after every component request and before every later send, at each model request and at the CLI's release |
+| **R3, P2:** cached coalescing contradicted dropping the shares of members that had not asked, and the memory bound covered one split only | §3.2: a bucket reads on its own cadence for its cohort, keeps one outcome with every cohort member's share, serves a member only under its current subscription revision, and keeps each read's time and lineage. The memory bound counts the outcome and the members' held shares: two capped reads per bucket, so never more than today's per-member bound plus one outcome per bucket. The load test is representative, not a worst case |
+| **R4, P2:** a subscription without a member label, alone in its tenant with a match, had no acquisition filter | §3.2: it sends its full effective match, as today's direct block |
+| **R5, P2:** S2's candidate and host check had no defined source state | §3.6: the active sources, with a revision. S2 composes its candidate from them, binds and re-checks the revision, and never adopts a source hand edit. The host check covers active and file installations |
+| **R6, P3:** the shared shape added `clusters[].loki.source`, `scope` and `off` | §2.1: each is a load error until S3b, with a deferred disposition in the registry |
+| **R7, P3:** the union filter left out the smoke's planted alert for another member, so it could never be counted | §3.2, §9: the count is of rows the filtered read returned; the smoke plants an alert that passes the filter and fails the member's extra match key |
+
+**The rulings on §11:**
+1. Approved: a cluster's own block always wins, an empty one included, and a shadowed installation creates no reader.
+2. Approved as a deliberate refinement of redesign §4, with its behaviour stated (§4.3's paragraph on A3) and its justification narrowed: an alert can be cited beside a UID read.
+3. Approved as an explicit amendment of redesign §6.7: §6 now says Detect reads the response, and what it never keeps, shows or sends.
+4. Approved, with R4's filter.
+5. Approved.
+6. Approved, and insufficient alone: R2's access generation.
+
+**Also adopted from the review:**
+- revisions never reused across an id's re-creation (§3.4);
+- a re-keyed bucket cancelled within its read's timeout (§3.2);
+- cumulative tokens that survive trimming, with canaries (§4.2, §4.3);
+- a lineage belonging to the read's outcome, never looked up later (§3.4);
+- unmatched rows never in another member's evidence (§3.2);
+- the migration's scope, auth and TLS conflicts (§7);
+- S2c's page discipline (§8).
