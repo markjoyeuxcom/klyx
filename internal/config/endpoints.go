@@ -257,7 +257,7 @@ func sharedWithoutMatch(clusters []ClusterConfig) []string {
 			if err != nil {
 				continue
 			}
-			k := key{e.Kind, origin + u.Path} // the origin canonical, the path as written
+			k := key{e.Kind, origin + u.EscapedPath()} // the origin canonical, the path as written (escaped, never decoded)
 			if _, seen := users[k]; !seen {
 				order = append(order, k)
 			}

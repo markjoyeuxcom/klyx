@@ -73,7 +73,9 @@ func (s *SourcesService) MigrationOffers() []MigrationOfferDTO {
 		if err != nil {
 			continue
 		}
-		k := origin + u.Path // the origin canonical, the path as written
+		// the origin canonical, the path as written: escaped, never decoded,
+		// so /a%2Fb and /a/b are two (Codex's review of S3a-4b, R2)
+		k := origin + u.EscapedPath()
 		g := byKey[k]
 		if g == nil {
 			g = &group{where: k, endpoint: b.Endpoint}

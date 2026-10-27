@@ -171,3 +171,29 @@ func TestAMigrationOfferNamesTheChoiceOnASharedTenant(t *testing.T) {
 		t.Fatalf("with a member label: %s", p.Refused)
 	}
 }
+
+// Codex's review of S3a-4b, R2: the offer groups URLs by their path as
+// written, escaped: /a%2Fb and /a/b are two endpoints a proxy may route
+// apart, never one installation; the same path, with or without its
+// trailing slash, is one.
+func TestAMigrationOfferKeepsEscapedPathsApart(t *testing.T) {
+	for _, tc := range []struct {
+		name, prd, dev string
+		offers         int
+		where          string
+	}{
+		{"an escaped slash", "https://am.example/a%2Fb", "https://am.example/a/b", 0, ""},
+		{"the same path", "https://am.example/a/b", "https://AM.example:443/a/b/", 1, "https://am.example:443/a/b"},
+		{"the same escaped path", "https://am.example/a%2Fb", "https://am.example/a%2Fb", 1, "https://am.example:443/a%2Fb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newSourcesRig(t)
+			SetRunningEndpoint(r.cs, "prd", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: tc.prd, Tenant: "prd", Match: map[string]string{"cluster": "prd"}})
+			SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: tc.dev, Tenant: "dev", Match: map[string]string{"cluster": "dev"}})
+			offers := r.svc.MigrationOffers()
+			if len(offers) != tc.offers || tc.offers == 1 && offers[0].Where != tc.where {
+				t.Fatalf("%+v", offers)
+			}
+		})
+	}
+}

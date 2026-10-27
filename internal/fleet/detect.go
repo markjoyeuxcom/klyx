@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -58,8 +59,8 @@ type DetectSample struct {
 // DetectAlertmanager runs Detect in cluster (S3a §6): its discovery, then,
 // for a proven installation, one sample through the cluster's own Service
 // proxy, in a fleet-wide slot, under a lease on the cluster.
-func (r *Registry) DetectAlertmanager(ctx context.Context, cluster string, fleetNames []string) DetectSample {
-	out := DetectSample{Cluster: cluster}
+func (r *Registry) DetectAlertmanager(ctx context.Context, cluster string, fleetNames []string) (out DetectSample) {
+	out = DetectSample{Cluster: cluster}
 	r.mu.RLock()
 	b := r.alerts
 	r.mu.RUnlock()
@@ -82,6 +83,18 @@ func (r *Registry) DetectAlertmanager(ctx context.Context, cluster string, fleet
 	defer cancel()
 	stop := context.AfterFunc(lctx, cancel) // the cluster's retirement ends it
 	defer stop()
+	// what it read settles only while its lease and its deadline hold: an
+	// ended attempt's discovery and sample are discarded, never proposed,
+	// however far its reads got (Codex's review of S3a-4b, R1). It runs
+	// before the lease is released.
+	defer func() {
+		switch {
+		case lctx.Err() != nil:
+			out = DetectSample{Cluster: cluster, Err: cluster + " was reconnected or removed while Detect read it, so what it read is discarded"}
+		case ctx.Err() != nil:
+			out = DetectSample{Cluster: cluster, Err: fmt.Sprintf("Detect in %s did not finish in time: %v", cluster, ctx.Err())}
+		}
+	}()
 	select {
 	case amReads <- struct{}{}:
 		defer func() { <-amReads }()
@@ -168,6 +181,13 @@ func sampleLabels(body []byte, fleetNames []string) (names []string, members map
 				byLabel[k][v] = true
 			}
 		}
+	}
+	// a complete sample is one list and nothing after it (R3)
+	if t, err := dec.Token(); err != nil || t != json.Delim(']') {
+		return nil, nil, 0, false, errors.New("the sample is not a complete list of alerts")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, nil, 0, false, errors.New("the sample has more after its list of alerts")
 	}
 	return sorted(seen), membersOf(byLabel), n, false, nil
 }
