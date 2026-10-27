@@ -1368,6 +1368,55 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     return { changes: r.changes, ends: r.ends };
   });
 
+  // ---- Settings S3a §8: an installation hosted by the lab cluster,
+  // serving aks-stg-weu by name, applied through its plan, tested through
+  // its host, then removed with its plan, so the smoke fleet ends as it
+  // began. The lab cluster keeps its own (legacy) block, which the page
+  // shows as it is. ----
+  await step(steps, "Settings > Observability: an installation applied as a plan, tested, then removed", async () => {
+    useFleet.getState().openSettings("observability");
+    await within(8000, "the alert sources", () => $("[data-testid='sources-sentence']"));
+    if ($("[data-testid='sources-file-differs']")) throw new Error("the smoke fleet's alert sources differ from the ones in force");
+    const sub = (c: string) => [...document.querySelectorAll<HTMLElement>("[data-testid='subscription-row']")].find((r) => r.dataset.cluster === c) ?? null;
+    const inst = () => $<HTMLElement>("[data-testid='installation-row'][data-installation='lab-am']");
+    const own = (await within(8000, `${cluster}'s alerts`, () => sub(cluster))).querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+    if (!/klyx-s8-lab\/alertmanager:web/.test(own)) throw new Error(`${cluster}'s own block: ${own}`);
+    const applyPlan = async (what: string) => {
+      const plan = await within(8000, `the plan to ${what}`, () => $("[data-testid='settings-plan']"));
+      const refused = plan.querySelector("[data-testid='plan-refused']");
+      if (refused) throw new Error(`the plan to ${what} was refused: ${refused.textContent}`);
+      const changes = [...plan.querySelectorAll("[data-testid='plan-changes'] li")].map((li) => li.textContent ?? "");
+      (await within(4000, "Apply", () => byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
+      await within(20_000, `${what}, applied and read back`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /^Applied/));
+      return changes;
+    };
+    (await within(4000, "Add an installation", () => byText<HTMLButtonElement>("[data-testid='sources-panel'] button", /^Add an installation$/))).click();
+    const ed = await within(8000, "the installation editor", () => $<HTMLElement>("[data-testid='installation-editor']"));
+    const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
+    typeInto(input("sources[].id"), "lab-am");
+    chooseOption(ed.querySelector<HTMLSelectElement>("[data-setting='sources[].host'] select")!, cluster);
+    typeInto(input("sources[].serviceRef.namespace"), "klyx-s8-lab");
+    typeInto(input("sources[].serviceRef.name"), "alertmanager");
+    typeInto(input("sources[].serviceRef.port"), "web");
+    typeInto(input("sources[].memberLabel"), "cluster");
+    typeInto(input("sources[].serves[].cluster"), "aks-stg-weu");
+    (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='installation-editor'] button", /^Review and apply$/))).click();
+    const added = await applyPlan("add lab-am");
+    await within(8000, "lab-am in force", inst);
+    const scope = await within(8000, "aks-stg-weu subscribed", () => {
+      const t = sub("aks-stg-weu")?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+      return /lab-am/.test(t) && /cluster=aks-stg-weu/.test(t) ? t : null;
+    });
+    // Test reads the installation's status through its host
+    (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
+    const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
+    (await within(4000, "Remove", () => $<HTMLButtonElement>("button[aria-label='remove lab-am']:not([disabled])"))).click();
+    const removed = await applyPlan("remove lab-am");
+    await within(8000, "lab-am gone", () => !inst());
+    if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
+    return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
+  });
+
   // ---- Settings slice F §7: the AI section's Review and apply, on the
   // lab: the plan shown, then applied, and the setting restored. Last in
   // the walk: an applied AI change ends the conversations open now. ----

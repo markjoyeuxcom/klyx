@@ -13,6 +13,7 @@ import { getZoom } from "../../app/zoom";
 import { SettingField } from "../SettingField";
 import { ENTRIES } from "../registry";
 import { Group, bytes, plural, type SectionProps } from "./common";
+import { SourcesPanel } from "./SourcesPanel";
 import { isStorageKey, readStored } from "../storage";
 
 // The sections that hold the existing panels (S1 §1), each with its
@@ -58,15 +59,20 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
   const parts = useAlertParts();
   const partsKey = parts.map((p) => `${p.cluster}:${p.coverage}`).join(",");
   const last = useRef<EndpointsState | null>(null);
+  // where alerts come from (S3a §8) is the section's sentence once read
+  const sources = useRef<string | null>(null);
   const onLoaded = (s: EndpointsState) => {
     last.current = s;
-    say(observabilitySentence(s, parts));
+    say(sources.current ?? observabilitySentence(s, parts));
     ready();
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (last.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
+  useEffect(() => { if (last.current && !sources.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
   return (
     <>
+      <Group title="Alert sources">
+        <SourcesPanel onLoaded={(s) => { sources.current = s.sentence; say(s.sentence); }} />
+      </Group>
       <Group title="External endpoints">
         <EndpointsPanel onLoaded={onLoaded} />
       </Group>
@@ -79,7 +85,7 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
       </Group>
       <Group title="Installations">
         <p className="settings-group-note">
-          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. Klyx reads it once for its members and gives each its share. They are set in fleet.yaml in this version, and Klyx reads them when it starts.
+          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. Klyx reads it once for its members and gives each its share. Alert sources above adds, edits and removes them through Review and apply.
         </p>
         <InstallationFields />
       </Group>
