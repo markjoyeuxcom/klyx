@@ -560,3 +560,9 @@ Codex closed RR1 (merged keys) and RR3 (the registry's text for `off`), and RR2 
 **Tests:** Codex's probes, as regression tests: an active host and a host in the file, a source move, and two long ids of one length still refusing the move. **Mutation pass:** 5 mutants over the fix, all caught.
 
 **Smoke:** 216/216 four ways at 2f9324e, the smoke fleet.yaml as it began after every walk.
+
+## 19. ACCEPT: S3a-1 (2026-10-27)
+
+Codex accepted S3a-1 at revision 3 (c5b63e5), with no remaining findings. That came after the review of 4647275 (two P2, two P3) and three re-reviews (§16-§18).
+
+Its last re-review reran every probe from the review and the re-reviews under the race detector, including the fleet discovery probe, the three long-id refusals and two distinct ids of one length. It accepts the model and its stage boundary: reading, the buckets, the lineage fences and the Settings transaction for sources are S3a-2 to S3a-4.
