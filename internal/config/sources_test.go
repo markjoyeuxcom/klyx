@@ -148,7 +148,7 @@ func TestScopes(t *testing.T) {
 	for _, tc := range []struct{ prd, dev, lab, sources, want string }{
 		{"", "", "    alertmanager: {source: solo}\n", bare, `solo has no memberLabel, so its subscription needs a scope`},
 		{"", "", "", strings.Replace(bare, "    endpoint", "    serves: [{cluster: lab}]\n    endpoint", 1), `solo has no memberLabel`},
-		{"    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "", lgtm, `clusters "prd" and "dev" share the default tenant of lgtm-we with the same cluster="same"`},
+		{"    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "", lgtm, `clusters "prd" and "dev" share the default tenant of lgtm-we, both with cluster set to "same"`},
 		{"", "    alertmanager: {source: lgtm-we, scope: tenant}\n", "", lgtm, `share the default tenant of lgtm-we, so neither can take scope: tenant`},
 		{"    alertmanager: {source: solo, match: {a: x}}\n", "    alertmanager: {source: solo, match: {a: y}}\n", "", bare, `clusters "prd" and "dev" share the default tenant of solo, which has no memberLabel`},
 	} {
@@ -195,5 +195,54 @@ func TestConnectionAlertmanager(t *testing.T) {
 func TestSourcesDecodeStrictly(t *testing.T) {
 	if _, err := loadYAML(t, fleetWith("", "", "", lgtm+"    membreLabel: cluster\n")); err == nil || !strings.Contains(err.Error(), "membreLabel") {
 		t.Errorf("unknown key: %v", err)
+	}
+}
+
+// Codex's review of S3a-1 (2026-10-27), R1 and R2: keys are judged as
+// written, and no new diagnostic echoes a long value.
+func TestKeysAreJudgedAsWritten(t *testing.T) {
+	for _, tc := range []struct{ lab, want string }{
+		{"    alertmanager: {source: \"\"}\n", `alertmanager.source names an installation in sources: it cannot be empty`},
+		{"    alertmanager: {off: false}\n", `alertmanager.off is true, or left out`},
+		{"    alertmanager: {off: true, tenant: \"\"}\n", `alertmanager.off allows nothing beside it`},
+		{"    alertmanager: {source: lgtm-we, tlsSkipVerify: false}\n", `alertmanager.source reaches its installation`},
+		{"    alertmanager: {scope: \"\"}\n", `alertmanager.scope is allowed only with source`},
+		{"    alertmanager: {source: lgtm-we, scope: \"\"}\n", `alertmanager.scope must be tenant`},
+		{"    alertmanager: {source: lgtm-we, scope: tenant, match: {}}\n", `a match is not allowed beside it`},
+		{"    loki: {source: \"\"}\n", `loki.source is not built yet`},
+		{"    loki: {scope: \"\"}\n", `loki.scope is not built yet`},
+		{"    loki: {off: false}\n", `loki.off is not built yet`},
+	} {
+		if _, err := loadYAML(t, fleetWith("", "", tc.lab, lgtm)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: %v, want %q", tc.lab, err, tc.want)
+		}
+	}
+	// the legacy modes, as written, still load
+	for _, lab := range []string{"    alertmanager: {}\n", "    alertmanager: {tenant: \"\"}\n", "    loki: {endpoint: https://loki.example}\n"} {
+		if _, err := loadYAML(t, fleetWith("", "", lab, lgtm)); err != nil {
+			t.Errorf("%q: %v", lab, err)
+		}
+	}
+}
+
+func TestNewDiagnosticsWithholdLongValues(t *testing.T) {
+	const canary = "C5-S3A1-CANARY-0123456789abcdef0123456789"
+	for _, doc := range []string{
+		fleetWith("", "", "    alertmanager: {source: "+canary+"}\n", lgtm),
+		fleetWith("", "", "", "  - id: x\n    kind: alertmanager\n    host: "+canary+"\n    discover: true\n"),
+		fleetWith("    alertmanager: {source: lgtm-we, match: {cluster: "+canary+"}}\n", "    alertmanager: {source: lgtm-we, match: {cluster: "+canary+"}}\n", "", lgtm),
+		fleetWith("    alertmanager: {source: solo, tenant: "+canary+", match: {a: x}}\n", "    alertmanager: {source: solo, tenant: "+canary+", match: {a: y}}\n", "", "  - id: solo\n    kind: alertmanager\n    endpoint: https://am.example\n"),
+	} {
+		_, err := loadYAML(t, doc)
+		if err == nil || strings.Contains(err.Error(), canary) || strings.Contains(DisplayError(err), canary) {
+			t.Errorf("a long value echoed: %v", err)
+		}
+	}
+	c, err := loadYAML(t, fleetWith("", "", "", strings.Replace(lgtm, "serves: [{group: we}]", "serves: [{group: we}, {cluster: "+canary+"}, {group: "+canary+"}]", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := strings.Join(c.Warnings(), "\n"); strings.Contains(w, canary) || !strings.Contains(w, "a value of 41 characters") {
+		t.Errorf("warnings: %s", w)
 	}
 }

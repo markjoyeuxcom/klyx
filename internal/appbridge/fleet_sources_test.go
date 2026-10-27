@@ -4,11 +4,15 @@ package appbridge
 // that would move a running connection's alerts.
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/secretstore"
 )
 
 func servesGroup(id, host, group string) config.SourceConfig {
@@ -64,5 +68,28 @@ func TestEndpointRowsSaySubscriptionsAndOff(t *testing.T) {
 	}
 	if s := endpointSource(config.EndpointAlertmanager, config.EndpointConfig{Source: "lgtm-we"}); !strings.Contains(s, "subscribed to the installation lgtm-we") || strings.Contains(s, "discovered") {
 		t.Errorf("subscribed: %q", s)
+	}
+}
+
+// Codex's review of S3a-1, R3: only a legacy reader that filters nothing is
+// called unscoped; off reads nothing, and a subscription's scope is its
+// installation's.
+func TestOnlyALegacyUnfilteredRowIsUnscoped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.yaml")
+	doc := "clusters:\n" +
+		"  - name: off\n    context: off\n    alertmanager: {off: true}\n" +
+		"  - name: sub\n    context: sub\n    alertmanager: {source: am}\n" +
+		"  - name: legacy\n    context: legacy\n    alertmanager: {endpoint: https://am.example}\n" +
+		"sources:\n  - id: am\n    kind: alertmanager\n    host: legacy\n    discover: true\n    memberLabel: cluster\n"
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewEndpointsService(path, &secretstore.Memory{}, endpointcred.NewRegistry(), func(string) (EndpointConn, bool) { return nil, false })
+	unscoped := map[string]bool{}
+	for _, r := range svc.GetEndpoints().Rows {
+		unscoped[r.Cluster] = r.Unscoped
+	}
+	if unscoped["off"] || unscoped["sub"] || !unscoped["legacy"] {
+		t.Fatalf("unscoped: %v", unscoped)
 	}
 }

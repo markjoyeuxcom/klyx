@@ -94,7 +94,7 @@ func (c *Config) validateSources() error {
 		case s.Endpoint == "" && s.Host == "":
 			return fmt.Errorf("%s: a serviceRef or discover: true is reached through a cluster's API server, so host is required", place)
 		case s.Host != "" && !clusters[s.Host]:
-			return fmt.Errorf("%s.host: %q is not a cluster of the fleet", place, s.Host)
+			return fmt.Errorf("%s.host: %s is not a cluster of the fleet", place, describeValue(s.Host))
 		case s.Endpoint == "" && (s.Auth != nil || s.TLSSkipVerify):
 			return fmt.Errorf("%s: auth and tlsSkipVerify are for an endpoint only; a host's API server authenticates the rest", place)
 		}
@@ -117,35 +117,70 @@ func (c *Config) validateSources() error {
 }
 
 // validateSubscription checks a cluster's own Alertmanager block for the
-// subscription fields (S3a §2.1), and refuses them on Loki until S3b.
+// subscription fields (S3a §2.1), and refuses them on Loki until S3b. Keys
+// are judged as written, never as decoded: a key written empty, or false,
+// is refused rather than read as left out, so a malformed subscription
+// never falls through to discovery (Codex's review of S3a-1, R1).
 func validateSubscription(cluster string, kind string, e *EndpointConfig) error {
 	if e == nil {
 		return nil
 	}
+	has := func(key string, set bool) bool { return set || e.wrote(key) }
 	if kind == EndpointLoki {
 		for _, k := range []struct {
 			key string
 			set bool
 		}{{"source", e.Source != ""}, {"scope", e.Scope != ""}, {"off", e.Off}} {
-			if k.set {
+			if has(k.key, k.set) {
 				return fmt.Errorf("cluster %q: loki.%s is not built yet: this version subscribes Alertmanager only", cluster, k.key)
 			}
 		}
 		return nil
 	}
+	source := has("source", e.Source != "")
+	beside := []struct {
+		key string
+		set bool
+	}{{"source", e.Source != ""}, {"scope", e.Scope != ""}, {"endpoint", e.Endpoint != ""}, {"serviceRef", e.ServiceRef != nil}, {"auth", e.Auth != nil},
+		{"tlsSkipVerify", e.TLSSkipVerify}, {"tenant", e.Tenant != ""}, {"match", len(e.Match) > 0}}
+	besideOff, locators := false, false
+	for _, k := range beside {
+		if has(k.key, k.set) {
+			besideOff = true
+			switch k.key {
+			case "endpoint", "serviceRef", "auth", "tlsSkipVerify":
+				locators = true
+			}
+		}
+	}
 	switch {
-	case e.Off && (e.Source != "" || e.Scope != "" || e.Endpoint != "" || e.ServiceRef != nil || e.Auth != nil || e.TLSSkipVerify || e.Tenant != "" || len(e.Match) > 0):
+	case e.wrote("off") && !e.Off:
+		return fmt.Errorf("cluster %q: alertmanager.off is true, or left out", cluster)
+	case e.Off && besideOff:
 		return fmt.Errorf("cluster %q: alertmanager.off allows nothing beside it", cluster)
-	case e.Source != "" && (e.Endpoint != "" || e.ServiceRef != nil || e.Auth != nil || e.TLSSkipVerify):
+	case source && e.Source == "":
+		return fmt.Errorf("cluster %q: alertmanager.source names an installation in sources: it cannot be empty", cluster)
+	case source && locators:
 		return fmt.Errorf("cluster %q: alertmanager.source reaches its installation, so endpoint, serviceRef, auth and tlsSkipVerify are not allowed beside it", cluster)
-	case e.Scope != "" && e.Source == "":
+	case has("scope", e.Scope != "") && !source:
 		return fmt.Errorf("cluster %q: alertmanager.scope is allowed only with source", cluster)
-	case e.Scope != "" && e.Scope != ScopeTenant:
+	case has("scope", e.Scope != "") && e.Scope != ScopeTenant:
 		return fmt.Errorf("cluster %q: alertmanager.scope must be tenant", cluster)
-	case e.Scope == ScopeTenant && len(e.Match) > 0:
+	case e.Scope == ScopeTenant && has("match", len(e.Match) > 0):
 		return fmt.Errorf("cluster %q: alertmanager.scope: tenant takes everything in the tenant, so a match is not allowed beside it", cluster)
 	}
 	return nil
+}
+
+// describeValue names a value the file holds in a diagnostic, as
+// describeKey names a key: quoted, or by its length alone at 25
+// characters or more, which may be a pasted credential (slice 0; Codex's
+// review of S3a-1, R2).
+func describeValue(v string) string {
+	if n := len([]rune(v)); n >= 25 {
+		return fmt.Sprintf("a value of %d characters", n)
+	}
+	return fmt.Sprintf("%q", v)
 }
 
 // Alertmanager resolution modes (S3a §2.2).
@@ -234,10 +269,10 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		case own.Source != "":
 			s, ok := byID[own.Source]
 			if !ok {
-				return nil, fmt.Errorf("cluster %q: alertmanager.source %q names no installation in sources", cl.Name, own.Source)
+				return nil, fmt.Errorf("cluster %q: alertmanager.source %s names no installation in sources", cl.Name, describeValue(own.Source))
 			}
 			if s.Kind != SourceKindAlertmanager {
-				return nil, fmt.Errorf("cluster %q: alertmanager.source %q is a %s installation", cl.Name, own.Source, s.Kind)
+				return nil, fmt.Errorf("cluster %q: alertmanager.source %s is not an Alertmanager installation", cl.Name, describeValue(own.Source))
 			}
 			r = AMResolution{Mode: AMSubscribed, Via: ViaOwnBlock, Source: own.Source}
 		case own.Endpoint != "":
@@ -320,7 +355,7 @@ func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[st
 		}
 		tenant := "the default tenant"
 		if k.tenant != "" {
-			tenant = "tenant " + k.tenant
+			tenant = "tenant " + describeValue(k.tenant)
 		}
 		label := byID[k.source].MemberLabel
 		values := map[string]string{}
@@ -338,7 +373,7 @@ func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[st
 			}
 			v := r.Match[label]
 			if prev, dup := values[v]; dup {
-				return fmt.Errorf("clusters %q and %q share %s of %s with the same %s=%q, so their alerts cannot be told apart", prev, m, tenant, k.source, label, v)
+				return fmt.Errorf("clusters %q and %q share %s of %s, both with %s set to %s, so their alerts cannot be told apart", prev, m, tenant, k.source, label, describeValue(v))
 			}
 			values[v] = m
 		}
@@ -408,9 +443,9 @@ func (c *Config) sourceWarnings() []string {
 		for _, sv := range s.Serves {
 			switch {
 			case sv.Cluster != "" && !names[sv.Cluster]:
-				w = append(w, fmt.Sprintf("source %q serves cluster %q, which is not in fleet.yaml", s.ID, sv.Cluster))
+				w = append(w, fmt.Sprintf("source %q serves cluster %s, which is not in fleet.yaml", s.ID, describeValue(sv.Cluster)))
 			case sv.Group != "" && !groups[sv.Group]:
-				w = append(w, fmt.Sprintf("source %q serves group %q, which no cluster has", s.ID, sv.Group))
+				w = append(w, fmt.Sprintf("source %q serves group %s, which no cluster has", s.ID, describeValue(sv.Group)))
 			}
 		}
 	}

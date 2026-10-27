@@ -218,7 +218,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	cred := endpointcred.Resolve(s.store, endpointcred.Input{Cluster: cl.Name, Kind: ne.Kind, Spec: ne.Spec, LegacyToken: legacy, Revoked: s.revs.Revoked(cl.Name, ne.Kind)})
 	r := EndpointRowDTO{Cluster: cl.Name, Kind: ne.Kind, Source: endpointSource(ne.Kind, ne.Spec), Tenant: ne.Spec.Tenant,
 		TLSOff: ne.Spec.TLSSkipVerify && ne.Spec.Endpoint != "", Scope: matchWords(ne.Spec.Match),
-		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0,
+		// only a legacy reader that filters nothing: off reads nothing, and a
+		// subscription's scope is its installation's (Codex's review of
+		// S3a-1, R3)
+		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
 		State:    string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
 		Revision: snap.EndpointRevision(cl.Name, ne.Kind)}
 	if a := ne.Spec.Auth; a != nil {

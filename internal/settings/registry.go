@@ -414,7 +414,7 @@ func sourceEntries() []Entry {
 		e("host", "Host cluster", "The fleet cluster whose API server reaches a serviceRef or discovered installation. It is transport only: it grants no reads of the host's objects, and a host cannot be removed while an installation names it.", "none: required with serviceRef or discover", "A cluster of the fleet; not with endpoint."),
 		e("serviceRef.namespace", "Installation Service namespace", "The namespace of the Service, in the host, that the installation is reached through.", "none", "A namespace name."),
 		e("serviceRef.name", "Installation Service name", "The Service, in the host, that the installation is reached through.", "none", "A Service name."),
-		e("serviceRef.port", "Installation Service port", "The Service port, by name or number.", "the Service's first port", "A port name or number."),
+		e("serviceRef.port", "Installation Service port", "The Service port, by name or number.", "none: required with serviceRef", "A port name or number."),
 		e("serviceRef.scheme", "Installation Service scheme", "Whether the host's proxy speaks http or https to the Service.", "http", "http or https."),
 		e("serviceRef.path", "Installation Service path prefix", "The prefix the Service serves its API under (Mimir's Alertmanager under /alertmanager).", "none", "A path; empty for none."),
 		e("discover", "Discover in the host", "Finds the installation in the host with Klyx's discovery and its proof of one installation.", "false", "true or false; exactly one of serviceRef, discover and endpoint."),

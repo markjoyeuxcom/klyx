@@ -881,7 +881,7 @@
       "label": "Installation Service port",
       "effect": "The Service port, by name or number.",
       "scope": "installation",
-      "default": "the Service's first port",
+      "default": "none: required with serviceRef",
       "validation": "A port name or number.",
       "takesEffect": "at restart",
       "save": "Edit fleet.yaml under sources: Klyx reads it when it starts. Settings applies installations in a later stage of this slice.",

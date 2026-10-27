@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/moomora/klyx/internal/safehttp"
+	"gopkg.in/yaml.v3"
 )
 
 // Coverage C5 §2: one endpoint shape for metrics, Alertmanager and Loki.
@@ -53,7 +55,31 @@ type EndpointConfig struct {
 	Source string `yaml:"source"`
 	Scope  string `yaml:"scope"`
 	Off    bool   `yaml:"off"`
+
+	// keys are the keys the block wrote, so a key written with a zero
+	// value is told apart from one left out (Codex's review of S3a-1, R1)
+	keys []string
 }
+
+// UnmarshalYAML decodes the block and records the keys it wrote.
+func (e *EndpointConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain EndpointConfig
+	var p plain
+	if err := n.Decode(&p); err != nil {
+		return err
+	}
+	*e = EndpointConfig(p)
+	e.keys = nil
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			e.keys = append(e.keys, n.Content[i].Value)
+		}
+	}
+	return nil
+}
+
+// wrote reports whether the block wrote key, whatever its value.
+func (e EndpointConfig) wrote(key string) bool { return slices.Contains(e.keys, key) }
 
 // Located says the endpoint names where it is: a URL or a Service. An
 // Alertmanager or metrics block without either is discovered in the
