@@ -1,6 +1,7 @@
 package appbridge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,8 @@ type SourcesDeps struct {
 	// Store and Revs say an installation's credential state
 	Store secretstore.Store
 	Revs  *endpointcred.Registry
+	// Detect runs Detect in one cluster (the registry's DetectAlertmanager)
+	Detect func(ctx context.Context, cluster string, fleetNames []string) fleet.DetectSample
 }
 
 // SourcesService is Observability's installations and subscriptions.

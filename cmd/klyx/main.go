@@ -629,6 +629,7 @@ func main() {
 		Read:      reg.InstallationRead,
 		Store:     endpointCreds.Store,
 		Revs:      endpointCreds.Revisions,
+		Detect:    reg.DetectAlertmanager,
 	})
 	appbridge.WireSourceCredentials(endpointsSvc, func() *fleet.AlertSources { return alertSources }, reg.InstallationStatus)
 
