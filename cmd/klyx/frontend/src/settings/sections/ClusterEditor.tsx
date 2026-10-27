@@ -14,10 +14,14 @@ const input: React.CSSProperties = { width: "100%", fontFamily: "var(--font-mono
 const small: React.CSSProperties = { padding: "1px 8px", fontSize: 11 };
 const KIND_LABEL: Record<string, string> = { metrics: "Metrics", alertmanager: "Alertmanager", loki: "Loki" };
 
+// ProtectionStatus is a cluster's protection as published now, with a held
+// attempt's different protection.
+export type ProtectionStatus = Pick<ClusterEntry, "protectedNow" | "protectedBy" | "pendingProtected" | "pendingProtectedBy">;
+
 // protectionNow says the published protection, what decides it, and a held
 // attempt's different protection, which applies only once it connects
 // (Codex's review of S2c, R5).
-export function protectionNow(e: ClusterEntry): string {
+export function protectionNow(e: ProtectionStatus): string {
   const now = !e.protectedNow ? "Not protected now." : e.protectedBy ? `Protected now, decided by ${e.protectedBy}.` : "Protected now, as published when it last connected.";
   if (e.pendingProtected === undefined || e.pendingProtected === null) return now;
   return `${now} Once its new connection is usable: ${e.pendingProtected ? `protected, decided by ${e.pendingProtectedBy}` : "not protected"}.`;
@@ -45,9 +49,13 @@ export function parseTags(text: string): { tags: Record<string, string>; bad: st
   return { tags, bad };
 }
 
-export function ClusterEditor({ entry, busy, onReview, onCancel, onDraftChange }: {
+export function ClusterEditor({ entry, busy, onReview, onCancel, onDraftChange, status }: {
   entry: ClusterEntry;
   busy: boolean;
+  // the protection in force now, read again with the fleet, over the one
+  // the entry was opened with: the draft stays the editor's own (Codex's
+  // re-review of S2c, RR2)
+  status?: ProtectionStatus;
   onReview: (draft: ClusterDraft) => void;
   onCancel: () => void;
   // told of every change to the draft, with whether it now differs from
@@ -56,6 +64,7 @@ export function ClusterEditor({ entry, busy, onReview, onCancel, onDraftChange }
   onDraftChange?: (changed: boolean) => void;
 }) {
   const d = entry.draft;
+  const st: ProtectionStatus = status ?? entry;
   const [context, setContext] = useState(d.context);
   const [kubeconfig, setKubeconfig] = useState(d.kubeconfig);
   const [region, setRegion] = useState(d.tags.region ?? "");
@@ -126,9 +135,9 @@ export function ClusterEditor({ entry, busy, onReview, onCancel, onDraftChange }
         note={parsed.bad.length > 0 ? `Each line needs key=value: ${parsed.bad.join(", ")}` : "One key=value a line. Comments inside the tags block are not kept."}>
         {(ids) => <textarea id={ids.id} aria-describedby={ids.describedBy} rows={3} style={input} value={tags} disabled={busy} onChange={(e) => setTags(e.target.value)} />}
       </SettingField>
-      <SettingField id="clusters[].protected" instance={name} source={d.protected ? "file" : entry.protectedBy ? "inferred" : "default"}
+      <SettingField id="clusters[].protected" instance={name} source={d.protected ? "file" : st.protectedBy ? "inferred" : "default"}
         note={<>
-          <span data-testid="cluster-protection-now">{protectionNow(entry)}</span>
+          <span data-testid="cluster-protection-now">{protectionNow(st)}</span>
           {entry.locked && <> <span data-testid="cluster-protection-locked">The {entry.locked}.</span></>}
           {" "}Protection ORs its inputs: clearing this never removes protection another input infers; the plan says the effect.
         </>}>

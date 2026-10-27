@@ -177,7 +177,7 @@ describe("Settings > Fleet (S2 §5)", () => {
     fireEvent.click(within(editor).getByRole("button", { name: "Review and apply" }));
     expect((await screen.findByTestId("plan-class-note")).textContent).toContain("held until its new connection is usable");
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
-    expect((await screen.findByTestId("settings-banner")).textContent).toBe("Saved: dev is not connected yet - connecting with the new terms. Nothing new starts on it until it connects.");
+    expect((await screen.findByTestId("settings-banner")).textContent).toBe("Saved: Klyx began connecting dev with the new terms. Its row says while it waits to connect.");
   });
 
   it("waits for every tag line to read as key=value before Review", async () => {
@@ -337,5 +337,18 @@ describe("Settings > Fleet (S2 §5)", () => {
     } finally {
       root.remove();
     }
+  });
+
+  it("RR1: an Apply for the edited cluster from elsewhere closes its unchanged editor, whose entry it replaced", async () => {
+    bridge.planClusterFromFile.mockResolvedValue(aPlan({ kind: "file", writes: false }));
+    bridge.applyClusterPlan.mockResolvedValue({ ok: true });
+    renderFleet(cfg({ clusters: [{ ...cfg().clusters[0], drift: "fleet.yaml says group: web" }, cfg().clusters[1]] }));
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    await screen.findByTestId("cluster-editor");
+    fireEvent.click(within(screen.getByTestId("settings-drift")).getByRole("button", { name: "Use the file's values" }));
+    await screen.findByTestId("settings-plan");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(bridge.applyClusterPlan).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("cluster-editor")).toBeNull());
   });
 });

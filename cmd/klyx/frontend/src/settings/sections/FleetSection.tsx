@@ -50,12 +50,14 @@ export function heldText(name: string, held: string): string {
 // okText is what an applied fleet plan did, in words.
 function okText(p: Plan, cluster: string): string {
   switch (p.class) {
+    // a receipt of what was done, never a claim about now: the row says
+    // whether the cluster has connected since (Codex's re-review of S2c, RR3)
     case "reconnect":
-      return `Saved: ${cluster} is not connected yet - connecting with the new terms. Nothing new starts on it until it connects.`;
+      return `Saved: Klyx began connecting ${cluster} with the new terms. Its row says while it waits to connect.`;
     case "removal":
       return `Removed ${cluster}.`;
     case "addition":
-      return `Connecting ${cluster}.`;
+      return `Klyx began connecting ${cluster}. Its row says while it waits to connect.`;
   }
   return p.writes ? `Applied: ${cluster}'s entry in fleet.yaml says so, and Klyx uses it.` : `Applied: Klyx uses fleet.yaml's entry for ${cluster}.`;
 }
@@ -79,6 +81,8 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
   const busyRef = useRef(false);
   busyRef.current = busy;
   const [editing, setEditing] = useState<ClusterEntry | null>(null);
+  const editingRef = useRef<ClusterEntry | null>(null);
+  editingRef.current = editing;
   const [dirty, setDirty] = useState(false);
   const [open, setOpen] = useState<OpenPlan | null>(null);
   // The editor's draft generation: a plan made from an older draft is
@@ -125,6 +129,10 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
   // another editor, or this one opened again, replaces the draft: a draft
   // with changes asks first, as leaving the section does (R2)
   const edit = (name: string) => (dirty ? requestLeave(() => void openEditor(name)) : void openEditor(name));
+  // an action on the cluster whose editor holds a changed draft replaces
+  // that draft, so it asks first; another cluster's action leaves it alone
+  // (Codex's re-review of S2c, RR1)
+  const onRow = (cluster: string, action: () => void) => (dirty && editing?.name === cluster ? requestLeave(action) : action());
   // Leaving the section, or replacing the editor, with a changed draft asks
   // to discard it or stay. There is no Save and leave: a cluster's change
   // is applied only through its plan (R2).
@@ -150,7 +158,9 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
     } else if (!r.ok) {
       setBanner({ kind: "error", text: `Not applied: ${r.error ?? "unknown error"}` });
     } else {
-      dropDraft();
+      // only the draft this Apply was for: the editor's own plan, or its
+      // cluster's - never another cluster's editor (RR1)
+      if (o.fromEditor || editingRef.current?.name === o.cluster) dropDraft();
       setOpen(null);
       const text = r.note ? `${okText(o.plan, o.cluster)} ${r.note}` : okText(o.plan, o.cluster);
       setBanner({ kind: r.note ? "warn" : "success", text });
@@ -279,24 +289,27 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
                 <span role="cell" style={{ display: "flex", gap: 4, justifyContent: "flex-end", fontFamily: "var(--font-sans)" }}>
                   <button className="l-btn" style={small} disabled={busy} aria-label={`edit ${c.name}`} onClick={() => edit(c.name)}>Edit</button>
                   <button className="l-btn" style={small} disabled={busy} aria-label={`remove ${c.name}`}
-                    onClick={() => void plan(c.name, `Remove ${c.name}`, () => planClusterRemove(c.name, []), { records: true })}>Remove…</button>
+                    onClick={() => onRow(c.name, () => void plan(c.name, `Remove ${c.name}`, () => planClusterRemove(c.name, []), { records: true }))}>Remove…</button>
                 </span>
                 {c.held && (
                   <div data-testid="settings-held" role="status" style={notice}>
                     <span>{heldText(c.name, c.held)}</span>
-                    {c.canRevert && <button className="l-btn" style={small} disabled={busy} onClick={() => void plan(c.name, `Revert ${c.name}`, () => planClusterRevert(c.name))}>Revert</button>}
-                    {c.canRetry && <button className="l-btn" style={small} disabled={busy} onClick={() => void plan(c.name, `Retry ${c.name}`, () => planClusterRetry(c.name))}>Retry</button>}
+                    {c.canRevert && <button className="l-btn" style={small} disabled={busy} onClick={() => onRow(c.name, () => void plan(c.name, `Revert ${c.name}`, () => planClusterRevert(c.name)))}>Revert</button>}
+                    {c.canRetry && <button className="l-btn" style={small} disabled={busy} onClick={() => onRow(c.name, () => void plan(c.name, `Retry ${c.name}`, () => planClusterRetry(c.name)))}>Retry</button>}
                   </div>
                 )}
                 {c.drift && (
                   <div data-testid="settings-drift" style={notice}>
                     <span>{c.drift}</span>
-                    <button className="l-btn" style={small} disabled={busy} onClick={() => void plan(c.name, `Use the file's values for ${c.name}`, () => planClusterFromFile(c.name))}>Use the file&apos;s values</button>
+                    <button className="l-btn" style={small} disabled={busy} onClick={() => onRow(c.name, () => void plan(c.name, `Use the file's values for ${c.name}`, () => planClusterFromFile(c.name)))}>Use the file&apos;s values</button>
                   </div>
                 )}
                 {editing?.name === c.name && (
                   // keyed by its opening: an editor opened again starts from the entry read then
+                  // its protection is the row's, read again with the fleet: the draft
+                  // stays the editor's own (RR2)
                   <ClusterEditor key={`${c.name}:${editorKey}`} entry={editing} busy={busy} onCancel={dropDraft}
+                    status={{ protectedNow: c.protected, protectedBy: c.protectedBy, pendingProtected: c.pendingProtected, pendingProtectedBy: c.pendingProtectedBy }}
                     onDraftChange={(changed) => {
                       draftGen.current++;
                       setDirty(changed);
