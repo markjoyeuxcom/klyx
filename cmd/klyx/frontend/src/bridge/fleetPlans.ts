@@ -9,17 +9,22 @@ import { askApply, askPlan } from "./plan";
 // Region is tags.region.
 export type ClusterDraft = { context: string; kubeconfig: string; group: string; environment: string; tags: Record<string, string>; protected: boolean };
 
-// One cluster's entry as the editor opens it: the raw fields, what decides
-// its protection and why it cannot be loosened here, and its kubeconfig's
-// contexts.
+// One cluster's entry as the editor opens it: the raw fields; its published
+// protection, what decides it, and a held attempt's different protection;
+// why it cannot be loosened here; the contexts of the kubeconfig the file's
+// entry names; and the endpoint kinds it configures.
 export type ClusterEntry = {
   name: string;
   draft: ClusterDraft;
   inFile: boolean;
+  protectedNow: boolean;
   protectedBy?: string;
+  pendingProtected?: boolean | null;
+  pendingProtectedBy?: string;
   locked?: string;
   contexts: string[];
   contextsError?: string;
+  endpoints?: string[];
   error?: string;
 };
 
@@ -27,7 +32,7 @@ export async function getClusterEntry(name: string): Promise<ClusterEntry> {
   try {
     return (await ConfigService.GetClusterEntry(name)) as ClusterEntry;
   } catch (e) {
-    return { name, draft: { context: "", kubeconfig: "", group: "", environment: "", tags: {}, protected: false }, inFile: false, contexts: [], error: e instanceof Error ? e.message : String(e) };
+    return { name, draft: { context: "", kubeconfig: "", group: "", environment: "", tags: {}, protected: false }, inFile: false, protectedNow: false, contexts: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 

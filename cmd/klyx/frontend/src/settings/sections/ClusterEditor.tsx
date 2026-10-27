@@ -1,5 +1,7 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ClusterDraft, ClusterEntry } from "../../bridge/fleetPlans";
+import { useFleet } from "../../store/fleet";
+import { openEndpointSettings, type EndpointKind } from "../EndpointSettingsLink";
 import { SettingField } from "../SettingField";
 
 // The cluster editor (Settings S2 §5): one cluster's S2 fields as
@@ -9,6 +11,17 @@ import { SettingField } from "../SettingField";
 // name is read-only: renaming is a later slice.
 
 const input: React.CSSProperties = { width: "100%", fontFamily: "var(--font-mono)", fontSize: 12 };
+const small: React.CSSProperties = { padding: "1px 8px", fontSize: 11 };
+const KIND_LABEL: Record<string, string> = { metrics: "Metrics", alertmanager: "Alertmanager", loki: "Loki" };
+
+// protectionNow says the published protection, what decides it, and a held
+// attempt's different protection, which applies only once it connects
+// (Codex's review of S2c, R5).
+export function protectionNow(e: ClusterEntry): string {
+  const now = !e.protectedNow ? "Not protected now." : e.protectedBy ? `Protected now, decided by ${e.protectedBy}.` : "Protected now, as published when it last connected.";
+  if (e.pendingProtected === undefined || e.pendingProtected === null) return now;
+  return `${now} Once its new connection is usable: ${e.pendingProtected ? `protected, decided by ${e.pendingProtectedBy}` : "not protected"}.`;
+}
 
 // tagsText is the tags other than region, one key=value a line.
 function tagsText(tags: Record<string, string>): string {
@@ -32,11 +45,15 @@ export function parseTags(text: string): { tags: Record<string, string>; bad: st
   return { tags, bad };
 }
 
-export function ClusterEditor({ entry, busy, onReview, onCancel }: {
+export function ClusterEditor({ entry, busy, onReview, onCancel, onDraftChange }: {
   entry: ClusterEntry;
   busy: boolean;
   onReview: (draft: ClusterDraft) => void;
   onCancel: () => void;
+  // told of every change to the draft, with whether it now differs from
+  // the entry: its plan is withdrawn, and leaving asks (Codex's review of
+  // S2c, R1 and R2)
+  onDraftChange?: (changed: boolean) => void;
 }) {
   const d = entry.draft;
   const [context, setContext] = useState(d.context);
@@ -48,6 +65,21 @@ export function ClusterEditor({ entry, busy, onReview, onCancel }: {
   const [isProtected, setProtected] = useState(d.protected);
   const contextsId = useId();
   const parsed = parseTags(tags);
+  const opened = useRef(true);
+  useEffect(() => {
+    if (opened.current) {
+      opened.current = false;
+      return;
+    }
+    onDraftChange?.(context !== d.context || kubeconfig !== d.kubeconfig || region !== (d.tags.region ?? "") || group !== d.group
+      || environment !== d.environment || tags !== tagsText(d.tags) || isProtected !== d.protected);
+    // the draft's fields only: the entry is fixed for this editor's life
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context, kubeconfig, region, group, environment, tags, isProtected]);
+  // the contexts offered are those of the kubeconfig the entry names; a
+  // kubeconfig typed since has not been read, so nothing is suggested from
+  // it, and the plan checks the context against it (R6)
+  const otherKubeconfig = kubeconfig.trim() !== d.kubeconfig.trim();
   const review = () => {
     const t = { ...parsed.tags };
     if (region.trim()) t.region = region.trim();
@@ -66,12 +98,15 @@ export function ClusterEditor({ entry, busy, onReview, onCancel }: {
       )}
       <SettingField id="clusters[].name" instance={name} value={name} />
       <SettingField id="clusters[].context" instance={name} source="file"
-        note={entry.contextsError ? `The kubeconfig could not be read: ${entry.contextsError}` : undefined}>
+        note={otherKubeconfig
+          ? `No contexts are suggested for the kubeconfig typed below: it has not been read. Review checks that the context is in it.`
+          : entry.contextsError ? `The kubeconfig could not be read: ${entry.contextsError}`
+            : `Suggested from ${d.kubeconfig || "the default kubeconfig"}.`}>
         {(ids) => (
           <>
             <input id={ids.id} aria-describedby={ids.describedBy} list={contextsId} style={input} value={context} disabled={busy}
               placeholder={`empty connects through the context named ${name}`} onChange={(e) => setContext(e.target.value)} />
-            <datalist id={contextsId}>{entry.contexts.map((c) => <option key={c} value={c} />)}</datalist>
+            <datalist id={contextsId}>{otherKubeconfig ? null : entry.contexts.map((c) => <option key={c} value={c} />)}</datalist>
           </>
         )}
       </SettingField>
@@ -93,7 +128,7 @@ export function ClusterEditor({ entry, busy, onReview, onCancel }: {
       </SettingField>
       <SettingField id="clusters[].protected" instance={name} source={d.protected ? "file" : entry.protectedBy ? "inferred" : "default"}
         note={<>
-          {entry.protectedBy ? `Protected now, decided by ${entry.protectedBy}.` : "Not protected now."}
+          <span data-testid="cluster-protection-now">{protectionNow(entry)}</span>
           {entry.locked && <> <span data-testid="cluster-protection-locked">The {entry.locked}.</span></>}
           {" "}Protection ORs its inputs: clearing this never removes protection another input infers; the plan says the effect.
         </>}>
@@ -104,6 +139,15 @@ export function ClusterEditor({ entry, busy, onReview, onCancel }: {
           </label>
         )}
       </SettingField>
+      <div data-testid="cluster-endpoints" style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 6 }}>
+        <span className="t-secondary">Endpoints, edited in fleet.yaml and tested under Observability:</span>
+        {(entry.endpoints ?? []).length === 0
+          ? <button type="button" className="l-btn" style={small} onClick={() => useFleet.getState().openSettings("observability")}>none for {name}; open Observability</button>
+          : (entry.endpoints ?? []).map((k) => (
+            <button key={k} type="button" className="l-btn" style={small} aria-label={`${name}'s ${KIND_LABEL[k] ?? k} endpoint in Observability`}
+              onClick={() => openEndpointSettings(name, k as EndpointKind)}>{KIND_LABEL[k] ?? k} in Observability</button>
+          ))}
+      </div>
       <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
         <button className="l-btn l-btn-primary" disabled={busy || parsed.bad.length > 0} onClick={review}>Review and apply</button>
         <button className="l-btn" disabled={busy} onClick={onCancel}>Cancel</button>

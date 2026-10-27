@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { addClusters, refreshNewContextCount, type FleetConfigDTO } from "../../bridge/configsvc";
 import {
@@ -7,7 +7,9 @@ import {
 } from "../../bridge/fleetPlans";
 import { lostAnswer, type ApplyResult, type Plan } from "../../bridge/plan";
 import { btn, ellipsis } from "../../chrome/primitives";
+import { useFleet } from "../../store/fleet";
 import { useLine } from "../../store/line";
+import { requestLeave, setSectionDraft } from "../navGuard";
 import { PlanView } from "../PlanView";
 import { SettingField } from "../SettingField";
 import { anchorOf, settingDomId } from "../registry";
@@ -21,8 +23,9 @@ import { PathRow, Group, type SectionProps } from "./common";
 // - and writes only on Apply. Each cell carries its anchor, and the
 // fields' contracts follow the table.
 
-// a plan on the page, with what it is for
-type OpenPlan = { plan: Plan; title: string; cluster: string; records?: boolean };
+// a plan on the page, with what it is for; fromEditor: the editor's draft
+// made it, so a change to the draft withdraws it
+type OpenPlan = { plan: Plan; title: string; cluster: string; records?: boolean; fromEditor?: boolean };
 
 const FIELDS: { id: string; head: string }[] = [
   { id: "clusters[].name", head: "name" },
@@ -69,52 +72,109 @@ export function sentenceForFleet(cfg: FleetConfigDTO): string {
   return differs.length ? `${running}; ${differs.join(", ")}` : `${running}; fleet.yaml agrees`;
 }
 
-export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: FleetConfigDTO; reload: () => void }) {
+export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: FleetConfigDTO; reload: () => Promise<boolean> }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [banner, setBanner] = useState<{ kind: "success" | "error" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   const [editing, setEditing] = useState<ClusterEntry | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [open, setOpen] = useState<OpenPlan | null>(null);
+  // The editor's draft generation: a plan made from an older draft is
+  // never shown or applied - any change to the draft withdraws its plan
+  // (Codex's review of S2c, R1).
+  const draftGen = useRef(0);
+  // an Apply being settled - its answer, then its readback - which the
+  // leave guard waits for (R2, R3)
+  const settling = useRef<Promise<void> | null>(null);
+  const dropDraft = () => {
+    draftGen.current++;
+    setEditing(null);
+    setDirty(false);
+    setOpen((o) => (o?.fromEditor ? null : o));
+  };
   // plan runs one request at a time and shows its plan; a refused plan
   // shows why, and nothing applies it
-  const plan = async (cluster: string, title: string, ask: () => Promise<Plan>, records?: boolean) => {
+  const plan = async (cluster: string, title: string, ask: () => Promise<Plan>, opts: { records?: boolean; fromEditor?: boolean } = {}) => {
+    const gen = draftGen.current;
     setBusy(true);
     setBanner(null);
     try {
-      setOpen({ plan: await ask(), title, cluster, records });
+      const p = await ask();
+      if (opts.fromEditor && gen !== draftGen.current) return; // the draft moved on
+      setOpen({ plan: p, title, cluster, records: opts.records, fromEditor: opts.fromEditor });
     } finally {
       setBusy(false);
     }
   };
-  const edit = async (name: string) => {
+  const [editorKey, setEditorKey] = useState(0);
+  const openEditor = async (name: string) => {
     setBusy(true);
     setOpen(null);
     try {
-      setEditing(await getClusterEntry(name));
+      draftGen.current++;
+      setDirty(false);
+      const e = await getClusterEntry(name);
+      setEditorKey((k) => k + 1);
+      setEditing(e);
     } finally {
       setBusy(false);
     }
   };
-  // settle says an Apply's result and reads back what runs: a replacement
-  // plan is shown for review, never applied by this; a lost answer is not
-  // a refusal (F2b review, R3)
-  const settle = (r: ApplyResult, o: OpenPlan) => {
+  // another editor, or this one opened again, replaces the draft: a draft
+  // with changes asks first, as leaving the section does (R2)
+  const edit = (name: string) => (dirty ? requestLeave(() => void openEditor(name)) : void openEditor(name));
+  // Leaving the section, or replacing the editor, with a changed draft asks
+  // to discard it or stay. There is no Save and leave: a cluster's change
+  // is applied only through its plan (R2).
+  useEffect(() => {
+    setSectionDraft("fleet-editor", editing && dirty
+      ? { settings: false, credentials: [], unsaved: [`a change to ${editing.name} not yet applied`], discard: dropDraft, settling: () => settling.current }
+      : { settings: false, credentials: [], discard: () => {}, settling: () => settling.current });
+  });
+  useEffect(() => () => setSectionDraft("fleet-editor", null), []);
+  // settle says an Apply's result, then reads back what runs before saying
+  // anything is current; a failed readback is said, and the outcome stays
+  // (R3). A replacement plan is shown for review, never applied by this; a
+  // lost answer is not a refusal (F2b review, R3).
+  const settle = async (r: ApplyResult, o: OpenPlan) => {
     if (r.unknown) {
       setOpen(null);
-      setBanner({ kind: "error", text: `${lostAnswer(r)}: what is shown is what runs now.` });
-      reload();
+      setBanner({ kind: "error", text: `${lostAnswer(r)}. Reading what runs now…` });
+      const read = await reload();
+      setBanner({ kind: "error", text: read ? `${lostAnswer(r)}: what is shown is what runs now.` : `${lostAnswer(r)}, and reading the fleet again failed: what is shown may not be what runs.` });
     } else if (r.plan) {
       setOpen({ ...o, plan: r.plan });
       setBanner(r.error ? { kind: "error", text: `Not applied: ${r.error}` } : null);
     } else if (!r.ok) {
       setBanner({ kind: "error", text: `Not applied: ${r.error ?? "unknown error"}` });
     } else {
+      dropDraft();
       setOpen(null);
-      setEditing(null);
-      setBanner(r.note ? { kind: "warn", text: `${okText(o.plan, o.cluster)} ${r.note}` } : { kind: "success", text: okText(o.plan, o.cluster) });
-      reload();
+      const text = r.note ? `${okText(o.plan, o.cluster)} ${r.note}` : okText(o.plan, o.cluster);
+      setBanner({ kind: r.note ? "warn" : "success", text });
+      if (!(await reload())) setBanner({ kind: "warn", text: `${text} Reading the fleet again failed: what is shown may be out of date.` });
     }
   };
+  // A held cluster's notice follows its connection: while one is held, a
+  // change in the live fleet, and every ten seconds, read the fleet again.
+  // Drafts and open plans are kept (R4).
+  const live = useFleet((s) => s.clusters);
+  const lastLive = useRef(live);
+  const anyHeld = cfg.clusters.some((c) => c.held);
+  useEffect(() => {
+    if (lastLive.current === live) return;
+    lastLive.current = live;
+    if (anyHeld && !busyRef.current) void reload();
+  }, [live, anyHeld, reload]);
+  useEffect(() => {
+    if (!anyHeld) return;
+    const t = setInterval(() => {
+      if (!busyRef.current) void reload();
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [anyHeld, reload]);
   const line = useLine((s) => s.dto);
   useEffect(() => { ready(); }, [ready]);
   const newContexts = cfg.contexts.filter((c) => !c.inFleet);
@@ -127,7 +187,7 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
     if (r.ok) {
       setBanner({ kind: "success", text: `Added ${selected.length} cluster${selected.length === 1 ? "" : "s"} to fleet.yaml - connecting now.` });
       setSelected([]);
-      reload();
+      void reload();
       void refreshNewContextCount();
     } else {
       setBanner({ kind: "error", text: r.error || "Could not update fleet.yaml" });
@@ -142,14 +202,18 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
       title={open.title}
       interlockTitle={`${open.title}?`}
       applyLabel={open.plan.class === "removal" ? "Remove" : "Apply"}
-      onRecords={open.records ? (chosen) => void plan(open.cluster, open.title, () => planClusterRemove(open.cluster, chosen), true) : undefined}
+      onRecords={open.records ? (chosen) => void plan(open.cluster, open.title, () => planClusterRemove(open.cluster, chosen), { records: true }) : undefined}
       onApply={async (typed) => {
         setBusy(true);
+        let done = () => {};
+        settling.current = new Promise<void>((resolve) => { done = resolve; });
         try {
           const r = await applyClusterPlan(open.plan.digest, typed);
-          settle(r, open);
+          await settle(r, open);
           return r;
         } finally {
+          settling.current = null;
+          done();
           setBusy(false);
         }
       }}
@@ -194,10 +258,14 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
             <span role="columnheader"><span className="sr-only">actions</span></span>
           </div>
           {cfg.clusters.map((c) => {
+            // a cell's id is its own: the editor's field for the same setting
+            // and cluster has the -row id (Codex's review of S2c, R7)
             const cell = (id: string, text: string, extra?: React.CSSProperties, title?: string) => (
-              <span role="cell" data-setting={id} data-instance={c.name} data-anchor={anchorOf(id, c.name)} id={`${settingDomId(id, c.name)}-row`} tabIndex={-1}
+              <span role="cell" data-setting={id} data-instance={c.name} data-anchor={anchorOf(id, c.name)} id={`${settingDomId(id, c.name)}-cell`} tabIndex={-1}
                 style={{ ...ellipsis, ...extra }} title={title ?? text}>{text}</span>
             );
+            const pending = c.pendingProtected === undefined || c.pendingProtected === null ? ""
+              : ` Once its new connection is usable: ${c.pendingProtected ? `protected, decided by ${c.pendingProtectedBy}` : "not protected"}.`;
             return (
               <div role="row" key={c.name} style={{ display: "grid", gridTemplateColumns: GRID, gap: 8, fontFamily: "var(--font-mono)", fontSize: 12, padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", alignItems: "center" }}>
                 {cell("clusters[].name", c.name)}
@@ -205,12 +273,13 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
                 {cell("clusters[].environment", c.env || "—", { color: "var(--color-text-tertiary)" })}
                 {cell("clusters[].group", c.group || "—", { color: "var(--color-text-tertiary)" })}
                 {cell("clusters[].protected", c.protected ? (c.protectedInferred ? "inferred" : "yes") : "no", { color: c.protected ? "var(--color-text-warning)" : "var(--color-text-tertiary)" },
-                  c.protectedInferred ? "inferred from a prd/prod/production token in its env, name or context - set protected: true to make it explicit" : undefined)}
+                  c.protectedInferred ? "inferred from a prd/prod/production token in its env, name or context - set protected: true to make it explicit"
+                    : pending ? `${c.protected ? "Protected now." : "Not protected now."}${pending}` : undefined)}
                 <span role="cell" style={{ color: "var(--color-text-tertiary)" }}>{c.hasMetrics ? "yes" : "—"}</span>
                 <span role="cell" style={{ display: "flex", gap: 4, justifyContent: "flex-end", fontFamily: "var(--font-sans)" }}>
-                  <button className="l-btn" style={small} disabled={busy} aria-label={`edit ${c.name}`} onClick={() => void edit(c.name)}>Edit</button>
+                  <button className="l-btn" style={small} disabled={busy} aria-label={`edit ${c.name}`} onClick={() => edit(c.name)}>Edit</button>
                   <button className="l-btn" style={small} disabled={busy} aria-label={`remove ${c.name}`}
-                    onClick={() => void plan(c.name, `Remove ${c.name}`, () => planClusterRemove(c.name, []), true)}>Remove…</button>
+                    onClick={() => void plan(c.name, `Remove ${c.name}`, () => planClusterRemove(c.name, []), { records: true })}>Remove…</button>
                 </span>
                 {c.held && (
                   <div data-testid="settings-held" role="status" style={notice}>
@@ -226,8 +295,14 @@ export function FleetSection({ cfg, reload, ready }: SectionProps & { cfg: Fleet
                   </div>
                 )}
                 {editing?.name === c.name && (
-                  <ClusterEditor key={c.name} entry={editing} busy={busy} onCancel={() => setEditing(null)}
-                    onReview={(d: ClusterDraft) => void plan(c.name, `Review the changes to ${c.name}`, () => planClusterEdit(c.name, d))} />
+                  // keyed by its opening: an editor opened again starts from the entry read then
+                  <ClusterEditor key={`${c.name}:${editorKey}`} entry={editing} busy={busy} onCancel={dropDraft}
+                    onDraftChange={(changed) => {
+                      draftGen.current++;
+                      setDirty(changed);
+                      setOpen((o) => (o?.fromEditor ? null : o));
+                    }}
+                    onReview={(d: ClusterDraft) => void plan(c.name, `Review the changes to ${c.name}`, () => planClusterEdit(c.name, d), { fromEditor: true })} />
                 )}
                 {open?.cluster === c.name && <div style={{ gridColumn: "1 / -1", fontFamily: "var(--font-sans)" }}>{planPanel}</div>}
               </div>

@@ -32,8 +32,12 @@ type FleetClusterDTO struct {
 	// when they agree.
 	Drift string `json:"drift,omitempty"`
 	// ProtectedBy names the input that decides protection (S2 §4.3), ""
-	// when it is off.
-	ProtectedBy string `json:"protectedBy,omitempty"`
+	// when it is off or the running entry no longer says what did;
+	// PendingProtected is a held attempt's different protection (Codex's
+	// review of S2c, R5).
+	ProtectedBy        string `json:"protectedBy,omitempty"`
+	PendingProtected   *bool  `json:"pendingProtected,omitempty"`
+	PendingProtectedBy string `json:"pendingProtectedBy,omitempty"`
 	// Held: saved, not connected yet, or a connection that failed to build,
 	// with why (S2 §4.5); "" while active. CanRevert and CanRetry say which
 	// plans it offers.
@@ -305,6 +309,7 @@ func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 		inFleet[c.Name] = true
 		inFleet[c.Context] = true
 		tags := c.EffectiveTags()
+		v := s.protectionOf(c)
 		dto.Clusters = append(dto.Clusters, FleetClusterDTO{
 			Name:     c.Name,
 			Context:  c.Context,
@@ -314,12 +319,15 @@ func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 			Account:  tags["account"],
 			Group:    c.Group,
 			// the published value (S2 §2.7): every reader agrees with the guard
-			Protected: s.IsProtected(c.Name),
-			// Inferred = locked by a prd/prod/production token, not the flag.
-			ProtectedInferred: s.IsProtected(c.Name) && !c.Protected,
-			HasMetrics:        c.Metrics != nil,
-			Drift:             clusterDrift(c, disk),
-			ProtectedBy:       c.ProtectedBy(),
+			Protected: v.now,
+			// Inferred = locked by a prd/prod/production token, not the
+			// flag - said only while the running entry is what decided it
+			ProtectedInferred:  v.now && v.pending == nil && !c.Protected,
+			HasMetrics:         c.Metrics != nil,
+			Drift:              clusterDrift(c, disk),
+			ProtectedBy:        v.by,
+			PendingProtected:   v.pending,
+			PendingProtectedBy: v.pendingBy,
 		})
 		s.heldOf(&dto.Clusters[len(dto.Clusters)-1])
 	}

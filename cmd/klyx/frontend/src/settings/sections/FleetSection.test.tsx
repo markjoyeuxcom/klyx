@@ -5,7 +5,11 @@ import type { FleetConfigDTO } from "../../bridge/configsvc";
 import type { ClusterEntry } from "../../bridge/fleetPlans";
 import type { Plan } from "../../bridge/plan";
 import { FleetSection } from "./FleetSection";
-import { parseTags } from "./ClusterEditor";
+import { applyAnchor } from "../../app/SettingsView";
+import { parseTags, protectionNow } from "./ClusterEditor";
+import { _resetNavGuardForTest, mustAsk, resolveLeave } from "../navGuard";
+import { useFleet } from "../../store/fleet";
+import { act } from "@testing-library/react";
 
 // Settings S2 §5: the Fleet page edits a cluster through its plan, and
 // every notice offers the plan that resolves it.
@@ -38,7 +42,9 @@ const entry = (over: Partial<ClusterEntry> = {}): ClusterEntry => ({
   name: "dev",
   draft: { context: "dev-ctx", kubeconfig: "", group: "", environment: "", tags: {}, protected: false },
   inFile: true,
+  protectedNow: false,
   contexts: ["dev-ctx", "dev-2"],
+  endpoints: [],
   ...over,
 });
 
@@ -48,7 +54,7 @@ const aPlan = (over: Partial<Plan> = {}): Plan => ({
 });
 
 function renderFleet(c = cfg()) {
-  const reload = vi.fn();
+  const reload = vi.fn(async () => true);
   render(<ThemeProvider><FleetSection cfg={c} reload={reload} ready={() => {}} say={() => {}} /></ThemeProvider>);
   return { reload };
 }
@@ -56,6 +62,8 @@ function renderFleet(c = cfg()) {
 describe("Settings > Fleet (S2 §5)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetNavGuardForTest();
+    useFleet.setState({ route: { name: "settings", section: "fleet" } });
     bridge.getClusterEntry.mockResolvedValue(entry());
   });
 
@@ -210,5 +218,124 @@ describe("Settings > Fleet (S2 §5)", () => {
   it("reads tags as key=value lines and names a bad one", () => {
     expect(parseTags("team=core\n\n env = dev ")).toEqual({ tags: { team: "core", env: "dev" }, bad: [] });
     expect(parseTags("nope\n=x").bad).toEqual(["nope", "=x"]);
+  });
+
+  // Codex's review of S2c (2026-10-27): its probes, R1-R3 and R5-R8, as
+  // regression tests
+  it("R1: a change to the draft withdraws its plan, and a late plan for an older draft is dropped", async () => {
+    let answer: (p: Plan) => void = () => {};
+    bridge.planClusterEdit.mockImplementationOnce(() => new Promise<Plan>((r) => { answer = r; }));
+    renderFleet();
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    const editor = await screen.findByTestId("cluster-editor");
+    fireEvent.change(within(editor).getByLabelText("Group"), { target: { value: "first" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Review and apply" }));
+    await act(async () => answer(aPlan({ digest: "first" })));
+    expect(screen.getByTestId("settings-plan").getAttribute("data-plan-digest")).toBe("first");
+    fireEvent.change(within(editor).getByLabelText("Group"), { target: { value: "second" } });
+    expect(screen.queryByTestId("settings-plan")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+    expect(bridge.applyClusterPlan).not.toHaveBeenCalled();
+  });
+
+  it("R2: an edited draft asks before leaving the section or opening another editor, and Cancel discards it", async () => {
+    renderFleet();
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    const editor = await screen.findByTestId("cluster-editor");
+    expect(mustAsk()).toBe(false);
+    fireEvent.change(within(editor).getByLabelText("Group"), { target: { value: "unsaved" } });
+    expect(mustAsk()).toBe(true);
+    act(() => useFleet.getState().openSettings("ai"));
+    expect(useFleet.getState().route).toEqual({ name: "settings", section: "fleet" });
+    await act(async () => resolveLeave("stay"));
+    fireEvent.click(screen.getByRole("button", { name: "edit prd" }));
+    expect(bridge.getClusterEntry).toHaveBeenCalledTimes(1); // asked first, not replaced
+    await act(async () => resolveLeave("discard"));
+    await waitFor(() => expect(bridge.getClusterEntry).toHaveBeenLastCalledWith("prd"));
+    expect(mustAsk()).toBe(false);
+    fireEvent.change(within(await screen.findByTestId("cluster-editor")).getByLabelText("Group"), { target: { value: "x" } });
+    fireEvent.click(within(screen.getByTestId("cluster-editor")).getByRole("button", { name: "Cancel" }));
+    expect(mustAsk()).toBe(false);
+  });
+
+  it("R3: after a lost answer, nothing is called current and nothing is enabled until the readback says so", async () => {
+    let readBack: (ok: boolean) => void = () => {};
+    const reload = vi.fn(() => new Promise<boolean>((r) => { readBack = r; }));
+    bridge.planClusterEdit.mockResolvedValue(aPlan());
+    bridge.applyClusterPlan.mockResolvedValue({ ok: false, unknown: true, error: "bridge closed" });
+    render(<ThemeProvider><FleetSection cfg={cfg()} reload={reload} ready={() => {}} say={() => {}} /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    fireEvent.click(within(await screen.findByTestId("cluster-editor")).getByRole("button", { name: "Review and apply" }));
+    await screen.findByTestId("settings-plan");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    expect(screen.getByTestId("settings-banner").textContent).not.toContain("what is shown is what runs now");
+    expect((screen.getByRole("button", { name: "remove dev" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mustAsk()).toBe(true); // leaving waits for the readback
+    await act(async () => readBack(false));
+    expect(screen.getByTestId("settings-banner").textContent).toContain("whether it applied is not known, and reading the fleet again failed");
+    expect((screen.getByRole("button", { name: "remove dev" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("R5: says pending protection apart from the protection in force", () => {
+    expect(protectionNow(entry({ protectedNow: true, protectedBy: "", pendingProtected: false }))).toBe("Protected now, as published when it last connected. Once its new connection is usable: not protected.");
+    expect(protectionNow(entry({ protectedNow: false, pendingProtected: true, pendingProtectedBy: "protected: true" }))).toBe("Not protected now. Once its new connection is usable: protected, decided by protected: true.");
+    expect(protectionNow(entry({ protectedNow: true, protectedBy: "the name prd" }))).toBe("Protected now, decided by the name prd.");
+  });
+
+  it("R6: suggests no contexts for a kubeconfig typed since the entry was read", async () => {
+    renderFleet();
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    const editor = await screen.findByTestId("cluster-editor");
+    expect(editor.querySelectorAll("datalist option").length).toBe(2);
+    fireEvent.change(within(editor).getByLabelText("Kubeconfig"), { target: { value: "/elsewhere/config" } });
+    expect(editor.querySelectorAll("datalist option").length).toBe(0);
+    expect(editor.textContent).toContain("No contexts are suggested for the kubeconfig typed below");
+  });
+
+  it("R7: keeps every DOM id unique with an editor open", async () => {
+    const { container } = render(<ThemeProvider><FleetSection cfg={cfg()} reload={vi.fn(async () => true)} ready={() => {}} say={() => {}} /></ThemeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    await screen.findByTestId("cluster-editor");
+    const ids = [...container.querySelectorAll<HTMLElement>("[id]")].map((e) => e.id);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+  });
+
+  it("R8: links the cluster's endpoints to Observability, through the leave guard", async () => {
+    bridge.getClusterEntry.mockResolvedValue(entry({ endpoints: ["metrics", "loki"] }));
+    renderFleet();
+    fireEvent.click(screen.getByRole("button", { name: "edit dev" }));
+    const editor = await screen.findByTestId("cluster-editor");
+    fireEvent.click(within(editor).getByRole("button", { name: "dev's Loki endpoint in Observability" }));
+    expect(useFleet.getState().route).toMatchObject({ name: "settings", section: "observability" });
+    expect(within(editor).getByRole("button", { name: "dev's Metrics endpoint in Observability" })).toBeTruthy();
+  });
+
+  it("R4: while a cluster is held, the fleet is read again every ten seconds, and not otherwise", async () => {
+    vi.useFakeTimers();
+    try {
+      const reload = vi.fn(async () => true);
+      const { rerender } = render(<ThemeProvider><FleetSection cfg={cfg({ clusters: [{ ...cfg().clusters[0], held: "saved, not connected yet: connecting", canRetry: true }] })} reload={reload} ready={() => {}} say={() => {}} /></ThemeProvider>);
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      expect(reload).toHaveBeenCalledTimes(1);
+      rerender(<ThemeProvider><FleetSection cfg={cfg()} reload={reload} ready={() => {}} say={() => {}} /></ThemeProvider>);
+      await act(async () => { vi.advanceTimersByTime(30_000); });
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("R7: an anchor with an editor open focuses the editor's control, not the table's cell", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<span data-setting="clusters[].group" data-anchor="clusters[].group@dev" tabindex="-1">web</span>
+      <div data-setting="clusters[].group" data-anchor="clusters[].group@dev"><div class="setting-control"><input id="the-control" /></div></div>`;
+    document.body.appendChild(root);
+    try {
+      expect(applyAnchor(root, "clusters[].group@dev")).toBeNull();
+      expect(document.activeElement?.id).toBe("the-control");
+    } finally {
+      root.remove();
+    }
   });
 });

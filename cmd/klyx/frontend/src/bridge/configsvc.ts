@@ -19,8 +19,12 @@ export type FleetClusterConfigDTO = {
   // drift: how fleet.yaml now differs from this running entry; "Use the
   // file's values" plans it (Settings S2 §4.6)
   drift?: string;
-  // what decides protection (S2 §4.3), "" when it is off
+  // what decides protection (S2 §4.3), "" when it is off or the running
+  // entry no longer says what did; pendingProtected is a held attempt's
+  // different protection, applied once it connects
   protectedBy?: string;
+  pendingProtected?: boolean | null;
+  pendingProtectedBy?: string;
   // held: saved, not connected yet, or a connection that failed to build,
   // with why (S2 §4.5); canRevert and canRetry, the plans it offers
   held?: string;

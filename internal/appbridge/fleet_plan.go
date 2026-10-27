@@ -759,42 +759,86 @@ type ClusterEntryDTO struct {
 	Name   string          `json:"name"`
 	Draft  ClusterDraftDTO `json:"draft"`
 	InFile bool            `json:"inFile"`
-	// ProtectedBy names what decides protection now, "" when it is off;
-	// Locked, why it cannot be loosened here (S2 §4.3)
-	ProtectedBy   string   `json:"protectedBy,omitempty"`
-	Locked        string   `json:"locked,omitempty"`
+	// ProtectedNow is the published protection, what the guard enforces;
+	// ProtectedBy names what decides it, "" when it is off or when the
+	// running entry no longer says what did. PendingProtected is a held
+	// attempt's protection, when it differs, published once the attempt
+	// connects (Codex's review of S2c, R5). Locked says why protection
+	// cannot be loosened here (S2 §4.3).
+	ProtectedNow       bool   `json:"protectedNow"`
+	ProtectedBy        string `json:"protectedBy,omitempty"`
+	PendingProtected   *bool  `json:"pendingProtected,omitempty"`
+	PendingProtectedBy string `json:"pendingProtectedBy,omitempty"`
+	Locked             string `json:"locked,omitempty"`
+	// Contexts are those of the kubeconfig the file's entry names (R6)
 	Contexts      []string `json:"contexts"`
 	ContextsError string   `json:"contextsError,omitempty"`
-	Error         string   `json:"error,omitempty"`
+	// Endpoints are the endpoint kinds the running entry configures:
+	// the editor links each to Observability (S2 §5, R8)
+	Endpoints []string `json:"endpoints"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// protectionView is a cluster's protection as the page says it: the
+// published value, what decides it while the running entry still says the
+// same, and a held attempt's different protection (Codex's review of S2c,
+// R5).
+type protectionView struct {
+	now       bool
+	by        string
+	pending   *bool
+	pendingBy string
+}
+
+func (s *ConfigService) protectionOf(run config.ClusterConfig) protectionView {
+	v := protectionView{now: s.IsProtected(run.Name)}
+	if p := run.IsProtected(); p != v.now {
+		v.pending, v.pendingBy = &p, run.ProtectedBy()
+		return v
+	}
+	v.by = run.ProtectedBy()
+	return v
 }
 
 // GetClusterEntry is the editor's starting point for a running cluster: the
 // raw entry, read from fleet.yaml now, and its kubeconfig's contexts.
 func (s *ConfigService) GetClusterEntry(name string) ClusterEntryDTO {
-	out := ClusterEntryDTO{Name: name, Contexts: []string{}}
+	out := ClusterEntryDTO{Name: name, Contexts: []string{}, Endpoints: []string{}}
 	run, running := s.runningEntry(name)
 	if !running {
 		out.Error = name + " is not running"
 		return out
 	}
-	out.ProtectedBy = run.ProtectedBy()
+	v := s.protectionOf(run)
+	out.ProtectedNow, out.ProtectedBy, out.PendingProtected, out.PendingProtectedBy = v.now, v.by, v.pending, v.pendingBy
 	if (config.ClusterConfig{Name: name}).ProtectedBy() != "" {
 		out.Locked = "protection is inferred from the name " + name + ", which is read-only here: renaming is a later slice"
 	}
-	_, raw, _, err := config.LoadRaw(s.path)
+	for _, e := range run.Endpoints() {
+		out.Endpoints = append(out.Endpoints, e.Kind)
+	}
+	eff, raw, _, err := config.LoadRaw(s.path)
 	if err != nil {
 		out.Error = "fleet.yaml does not load: " + config.DisplayError(err)
 		return out
 	}
 	entry, inFile := raw[name]
 	out.InFile = inFile
+	// the contexts offered are those of the kubeconfig the draft names: the
+	// file's entry, as Klyx would read it (R6); a cluster gone from the file
+	// offers those it runs with
+	path := run.Kubeconfig
 	if inFile {
 		out.Draft = ClusterDraftDTO{Context: entry.Context, Kubeconfig: entry.Kubeconfig, Group: entry.Group, Environment: entry.Environment, Tags: copyTags(entry.Tags), Protected: entry.Protected}
 		if out.Draft.Tags == nil {
 			out.Draft.Tags = map[string]string{}
 		}
+		for _, c := range eff.Clusters {
+			if c.Name == name {
+				path = c.Kubeconfig
+			}
+		}
 	}
-	path := run.Kubeconfig
 	if path == "" {
 		path = s.kubeconfigPath()
 	}
