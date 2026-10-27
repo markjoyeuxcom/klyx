@@ -837,3 +837,15 @@ Codex found R1, R2, R7 and R8 closed, and R3 to R6's original probes passing. It
 | **RR4:** `AddClusters` found a name already running only after writing it | Every name is checked before anything is prepared or written. A name that runs, or is published, is refused, and the file's values remove it |
 
 **Tests:** Codex's four probes, as regression tests, and an edit on the connected identity keeping its last connected terms. **Mutation pass:** 6 mutants, all caught.
+
+## 23. S2b revision 3: Codex's second re-review (2026-10-26)
+
+Codex found RR1, RR2 and RR4 closed, and RR3 correct for a cluster with a connection. It requested changes: one residual P2.
+
+| Finding | Fix |
+|---|---|
+| **R2-1:** a cluster whose first build failed has no connection. A placement edit committed then updated nothing, so Retry built the edit's terms but recorded the startup ones, and a later Revert undid the edit | Every committed placement or protection change updates the cluster's current terms, connection or not. Its connection's terms, and the last connected terms, change only when a connection exists, the latter only for the connection that connected: an edit before any connection invents no history |
+
+§22's RR3 line holds with that correction: the current terms follow every committed change, not only those on a connection.
+
+**Tests:** Codex's probe, as a regression test covering a save and a file adoption before the first build: the edit is Retry's terms, no connected terms exist until Retry connects, and Revert restores the connection that succeeded. **Mutation pass:** 5 mutants, 4 caught. The survivor, dropping the return after an edit on a connection, is equivalent: the current terms are then written twice with the same value. No native smoke for this revision alone: the change is bookkeeping on paths the unit tests drive, and the S2c smoke runs on top of it.
