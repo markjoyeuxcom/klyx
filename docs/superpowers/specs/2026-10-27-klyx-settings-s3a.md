@@ -534,3 +534,17 @@ Codex also asked that one rule be stated, which this note does: **two installati
 **Tests:** Codex's probes, as regression tests: every key written at its zero value, by kind; a 41-character canary withheld from every new error and warning; the row's scope by mode. **Mutation pass:** 6 mutants over the fixes, all caught.
 
 **Smoke:** 216/216 four ways at 4580148, the smoke fleet.yaml as it began after every walk: every endpoint block now decodes through `UnmarshalYAML`.
+
+## 17. S3a-1 revision 2: Codex's re-review (2026-10-27)
+
+Codex found R3 and R4 closed, R1 fixed for keys written in the block itself, and R2 fixed for its five cases. It requested changes: two P2 and one P3.
+
+| Finding | Fix |
+|---|---|
+| **RR1, P2:** keys inherited through a YAML merge (`<<: *defaults`) were not recorded as written, so an inherited `source: ""` loaded and became discovery again, and inherited Loki keys and empty siblings loaded | A block's written keys are its effective keys: a merge key's mapping, an alias to one, a sequence of them and nested merges are followed, each node once. A key written anywhere in the merge is written. Valid merges and aliases still load |
+| **RR2, P2:** identities and label names still reached diagnostics whole: installation ids in the location and in warnings and scope guidance, duplicate ids, the member-label name, and cluster and group names in conflicts | Every identity in the new diagnostics is named as a value is: quoted, or by its length alone at 25 characters or more. A label name is named as a key. An installation's location is `sources.<id>` only when its id is short enough to show, else `sources[<index>]` |
+| **RR3, P3:** the registry said `off` was true or false, but the loader refuses an explicit false | "true, or left out; nothing else in the block" |
+
+**Tests:** Codex's probes, as regression tests: seven inherited forms, plus a merge sequence and a nested merge, all refused, with valid merges and aliases still loading; six long identities and label names withheld; the registry's text for `off`. **Mutation pass:** 6 mutants over the fixes, all caught.
+
+**Smoke:** 216/216 four ways at 85cf6e8, the smoke fleet.yaml as it began after every walk.
