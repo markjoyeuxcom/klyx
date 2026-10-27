@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -659,7 +660,7 @@ func installationChanges(from, to []config.SourceConfig) []PlanChangeDTO {
 					continue
 				}
 				from, to := orNone(of[f]), orNone(nf[f])
-				to += unshownChange(f, oi[f], ni[f], from == to)
+				to += unshownChange(f, o, n, from == to)
 				out = append(out, PlanChangeDTO{ID: "sources." + id + "." + strings.ReplaceAll(f, " ", "-"), Label: shownInstallation(id) + "'s " + f, From: from, To: to})
 			}
 		}
@@ -703,9 +704,9 @@ func installationFields(src config.SourceConfig) [][2]string {
 		if scheme == "" {
 			scheme = "http"
 		}
-		svc := fmt.Sprintf("%s %s/%s:%s", scheme, r.Namespace, r.Name, r.Port)
+		svc := fmt.Sprintf("%s %s/%s:%s", scheme, wordOf(r.Namespace), wordOf(r.Name), wordOf(r.Port))
 		if r.Path != "" {
-			svc += ", path " + r.Path
+			svc += ", path " + pathWordOf(r.Path)
 		}
 		add("Service", svc)
 	}
@@ -728,9 +729,9 @@ func installationFields(src config.SourceConfig) [][2]string {
 	var serves []string
 	for _, sv := range src.Serves {
 		if sv.Group != "" {
-			serves = append(serves, "group "+sv.Group)
+			serves = append(serves, "group "+wordOf(sv.Group))
 		} else {
-			serves = append(serves, sv.Cluster)
+			serves = append(serves, wordOf(sv.Cluster))
 		}
 	}
 	sort.Strings(serves)
@@ -775,20 +776,82 @@ func installationInputs(src config.SourceConfig) map[string]string {
 	if a := src.Auth; a != nil {
 		m["auth"] = a.Type + "\x00" + a.Username
 	}
-	m["serves"] = fieldMap(installationFields(src))["serves"]
+	// what it serves as typed selectors, in any order (R7)
+	var serves []string
+	for _, sv := range src.Serves {
+		if sv.Group != "" {
+			serves = append(serves, "group\x00"+sv.Group)
+		} else {
+			serves = append(serves, "cluster\x00"+sv.Cluster)
+		}
+	}
+	sort.Strings(serves)
+	m["serves"] = strings.Join(serves, "\x01")
 	return m
 }
 
-// unshownChange names what changed in a field that its words do not show:
-// an endpoint's query or fragment, whose contents are never shown, or only
-// how a field is written. same is that its words are the same.
-func unshownChange(field, was, now string, same bool) string {
-	if field != "endpoint" {
-		if same {
+// plainWord and plainPath are values a plan shows bare: nothing in them can
+// be read as the words around them. Any other value is quoted, so two
+// different inputs never read the same (Codex's second re-review of
+// S3a-4a, R2-1: a group "blue, group green" read as two groups).
+var (
+	plainWord = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]*$`)
+	plainPath = regexp.MustCompile(`^/?[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*/?$`)
+)
+
+func wordOf(v string) string {
+	if plainWord.MatchString(v) {
+		return v
+	}
+	return strconv.Quote(v)
+}
+
+func pathWordOf(v string) string {
+	if plainPath.MatchString(v) {
+		return v
+	}
+	return strconv.Quote(v)
+}
+
+// unshownChange names what changed in a field that its words do not show,
+// decided from the inputs: an endpoint's query or fragment, whose contents
+// are never shown, or only how it is written; a Service's scheme written
+// out as its default. same is that its words are the same.
+func unshownChange(field string, was, now config.SourceConfig, same bool) string {
+	switch field {
+	case "endpoint":
+		return endpointUnshown(was.Endpoint, now.Endpoint, same)
+	case "Service":
+		if same && sameServiceEffect(was.ServiceRef, now.ServiceRef) {
 			return ": written differently, with the same effect"
 		}
-		return ""
 	}
+	if same {
+		// the words of every other field show its inputs: kept for honesty,
+		// never as a claim that nothing changed
+		return ": changed in a way these words cannot show"
+	}
+	return ""
+}
+
+// sameServiceEffect is two Services that differ only in a scheme left to
+// its default and written out.
+func sameServiceEffect(a, b *config.MetricsServiceRef) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	scheme := func(r *config.MetricsServiceRef) string {
+		if r.Scheme == "" {
+			return "http"
+		}
+		return r.Scheme
+	}
+	return a.Namespace == b.Namespace && a.Name == b.Name && a.Port == b.Port && a.Path == b.Path && scheme(a) == scheme(b)
+}
+
+// endpointUnshown names what changed in an endpoint that its words do not
+// show.
+func endpointUnshown(was, now string, same bool) string {
 	wu, werr := url.Parse(was)
 	nu, nerr := url.Parse(now)
 	if werr != nil || nerr != nil {

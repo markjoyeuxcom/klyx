@@ -376,3 +376,112 @@ func TestAChangeTheWordsCannotShowIsNamed(t *testing.T) {
 		}
 	})
 }
+
+// Codex's second re-review of S3a-4a, R2-1: what an installation serves is
+// compared as typed selectors, never as their words, and a value that could
+// read as the words around it is quoted - a group "blue, group green" is
+// not the groups blue and green. Order alone changes nothing.
+func TestSelectorsAndServicesAreComparedAsTheirInputs(t *testing.T) {
+	for _, withName := range []bool{false, true} {
+		t.Run(map[bool]string{false: "the selectors alone", true: "the selectors and the name"}[withName], func(t *testing.T) {
+			old := hostedOnPrd("shared", config.ServeConfig{Group: "blue, group green"})
+			r := newSourcesRig(t, old)
+			d := sourceDraftOf(old)
+			d.ServesGroups = []string{"blue", "green"}
+			if withName {
+				d.Name = "shared AM"
+			}
+			p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+			if p.Refused != "" {
+				t.Fatalf("refused: %s", p.Refused)
+			}
+			c, ok := change(p, "sources.shared.serves")
+			if !ok || c.From != `group "blue, group green"` || c.To != "group blue, group green" {
+				t.Fatalf("%+v", p.Changes)
+			}
+			if _, ok := change(p, "sources.shared.name"); ok != withName {
+				t.Fatalf("the name: %+v", p.Changes)
+			}
+			if res := r.svc.ApplySources(p.Digest); !res.OK {
+				t.Fatalf("apply: %+v", res)
+			}
+			if got := r.active.Sources()[0].Serves; len(got) != 2 {
+				t.Fatalf("in force: %+v", got)
+			}
+		})
+	}
+	t.Run("only their order", func(t *testing.T) {
+		old := hostedOnPrd("shared", config.ServeConfig{Group: "blue"}, config.ServeConfig{Group: "green"})
+		r := newSourcesRig(t, old)
+		d := sourceDraftOf(old)
+		d.ServesGroups = []string{"green", "blue"}
+		p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+		if !strings.Contains(p.Refused, "changes nothing") {
+			t.Fatalf("%+v %+v", p.Refused, p.Changes)
+		}
+	})
+	t.Run("their order, beside the name", func(t *testing.T) {
+		old := hostedOnPrd("shared", config.ServeConfig{Group: "blue"}, config.ServeConfig{Group: "green"})
+		r := newSourcesRig(t, old)
+		d := sourceDraftOf(old)
+		d.ServesGroups = []string{"green", "blue"}
+		d.Name = "shared AM"
+		p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+		if p.Refused != "" || len(p.Changes) == 0 {
+			t.Fatalf("%+v", p)
+		}
+		if _, ok := change(p, "sources.shared.serves"); ok {
+			t.Fatalf("an order-only change of what it serves is named: %+v", p.Changes)
+		}
+	})
+	t.Run("a group for a cluster of the same name", func(t *testing.T) {
+		old := hostedOnPrd("shared", config.ServeConfig{Group: "dev"})
+		r := newSourcesRig(t, old)
+		d := sourceDraftOf(old)
+		d.ServesGroups, d.ServesClusters = nil, []string{"dev"}
+		p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+		c, ok := change(p, "sources.shared.serves")
+		if p.Refused != "" || !ok || c.From != "group dev" || c.To != "dev" {
+			t.Fatalf("%+v %+v", p.Refused, p.Changes)
+		}
+	})
+	t.Run("a Service whose parts read alike", func(t *testing.T) {
+		old := hostedOnPrd("shared", config.ServeConfig{Cluster: "dev"})
+		old.ServiceRef = &config.MetricsServiceRef{Namespace: "a/b", Name: "c", Port: "web"}
+		r := newSourcesRig(t, old)
+		d := sourceDraftOf(old)
+		d.ServiceRef = &ServiceRefDTO{Namespace: "a", Name: "b/c", Port: "web"}
+		p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+		c, ok := change(p, "sources.shared.Service")
+		if p.Refused != "" || !ok || c.From != `http "a/b"/c:web` || c.To != `http a/"b/c":web` {
+			t.Fatalf("%+v %+v", p.Refused, p.Changes)
+		}
+	})
+}
+
+// The same words with different inputs are never called the same effect,
+// unless the inputs say so: a Service's scheme written out as its default.
+func TestSameWordsAreSameEffectOnlyWhenTheInputsSaySo(t *testing.T) {
+	svc := func(scheme, ns string) config.SourceConfig {
+		return config.SourceConfig{ServiceRef: &config.MetricsServiceRef{Scheme: scheme, Namespace: ns, Name: "am", Port: "web"}}
+	}
+	for _, tc := range []struct {
+		name, field string
+		was, now    config.SourceConfig
+		want        string
+	}{
+		{"a scheme written out", "Service", svc("", "monitoring"), svc("http", "monitoring"), ": written differently, with the same effect"},
+		{"another Service", "Service", svc("", "monitoring"), svc("http", "other"), ": changed in a way these words cannot show"},
+		{"a Service added", "Service", config.SourceConfig{}, svc("http", "monitoring"), ": changed in a way these words cannot show"},
+		{"any other field", "serves", config.SourceConfig{}, config.SourceConfig{}, ": changed in a way these words cannot show"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := unshownChange(tc.field, tc.was, tc.now, true); got != tc.want {
+				t.Fatalf("%q", got)
+			}
+			if got := unshownChange(tc.field, tc.was, tc.now, false); got != "" {
+				t.Fatalf("different words named again: %q", got)
+			}
+		})
+	}
+}
