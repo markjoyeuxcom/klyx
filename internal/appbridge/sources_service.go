@@ -761,11 +761,14 @@ func endpointWords(endpoint string) string {
 }
 
 // installationInputs are an installation's inputs as written, by field: a
-// plan decides what changed from them.
+// plan decides what changed from them. A field of several values is
+// encoded as JSON, whose boundaries no value can forge (Codex's third
+// re-review of S3a-4a, R3-1: a value holding the delimiters of a joined
+// string read as two).
 func installationInputs(src config.SourceConfig) map[string]string {
 	m := map[string]string{"name": src.Name, "host": src.Host, "endpoint": src.Endpoint, "tenant": src.Tenant, "member label": src.MemberLabel}
 	if r := src.ServiceRef; r != nil {
-		m["Service"] = strings.Join([]string{r.Scheme, r.Namespace, r.Name, r.Port, r.Path}, "\x00")
+		m["Service"] = inputOf([]string{r.Scheme, r.Namespace, r.Name, r.Port, r.Path})
 	}
 	if src.Discover {
 		m["discovery"] = "true"
@@ -774,20 +777,34 @@ func installationInputs(src config.SourceConfig) map[string]string {
 		m["certificate"] = "true"
 	}
 	if a := src.Auth; a != nil {
-		m["auth"] = a.Type + "\x00" + a.Username
+		m["auth"] = inputOf([]string{a.Type, a.Username})
 	}
 	// what it serves as typed selectors, in any order (R7)
-	var serves []string
+	serves := make([][2]string, 0, len(src.Serves))
 	for _, sv := range src.Serves {
 		if sv.Group != "" {
-			serves = append(serves, "group\x00"+sv.Group)
+			serves = append(serves, [2]string{"group", sv.Group})
 		} else {
-			serves = append(serves, "cluster\x00"+sv.Cluster)
+			serves = append(serves, [2]string{"cluster", sv.Cluster})
 		}
 	}
-	sort.Strings(serves)
-	m["serves"] = strings.Join(serves, "\x01")
+	sort.Slice(serves, func(i, j int) bool {
+		if serves[i][0] != serves[j][0] {
+			return serves[i][0] < serves[j][0]
+		}
+		return serves[i][1] < serves[j][1]
+	})
+	m["serves"] = inputOf(serves)
 	return m
+}
+
+func inputOf(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// strings and their arrays always encode
+		panic(err)
+	}
+	return string(b)
 }
 
 // plainWord and plainPath are values a plan shows bare: nothing in them can

@@ -485,3 +485,47 @@ func TestSameWordsAreSameEffectOnlyWhenTheInputsSaySo(t *testing.T) {
 		})
 	}
 }
+
+// Codex's third re-review of S3a-4a, R3-1: a value holding a joined
+// string's delimiters never reads as several - what an installation serves,
+// its Service and its auth are compared as encoded values.
+func TestAValueHoldingDelimitersIsOneValue(t *testing.T) {
+	for _, withName := range []bool{false, true} {
+		t.Run(map[bool]string{false: "the selectors alone", true: "the selectors and the name"}[withName], func(t *testing.T) {
+			old := hostedOnPrd("shared", config.ServeConfig{Group: "blue\x01group\x00green"})
+			r := newSourcesRig(t, old)
+			d := sourceDraftOf(old)
+			d.ServesGroups = []string{"blue", "green"}
+			if withName {
+				d.Name = "shared AM"
+			}
+			p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
+			if p.Refused != "" {
+				t.Fatalf("refused: %s", p.Refused)
+			}
+			c, ok := change(p, "sources.shared.serves")
+			if !ok || c.From != `group "blue\x01group\x00green"` || c.To != "group blue, group green" {
+				t.Fatalf("%+v", p.Changes)
+			}
+			if res := r.svc.ApplySources(p.Digest); !res.OK {
+				t.Fatalf("apply: %+v", res)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name     string
+		was, now config.SourceConfig
+	}{
+		{"a Service", config.SourceConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "a\x00b", Name: "c", Port: "web"}},
+			config.SourceConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "a", Name: "b\x00c", Port: "web"}}},
+		{"an auth", config.SourceConfig{Auth: &config.EndpointAuth{Type: "basic\x00x", Username: "y"}},
+			config.SourceConfig{Auth: &config.EndpointAuth{Type: "basic", Username: "x\x00y"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := map[string]string{"a Service": "Service", "an auth": "auth"}[tc.name]
+			if installationInputs(tc.was)[f] == installationInputs(tc.now)[f] {
+				t.Fatalf("two different %s inputs compare equal", f)
+			}
+		})
+	}
+}
