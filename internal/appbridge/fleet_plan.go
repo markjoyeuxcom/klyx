@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,6 +79,11 @@ type FleetPlanDeps struct {
 	// Hosts are the installations naming the cluster as their host: a
 	// removal is refused while there are any (S2 §4.4; S3a fills it)
 	Hosts func(cluster string) []string
+	// Alertmanager is the block a connection for an entry would use,
+	// resolved against the active installations (Settings S3a §2.2). A
+	// change that keeps the connection must not move it: the running
+	// connection would not follow
+	Alertmanager func(config.ClusterConfig) *config.EndpointConfig
 	// EndEpochWork ends a cluster's conversations explicitly at a committed
 	// protection change (S2 §8, ruling 1)
 	EndEpochWork func(cluster, why string)
@@ -549,6 +555,16 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 				return refuse("Klyx cannot connect with these terms, so nothing was planned: " + config.DisplayError(err))
 			}
 		}
+	case classPlacement, classProtection:
+		// Settings S3a §3.6: a group or name that moves where the
+		// cluster's alerts come from changes what its running connection
+		// reads; this version cannot move it, so it refuses rather than
+		// leave the connection on the old source
+		if fp.d.Alertmanager != nil {
+			if was, now := fp.d.Alertmanager(run), fp.d.Alertmanager(x.cand); amSourceOf(was) != amSourceOf(now) {
+				return refuse("this changes where " + name + "'s alerts come from (" + amSourceOf(was) + " to " + amSourceOf(now) + "), which this version of Klyx cannot apply to a running connection")
+			}
+		}
 	}
 
 	// what it shows
@@ -849,4 +865,42 @@ func (s *ConfigService) GetClusterEntry(name string) ClusterEntryDTO {
 		out.Contexts = append(out.Contexts, ctxs...)
 	}
 	return out
+}
+
+// amSourceOf says where an Alertmanager block's alerts come from, in words
+// (Settings S3a §2.2).
+func amSourceOf(e *config.EndpointConfig) string {
+	switch {
+	case e == nil:
+		return "discovery in the cluster"
+	case e.Off:
+		return "off"
+	case e.Source != "":
+		return "the installation " + e.Source
+	case e.Endpoint != "":
+		return "its own endpoint"
+	case e.ServiceRef != nil:
+		return "its own Service"
+	}
+	return "discovery in the cluster"
+}
+
+// SourceHosts is the host check S2 left for S3a (S2 §4.4, S3a §3.6): the
+// installations naming a cluster as their host, both those in force and
+// those in fleet.yaml now, so a removal leaves neither a running
+// dependency nor one still to be applied without its host. A file that
+// does not load adds none: its own refusal says why.
+func SourceHosts(path string, active []config.SourceConfig) func(cluster string) []string {
+	return func(cluster string) []string {
+		hosts := config.HostedBy(active, cluster)
+		if eff, _, _, err := config.LoadRaw(path); err == nil {
+			for _, id := range config.HostedBy(eff.Sources, cluster) {
+				if !slices.Contains(hosts, id) {
+					hosts = append(hosts, id)
+				}
+			}
+		}
+		sort.Strings(hosts)
+		return hosts
+	}
 }

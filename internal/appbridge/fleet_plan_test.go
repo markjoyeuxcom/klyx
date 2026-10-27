@@ -45,6 +45,8 @@ type fleetRig struct {
 	changed   int
 	releases  int
 	onPrepare func(config.ClusterConfig)
+	// sources are the installations in force (Settings S3a)
+	sources []config.SourceConfig
 }
 
 // newFleetRig runs a fleet over fleetDoc; run applies usability as it
@@ -130,8 +132,18 @@ func newFleetRigWith(t *testing.T, run bool, failFirst string) *fleetRig {
 		},
 		EndEpochWork: func(c, why string) { r.mu.Lock(); r.ended = append(r.ended, c); r.mu.Unlock() },
 		Changed:      func() { r.mu.Lock(); r.changed++; r.mu.Unlock() },
+		Hosts:        func(c string) []string { return SourceHosts(path, r.activeSources())(c) },
+		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
+			return config.ConnectionAlertmanager(r.activeSources(), cc)
+		},
 	})
 	return r
+}
+
+func (r *fleetRig) activeSources() []config.SourceConfig {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sources
 }
 
 func (r *fleetRig) released() int {

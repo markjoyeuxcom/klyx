@@ -77,7 +77,24 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
         <EndpointFields kind="loki" title="Loki" />
         <SettingField id="clusters[].metrics.token" source="file" value="per cluster: External endpoints says where each token is" />
       </Group>
+      <Group title="Installations">
+        <p className="settings-group-note">
+          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. They are set in fleet.yaml in this version, and Klyx reads them when it starts. A later version reads alerts through them; until then a subscribed cluster&apos;s alerts are said to be unread.
+        </p>
+        <InstallationFields />
+      </Group>
     </>
+  );
+}
+
+// The fields of an installation (Settings S3a §2.1), described once.
+function InstallationFields() {
+  const ids = ENTRIES.filter((e) => e.id.startsWith("sources[].")).map((e) => e.id);
+  return (
+    <details className="settings-fields" data-fields="sources">
+      <summary>What each installation field does</summary>
+      {ids.map((id) => <SettingField key={id} id={id} source="file" value="per installation, in fleet.yaml" />)}
+    </details>
   );
 }
 

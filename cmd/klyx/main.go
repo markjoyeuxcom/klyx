@@ -112,6 +112,9 @@ func main() {
 		factory = fleet.ResolvingConnFactory(clock.Real{}, endpointCreds, evalRun.Resolve)
 		resolveREST = evalRun.Resolve
 	}
+	// Settings S3a §2.2: a cluster an installation serves is never built
+	// for discovery. The installations in force are those read at start.
+	factory = fleet.SubscribingFactory(cfg.Sources, factory)
 	reg := fleet.NewRegistry(cfg, factory)
 	// Settings slice F §1: each cluster's published admission state -
 	// protection, epoch, Active - seeded before any cluster connects, and
@@ -588,6 +591,12 @@ func main() {
 		CredLock:     appbridge.EndpointCredLock(endpointsSvc),
 		Delete:       appbridge.DeleteEndpointRecord(endpointsSvc),
 		EndEpochWork: appbridge.EndChatsOnPolicy(chatSvc),
+		// Settings S3a §3.6: the host check, and the Alertmanager a
+		// connection for an entry uses
+		Hosts: appbridge.SourceHosts(configPath(), cfg.Sources),
+		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
+			return config.ConnectionAlertmanager(cfg.Sources, cc)
+		},
 		Changed: func() {
 			if lineSvc != nil {
 				lineSvc.Rescan()

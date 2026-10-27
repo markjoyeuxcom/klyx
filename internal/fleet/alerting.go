@@ -57,6 +57,10 @@ var amLimits = endpointhttp.Limits{MaxBytes: amMaxBytes, TooLarge: errAMTooLarge
 // Observer's ErrSourceAbsent.
 var ErrNoAlertmanager = fmt.Errorf("%w: no Alertmanager configured or found", observe.ErrSourceAbsent)
 
+// ErrAlertsOff: the cluster's own block says off (Settings S3a §2.2): no
+// alerts are read, and it reads as absent, never as a failure.
+var ErrAlertsOff = fmt.Errorf("%w: alerts are off for this cluster in fleet.yaml", observe.ErrSourceAbsent)
+
 // ErrSourceChanged: the read's generation was keyed to another source; the
 // re-key that follows discards it (S8a §4).
 var ErrSourceChanged = errors.New("the alert source changed during the read; it is read again for the new source")
@@ -101,9 +105,13 @@ type amDiscovery struct {
 // discovery). Call it in the factory, before Start.
 func (c *ClusterConn) WithAlertmanager(cfg *config.EndpointConfig) *ClusterConn {
 	c.am.cfg = cloneEndpoint(cfg)
-	c.am.configured.Store(cfg != nil)
+	c.am.configured.Store(configuredAM(cfg))
 	return c
 }
+
+// configuredAM is the Alerting capability's configured half: a block that
+// is not off (Settings S3a §2.2).
+func configuredAM(cfg *config.EndpointConfig) bool { return cfg != nil && !cfg.Off }
 
 // alertsPresent is the Alerting capability: an Alertmanager configured, or
 // the last keyed read resolved one.
@@ -127,7 +135,7 @@ func (c *ClusterConn) SetAlertmanagerConfig(cfg *config.EndpointConfig) {
 	c.am.mu.Lock()
 	defer c.am.mu.Unlock()
 	c.am.cfg = cloneEndpoint(cfg)
-	c.am.configured.Store(cfg != nil)
+	c.am.configured.Store(configuredAM(cfg))
 	c.am.disc, c.am.found = nil, nil
 	if c.creds.Revisions != nil {
 		c.creds.Revisions.Bump(c.name, config.EndpointAlertmanager, false)
@@ -145,7 +153,7 @@ func (c *ClusterConn) ChangeAlertmanagerCredential(cfg *config.EndpointConfig, i
 	}
 	if !sameEndpoint(c.am.cfg, cfg) {
 		c.am.cfg = cloneEndpoint(cfg)
-		c.am.configured.Store(cfg != nil)
+		c.am.configured.Store(configuredAM(cfg))
 		c.am.disc, c.am.found = nil, nil
 	}
 	if c.creds.Revisions != nil {
@@ -188,6 +196,10 @@ func (c *ClusterConn) staticSourceLocked() (string, bool) {
 		return "", false
 	}
 	switch {
+	case cfg.Off:
+		return amOffIdentity, true
+	case cfg.Source != "":
+		return amSubscribedIdentity(cfg.Source), true
 	case cfg.Endpoint != "":
 		at, err := endpointAt(cfg.Endpoint)
 		if err != nil {
@@ -199,6 +211,12 @@ func (c *ClusterConn) staticSourceLocked() (string, bool) {
 	}
 	return "", false
 }
+
+// amOffIdentity and amSubscribedIdentity are the identities of a block that
+// says off, and of a subscription to an installation (Settings S3a §2.2).
+const amOffIdentity = "off"
+
+func amSubscribedIdentity(source string) string { return "source|" + source }
 
 // amIdentity is a source identity: the resolution, the effective location,
 // the tenant and the sorted match set (S8a §4).
@@ -264,6 +282,17 @@ func (c *ClusterConn) resolveAlertmanagerLocked(ctx context.Context) (amSource, 
 		tenant, match = cfg.Tenant, cfg.Match
 	}
 	rev := c.creds.Revisions.Revision(c.name, config.EndpointAlertmanager)
+	// Settings S3a §2.2: off reads nothing, and a subscription is read
+	// through its installation - never by discovery in this cluster. This
+	// version does not read through installations yet, so a subscribed
+	// cluster's alerts are unreadable, said as such
+	switch {
+	case cfg != nil && cfg.Off:
+		return amSource{identity: amOffIdentity}, ErrAlertsOff
+	case cfg != nil && cfg.Source != "":
+		return amSource{identity: amSubscribedIdentity(cfg.Source)},
+			fmt.Errorf("this cluster's alerts come from the installation %s, and this version of Klyx does not read through installations yet", cfg.Source)
+	}
 	if cfg != nil && cfg.Endpoint != "" {
 		at, err := endpointAt(cfg.Endpoint)
 		if err != nil {
@@ -561,7 +590,7 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.
 		return alertmanager.Read{Identity: src.identity}, ErrSourceChanged
 	}
 	// the read's own outcome for its key is the capability's evidence
-	c.am.resolved.Store(!errors.Is(err, ErrNoAlertmanager))
+	c.am.resolved.Store(!errors.Is(err, ErrNoAlertmanager) && !errors.Is(err, ErrAlertsOff))
 	c.am.mu.Unlock()
 	if err != nil {
 		return alertmanager.Read{Identity: src.identity}, err
@@ -693,6 +722,10 @@ func amIdentityOf(e *config.EndpointConfig) string {
 		at, _ = endpointAt(e.Endpoint)
 	case e.ServiceRef != nil:
 		at = serviceAt(serviceOf(e.ServiceRef))
+	case e.Off:
+		at = amOffIdentity
+	case e.Source != "":
+		at = amSubscribedIdentity(e.Source) + "|scope=" + e.Scope
 	}
 	return amIdentity("cfg", at, e.Tenant, e.Match)
 }

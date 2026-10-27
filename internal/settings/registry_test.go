@@ -84,7 +84,7 @@ func TestEveryEntryIsComplete(t *testing.T) {
 			t.Errorf("%s: source %q", id, e.Source)
 		case !known(e.TakesEffect, Now, OnSave, Reconnect, Restart, OnAction):
 			t.Errorf("%s: takes effect %q", id, e.TakesEffect)
-		case !known(e.Scope, "fleet", "cluster", "endpoint", "profile", "process", "webview"):
+		case !known(e.Scope, "fleet", "cluster", "endpoint", "installation", "subscription", "profile", "process", "webview"):
 			t.Errorf("%s: scope %q", id, e.Scope)
 		case strings.Contains(e.Effect+e.Label+e.Save+e.Validation, "—"):
 			t.Errorf("%s: an em dash", id)

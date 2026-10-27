@@ -46,6 +46,13 @@ type EndpointConfig struct {
 	// equality matchers, sent as the endpoint's filter and checked again on
 	// what it returns. None means everything there is this cluster's.
 	Match map[string]string `yaml:"match"`
+	// Source subscribes the cluster to an installation of sources, its
+	// tenant and match over the installation's defaults; Scope "tenant"
+	// takes everything in the tenant; Off reads no alerts (Settings S3a
+	// §2.1). Alertmanager only until S3b: on Loki each is a load error.
+	Source string `yaml:"source"`
+	Scope  string `yaml:"scope"`
+	Off    bool   `yaml:"off"`
 }
 
 // Located says the endpoint names where it is: a URL or a Service. An

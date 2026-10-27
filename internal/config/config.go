@@ -19,6 +19,8 @@ type Config struct {
 	// Notifications are the health notifications (The Line slice 10): only
 	// Settings > Notifications writes them.
 	Notifications *NotificationsConfig `yaml:"notifications"`
+	// Sources are the observability installations (Settings S3a §2.1).
+	Sources []SourceConfig `yaml:"sources"`
 
 	// unknownTop are the unknown top-level keys, for Warnings (strict.go)
 	unknownTop []string
@@ -262,6 +264,7 @@ func (c *Config) Warnings() []string {
 		}
 	}
 	w = append(w, sharedWithoutMatch(c.Clusters)...)
+	w = append(w, c.sourceWarnings()...)
 	_, notes := c.ApprovedGitRepos()
 	return append(w, notes...)
 }
@@ -450,10 +453,24 @@ func (c *Config) validate() error {
 			}
 		}
 		for _, e := range cl.Endpoints() {
+			if e.Kind != EndpointMetrics {
+				spec := e.Spec
+				if err := validateSubscription(cl.Name, e.Kind, &spec); err != nil {
+					return err
+				}
+			}
 			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
 				return fmt.Errorf("cluster %q: %w", cl.Name, err)
 			}
 		}
+	}
+	// Settings S3a §2: the installations, then every cluster's resolution
+	// and scope, so a conflict is a load error naming its place
+	if err := c.validateSources(); err != nil {
+		return err
+	}
+	if _, err := ResolveAlertmanager(c.Sources, c.Clusters); err != nil {
+		return err
 	}
 	return nil
 }

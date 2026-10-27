@@ -91,6 +91,7 @@ func Registry() []Entry {
 	var out []Entry
 	out = append(out, fleetEntries()...)
 	out = append(out, endpointEntries()...)
+	out = append(out, sourceEntries()...)
 	out = append(out, aiEntries()...)
 	out = append(out, gitEntries()...)
 	out = append(out, notificationEntries()...)
@@ -170,6 +171,24 @@ func endpointEntries() []Entry {
 		if k.id != "metrics" {
 			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.", "none", "A map of label equality matchers."))
 		}
+	}
+	// Settings S3a §2.1: a cluster's subscription to an installation. Loki's
+	// are built in S3b: until then each is a load error (S3a §12, R6).
+	sub := func(kind, id, label, effect, def, validation string) Entry {
+		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki"}[kind]
+		e := Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
+			TakesEffect: Restart, Save: "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts. Settings applies subscriptions in a later stage of this slice.", Disposition: FileOnly, Source: FromSchema}
+		if kind == "loki" {
+			e.Effect, e.Disposition, e.Save = "Not built yet: Loki subscriptions arrive in S3b, and until then this key is a load error.", Deferred, "Not yet: fleet.yaml refuses it."
+		}
+		return e
+	}
+	for _, kind := range []string{"alertmanager", "loki"} {
+		out = append(out,
+			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, else discovery", "An id in sources, of kind alertmanager."),
+			sub(kind, "scope", "scope", "tenant takes everything in the subscription's tenant as the cluster's own. Allowed only when no other subscription of the installation shares that tenant.", "the member label equal to the cluster's name, and the match", "tenant, with source; no match beside it."),
+			sub(kind, "off", "off", "Reads no alerts for the cluster, and says so, even when an installation serves it.", "false", "true or false; nothing else in the block."),
+		)
 	}
 	tok := Entry{ID: "clusters[].metrics.token", Section: Observability, Label: "Metrics token (legacy)", Effect: "A plain-text bearer token, still read. External endpoints moves it to the keychain and replaces this line with auth.", Scope: "endpoint",
 		Default: "none", Validation: "Any string.", TakesEffect: Restart, Save: "Move it to the keychain under External endpoints, or edit fleet.yaml.", Disposition: FileOnly, Source: FromSchema}
@@ -378,4 +397,34 @@ var boundLabels = map[string]string{
 	"alerts.perRead":              "Alerts per Alertmanager read",
 	"alerts.bytes":                "Alertmanager response size",
 	"alerts.appearances":          "Alert group appearances per read",
+}
+
+// sourceEntries are the installations (Settings S3a §2.1): what can be
+// reached, written once under sources. File-only until Settings applies
+// them in S3a's last stage.
+func sourceEntries() []Entry {
+	e := func(id, label, effect, def, validation string) Entry {
+		return Entry{ID: "sources[]." + id, Section: Observability, Label: label, Effect: effect, Scope: "installation", Default: def, Validation: validation,
+			TakesEffect: Restart, Save: "Edit fleet.yaml under sources: Klyx reads it when it starts. Settings applies installations in a later stage of this slice.", Disposition: FileOnly, Source: FromSchema}
+	}
+	return []Entry{
+		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.", "none: required", "A DNS label, unique among sources."),
+		e("kind", "Installation kind", "What the installation serves.", "none: required", "alertmanager; loki and metrics are not built yet."),
+		e("name", "Installation name", "A display name, for Settings and the scope sentence.", "the id", "Any string without control characters."),
+		e("host", "Host cluster", "The fleet cluster whose API server reaches a serviceRef or discovered installation. It is transport only: it grants no reads of the host's objects, and a host cannot be removed while an installation names it.", "none: required with serviceRef or discover", "A cluster of the fleet; not with endpoint."),
+		e("serviceRef.namespace", "Installation Service namespace", "The namespace of the Service, in the host, that the installation is reached through.", "none", "A namespace name."),
+		e("serviceRef.name", "Installation Service name", "The Service, in the host, that the installation is reached through.", "none", "A Service name."),
+		e("serviceRef.port", "Installation Service port", "The Service port, by name or number.", "the Service's first port", "A port name or number."),
+		e("serviceRef.scheme", "Installation Service scheme", "Whether the host's proxy speaks http or https to the Service.", "http", "http or https."),
+		e("serviceRef.path", "Installation Service path prefix", "The prefix the Service serves its API under (Mimir's Alertmanager under /alertmanager).", "none", "A path; empty for none."),
+		e("discover", "Discover in the host", "Finds the installation in the host with Klyx's discovery and its proof of one installation.", "false", "true or false; exactly one of serviceRef, discover and endpoint."),
+		e("endpoint", "Installation URL", "The URL the installation is read from directly, with no host.", "none", "An http or https URL with no credential in it."),
+		e("tlsSkipVerify", "Installation certificate check off", "Accept any certificate the endpoint presents: encrypted, but the server is not authenticated.", "false", "true or false; endpoint only."),
+		e("auth.type", "Installation authentication", "How Klyx authenticates to the endpoint. The secret is in the keychain as source/<id>, never in the file.", "none", "bearer or basic; endpoint only."),
+		e("auth.username", "Installation username", "The basic-authentication username; the password is in the keychain.", "none", "Any string; basic only."),
+		e("tenant", "Installation tenant", "The default tenant of its subscriptions, sent as X-Scope-OrgID.", "none", "Any string without control characters."),
+		e("memberLabel", "Member label", "The default scope of every subscription: this label equal to the member cluster's name. Subscriptions sharing a tenant need it, with distinct values.", "none: then each subscription states a match or scope: tenant", "A label name."),
+		e("serves[].group", "Serves a group", "Every cluster of this group without its own alertmanager block subscribes to the installation.", "none", "A group name; one key per entry."),
+		e("serves[].cluster", "Serves a cluster", "This cluster, without its own alertmanager block, subscribes to the installation, before any group installation.", "none", "A cluster name; one key per entry."),
+	}
 }
