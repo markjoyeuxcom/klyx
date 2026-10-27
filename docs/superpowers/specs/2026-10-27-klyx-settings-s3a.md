@@ -721,3 +721,15 @@ Codex found the two candidates, the strict disk validation, the shared compare-a
 **Tests:** Codex's probes, as regression tests: a stale Store and a stale Remove, moved at the lock, changing nothing; a late file edit refusing the adoption; each changed input said (endpoint path, Service scheme and path, username, name, member label); a running Explain named and refused at its send; a conversation reading during an Apply refused and not recorded, and going on; reordered installations no difference; a member re-keyed under an unchanged block, and an unchanged publication re-keying nothing; a Test fenced by its revision. Codex's probe for a conversation started during the Apply ran the conversation inside the plan's work callback, which the Apply now holds; the regression runs it alongside, as a conversation runs. **Mutation pass:** 14 mutants over the fixes: 12 caught at first; two did not build and were rewritten, and are caught.
 
 **Smoke:** 216/216 four ways at eac06c0, the smoke fleet.yaml as it began after every walk.
+
+## 28. S3a-4a revision 2: Codex's re-review (2026-10-27)
+
+Codex closed R1, R2, R3, R5, R6 and R7, and accepted the concurrent regression that replaced its synchronous R6 probe. One P2 remained in R4.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** a plan decided a field had changed by comparing its words, and an endpoint's words reduce any query to "(with a query)": an edit of the query alone was refused as changing nothing, and the same edit beside a new name applied with only the name in the confirmation | A plan decides each changed field from its inputs as written, never from their words, and names what the words cannot show, its contents still withheld: an endpoint's changed query ("its query changed, and is not shown"), its fragment (which the words never show) or both, and that only the writing changed (an origin's case or default port: "written differently, to the same origin and path"; a Service scheme written out as its default: "written differently, with the same effect"). A changed query is named beside a changed path too; a query added or removed is already in the words |
+
+**Tests:** Codex's two cases, a query-only edit planned with an endpoint line and a query edited beside the name naming both, and Apply publishing each; the query beside the path, the fragment alone, the query and fragment together, only the writing, a query added, and a Service scheme written out; no withheld part in any line. **Mutation pass:** 12 mutants over the fix, all caught.
+
+**Smoke:** the native walk at 0056fe7a, 216/216 four ways (night and day, 1440 and 1024) on the kind lab, the smoke fleet as it began after each.
