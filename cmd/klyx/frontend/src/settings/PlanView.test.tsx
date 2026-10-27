@@ -31,4 +31,15 @@ describe("PlanView", () => {
     expect(screen.getByText("Continues")).toBeTruthy();
     expect(screen.getByRole("region").textContent).toContain("its confirmed request goes ahead");
   });
+
+  // Settings S2 §4.2: a fleet plan says what its Apply does
+  it("says what a fleet plan's Apply does, by kind and class", () => {
+    const fleet = (over: Partial<Plan>) => plan({ section: "fleet", activates: true, ...over });
+    const { rerender } = render(<PlanView plan={fleet({ kind: "file", class: "removal" })} busy={false} onApply={vi.fn()} onCancel={vi.fn()} interlockTitle="Remove dev?" />);
+    expect(screen.getByRole("region").textContent).toContain("fleet.yaml no longer lists this cluster: applying disconnects it and writes nothing.");
+    rerender(<PlanView plan={fleet({ kind: "revert", class: "reconnect", writes: true })} busy={false} onApply={vi.fn()} onCancel={vi.fn()} interlockTitle="Revert dev?" />);
+    expect(screen.getByRole("region").textContent).toContain("writes the terms that last connected back to fleet.yaml");
+    rerender(<PlanView plan={fleet({ kind: "remove", class: "removal" })} busy={false} onApply={vi.fn()} onCancel={vi.fn()} interlockTitle="Remove dev?" />);
+    expect(screen.getByRole("region").textContent).toContain("fleet.yaml has no entry for it to remove");
+  });
 });

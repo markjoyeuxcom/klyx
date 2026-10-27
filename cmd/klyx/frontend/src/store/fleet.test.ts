@@ -4,6 +4,19 @@ import { useFleet, crdCountKey } from "./fleet";
 beforeEach(() => useFleet.setState({ clusters: [], route: { name: "fleet" } }));
 
 describe("fleet store routing", () => {
+  // Settings S2 §5: a removed cluster's route goes back to the fleet, with a
+  // note; a route restored at start, before the fleet is read, is left alone
+  it("sends a removed cluster's route back to the fleet, with a note", () => {
+    const c = (name: string) => ({ name }) as never;
+    useFleet.getState().setClusters([c("dev"), c("prd")]);
+    useFleet.getState().openCluster("dev");
+    useFleet.getState().setClusters([c("prd")]);
+    expect(useFleet.getState().route).toEqual({ name: "fleet" });
+    expect(useFleet.getState().actionLog[0]?.message).toContain("dev was removed from the fleet");
+    useFleet.setState({ clusters: [], route: { name: "cluster", cluster: "later", section: "overview" } });
+    useFleet.getState().setClusters([c("prd")]);
+    expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "later", section: "overview" });
+  });
   it("openCluster enters cluster scope on overview", () => {
     useFleet.getState().openCluster("homelab-nelli");
     expect(useFleet.getState().route).toEqual({ name: "cluster", cluster: "homelab-nelli", section: "overview" });

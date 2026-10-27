@@ -8,6 +8,8 @@ import { setThemeChoice } from "../theme/ThemeProvider";
 import { describeResource } from "../bridge/exec";
 import { describeArg } from "../chrome/describe/targets";
 import { parseDescribe, printDescribe } from "../chrome/describe/parse";
+import { getFleetConfig } from "../bridge/configsvc";
+import { useLine } from "../store/line";
 
 // The native WKWebView smoke's runner (The Line slice 12b, note §3): loaded
 // only by the smoke build's handshake (boot.ts). It walks every registry
@@ -1293,6 +1295,77 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     if (drawer !== narrow) throw new Error(`the inspector is ${drawer ? "a drawer" : "split"} at ${settings.width}px`);
     if (drawer && !$(".lens-drawer")?.contains(document.activeElement)) throw new Error("focus did not move into the drawer");
     return { drawer };
+  });
+
+  // ---- Settings S2c (spec §6): the lab cluster's fields edited through
+  // their plans, each change undone, so the smoke fleet ends as it began ----
+  const fleetRow = (name: string) => [...document.querySelectorAll<HTMLElement>("[aria-label='Clusters running'] [role='row']")]
+    .find((r) => r.querySelector("[data-setting='clusters[].name']")?.textContent === name) ?? null;
+  const editAndApply = async (what: string, change: (ed: HTMLElement) => void, opts: { typed?: string; done?: RegExp } = {}) => {
+    useFleet.getState().openSettings("fleet");
+    const row = await within(8000, `the ${cluster} row`, () => fleetRow(cluster));
+    (await within(4000, "Edit", () => row.querySelector<HTMLButtonElement>(`button[aria-label='edit ${cluster}']:not([disabled])`))).click();
+    const ed = await within(8000, "the editor", () => $<HTMLElement>("[data-testid='cluster-editor']"));
+    change(ed);
+    (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='cluster-editor'] button", /^Review and apply$/))).click();
+    const plan = await within(8000, `the plan to ${what}`, () => $("[data-testid='settings-plan']"));
+    const refused = plan.querySelector("[data-testid='plan-refused']");
+    if (refused) throw new Error(`the plan to ${what} was refused: ${refused.textContent}`);
+    const changes = [...plan.querySelectorAll("[data-testid='plan-changes'] li")].map((li) => li.textContent ?? "");
+    const ends = plan.querySelectorAll("[data-testid='plan-ends'] li").length;
+    const interlock = !!plan.querySelector("[data-testid='plan-interlock']");
+    (await within(4000, "Apply", () => byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
+    if (opts.typed) {
+      typeInto(await within(4000, "the interlock", () => $<HTMLInputElement>(`input[placeholder='${opts.typed}']`)), opts.typed);
+      (await within(4000, "Confirm and apply", () => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Confirm and apply" && !b.disabled) ?? null)).click();
+    }
+    const banner = await within(20_000, `${what}, applied`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='settings-banner']", opts.done ?? /^Applied/));
+    return { changes, ends, interlock, banner: banner.textContent?.trim() };
+  };
+  const connected = async (what: string) => {
+    for (const end = Date.now() + 60_000; Date.now() < end; await settle(500)) {
+      const row = (await getFleetConfig())?.clusters.find((c) => c.name === cluster);
+      if (row && !row.held) return;
+    }
+    throw new Error(`${cluster} never connected after ${what}`);
+  };
+  await step(steps, "Settings > Fleet: a placement edit relabels the line, then is undone", async () => {
+    const track = () => useLine.getState().dto?.stations.find((st) => st.cluster === cluster)?.track ?? "";
+    const before = track();
+    const region = (ed: HTMLElement) => ed.querySelector<HTMLInputElement>(`[data-setting='clusters[].tags'][data-instance='${cluster}'] input`)!;
+    const moved = await editAndApply("move its region", (ed) => typeInto(region(ed), "northeurope"));
+    if (moved.interlock || moved.ends > 0) throw new Error(`a placement edit took an interlock or ended work: ${JSON.stringify(moved)}`);
+    await within(15_000, "the line relabelled", () => track() !== before && /north/i.test(track()));
+    await editAndApply("restore its region", (ed) => typeInto(region(ed), "westeurope"));
+    await within(15_000, "the line restored", () => track() === before);
+    return { before, moved: moved.changes };
+  });
+  await step(steps, "Settings > Fleet: protection tightened, then loosened through its interlock", async () => {
+    const box = (ed: HTMLElement) => ed.querySelector<HTMLInputElement>("[data-setting='clusters[].protected'] input[type='checkbox']")!;
+    const cell = () => fleetRow(cluster)?.querySelector("[data-setting='clusters[].protected']")?.textContent;
+    const on = await editAndApply("protect it", (ed) => box(ed).click());
+    if (on.interlock) throw new Error("tightening took an interlock");
+    await within(8000, "shown protected", () => cell() === "yes");
+    const off = await editAndApply("unprotect it", (ed) => box(ed).click(), { typed: cluster });
+    if (!off.interlock) throw new Error("loosening took no interlock");
+    await within(8000, "shown unprotected", () => cell() === "no");
+    return { on: on.changes, off: off.changes };
+  });
+  await step(steps, "Settings > Fleet: a reconnect through an explicit kubeconfig, held until it connects, then undone", async () => {
+    const path = (await getFleetConfig())?.kubeconfigPath;
+    if (!path) throw new Error("no kubeconfig path to name");
+    const kc = (ed: HTMLElement) => ed.querySelector<HTMLInputElement>("[data-setting='clusters[].kubeconfig'] input")!;
+    const r = await editAndApply("reconnect it", (ed) => typeInto(kc(ed), path), { done: /^Saved: / });
+    if (!r.changes.some((c) => c.startsWith("Kubeconfig:"))) throw new Error(`the plan did not change the kubeconfig: ${r.changes.join("; ")}`);
+    await connected("the reconnect");
+    // its views follow the new connection
+    await open("flux");
+    await within(30_000, "the Flux lens on the new connection", () => byText<HTMLElement>(".lens-row", /a1-web/));
+    await editAndApply("restore its kubeconfig", (ed) => typeInto(kc(ed), ""), { done: /^Saved: / });
+    await connected("the restore");
+    await open("flux");
+    await within(30_000, "the Flux lens restored", () => byText<HTMLElement>(".lens-row", /a1-web/));
+    return { changes: r.changes, ends: r.ends };
   });
 
   // ---- Settings slice F §7: the AI section's Review and apply, on the

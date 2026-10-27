@@ -708,3 +708,81 @@ func TestARemovalRefusedAtItsDecisionDeletesNothing(t *testing.T) {
 		t.Fatal("removed")
 	}
 }
+
+// Settings S2 §5: the page's rows say a held cluster's state and the
+// plans it offers, and the editor opens on the raw entry.
+func TestTheFleetRowsSayAHeldClustersPlans(t *testing.T) {
+	r := newFleetRig(t, false)
+	connectNow(t, r, "dev") // its startup terms connected: Revert has them
+	row := func(name string) FleetClusterDTO {
+		for _, c := range r.cs.GetFleetConfig().Clusters {
+			if c.Name == name {
+				return c
+			}
+		}
+		t.Fatalf("no row for %s", name)
+		return FleetClusterDTO{}
+	}
+	if d := row("dev"); d.Held != "" || d.CanRetry || d.CanRevert {
+		t.Fatalf("an active cluster offers plans: %+v", d)
+	}
+	if d := row("prd"); d.ProtectedBy != "the name prd" {
+		t.Fatalf("prd's protection: %q", d.ProtectedBy)
+	}
+	d := devDraft()
+	d.Context = "dev-2"
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if got := row("dev"); !strings.Contains(got.Held, "dev-2") || !got.CanRetry || !got.CanRevert {
+		t.Fatalf("held: %+v", got)
+	}
+}
+
+func TestTheEditorOpensOnTheRawEntry(t *testing.T) {
+	r := newFleetRig(t, true)
+	r.cs.kubeContexts = func(string) ([]string, error) { return []string{"dev-ctx", "dev-2"}, nil }
+	e := r.cs.GetClusterEntry("prd")
+	if !e.InFile || e.Draft.Context != "prd-ctx" || e.Draft.Group != "platform" || e.Draft.Tags["region"] != "westeurope" || len(e.Contexts) != 2 {
+		t.Fatalf("entry: %+v", e)
+	}
+	if e.ProtectedBy != "the name prd" || !strings.Contains(e.Locked, "the name prd") {
+		t.Fatalf("protection: %q, locked %q", e.ProtectedBy, e.Locked)
+	}
+	if e := r.cs.GetClusterEntry("dev"); e.Locked != "" || e.Draft.Tags == nil {
+		t.Fatalf("dev: %+v", e)
+	}
+	if e := r.cs.GetClusterEntry("nowhere"); e.Error == "" {
+		t.Fatal("a cluster not running opened")
+	}
+	// protection set in the file is the file's to loosen: never locked
+	d := devDraft()
+	d.Protected = true
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	if e := r.cs.GetClusterEntry("dev"); e.ProtectedBy == "" || e.Locked != "" || !e.Draft.Protected {
+		t.Fatalf("dev, protected in the file: %+v", e)
+	}
+	// the draft is the file's raw entry: a context left out stays out,
+	// never the running or the defaulted one
+	r.handEdit("    context: dev-ctx\n", "")
+	if e := r.cs.GetClusterEntry("dev"); e.Draft.Context != "" || !e.InFile {
+		t.Fatalf("dev without a context in the file: %+v", e)
+	}
+}
+
+// A held reconnect offers Revert only when other terms connected before.
+func TestAHeldReconnectWithNoEarlierConnectionOffersNoRevert(t *testing.T) {
+	r := newFleetRig(t, false)
+	d := devDraft()
+	d.Context = "dev-2"
+	if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+		t.Fatal(res.Error)
+	}
+	for _, c := range r.cs.GetFleetConfig().Clusters {
+		if c.Name == "dev" && (c.Held == "" || !c.CanRetry || c.CanRevert) {
+			t.Fatalf("dev: %+v", c)
+		}
+	}
+}

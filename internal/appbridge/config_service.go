@@ -28,9 +28,18 @@ type FleetClusterDTO struct {
 	ProtectedInferred bool `json:"protectedInferred"`
 	HasMetrics        bool `json:"hasMetrics"`
 	// Drift says how fleet.yaml now differs from this running entry, which
-	// a cluster's settings take only at a restart (Settings review slice 0);
-	// "" when they agree.
+	// "Use the file's values" plans (Settings review slice 0, S2 §4.6); ""
+	// when they agree.
 	Drift string `json:"drift,omitempty"`
+	// ProtectedBy names the input that decides protection (S2 §4.3), ""
+	// when it is off.
+	ProtectedBy string `json:"protectedBy,omitempty"`
+	// Held: saved, not connected yet, or a connection that failed to build,
+	// with why (S2 §4.5); "" while active. CanRevert and CanRetry say which
+	// plans it offers.
+	Held      string `json:"held,omitempty"`
+	CanRevert bool   `json:"canRevert,omitempty"`
+	CanRetry  bool   `json:"canRetry,omitempty"`
 }
 
 // KubeContextDTO is one kubeconfig context with its fleet membership.
@@ -310,7 +319,9 @@ func (s *ConfigService) fleetConfig(withFile bool) FleetConfigDTO {
 			ProtectedInferred: s.IsProtected(c.Name) && !c.Protected,
 			HasMetrics:        c.Metrics != nil,
 			Drift:             clusterDrift(c, disk),
+			ProtectedBy:       c.ProtectedBy(),
 		})
+		s.heldOf(&dto.Clusters[len(dto.Clusters)-1])
 	}
 	sort.Slice(dto.Clusters, func(a, b int) bool { return dto.Clusters[a].Name < dto.Clusters[b].Name })
 

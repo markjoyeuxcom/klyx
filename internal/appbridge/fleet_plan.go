@@ -734,3 +734,75 @@ func protectionText(c config.ClusterConfig) string {
 	}
 	return "on, inferred from " + by
 }
+
+// heldOf fills a row's held state from the published policy (S2 §4.5):
+// a held cluster offers Retry, and Revert when it waits on a reconnect's
+// attempt and other terms connected before.
+func (s *ConfigService) heldOf(d *FleetClusterDTO) {
+	if s.policy == nil {
+		return
+	}
+	snap, ok := s.policy.Snapshot(d.Name)
+	if !ok || snap.State != policy.Held {
+		return
+	}
+	d.Held, d.CanRetry = snap.Reason, true
+	if s.fp != nil && snap.Attempt != 0 {
+		_, d.CanRevert = s.fp.lastConnected(d.Name)
+	}
+}
+
+// ClusterEntryDTO is one cluster's entry as the editor opens it (S2 §5):
+// its S2 fields as fleet.yaml says them, what decides its protection, and
+// the contexts its kubeconfig offers.
+type ClusterEntryDTO struct {
+	Name   string          `json:"name"`
+	Draft  ClusterDraftDTO `json:"draft"`
+	InFile bool            `json:"inFile"`
+	// ProtectedBy names what decides protection now, "" when it is off;
+	// Locked, why it cannot be loosened here (S2 §4.3)
+	ProtectedBy   string   `json:"protectedBy,omitempty"`
+	Locked        string   `json:"locked,omitempty"`
+	Contexts      []string `json:"contexts"`
+	ContextsError string   `json:"contextsError,omitempty"`
+	Error         string   `json:"error,omitempty"`
+}
+
+// GetClusterEntry is the editor's starting point for a running cluster: the
+// raw entry, read from fleet.yaml now, and its kubeconfig's contexts.
+func (s *ConfigService) GetClusterEntry(name string) ClusterEntryDTO {
+	out := ClusterEntryDTO{Name: name, Contexts: []string{}}
+	run, running := s.runningEntry(name)
+	if !running {
+		out.Error = name + " is not running"
+		return out
+	}
+	out.ProtectedBy = run.ProtectedBy()
+	if (config.ClusterConfig{Name: name}).ProtectedBy() != "" {
+		out.Locked = "protection is inferred from the name " + name + ", which is read-only here: renaming is a later slice"
+	}
+	_, raw, _, err := config.LoadRaw(s.path)
+	if err != nil {
+		out.Error = "fleet.yaml does not load: " + config.DisplayError(err)
+		return out
+	}
+	entry, inFile := raw[name]
+	out.InFile = inFile
+	if inFile {
+		out.Draft = ClusterDraftDTO{Context: entry.Context, Kubeconfig: entry.Kubeconfig, Group: entry.Group, Environment: entry.Environment, Tags: copyTags(entry.Tags), Protected: entry.Protected}
+		if out.Draft.Tags == nil {
+			out.Draft.Tags = map[string]string{}
+		}
+	}
+	path := run.Kubeconfig
+	if path == "" {
+		path = s.kubeconfigPath()
+	}
+	ctxs, err := s.kubeContexts(path)
+	if err != nil {
+		out.ContextsError = err.Error()
+	} else {
+		out.Contexts = append(out.Contexts, ctxs...)
+	}
+	return out
+}

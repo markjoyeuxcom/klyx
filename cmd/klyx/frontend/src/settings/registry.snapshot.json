@@ -18,9 +18,9 @@
       "scope": "cluster",
       "default": "none: required",
       "validation": "A context in the cluster's kubeconfig.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "at reconnect",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -31,9 +31,9 @@
       "scope": "cluster",
       "default": "tags.env, else none",
       "validation": "Any string.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -44,9 +44,9 @@
       "scope": "cluster",
       "default": "none",
       "validation": "Any string; empty is ungrouped.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -57,9 +57,9 @@
       "scope": "cluster",
       "default": "KUBECONFIG, else ~/.kube/config",
       "validation": "A file, or an OS path list; empty uses the default.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "at reconnect",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -71,7 +71,7 @@
       "default": "none: required",
       "validation": "Unique in the fleet; not empty.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
+      "save": "Edit fleet.yaml: renaming a cluster is a later slice.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -83,9 +83,9 @@
       "scope": "cluster",
       "default": "false (inferred protection still applies)",
       "validation": "true or false.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -96,9 +96,9 @@
       "scope": "cluster",
       "default": "none",
       "validation": "A map of strings.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {

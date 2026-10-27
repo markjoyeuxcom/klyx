@@ -75,12 +75,15 @@ const (
 )
 
 const (
-	clusterSave = "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs."
-	aiSave      = "Save rewrites fleet.yaml's ai block (comments inside it are not kept) and rebuilds the AI in use."
-	gitSave     = "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
-	notifySave  = "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
-	envSave     = "Set it in the environment Klyx is launched from; a GUI launch may not see shell exports."
-	harnessNote = "A build harness's variable, not a product setting: only a smoke or eval build reads it."
+	clusterSave = "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\"."
+	clusterName = "Edit fleet.yaml: renaming a cluster is a later slice."
+	// an endpoint's fields stay file-only until S3
+	endpointSave = "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs."
+	aiSave       = "Save rewrites fleet.yaml's ai block (comments inside it are not kept) and rebuilds the AI in use."
+	gitSave      = "The action rewrites fleet.yaml's git block (comments inside it are not kept) and takes effect at once. A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
+	notifySave   = "Each change rewrites fleet.yaml's notifications block at once (comments inside it are not kept). A hand edit of the block takes effect through \"Use the file's values\" or at a restart."
+	envSave      = "Set it in the environment Klyx is launched from; a GUI launch may not see shell exports."
+	harnessNote  = "A build harness's variable, not a product setting: only a smoke or eval build reads it."
 )
 
 // Registry is every entry, sorted by section then id.
@@ -109,9 +112,18 @@ func Registry() []Entry {
 }
 
 func fleetEntries() []Entry {
+	// Settings S2: a cluster's fields are edited in Fleet - a context or
+	// kubeconfig reconnects - except its name, which stays file-only
 	c := func(id, label, effect, def, validation string) Entry {
-		return Entry{ID: "clusters[]." + id, Section: Fleet, Label: label, Effect: effect, Scope: "cluster", Default: def, Validation: validation,
-			TakesEffect: Restart, Save: clusterSave, Disposition: FileOnly, Source: FromSchema}
+		e := Entry{ID: "clusters[]." + id, Section: Fleet, Label: label, Effect: effect, Scope: "cluster", Default: def, Validation: validation,
+			TakesEffect: OnSave, Save: clusterSave, Disposition: Editable, Source: FromSchema}
+		switch id {
+		case "name":
+			e.TakesEffect, e.Save, e.Disposition = Restart, clusterName, FileOnly
+		case "context", "kubeconfig":
+			e.TakesEffect = Reconnect
+		}
+		return e
 	}
 	line := func(id, label, effect, validation string) Entry {
 		return Entry{ID: "line.source." + id, Section: Fleet, Label: label, Effect: effect, Scope: "fleet", Default: "unset: the Git key most stations share",
@@ -141,7 +153,7 @@ func endpointEntries() []Entry {
 	for _, k := range kinds {
 		e := func(id, label, effect, def, validation string) Entry {
 			return Entry{ID: "clusters[]." + k.id + "." + id, Section: Observability, Label: k.label + " " + label, Effect: effect, Scope: "endpoint", Default: def, Validation: validation,
-				TakesEffect: Restart, Test: "Test under External endpoints reads this endpoint and says what answered.", Save: clusterSave, Disposition: FileOnly, Source: FromSchema}
+				TakesEffect: Restart, Test: "Test under External endpoints reads this endpoint and says what answered.", Save: endpointSave, Disposition: FileOnly, Source: FromSchema}
 		}
 		out = append(out,
 			e("endpoint", "URL", "The URL Klyx reads "+k.label+" from. "+k.found, "none", "An http or https URL with no credential in it."),

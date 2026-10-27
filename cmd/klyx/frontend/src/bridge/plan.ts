@@ -6,10 +6,16 @@ export type PlanChange = { id: string; label: string; from: string; to: string }
 // One piece of running work a plan ends or continues, by identity.
 export type PlanWork = { id: string; kind: string; cluster: string; started?: string; what: string };
 export type Interlock = { phrase: string; why: string };
+// A removal's keychain record, its own choice (Settings S2 §4.4): by kind,
+// never its secret.
+export type PlanRecord = { kind: string; revision: string; chosen: boolean };
 
 export type Plan = {
   section: string;
-  kind: "save" | "file" | "revert";
+  kind: "save" | "file" | "revert" | "connect" | "remove" | "retry";
+  // a fleet plan's cluster, and what its Apply does (S2 §4.2)
+  cluster?: string;
+  class?: "placement" | "protection" | "reconnect" | "removal" | "addition";
   digest: string;
   fileVersion: string;
   runtime: Record<string, string>;
@@ -22,6 +28,7 @@ export type Plan = {
   // as in use differs (a saved block whose activation failed)
   activates: boolean;
   refused?: string;
+  records?: PlanRecord[];
 };
 
 // Applied; refused with the plan it was replaced by; a quiet Apply's plan,
