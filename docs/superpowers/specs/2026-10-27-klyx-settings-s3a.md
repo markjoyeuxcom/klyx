@@ -733,3 +733,15 @@ Codex closed R1, R2, R3, R5, R6 and R7, and accepted the concurrent regression t
 **Tests:** Codex's two cases, a query-only edit planned with an endpoint line and a query edited beside the name naming both, and Apply publishing each; the query beside the path, the fragment alone, the query and fragment together, only the writing, a query added, and a Service scheme written out; no withheld part in any line. **Mutation pass:** 12 mutants over the fix, all caught.
 
 **Smoke:** the native walk at 0056fe7a, 216/216 four ways (night and day, 1440 and 1024) on the kind lab, the smoke fleet as it began after each.
+
+## 29. S3a-4a revision 3: Codex's second re-review (2026-10-27)
+
+Codex closed RR1, and R1 to R7 stayed closed. One P2 remained, of RR1's kind in another field.
+
+| Finding | Fix |
+|---|---|
+| **R2-1:** what an installation serves was still compared through its words, which joined selectors with commas and prefixed a group with "group ": a group "blue, group green" read the same as the groups blue and green, so a selector-only edit was refused as changing nothing, and beside a name it applied with only the name in the confirmation. The fallback could also call colliding words "written differently, with the same effect" | What an installation serves is compared as typed selectors (a group or a cluster, and its value), in any order: order alone still changes nothing. A value that could read as the words around it is quoted, in serves and in a Service's namespace, name, port and path (`group "blue, group green"`, `http "a/b"/c:web`), so two different inputs never read the same. "Written differently, with the same effect" is decided from the inputs, for a Service's scheme written out as its default only; any other field whose words could not show its change says "changed in a way these words cannot show", never that nothing changed |
+
+**Tests:** Codex's two cases, the selectors alone and beside the name, each applying with its serves line; order alone refused as changing nothing, and order beside the name naming only the name; a group replaced by a cluster of the same name; a Service whose parts read alike; and the fallback decided from the inputs. **Mutation pass:** 12 mutants over the fix: 9 caught at first; two survived until the order-beside-the-name and group-for-a-cluster cases were added, one of them rewritten to drop both selector types (it had dropped one), and are caught; one is equivalent: with the quoting, the words of what an installation serves are themselves unambiguous and sorted, so comparing them is the same comparison.
+
+**Smoke:** the native walk at db970710, 216/216 four ways on the kind lab, the smoke fleet as it began after each.
