@@ -566,3 +566,43 @@ Codex closed RR1 (merged keys) and RR3 (the registry's text for `off`), and RR2 
 Codex accepted S3a-1 at revision 3 (c5b63e5), with no remaining findings. That came after the review of 4647275 (two P2, two P3) and three re-reviews (§16-§18).
 
 Its last re-review reran every probe from the review and the re-reviews under the race detector, including the fleet discovery probe, the three long-id refusals and two distinct ids of one length. It accepts the model and its stage boundary: reading, the buckets, the lineage fences and the Settings transaction for sources are S3a-2 to S3a-4.
+
+## 20. S3a-2 as built: reading (2026-10-27)
+
+S3a-2 is §3: reading an installation in buckets, the split, the lineage on every read, the scope sentence, and S2's commits re-resolving subscriptions. It was built on S3a-1's revision 1 and rebased onto the accepted revision 3.
+
+| Contract | Code |
+|---|---|
+| The active sources (§3.4, §3.6) | `fleet.AlertSources`: the installations in force and every cluster's subscription, resolved against the running fleet. Revisions come from one process-wide sequence and are never reused: an unchanged installation or subscription keeps its revision, a changed one moves, and an id removed and re-created gets a new one. The set's own revision moves with any change |
+| The host's access generation (§3.4) | `ClusterConn.publishedUsability`: the usability incarnation as published (one still pending publication is not in force) and whether it is usable now, with the installation's observed 401s and 403s (`AlertSources.Denied`). A direct installation's generation is its denials alone |
+| The snapshot key (§3.4) | `source|<id>|r<installation>|s<subscription>|a<access>|tenant=…|match=…`. A host's reconnect, its recovery in place, an observed denial, or a change to the installation or the subscription re-keys the member at its next read (`ErrSourceChanged`); a credential change re-keys nothing |
+| Buckets (§3.2) | `fleet.alertBuckets`, one per registry: a bucket per installation, revision, access generation and tenant; one owner reading on its cadence (30 seconds), early when a member asks for a read the latest outcome did not cover; joins that come before the read starts share it. One fleet-wide slot per read; buckets add none. A per-installation gate: a re-keyed bucket's read never overlaps the old worker. The last member to leave cancels the bucket, whose outcome is never served |
+| The member's read (§3.2) | `ClusterConn.readSubscribed`: served the latest outcome at once when its cohort covered the member under its subscription revision, else it waits within its own timer for the read its asking started. A member joining while a read is in flight is not in that read's cohort. A served share keeps the read's acquisition time (`ReadAlertsAt`, observe's `ReadKeyedAt` and `SnapshotRead.ReadAt`), and a share already overdue lands stale |
+| The transports (§3.1) | Hosted: a lease on the host through S2's lifecycle (`AlertHostLeaser`, work kind `alerts`), its service proxy (`amProxyREST`), the serviceRef, or the host's discovery cached five minutes per host connection and installation revision. Direct: `source/<id>` from the keychain (`endpointcred.SourceAccount`), bound to its origin, with its own credential revision |
+| The read (§3.2) | Alerts and groups with one filter: none for `scope: tenant`; the member label's cohort values as one anchored regular expression; a lone subscription's full match. Checked before and after each request: the installation in force at the bucket's revision, the host connected and usable, the access generation unchanged. An observed 401 or 403 moves the access generation |
+| The split (§3.2) | Reduced and capped once; each row to the cohort member whose full scope it matches; a row matching none counted on the installation (`Registry.InstallationRead`), never added to a member. A cut read qualifies every member |
+| Coverage (§3.3) | The host not connected: "lgtm-we's host prd is not connected"; discovery finding none: "lgtm-we found no Alertmanager in prd", unreadable, never absent |
+| Lineage (§3.4) | `alertmanager.Read.Lineage`: mode, identity, installation and its revision, subscription revision, host, host connection, access generation, tenant, credential revision. Legacy reads carry their mode, identity, tenant and credential revision |
+| The scope sentence (§3.5) | Subscribed: "from lgtm-we, hosted by prd, tenant ops, filtered by cluster=dev"; direct "from shared at am.example.com, …"; legacy "from the Service ns/name:port on this cluster, …", or "unfiltered: everything there is read as this cluster's". In the Alerts lens header and the inspector's alerts block |
+| S2 (§3.6) | S3a-1's refusal is replaced: a plan checks its runtime candidate (the running fleet with its change) resolves against the active sources, binds their revision, and lists a moved source ("Alerts: discovery in the cluster → the installation lgtm-we"), comparing sources by the installation id itself and naming a long id by its length alone, as S3a-1's refusals do (§18). Every commit puts the running fleet's subscriptions in force (`Registry.Resubscribe`): a connection whose block changes adopts it. The host check reads the active sources |
+
+**Leaving a bucket:** a member leaves when its snapshot re-keys, its connection stops, or its block stops being a subscription.
+
+**Tests:**
+- buckets: one read split among members, the steady state reading nothing new, a join during a read waiting for its own, the host not connected, a recovery in place re-keying, a denial moving the access generation, a capped read qualifying every member, a direct installation's own credential and tenant, the filters, the last member cancelling, a changed subscription never served the older outcome, a read whose terms move discarded, an unsubscribed cluster leaving, a re-keyed bucket never overlapping the old read, a pending incarnation not in force, revisions;
+- the memory bound at a representative shape: four members made hot in turn through joins, then a failed read, every held row counted once: 20,000 retained against a bound of 25,000;
+- observe: a shared read keeping its time, an overdue one landing stale;
+- S2: a moved source listed and resubscribed, a change the installations cannot resolve refused; the host lease admitted, refused while reserved, ended at the host's retirement;
+- the legacy sentence and lineage; the inspector's sentence.
+
+**The lab:** `TestInstallationLab` (`KLYX_S3A_LAB_CONTEXT=kind-klyx`, read-only, refusing any other context and checking the lab's label) reads the S8a lab's real Alertmanager as an installation hosted by kind-klyx, serving it with `match: {namespace: klyx-s8-lab}`. Its share held the nine namespaced alerts; the three cluster-wide alerts passed the filter and matched no member (unmatched 3); the other cluster's alert never reached the read.
+
+**Mutation pass:** 26 mutants, 20 caught at first. Four survivors got tests and are caught: a read whose access generation or installation moves in flight, an unchanged subscription keeping its revision, and a changed installation moving its. Two are equivalent:
+- the immediate overdue check on a landed share: the Observer's loop marks an overdue read stale before it publishes, so no summary shows it live either way. It stays, as a defence;
+- the explicit leave on a re-key: the member's next read joins its new bucket, which leaves the old one.
+
+Looking at the second found a real gap, now fixed: a cluster whose block stops being a subscription never joins again, so it now leaves its bucket when its block changes.
+
+**A gate run found a test fault:** the registry test of the running fleet's subscriptions started its connections without clients, and under load a metadata informer could run before the test ended and crash the package. It now builds them with fake clients and stops them. Twelve runs of the package under load pass.
+
+**Smoke:** 216/216 four ways at 56498c0, the smoke fleet.yaml as it began after every walk.
