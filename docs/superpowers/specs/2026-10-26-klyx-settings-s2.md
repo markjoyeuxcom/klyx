@@ -946,3 +946,11 @@ Codex found R1, R3 and R5 to R8 resolved, and R2 and R4 resolved in part. Its tw
 **Mutation pass:** 6 mutants over the fixes, all caught; the last, an unchanged editor kept open over a replaced entry, after a test was added for it.
 
 **Smoke:** 216/216 four ways at c5a9dda, the smoke fleet.yaml as it began after every walk.
+
+## 28. ACCEPT: S2c (2026-10-27)
+
+Codex accepted S2c at revision 2 (95d2a99), with no remaining findings. That came after the review of 10253e1 (five P2, three P3) and two re-reviews (§26, §27).
+
+It ran its earlier probes unchanged: an unrelated cluster's removal keeps a dirty editor, the open editor's protection follows the row at release with its draft kept, and the reconnect banner no longer claims a pending connection once it has connected. It found the draft generation, the explicit replacement plans, the digest and typed phrase, the keychain choices, the awaited readback, read sequencing, the held refresh, the kubeconfig suggestions, unique anchors and the endpoint links intact.
+
+S2 is complete: S2a, S2b and S2c are each accepted. S3a builds next.
