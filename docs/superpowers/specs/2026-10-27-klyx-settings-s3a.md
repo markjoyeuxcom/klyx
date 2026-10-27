@@ -625,3 +625,16 @@ Codex also noted that the memory test's failure phase never waited for a failed 
 **Tests:** Codex's probes, as regression tests: a subscription moved during a read (re-keyed, never served, the read giving it nothing) beside an unchanged one; the gate's wait bounded and cancellable; a stopped connection's late read and a later one joining nothing; one join causing one follow-up; an idle bucket's host lease, named by the host's plan and ending the bucket at its retirement; a bucket keyed to an old host connection; additions putting their subscriptions in force, one failing to install, one failing to prepare, and a refusal before anything is written. **Mutation pass:** 16 mutants over the fixes: 10 caught at first, two did not build and were rewritten, and four survivors got tests (a read whose context ended on a connection still running, an early read spent by a read that started first, a host leased only at a later read, and the moved member's absence asserted on the read itself). All 16 are caught.
 
 **Smoke:** 216/216 four ways at 18eb817, the smoke fleet.yaml as it began after every walk.
+
+## 22. S3a-2 revision 2: Codex's re-review (2026-10-27)
+
+Codex closed R1 to R6, and found the memory test's failure phase now waits for the failed read. It requested changes: two P2.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** a member's read served a held share while its host was known to be down: the access generation carries the host's usability incarnation, not whether it is usable now, so it did not move until the host recovered | Before serving, a member's read checks its installation's host is connected and usable; a host known to be down fails the read with its reason ("lgtm-we's host prd is not connected"), with no request, so the Observer keeps what it had as stale (§3.3). A usable host's held share is reused as before |
+| **RR2:** the read in flight recorded its members by connection only, and ended after its waiters woke: a member whose subscription changed within its bucket could wait for no read until the cadence | The read in flight records each member at the subscription revision it covers, so a new revision asks for its own read; and the read ends in the same step as its outcome is published, so a waiter it wakes never sees it still in flight |
+
+**Tests:** Codex's probes, as regression tests: a known-down host serving no held share, beside a usable one whose share is reused; a new revision within its bucket keeping its follow-up across the end of the old read. **Mutation pass:** 4 mutants, 2 caught at first; one did not build and was rewritten, and is caught. RR2's two fixes each close the gap alone, so removing either survives; removing both is caught.
+
+**Smoke:** 216/216 four ways at 214fafe, the smoke fleet.yaml as it began after every walk.
