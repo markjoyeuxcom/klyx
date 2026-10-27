@@ -7,7 +7,7 @@ Opened 2026-10-27, on `feat/settings-s3a`, after S2b was accepted (S2 §24) and 
 - the host fence on reads and on later sends;
 - Detect, and the migration offer.
 
-Loki and metrics follow on the same model in S3b. This note is for Codex's review before anything is built; revisions 1 and 2 the same day, after that review and its re-review (§12, §13).
+Loki and metrics follow on the same model in S3b. This note is for Codex's review before anything is built; revisions 1 and 2 the same day, after that review and its re-review (§12, §13); the design is accepted (§14).
 
 ## 0. What exists
 
@@ -469,3 +469,13 @@ Codex found R1 (one file transaction), R4, R6 and R7 resolved, and R2, R3 and R5
 - **Member freshness:** a served share keeps its acquisition time and its last failure or overdue state. A member leaves its bucket when its snapshot generation stops or re-keys. `Observer.SetConnection` and `stopSnap` are separate operations, so a connection becoming unreachable does not leave the bucket on its own.
 - **Fences:** installation and subscription terms are checked on hosted and direct paths alike. Empty, stale and count-only outcomes and derived evidence carry lineage. Dependencies are kept past trimming, and every API attempt and every CLI input release runs the same check. A3's Review and Run already call `withdrawFencedLocked`, so the lineage term in `planFenceLocked` enforces the sticky withdrawal.
 - **Read isolation:** alerts and groups take the same filter; the full match is checked before projection; cap and unmatched counts are qualified; and nothing of the host's objects, another member's rows or unmatched evidence enters a member's AI context.
+
+## 14. ACCEPT (2026-10-27)
+
+Codex accepted the design at revision 2 (b28c0a4), after the review of cce38ba and two re-reviews, with no remaining findings. It ruled RR1 to RR4 resolved, the original R1 to R7 resolutions intact, and §11's wording in line with its rulings. It found no new conflict with the redesign, S2 or the code cited: the join exception and Detect's bounded sample are deliberate refinements of the redesign, with their limits stated.
+
+§13's acceptance requirements stand for the stages that build them, with one more from the acceptance: **a member that joins while a read is in flight is not in that read's cohort.** It is never served that read as its current share: it waits for the coalesced follow-up within its own deadline, or its read fails as any other.
+
+The historical memory description in §12 records revision 1. §3.2 and §13 supersede it: the load test uses the bound per reading member plus one outcome per bucket.
+
+S3a-1, the model, builds next.
