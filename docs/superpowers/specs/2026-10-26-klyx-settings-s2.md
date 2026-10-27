@@ -849,3 +849,11 @@ Codex found RR1, RR2 and RR4 closed, and RR3 correct for a cluster with a connec
 §22's RR3 line holds with that correction: the current terms follow every committed change, not only those on a connection.
 
 **Tests:** Codex's probe, as a regression test covering a save and a file adoption before the first build: the edit is Retry's terms, no connected terms exist until Retry connects, and Revert restores the connection that succeeded. **Mutation pass:** 5 mutants, 4 caught. The survivor, dropping the return after an edit on a connection, is equivalent: the current terms are then written twice with the same value. No native smoke for this revision alone: the change is bookkeeping on paths the unit tests drive, and the S2c smoke runs on top of it.
+
+## 24. ACCEPT: S2b (2026-10-27)
+
+Codex accepted S2b at revision 3 (3196a4e), with no remaining findings. That came after the review of c155378 (seven P2, one P3) and three re-reviews (§21-§23).
+
+Its last re-review checked the failed-startup case end to end: a placement edit, a Retry that connects, the real usability publication, a pending reconnect, then Revert, with the edit kept. All fourteen of its independent probes pass under the race detector. It accepted the equivalent mutant §23 names, and no native smoke for that bookkeeping fix: the S2c smoke runs on top of it.
+
+S2c, the page, builds on S2b next. The two are proposed for `main` together.
