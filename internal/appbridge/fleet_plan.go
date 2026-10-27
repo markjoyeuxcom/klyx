@@ -546,7 +546,11 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		}
 		if fp.d.Hosts != nil {
 			if hosts := fp.d.Hosts(name); len(hosts) > 0 {
-				return refuse(name + " hosts " + strings.Join(hosts, ", ") + ": remove those first")
+				shown := make([]string, len(hosts))
+				for i, h := range hosts {
+					shown[i] = shownInstallation(h)
+				}
+				return refuse(name + " hosts " + strings.Join(shown, ", ") + ": remove those first")
 			}
 		}
 	case classReconnect, classAddition:
@@ -561,7 +565,7 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		// reads; this version cannot move it, so it refuses rather than
 		// leave the connection on the old source
 		if fp.d.Alertmanager != nil {
-			if was, now := fp.d.Alertmanager(run), fp.d.Alertmanager(x.cand); amSourceOf(was) != amSourceOf(now) {
+			if was, now := fp.d.Alertmanager(run), fp.d.Alertmanager(x.cand); amSourceKey(was) != amSourceKey(now) {
 				return refuse("this changes where " + name + "'s alerts come from (" + amSourceOf(was) + " to " + amSourceOf(now) + "), which this version of Klyx cannot apply to a running connection")
 			}
 		}
@@ -868,21 +872,52 @@ func (s *ConfigService) GetClusterEntry(name string) ClusterEntryDTO {
 }
 
 // amSourceOf says where an Alertmanager block's alerts come from, in words
-// (Settings S3a §2.2).
+// (Settings S3a §2.2). A long installation id is named by its length
+// alone, so two sources are compared by amSourceKey, never by these words.
 func amSourceOf(e *config.EndpointConfig) string {
-	switch {
-	case e == nil:
-		return "discovery in the cluster"
-	case e.Off:
-		return "off"
-	case e.Source != "":
+	if e != nil && !e.Off && e.Source != "" {
+		if _, withheld := config.Withheld(e.Source); withheld {
+			return shownInstallation(e.Source)
+		}
 		return "the installation " + e.Source
-	case e.Endpoint != "":
+	}
+	switch amSourceKey(e) {
+	case "off":
+		return "off"
+	case "endpoint":
 		return "its own endpoint"
-	case e.ServiceRef != nil:
+	case "service":
 		return "its own Service"
 	}
 	return "discovery in the cluster"
+}
+
+// amSourceKey is where an Alertmanager block's alerts come from, for a
+// comparison: an installation by its id itself.
+func amSourceKey(e *config.EndpointConfig) string {
+	switch {
+	case e == nil:
+		return "discovery"
+	case e.Off:
+		return "off"
+	case e.Source != "":
+		return "source/" + e.Source
+	case e.Endpoint != "":
+		return "endpoint"
+	case e.ServiceRef != nil:
+		return "service"
+	}
+	return "discovery"
+}
+
+// shownInstallation names an installation in a message: by its id, or by
+// the id's length alone where the loader's diagnostics withhold a value
+// (Codex's re-review 2 of S3a-1, R2-1).
+func shownInstallation(id string) string {
+	if n, withheld := config.Withheld(id); withheld {
+		return "an installation whose id has " + strconv.Itoa(n) + " characters"
+	}
+	return id
 }
 
 // SourceHosts is the host check S2 left for S3a (S2 §4.4, S3a §3.6): the

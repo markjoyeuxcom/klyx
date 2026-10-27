@@ -182,10 +182,19 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig) error 
 // characters or more, which may be a pasted credential (slice 0; Codex's
 // review of S3a-1, R2).
 func describeValue(v string) string {
-	if n := len([]rune(v)); n >= 25 {
+	if n, withheld := Withheld(v); withheld {
 		return fmt.Sprintf("a value of %d characters", n)
 	}
 	return fmt.Sprintf("%q", v)
+}
+
+// Withheld is whether a message names a value the file holds by its
+// length alone, n characters: at 25 or more it may be a pasted
+// credential. The loader's diagnostics follow it, and so do the messages
+// built from the file elsewhere (Codex's re-review 2 of S3a-1, R2-1).
+func Withheld(v string) (n int, withheld bool) {
+	n = len([]rune(v))
+	return n, n >= 25
 }
 
 // Alertmanager resolution modes (S3a §2.2).
