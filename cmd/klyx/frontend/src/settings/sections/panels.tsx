@@ -79,7 +79,7 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
       </Group>
       <Group title="Installations">
         <p className="settings-group-note">
-          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. They are set in fleet.yaml in this version, and Klyx reads them when it starts. A later version reads alerts through them; until then a subscribed cluster&apos;s alerts are said to be unread.
+          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. Klyx reads it once for its members and gives each its share. They are set in fleet.yaml in this version, and Klyx reads them when it starts.
         </p>
         <InstallationFields />
       </Group>
@@ -94,6 +94,7 @@ function InstallationFields() {
     <details className="settings-fields" data-fields="sources">
       <summary>What each installation field does</summary>
       {ids.map((id) => <SettingField key={id} id={id} source="file" value="per installation, in fleet.yaml" />)}
+      <SettingField id="credential.source" value="per installation read at an endpoint with auth, in the keychain" />
     </details>
   );
 }

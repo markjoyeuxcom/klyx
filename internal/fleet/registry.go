@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
@@ -96,7 +97,19 @@ func (r *Registry) Resubscribe(running []config.ClusterConfig) error {
 	if a == nil {
 		return nil
 	}
-	sources := a.Sources()
+	return r.PublishSources(a.Sources(), running)
+}
+
+// PublishSources puts sources and the running fleet's subscriptions in
+// force (Settings S3a §5, an Observability Apply's publication): the
+// installations and subscriptions that changed move their revisions, and
+// each connection whose block changes adopts it, re-keying its alerts. It
+// runs under the fleet Apply lock, from a resolution already checked.
+func (r *Registry) PublishSources(sources []config.SourceConfig, running []config.ClusterConfig) error {
+	a := r.AlertSources()
+	if a == nil {
+		return nil
+	}
 	if _, err := a.Apply(sources, running); err != nil {
 		return err
 	}
@@ -111,6 +124,51 @@ func (r *Registry) Resubscribe(running []config.ClusterConfig) error {
 		}
 	}
 	return nil
+}
+
+// InstallationStatus reads an installation's status once, as the person
+// tests it (Settings S3a §5): through the transport its reads take, in a
+// fleet-wide slot, and never into a bucket's outcome. An observed 401 or
+// 403 is reported, not counted as a loss of access.
+func (r *Registry) InstallationStatus(ctx context.Context, id string) (alertmanager.Status, string, error) {
+	a := r.AlertSources()
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if a == nil || b == nil {
+		return alertmanager.Status{}, "", errors.New("no installation is in force")
+	}
+	src, rev, ok := a.Installation(id)
+	if !ok {
+		return alertmanager.Status{}, "", fmt.Errorf("%s is not in force", id)
+	}
+	if err := b.hostDown(src); err != nil {
+		return alertmanager.Status{}, "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+	select {
+	case amReads <- struct{}{}:
+		defer func() { <-amReads }()
+	case <-ctx.Done():
+		return alertmanager.Status{}, "", fmt.Errorf("%s was not read in time: %w", id, ctx.Err())
+	}
+	var credRev uint64
+	if src.Endpoint != "" {
+		credRev = b.creds.Revisions.Revision("source/"+id, config.EndpointAlertmanager)
+	}
+	tr, err := b.transport(ctx, cancel, src, rev, src.Tenant, credRev, "a test of "+id)
+	if err != nil {
+		return alertmanager.Status{}, "", err
+	}
+	defer tr.release()
+	red := tr.am.redactor
+	st, err := amGet(ctx, tr.am, "/api/v2/status", nil, alertmanager.ParseStatus)
+	if err != nil {
+		return alertmanager.Status{}, red.Text(tr.display), err
+	}
+	st.Version, st.ClusterStatus = alertmanager.Clip(red.Text(st.Version), alertmanager.MaxLabelValue), alertmanager.Clip(red.Text(st.ClusterStatus), alertmanager.MaxLabelValue)
+	return st, red.Text(tr.display), nil
 }
 
 // InstallationRead is an installation's latest read (S3a §8).

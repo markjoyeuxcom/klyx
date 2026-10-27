@@ -75,8 +75,10 @@ const (
 )
 
 const (
-	clusterSave = "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\"."
-	clusterName = "Edit fleet.yaml: renaming a cluster is a later slice."
+	sourcesSave      = "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\"."
+	subscriptionSave = "Review and apply in Observability writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through \"Use the file's values\"."
+	clusterSave      = "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\"."
+	clusterName      = "Edit fleet.yaml: renaming a cluster is a later slice."
 	// an endpoint's fields stay file-only until S3
 	endpointSave = "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs."
 	aiSave       = "Save rewrites fleet.yaml's ai block (comments inside it are not kept) and rebuilds the AI in use."
@@ -177,7 +179,7 @@ func endpointEntries() []Entry {
 	sub := func(kind, id, label, effect, def, validation string) Entry {
 		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki"}[kind]
 		e := Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
-			TakesEffect: Restart, Save: "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts. Settings applies subscriptions in a later stage of this slice.", Disposition: FileOnly, Source: FromSchema}
+			TakesEffect: OnSave, Save: subscriptionSave, Disposition: Editable, Source: FromSchema}
 		if kind == "loki" {
 			e.Effect, e.Disposition, e.Save = "Not built yet: Loki subscriptions arrive in S3b, and until then this key is a load error.", Deferred, "Not yet: fleet.yaml refuses it."
 		}
@@ -194,7 +196,10 @@ func endpointEntries() []Entry {
 		Default: "none", Validation: "Any string.", TakesEffect: Restart, Save: "Move it to the keychain under External endpoints, or edit fleet.yaml.", Disposition: FileOnly, Source: FromSchema}
 	cred := Entry{ID: "credential.endpoint", Section: Observability, Label: "Endpoint credential", Effect: "The token or password for an endpoint with auth, kept in the OS keychain for that cluster and endpoint. Klyx shows only whether it is stored.", Scope: "endpoint",
 		Default: "none stored", Validation: "Not empty.", TakesEffect: OnAction, Test: "Test reads the endpoint with it.", Save: "Store and Remove change the keychain at once; nothing goes to fleet.yaml.", Disposition: Editable, Source: FromCredential}
-	return append(out, tok, cred)
+	// Settings S3a §5: an installation's own credential, never a cluster's
+	srcCred := Entry{ID: "credential.source", Section: Observability, Label: "Installation credential", Effect: "The token or password for an installation read at an endpoint with auth, kept in the OS keychain as source/<id> and bound to the endpoint's origin. Klyx shows only whether it is stored; a cluster's credential is never copied into it.", Scope: "installation",
+		Default: "none stored", Validation: "Not empty.", TakesEffect: OnAction, Test: "Test reads the installation's status with it.", Save: "Store and Remove change the keychain at once; nothing goes to fleet.yaml.", Disposition: Editable, Source: FromCredential}
+	return append(out, tok, cred, srcCred)
 }
 
 func aiEntries() []Entry {
@@ -405,7 +410,7 @@ var boundLabels = map[string]string{
 func sourceEntries() []Entry {
 	e := func(id, label, effect, def, validation string) Entry {
 		return Entry{ID: "sources[]." + id, Section: Observability, Label: label, Effect: effect, Scope: "installation", Default: def, Validation: validation,
-			TakesEffect: Restart, Save: "Edit fleet.yaml under sources: Klyx reads it when it starts. Settings applies installations in a later stage of this slice.", Disposition: FileOnly, Source: FromSchema}
+			TakesEffect: OnSave, Save: sourcesSave, Disposition: Editable, Source: FromSchema}
 	}
 	return []Entry{
 		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.", "none: required", "A DNS label, unique among sources."),

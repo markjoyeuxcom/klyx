@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -239,4 +240,63 @@ func TestAHostedLineageIgnoresEndpointCredentials(t *testing.T) {
 	r.revs.Bump("source/lgtm-we", config.EndpointAlertmanager, true)
 	r.revs.Bump("dev", config.EndpointAlertmanager, true)
 	wantProblem(t, reg, "dev", dev.Lineage, "")
+}
+
+// Settings S3a §5: an installation's Test reads its status once through
+// the transport its reads take - here its host's Service proxy - and moves
+// no bucket's outcome; a host known to be down is said, with no request.
+func TestAnInstallationsStatusIsReadOnce(t *testing.T) {
+	r := newBucketRig(t, hostedSource(), "dev")
+	r.am.status = `{"versionInfo":{"version":"0.28.1"},"cluster":{"status":"ready","peers":[{},{},{}]}}`
+	reg := lineageRegistry(r)
+	st, where, err := reg.InstallationStatus(context.Background(), "lgtm-we")
+	if err != nil || st.Version != "0.28.1" || where != "Service monitoring/am:web" {
+		t.Fatalf("%+v %q %v", st, where, err)
+	}
+	if r.reads() != 0 {
+		t.Fatal("the test read alerts")
+	}
+	if _, _, err := reg.InstallationStatus(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), "is not in force") {
+		t.Fatalf("an unknown installation: %v", err)
+	}
+	usable(r.host, 1)
+	r.host.mu.Lock()
+	r.host.state = Failed
+	r.host.mu.Unlock()
+	r.am.mu.Lock()
+	before := len(r.am.queries["/api/v2/status"])
+	r.am.mu.Unlock()
+	if _, _, err := reg.InstallationStatus(context.Background(), "lgtm-we"); err == nil || !strings.Contains(err.Error(), "host prd is not connected") {
+		t.Fatalf("a down host: %v", err)
+	}
+	r.am.mu.Lock()
+	defer r.am.mu.Unlock()
+	if len(r.am.queries["/api/v2/status"]) != before {
+		t.Fatal("a down host was asked")
+	}
+}
+
+// PublishSources puts new installations and the running fleet's
+// subscriptions in force, and each connection whose block changes adopts
+// it.
+func TestPublishSourcesMovesWhatChanged(t *testing.T) {
+	r := newBucketRig(t, hostedSource(), "dev", "stg")
+	reg := lineageRegistry(r)
+	dev, _ := r.mustRead("dev")
+	moved := hostedSource()
+	moved.Tenant = "ops"
+	running := []config.ClusterConfig{{Name: "prd"}, {Name: "dev"}, {Name: "stg", Alertmanager: &config.EndpointConfig{Off: true}}}
+	if err := reg.PublishSources([]config.SourceConfig{moved}, running); err != nil {
+		t.Fatal(err)
+	}
+	wantProblem(t, reg, "dev", dev.Lineage, "lgtm-we changed since its alerts were read")
+	if _, ok := r.sources.Subscription("stg"); ok {
+		t.Fatal("stg is off, still subscribed")
+	}
+	if b := r.conns["stg"].AlertmanagerConfig(); b == nil || !b.Off {
+		t.Fatalf("stg did not adopt its block: %+v", b)
+	}
+	if sub, ok := r.sources.Subscription("dev"); !ok || sub.Tenant != "ops" {
+		t.Fatalf("dev's subscription: %+v", sub)
+	}
 }

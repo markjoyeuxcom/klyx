@@ -101,6 +101,11 @@ type EndpointsService struct {
 	// entry, so a reconnect keeps it. Nil in tools and tests.
 	fleetLock func() func()
 	publish   func(cluster, kind string, m *config.MetricsConfig, e *config.EndpointConfig)
+
+	// the installations in force and their test (Settings S3a §5): an
+	// installation's credential actions
+	sources      func() *fleet.AlertSources
+	sourceStatus func(ctx context.Context, id string) (alertmanager.Status, string, error)
 }
 
 // WireEndpointActivation makes every endpoint activation publish into the

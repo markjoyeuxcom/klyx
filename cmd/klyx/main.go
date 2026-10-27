@@ -619,6 +619,19 @@ func main() {
 		},
 	})
 
+	// Settings S3a §5, §8: Observability's installations and subscriptions,
+	// planned from what runs and applied under the fleet Apply lock; an
+	// installation's credential and test are endpoint actions
+	sourcesSvc := appbridge.NewSourcesService(configPath(), configSvc, appbridge.SourcesDeps{
+		Active:    func() *fleet.AlertSources { return alertSources },
+		Publish:   reg.PublishSources,
+		AlertWork: chatSvc.AlertWork,
+		Read:      reg.InstallationRead,
+		Store:     endpointCreds.Store,
+		Revs:      endpointCreds.Revisions,
+	})
+	appbridge.WireSourceCredentials(endpointsSvc, func() *fleet.AlertSources { return alertSources }, reg.InstallationStatus)
+
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.
 	aiSettingsSvc := appbridge.NewAISettingsService(configPath(), ai.OSKeyStore{}, envread.Dynamic(envread.AIKey), aiSvc, cfg.AI)
@@ -721,6 +734,7 @@ func main() {
 		application.NewService(writesSvc),
 		application.NewService(metricsSvc),
 		application.NewService(endpointsSvc),
+		application.NewService(sourcesSvc),
 		application.NewService(workloadsSvc),
 		application.NewService(podsSvc),
 		application.NewService(logsSvc),

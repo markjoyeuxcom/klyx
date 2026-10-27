@@ -571,69 +571,14 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 	if err := check(); err != nil {
 		return fail(err)
 	}
-	var am amSource
-	var credRev uint64
-	var hostConn ConnID
-	if src.Endpoint != "" {
-		account, revKey := endpointcred.SourceAccount(src.ID), "source/"+src.ID
-		revs := b.creds.Revisions
-		credRev = o.credRev
-		cred := endpointcred.Resolve(b.creds.Store, endpointcred.Input{Cluster: revKey, Kind: config.EndpointAlertmanager, Account: account,
-			Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}, Revoked: revs.Revoked(revKey, config.EndpointAlertmanager)})
-		auth := endpointhttp.Auth{Tenant: bu.key.Tenant}
-		if !cred.Usable() {
-			why := cred.Why
-			if why == "" {
-				why = "the credential is " + string(cred.State)
-			}
-			return fail(fmt.Errorf("%s: %s", src.ID, why))
-		}
-		auth.Header, auth.Redactor, auth.Live = cred.Header(), cred.Redactor(), revs.Live(revKey, config.EndpointAlertmanager, credRev)
-		client := safehttp.NewClient
-		if b.client != nil {
-			client = b.client
-		}
-		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client(endpointhttp.DirectPolicy(amLimits, amHTTPTimeout, src.TLSSkipVerify)), amLimits)
-		at, err := endpointAt(src.Endpoint)
-		if err != nil {
-			return fail(err)
-		}
-		am, o.display = amSource{get: d.Get, redactor: d.Redactor()}, at
-	} else {
-		conn, lctx, release, err := b.lease(src.Host, "the alerts of "+src.ID)
-		if err != nil {
-			return fail(fmt.Errorf("%s's host %s is not connected: %w", src.ID, src.Host, err))
-		}
-		defer release()
-		host, ok := conn.(*ClusterConn)
-		if !ok {
-			return fail(fmt.Errorf("%s's host %s cannot proxy a Service", src.ID, src.Host))
-		}
-		hostConn = host.ID()
-		stop := context.AfterFunc(lctx, cancel) // the host's retirement ends the read
-		defer stop()
-		var svc endpointhttp.Service
-		if src.ServiceRef != nil {
-			svc = serviceOf(src.ServiceRef)
-		} else {
-			d := b.discover(ctx, host, bu.key.InstRev)
-			switch {
-			case d.err != nil:
-				return fail(fmt.Errorf("%s's discovery in %s could not be read: %w", src.ID, src.Host, d.err))
-			case d.ambiguous != "":
-				return fail(fmt.Errorf("%s: %s in %s", src.ID, d.ambiguous, src.Host))
-			case d.none:
-				return fail(fmt.Errorf("%s found no Alertmanager in %s", src.ID, src.Host))
-			}
-			svc = d.svc
-		}
-		rc, err := host.amProxyREST()
-		if err != nil {
-			return fail(fmt.Errorf("%s: the service-proxy client could not be built: %w", src.ID, err))
-		}
-		p := endpointhttp.NewProxy(rc, svc, bu.key.Tenant, amLimits)
-		am, o.display = amSource{get: p.Get}, "Service "+serviceAt(svc)
+	credRev := o.credRev
+	tr, err := b.transport(ctx, cancel, src, bu.key.InstRev, bu.key.Tenant, credRev, "the alerts of "+src.ID)
+	if err != nil {
+		return fail(err)
 	}
+	defer tr.release()
+	am, hostConn := tr.am, tr.hostConn
+	o.display = tr.display
 	filter := bu.filter(cohort)
 	q := url.Values{"active": {"true"}, "silenced": {"true"}, "inhibited": {"true"}, "unprocessed": {"true"}, "filter": filter}
 	gq := url.Values{"active": {"true"}, "muted": {"true"}, "silenced": {"false"}, "inhibited": {"false"}, "filter": filter}
@@ -671,6 +616,86 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 	o.lineage = alertmanager.Lineage{Mode: config.AMSubscribed, Installation: src.ID, InstRev: bu.key.InstRev, Host: src.Host,
 		HostConn: uint64(hostConn), Access: bu.key.Access, Tenant: bu.key.Tenant, CredRev: credRev}
 	return o
+}
+
+// amTransport is how one read reaches an installation (S3a §3.1).
+type amTransport struct {
+	am       amSource
+	display  string
+	hostConn ConnID
+	release  func()
+}
+
+// transport builds an installation's transport for one read: a direct
+// installation's endpoint with its own credential, at credRev; or a lease
+// on its host's current connection, whose retirement cancels the read
+// (cancel), and the Service it proxies - the serviceRef, or the host's
+// discovery at the installation's revision.
+func (b *alertBuckets) transport(ctx context.Context, cancel context.CancelFunc, src config.SourceConfig, instRev uint64, tenant string, credRev uint64, what string) (*amTransport, error) {
+	if src.Endpoint != "" {
+		account, revKey := endpointcred.SourceAccount(src.ID), "source/"+src.ID
+		revs := b.creds.Revisions
+		cred := endpointcred.Resolve(b.creds.Store, endpointcred.Input{Cluster: revKey, Kind: config.EndpointAlertmanager, Account: account,
+			Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}, Revoked: revs.Revoked(revKey, config.EndpointAlertmanager)})
+		auth := endpointhttp.Auth{Tenant: tenant}
+		if !cred.Usable() {
+			why := cred.Why
+			if why == "" {
+				why = "the credential is " + string(cred.State)
+			}
+			return nil, fmt.Errorf("%s: %s", src.ID, why)
+		}
+		auth.Header, auth.Redactor, auth.Live = cred.Header(), cred.Redactor(), revs.Live(revKey, config.EndpointAlertmanager, credRev)
+		client := safehttp.NewClient
+		if b.client != nil {
+			client = b.client
+		}
+		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client(endpointhttp.DirectPolicy(amLimits, amHTTPTimeout, src.TLSSkipVerify)), amLimits)
+		at, err := endpointAt(src.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return &amTransport{am: amSource{get: d.Get, redactor: d.Redactor()}, display: at, release: func() {}}, nil
+	}
+	conn, lctx, release, err := b.lease(src.Host, what)
+	if err != nil {
+		return nil, fmt.Errorf("%s's host %s is not connected: %w", src.ID, src.Host, err)
+	}
+	host, ok := conn.(*ClusterConn)
+	if !ok {
+		release()
+		return nil, fmt.Errorf("%s's host %s cannot proxy a Service", src.ID, src.Host)
+	}
+	stop := context.AfterFunc(lctx, cancel) // the host's retirement ends the read
+	done := func() {
+		stop()
+		release()
+	}
+	var svc endpointhttp.Service
+	if src.ServiceRef != nil {
+		svc = serviceOf(src.ServiceRef)
+	} else {
+		d := b.discover(ctx, host, instRev)
+		switch {
+		case d.err != nil:
+			done()
+			return nil, fmt.Errorf("%s's discovery in %s could not be read: %w", src.ID, src.Host, d.err)
+		case d.ambiguous != "":
+			done()
+			return nil, fmt.Errorf("%s: %s in %s", src.ID, d.ambiguous, src.Host)
+		case d.none:
+			done()
+			return nil, fmt.Errorf("%s found no Alertmanager in %s", src.ID, src.Host)
+		}
+		svc = d.svc
+	}
+	rc, err := host.amProxyREST()
+	if err != nil {
+		done()
+		return nil, fmt.Errorf("%s: the service-proxy client could not be built: %w", src.ID, err)
+	}
+	p := endpointhttp.NewProxy(rc, svc, tenant, amLimits)
+	return &amTransport{am: amSource{get: p.Get}, display: "Service " + serviceAt(svc), hostConn: host.ID(), release: done}, nil
 }
 
 // filter is the acquisition filter (S3a §3.2): none for scope: tenant;
