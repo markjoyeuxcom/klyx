@@ -352,3 +352,52 @@ func TestAnEditOnTheConnectedIdentityKeepsItsTerms(t *testing.T) {
 		t.Fatalf("after a protection change: %+v", last)
 	}
 }
+
+// R2-1: a cluster whose first build failed has no connection; an edit
+// committed then - a save or a file adoption - is what Retry builds and
+// records, and no history is invented before it connects.
+func TestAnEditBeforeTheFirstBuildIsWhatRetryRecords(t *testing.T) {
+	for _, via := range []string{"save", "file"} {
+		t.Run(via, func(t *testing.T) {
+			r := newFleetRigWith(t, false, "dev")
+			var p PlanDTO
+			if via == "save" {
+				d := devDraft()
+				d.Group = "new-platform"
+				p = r.cs.PlanClusterEdit("dev", d)
+			} else {
+				r.handEdit("    context: dev-ctx\n", "    context: dev-ctx\n    group: new-platform\n")
+				p = r.cs.PlanClusterFromFile("dev")
+			}
+			if p.Refused != "" || p.Class != string(classPlacement) {
+				t.Fatalf("fixture plan: %+v", p)
+			}
+			if res := r.apply(p, ""); !res.OK {
+				t.Fatal(res.Error)
+			}
+			if saved, ok := r.cs.fp.currentTerms("dev"); !ok || saved.Group != "new-platform" {
+				t.Fatalf("the edit left Retry's terms stale: %+v", saved)
+			}
+			if last, ok := r.cs.fp.lastConnected("dev"); ok {
+				t.Fatalf("an edit before any connection invented history: %+v", last)
+			}
+			if res := r.apply(r.cs.PlanClusterRetry("dev"), ""); !res.OK {
+				t.Fatal(res.Error)
+			}
+			connectNow(t, r, "dev")
+			if last, ok := r.cs.fp.lastConnected("dev"); !ok || last.Group != "new-platform" || r.running("dev").Group != "new-platform" {
+				t.Fatalf("Retry built new-platform but recorded otherwise: last=%+v running=%+v", last, r.running("dev"))
+			}
+			d := devDraft()
+			d.Group = "new-platform"
+			d.Context = "next-not-yet-connected"
+			if res := r.apply(r.cs.PlanClusterEdit("dev", d), ""); !res.OK {
+				t.Fatal(res.Error)
+			}
+			if revert := r.cs.PlanClusterRevert("dev"); revert.Refused != "" || hasChange(revert, "fleet.group", "new-platform", "") ||
+				!hasChange(revert, "fleet.context", "next-not-yet-connected", "dev-ctx") {
+				t.Fatalf("Revert does not restore the connection that succeeded: %+v", revert)
+			}
+		})
+	}
+}

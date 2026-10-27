@@ -158,14 +158,18 @@ func (fp *fleetPlans) attempt(cluster string, id fleet.ConnID, terms s2Fields) {
 	fp.current[cluster] = terms
 }
 
-// editedNow records a change committed on the cluster's current
-// connection, under its gate.
+// editedNow records a change committed on the cluster, under its gate: on
+// its connection when it has one; a cluster whose first build failed has
+// none, and its current terms alone say the change - what Retry builds
+// (Codex's second re-review of S2b, R2-1).
 func (fp *fleetPlans) editedNow(life *Lifecycle, cluster string, terms s2Fields) {
 	if c, ok := life.reg.Conn(cluster); ok {
 		if id, ok := connID(c); ok {
 			fp.edited(cluster, id, terms)
+			return
 		}
 	}
+	fp.editedUnbuilt(cluster, terms)
 }
 
 // fileIs checks fleet.yaml is still the version a plan was made from.

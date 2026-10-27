@@ -184,6 +184,15 @@ func (fp *fleetPlans) edited(cluster string, id fleet.ConnID, terms s2Fields) {
 	}
 }
 
+// editedUnbuilt records an S2 change committed on a cluster with no
+// connection: its current terms say the change; no identity connected,
+// so no history does.
+func (fp *fleetPlans) editedUnbuilt(cluster string, terms s2Fields) {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	fp.current[cluster] = terms
+}
+
 func (fp *fleetPlans) forget(cluster string) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
