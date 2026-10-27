@@ -902,3 +902,29 @@ S2 §6 lists the protection walk the other way round, loosened then tightened ba
 **Also in this slice:** `TestRekeyStartsAnUnreadCollection` (coverage S8a) failed about one run in seven, on `main` as well. A re-key is published at the next evaluation, so its "A read empty" wait could pass on the state the "" read left; the test now waits for A's read to start. It is a test fix only: a stopped generation's one read, made with its context already cancelled, is discarded as before.
 
 **Smoke:** 216/216 four ways (night and day, 1440 and 1024) at d412450, the smoke fleet.yaml as it began after every walk. An earlier run at 9ecfaaf passed 216/216 three ways; its day 1024 walk ran out of its budget after three stalls of about five minutes each, while it competed with a mutation run and overnight. Run alone, every walk takes about five minutes, as S2a's and S2b's did.
+
+## 26. S2c revision 1: Codex's review (2026-10-27)
+
+Codex found the plans bound and the interlock, the keychain choices, the removed cluster's route and the registry sound. It rejected one candidate of its own (the generated binding turns a null tags map into an empty one). It requested changes: five P2 and three P3.
+
+| Finding | Fix |
+|---|---|
+| **R1, P2:** after Review, the draft stayed editable and its older plan stayed applicable: Apply sent the old digest and dropped the newer draft | Every change to the draft withdraws the plan it made, so the page never offers a plan for another draft. A plan answered for an older draft is dropped too |
+| **R2, P2:** the cluster editor was not a draft to the leave guard, so leaving Settings, changing section or opening another editor dropped it without asking | A changed draft is a draft to the guard: leaving, or opening another editor, asks to discard it or stay. There is no Save and leave, since a cluster changes only through its plan. Cancel discards it. An Apply being settled holds leaving until its readback ends |
+| **R3, P2:** the readback after an Apply was not awaited: the old rows were called current and the actions came back at once. A failed read dropped the page, and the lost answer with it | Settling awaits the readback before saying anything is current, and keeps the actions disabled until it ends. A failed read is said beside the outcome. Settings keeps the rows read before, said as not current, and the newest read always decides |
+| **R4, P2:** the held notice never followed the connection: it stayed after the attempt connected | While a cluster is held, the page reads the fleet again on every change in the live fleet, and every ten seconds. Drafts and open plans are kept |
+| **R5, P2:** the editor and the row took protection from the running entry, which holds a held attempt's pending terms: "Not protected now" while the guard still protected the cluster | The published protection is the one in force, named with what decides it while the running entry still says the same. A held attempt's different protection is said apart: "Once its new connection is usable: not protected" |
+| **R6, P3:** the contexts offered came from the kubeconfig the cluster runs with, not the one the draft names, and stayed when the kubeconfig was edited | The contexts are read from the kubeconfig the file's entry names. A kubeconfig typed since has not been read: nothing is suggested from it, and the plan checks the context against it |
+| **R7, P3:** with an editor open, the table's cells and the editor's fields had the same DOM ids | A cell's id is its own. An anchor with an editor open focuses the editor's control |
+| **R8, P3:** S2 §5's link from the editor to the cluster's endpoints was missing | The editor links each endpoint the cluster configures to its row in Observability, or opens Observability when it has none. Leaving goes through the guard |
+
+**Tests:** Codex's probes, as regression tests, and:
+- the guard's paths: Stay, opening another editor, Discard, Cancel;
+- the leave guard holding while an Apply is read back;
+- the newest of two overlapping reads deciding;
+- the ten-second read while held, and none when nothing is held;
+- the anchor's focus, and the endpoint links' route.
+
+**Mutation pass:** 22 mutants over the fixes, frontend and backend, all caught. Dropping a plan answered for an older draft is not among them: the editor's inputs are disabled while a plan is asked for, so the draft cannot move meanwhile, and that check is kept as a defence.
+
+**Smoke:** 216/216 four ways at 9ad1afe, the smoke fleet.yaml as it began after every walk.
