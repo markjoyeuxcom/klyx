@@ -124,6 +124,8 @@ func main() {
 		alertSources, _ = fleet.NewAlertSources(nil, cfg.Clusters)
 	}
 	reg.EnableAlertSources(ctx, alertSources, endpointCreds, clock.Real{})
+	// every later send of alerts checks the terms they were read under (S3a §4.3)
+	appbridge.SetAlertLineageCheck(reg.LineageProblem)
 	// Settings slice F §1: each cluster's published admission state -
 	// protection, epoch, Active - seeded before any cluster connects, and
 	// a new connection incarnation each time one becomes usable again.

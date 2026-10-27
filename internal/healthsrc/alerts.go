@@ -88,6 +88,9 @@ type AlertRows struct {
 	Match     map[string]string
 	Truncated bool
 	Alerts    []AlertRow
+	// Lineage is the read's provenance (Settings S3a §3.4): an AI read of
+	// these rows records it, and every later send checks it
+	Lineage alertmanager.Lineage
 }
 
 // AlertRow is one alert's display values and its subject's state.
@@ -198,7 +201,7 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 	counts.Truncated = env.Truncated
 	idx := indexSubjects(c)
 	var counted []alertmanager.Item
-	rows := AlertRows{Identity: env.Identity, Source: env.Source, Match: env.Match, Truncated: env.Truncated}
+	rows := AlertRows{Identity: env.Identity, Source: env.Source, Match: env.Match, Truncated: env.Truncated, Lineage: env.Lineage}
 	for _, it := range env.Alerts {
 		switch it.Display.StateClass {
 		case alertmanager.StateActive:

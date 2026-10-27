@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/crd"
 	"github.com/moomora/klyx/internal/urlscrub"
 	"io"
@@ -321,6 +322,32 @@ type chatTools struct {
 	// anchor is an investigation's pinned object, nil in a chat: a tool
 	// that reads it by name says when the UID differs (AI A1.1 §5)
 	anchor *ChatSeedDTO
+	// record keeps an alerts read's lineage with the conversation (Settings
+	// S3a §4.2), or refuses rows read under terms that have since moved;
+	// nil outside a turn
+	record func(alertmanager.Lineage) error
+}
+
+// alertsPart is the alerts part a summary read shows in a turn: its counts
+// from one capture of its rows, whose lineage is recorded with them, so a
+// count is never sent without the terms it was read under (S3a §4.2). A
+// part whose rows cannot be read, or were read under terms that have since
+// moved, keeps no counts, and problem says why.
+func (t *chatTools) alertsPart(ctx context.Context, task string, part observe.Part) (observe.Part, string) {
+	if t.record == nil {
+		return part, "" // outside a turn: nothing is sent later
+	}
+	rows, ok := t.conn.HealthRowsNow(ctx, task, part.ID)
+	ar, isAlerts := rows.Rows.(healthsrc.AlertRows)
+	if !ok || !isAlerts || rows.Part.Alerts == nil {
+		part.Alerts = nil
+		return part, task + "/" + part.ID + ": the alerts could not be read with their source's terms, so their counts are left out"
+	}
+	if err := t.record(ar.Lineage); err != nil {
+		part.Alerts = nil
+		return part, task + "/" + part.ID + ": " + err.Error() + "; their counts are left out"
+	}
+	return rows.Part, ""
 }
 
 // as is a copy of t that runs one read under its citation ID.
@@ -346,7 +373,7 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 		if err := strictArgs(args, &a); err != nil {
 			return t.refuse(name, "", err)
 		}
-		return t.overview()
+		return t.overview(ctx)
 	case toolAttention:
 		var a struct {
 			Area string `json:"area"`
@@ -357,7 +384,7 @@ func (t *chatTools) Run(ctx context.Context, name string, args json.RawMessage) 
 		if a.Area != "" && !idRe.MatchString(a.Area) {
 			return t.refuse(name, a.Area, errors.New("area must be an area id from cluster_overview"))
 		}
-		return t.attention(a.Area)
+		return t.attention(ctx, a.Area)
 	case toolList:
 		var a struct {
 			Kind     string `json:"kind"`
@@ -1118,7 +1145,7 @@ type chatTask struct {
 	Parts      []chatPart `json:"parts"`
 }
 
-func (t *chatTools) overview() ChatToolResult {
+func (t *chatTools) overview(ctx context.Context) ChatToolResult {
 	sum, ok := t.conn.ChatSummary()
 	if !ok {
 		return t.failed(toolOverview, "observer", "", errors.New("Klyx has no health summary for this cluster yet"))
@@ -1135,6 +1162,12 @@ func (t *chatTools) overview() ChatToolResult {
 			}
 		}
 		for _, part := range task.Parts {
+			if part.Alerts != nil {
+				var problem string
+				if part, problem = t.alertsPart(ctx, task.ID, part); problem != "" {
+					problems = append(problems, problem)
+				}
+			}
 			ct.Parts = append(ct.Parts, toChatPart("", part, &p.redacted))
 			problems = append(problems, partProblems(task.ID, part)...)
 		}
@@ -1165,7 +1198,7 @@ type chatAttention struct {
 	Label     string `json:"label"`
 }
 
-func (t *chatTools) attention(area string) ChatToolResult {
+func (t *chatTools) attention(ctx context.Context, area string) ChatToolResult {
 	sum, ok := t.conn.ChatSummary()
 	if !ok {
 		return t.failed(toolAttention, "observer", area, errors.New("Klyx has no health summary for this cluster yet"))
@@ -1183,6 +1216,14 @@ func (t *chatTools) attention(area string) ChatToolResult {
 		}
 		found = true
 		for _, part := range task.Parts {
+			if part.Alerts != nil {
+				var problem string
+				if part, problem = t.alertsPart(ctx, task.ID, part); problem != "" {
+					problems = append(problems, problem)
+					parts = append(parts, toChatPart(task.ID, part, &p.redacted))
+					continue
+				}
+			}
 			// An unreadable, stale or capped part's count is not proof of
 			// absence (Codex reviews of aea77e7 and 4456049).
 			problems = append(problems, partProblems(task.ID, part)...)

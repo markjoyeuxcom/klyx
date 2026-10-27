@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,10 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/certmanager"
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/gitops/depgraph"
 	"github.com/moomora/klyx/internal/gwapi"
+	"github.com/moomora/klyx/internal/healthsrc"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/readfence"
@@ -219,6 +222,16 @@ func (r *turnRunner) guard() (*AIState, error) {
 			if p := r.s.memberProblem(st, m); p != "" {
 				return nil, &endError{reason: p}
 			}
+		}
+	}
+	// Settings S3a §4.3: every alert lineage the conversation read under
+	// still holds, or it ends - as a reconnect does
+	r.s.mu.Lock()
+	lineages := append([]alertmanager.Lineage(nil), r.c.lineages...)
+	r.s.mu.Unlock()
+	for _, l := range lineages {
+		if p := lineageProblem(r.c.cluster, l); p != "" {
+			return nil, &endError{reason: p + "; start a new conversation"}
 		}
 	}
 	return st, nil
@@ -1138,9 +1151,29 @@ func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*un
 	return g.r.c.conn.FluxObject(ctx, kind, ns, name)
 }
 
+// recordLineage keeps an alerts read's lineage with the conversation, for
+// good (Settings S3a §4.2). A read without a source records nothing. Rows
+// read under terms that have since moved are refused instead: a tool does
+// not use them, so the conversation is not ended over them.
+func (r *turnRunner) recordLineage(l alertmanager.Lineage) error {
+	if l == (alertmanager.Lineage{}) {
+		return nil
+	}
+	if p := lineageProblem(r.c.cluster, l); p != "" {
+		return errors.New(p + "; Klyx reads them again within " + healthsrc.AlertsCadence.String())
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if !slices.Contains(r.c.lineages, l) {
+		r.c.lineages = append(r.c.lineages, l)
+	}
+	return nil
+}
+
 // equip gives a turn's tools the service's Git and Loki reads, each behind
 // the turn's guard, and the conversation's ledger.
 func (r *turnRunner) equip(t *chatTools) {
+	t.record = r.recordLineage
 	if r.s.git != nil {
 		t.git = guardedGit{r: r, g: r.s.git}
 	}

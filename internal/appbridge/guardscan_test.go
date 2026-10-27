@@ -52,6 +52,7 @@ var reviewedContextFuncs = map[string]string{
 	"Ticket.Write":        "the ticket's fence and a write tracker on its argument",
 	"fenced":              "its argument with a cancellation the fence drives; a wrapper, never a new root",
 	"LogsService.reserve": "a log stream's lifetime: a read, never a guarded write's",
+	"withLineages":        "its argument with a lineage recorder value (WithValue), and its fence extended; a wrapper, never a new root (Settings S3a §4.3)",
 }
 
 // contextWrappers derive a context from their first argument.

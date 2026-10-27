@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/moomora/klyx/internal/ai"
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/bounds"
 	"github.com/moomora/klyx/internal/policy"
 )
@@ -182,6 +183,10 @@ type conversation struct {
 	// started is when it began: a plan names the work it ends by it
 	// (Settings slice F §5)
 	started time.Time
+	// lineages are the alert lineages its reads were made under,
+	// cumulative: trimming an exchange keeps them, since a later send still
+	// carries what those reads informed (Settings S3a §4.2)
+	lineages []alertmanager.Lineage
 }
 
 // activeTurn is the one running turn. stopped is set under the service lock
@@ -575,6 +580,13 @@ func (s *ChatService) stateLocked(c *conversation) ChatStateDTO {
 func (s *ChatService) planFenceLocked(c *conversation) string {
 	if c.ended != "" {
 		return "the investigation ended (" + c.ended + ")"
+	}
+	// Settings S3a §4.3: a plan resting partly on alerts read under terms
+	// that moved is withdrawn, as for the other fences
+	for _, l := range c.lineages {
+		if p := lineageProblem(c.cluster, l); p != "" {
+			return p
+		}
 	}
 	st := s.ai.load()
 	switch {

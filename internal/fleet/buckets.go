@@ -68,6 +68,9 @@ type outcome struct {
 	lineage   alertmanager.Lineage
 	display   string
 	redactor  safehttp.Redactor
+	// credRev is a direct installation's credential revision when the read
+	// began: the outcome is served only while it is current
+	credRev uint64
 }
 
 type bucket struct {
@@ -200,7 +203,7 @@ func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription
 		}
 		bu.mu.Lock()
 		if o := bu.outcome; o != nil {
-			if rev, in := o.cohort[member]; in && rev == sub.SubRev {
+			if rev, in := o.cohort[member]; in && rev == sub.SubRev && bu.credCurrent(o) {
 				r, at, err := bu.forMemberLocked(o, member)
 				bu.mu.Unlock()
 				return r, at, err
@@ -240,6 +243,15 @@ func (b *alertBuckets) hostDown(src config.SourceConfig) error {
 		return fmt.Errorf("%s's host %s is not connected", src.ID, src.Host)
 	}
 	return nil
+}
+
+// credCurrent is whether an outcome was read under the credential a direct
+// installation holds now. One read before a credential was stored,
+// replaced or removed is not served again: its lineage would not hold
+// (S3a §4.3), so the member asks for a read under the new one, keeping its
+// key.
+func (bu *bucket) credCurrent(o *outcome) bool {
+	return bu.src.Endpoint == "" || bu.b.creds.Revisions.Revision("source/"+bu.src.ID, config.EndpointAlertmanager) == o.credRev
 }
 
 // forMemberLocked is a member's share of an outcome, under bu.mu.
@@ -514,6 +526,9 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 	for m, s := range cohort {
 		o.cohort[m] = s.subRev
 	}
+	if src.Endpoint != "" {
+		o.credRev = b.creds.Revisions.Revision("source/"+src.ID, config.EndpointAlertmanager)
+	}
 	fail := func(err error) *outcome { o.err = err; return o }
 	// the whole read's budget starts before its turn at the installation
 	ctx, cancel := context.WithTimeout(bu.ctx, b.timeout)
@@ -562,7 +577,7 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 	if src.Endpoint != "" {
 		account, revKey := endpointcred.SourceAccount(src.ID), "source/"+src.ID
 		revs := b.creds.Revisions
-		credRev = revs.Revision(revKey, config.EndpointAlertmanager)
+		credRev = o.credRev
 		cred := endpointcred.Resolve(b.creds.Store, endpointcred.Input{Cluster: revKey, Kind: config.EndpointAlertmanager, Account: account,
 			Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}, Revoked: revs.Revoked(revKey, config.EndpointAlertmanager)})
 		auth := endpointhttp.Auth{Tenant: bu.key.Tenant}
