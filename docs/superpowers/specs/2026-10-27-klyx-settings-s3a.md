@@ -638,3 +638,9 @@ Codex closed R1 to R6, and found the memory test's failure phase now waits for t
 **Tests:** Codex's probes, as regression tests: a known-down host serving no held share, beside a usable one whose share is reused; a new revision within its bucket keeping its follow-up across the end of the old read. **Mutation pass:** 4 mutants, 2 caught at first; one did not build and was rewritten, and is caught. RR2's two fixes each close the gap alone, so removing either survives; removing both is caught.
 
 **Smoke:** 216/216 four ways at 214fafe, the smoke fleet.yaml as it began after every walk.
+
+## 23. ACCEPT: S3a-2 (2026-10-27)
+
+Codex accepted S3a-2 at revision 2 (70ffbee), with no remaining findings. That came after the review of fb8aff7 (six P2) and two re-reviews (§21-§22).
+
+Its last re-review reran every probe from the review and the re-reviews five times under the race detector, and agreed with §22 that RR2's two fixes each close the gap alone. It accepts the reading stage; the send fences are S3a-3, which must carry each read's own lineage through its rows, empty and count-only outcomes, stale evidence and what is derived from them.
