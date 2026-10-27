@@ -84,10 +84,11 @@ type bucket struct {
 	outcome *outcome
 	waiters []chan struct{}
 	// pending: an early read was asked for and has not started; inflight:
-	// the cohort of the read in progress. A member asks once (Codex's
-	// review of S3a-2, R4).
+	// the cohort of the read in progress, each member at the subscription
+	// revision it covers. A member asks once (Codex's review of S3a-2, R4),
+	// and a new revision owes its own read (re-review, RR2).
 	pending  bool
-	inflight map[ConnID]bool
+	inflight map[ConnID]uint64
 
 	// the bucket's dependency on its host's connection for its whole life
 	// (R6); its run goroutine's alone
@@ -191,6 +192,12 @@ func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription
 		if cur, ok := b.sources.Subscription(sub.Cluster); !ok || cur.SubRev != sub.SubRev {
 			return alertmanager.Read{Identity: key}, time.Time{}, errSubscriptionMoved
 		}
+		// a host known to be down serves nothing, a held share included: the
+		// read fails with its reason, and what was read before goes stale
+		// (S3a §3.3; Codex's re-review of S3a-2, RR1)
+		if err := b.hostDown(sub.Source); err != nil {
+			return alertmanager.Read{Identity: key}, time.Time{}, err
+		}
 		bu.mu.Lock()
 		if o := bu.outcome; o != nil {
 			if rev, in := o.cohort[member]; in && rev == sub.SubRev {
@@ -202,8 +209,9 @@ func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription
 		ch := make(chan struct{})
 		bu.waiters = append(bu.waiters, ch)
 		// one early read per join: none while a read that covers the member
-		// is in flight, or one is already asked for (R4)
-		if !bu.inflight[member] && !bu.pending {
+		// at this revision is in flight, or one is already asked for (R4,
+		// RR2)
+		if rev, in := bu.inflight[member]; !(in && rev == sub.SubRev) && !bu.pending {
 			bu.pending = true
 			bu.nudge()
 		}
@@ -216,6 +224,22 @@ func (b *alertBuckets) read(ctx context.Context, member ConnID, sub Subscription
 			return alertmanager.Read{Identity: key}, time.Time{}, ErrSourceChanged
 		}
 	}
+}
+
+// hostDown is why a hosted installation's host cannot serve now: not
+// connected, or connected and not usable. nil for a direct installation.
+func (b *alertBuckets) hostDown(src config.SourceConfig) error {
+	if src.Host == "" {
+		return nil
+	}
+	c, ok := b.host(src.Host)
+	if !ok {
+		return fmt.Errorf("%s's host %s is not connected", src.ID, src.Host)
+	}
+	if _, usable := c.publishedUsability(); !usable {
+		return fmt.Errorf("%s's host %s is not connected", src.ID, src.Host)
+	}
+	return nil
 }
 
 // forMemberLocked is a member's share of an outcome, under bu.mu.
@@ -429,6 +453,12 @@ func (bu *bucket) retire() {
 	bu.cancel()
 }
 
+func (bu *bucket) endInflight() {
+	bu.mu.Lock()
+	bu.inflight = nil
+	bu.mu.Unlock()
+}
+
 func (bu *bucket) readOnce() {
 	bu.mu.Lock()
 	// this read covers everyone in the cohort now, so an early read asked
@@ -439,24 +469,24 @@ func (bu *bucket) readOnce() {
 	}
 	cohort := maps.Clone(bu.cohort)
 	bu.pending = false
-	bu.inflight = make(map[ConnID]bool, len(cohort))
-	for m := range cohort {
-		bu.inflight[m] = true
+	bu.inflight = make(map[ConnID]uint64, len(cohort))
+	for m, s := range cohort {
+		bu.inflight[m] = s.subRev
 	}
 	bu.mu.Unlock()
-	defer func() {
-		bu.mu.Lock()
-		bu.inflight = nil
-		bu.mu.Unlock()
-	}()
 	if len(cohort) == 0 {
+		bu.endInflight()
 		return
 	}
 	o := bu.acquire(cohort)
 	if bu.ctx.Err() != nil {
+		bu.endInflight()
 		return // a cancelled bucket's outcome is never served
 	}
 	bu.mu.Lock()
+	// the read in flight ends as its outcome is published, in one step: a
+	// waiter it wakes never sees it still in flight (RR2)
+	bu.inflight = nil
 	if o.err != nil && bu.outcome != nil && bu.outcome.good {
 		prev := bu.outcome
 		o.shares, o.truncated, o.unmatched, o.good, o.lineage, o.display, o.redactor = prev.shares, prev.truncated, prev.unmatched, true, prev.lineage, prev.display, prev.redactor
@@ -515,14 +545,8 @@ func (bu *bucket) acquire(cohort map[ConnID]memberScope) *outcome {
 		if _, rev, ok := b.sources.Installation(src.ID); !ok || rev != bu.key.InstRev {
 			return fmt.Errorf("%s changed; it is read again for its new terms", src.ID)
 		}
-		if src.Host != "" {
-			c, ok := b.host(src.Host)
-			if !ok {
-				return fmt.Errorf("%s's host %s is not connected", src.ID, src.Host)
-			}
-			if _, usable := c.publishedUsability(); !usable {
-				return fmt.Errorf("%s's host %s is not connected", src.ID, src.Host)
-			}
+		if err := b.hostDown(src); err != nil {
+			return err
 		}
 		if b.access(src) != bu.key.Access {
 			return fmt.Errorf("%s's access changed; it is read again", src.ID)

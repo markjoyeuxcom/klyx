@@ -346,3 +346,92 @@ func TestAHostLeasedLaterIsHeld(t *testing.T) {
 	r.mustRead("dev")
 	waitFor2s(t, func() bool { return h.count() == 1 })
 }
+
+// Codex's re-review of S3a-2, RR1: a host known to be down serves nothing,
+// a held share included: the read fails with the host's reason, with no
+// request made; a usable host's held share is still reused.
+func TestAKnownDownHostServesNoHeldShare(t *testing.T) {
+	for _, down := range []bool{false, true} {
+		t.Run(map[bool]string{false: "usable", true: "down"}[down], func(t *testing.T) {
+			r := newBucketRig(t, hostedSource(), "dev")
+			first, at := r.mustRead("dev")
+			if len(first.Alerts) != 1 {
+				t.Fatal("fixture: the dev share")
+			}
+			before := r.reads()
+			if down {
+				r.host.mu.Lock()
+				r.host.state = Failed
+				r.host.mu.Unlock()
+			}
+			_, again, err := r.read("dev")
+			if r.reads() != before {
+				t.Fatal("the held share's read made a request")
+			}
+			if !down {
+				if err != nil || !again.Equal(at) {
+					t.Fatalf("the held share was not reused: at=%v err=%v", again, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "lgtm-we's host prd is not connected") {
+				t.Fatalf("a known-down host served its held share: %v", err)
+			}
+		})
+	}
+}
+
+// RR2: a member whose subscription changes within its bucket, while a read
+// of the old revision is in flight, owes its own follow-up, which the end
+// of that read never loses. The extra waiters only widen the window
+// between the outcome's publication and the waiters' wakeup.
+func TestANewRevisionKeepsItsFollowup(t *testing.T) {
+	r := newBucketRig(t, hostedSource(), "dev", "stg")
+	r.mustRead("dev")
+	r.mustRead("stg")
+	r.b.mu.Lock()
+	var bu *bucket
+	for _, b := range r.b.buckets {
+		bu = b
+	}
+	r.b.mu.Unlock()
+	waitFor2s(t, func() bool { bu.mu.Lock(); defer bu.mu.Unlock(); return bu.inflight == nil })
+	hold, entered := make(chan struct{}), make(chan struct{}, 1)
+	r.am.mu.Lock()
+	r.am.hold, r.am.entered = hold, entered
+	r.am.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	readDone := make(chan struct{})
+	go func() { bu.readOnce(); close(readDone) }() // the cadence's read
+	<-entered
+	if _, err := r.sources.Apply([]config.SourceConfig{hostedSource()}, []config.ClusterConfig{{Name: "prd"}, {Name: "stg"},
+		{Name: "dev", Alertmanager: &config.EndpointConfig{Source: "lgtm-we", Match: map[string]string{"cluster": "dev", "team": "new"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	key, _, _, _ := r.b.memberKey("dev")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	memberDone := make(chan error, 1)
+	go func() { _, _, err := r.conns["dev"].ReadAlertsAt(ctx, key); memberDone <- err }()
+	waitFor2s(t, func() bool { bu.mu.Lock(); defer bu.mu.Unlock(); return len(bu.waiters) > 0 })
+	bu.mu.Lock()
+	for i := 0; i < 100000; i++ {
+		bu.waiters = append(bu.waiters, make(chan struct{}))
+	}
+	bu.mu.Unlock()
+	release()
+	<-readDone
+	select {
+	case err := <-memberDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		bu.mu.Lock()
+		pending, early, inflight, waiters := bu.pending, len(bu.early), len(bu.inflight), len(bu.waiters)
+		bu.mu.Unlock()
+		t.Fatalf("the new revision lost its follow-up: pending=%v early=%d inflight=%d waiters=%d", pending, early, inflight, waiters)
+	}
+}
