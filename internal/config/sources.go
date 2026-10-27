@@ -63,10 +63,15 @@ func (c *Config) validateSources() error {
 			return fmt.Errorf("%s: id must be a DNS label (lowercase letters, digits and -), up to 63 characters", place)
 		}
 		if ids[s.ID] {
-			return fmt.Errorf("duplicate source id %q", s.ID)
+			return fmt.Errorf("duplicate source id %s", describeValue(s.ID))
 		}
 		ids[s.ID] = true
-		place = "sources." + s.ID
+		// named by its id when that is short enough to show, else by its
+		// index: a long id may be a pasted value (Codex's re-review of
+		// S3a-1, RR2)
+		if len([]rune(s.ID)) < 25 {
+			place = "sources." + s.ID
+		}
 		switch s.Kind {
 		case SourceKindAlertmanager:
 		case EndpointLoki, EndpointMetrics:
@@ -132,7 +137,7 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig) error 
 			set bool
 		}{{"source", e.Source != ""}, {"scope", e.Scope != ""}, {"off", e.Off}} {
 			if has(k.key, k.set) {
-				return fmt.Errorf("cluster %q: loki.%s is not built yet: this version subscribes Alertmanager only", cluster, k.key)
+				return fmt.Errorf("cluster %s: loki.%s is not built yet: this version subscribes Alertmanager only", describeValue(cluster), k.key)
 			}
 		}
 		return nil
@@ -155,19 +160,19 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig) error 
 	}
 	switch {
 	case e.wrote("off") && !e.Off:
-		return fmt.Errorf("cluster %q: alertmanager.off is true, or left out", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.off is true, or left out", describeValue(cluster))
 	case e.Off && besideOff:
-		return fmt.Errorf("cluster %q: alertmanager.off allows nothing beside it", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.off allows nothing beside it", describeValue(cluster))
 	case source && e.Source == "":
-		return fmt.Errorf("cluster %q: alertmanager.source names an installation in sources: it cannot be empty", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.source names an installation in sources: it cannot be empty", describeValue(cluster))
 	case source && locators:
-		return fmt.Errorf("cluster %q: alertmanager.source reaches its installation, so endpoint, serviceRef, auth and tlsSkipVerify are not allowed beside it", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.source reaches its installation, so endpoint, serviceRef, auth and tlsSkipVerify are not allowed beside it", describeValue(cluster))
 	case has("scope", e.Scope != "") && !source:
-		return fmt.Errorf("cluster %q: alertmanager.scope is allowed only with source", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.scope is allowed only with source", describeValue(cluster))
 	case has("scope", e.Scope != "") && e.Scope != ScopeTenant:
-		return fmt.Errorf("cluster %q: alertmanager.scope must be tenant", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.scope must be tenant", describeValue(cluster))
 	case e.Scope == ScopeTenant && has("match", len(e.Match) > 0):
-		return fmt.Errorf("cluster %q: alertmanager.scope: tenant takes everything in the tenant, so a match is not allowed beside it", cluster)
+		return fmt.Errorf("cluster %s: alertmanager.scope: tenant takes everything in the tenant, so a match is not allowed beside it", describeValue(cluster))
 	}
 	return nil
 }
@@ -247,9 +252,9 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		}
 		switch {
 		case len(named) > 1:
-			return nil, fmt.Errorf("cluster %q is served by name by both %s and %s: one installation serves a cluster at each step", cl.Name, named[0], named[1])
+			return nil, fmt.Errorf("cluster %s is served by name by both %s and %s: one installation serves a cluster at each step", describeValue(cl.Name), describeValue(named[0]), describeValue(named[1]))
 		case len(grouped) > 1:
-			return nil, fmt.Errorf("cluster %q's group %q is served by both %s and %s: one installation serves a group", cl.Name, cl.Group, grouped[0], grouped[1])
+			return nil, fmt.Errorf("cluster %s's group %s is served by both %s and %s: one installation serves a group", describeValue(cl.Name), describeValue(cl.Group), describeValue(grouped[0]), describeValue(grouped[1]))
 		}
 		implied, via := "", ""
 		if len(named) == 1 {
@@ -269,10 +274,10 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		case own.Source != "":
 			s, ok := byID[own.Source]
 			if !ok {
-				return nil, fmt.Errorf("cluster %q: alertmanager.source %s names no installation in sources", cl.Name, describeValue(own.Source))
+				return nil, fmt.Errorf("cluster %s: alertmanager.source %s names no installation in sources", describeValue(cl.Name), describeValue(own.Source))
 			}
 			if s.Kind != SourceKindAlertmanager {
-				return nil, fmt.Errorf("cluster %q: alertmanager.source %s is not an Alertmanager installation", cl.Name, describeValue(own.Source))
+				return nil, fmt.Errorf("cluster %s: alertmanager.source %s is not an Alertmanager installation", describeValue(cl.Name), describeValue(own.Source))
 			}
 			r = AMResolution{Mode: AMSubscribed, Via: ViaOwnBlock, Source: own.Source}
 		case own.Endpoint != "":
@@ -323,7 +328,7 @@ func scopeOf(r *AMResolution, s SourceConfig, cluster string, own *EndpointConfi
 		}
 	}
 	if len(m) == 0 {
-		return fmt.Errorf("cluster %q: %s has no memberLabel, so its subscription needs a scope: give alertmanager: {source: %s, match: ...} or scope: tenant", cluster, s.ID, s.ID)
+		return fmt.Errorf("cluster %s: the installation %s has no memberLabel, so its subscription needs a scope: give the cluster's alertmanager block that source with a match, or scope: tenant", describeValue(cluster), describeValue(s.ID))
 	}
 	r.Match = m
 	return nil
@@ -366,14 +371,14 @@ func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[st
 				if other == m {
 					other = ms[1]
 				}
-				return fmt.Errorf("clusters %q and %q share %s of %s, so neither can take scope: tenant", m, other, tenant, k.source)
+				return fmt.Errorf("clusters %s and %s share %s of %s, so neither can take scope: tenant", describeValue(m), describeValue(other), tenant, describeValue(k.source))
 			}
 			if label == "" {
-				return fmt.Errorf("clusters %q and %q share %s of %s, which has no memberLabel: give each its own tenant, or the installation a memberLabel", ms[0], ms[1], tenant, k.source)
+				return fmt.Errorf("clusters %s and %s share %s of %s, which has no memberLabel: give each its own tenant, or the installation a memberLabel", describeValue(ms[0]), describeValue(ms[1]), tenant, describeValue(k.source))
 			}
 			v := r.Match[label]
 			if prev, dup := values[v]; dup {
-				return fmt.Errorf("clusters %q and %q share %s of %s, both with %s set to %s, so their alerts cannot be told apart", prev, m, tenant, k.source, label, describeValue(v))
+				return fmt.Errorf("clusters %s and %s share %s of %s, both with %s set to %s, so their alerts cannot be told apart", describeValue(prev), describeValue(m), tenant, describeValue(k.source), describeKey(label), describeValue(v))
 			}
 			values[v] = m
 		}
@@ -443,9 +448,9 @@ func (c *Config) sourceWarnings() []string {
 		for _, sv := range s.Serves {
 			switch {
 			case sv.Cluster != "" && !names[sv.Cluster]:
-				w = append(w, fmt.Sprintf("source %q serves cluster %s, which is not in fleet.yaml", s.ID, describeValue(sv.Cluster)))
+				w = append(w, fmt.Sprintf("source %s serves cluster %s, which is not in fleet.yaml", describeValue(s.ID), describeValue(sv.Cluster)))
 			case sv.Group != "" && !groups[sv.Group]:
-				w = append(w, fmt.Sprintf("source %q serves group %s, which no cluster has", s.ID, describeValue(sv.Group)))
+				w = append(w, fmt.Sprintf("source %s serves group %s, which no cluster has", describeValue(s.ID), describeValue(sv.Group)))
 			}
 		}
 	}

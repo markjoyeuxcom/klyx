@@ -118,13 +118,13 @@ func TestResolutionModes(t *testing.T) {
 
 func TestResolutionConflicts(t *testing.T) {
 	other := "  - id: other\n    kind: alertmanager\n    host: lab\n    discover: true\n    memberLabel: cluster\n    serves: [{group: we}]\n"
-	if _, err := loadYAML(t, fleetWith("", "", "", lgtm+other)); err == nil || !strings.Contains(err.Error(), `group "we" is served by both lgtm-we and other`) {
+	if _, err := loadYAML(t, fleetWith("", "", "", lgtm+other)); err == nil || !strings.Contains(err.Error(), `group "we" is served by both "lgtm-we" and "other"`) {
 		t.Errorf("two by group: %v", err)
 	}
 	named := func(id string) string {
 		return "  - id: " + id + "\n    kind: alertmanager\n    host: lab\n    discover: true\n    memberLabel: cluster\n    serves: [{cluster: lab}]\n"
 	}
-	if _, err := loadYAML(t, fleetWith("", "", "", named("a")+named("b"))); err == nil || !strings.Contains(err.Error(), `cluster "lab" is served by name by both a and b`) {
+	if _, err := loadYAML(t, fleetWith("", "", "", named("a")+named("b"))); err == nil || !strings.Contains(err.Error(), `cluster "lab" is served by name by both "a" and "b"`) {
 		t.Errorf("two by name: %v", err)
 	}
 }
@@ -146,11 +146,11 @@ func TestScopes(t *testing.T) {
 		t.Errorf("a lone subscription without a member label takes its match: %+v", r["lab"])
 	}
 	for _, tc := range []struct{ prd, dev, lab, sources, want string }{
-		{"", "", "    alertmanager: {source: solo}\n", bare, `solo has no memberLabel, so its subscription needs a scope`},
-		{"", "", "", strings.Replace(bare, "    endpoint", "    serves: [{cluster: lab}]\n    endpoint", 1), `solo has no memberLabel`},
-		{"    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "", lgtm, `clusters "prd" and "dev" share the default tenant of lgtm-we, both with cluster set to "same"`},
-		{"", "    alertmanager: {source: lgtm-we, scope: tenant}\n", "", lgtm, `share the default tenant of lgtm-we, so neither can take scope: tenant`},
-		{"    alertmanager: {source: solo, match: {a: x}}\n", "    alertmanager: {source: solo, match: {a: y}}\n", "", bare, `clusters "prd" and "dev" share the default tenant of solo, which has no memberLabel`},
+		{"", "", "    alertmanager: {source: solo}\n", bare, `the installation "solo" has no memberLabel, so its subscription needs a scope`},
+		{"", "", "", strings.Replace(bare, "    endpoint", "    serves: [{cluster: lab}]\n    endpoint", 1), `the installation "solo" has no memberLabel`},
+		{"    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "    alertmanager: {source: lgtm-we, match: {cluster: same}}\n", "", lgtm, `clusters "prd" and "dev" share the default tenant of "lgtm-we", both with "cluster" set to "same"`},
+		{"", "    alertmanager: {source: lgtm-we, scope: tenant}\n", "", lgtm, `share the default tenant of "lgtm-we", so neither can take scope: tenant`},
+		{"    alertmanager: {source: solo, match: {a: x}}\n", "    alertmanager: {source: solo, match: {a: y}}\n", "", bare, `clusters "prd" and "dev" share the default tenant of "solo", which has no memberLabel`},
 	} {
 		if _, err := loadYAML(t, fleetWith(tc.prd, tc.dev, tc.lab, tc.sources)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: %v", tc.want, err)
@@ -244,5 +244,64 @@ func TestNewDiagnosticsWithholdLongValues(t *testing.T) {
 	}
 	if w := strings.Join(c.Warnings(), "\n"); strings.Contains(w, canary) || !strings.Contains(w, "a value of 41 characters") {
 		t.Errorf("warnings: %s", w)
+	}
+}
+
+// Codex's re-review of S3a-1 (2026-10-27), RR1 and RR2: keys inherited
+// through a YAML merge are written too, and identities and label names are
+// withheld like values.
+func TestMergedKeysAreWrittenToo(t *testing.T) {
+	for _, tc := range []struct{ name, inherited, block string }{
+		{"empty-source", `source: ""`, "alertmanager: {<<: *defaults}"},
+		{"loki-source", `source: ""`, "loki: {<<: *defaults}"},
+		{"loki-scope", `scope: ""`, "loki: {<<: *defaults}"},
+		{"loki-off", `off: false`, "loki: {<<: *defaults}"},
+		{"am-false-off", `off: false`, "alertmanager: {<<: *defaults}"},
+		{"source-with-empty-endpoint", `endpoint: ""`, "alertmanager: {<<: *defaults, source: lgtm-we}"},
+		{"off-with-empty-tenant", `tenant: ""`, "alertmanager: {<<: *defaults, off: true}"},
+		{"a merge sequence", `source: ""`, "alertmanager: {<<: [*other, *defaults]}"},
+		{"a nested merge", `<<: *inner`, "alertmanager: {<<: *defaults}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := "inner: &inner {source: \"\"}\nother: &other {tenant: t}\ndefaults: &defaults {" + tc.inherited + "}\n" + fleetWith("", "    "+tc.block+"\n", "", lgtm)
+			if cfg, err := loadYAML(t, doc); err == nil {
+				r, re := ResolveAlertmanager(cfg.Sources, cfg.Clusters)
+				t.Fatalf("a merged forbidden key loaded: resolution=%+v error=%v", r["dev"], re)
+			}
+		})
+	}
+	// valid merges and aliases still load, as they did
+	for _, block := range []string{"alertmanager: {<<: *ok}", "alertmanager: *ok"} {
+		doc := "ok: &ok {source: lgtm-we, tenant: t}\n" + fleetWith("", "    "+block+"\n", "", lgtm)
+		if _, err := loadYAML(t, doc); err != nil {
+			t.Errorf("%q: %v", block, err)
+		}
+	}
+}
+
+func TestIdentitiesAndLabelNamesAreWithheldToo(t *testing.T) {
+	const canary = "s3a1canary012345678901234567890123456789"
+	renamed := strings.ReplaceAll(lgtm, "lgtm-we", canary)
+	cases := map[string]string{
+		"duplicate-id":      fleetWith("", "", "", renamed+renamed),
+		"id-in-place":       fleetWith("", "", "", strings.Replace(renamed, "host: prd", "host: absent", 1)),
+		"id-in-warning":     fleetWith("", "", "", strings.Replace(renamed, "group: we", "group: absent", 1)),
+		"id-in-scope-error": fleetWith("", "", "    alertmanager: {source: "+canary+"}\n", "  - id: "+canary+"\n    kind: alertmanager\n    endpoint: https://am.example\n"),
+		"member-label-name": fleetWith("    alertmanager: {source: lgtm-we, match: {"+canary+": same}}\n", "    alertmanager: {source: lgtm-we, match: {"+canary+": same}}\n", "", strings.Replace(lgtm, "memberLabel: cluster", "memberLabel: "+canary, 1)),
+		"group-conflict":    strings.ReplaceAll(fleetWith("", "", "", lgtm+strings.ReplaceAll(lgtm, "lgtm-we", "other-am")), "group: we", "group: "+canary),
+	}
+	for name, doc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := loadYAML(t, doc)
+			if err != nil {
+				if strings.Contains(err.Error(), canary) || strings.Contains(DisplayError(err), canary) {
+					t.Fatalf("an identity or label name echoed whole: %v", err)
+				}
+				return
+			}
+			if strings.Contains(strings.Join(cfg.Warnings(), "\n"), canary) {
+				t.Fatal("an identity echoed whole in a warning")
+			}
+		})
 	}
 }

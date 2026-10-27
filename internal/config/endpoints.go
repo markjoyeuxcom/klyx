@@ -69,13 +69,38 @@ func (e *EndpointConfig) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*e = EndpointConfig(p)
-	e.keys = nil
-	if n.Kind == yaml.MappingNode {
+	e.keys = mappingKeys(n, map[*yaml.Node]bool{})
+	return nil
+}
+
+// mappingKeys are the keys a mapping writes, its merges included: a merge
+// key's mapping, an alias to one, or a sequence of them, nested merges
+// too, each node once (Codex's re-review of S3a-1, RR1). Precedence does
+// not matter here: a key written anywhere in the merge is written.
+func mappingKeys(n *yaml.Node, seen map[*yaml.Node]bool) []string {
+	for hops := 0; n != nil && n.Kind == yaml.AliasNode && hops < 64; hops++ {
+		n = n.Alias
+	}
+	if n == nil || seen[n] {
+		return nil
+	}
+	seen[n] = true
+	var out []string
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			out = append(out, mappingKeys(c, seen)...)
+		}
+	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			e.keys = append(e.keys, n.Content[i].Value)
+			if k := n.Content[i]; k.ShortTag() == "!!merge" {
+				out = append(out, mappingKeys(n.Content[i+1], seen)...)
+			} else {
+				out = append(out, k.Value)
+			}
 		}
 	}
-	return nil
+	return out
 }
 
 // wrote reports whether the block wrote key, whatever its value.

@@ -187,7 +187,7 @@ func endpointEntries() []Entry {
 		out = append(out,
 			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, else discovery", "An id in sources, of kind alertmanager."),
 			sub(kind, "scope", "scope", "tenant takes everything in the subscription's tenant as the cluster's own. Allowed only when no other subscription of the installation shares that tenant.", "the member label equal to the cluster's name, and the match", "tenant, with source; no match beside it."),
-			sub(kind, "off", "off", "Reads no alerts for the cluster, and says so, even when an installation serves it.", "false", "true or false; nothing else in the block."),
+			sub(kind, "off", "off", "Reads no alerts for the cluster, and says so, even when an installation serves it.", "left out: alerts are read", "true, or left out; nothing else in the block."),
 		)
 	}
 	tok := Entry{ID: "clusters[].metrics.token", Section: Observability, Label: "Metrics token (legacy)", Effect: "A plain-text bearer token, still read. External endpoints moves it to the keychain and replaces this line with auth.", Scope: "endpoint",

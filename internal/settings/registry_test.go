@@ -191,3 +191,13 @@ func TestCredentialsAreTheirOwnEntries(t *testing.T) {
 		}
 	}
 }
+
+// The registry says what the loader accepts: alertmanager.off is true or
+// left out (Codex's re-review of S3a-1, RR3).
+func TestOffSaysWhatTheLoaderAccepts(t *testing.T) {
+	for _, e := range Registry() {
+		if e.ID == "clusters[].alertmanager.off" && !strings.HasPrefix(e.Validation, "true, or left out") {
+			t.Fatalf("off: %q", e.Validation)
+		}
+	}
+}
