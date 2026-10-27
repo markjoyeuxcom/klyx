@@ -3,9 +3,11 @@ package appbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/fleet"
@@ -45,10 +47,22 @@ func lineageProblem(cluster string, l alertmanager.Lineage) string {
 	return ""
 }
 
+// alertTerms closes the admission of alert dependencies across an
+// Observability Apply (Settings S3a §5; Codex's review of S3a-4a, R6): a
+// lineage is checked and recorded under its read lock, and an Apply holds
+// its write lock from its final work list until its publication. A read
+// made meanwhile records its lineage after the publication, and is then
+// refused when the terms it was read under moved: no work holding the old
+// terms starts unnamed.
+var alertTerms sync.RWMutex
+
 // lineageSet is the alert lineages one call's evidence was read under: its
 // fence checks them before every later read and at the send (S3a §4.3).
+// Each is named, while its call runs, in an Observability plan's work.
 type lineageSet struct {
+	id      uint64
 	cluster string
+	started time.Time
 	mu      sync.Mutex
 	list    []alertmanager.Lineage
 }
@@ -59,6 +73,8 @@ func (s *lineageSet) add(l alertmanager.Lineage) error {
 	if l == (alertmanager.Lineage{}) {
 		return nil
 	}
+	alertTerms.RLock()
+	defer alertTerms.RUnlock()
 	if p := lineageProblem(s.cluster, l); p != "" {
 		return errors.New(p)
 	}
@@ -68,6 +84,32 @@ func (s *lineageSet) add(l alertmanager.Lineage) error {
 		s.list = append(s.list, l)
 	}
 	return nil
+}
+
+// explainCalls are the calls fenced by their lineages, while they run.
+var explainCalls = struct {
+	mu   sync.Mutex
+	seq  uint64
+	sets map[uint64]*lineageSet
+}{sets: map[uint64]*lineageSet{}}
+
+// explainAlertWork is the running calls holding alerts read on clusters,
+// by identity (R6): their next send is refused once the terms move.
+func explainAlertWork(in map[string]bool) []PlanWorkDTO {
+	explainCalls.mu.Lock()
+	defer explainCalls.mu.Unlock()
+	var out []PlanWorkDTO
+	for _, set := range explainCalls.sets {
+		set.mu.Lock()
+		held := len(set.list) > 0
+		set.mu.Unlock()
+		if !held || !in[set.cluster] {
+			continue
+		}
+		out = append(out, PlanWorkDTO{ID: fmt.Sprintf("explain:%d", set.id), Kind: "explain", Cluster: set.cluster, Started: set.started.UTC().Format(time.RFC3339),
+			What: "an Explain on " + set.cluster + " holding alerts read under the old terms: its send is refused"})
+	}
+	return out
 }
 
 func (s *lineageSet) problem(cluster string) error {
@@ -82,16 +124,27 @@ func (s *lineageSet) problem(cluster string) error {
 	return nil
 }
 
-// withLineages fences a call's evidence (Explain, Suggest-fix): the fence,
-// then every lineage its reads recorded through the context.
-func withLineages(ctx context.Context, cluster string, fence func() error) (context.Context, func() error) {
-	set := &lineageSet{cluster: cluster}
+// withLineages fences a call's evidence (Explain): the fence, then every
+// lineage its reads recorded through the context. done ends the call's
+// place in Observability plans' work.
+func withLineages(ctx context.Context, cluster string, fence func() error) (context.Context, func() error, func()) {
+	set := &lineageSet{cluster: cluster, started: time.Now()}
+	explainCalls.mu.Lock()
+	explainCalls.seq++
+	set.id = explainCalls.seq
+	explainCalls.sets[set.id] = set
+	explainCalls.mu.Unlock()
+	done := func() {
+		explainCalls.mu.Lock()
+		delete(explainCalls.sets, set.id)
+		explainCalls.mu.Unlock()
+	}
 	return context.WithValue(ctx, lineageRecorderKey{}, set.add), func() error {
 		if err := fence(); err != nil {
 			return err
 		}
 		return set.problem(cluster)
-	}
+	}, done
 }
 
 type lineageRecorderKey struct{}

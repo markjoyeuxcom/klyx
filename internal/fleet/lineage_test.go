@@ -2,6 +2,8 @@ package fleet
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -249,14 +251,15 @@ func TestAnInstallationsStatusIsReadOnce(t *testing.T) {
 	r := newBucketRig(t, hostedSource(), "dev")
 	r.am.status = `{"versionInfo":{"version":"0.28.1"},"cluster":{"status":"ready","peers":[{},{},{}]}}`
 	reg := lineageRegistry(r)
-	st, where, err := reg.InstallationStatus(context.Background(), "lgtm-we")
+	_, rev, _ := r.sources.Installation("lgtm-we")
+	st, where, err := reg.InstallationStatus(context.Background(), "lgtm-we", rev)
 	if err != nil || st.Version != "0.28.1" || where != "Service monitoring/am:web" {
 		t.Fatalf("%+v %q %v", st, where, err)
 	}
 	if r.reads() != 0 {
 		t.Fatal("the test read alerts")
 	}
-	if _, _, err := reg.InstallationStatus(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), "is not in force") {
+	if _, _, err := reg.InstallationStatus(context.Background(), "nope", 1); err == nil || !strings.Contains(err.Error(), "is not in force") {
 		t.Fatalf("an unknown installation: %v", err)
 	}
 	usable(r.host, 1)
@@ -266,7 +269,7 @@ func TestAnInstallationsStatusIsReadOnce(t *testing.T) {
 	r.am.mu.Lock()
 	before := len(r.am.queries["/api/v2/status"])
 	r.am.mu.Unlock()
-	if _, _, err := reg.InstallationStatus(context.Background(), "lgtm-we"); err == nil || !strings.Contains(err.Error(), "host prd is not connected") {
+	if _, _, err := reg.InstallationStatus(context.Background(), "lgtm-we", rev); err == nil || !strings.Contains(err.Error(), "host prd is not connected") {
 		t.Fatalf("a down host: %v", err)
 	}
 	r.am.mu.Lock()
@@ -298,5 +301,76 @@ func TestPublishSourcesMovesWhatChanged(t *testing.T) {
 	}
 	if sub, ok := r.sources.Subscription("dev"); !ok || sub.Tenant != "ops" {
 		t.Fatalf("dev's subscription: %+v", sub)
+	}
+}
+
+// Codex's review of S3a-4a, R5: publishing a change to an installation
+// re-keys its member at once, though the member's block is the same; an
+// unchanged publication re-keys nothing.
+func TestPublishRekeysAMemberUnderAnUnchangedBlock(t *testing.T) {
+	for _, move := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "tenant changed"}[move], func(t *testing.T) {
+			r := newBucketRig(t, hostedSource(), "dev")
+			reg := lineageRegistry(r)
+			r.mustRead("dev")
+			var keys []string
+			r.conns["dev"].setAlertsRekey(func(key string) { keys = append(keys, key) })
+			next := hostedSource()
+			if move {
+				next.Tenant = "ops"
+			}
+			if err := reg.PublishSources([]config.SourceConfig{next}, []config.ClusterConfig{{Name: "prd"}, {Name: "dev"}}); err != nil {
+				t.Fatal(err)
+			}
+			want, _, _, _ := r.b.memberKey("dev")
+			if move && (len(keys) != 1 || r.conns["dev"].AlertsIdentity() != want) {
+				t.Fatalf("the old collection stayed current: %d re-keys, identity %q, wanted %q", len(keys), r.conns["dev"].AlertsIdentity(), want)
+			}
+			if !move && len(keys) != 0 {
+				t.Fatalf("an unchanged publication re-keyed: %v", keys)
+			}
+		})
+	}
+}
+
+// R3: an installation's Test is fenced by the revision reviewed: one that
+// moves before the request sends nothing and says so; one already moved
+// is refused before anything.
+func TestAnInstallationsTestIsFencedByItsRevision(t *testing.T) {
+	for _, move := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "moved before the request"}[move], func(t *testing.T) {
+			src := config.SourceConfig{ID: "shared", Kind: config.SourceKindAlertmanager, Endpoint: "https://am.example/before", MemberLabel: "cluster", Serves: []config.ServeConfig{{Cluster: "dev"}}}
+			r := newBucketRig(t, src, "dev")
+			reg := lineageRegistry(r)
+			_, rev, _ := r.sources.Installation("shared")
+			requests := 0
+			r.b.client = func(safehttp.Policy) *http.Client {
+				if move {
+					next := src
+					next.Endpoint = "https://am.example/after"
+					if _, err := r.sources.Apply([]config.SourceConfig{next}, []config.ClusterConfig{{Name: "prd"}, {Name: "dev"}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return &http.Client{Transport: f1RT(func(req *http.Request) (*http.Response, error) {
+					requests++
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"versionInfo":{"version":"0.28.1"},"cluster":{"status":"ready","peers":[]}}`)), Header: http.Header{}, Request: req}, nil
+				})}
+			}
+			_, _, err := reg.InstallationStatus(context.Background(), "shared", rev)
+			if !move {
+				if err != nil || requests != 1 {
+					t.Fatalf("requests %d: %v", requests, err)
+				}
+				return
+			}
+			if err == nil || requests != 0 || !strings.Contains(err.Error(), "changed during the test") {
+				t.Fatalf("a moved installation was read: requests %d: %v", requests, err)
+			}
+			_, now, _ := r.sources.Installation("shared")
+			if _, _, err := reg.InstallationStatus(context.Background(), "shared", rev); err == nil || !strings.Contains(err.Error(), "changed since it was shown") || now == rev {
+				t.Fatalf("a stale revision: %v", err)
+			}
+		})
 	}
 }

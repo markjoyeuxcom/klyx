@@ -21,42 +21,50 @@ import (
 // WireSourceCredentials gives the endpoint actions the installations in
 // force and their test (main: the registry's AlertSources and
 // InstallationStatus).
-func WireSourceCredentials(es *EndpointsService, active func() *fleet.AlertSources, status func(ctx context.Context, id string) (alertmanager.Status, string, error)) {
+func WireSourceCredentials(es *EndpointsService, active func() *fleet.AlertSources, status func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error)) {
 	es.sources, es.sourceStatus = active, status
 }
 
 // reviewedSource is the installation the person reviewed, still in force
-// at its revision.
-func (s *EndpointsService) reviewedSource(id, revision string) (config.SourceConfig, error) {
+// at its revision, and that revision. A credential action resolves it
+// inside the fleet Apply lock, so no Observability Apply moves it between
+// the check and the change (Codex's review of S3a-4a, R2).
+func (s *EndpointsService) reviewedSource(id, revision string) (config.SourceConfig, uint64, error) {
 	if s.sources == nil || s.sources() == nil {
-		return config.SourceConfig{}, fmt.Errorf("no installation is in force")
+		return config.SourceConfig{}, 0, fmt.Errorf("no installation is in force")
 	}
 	src, rev, ok := s.sources().Installation(id)
 	if !ok {
-		return config.SourceConfig{}, fmt.Errorf("%s is not in force", shownInstallation(id))
+		return config.SourceConfig{}, 0, fmt.Errorf("%s is not in force", shownInstallation(id))
 	}
 	if strconv.FormatUint(rev, 10) != revision {
-		return config.SourceConfig{}, fmt.Errorf("%s changed since it was shown: review it again", shownInstallation(id))
+		return config.SourceConfig{}, 0, fmt.Errorf("%s changed since it was shown: review it again", shownInstallation(id))
 	}
-	return src, nil
+	return src, rev, nil
 }
 
 // SetSourceCredential stores the secret for an installation the person
 // reviewed, bound to its endpoint's origin, under its own account; its
-// credential revision moves, so every read takes it.
+// credential revision moves, so every read takes it. The installation, its
+// origin and its auth type are read inside the fleet Apply lock.
 func (s *EndpointsService) SetSourceCredential(id, revision, secret string) EndpointActionDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	red := safehttp.NewRedactor([]string{secret})
-	src, err := s.reviewedSource(id, revision)
-	if err != nil {
-		return fail(red, err)
-	}
 	switch {
 	case s.store == nil:
 		return EndpointActionDTO{Message: "keychain unavailable: no credential store"}
 	case secret == "":
 		return EndpointActionDTO{Message: "enter the credential to store"}
+	}
+	if s.fleetLock != nil {
+		defer s.fleetLock()()
+	}
+	src, _, err := s.reviewedSource(id, revision)
+	if err != nil {
+		return fail(red, err)
+	}
+	switch {
 	case src.Endpoint == "":
 		return EndpointActionDTO{Message: "a hosted installation is read through its host's API server; it takes no credential, and nothing was stored"}
 	case src.Auth == nil:
@@ -73,9 +81,6 @@ func (s *EndpointsService) SetSourceCredential(id, revision, secret string) Endp
 	if err != nil {
 		return fail(red, err)
 	}
-	if s.fleetLock != nil {
-		defer s.fleetLock()()
-	}
 	if err := s.store.Set(endpointcred.SourceAccount(id), v); err != nil {
 		return fail(red, err)
 	}
@@ -84,19 +89,20 @@ func (s *EndpointsService) SetSourceCredential(id, revision, secret string) Endp
 }
 
 // RemoveSourceCredential stops an installation's credential being used, at
-// once, in memory, and then deletes it from the keychain.
+// once, in memory, and then deletes it from the keychain; the installation
+// is read inside the fleet Apply lock.
 func (s *EndpointsService) RemoveSourceCredential(id, revision string) EndpointActionDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	red := safehttp.NewRedactor()
-	if _, err := s.reviewedSource(id, revision); err != nil {
-		return fail(red, err)
-	}
 	if s.store == nil {
 		return EndpointActionDTO{Message: "keychain unavailable: no credential store"}
 	}
 	if s.fleetLock != nil {
 		defer s.fleetLock()()
+	}
+	if _, _, err := s.reviewedSource(id, revision); err != nil {
+		return fail(red, err)
 	}
 	s.revs.Revoke("source/"+id, config.EndpointAlertmanager)
 	if err := s.store.Delete(endpointcred.SourceAccount(id)); err != nil {
@@ -105,11 +111,12 @@ func (s *EndpointsService) RemoveSourceCredential(id, revision string) EndpointA
 	return EndpointActionDTO{OK: true, Message: "Removed from use and from the keychain."}
 }
 
-// TestSource reads the installation the person reviewed once, through the
-// transport its reads take: its status, never its alerts.
+// TestSource reads the installation the person reviewed once, at the
+// revision shown, through the transport its reads take: its status, never
+// its alerts. The read is fenced by that revision (R3).
 func (s *EndpointsService) TestSource(id, revision string) EndpointActionDTO {
 	s.mu.Lock()
-	_, err := s.reviewedSource(id, revision)
+	_, rev, err := s.reviewedSource(id, revision)
 	s.mu.Unlock()
 	if err != nil {
 		return fail(safehttp.NewRedactor(), err)
@@ -119,7 +126,7 @@ func (s *EndpointsService) TestSource(id, revision string) EndpointActionDTO {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
 	defer cancel()
-	st, where, err := s.sourceStatus(ctx, id)
+	st, where, err := s.sourceStatus(ctx, id, rev)
 	if err != nil {
 		return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
 	}

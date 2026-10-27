@@ -110,8 +110,13 @@ func (r *Registry) PublishSources(sources []config.SourceConfig, running []confi
 	if a == nil {
 		return nil
 	}
-	if _, err := a.Apply(sources, running); err != nil {
+	changed, err := a.Apply(sources, running)
+	if err != nil {
 		return err
+	}
+	moved := map[string]bool{}
+	for _, name := range changed {
+		moved[name] = true
 	}
 	for _, cc := range running {
 		c, ok := r.Conn(cc.Name)
@@ -121,16 +126,23 @@ func (r *Registry) PublishSources(sources []config.SourceConfig, running []confi
 		}
 		if want := config.ConnectionAlertmanager(sources, cc); !sameEndpoint(cl.AlertmanagerConfig(), want) {
 			cl.SetAlertmanagerConfig(want)
+		} else if moved[cc.Name] {
+			// its installation or subscription moved under the same block:
+			// re-keyed now, not at its next read (Codex's review of S3a-4a, R5)
+			cl.reidentify()
 		}
 	}
 	return nil
 }
 
 // InstallationStatus reads an installation's status once, as the person
-// tests it (Settings S3a §5): through the transport its reads take, in a
-// fleet-wide slot, and never into a bucket's outcome. An observed 401 or
-// 403 is reported, not counted as a loss of access.
-func (r *Registry) InstallationStatus(ctx context.Context, id string) (alertmanager.Status, string, error) {
+// tests it (Settings S3a §5): the installation at the revision reviewed,
+// through the transport its reads take, in a fleet-wide slot, and never
+// into a bucket's outcome. The request is fenced as a bucket's is, before
+// and after, by that revision, its host, its access and its credential
+// (Codex's review of S3a-4a, R3). An observed 401 or 403 is reported, not
+// counted as a loss of access.
+func (r *Registry) InstallationStatus(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error) {
 	a := r.AlertSources()
 	r.mu.RLock()
 	b := r.alerts
@@ -142,9 +154,13 @@ func (r *Registry) InstallationStatus(ctx context.Context, id string) (alertmana
 	if !ok {
 		return alertmanager.Status{}, "", fmt.Errorf("%s is not in force", id)
 	}
+	if rev != revision {
+		return alertmanager.Status{}, "", fmt.Errorf("%s changed since it was shown: review it again", id)
+	}
 	if err := b.hostDown(src); err != nil {
 		return alertmanager.Status{}, "", err
 	}
+	access := b.access(src)
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	select {
@@ -157,13 +173,31 @@ func (r *Registry) InstallationStatus(ctx context.Context, id string) (alertmana
 	if src.Endpoint != "" {
 		credRev = b.creds.Revisions.Revision("source/"+id, config.EndpointAlertmanager)
 	}
+	check := func() error {
+		if _, now, ok := a.Installation(id); !ok || now != revision {
+			return fmt.Errorf("%s changed during the test, so nothing is said of it", id)
+		}
+		if err := b.hostDown(src); err != nil {
+			return err
+		}
+		if b.access(src) != access {
+			return fmt.Errorf("%s's access changed during the test", id)
+		}
+		if src.Endpoint != "" && b.creds.Revisions.Revision("source/"+id, config.EndpointAlertmanager) != credRev {
+			return fmt.Errorf("%s's credential changed during the test", id)
+		}
+		return nil
+	}
 	tr, err := b.transport(ctx, cancel, src, rev, src.Tenant, credRev, "a test of "+id)
 	if err != nil {
 		return alertmanager.Status{}, "", err
 	}
 	defer tr.release()
 	red := tr.am.redactor
-	st, err := amGet(ctx, tr.am, "/api/v2/status", nil, alertmanager.ParseStatus)
+	st, err := bucketGet(ctx, tr.am, "/api/v2/status", nil, alertmanager.ParseStatus, check)
+	if errors.Is(err, errAccessDenied) {
+		err = fmt.Errorf("%s refused Klyx's read (401 or 403)", id)
+	}
 	if err != nil {
 		return alertmanager.Status{}, red.Text(tr.display), err
 	}

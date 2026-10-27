@@ -38,7 +38,7 @@ func sourceCredRig(t *testing.T, sources ...config.SourceConfig) (*EndpointsServ
 		t.Fatal(err)
 	}
 	es := NewEndpointsService(path, store, revs, func(string) (EndpointConn, bool) { return nil, false })
-	WireSourceCredentials(es, func() *fleet.AlertSources { return a }, func(_ context.Context, id string) (alertmanager.Status, string, error) {
+	WireSourceCredentials(es, func() *fleet.AlertSources { return a }, func(_ context.Context, id string, _ uint64) (alertmanager.Status, string, error) {
 		if id == "down" {
 			return alertmanager.Status{}, "", errors.New("down: the credential is missing")
 		}

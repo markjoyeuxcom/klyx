@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"sort"
 	"strconv"
@@ -468,6 +469,11 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 // subscriptions are put in force, from the resolution already checked.
 func (s *SourcesService) ApplySources(digest string) ApplyResultDTO {
 	defer FleetApplyLock(s.cs)()
+	// no alert dependency is recorded from the final work list until the
+	// publication: one made meanwhile is checked against the new terms
+	// (Codex's review of S3a-4a, R6)
+	alertTerms.Lock()
+	defer alertTerms.Unlock()
 	v, ok := s.cache.get(digest)
 	if !ok {
 		return ApplyResultDTO{Error: "This plan expired or was already applied: review the changes again."}
@@ -488,6 +494,11 @@ func (s *SourcesService) ApplySources(digest string) ApplyResultDTO {
 			}
 			return ApplyResultDTO{Error: config.DisplayError(err)}
 		}
+	} else if err := s.cs.fileIs(re.plan.FileVersion); err != nil {
+		// "Use the file's values" adopts the file as it is at the
+		// publication, never as it was read (R1)
+		np := s.plan(c)
+		return ApplyResultDTO{Error: "fleet.yaml changed while this was applied, so nothing was put in force: review the new plan.", Plan: &np.plan}
 	}
 	s.cache.consume(digest)
 	for name, block := range re.runBlocks {
@@ -637,7 +648,14 @@ func installationChanges(from, to []config.SourceConfig) []PlanChangeDTO {
 		case !has:
 			out = append(out, PlanChangeDTO{ID: "sources." + id, Label: "Installation " + shownInstallation(id), From: sourceWords(o), To: "removed"})
 		default:
-			out = append(out, PlanChangeDTO{ID: "sources." + id, Label: "Installation " + shownInstallation(id), From: sourceWords(o), To: sourceWords(n)})
+			// each material input that changed, in its own line (R4)
+			of, nf := fieldMap(installationFields(o)), fieldMap(installationFields(n))
+			for _, f := range sourceFieldOrder {
+				if of[f] != nf[f] {
+					out = append(out, PlanChangeDTO{ID: "sources." + id + "." + strings.ReplaceAll(f, " ", "-"), Label: shownInstallation(id) + "'s " + f,
+						From: orNone(of[f]), To: orNone(nf[f])})
+				}
+			}
 		}
 	}
 	return out
@@ -658,22 +676,49 @@ func whereOf(src config.SourceConfig) string {
 	return "an endpoint"
 }
 
-// sourceWords is an installation in words: where it is, its defaults, and
-// what it serves.
-func sourceWords(src config.SourceConfig) string {
-	parts := []string{whereOf(src)}
-	if src.Tenant != "" {
-		parts = append(parts, "tenant "+src.Tenant)
+// sourceFieldOrder is the order an installation's inputs are said in.
+var sourceFieldOrder = []string{"name", "host", "Service", "discovery", "endpoint", "certificate", "auth", "tenant", "member label", "serves"}
+
+// installationFields are an installation's material inputs, each in words: the
+// request's target, how it authenticates, its defaults and what it serves.
+// A plan says each that changes (Codex's review of S3a-4a, R4); no secret
+// is among them.
+func installationFields(src config.SourceConfig) [][2]string {
+	var out [][2]string
+	add := func(k, v string) {
+		if v != "" {
+			out = append(out, [2]string{k, v})
+		}
 	}
-	if src.Auth != nil {
-		parts = append(parts, "auth "+src.Auth.Type)
+	add("name", src.Name)
+	add("host", src.Host)
+	if r := src.ServiceRef; r != nil {
+		scheme := r.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+		svc := fmt.Sprintf("%s %s/%s:%s", scheme, r.Namespace, r.Name, r.Port)
+		if r.Path != "" {
+			svc += ", path " + r.Path
+		}
+		add("Service", svc)
 	}
+	if src.Discover {
+		add("discovery", "discovered in its host")
+	}
+	add("endpoint", endpointWords(src.Endpoint))
 	if src.TLSSkipVerify {
-		parts = append(parts, "certificate not verified")
+		add("certificate", "not verified")
 	}
-	if src.MemberLabel != "" {
-		parts = append(parts, "member label "+src.MemberLabel)
+	if a := src.Auth; a != nil {
+		if a.Username != "" {
+			add("auth", a.Type+" as "+a.Username)
+		} else {
+			add("auth", a.Type)
+		}
 	}
+	add("tenant", src.Tenant)
+	add("member label", src.MemberLabel)
 	var serves []string
 	for _, sv := range src.Serves {
 		if sv.Group != "" {
@@ -682,8 +727,52 @@ func sourceWords(src config.SourceConfig) string {
 			serves = append(serves, sv.Cluster)
 		}
 	}
-	if len(serves) > 0 {
-		parts = append(parts, "serves "+strings.Join(serves, ", "))
+	sort.Strings(serves)
+	add("serves", strings.Join(serves, ", "))
+	return out
+}
+
+// endpointWords is an endpoint as a plan says it: its origin and path; a
+// query is named, never shown.
+func endpointWords(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "an endpoint that does not parse"
+	}
+	o, err := safehttp.OriginOf(endpoint)
+	if err != nil {
+		return "an endpoint that does not parse"
+	}
+	w := o + u.EscapedPath()
+	if u.RawQuery != "" {
+		w += " (with a query)"
+	}
+	return w
+}
+
+func fieldMap(fields [][2]string) map[string]string {
+	m := map[string]string{}
+	for _, f := range fields {
+		m[f[0]] = f[1]
+	}
+	return m
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
+}
+
+// sourceWords is an installation in words: every input, in order.
+func sourceWords(src config.SourceConfig) string {
+	var parts []string
+	for _, f := range installationFields(src) {
+		parts = append(parts, f[0]+" "+f[1])
 	}
 	return strings.Join(parts, "; ")
 }
@@ -791,11 +880,14 @@ func normSource(s config.SourceConfig) config.SourceConfig {
 	return n
 }
 
+// normSources is installations for a comparison, in order of id: their
+// order in the file means nothing (Codex's review of S3a-4a, R7).
 func normSources(list []config.SourceConfig) []config.SourceConfig {
 	out := make([]config.SourceConfig, 0, len(list))
 	for _, s := range list {
 		out = append(out, normSource(s))
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

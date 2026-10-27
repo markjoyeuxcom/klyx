@@ -94,7 +94,7 @@ func TestASourcesPlanAddsAnInstallationAndASubscription(t *testing.T) {
 	if p.Refused != "" || !p.Writes || !p.Activates || p.Section != "observability" {
 		t.Fatalf("%+v", p)
 	}
-	if c, ok := change(p, "sources.lgtm-we"); !ok || c.From != "none" || !strings.Contains(c.To, "Service monitoring/am:web in prd") {
+	if c, ok := change(p, "sources.lgtm-we"); !ok || c.From != "none" || c.To != "host prd; Service http monitoring/am:web; member label cluster; serves prd" {
 		t.Fatalf("installation: %+v", p.Changes)
 	}
 	if c, ok := change(p, "clusters.dev.alertmanager"); !ok || c.To != "subscribed to lgtm-we" {

@@ -142,6 +142,7 @@ func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
 			break
 		}
 	}
+	out = append(out, explainAlertWork(in)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }

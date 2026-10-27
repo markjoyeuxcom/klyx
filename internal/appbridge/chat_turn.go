@@ -1159,6 +1159,9 @@ func (r *turnRunner) recordLineage(l alertmanager.Lineage) error {
 	if l == (alertmanager.Lineage{}) {
 		return nil
 	}
+	// never while an Observability Apply moves the terms (S3a-4a, R6)
+	alertTerms.RLock()
+	defer alertTerms.RUnlock()
 	if p := lineageProblem(r.c.cluster, l); p != "" {
 		return errors.New(p + "; Klyx reads them again within " + healthsrc.AlertsCadence.String())
 	}

@@ -105,7 +105,7 @@ type EndpointsService struct {
 	// the installations in force and their test (Settings S3a §5): an
 	// installation's credential actions
 	sources      func() *fleet.AlertSources
-	sourceStatus func(ctx context.Context, id string) (alertmanager.Status, string, error)
+	sourceStatus func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error)
 }
 
 // WireEndpointActivation makes every endpoint activation publish into the

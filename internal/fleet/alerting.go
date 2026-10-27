@@ -175,6 +175,15 @@ func (c *ClusterConn) ChangeAlertmanagerCredential(cfg *config.EndpointConfig, i
 	return nil
 }
 
+// reidentify recomputes the identity from the configuration as it is,
+// re-keying the snapshot when it moved: a subscription whose installation
+// or own revision changed under the same block (Settings S3a §5).
+func (c *ClusterConn) reidentify() {
+	c.am.mu.Lock()
+	defer c.am.mu.Unlock()
+	c.reidentifyLocked()
+}
+
 // reidentifyLocked recomputes the identity from the configuration and the
 // last discovery, without the network; a change re-keys the snapshot.
 // Caller holds am.mu.
