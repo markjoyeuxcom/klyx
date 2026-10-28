@@ -426,3 +426,18 @@ What the scan does not claim, as before: a path built at run time from data the 
 **Tests:** the fixtures and controls above; the repository scan, passing. **Mutation pass:** 12 mutants (Codex's aliased sender and an aliased `TransportOf` planted in the fleet, a numeric `Sprintf` and a lexically bound constant planted in the fleet, the object check reduced to a package name, each fold disabled, numeric arguments refused, constants ignored, Loki's paths flagged), all caught.
 
 **Smoke:** the native walk at 5e0d2b76, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
+
+## 23. S3b-2a revision 4: Codex's third re-review (2026-10-28)
+
+Codex closed R2-1: its seven binding cases and its aliased end-to-end sender are caught, an added Go file reruns a cached scan (go test hashes the walked directories' entries), and CI installs the GTK headers and stubs the frontend's dist before the listing. One P2 and one P3 remained.
+
+| Finding | Fix |
+|---|---|
+| **R3-1:** the folds took each argument as a string, so a keyed literal (`strings.Join([]string{0: "", 1: "api", 2: "v1", 3: "query"}, "/")`) and a spread one (`path.Join([]string{...}...)`) passed, and both senders reached `/api/v1/query` | A string slice or array literal is read as Go lays it out: a keyed element at its constant index, a gap the empty string, an array filled to its length. A spread literal is the call's last arguments, for `path.Join`, `filepath.Join` and `url.JoinPath`, and a spread `[]any` literal for `fmt.Sprintf`. Any string slice or array literal whose pieces name the API, joined as a path or run together, is flagged wherever it is held, a variable's initializer included |
+| **R3-2, P3:** `go list -e` exits 0 with a package's error recorded (cmd/klyx without its frontend's dist), and the scan dropped the record | A package in scope with an error record, or a dependency's, fails the scan, saying so, with the hint for cmd/klyx's dist; a listing that says nothing fails too. The platform build directories stay out of scope, errors and all. CI's stub is unchanged; a fresh clone runs the scan once the frontend is built or the stub created |
+
+What the scan does not claim, as before: a path built at run time, including from a variable, and a joining function held in a variable (the analysis follows direct callees). Every literal and constant the source fixes, in any of the forms above, is read.
+
+**Tests:** the fixtures add a keyed literal, a keyed literal with gaps, a spread `path.Join`, a spread `url.JoinPath`, a spread `Sprintf`, a literal slice and an array in variables, and pieces run together, with Loki's path, another API and other strings in pieces as controls; the listing failing on a failing command, an empty listing, an error record and a dependency's, the build directories out of scope; cmd/klyx without its dist failing the repository scan with the hint (checked by moving the dist away). **Mutation pass:** 11 mutants (keys refused, spreads ignored for the joins and for `Sprintf`, the slice check and its run-together form dropped, each listing check dropped, the build directories brought into scope, and Codex's keyed and spread senders planted in the fleet), all caught.
+
+**Smoke:** the native walk at 1e5bf950, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
