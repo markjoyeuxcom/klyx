@@ -453,3 +453,17 @@ Codex closed R3-1 (the keyed `strings.Join` and spread `path.Join` senders are c
 **Tests:** the fixtures add a keyed spread, a reordered keyed spread, a gapped spread read by an explicit index, and a literal of `any` holding the path in pieces; the unkeyed spread stays as the control. **Mutation pass:** 5 mutants (the spread flattened again, keys refused, gaps dropped from the arguments, `any` elements refused, and Codex's sender planted in the fleet), all caught.
 
 **Smoke:** this revision changes only `internal/metrics/boundary_test.go`; the product code is the one smoked at 1e5bf950 (§23), 217/217 four ways, so no walk was repeated.
+
+## 25. S3b-2a revision 6: Codex's fifth re-review (2026-10-28)
+
+Codex closed R4-1: the keyed, reordered and gapped `[]any` spreads are folded, its planted keyed-format sender fails the repository gate, and thirteen further fixed forms and three controls hold. One P2 remained.
+
+| Finding | Fix |
+|---|---|
+| **R5-1:** a written `nil` (`fmt.Sprintf("/api/%[2]s/query", []any{nil, "v1"}...)`, the keyed `[]any{0: nil, 1: "v1"}...`, or `nil, "v1"` as arguments) abandoned the fold, because nil is not a constant, while the omitted slot it equals was folded; a planted fleet sender passed the scan and the parser proof | A format argument the source does not fix is an opaque marker in the fold, never part of a path with what surrounds it: a format that never prints it (`%[2]s` skips the first) reads the same whatever it holds, and a result names the API only through what the source fixes. A written `nil` is such an argument, and so are `any(nil)`, `(*T)(nil)` and a variable in a skipped slot. Among a literal's pieces, the predeclared nil is a gap, known by its type: a constant named `nil` is the string it holds |
+
+**Tests:** the fixtures add the three explicit-nil forms, a converted nil and a variable in a skipped slot, a variable beside a path whose fixed text names the API (`fmt.Sprintf("%s/api/v%d/query", x, 1)`), a nil among a literal's pieces, and a constant named `nil` holding a piece of the path; the controls add nil printed (`/api/<nil>/query`), a variable printed in the path's place, and a constant named `nil` that makes the pieces Loki's path, which a test by spelling would flag. **Mutation pass:** 5 mutants (a nil among the pieces no longer a gap, nil known by its spelling, an unread argument abandoning the fold again, and Codex's explicit-nil sender planted in the fleet as a spread and as arguments), all caught.
+
+What the scan does not claim is unchanged: a path built at run time, a variable's value, and a joining function held in a variable.
+
+**Smoke:** this revision changes only `internal/metrics/boundary_test.go`; the product code is the one smoked at 1e5bf950 (§23), 217/217 four ways, so no walk was repeated.
