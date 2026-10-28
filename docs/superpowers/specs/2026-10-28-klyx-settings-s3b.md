@@ -7,7 +7,7 @@ Opened 2026-10-28, on `feat/settings-s3b`, with S3a-1 to S3a-4b accepted and S3a
 - lineage on every AI read of logs and metrics, and the fences that end later sends when the terms move: S3a §0's gap, closed for Loki and metrics;
 - Settings: the installations and subscriptions of each kind, their plans, credentials, Test, Detect for metrics, and the migration offer.
 
-This note is for Codex's review before anything is built.
+This note is for Codex's review before anything is built; revision 1 the same day, after that review (§12), with the implementation contracts it set (§13).
 
 ## 0. What exists
 
@@ -17,12 +17,13 @@ From a read of the code at bfe29154 (S3a-4c's head).
 - `clusters[].loki` is `EndpointConfig`, the Alertmanager shape: `endpoint`, `serviceRef`, `auth`, `tlsSkipVerify`, `tenant`, `match`, and S3a's `source`, `scope` and `off`, which are refused for Loki as written ("loki.source is not built yet", `sources.go:134-143`).
 - `clusters[].metrics` is its own `MetricsConfig`: `endpoint`, the legacy `token`, `tlsSkipVerify`, `serviceRef` (with `path`), `auth`, `tenant`. **It has no `match`, `source`, `scope` or `off`** (`config.go:137-157`); any of them is an unknown key, a load error (`strict.go`).
 - `sources[].kind` is `alertmanager`; `loki` and `metrics` are refused as "not built yet" (`sources.go:75-83`). The registry gives Loki's subscription keys the disposition deferred, S3b's (`registry.go:177-193`).
-- Loki is never discovered (`endpoints.go:109-113`, `fleet/loki.go:78-81`); metrics is, when its block has no locator (`fleet/metrics.go:101-148`: named Services in `monitoring`, then two selectors; several matches are unavailable).
+- Loki is never discovered (`endpoints.go:109-113`, `fleet/loki.go:78-81`); metrics is, when its block has no locator (`fleet/metrics.go:101-148`): the named Services in `monitoring` are **ranked**, and the first present wins (`TestDiscoverPrefersFirstNamed`); only when none is present are two label selectors tried, where several matches are unavailable.
 - `sharedWithoutMatch` skips metrics (`endpoints.go:249`).
 
 **Metrics reading** (per `ClusterConn`):
 - `metrics.Resolve`: the endpoint, else the serviceRef through the cluster's own API server, else discovery (`metrics/resolve.go:28-60`). The tenant is `X-Scope-OrgID` on both transports; responses are capped at 4 MiB (`metrics/transport.go`).
 - A cache on the connection: the capability for the connection's life, unavailable for 45 s, samples for 15 s (`fleet/metrics.go:16-23, 132-171`). The credential revision `(cluster, metrics)` is checked after each read (`:177-201`).
+- **Time budgets:** the bound UI services give each operation a 30 s context (`appbridge/metrics_service.go:13`, `:41`), which the proxy uses; 3 s is only the direct HTTP client's timeout (`fleet/metrics.go:22`, `:63`). There is no fleet-wide metrics slot.
 - **No template carries a cluster label or a match**: cluster CPU and memory, workload usage, node utilization, pod container usage, sparklines, Envoy route and rule metrics, Hubble, and chat's `get_metrics` (`fleet/metrics.go`, `workload_metrics.go`, `node_metrics.go`, `sparklines.go`, `routemetrics.go`, `rulemetrics.go`, `hubble.go`, `appbridge/chat_metrics.go:205-215`). Selectors are built by `metrics.Equals`/`MatchAnyOf` (`metrics/promql.go`) inside hand-written format strings; some selectors are bare (`count(envoy_cluster_upstream_rq_total)`, `routemetrics/envoy.go:67`).
 - **So a shared metrics tenant mixes clusters today:** two clusters reading one Mimir tenant see each other's series in every chart.
 
@@ -50,8 +51,8 @@ The Observer and the attention surfaces read neither.
 
 | Stage | Builds | Behaviour for today's files |
 |---|---|---|
-| **S3b-1: the model** | the kinds `loki` and `metrics` in `sources`, their subscription fields, `metrics.match`, resolution and scopes per kind (§2) | unchanged, except that `metrics.match` becomes valid (§2.1, ruling 1) |
-| **S3b-2: reading** | per-subscription acquisition through an installation (§3), the scope applied to every Loki and metrics read, caches and views keyed by lineage, the scope sentence; the host check in S2's removal for every kind | the legacy modes read as today, with lineage and the scope sentence; a legacy `metrics.match` scopes every template |
+| **S3b-1: the model** | the kinds `loki` and `metrics` in `sources`, their subscription fields, resolution and scopes per kind (§2), and what a connection does until S3b-2 reads through installations (§2.4) | unchanged; `metrics.match` stays a load error until S3b-2 honours it (§12, R1) |
+| **S3b-2: reading** | per-subscription acquisition through an installation (§3), the closed metrics query surface and the scope on every Loki and metrics read, caches and views keyed by lineage, the scope sentence; the host check in S2's removal for every kind | the legacy modes read as today, with lineage and the scope sentence; `metrics.match` is admitted, and scopes every query |
 | **S3b-3: the fences** | lineage recorded by every AI read of logs and metrics, checked before every component read and every later send (§4) | **a change to a legacy Loki or metrics block's endpoint, tenant, match or credential ends later sends of the logs or metrics a conversation read before it** |
 | **S3b-4: Settings** | Observability's installations and subscriptions for every kind, their plans, credentials and Test, Detect for metrics, and the migration offer (§5 to §8) | the legacy rows as today, with the offer where it applies |
 
@@ -100,7 +101,7 @@ clusters:
 
 - `loki.source`, `loki.scope` and `loki.off` stop being refused; they follow S3a's rules (a `source` block refuses a locator, `auth` and `tlsSkipVerify`; `off` allows nothing beside it; `scope` only with `source`).
 - `MetricsConfig` gains `Source`, `Scope`, `Off` and **`Match`**, decoded strictly and recorded as written, as `EndpointConfig` does (S3a-1 R1). The legacy `token` is refused beside `source` and `off`.
-- **`metrics.match` is valid on a legacy block too** (ruling 1). Today a cluster sharing a Mimir tenant has no way to scope its charts (§0). With `match`, every template of that cluster carries it (§3.3). `sharedWithoutMatch` then covers metrics as it covers Alertmanager and Loki.
+- **`metrics.match` is valid on a legacy block too** (ruling 1, approved). Today a cluster sharing a Mimir tenant has no way to scope its charts (§0). With `match`, every query of that cluster carries it (§3.3). `sharedWithoutMatch` then covers metrics as it covers Alertmanager and Loki. **It is admitted in S3b-2,** the stage that honours it; in S3b-1 it stays a load error naming it ("metrics.match is read from a later version"), so no file states a scope Klyx does not apply (§12, R1). A legacy `token` may accompany a legacy `match`; `source` and `off` refuse the token. The written-key checks hold through aliases and merges, empty and false spellings included.
 
 ### 2.2 Resolution
 
@@ -122,6 +123,16 @@ One resolution per kind, the same function: S3a's `ResolveAlertmanager` becomes 
 
 S3a §2.3 unchanged, per kind and per installation: every subscription states its scope (a non-empty effective match, or `scope: tenant`); subscriptions of one installation sharing a tenant are provably disjoint on the member label. For the owner's LGTM layout (a tenant per cluster), `scope: tenant` is the usual subscription, and no label is injected anywhere.
 
+### 2.4 What a connection does in S3b-1
+
+Reading through an installation is S3b-2. Until then, as S3a-1 did for alerts (S3a §15), nothing an installation serves is read any other way:
+- `fleet.SubscribingFactory` resolves all three kinds and gives each connection its blocks resolved against the installations read at start. The running fleet's entry is not changed.
+- **`off`** makes no request of any kind: metrics and log history read as absent, "metrics are off for this cluster in fleet.yaml", with no capability.
+- **A subscription** is unreadable, said as such: "this cluster's metrics come from the installation lgtm-we-metrics, and this version of Klyx does not read through installations yet". It never falls back to discovery in the member or to another block. A Loki subscription says so too, distinct from "no Loki is configured for this cluster".
+- Their identities are `off` and `source|<id>` per kind, so adopting another block re-keys.
+- **S2's plans:** the host check covers installations of every kind. A placement or protection edit that would move a cluster's Loki or metrics resolution is refused, naming both sources, since the running connection cannot follow until S3b-2 re-resolves on commit. Reconnects and additions build their connection through the resolving factory, so they follow.
+- **Controls:** a file without `sources`, and every legacy block, read exactly as before; tests show discovery counted for a legacy block and never for a subscription or `off`.
+
 ## 3. Reading (S3b-2)
 
 ### 3.1 Per-subscription acquisition
@@ -134,7 +145,11 @@ S3a §2.3 unchanged, per kind and per installation: every subscription states it
 
 **The fence on every request** (S3a §4.3's request check, per read): before and after each request, the host's pinned connection is still its current connection and usable, its access generation is the one the read started under, and the installation's and subscription's revisions are unchanged; a direct read checks its access generation and credential revision. A mismatch discards the read. A 401 or 403 moves the access generation first.
 
-**Bounds:** today's per kind, applied per read: Loki's 8 MiB a page and its four pages fleet-wide and two per member; metrics' 4 MiB and its 3 s UI timeout. **A host carries its members' hosted reads,** so each host adds one bound: at most four hosted metrics requests and two hosted Loki pages in flight through one host, beyond which reads wait within their own timeout (ruling 3). Direct installations add none: the endpoint is not a cluster's API server.
+**Budgets** (§12, R4; ruling 3, approved):
+- **The operation deadline** is the caller's: the UI services' 30 s context, the chat tool's turn budget, Detect's 30 s per member. Every wait and request of the operation (a host slot, discovery, each request and its body) runs inside it.
+- **Per request:** a direct request keeps its 3 s client timeout; a proxied request runs under the remaining operation deadline, as today. A composite read (several queries for one result) pins its terms once (§13).
+- **The host bound:** at most four hosted metrics requests and two hosted Loki pages in flight through one host, shared by every installation and subscriber using that host. A read waits for a slot within its operation deadline; a cancelled wait leaves without a request. A slot is released when the request and its body have finished, not when cancellation is signalled, and a reconnect does not reset the count while earlier workers run. A member that is its own host acquires one slot, never two. Direct installations take no host slot.
+- Loki's four pages fleet-wide and two per member, its 8 MiB a page, and metrics' 4 MiB a response stay as today.
 
 ### 3.2 Caches, views and keys
 
@@ -146,11 +161,11 @@ S3a §2.3 unchanged, per kind and per installation: every subscription states it
 
 **Loki:** the effective match is the reader's match, which already leads every selector of every branch (`loki/loki.go:112-125`). `scope: tenant` sends none. Test and the label read use it as today.
 
-**Metrics:** every template carries the member's scope in **every** vector selector, by construction:
-- `internal/metrics` gains a `Scope` (the effective match's matchers, escaped by `Equals`), and every template becomes a function of it. Each selector is written `metric{<template's own matchers>,<scope>}`; a bare selector (`count(envoy_cluster_upstream_rq_total)`) gains braces.
-- **The canary test:** every template, rendered with a canary scope, is scanned by a small PromQL selector scanner (test-only), and every vector selector must carry the canary. A template added without it fails the test. (Ruling 2: or the Prometheus parser as a test-only dependency.)
-- `scope: tenant` and a legacy block without `match` render an empty scope, so today's queries are unchanged byte for byte.
-- **What a scope cannot show is said, never zero.** A series without the member label is outside the scope. A template that returns nothing under a scope reads "no data for aks-we-dev under cluster=aks-we-dev", never "0" and never "unavailable".
+**Metrics:** every data query carries the member's scope in **every** vector selector, through a closed surface (§12, R2; ruling 2, approved):
+- **The surface.** `internal/metrics` owns a registry of named templates, each a function of its parameters and a `Scope` (the effective match's equality matchers, escaped by `Equals`). A query exists only as a `metrics.Query`, a type with unexported fields that the registry alone builds. Every sink (`readMetrics`, the range and instant reads, `ChatMetricsRange`, the route, rule and Hubble clients) takes a `metrics.Query`, never a string, so an unregistered query does not compile. The liveness probe `vector(1)` is the one named exception, `metrics.Liveness`, never a data query.
+- **Conjoined, never replaced.** The scope's matchers are added to each selector's own; a template matcher on the same label stays, and both must hold (Prometheus requires every matcher of a selector). A bare selector gains braces.
+- **The proof** (test-only, the Prometheus parser pinned as a test dependency): every registered template, over an enumerated grid of its parameters that covers every branch, is rendered with a hostile scope (several labels, values with quotes, backslashes and braces), parsed, and every vector selector (a range selector's included) must carry every scope matcher as an equality with its exact decoded value. The registry is the production list: a template not in it cannot be built. Negative fixtures must fail the proof: an unscoped operand, one scope matcher missing, a bare selector, the canary only inside a quoted string, and a parameter case left out of the grid. An empty scope renders today's queries byte for byte.
+- **What a scope cannot show is said, never zero.** A series without the member label is outside the scope. An empty result reads "no data for aks-we-dev under cluster=aks-we-dev"; a failed read, a real zero, and a non-finite or gapped sample stay distinct from it and from each other.
 
 ### 3.4 Coverage for a member
 
@@ -200,16 +215,20 @@ The two candidates, the one transaction under the fleet Apply lock, "Use the fil
 ## 6. Detect (S3b-4)
 
 **Metrics only:** Loki is never discovered, and Detect never reads log lines.
-1. In each member, Klyx runs the existing Prometheus discovery. Several candidates are ambiguous, as today, and propose nothing.
-2. For the Service found, one bounded sample of label names and values (ruling 4): `/api/v1/labels` over the last hour, then `/api/v1/label/<name>/values` for at most eight labels whose names suggest a cluster (`cluster`, `k8s_cluster_name`, `cluster_name` and the like, or any label among the names), each capped at 1 MiB and 2,000 values. A value is kept only when it equals a fleet cluster's name; no series and no sample value is read.
-3. The proposal is S3a §6's: the host and the Service, a member label whose values name fleet clusters, the members seen, the sample's time and bounds, what was ambiguous. "Seen in this sample" never means a member has no metrics.
-4. Never inferred from equal Service names; through the fleet-wide metrics bound; only when the person asks, one group or cluster at a time.
+1. **Detect's own policy** (§12, R5). Legacy reading keeps its ranked discovery (the first named Service present wins). Detect is stricter: it lists every named candidate present in the member, and the label-selector matches. One candidate is proposed, named with how it was found; several propose nothing and name every candidate, so the person can write the installation from them.
+2. **One bounded metadata sample** (ruling 4, approved), never series and never sample values: one `/api/v1/labels` response for a requested last-hour window, then `/api/v1/label/<name>/values` for at most eight labels, in a fixed order (`cluster`, `k8s_cluster_name`, `cluster_name`, `kubernetes_cluster`, then any other label among the names whose values could be checked, alphabetically). Each response is capped at 1 MiB, and at most 2,000 values are kept from each, counted locally. Label names in paths are path-escaped. Only names, and values exactly equal to a fleet cluster's name, are kept; never other values, decoded error bodies or numbers, in a proposal or in AI context. The labels not queried, any response cut at its cap and any that failed are said.
+3. **What it can claim:** metadata returned for a requested window, not proof that a member produced metrics in that hour (Prometheus's metadata bounds are approximate, and can include series without samples in the window). A member absent from the metadata proves no absence of data.
+4. The proposal is S3a §6's: the host and the Service, a member label whose values name fleet clusters, the members seen, the sample's time and bounds.
+5. **Budget and lifecycle:** at most two metrics Detects in flight fleet-wide, a pool of Detect's own; each takes a lease on its member and a host slot for each request, within a 30 s deadline per member. As S3a-4b settled it, retirement or the deadline discards the proposal before the lease is released. Never inferred from equal Service names; only when the person asks, one group or cluster at a time.
 
 ## 7. Credentials and the migration offer (S3b-4)
 
-- An installation's credential is `source/<id>`, as S3a's: ids are unique across kinds, so the account names one installation of one kind. Store, Remove and Test as S3a-4a's, per kind. Test for Loki reads the build info and the label names in the subscription's scope, never lines; for metrics, the capability probe.
+- An installation's credential is `source/<id>`, as S3a's: ids are unique across kinds, so the account names one installation of one kind. Store and Remove as S3a-4a's, per kind, resolved inside the endpoint-then-fleet lock order.
+- **Two Tests** (§12, R3):
+  - **The installation's Test** proves reachability, nothing about any member: Loki's build info, metrics' liveness probe (API liveness, not scoped samples), Alertmanager's status as today. With no subscribers, it is the only Test.
+  - **A subscription's Test,** on a running member's row, for Loki: the backend resolves that member's kind, installation, effective tenant and full match, and their revisions; the page sends only the member's name and the revisions it shows, never a tenant or a match. It reads the label names under that scope over the last hour, never lines, and checks the subscription's, installation's, host and access, and credential terms before and after the request; a move discards the result. Each member's Test is its own, so one tenant working and another denied are said apart.
 - **The migration offer** (S3a §7) for each kind: one direct URL on several clusters' `loki` or `metrics` blocks, or `sharedWithoutMatch`'s warning. Its draft, conflicts (auth, the certificate check, left to the person, S3a-4c), scope statements and choices are S3a's.
-- **A legacy metrics `token`** is never carried into an installation: the offer says the installation needs its own credential, stored by the person, and the clusters' tokens stay until removed.
+- **A legacy metrics `token`** is never carried into an installation: the offer says the installation needs its own credential, stored by the person, and the clusters' tokens stay until removed. A token without an explicit `auth` implies bearer auth: the offer's draft carries that shape (`auth: {type: bearer}`), never the token, in any draft, candidate, plan, cache or output, so the installation is not planned unauthenticated.
 
 ## 8. The page (S3b-4)
 
@@ -227,6 +246,7 @@ Observability's "Alert sources" becomes **"Sources"**, one panel per kind (Alert
 - **Reading:** a hosted read through the host's current connection, its lease released once, a host reconnect re-keying the member's cache and ending its views; a direct read with the installation's credential; the per-request fence discarding a read that crossed a move; the host bound; Loki selectors leading with the effective match; **the canary test over every metrics template**, and every template byte for byte unchanged under an empty scope; "no data under the scope", never zero.
 - **The fences:** `get_metrics`, `route_*` and `get_log_history` recording their lineage; a conversation ended at its next send by an installation, subscription, host, access, credential or legacy block change; canaries that a token never enters a request.
 - **Settings:** plans per kind, the page's discipline per kind, Detect's sample keeping only names and fleet-name values, the offer per kind with its conflicts left to the person.
+- **Revision 1's cases** (§12): S3b-1's boundary (a subscription unreadable without discovery, `off` making no request, `metrics.match` refused, legacy controls unchanged); the query surface's proof and its negatives (§3.3); the host bound held, a queued read cancelled without a request, the deadline, and a slot released only when the body has finished; Detect's candidates listed and the ranked legacy choice unchanged, its metadata bounds and qualifications; two Loki subscriptions on different tenants tested apart, one denied, a subscription moving during its Test, an installation with no subscribers; composite reads refused whole across a move; empty and cached reads carrying their own lineage; late UI replies under an old key refused; the smoke's cleanup after an installation was added.
 - **The native walk:** a metrics installation hosted by the lab cluster, `scope: tenant` or a member label against the lab's Prometheus, its scope sentence in the Nodes view; a Loki installation over the lab's Loki (S8b) with a subscription scoped by `k8s_cluster_name`, its sentence in the log history pane; each removed, the smoke fleet as it began.
 
 ## 10. Not in S3b
@@ -238,7 +258,33 @@ Observability's "Alert sources" becomes **"Sources"**, one panel per kind (Alert
 
 ## 11. For Codex's ruling
 
-1. **`metrics.match` on legacy blocks.** I propose it: without it a cluster sharing a Mimir tenant cannot be scoped at all, and the injection machinery (§3.3) is the same for installations and legacy blocks. The alternative is to allow `match` only with `source`, leaving today's legacy reads unscoped.
-2. **How "every selector carries the scope" is proven.** I propose templates as functions of a `Scope` and a test-only scanner that checks a canary in every vector selector. The alternative is the Prometheus parser as a test-only dependency, which is exact but heavy.
-3. **A per-host bound for hosted reads** (four metrics requests, two Loki pages in flight per host). Without it, a group installation of many members could crowd one host's API server.
-4. **Detect's metrics sample** reads label names and the values of cluster-like labels, never series, bounded as §6 says: an amendment of redesign §6.7 like S3a's ruling 3.
+Asked in the first draft, ruled in Codex's review (§12):
+1. **`metrics.match` on legacy blocks:** approved, admitted in S3b-2 (§2.1, §2.4).
+2. **The selector proof:** the Prometheus parser as a test-only dependency, over a closed query surface (§3.3).
+3. **A per-host bound for hosted reads:** approved, four metrics requests and two Loki pages, shared per host (§3.1).
+4. **Detect's metrics sample:** approved, metadata only, bounded and qualified (§6).
+
+## 12. Revision 1: Codex's review (2026-10-28)
+
+Codex found the note's account of today's schema, the absent metrics scopes, Loki's configured-only behaviour and history bounds, the credential revisions, the shared-tenant risk and the missing lineage on logs and metrics supported by the code. It requested changes: three P2 and two P3, and ruled on §11's four questions (all approved, two with conditions).
+
+| Finding | Change |
+|---|---|
+| **R1:** S3b-1 made `metrics.match`, subscriptions and `off` valid with no reader to honour them: a legacy match on a shared tenant would not filter, and an implied subscription or `off` could fall back to discovery | §2.4: S3b-1's connection boundary, as S3a-1's: `off` makes no request, a subscription is unreadable and never discovered, Loki's subscription is told apart from none, S2 edits a connection cannot follow are refused, reconnects and additions follow, legacy controls unchanged. `metrics.match` is admitted in S3b-2, a load error until then (§2.1) |
+| **R2:** a canary over a chosen template list proves only that list: a raw-string sink (`ChatMetricsRange`), an omitted branch or one dropped scope matcher would pass | §3.3: a closed query surface (`metrics.Query`, built only by the template registry; every sink takes it, never a string; `metrics.Liveness` the one exception); the Prometheus parser proves every vector selector carries every scope matcher with its exact value, over a grid covering every branch, with negative fixtures that must fail; scope matchers conjoined with a template's own |
+| **R3:** an installation's Loki Test had no subscription to scope it: several tenants, or none | §7: two Tests. The installation's proves reachability only; a subscription's, on a member's row, is resolved by the backend from the member's name and shown revisions, reads label names under that scope, never lines, and is fenced by every term |
+| **R4, P3:** "3 s" was the direct client's timeout, not the operation's (30 s), and Detect's "fleet-wide metrics bound" did not exist | §0 corrected; §3.1 defines the operation deadline, the per-request timeouts, the host slots (shared, released when the body finishes, a reconnect not resetting them); §6 gives Detect a pool of two of its own and a 30 s deadline per member |
+| **R5, P3:** legacy discovery ranks named Services and picks the first; the note said several were ambiguous "as today" | §0 corrected; §6: legacy reading keeps its ranking, and Detect's own stricter policy lists every candidate and proposes one only when one is found, with its own tests |
+
+**The rulings' conditions,** adopted: a legacy token may accompany a legacy match, while `source` and `off` refuse it (§2.1); the scope matchers conjoin with a template's own (§3.3); the host bound is shared across installations and subscribers, never double-acquired by a member that is its own host (§3.1); Detect's metadata wording and bounds (§6).
+
+## 13. Implementation contracts
+
+Codex's acceptance requirements for the implementation, adopted as they stand (its review, "Remaining contracts and implementation checkpoints"):
+- **Model:** the three resolutions are checked in both candidates; the kind is part of every legacy, dependency and cache namespace, so a Loki change is never compared with a metrics revision.
+- **Provenance:** a read's lineage travels with its result through projection, caches, DTOs and the AI adapter; cached values keep their acquisition time and credential revision; empty successes, counts, partial and derived results carry the lineage of the read that made them, never a lineage looked up later. Tokens are deduplicated by kind and terms, the acquisition time on the read's envelope.
+- **Composite reads:** the terms are pinned once for a logical result, rechecked before and after every component and at settlement; a move discards the whole result, never a nil sample or two generations mixed. `TestEveryMetricsReaderDropsAReadAcrossARevisionMove` is ported to installation, subscription, host and access, and credential moves, range, Envoy rule, Hubble and chat's templates included.
+- **Caches and the UI:** the outcome's credential revision is carried though not keyed; a known-down host is checked before a cached value is served; in-place recovery, a reconnect and an observed denial are tested. Frontend stores, sparklines and log page sets refuse late replies from an old key, and keep their sentence tied to the outcome shown; old data is shown only with its own lineage and qualified as stale.
+- **Lifecycle and fences:** the caller's context and fence are kept while joining the host lease's cancellation; host work is registered before its I/O, listed in S2's plans, settled before the lease's release, and no idle reader keeps a host lease. The host's pinned connection, usability and access generation are checked on cache hits and every later send. Dependencies survive trimming; every retry, redirect and CLI input release is fenced, with A3's sticky withdrawal.
+- **Plans:** the affected-work calculation and its registration lock cover every kind, filtered by the changed kind, member and terms: a metrics-only Apply never ends an alerts-only conversation whose tokens still hold, and work acquiring an affected dependency during the final planning is refused or included. The work identities are in the digest; per-field raw-input comparison and withheld wording are kept; "Use the file's values" adopts no unrelated drift and no legacy block.
+- **The page:** S3a-4c's accepted behaviour after its revision, per kind: unique leave-guard owners per panel, refreshed-away drafts kept, late plans and readbacks refused, revision-keyed credential clearing, proposal ids and references, and anchors after every panel has loaded. Every repeated control has a unique address; new fixed limits are registered with the schema paths, and `metrics.match`'s two dispositions are explained.
