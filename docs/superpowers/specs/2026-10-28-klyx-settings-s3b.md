@@ -345,3 +345,7 @@ Codex found per-kind resolution, the connection boundary, S2's refusals (indepen
 **Tests:** the six empty and null spellings, direct and merged, for `source` and `off`; an empty token beside a legacy endpoint loading and advertising no credential; the Loki refusal's words. **Mutation pass:** 3 mutants (the value-only check, a key check that always fires, the discovery wording), all caught.
 
 **Smoke:** the native walk at 19d0d6d9, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
+
+## 18. S3b-1 ACCEPT (2026-10-28)
+
+Codex accepted S3b-1 at fe2beb89 (its re-review of revision 1), with no new finding: R1 and R2 are closed, an empty or null token beside a legacy endpoint still loads as no credential, and Loki's placement refusal says "no log history" while metrics and Alertmanager keep their discovery wording. It noted one unrelated test-synchronization issue: `TestAReconnectIsHeldUntilItsOwnConnectionIsUsable` waits for the policy to be active and then expects the release hook to have run, while the hooks run outside the gate after the publication; S3b-2a's commit waits for both.
