@@ -314,11 +314,12 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 			}
 			rest = append(append([]ast.Expr{}, rest[:len(rest)-1]...), elems...)
 		}
-		// an argument the source does not fix is an opaque marker, never
-		// part of a path with what surrounds it: the result names the API
-		// only through what the source fixes, and a format that never
-		// prints the argument (%[2]s skips the first) reads the same
-		// whatever it holds (Codex's re-review 5 of S3b-2a, R5-1)
+		// an argument the source does not fix is an opaque marker: the
+		// result names the API through what the source fixes, and a format
+		// that never prints the argument (%[2]s skips the first) reads the
+		// same whatever it holds (Codex's re-review 5 of S3b-2a, R5-1). A
+		// zero precision erases the marker as it would a string's value,
+		// so the result is then flagged as a string there would make it
 		vals := make([]any, 0, len(rest))
 		for _, a := range rest {
 			if a == nil {
@@ -469,9 +470,14 @@ func isNil(info *types.Info, e ast.Expr) bool {
 	return ok && tv.IsNil()
 }
 
-// constantOf is a format argument's value: any constant's, or a folded
-// string.
+// constantOf is a format argument's value: the predeclared nil, any
+// constant's, or a folded string. nil is kept as itself, never left to
+// the unread marker, which a zero precision (%.0v) would erase where Go
+// prints <nil> (Codex's re-review 6 of S3b-2a, R6-1).
 func constantOf(info *types.Info, e ast.Expr) (any, bool) {
+	if isNil(info, e) {
+		return nil, true
+	}
 	if tv, ok := info.Types[e]; ok && tv.Value != nil {
 		switch v := tv.Value; v.Kind() {
 		case constant.String:
@@ -622,6 +628,9 @@ func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 		"a slice of other strings": `package x; var parts = []string{"query", "range"}`,
 		"nil printed":              `package x; import "fmt"; var p = fmt.Sprintf("/api/%v/query", nil)`,
 		"a constant named nil":     `package x; const nil = "loki"; var parts = []any{nil, "api", "v1", "labels"}`,
+		"nil at zero precision":    `package x; import "fmt"; var p = fmt.Sprintf("/api/v%.0v%d/query", nil, 1)`,
+		"a spread nil, precision":  `package x; import "fmt"; var p = fmt.Sprintf("/api/v%.0v%d/query", []any{nil, 1}...)`,
+		"a gap at zero precision":  `package x; import "fmt"; var p = fmt.Sprintf("/api/v%.0v%d/query", []any{1: 1}...)`,
 		"a variable printed":       `package x; import "fmt"; func f(x any) string { return fmt.Sprintf("/api/%s/query", x) }`,
 		"a constant of another fn": `package x; import "path"; func a() string { const version = "v1"; return version }; func b() string { const version = "v2"; return path.Join("/api", version, "x") }`,
 	} {
