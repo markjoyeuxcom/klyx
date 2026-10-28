@@ -412,3 +412,17 @@ Codex closed R1 to R3: an external `Define` and the raw transport calls no longe
 **Tests:** the exported-variable check; the scan's fixtures and controls; a long cluster name and a long reserved label withheld, a short name said as it is, and the loop's other three refusals with a long name. **Mutation pass:** 14 mutants (a renderer input exported, each fold disabled, the `TransportOf` check, the rule narrowed back to `api/v1/query`, the constants dropped, a production `TransportOf` and a formatted path planted in the fleet, and each of the four refusals echoing the name), all caught.
 
 **Smoke:** the native walk at e08d021f, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
+
+## 22. S3b-2a revision 3: Codex's second re-review (2026-10-28)
+
+Codex closed RR1 (the rule families are private, and no exported variable feeds a renderer) and RR3 (long names withheld at every refusal of the cluster loop), and the composed-path sender of its first re-review is caught. One P2 remained.
+
+| Finding | Fix |
+|---|---|
+| **R2-1:** the scan matched names by their spelling and kept one flat map of constants: an aliased or dot-imported `path.Join` or `strings.Join`, `TransportOf` through an aliased import or as a function value, a numeric format argument, and a same-named constant of another function all passed it; an aliased production sender reached `/api/v1/query` with raw text | The scan is typed. It lists the repository with `go list -e -export -deps` and type-checks every package outside `internal/metrics` with `go/types` over that export data, failing if one does not type-check (a package read half blind is not scanned). `TransportOf` is found as the object it is, through any import spelling, as a call or a value; a constant is the value `go/types` binds where it is used, so each function's constants are its own; `path.Join`, `filepath.Join`, `strings.Join`, `url.JoinPath` and `fmt.Sprintf` are folded by callee identity over constant arguments of any kind, nested folds included. The fixtures add Codex's seven forms (an aliased and a dot-imported `path.Join`, an aliased `strings.Join`, an aliased, a dot-imported and a value `TransportOf`, a numeric format argument, lexically distinct constants) and `filepath.Join`, `url.JoinPath` and a nested fold, against stubs of this package and of another with its own `TransportOf`; the controls add a join of other paths and a constant of another function. The test walks the source tree itself, so go test's cache, blind to what `go list` reads, never keeps a pass once a file is added: a planted file added after a cached run fails it |
+
+What the scan does not claim, as before: a path built at run time from data the source does not fix. CI's Go job runs it with the rest of `internal/metrics`; `go list -export` builds `cmd/klyx`'s dependencies there, as the job's GTK headers and the frontend stub already allow.
+
+**Tests:** the fixtures and controls above; the repository scan, passing. **Mutation pass:** 12 mutants (Codex's aliased sender and an aliased `TransportOf` planted in the fleet, a numeric `Sprintf` and a lexically bound constant planted in the fleet, the object check reduced to a package name, each fold disabled, numeric arguments refused, constants ignored, Loki's paths flagged), all caught.
+
+**Smoke:** the native walk at 5e0d2b76, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
