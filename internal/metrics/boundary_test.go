@@ -306,15 +306,20 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 		}
 		rest := call.Args[1:]
 		if call.Ellipsis.IsValid() && len(rest) > 0 {
-			// a spread []any literal: its elements are the arguments
-			lit, ok := ast.Unparen(rest[len(rest)-1]).(*ast.CompositeLit)
+			// a spread literal: its elements, laid out as Go does, are the
+			// arguments; a gap is a nil argument
+			elems, _, ok := layoutLit(info, rest[len(rest)-1])
 			if !ok {
 				return "", false
 			}
-			rest = append(append([]ast.Expr{}, rest[:len(rest)-1]...), lit.Elts...)
+			rest = append(append([]ast.Expr{}, rest[:len(rest)-1]...), elems...)
 		}
 		vals := make([]any, 0, len(rest))
 		for _, a := range rest {
+			if a == nil {
+				vals = append(vals, nil)
+				continue
+			}
 			v, ok := constantOf(info, a)
 			if !ok {
 				return "", false
@@ -359,17 +364,18 @@ func foldArgs(info *types.Info, call *ast.CallExpr) ([]string, bool) {
 	return append(head, tail...), true
 }
 
-// foldSlice is a string slice or array literal's elements in Go's order: a
-// keyed element at its constant index, a gap the empty string, an array
-// filled to its length (Codex's re-review 3 of S3b-2a, R3-1).
-func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
+// layoutLit is a slice or array literal's element expressions in Go's
+// order: a keyed element at its constant index, the next unkeyed one after
+// it, a gap nil, an array filled to its length; and its element type
+// (Codex's re-reviews of S3b-2a, R3-1 and R4-1).
+func layoutLit(info *types.Info, e ast.Expr) ([]ast.Expr, types.Type, bool) {
 	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	tv, ok := info.Types[lit]
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	var elem types.Type
 	length := int64(-1)
@@ -379,38 +385,62 @@ func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
 	case *types.Array:
 		elem, length = t.Elem(), t.Len()
 	default:
-		return nil, false
+		return nil, nil, false
 	}
-	if b, ok := elem.Underlying().(*types.Basic); !ok || b.Info()&types.IsString == 0 {
-		return nil, false
-	}
-	var out []string
+	var out []ast.Expr
 	idx := 0
 	for _, el := range lit.Elts {
 		v := el
 		if kv, ok := el.(*ast.KeyValueExpr); ok {
 			kt, ok := info.Types[kv.Key]
 			if !ok || kt.Value == nil {
-				return nil, false
+				return nil, nil, false
 			}
 			i, exact := constant.Int64Val(constant.ToInt(kt.Value))
 			if !exact || i < 0 || i > 1<<16 {
-				return nil, false
+				return nil, nil, false
 			}
 			idx, v = int(i), kv.Value
+		}
+		for len(out) <= idx {
+			out = append(out, nil)
+		}
+		out[idx] = v
+		idx++
+	}
+	for int64(len(out)) < length {
+		out = append(out, nil)
+	}
+	return out, elem, true
+}
+
+// foldSlice is a literal of strings - a string slice or array, or one of
+// any type whose elements are all strings - laid out as Go does, a gap the
+// empty string.
+func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
+	elems, elem, ok := layoutLit(info, e)
+	if !ok {
+		return nil, false
+	}
+	switch u := elem.Underlying().(type) {
+	case *types.Basic:
+		if u.Info()&types.IsString == 0 {
+			return nil, false
+		}
+	case *types.Interface:
+	default:
+		return nil, false
+	}
+	out := make([]string, len(elems))
+	for i, v := range elems {
+		if v == nil {
+			continue
 		}
 		s, ok := foldTyped(info, v)
 		if !ok {
 			return nil, false
 		}
-		for len(out) <= idx {
-			out = append(out, "")
-		}
-		out[idx] = s
-		idx++
-	}
-	for int64(len(out)) < length {
-		out = append(out, "")
+		out[i] = s
 	}
 	return out, true
 }
@@ -542,6 +572,10 @@ func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 		"a spread path.Join":            {`package x; import "path"; var p = path.Join([]string{"/api", "v1", "query"}...)`},
 		"a spread url.JoinPath":         {`package x; import "net/url"; var p, _ = url.JoinPath("http://h/api", []string{"v1", "query"}...)`},
 		"a spread Sprintf":              {`package x; import "fmt"; var p = fmt.Sprintf("/api/%s/query", []any{"v1"}...)`},
+		"a keyed spread Sprintf":        {`package x; import "fmt"; var p = fmt.Sprintf("/api/%s/query", []any{0: "v1"}...)`},
+		"a reordered keyed spread":      {`package x; import "fmt"; var p = fmt.Sprintf("/%s/%s/query", []any{1: "v1", 0: "api"}...)`},
+		"a gapped spread, indexed":      {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", []any{1: "v1"}...)`},
+		"a literal of any in pieces":    {`package x; var parts = []any{"", "api", "v1", "query"}`},
 		"a literal slice in a variable": {`package x; var parts = []string{"", "api", "v1", "query"}`},
 		"an array literal":              {`package x; var parts = [4]string{"", "api", "v1", "query"}`},
 		"pieces run together":           {`package x; var parts = []string{"/ap", "i/v1", "/query"}`},
