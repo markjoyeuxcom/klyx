@@ -314,6 +314,11 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 			}
 			rest = append(append([]ast.Expr{}, rest[:len(rest)-1]...), elems...)
 		}
+		// an argument the source does not fix is an opaque marker, never
+		// part of a path with what surrounds it: the result names the API
+		// only through what the source fixes, and a format that never
+		// prints the argument (%[2]s skips the first) reads the same
+		// whatever it holds (Codex's re-review 5 of S3b-2a, R5-1)
 		vals := make([]any, 0, len(rest))
 		for _, a := range rest {
 			if a == nil {
@@ -322,7 +327,7 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 			}
 			v, ok := constantOf(info, a)
 			if !ok {
-				return "", false
+				v = "\x00unread\x00"
 			}
 			vals = append(vals, v)
 		}
@@ -415,8 +420,8 @@ func layoutLit(info *types.Info, e ast.Expr) ([]ast.Expr, types.Type, bool) {
 }
 
 // foldSlice is a literal of strings - a string slice or array, or one of
-// any type whose elements are all strings - laid out as Go does, a gap the
-// empty string.
+// any type whose elements are all strings or nil - laid out as Go does, a
+// gap or a nil the empty string.
 func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
 	elems, elem, ok := layoutLit(info, e)
 	if !ok {
@@ -433,7 +438,7 @@ func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
 	}
 	out := make([]string, len(elems))
 	for i, v := range elems {
-		if v == nil {
+		if v == nil || isNil(info, v) {
 			continue
 		}
 		s, ok := foldTyped(info, v)
@@ -455,6 +460,13 @@ func foldAll(info *types.Info, es []ast.Expr) ([]string, bool) {
 		out = append(out, v)
 	}
 	return out, true
+}
+
+// isNil is whether e is the predeclared nil, by its type: a constant
+// named nil is not.
+func isNil(info *types.Info, e ast.Expr) bool {
+	tv, ok := info.Types[e]
+	return ok && tv.IsNil()
 }
 
 // constantOf is a format argument's value: any constant's, or a folded
@@ -576,6 +588,15 @@ func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 		"a reordered keyed spread":      {`package x; import "fmt"; var p = fmt.Sprintf("/%s/%s/query", []any{1: "v1", 0: "api"}...)`},
 		"a gapped spread, indexed":      {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", []any{1: "v1"}...)`},
 		"a literal of any in pieces":    {`package x; var parts = []any{"", "api", "v1", "query"}`},
+		"an explicit nil spread":        {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", []any{nil, "v1"}...)`},
+		"a keyed explicit nil spread":   {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", []any{0: nil, 1: "v1"}...)`},
+		"an explicit nil argument":      {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", nil, "v1")`},
+		"a converted nil, skipped":      {`package x; import "fmt"; var p = fmt.Sprintf("/api/%[2]s/query", any(nil), "v1")`},
+		"a variable, skipped":           {`package x; import "fmt"; func f(x any) string { return fmt.Sprintf("/api/%[2]s/query", x, "v1") }`},
+		"a variable beside the path":    {`package x; import "fmt"; func f(x any) string { return fmt.Sprintf("%s/api/v%d/query", x, 1) }`},
+		"a nil among the pieces":        {`package x; var parts = []any{nil, "api", "v1", "query"}`},
+		"a constant named nil, pieces":  {`package x; const nil = "v1"; var parts = []any{"", "api", nil, "query"}`},
+		"a constant named nil":          {`package x; import "fmt"; const nil = "v1"; var p = fmt.Sprintf("/api/%s/query", nil)`},
 		"a literal slice in a variable": {`package x; var parts = []string{"", "api", "v1", "query"}`},
 		"an array literal":              {`package x; var parts = [4]string{"", "api", "v1", "query"}`},
 		"pieces run together":           {`package x; var parts = []string{"/ap", "i/v1", "/query"}`},
@@ -599,6 +620,9 @@ func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 		"Loki's path in pieces":    `package x; var parts = []string{"/loki", "api", "v1", "labels"}`,
 		"another API in pieces":    `package x; var parts = []string{"", "api", "v2", "alerts"}`,
 		"a slice of other strings": `package x; var parts = []string{"query", "range"}`,
+		"nil printed":              `package x; import "fmt"; var p = fmt.Sprintf("/api/%v/query", nil)`,
+		"a constant named nil":     `package x; const nil = "loki"; var parts = []any{nil, "api", "v1", "labels"}`,
+		"a variable printed":       `package x; import "fmt"; func f(x any) string { return fmt.Sprintf("/api/%s/query", x) }`,
 		"a constant of another fn": `package x; import "path"; func a() string { const version = "v1"; return version }; func b() string { const version = "v2"; return path.Join("/api", version, "x") }`,
 	} {
 		if p := fixtureScan(t, src); len(p) != 0 {
