@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -18,6 +19,7 @@ func Probe(ctx context.Context, res Resolution) MetricsCapability {
 		// the transport already redacted its own credential; the general
 		// credential shapes go too before the reason reaches the page (C5 §5)
 		out.Reason = safehttp.NewRedactor().Text(err.Error())
+		out.Refused = readfence.Failed(err)
 		return out
 	}
 	out.Available = true

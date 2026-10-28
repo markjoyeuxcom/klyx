@@ -11,11 +11,15 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes"
+	typedfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
+	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
+	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/readfence"
+	"github.com/moomora/klyx/internal/secretstore"
 )
 
 // Codex's review of S3b-2b: a read's terms are checked at every round
@@ -394,4 +398,173 @@ func TestEachDiscoveryFenceCheckOnItsOwn(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Codex's re-review 2 of S3b-2b, R2-1: a read its caller's fence withdrew
+// is that call's answer, never the member's capability or samples: a fresh
+// reader, without forcing a re-probe, reads the healthy source. Through
+// every place a refusal can land - before discovery, after its first
+// candidate, before the liveness probe, at one probe round trip alone -
+// and for a cluster's own metrics block, and the samples.
+func TestAWithdrawnReadIsNeverTheMembersCapability(t *testing.T) {
+	withdrawn := errors.New("the old chat withdrew its reads")
+	type rig struct {
+		dev      *ClusterConn
+		services *atomic.Int32
+	}
+	subscribed := func(t *testing.T, discover bool, onService func(n int32)) rig {
+		src := metricsInstallation()
+		if discover {
+			src.ServiceRef, src.Discover = nil, true
+		}
+		r := newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
+		n := new(atomic.Int32)
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			k := n.Add(1)
+			if onService != nil {
+				onService(k)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if q.URL.Path == "/api/v1/namespaces/monitoring/services/prometheus-operated" {
+				_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"prometheus-operated","namespace":"monitoring"},"spec":{"ports":[{"port":9090}]}}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+		}))
+		t.Cleanup(api.Close)
+		cfg := &rest.Config{Host: api.URL}
+		cfg.Wrap(readfence.Transport)
+		typed, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.host.typed = typed
+		return rig{dev: r.conns["dev"], services: n}
+	}
+	fresh := func(t *testing.T, dev *ClusterConn) {
+		t.Helper()
+		cm, capb := dev.ClusterMetrics(context.Background(), false)
+		if !capb.Available || cm.CPUFraction == nil {
+			t.Fatalf("a fresh reader was given the withdrawn read's answer: %+v %+v", capb, cm)
+		}
+	}
+	var refusedNow atomic.Bool
+	fence := func(onCall func(n int32) bool) context.Context {
+		var calls atomic.Int32
+		return readfence.With(context.Background(), func() error {
+			if onCall(calls.Add(1)) || refusedNow.Load() {
+				return withdrawn
+			}
+			return nil
+		})
+	}
+	t.Run("before discovery", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, true, nil)
+		if _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); !errors.Is(err, withdrawn) && err == nil {
+			t.Fatalf("the withdrawn read: %v", err)
+		}
+		if r.services.Load() != 0 {
+			t.Fatalf("%d Service reads", r.services.Load())
+		}
+		fresh(t, r.dev)
+	})
+	t.Run("after the first candidate", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, true, func(n int32) {
+			if n == 1 {
+				refusedNow.Store(true)
+			}
+		})
+		ctx := fence(func(int32) bool { return false })
+		if _, err := r.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+			t.Fatal("the withdrawn read was answered")
+		}
+		refusedNow.Store(false)
+		fresh(t, r.dev)
+	})
+	t.Run("before the liveness probe", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, false, nil)
+		if _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+			t.Fatal("the withdrawn read was answered")
+		}
+		fresh(t, r.dev)
+	})
+	t.Run("at one probe round trip", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, false, nil)
+		// the installation's own check, then the probe's round trip
+		cm, capb := r.dev.ClusterMetrics(fence(func(n int32) bool { return n == 1 }), false)
+		if capb.Available || cm.CPUFraction != nil {
+			t.Fatalf("the withdrawn probe was answered: %+v", capb)
+		}
+		fresh(t, r.dev)
+	})
+	t.Run("a cluster's own block", func(t *testing.T) {
+		f := &obsFake{}
+		api := httptest.NewServer(f)
+		defer api.Close()
+		dev := NewClusterConn("dev", typedfake.NewSimpleClientset(), nil, nil, nil, clock.Real{}, config.MetricsConfig{Endpoint: api.URL})
+		dev.WithCredentials(Credentials{Store: &secretstore.Memory{}, Revisions: endpointcred.NewRegistry()})
+		if _, capb := dev.ClusterMetrics(fence(func(int32) bool { return true }), false); capb.Available {
+			t.Fatal("the withdrawn probe was answered")
+		}
+		fresh(t, dev)
+	})
+	t.Run("a cluster's own discovery", func(t *testing.T) {
+		f := &obsFake{}
+		prom := httptest.NewServer(f)
+		defer prom.Close()
+		services := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"prometheus-operated","namespace":"monitoring"},"spec":{"ports":[{"port":9090}]}}`))
+		}))
+		defer services.Close()
+		cfg := &rest.Config{Host: services.URL}
+		cfg.Wrap(readfence.Transport)
+		typed, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dev := NewClusterConn("dev", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+		dev.WithCredentials(Credentials{Store: &secretstore.Memory{}, Revisions: endpointcred.NewRegistry()})
+		dev.restConfig = &rest.Config{Host: prom.URL}
+		if _, capb := dev.ClusterMetrics(fence(func(int32) bool { return true }), false); capb.Available {
+			t.Fatal("the withdrawn discovery was answered")
+		}
+		dev.metricsMu.Lock()
+		kept := dev.metricsState.capSet
+		dev.metricsMu.Unlock()
+		if kept {
+			t.Fatal("a withdrawn discovery was kept as the cluster's capability")
+		}
+	})
+	t.Run("the samples", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, false, nil)
+		// the probe passes, then the samples are withdrawn
+		var calls atomic.Int32
+		ctx := readfence.With(context.Background(), func() error {
+			if calls.Add(1) > 2 {
+				return withdrawn
+			}
+			return nil
+		})
+		if cm, capb := r.dev.ClusterMetrics(ctx, false); capb.Available || cm.CPUFraction != nil {
+			t.Fatalf("withdrawn samples were answered: %+v %+v", capb, cm)
+		}
+		fresh(t, r.dev)
+	})
+	t.Run("one sample's round trip", func(t *testing.T) {
+		refusedNow.Store(false)
+		r := subscribed(t, false, nil)
+		// the probe's round trip, then the CPU sample's alone is refused: the
+		// memory sample's answer is no reason to keep a sample without CPU
+		if cm, capb := r.dev.ClusterMetrics(fence(func(n int32) bool { return n == 2 }), false); capb.Available || cm.MemFraction != nil {
+			t.Fatalf("a part-withdrawn sample was answered: %+v %+v", capb, cm)
+		}
+		fresh(t, r.dev)
+	})
 }

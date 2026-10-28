@@ -21,6 +21,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointhttp"
 	"github.com/moomora/klyx/internal/loki"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -352,7 +353,7 @@ func (r *LokiReader) read(ctx context.Context, path string, q url.Values, hdr ht
 		}
 	}
 	if err != nil {
-		return nil, r.red.Err(err, errLokiTooLarge, endpointhttp.ErrCredentialChanged, context.Canceled, context.DeadlineExceeded)
+		return nil, r.red.Err(err, errLokiTooLarge, endpointhttp.ErrCredentialChanged, context.Canceled, context.DeadlineExceeded, readfence.ErrRefused)
 	}
 	if r.c.creds.Revisions != nil && r.c.creds.Revisions.Revision(r.c.name, config.EndpointLoki) != r.rev {
 		return nil, ErrLokiSourceChanged

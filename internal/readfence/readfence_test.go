@@ -3,6 +3,7 @@ package readfence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -42,5 +43,19 @@ func TestAFenceIsCheckedBeforeEachRequest(t *testing.T) {
 	}
 	if err := Check(With(context.Background(), nil)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Settings S3b-2b re-review 2, R2-1: every refusal is ErrRefused, which a
+// redactor keeps by identity, so a refusal stays one however it is
+// wrapped or redacted.
+func TestARefusalIsErrRefusedThroughWrapping(t *testing.T) {
+	ctx := With(context.Background(), func() error { return errors.New("withdrawn") })
+	err := Check(ctx)
+	if !errors.Is(err, ErrRefused) || !Failed(err) || !Failed(fmt.Errorf("a read: %w", err)) {
+		t.Fatalf("%v", err)
+	}
+	if Failed(errors.New("a read failed")) || errors.Is(errors.New("x"), ErrRefused) {
+		t.Fatal("an ordinary error is a refusal")
 	}
 }

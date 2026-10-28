@@ -35,11 +35,19 @@ func With(ctx context.Context, check func() error) context.Context {
 }
 
 // Error is a fence that no longer holds: the read was not made. It wraps
-// the fence's own error.
+// the fence's own error, and is ErrRefused.
 type Error struct{ Err error }
 
 func (e *Error) Error() string { return e.Err.Error() }
 func (e *Error) Unwrap() error { return e.Err }
+
+// Is makes every refusal ErrRefused, which a redactor can keep by identity
+// where it keeps no type (Settings S3b-2b re-review 2, R2-1).
+func (e *Error) Is(target error) bool { return target == ErrRefused }
+
+// ErrRefused is what every fence's refusal is, however it is wrapped or
+// redacted.
+var ErrRefused = errors.New("the read's fence no longer holds")
 
 // Check runs ctx's fence: nil when it holds, or when ctx has none, else an
 // *Error - marked ErrNotForwarded when ctx tracks a write and nothing of
@@ -60,7 +68,7 @@ func Check(ctx context.Context) error {
 // failure.
 func Failed(err error) bool {
 	var e *Error
-	return errors.As(err, &e)
+	return errors.As(err, &e) || errors.Is(err, ErrRefused)
 }
 
 // Transport checks the request's fence before each round trip.

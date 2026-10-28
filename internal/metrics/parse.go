@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -49,7 +50,7 @@ func (c *Client) redact(err error) error {
 	if err == nil {
 		return nil
 	}
-	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge, ErrUnregisteredQuery, ErrInvalidScope)
+	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge, ErrUnregisteredQuery, ErrInvalidScope, readfence.ErrRefused)
 }
 
 // Display is a decoded string from a response (a label value Klyx shows)

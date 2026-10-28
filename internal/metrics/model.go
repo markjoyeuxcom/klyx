@@ -96,6 +96,10 @@ type MetricsCapability struct {
 	Source    string
 	Warning   string
 	Reason    string
+	// Refused: the probe's context's fence refused it, so it says nothing
+	// of the backend - this call's answer, never a capability to keep
+	// (Settings S3b-2b re-review 2, R2-1)
+	Refused bool `json:"-"`
 }
 
 // ClusterMetrics is the proof-of-life readout. Nil pointers mean "no data",

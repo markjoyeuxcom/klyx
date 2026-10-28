@@ -120,13 +120,13 @@ func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Contex
 		if err := done(); err != nil {
 			return err
 		}
+		// a read the context's fence refused - a round trip, a retry, a
+		// redirect's hop - is the discovery's refusal, never an absence
+		// (Codex's re-review of S3b-2b, RR1)
+		if readfence.Failed(rerr) {
+			return rerr
+		}
 		if gate != nil {
-			// a read the context's fence refused - a round trip, a retry, a
-			// redirect's hop - is the discovery's refusal, never an absence
-			// (Codex's re-review of S3b-2b, RR1)
-			if readfence.Failed(rerr) {
-				return rerr
-			}
 			return ctx.Err()
 		}
 		return nil
@@ -174,18 +174,19 @@ func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Contex
 // ensureMetricsLocked resolves+probes the metrics endpoint into c.metricsState
 // when the cached capability is invalid. Available is cached for the conn
 // lifetime, unavailable is short-TTL re-probed, forceReprobe bypasses the cache.
-// Caller MUST hold c.metricsMu.
-func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
+// A read its context's fence refused - its discovery or its probe - is this
+// call's answer, returned and never kept: a later reader resolves again
+// (Codex's re-review 2 of S3b-2b, R2-1). Caller MUST hold c.metricsMu.
+func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) (refused *metrics.MetricsCapability) {
 	if c.metricsCfg.Source != "" {
-		c.ensureSubscribedMetricsLocked(ctx, forceReprobe, now)
-		return
+		return c.ensureSubscribedMetricsLocked(ctx, forceReprobe, now)
 	}
 	revs := c.creds.Revisions
 	rev := revs.Revision(c.name, config.EndpointMetrics)
 	capValid := c.metricsState.capSet && !forceReprobe && c.metricsState.credRev == rev &&
 		(c.metricsState.cap.Available || now.Before(c.metricsState.capExpiry))
 	if capValid {
-		return
+		return nil
 	}
 	pr, prErr := c.proxyREST()
 	var tf metrics.TransportFactory = transportFactory{rest: pr, restErr: prErr}
@@ -195,17 +196,23 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	disco := metrics.DiscoveryResult{}
 	// off or a subscription is never discovered (Settings S3b §2.4)
 	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil && !c.metricsCfg.Off && c.metricsCfg.Source == "" {
-		disco = c.discover(ctx)
+		var derr error
+		if disco, derr = c.discoverWith(ctx, nil); readfence.Failed(derr) {
+			return &metrics.MetricsCapability{Mode: metrics.ModeUnavailable, Reason: safehttp.NewRedactor().Text(derr.Error()), Refused: true}
+		}
 	}
 	res := metrics.Resolve(c.metricsCfg, c.metricsAuth(rev), disco, tf)
 	cap := metrics.Probe(ctx, res)
+	if cap.Refused {
+		return &cap
+	}
 
 	// a read started under an older credential revision is neither cached
 	// nor shown as the endpoint's availability (C5 §7)
 	if revs.Revision(c.name, config.EndpointMetrics) != rev {
 		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: res.Mode, Source: res.Source,
 			Reason: reasonCredentialChanged}}
-		return
+		return nil
 	}
 	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
@@ -219,6 +226,7 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	// re-probe invalidates any cached samples
 	c.metricsState.samples = metrics.ClusterMetrics{}
 	c.metricsState.samplesExp = time.Time{}
+	return nil
 }
 
 // ensureSubscribedMetricsLocked probes a subscription's metrics through
@@ -226,7 +234,7 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 // lineage: the cache is valid while the key and the block's revision are,
 // available for their life and unavailable for the short TTL. Caller MUST
 // hold c.metricsMu.
-func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
+func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) (refused *metrics.MetricsCapability) {
 	rev := c.creds.Revisions.Revision(c.name, config.EndpointMetrics)
 	id := c.metricsCfg.Source
 	unavailable := func(source, why string) {
@@ -257,11 +265,18 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		source += ", " + display
 	}
 	if err != nil {
+		if readfence.Failed(err) {
+			return &metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: safehttp.NewRedactor().Text(err.Error()), Refused: true}
+		}
 		unavailable(source, safehttp.NewRedactor().Text(err.Error()))
 		c.metricsState.key, c.metricsState.terms = key, &t
 		return
 	}
 	cap := metrics.Probe(ctx, metrics.Resolution{Mode: metrics.ModeSubscribed, Source: source, Transport: q})
+	if cap.Refused {
+		release()
+		return &cap
+	}
 	// a probe across a move is neither cached nor shown as the source's
 	// availability; it settles before its host lease is released (§13)
 	why := c.readMoved(rev, &t)
@@ -274,6 +289,7 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 	if !cap.Available {
 		c.metricsState.capExpiry = now.Add(metricsUnavailableTTL)
 	}
+	return nil
 }
 
 // reasonCredentialChanged is what a read that crossed a change to the
@@ -299,8 +315,11 @@ type metricsRead struct {
 // read alone, under the terms it was probed with (S3b §3.1, §13).
 func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
 	c.metricsMu.Lock()
-	c.ensureMetricsLocked(ctx, false, now)
+	refused := c.ensureMetricsLocked(ctx, false, now)
 	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}}
+	if refused != nil {
+		mr.cap, mr.terms = *refused, nil
+	}
 	c.metricsMu.Unlock()
 	if mr.terms == nil || !mr.cap.Available {
 		return mr
@@ -353,7 +372,9 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 		clk = clock.Real{}
 	}
 	now := clk.Now()
-	c.ensureMetricsLocked(ctx, forceReprobe, now)
+	if refused := c.ensureMetricsLocked(ctx, forceReprobe, now); refused != nil {
+		return metrics.ClusterMetrics{}, *refused
+	}
 
 	cap := c.metricsState.cap
 	if !cap.Available {
@@ -371,7 +392,7 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 			}
 			cl, release = metrics.NewClient(q, terms.scope()), rel
 		}
-		samples := querySamples(ctx, cl)
+		samples, refusedBy := querySamples(ctx, cl)
 		// settled before the host lease is released (§13)
 		why := c.readMoved(rev, terms)
 		release()
@@ -380,23 +401,38 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
 				Reason: why}
 		}
+		// samples the read's fence refused are this call's answer, never
+		// kept (R2-1)
+		if refusedBy != nil {
+			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source, Reason: safehttp.NewRedactor().Text(refusedBy.Error()), Refused: true}
+		}
 		c.metricsState.samples = samples
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)
 	}
 	return c.metricsState.samples, cap
 }
 
-func querySamples(ctx context.Context, cl *metrics.Client) metrics.ClusterMetrics {
+func querySamples(ctx context.Context, cl *metrics.Client) (metrics.ClusterMetrics, error) {
 	var out metrics.ClusterMetrics
-	if s, err := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{})); err == nil && !s.Absent {
+	// a sample its read's fence refused is the caller's, never an absence
+	// (Codex's re-review 2 of S3b-2b, R2-1)
+	s, err := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{}))
+	if readfence.Failed(err) {
+		return metrics.ClusterMetrics{}, err
+	}
+	if err == nil && !s.Absent {
 		v := s.Value
 		out.CPUFraction = &v
 	}
-	if s, err := cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{})); err == nil && !s.Absent {
+	s, err = cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{}))
+	if readfence.Failed(err) {
+		return metrics.ClusterMetrics{}, err
+	}
+	if err == nil && !s.Absent {
 		v := s.Value
 		out.MemFraction = &v
 	}
-	return out
+	return out, nil
 }
 
 // metricsAuth is the metrics endpoint's credential and tenant as resolved

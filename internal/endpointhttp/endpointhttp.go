@@ -139,7 +139,9 @@ func (d *Direct) GetWith(ctx context.Context, path string, q url.Values, hdr htt
 	red := d.auth.Redactor
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return 0, nil, red.Err(err, ErrCredentialChanged, d.lim.TooLarge)
+		// a refusal by the read's fence stays one through redaction
+		// (Settings S3b-2b re-review 2, R2-1)
+		return 0, nil, red.Err(err, ErrCredentialChanged, d.lim.TooLarge, readfence.ErrRefused)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := ReadCapped(resp.Body, d.lim)
