@@ -831,3 +831,17 @@ Codex found the conflict checkpoint met (auth undecided, neither certificate cho
 **Tests:** Codex's probes, as regression tests: a changed editor kept through Stay and replaced through Discard; the edited installation's removal asking and another's not; a delayed pre-Apply poll never overwriting the readback; a credential action busy until its readback; a name-only edit keeping a group with a comma, a cluster with spaces and an untouched tenant, and a tenant-only edit keeping a match value's spaces; an editor kept, with what was typed, when a refresh removes its installation; a renamed offer's carried subscriptions following it while another installation's stays. Observability's readiness waiting for both panels, either answering first, a failure counting. The cleanup: removal after a failure, both failures reported, nothing removed that was not created, nothing when the step passes. **Mutation pass:** 16 mutants: 15 caught at first; the untouched text field's survived until an untouched tenant was added, and is caught.
 
 **Smoke:** the native walk at 925d2a2b, 217/217 four ways on the kind lab, the smoke fleet as it began after each; the walk's served cluster is now added through the list editor's own input.
+
+## 36. S3a-4c revision 2: Codex's re-review (2026-10-28)
+
+Codex closed R2, R4, R5 and R6, and checked no regression in replacement plans, refusals and lost answers, credential clearing, undecided conflicts or the legacy sentence. Three residuals remained, each at an edge of a fix.
+
+| Finding | Fix |
+|---|---|
+| **RR1:** a match row was sent as written only when both its key and its value were untouched, so editing a key trimmed its value (`team: " blue "` became `environment: "blue"`) | Each row keeps the pair it was written as, and each of its two fields is sent as written until the person edits that field; an edited field is trimmed, a new row's both are |
+| **RR2:** the removal that would strand a subscription editor was judged by the installation it opened with, not the one its draft names now: choosing `other` and removing `other` did not ask | The subscription editor reports its current destination, and a removal of the installation it opened with or the one it names now asks first; Stay keeps the choice |
+| **RR3, P3:** the smoke step's cleanup keyed on the new row being shown, so an add that applied but whose readback failed was left in force | The add's outcome is kept apart from the rows: attempted once its Apply is clicked, acknowledged once Applied is said, read back only with the plain Applied. `restore` reads the rows again (the panel's Retry), removes the installation once shown, says an acknowledged add it cannot see, and leaves alone one neither shown nor acknowledged; after the step's own removal nothing is left to restore |
+
+**Tests:** a key-only edit keeping its value's spaces; removing the draft's new destination asking, Stay keeping it; `restore` removing what is shown, reading again before removing, saying an acknowledged one it cannot see, and leaving alone one neither shown nor acknowledged. **Mutation pass:** 6 mutants (rows trimmed whole, the opening source alone, no destination reported, no read again, acknowledgement ignored, a removal of what is not shown), all caught.
+
+**Smoke:** the native walk at c41b6768, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
