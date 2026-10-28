@@ -226,11 +226,12 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	}
 	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
+	// the source's identity is kept while it is unreachable: a later send
+	// of what it read is checked against it (S3b §4), not ended by an outage
+	lin, sentence, words := legacyMetrics(res, c.metricsCfg, rev)
+	c.metricsState.lineage, c.metricsState.words = lin, ""
 	if cap.Available {
-		c.metricsState.lineage, cap.Sentence, c.metricsState.words = legacyMetrics(res, c.metricsCfg, rev)
-		cap.Lineage = c.metricsState.lineage.Key()
-	} else {
-		c.metricsState.lineage, c.metricsState.words = sources.Lineage{}, ""
+		cap.Sentence, cap.Lineage, c.metricsState.words = sentence, lin.Key(), words
 	}
 	c.metricsState.cap = cap
 	c.metricsState.client = metrics.NewClient(res.Transport, metrics.ScopeOf(c.metricsCfg.Match))

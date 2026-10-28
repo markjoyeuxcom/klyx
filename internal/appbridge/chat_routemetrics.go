@@ -107,6 +107,15 @@ func (t *chatTools) routeSeries(ctx context.Context, template, ns, name, window 
 			env.Complete = false
 			continue
 		}
+		// the conversation keeps the read's lineage (Settings S3b §4); a
+		// read under terms that moved is left out
+		if t.record != nil {
+			if err := t.record(gr.Status.Provenance); err != nil {
+				env.Errors = append(env.Errors, "Gateway "+gwText+": "+chatScrub(err.Error(), &p.redacted))
+				env.Complete = false
+				continue
+			}
+		}
 		if data.Start == "" {
 			data.Start, data.End = rfcOrEmpty(gr.Start), rfcOrEmpty(gr.End)
 		}

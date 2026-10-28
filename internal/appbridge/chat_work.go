@@ -3,7 +3,11 @@ package appbridge
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/moomora/klyx/internal/alertmanager"
+	"github.com/moomora/klyx/internal/config"
 )
 
 // aiWork is the AI work an Apply of the AI settings affects (Settings slice
@@ -130,7 +134,7 @@ func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
 		if c.kind == kindInvestigation {
 			what = "an investigation on " + c.cluster
 		}
-		out = append(out, PlanWorkDTO{ID: "conv:" + c.id, Kind: c.kind, Cluster: c.cluster, Started: started, What: what + " holding alerts read under the old terms: it ends at its next send"})
+		out = append(out, PlanWorkDTO{ID: "conv:" + c.id, Kind: c.kind, Cluster: c.cluster, Started: started, What: what + " holding " + heldNouns(c.lineages) + " read under the old terms: it ends at its next send"})
 		for i := len(c.exchanges) - 1; i >= 0; i-- {
 			e := c.exchanges[i]
 			if e.plan == nil || len(e.plan.dto.Steps) == 0 {
@@ -145,4 +149,26 @@ func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
 	out = append(out, explainAlertWork(in)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// heldNouns is what a conversation's lineages read, in a plan's words:
+// "alerts", "alerts and logs", "alerts, logs and metrics" (Settings S3b §4).
+func heldNouns(ls []alertmanager.Lineage) string {
+	held := map[string]bool{}
+	for _, l := range ls {
+		held[l.Kind] = true
+	}
+	var nouns []string
+	for _, k := range []struct{ kind, noun string }{{"", "alerts"}, {config.EndpointLoki, "logs"}, {config.EndpointMetrics, "metrics"}} {
+		if held[k.kind] {
+			nouns = append(nouns, k.noun)
+		}
+	}
+	switch len(nouns) {
+	case 0:
+		return "data"
+	case 1:
+		return nouns[0]
+	}
+	return strings.Join(nouns[:len(nouns)-1], ", ") + " and " + nouns[len(nouns)-1]
 }

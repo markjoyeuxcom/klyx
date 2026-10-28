@@ -5,6 +5,7 @@ package routemetrics
 
 import (
 	"context"
+	"github.com/moomora/klyx/internal/sources"
 	"time"
 )
 
@@ -35,6 +36,9 @@ type Status struct {
 	Lineage  string
 	// NoSeries: the read answered with no series at all (S3b §3.3)
 	NoSeries bool
+	// Provenance is the read's lineage, whole: what an AI read records and
+	// checks before a later send (S3b §4); Lineage above is its key
+	Provenance sources.Lineage
 }
 
 // Source produces per-route metrics for a set of route keys ("<ns>/<name>").

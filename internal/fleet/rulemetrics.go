@@ -92,7 +92,7 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 		return routemetrics.Unavailable(q, "metrics unavailable: "+why), nil
 	}
 	res.Status.UpdatedAt = q.End
-	res.Status.Sentence, res.Status.Lineage = mcap.Sentence, mcap.Lineage
+	res.Status.Sentence, res.Status.Lineage, res.Status.Provenance = mcap.Sentence, mcap.Lineage, mr.lineage
 	return res, nil
 }
 

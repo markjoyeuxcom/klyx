@@ -51,7 +51,7 @@ func TestARedirectAfterAMoveIsNotSent(t *testing.T) {
 		}))
 		src = config.SourceConfig{ID: "mets", Kind: config.SourceKindMetrics, Endpoint: api.URL, Tenant: "old-tenant", MemberLabel: "cluster", Serves: []config.ServeConfig{{Cluster: "dev"}}}
 		rig = newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
-		_, err := rig.conns["dev"].ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+		_, _, err := rig.conns["dev"].ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
 		api.Close()
 		if move && (err == nil || followed.Load() != 0) {
 			t.Fatalf("a redirect's hop was sent after the terms moved: %d, %v", followed.Load(), err)
@@ -192,7 +192,7 @@ func TestABrokenDenialMovesTheAccess(t *testing.T) {
 		t.Fatalf("fixture: %+v %+v", old, capb)
 	}
 	deny.Store(true)
-	if _, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+	if _, _, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
 		t.Fatal("a truncated denial was read")
 	}
 	cached, after := dev.ClusterMetrics(context.Background(), false)
@@ -462,7 +462,7 @@ func TestAWithdrawnReadIsNeverTheMembersCapability(t *testing.T) {
 	t.Run("before discovery", func(t *testing.T) {
 		refusedNow.Store(false)
 		r := subscribed(t, true, nil)
-		if _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); !errors.Is(err, withdrawn) && err == nil {
+		if _, _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); !errors.Is(err, withdrawn) && err == nil {
 			t.Fatalf("the withdrawn read: %v", err)
 		}
 		if r.services.Load() != 0 {
@@ -478,7 +478,7 @@ func TestAWithdrawnReadIsNeverTheMembersCapability(t *testing.T) {
 			}
 		})
 		ctx := fence(func(int32) bool { return false })
-		if _, err := r.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+		if _, _, err := r.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
 			t.Fatal("the withdrawn read was answered")
 		}
 		refusedNow.Store(false)
@@ -487,7 +487,7 @@ func TestAWithdrawnReadIsNeverTheMembersCapability(t *testing.T) {
 	t.Run("before the liveness probe", func(t *testing.T) {
 		refusedNow.Store(false)
 		r := subscribed(t, false, nil)
-		if _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+		if _, _, err := r.dev.ChatMetricsRange(fence(func(int32) bool { return true }), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
 			t.Fatal("the withdrawn read was answered")
 		}
 		fresh(t, r.dev)
@@ -639,7 +639,7 @@ func TestACancelledCallerIsNeverTheMembersCapability(t *testing.T) {
 		st := rig(t, true)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, err := st.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+		if _, _, err := st.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
 			t.Fatal("a cancelled read was answered")
 		}
 		fresh(t, st)

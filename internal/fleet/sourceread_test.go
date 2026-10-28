@@ -263,7 +263,7 @@ func TestADirectMetricsInstallationUsesItsOwnCredential(t *testing.T) {
 	f.mu.Lock()
 	f.onData = func() { r.revs.Bump(endpointcred.SourceAccount("mimir"), config.EndpointMetrics, true) }
 	f.mu.Unlock()
-	if _, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil ||
+	if _, _, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil ||
 		!strings.Contains(err.Error(), "the read was dropped: the installation's credential changed") {
 		t.Fatalf("a read across a credential change: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestAMetricsReadAcrossAMoveIsDropped(t *testing.T) {
 				}
 				why = capb.Reason
 			case "chat":
-				_, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+				_, _, err := dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
 				if err == nil {
 					t.Errorf("%s/%s: a read across the move was shown", tc.name, read)
 					continue
@@ -353,7 +353,7 @@ func TestAMetricsDenialMovesTheAccessGeneration(t *testing.T) {
 	r.fake.mu.Lock()
 	r.fake.code = http.StatusForbidden
 	r.fake.mu.Unlock()
-	_, _ = dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+	_, _, _ = dev.ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
 	if r.sources.Denials("lgtm-we-metrics") != 1 {
 		t.Fatalf("denials %d", r.sources.Denials("lgtm-we-metrics"))
 	}
@@ -430,7 +430,7 @@ func TestTwoMembersShareTheHostBound(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = r.conns[m].ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+			_, _, _ = r.conns[m].ChatMetricsRange(context.Background(), metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
 		}()
 	}
 	deadline := time.Now().Add(5 * time.Second)

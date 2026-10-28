@@ -16,6 +16,7 @@ import (
 
 	"github.com/moomora/klyx/internal/loki"
 	"github.com/moomora/klyx/internal/safehttp"
+	"github.com/moomora/klyx/internal/sources"
 )
 
 // fakeHistory is a Loki source: the labels it lists (by query), and the
@@ -33,11 +34,14 @@ type fakeHistory struct {
 	err     error
 }
 
-func (f *fakeHistory) LineageKey() string                   { return f.lineage }
-func (f *fakeHistory) Revision() uint64                     { return f.rev }
-func (f *fakeHistory) Source() string                       { return "Service logs/loki:http" }
-func (f *fakeHistory) Tenant() string                       { return f.tenant }
-func (f *fakeHistory) Sentence() string                     { return "from the Service loki/loki:3100 on this cluster" }
+func (f *fakeHistory) LineageKey() string { return f.lineage }
+func (f *fakeHistory) Revision() uint64   { return f.rev }
+func (f *fakeHistory) Source() string     { return "Service logs/loki:http" }
+func (f *fakeHistory) Tenant() string     { return f.tenant }
+func (f *fakeHistory) Sentence() string   { return "from the Service loki/loki:3100 on this cluster" }
+func (f *fakeHistory) Lineage() sources.Lineage {
+	return sources.Lineage{Kind: "loki", Mode: "service", Identity: "service|" + f.lineage, CredRev: f.rev}
+}
 func (f *fakeHistory) Match() map[string]string             { return f.match }
 func (f *fakeHistory) Current() bool                        { return true }
 func (f *fakeHistory) Slot(context.Context) (func(), error) { return func() {}, nil }

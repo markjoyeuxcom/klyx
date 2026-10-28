@@ -214,12 +214,19 @@ func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, 
 	case "restarts":
 		q, by = metrics.PodsRestarts.With(set), "pod"
 	}
-	series, err := t.conn.ChatMetricsRange(ctx, q, start, end, step)
+	series, lin, err := t.conn.ChatMetricsRange(ctx, q, start, end, step)
 	if err != nil {
 		if errors.Is(err, fleet.ErrChatMetricsUnavailable) {
 			return t.failed(toolMetrics, "prometheus", target, err)
 		}
 		return t.failed(toolMetrics, "prometheus", target, fmt.Errorf("the query failed: %w", err))
+	}
+	// the conversation keeps the read's lineage, checked before every later
+	// send (Settings S3b §4)
+	if t.record != nil {
+		if err := t.record(lin); err != nil {
+			return t.failed(toolMetrics, "prometheus", target, err)
+		}
 	}
 	var limits map[string]resource.Quantity
 	if pod != nil && template != "restarts" {

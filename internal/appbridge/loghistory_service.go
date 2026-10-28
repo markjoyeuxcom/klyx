@@ -16,6 +16,7 @@ import (
 	"github.com/moomora/klyx/internal/fleet"
 	"github.com/moomora/klyx/internal/loki"
 	"github.com/moomora/klyx/internal/safehttp"
+	"github.com/moomora/klyx/internal/sources"
 )
 
 // Coverage S8b: pod log history from the cluster's Loki, on demand. A view
@@ -40,6 +41,7 @@ type HistoryReader interface {
 	Source() string
 	Tenant() string
 	Sentence() string
+	Lineage() sources.Lineage
 	Match() map[string]string
 	Redactor() safehttp.Redactor
 	Current() bool
@@ -102,7 +104,10 @@ type LogHistoryPageDTO struct {
 	Tenant    string              `json:"tenant,omitempty"`
 	// Sentence says where the history is read and what makes it this
 	// cluster's (Settings S3b §3.4)
-	Sentence  string                `json:"sentence,omitempty"`
+	Sentence string `json:"sentence,omitempty"`
+	// Lineage is the reader's, whole, never sent to the page: what an AI
+	// read records and checks before a later send (S3b §4)
+	Lineage   sources.Lineage       `json:"-"`
 	Start     string                `json:"start"`
 	End       string                `json:"end"`
 	Done      bool                  `json:"done"` // the start of the range reached
@@ -470,7 +475,7 @@ func (s *LogHistoryService) firstPage(ctx context.Context, r HistoryReader, v *h
 	v.start, v.end = historyRange(req, s.now())
 	v.created, v.gone = req.CreatedUnix, req.Gone
 	v.target = loki.Target{Match: r.Match(), Namespace: req.Namespace, Pod: req.Pod, Container: req.Container, UID: req.UID}
-	out.Source, out.Tenant, out.Sentence = r.Source(), r.Tenant(), r.Sentence()
+	out.Source, out.Tenant, out.Sentence, out.Lineage = r.Source(), r.Tenant(), r.Sentence(), r.Lineage()
 	out.Start, out.End = v.start.UTC().Format(time.RFC3339), v.end.UTC().Format(time.RFC3339)
 	ms := matchSelector(v.target.Match)
 	labels, data, err := r.Labels(ctx, v.start, v.end, ms)
@@ -535,7 +540,7 @@ func (s *LogHistoryService) reader(r HistoryReader, v *historyView) loki.QueryFu
 }
 
 func (s *LogHistoryService) page(ctx context.Context, r HistoryReader, v *historyView, out LogHistoryPageDTO) LogHistoryPageDTO {
-	out.Source, out.Tenant, out.Sentence = r.Source(), r.Tenant(), r.Sentence()
+	out.Source, out.Tenant, out.Sentence, out.Lineage = r.Source(), r.Tenant(), r.Sentence(), r.Lineage()
 	out.Start, out.End = v.start.UTC().Format(time.RFC3339), v.end.UTC().Format(time.RFC3339)
 	if !r.Current() {
 		out.Reset, out.Error = true, fleet.ErrLokiSourceChanged.Error()
