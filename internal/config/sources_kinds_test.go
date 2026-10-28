@@ -152,3 +152,33 @@ func TestALokiSubscriptionOrOffIsNotWarnedAsUnlocated(t *testing.T) {
 		t.Fatal("the control: an unlocated Loki block is warned")
 	}
 }
+
+// Codex's review of S3b-1, R1: a token written empty or null, directly or
+// through a merge, is refused beside source or off as a non-empty one is;
+// an empty token beside a legacy endpoint stays valid, and no credential.
+func TestATokenWrittenAtAllIsRefusedBesideSourceOrOff(t *testing.T) {
+	block := "    metrics: {source: m, scope: tenant}\n"
+	for _, written := range []string{
+		"    metrics: {off: true, token: \"\"}\n",
+		"    metrics: {off: true, token: null}\n",
+		"    metrics: {source: m, scope: tenant, token: \"\"}\n",
+		"    metrics: {source: m, scope: tenant, token: null}\n",
+		"    metrics:\n      <<: {token: \"\"}\n      off: true\n",
+		"    metrics:\n      <<: {token: null}\n      source: m\n      scope: tenant\n",
+	} {
+		doc := strings.Replace(kindsFleet, block, written, 1)
+		if _, err := loadYAML(t, doc); err == nil || !strings.Contains(err.Error(), "metrics.token belongs to the cluster's own endpoint") {
+			t.Errorf("%q: %v", written, err)
+		}
+	}
+	doc := strings.Replace(kindsFleet, block, "    metrics: {endpoint: https://mimir.example, token: \"\"}\n", 1)
+	c, err := loadYAML(t, doc)
+	if err != nil {
+		t.Fatalf("an empty token beside a legacy endpoint: %v", err)
+	}
+	for _, e := range c.Clusters[1].Endpoints() {
+		if e.Kind == EndpointMetrics && e.LegacyToken {
+			t.Fatal("an empty token is advertised as a credential")
+		}
+	}
+}

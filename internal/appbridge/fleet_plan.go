@@ -586,7 +586,7 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		for _, kind := range []string{config.EndpointLoki, config.EndpointMetrics} {
 			was, now := config.ConnectionBlock(kind, sources, run), config.ConnectionBlock(kind, sources, x.cand)
 			if amSourceKey(was) != amSourceKey(now) {
-				return refuse("with this change, " + name + "'s " + kindWords(kind) + " would come from " + amSourceOf(now) + " instead of " + amSourceOf(was) +
+				return refuse("with this change, " + name + "'s " + kindWords(kind) + " would come from " + kindSourceOf(kind, now) + " instead of " + kindSourceOf(kind, was) +
 					": this version of Klyx cannot move a running cluster's " + kindWords(kind) + " until it reads through installations, so leave its group as it is, or give it its own " + kind + " block")
 			}
 		}
@@ -920,6 +920,16 @@ func amSourceOf(e *config.EndpointConfig) string {
 		return "its own Service"
 	}
 	return "discovery in the cluster"
+}
+
+// kindSourceOf is where a kind's block reads from, in words: Loki is
+// never discovered, so a Loki reader with no source has none (Codex's
+// review of S3b-1, R2); the others say amSourceOf's words.
+func kindSourceOf(kind string, e *config.EndpointConfig) string {
+	if kind == config.EndpointLoki && amSourceKey(e) == "discovery" {
+		return "no log history (Loki is never discovered)"
+	}
+	return amSourceOf(e)
 }
 
 // kindWords is what a kind's readers read, in a plan's words.

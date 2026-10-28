@@ -46,7 +46,7 @@ func TestAPlacementThatWouldMoveLogsOrMetricsIsRefused(t *testing.T) {
 	r.mu.Lock()
 	r.sources = []config.SourceConfig{lokiOn("lgtm-we-logs", "prd", "web")}
 	r.mu.Unlock()
-	if p := r.cs.PlanClusterEdit("dev", d); !strings.Contains(p.Refused, "dev's log history would come from the installation lgtm-we-logs") {
+	if p := r.cs.PlanClusterEdit("dev", d); !strings.Contains(p.Refused, "dev's log history would come from the installation lgtm-we-logs instead of no log history (Loki is never discovered)") || strings.Contains(p.Refused, "discovery in the cluster") {
 		t.Fatalf("logs moved: %+v", p)
 	}
 }

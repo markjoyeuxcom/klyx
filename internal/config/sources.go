@@ -168,7 +168,10 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig, legacy
 		// states a scope Klyx does not apply (S3b §2.1, §12 R1)
 		return fmt.Errorf("cluster %s: metrics.match is read from a later version of Klyx: remove it for now", describeValue(cluster))
 	}
-	if legacyToken && (has("source", e.Source != "") || has("off", e.Off)) {
+	// the token as written, an empty or null one included: a subscription
+	// or off allows none (Codex's review of S3b-1, R1); an empty token is
+	// still no credential for a legacy block
+	if has("token", legacyToken) && (has("source", e.Source != "") || has("off", e.Off)) {
 		return fmt.Errorf("cluster %s: metrics.token belongs to the cluster's own endpoint, so it is not allowed beside source or off", describeValue(cluster))
 	}
 	source := has("source", e.Source != "")
