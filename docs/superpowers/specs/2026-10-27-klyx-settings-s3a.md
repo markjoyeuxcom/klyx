@@ -771,3 +771,19 @@ S3a-4b is §6 and §7, on S3a-4a's plans (accepted, §30): both only propose, an
 **Mutation pass:** 15 mutants: 13 caught at first; a survivor got a stricter test (a sample over 1 MiB said as such, not as a failed read), and is caught. One is equivalent: dropping the offer's check that a block has a URL, since a Service's block has none to parse and is passed over there.
 
 **Smoke:** the native walk at a2e535ce, 216/216 four ways on the kind lab, the smoke fleet as it began after each. Detect's sample and the offer have no step of their own in the walk: Detect reads a lab Alertmanager the person points it at, and the smoke fleet has no direct URL on several clusters; S3a-4c's page walk covers Settings' plans.
+
+## 32. S3a-4b revision 1: Codex's review (2026-10-28)
+
+Codex found the sample's retention boundary, its bounds, the lease and slot at admission, per-cluster proposals and the offer's no-write, no-copy path sound, and closed S3a-4a's follow-up (§30). It requested changes: two P2 and one P3.
+
+| Finding | Fix |
+|---|---|
+| **R1:** Detect tied its reads to the lease, so a lease that ended cancelled them; but a read that had already completed was still returned, its sample a proposal for a cluster reconnected or removed meanwhile | What Detect read settles only while its lease and its deadline hold: checked at the end, before the lease is released, whatever path it took. An ended attempt's discovery and sample are discarded, never proposed: "prd was reconnected or removed while Detect read it, so what it read is discarded", or that it did not finish in time |
+| **R2:** the offer grouped URLs by their decoded path, so `/a%2Fb` and `/a/b`, which a proxy may route apart, were offered as one installation at the first URL, every scope "the same" | URLs are grouped by their path as written, escaped (`EscapedPath`), the origin canonical and a trailing slash dropped as before; the offer's where is said the same way. The shared-endpoint warning, whose comment already said "the path as written", now groups the same way |
+| **R3, P3:** a small sample's parser stopped at the end of its list and read anything after it, `[...]NOT-JSON`, as a complete sample | A complete sample is one list and nothing after it: the closing bracket is read, then only whitespace before the end; anything else leaves the sample unread, its message fixed and never echoing the body. A sample cut at its 500-alert bound stays a qualified partial one |
+
+**The checkpoint for S3a-4c** (an offer's auth and certificate-check conflicts stay unresolved choices in the editor, never preselected) is S3a-4c's.
+
+**Tests:** the lease ending during discovery, after the sample's body, and the caller's deadline after the body, each leaving no sample, no member, no Service and the reason, with the lease released once; the unchanged lease as the control. A complete list, with surrounding whitespace; a list followed by text, by a second list, or unclosed, each unread without echoing it; the 500 bound still cut and partial. Escaped and decoded paths kept apart, and the same path with a trailing slash, or the same escaped path, one offer; the warning likewise. **Mutation pass:** 6 mutants: 4 caught at first; the deadline's settlement survived until the caller's-deadline case was added, and is caught; the EOF check's mutant did not build (an unused import) and, rewritten, is caught.
+
+**Smoke:** the native walk at 24ffabd0, 216/216 four ways on the kind lab, the smoke fleet as it began after each. The labs were rebuilt first: the scratchpad's cleanup had removed their scripts again, and they were replayed from the session transcript, checked against the one survivor and pinned to the lab's context before they ran.
