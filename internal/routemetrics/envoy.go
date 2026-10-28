@@ -68,7 +68,7 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	// Real Prometheus count() over no series returns an empty vector (-> Absent);
 	// the ==0 check is defensive against a malformed response.
 	if exist.Absent || exist.Value == 0 {
-		return out, Status{Available: false, Message: "no envoy_cluster_* series found"}, nil
+		return out, Status{Available: false, NoSeries: true, Message: "no envoy_cluster_* series found"}, nil
 	}
 	return out, Status{Available: true, Message: "no route series matched this topology"}, nil
 }

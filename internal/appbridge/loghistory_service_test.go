@@ -37,6 +37,7 @@ func (f *fakeHistory) LineageKey() string                   { return f.lineage }
 func (f *fakeHistory) Revision() uint64                     { return f.rev }
 func (f *fakeHistory) Source() string                       { return "Service logs/loki:http" }
 func (f *fakeHistory) Tenant() string                       { return f.tenant }
+func (f *fakeHistory) Sentence() string                     { return "from the Service loki/loki:3100 on this cluster" }
 func (f *fakeHistory) Match() map[string]string             { return f.match }
 func (f *fakeHistory) Current() bool                        { return true }
 func (f *fakeHistory) Slot(context.Context) (func(), error) { return func() {}, nil }

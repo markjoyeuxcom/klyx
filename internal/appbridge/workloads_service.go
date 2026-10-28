@@ -230,7 +230,7 @@ func (s *WorkloadsService) GetWorkloadMetrics(cluster, namespace string) Workloa
 		updatedAt = st.UpdatedAt.Format(time.RFC3339)
 	}
 	return WorkloadMetricsResultDTO{
-		Status: WorkloadMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt},
+		Status: WorkloadMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt, Sentence: st.Sentence, Lineage: st.Lineage, NoData: st.NoData},
 		Usage:  out,
 	}
 }

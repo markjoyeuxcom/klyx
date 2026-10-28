@@ -138,7 +138,8 @@ export function LogHistoryPane({ cluster, target }: { cluster: string; target: H
             <button className="l-chip" style={{ marginLeft: 6 }} onClick={() => setShowSelectors((s) => !s)}>{page.selectors.length} selectors</button>
           )}
           {showSelectors && page.selectors.slice(1).map((s) => <div key={s}><code style={{ fontSize: 11 }}>{s}</code></div>)}
-          <div data-testid="history-strength">{page.strength}{page.source ? ` · ${page.source}` : ""}{page.tenant ? ` · tenant ${page.tenant}` : ""}</div>
+          {/* where the history is read and what makes it this pod's cluster's (Settings S3b §3.4) */}
+          <div data-testid="history-strength">{page.strength}{page.sentence ? ` · read ${page.sentence}` : `${page.source ? ` · ${page.source}` : ""}${page.tenant ? ` · tenant ${page.tenant}` : ""}`}</div>
         </div>
       )}
       {notice && <div role="status" className="t-secondary" style={{ color: "var(--color-text-warning)" }}>{notice}</div>}

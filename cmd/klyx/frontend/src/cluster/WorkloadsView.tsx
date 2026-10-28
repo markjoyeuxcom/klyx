@@ -47,6 +47,7 @@ import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { SourceLine } from "./SourceLine";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -402,6 +403,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     );
   }
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{wl.rowsState?.refreshError ? ` Last re-read failed: ${wl.rowsState.refreshError}` : ""}</div>);
+  // where the usage comes from (Settings S3b §3.4); usage kept from an
+  // earlier read keeps that read's sentence, said as not current
+  if (mine && (wl.metricsAvailable || wl.metricsStatus?.noData)) notices.push(<SourceLine key="src" sentence={wl.metricsStatus?.sentence} noData={wl.metricsStatus?.noData} stale={wl.metricsStale} testid="workloads-source" />);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   const tone = attentionTone(counts);
@@ -908,6 +912,8 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
         <span style={{ color: "var(--color-text-tertiary)" }}>mem 30m</span>
         <Sparkline points={spark.mem} />
       </span>
+      {/* no series under the cluster's scope, said rather than drawn as nothing (Settings S3b §3.3) */}
+      {spark.noData && <span data-testid="spark-no-data" style={{ color: "var(--color-text-tertiary)" }}>{spark.noData}</span>}
     </div>
   );
 }

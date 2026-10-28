@@ -49,6 +49,9 @@ func (s *MetricsService) GetClusterMetrics(cluster string, forceReprobe bool) Me
 		Reason:      cap.Reason,
 		CPUFraction: cm.CPUFraction,
 		MemFraction: cm.MemFraction,
+		Sentence:    cap.Sentence,
+		Lineage:     cap.Lineage,
+		NoData:      cm.NoData,
 	}
 }
 
@@ -86,7 +89,7 @@ func (s *MetricsService) GetClusterSparklines(cluster string) SparklinesDTO {
 }
 
 func sparklinesDTO(set fleet.SparklineSet) SparklinesDTO {
-	return SparklinesDTO{Available: true, CPU: pointsDTO(set.CPU), Mem: pointsDTO(set.Mem)}
+	return SparklinesDTO{Available: true, CPU: pointsDTO(set.CPU), Mem: pointsDTO(set.Mem), Sentence: set.Sentence, Lineage: set.Lineage, NoData: set.NoData}
 }
 
 func pointsDTO(ps []metrics.Point) []PointDTO {
@@ -108,7 +111,7 @@ func (s *MetricsService) GetNodeUtilization(cluster string) NodeUtilizationResul
 	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
 	defer cancel()
 	usages, st := conn.NodeUtilization(ctx)
-	out := NodeUtilizationResultDTO{Available: st.Available, Message: st.Message, Items: make([]NodeUsageDTO, 0, len(usages))}
+	out := NodeUtilizationResultDTO{Available: st.Available, Message: st.Message, Items: make([]NodeUsageDTO, 0, len(usages)), Sentence: st.Sentence, Lineage: st.Lineage, NoData: st.NoData}
 	if !st.UpdatedAt.IsZero() {
 		out.UpdatedAtUnix = st.UpdatedAt.Unix()
 	}
@@ -129,7 +132,7 @@ func (s *MetricsService) GetPodContainerUsage(cluster, namespace, pod string) Po
 	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
 	defer cancel()
 	byName, st := conn.PodContainerUsage(ctx, namespace, pod)
-	out := PodUsageResultDTO{Available: st.Available, Message: st.Message, Items: make([]ContainerUsageDTO, 0, len(byName))}
+	out := PodUsageResultDTO{Available: st.Available, Message: st.Message, Items: make([]ContainerUsageDTO, 0, len(byName)), Sentence: st.Sentence, Lineage: st.Lineage, NoData: st.NoData}
 	if !st.UpdatedAt.IsZero() {
 		out.UpdatedAtUnix = st.UpdatedAt.Unix()
 	}

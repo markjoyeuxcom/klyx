@@ -52,5 +52,9 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + why}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
+	st.Sentence, st.Lineage = cap.Sentence, cap.Lineage
+	if w := mr.noData(); st.NoSeries && w != "" {
+		st.Message = w + ": " + st.Message
+	}
 	return out, st
 }

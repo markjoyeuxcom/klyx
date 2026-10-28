@@ -38,7 +38,7 @@ import {
 
 type Mode = "all" | "issues" | "global" | "policies";
 type OpenObject = (ref: ResourceRef, namespace: string, name: string) => void;
-export type MetricsObs = { state: "reading" | "live" | "stale" | "unavailable"; message: string; at: number | null };
+export type MetricsObs = { state: "reading" | "live" | "stale" | "unavailable"; message: string; at: number | null; sentence?: string };
 
 export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway: GatewayRef }) {
   const net = useFleet((s) => s.network);
@@ -106,8 +106,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
 
   const rmStatus = current ? net.routeMetricsStatus : null;
   const metricsObs: MetricsObs = !rmStatus ? { state: "reading", message: "", at: null }
-    : rmStatus.available ? { state: "live", message: rmStatus.message, at: net.routeMetricsAt ?? null }
-    : net.routeMetricsStale ? { state: "stale", message: rmStatus.message, at: net.routeMetricsAt ?? null }
+    : rmStatus.available ? { state: "live", message: rmStatus.message, at: net.routeMetricsAt ?? null, sentence: rmStatus.sentence }
+    : net.routeMetricsStale ? { state: "stale", message: rmStatus.message, at: net.routeMetricsAt ?? null, sentence: rmStatus.sentence }
     : { state: "unavailable", message: rmStatus.message, at: null };
 
   const healthOf = useMemo(() => new Map(routes.map((r) => [laneKey(r), routeRole(r)])), [routes]);
@@ -273,6 +273,8 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
     : metricsObs.state === "stale" ? `route traffic: last good read - the latest failed${metricsObs.message ? ` (${metricsObs.message})` : ""}`
     : metricsObs.state === "unavailable" ? `route traffic unavailable: ${metricsObs.message || "no metrics source"}`
     : metricsObs.message ? `route traffic: ${metricsObs.message}` : "route traffic · 5m rates";
+  // where the numbers come from; kept numbers keep their own read's (Settings S3b §3.4)
+  const metricsSource = !metricsObs.sentence ? "" : metricsObs.state === "stale" ? ` · earlier read ${metricsObs.sentence}` : ` · read ${metricsObs.sentence}`;
   const coverage = routesNow ? "" : routesCarried ? " (last complete read)" : " (route list unreadable)";
 
   return (
@@ -349,7 +351,7 @@ export function GatewayTopology({ cluster, gateway }: { cluster: string; gateway
         </div>
       ) : null}
       footer={<span className="t-legend">j k select · esc close · / search</span>}
-      footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}</span>}
+      footerEnd={<span className="t-secondary">{visible.length !== routes.length ? `${visible.length} of ${routes.length} routes · ` : ""}broken first · {metricsCaption}{metricsSource}</span>}
       inspector={selKey && inspected && t ? (
         <RouteInspector key={selKey} cluster={cluster} route={inspected} gone={missing && routesNow} unproven={missing && !routesNow} gateway={t.gateway} listeners={listeners} notes={warnings.byRoute.get(routeId(inspected)) ?? []} ruleMetrics={ruleM}
           metric={metricsKey ? metrics[metricsKey] : undefined} metricsObs={metricsObs} certLookup={certLookup} certEvidence={certEvidence} certLastGood={certLastGood} certGap={certGap} nowS={nowS} onOpenObject={openObject} onClose={() => pick(null)} />

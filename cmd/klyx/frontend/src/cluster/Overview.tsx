@@ -20,6 +20,7 @@ import { reveal, selectsOnReveal } from "../nav/reveal";
 import { StationVerdict } from "./StationVerdict";
 import { clusterDisplayName } from "../fleet/clusterName";
 import { NeedsYou } from "../fleet/NeedsYou";
+import { SourceLine } from "./SourceLine";
 
 
 // Overview on the workspace template (redesign step 7e). Its attention
@@ -501,6 +502,7 @@ function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; l
     if (dto.warning) text += ` ⚠︎ ${dto.warning}`;
   }
   return (
+    <>
     <div style={{ display: "flex", gap: 8, fontSize: 11, alignItems: "center", marginTop: 2 }}>
       <span style={{ color }}>{text}</span>
       <button
@@ -512,5 +514,8 @@ function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; l
         {loading ? "…" : "refresh"}
       </button>
     </div>
+    {/* where the readout comes from, and no data under its scope said as such (Settings S3b §3.3, §3.4) */}
+    {dto?.available && <SourceLine sentence={dto.sentence} noData={dto.noData} testid="monitoring-source" />}
+    </>
   );
 }

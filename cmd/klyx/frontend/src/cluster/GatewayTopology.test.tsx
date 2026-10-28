@@ -347,6 +347,16 @@ describe("GatewayTopology (redesign step 6, canvas-detail)", () => {
     expect(screen.getByText(/route traffic unavailable: Envoy Gateway not detected/)).toBeTruthy();
   });
 
+  it("names where the route numbers are read; kept numbers name their earlier read (Settings S3b §3.4)", () => {
+    seed(topo([route("apps", "share")]), { routeMetricsStatus: { available: true, message: "", updatedAt: "now", sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=x" } });
+    const live = render(<GatewayTopology cluster="x" gateway={gateway} />);
+    expect(screen.getByText(/route traffic · 5m rates · read from lgtm-we-metrics, hosted by prd, filtered by cluster=x/)).toBeTruthy();
+    live.unmount();
+    seed(topo([route("apps", "share")]), { routeMetrics: { "apps/share": { rps: 3, p50: 12, p99: 80, errRate: 0 } }, routeMetricsStatus: { available: false, message: "timeout", updatedAt: "then", sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=x" }, routeMetricsStale: true });
+    render(<GatewayTopology cluster="x" gateway={gateway} />);
+    expect(screen.getByText(/the latest failed \(timeout\) · earlier read from lgtm-we-metrics, hosted by prd, filtered by cluster=x/)).toBeTruthy();
+  });
+
   // The route-level numbers are the selected route's, in its inspector.
   it("a failed metrics refresh keeps the last numbers, labelled", () => {
     seed(topo([route("apps", "share")]), { selectedRoute: "apps/share", routeMetrics: { "apps/share": { rps: 3, p50: 12, p99: 80, errRate: 0 } }, routeMetricsStatus: { available: false, message: "timeout", updatedAt: "then" }, routeMetricsStale: true });

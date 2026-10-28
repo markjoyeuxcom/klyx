@@ -51,7 +51,7 @@ export function DataPath({ gateway, route, listeners, metrics }: { gateway: Gate
       <Rail label="Data path" steps={steps} />
       {m && m.status.available && (
         <div className="rail-detail">
-          {[...m.notes, m.backendSplit ? `Per-backend split: ${m.backendSplit}.` : "", m.scopeNote ?? ""].filter(Boolean).map((n, i) => <div key={i}>{n}</div>)}
+          {[...m.notes, m.backendSplit ? `Per-backend split: ${m.backendSplit}.` : "", m.scopeNote ?? "", m.status.sentence ? `Read ${m.status.sentence}.` : ""].filter(Boolean).map((n, i) => <div key={i}>{n}</div>)}
         </div>
       )}
     </div>

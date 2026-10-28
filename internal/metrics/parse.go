@@ -142,7 +142,7 @@ func (c *Client) InstantScalar(ctx context.Context, q Query) (s Sample, err erro
 			return Sample{}, fmt.Errorf("parse vector: %w", err)
 		}
 		if len(vec) == 0 {
-			return Sample{Absent: true}, nil
+			return Sample{Absent: true, Empty: true}, nil
 		}
 		if len(vec) > 1 {
 			return Sample{}, fmt.Errorf("expected single-element vector, got %d", len(vec))

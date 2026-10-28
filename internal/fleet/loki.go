@@ -23,6 +23,7 @@ import (
 	"github.com/moomora/klyx/internal/loki"
 	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
+	"github.com/moomora/klyx/internal/sources"
 )
 
 // Coverage S8b: a connection's Loki endpoint - configured only (§2: no
@@ -136,6 +137,10 @@ type LokiReader struct {
 	// terms are a subscription's, pinned when the reader was built
 	// (Settings S3b §3.1): every page is fenced by them
 	terms *sourceTerms
+	// sentence and lineage say where the reader reads and what makes it
+	// this cluster's (S3b §3.2, §3.4)
+	sentence string
+	lineage  sources.Lineage
 }
 
 // lokiGet is one page's GET.
@@ -172,6 +177,7 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 		client := c.lokiClient(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, cfg.TLSSkipVerify))
 		d := endpointhttp.NewDirect(strings.TrimRight(cfg.Endpoint, "/"), auth, client, lokiLimits)
 		r.identity, r.display, r.red, r.get = amIdentity("endpoint", at, cfg.Tenant, cfg.Match), at, d.Redactor(), d.GetWith
+		r.lineage, r.sentence = legacyLoki(config.AMDirect, r.identity, "from "+at, cfg.Tenant, cfg.Match, rev)
 		return r, nil
 	}
 	if cfg.ServiceRef == nil {
@@ -184,6 +190,7 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 	svc := serviceOf(cfg.ServiceRef)
 	p := endpointhttp.NewRawProxy(g, svc, cfg.Tenant, lokiLimits)
 	r.identity, r.display, r.get = amIdentity("service", serviceAt(svc), cfg.Tenant, cfg.Match), "Service "+serviceAt(svc), p.Get
+	r.lineage, r.sentence = legacyLoki(config.AMService, r.identity, "from the Service "+serviceAt(svc)+" on this cluster", cfg.Tenant, cfg.Match, rev)
 	return r, nil
 }
 
@@ -239,7 +246,7 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 	if sub.ScopeTenant {
 		match = nil
 	}
-	r := &LokiReader{c: c, identity: t.key(), tenant: sub.Tenant, match: match, rev: rev, terms: &t}
+	r := &LokiReader{c: c, identity: t.key(), tenant: sub.Tenant, match: match, rev: rev, terms: &t, lineage: t.lineage()}
 	src := sub.Source
 	fence := endpointhttp.Fence{Check: func() error { return b.checkTerms(t) }, Denied: func() { b.sources.Denied(src.ID) }}
 	if t.direct() {
@@ -253,7 +260,7 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		}
 		client := c.lokiClient(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, src.TLSSkipVerify))
 		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client, lokiLimits)
-		r.display, r.red = src.ID+", "+at, d.Redactor()
+		r.display, r.red, r.sentence = src.ID+", "+at, d.Redactor(), t.sentence(at)
 		r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 			return fence.Do(ctx, func(ctx context.Context) (int, []byte, error) { return d.GetWith(ctx, path, q, hdr) })
 		}
@@ -263,7 +270,7 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		return nil, fmt.Errorf("%s has no serviceRef, and Loki is not discovered", src.ID)
 	}
 	svc := serviceOf(src.ServiceRef)
-	r.display = src.ID + ", Service " + serviceAt(svc) + " in " + src.Host
+	r.display, r.sentence = src.ID+", Service "+serviceAt(svc)+" in "+src.Host, t.sentence("")
 	r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 		conn, life, release, err := b.lease(src.Host, "the log history of "+c.name)
 		if err != nil {
@@ -306,6 +313,12 @@ func (r *LokiReader) Revision() uint64 { return r.rev }
 // Source and Tenant are display values.
 func (r *LokiReader) Source() string { return alertmanager.Clip(r.red.Text(r.display), 512) }
 func (r *LokiReader) Tenant() string { return alertmanager.Clip(r.red.Text(r.tenant), 256) }
+
+// Sentence is the reader's scope sentence (S3b §3.4), a display value.
+func (r *LokiReader) Sentence() string { return alertmanager.Clip(r.red.Text(r.sentence), 1024) }
+
+// Lineage is the reader's lineage (S3b §3.2).
+func (r *LokiReader) Lineage() sources.Lineage { return r.lineage }
 
 // Match is the configured match, raw: for building queries in process.
 func (r *LokiReader) Match() map[string]string { return r.match }
@@ -476,4 +489,21 @@ func matchSelectorOf(m map[string]string) string {
 		parts = append(parts, k+"="+strconv.Quote(m[k]))
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+// legacyLoki is a cluster's own Loki block's lineage and sentence: where it
+// reads, its tenant and its match, or that nothing filters it.
+func legacyLoki(mode, identity, where, tenant string, match map[string]string, rev uint64) (sources.Lineage, string) {
+	parts := []string{where}
+	if tenant != "" {
+		parts = append(parts, "tenant "+alertmanager.Clip(tenant, alertmanager.MaxLabelValue))
+	}
+	words := scopeWords(match, safehttp.Redactor{})
+	if words == "" {
+		parts = append(parts, "unfiltered: every stream there is read as this cluster's")
+	} else {
+		parts = append(parts, "filtered by "+words)
+	}
+	return sources.Lineage{Kind: config.EndpointLoki, Mode: mode, Identity: identity, Tenant: tenant, Match: words, CredRev: rev},
+		strings.Join(parts, ", ")
 }

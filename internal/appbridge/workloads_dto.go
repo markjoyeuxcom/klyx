@@ -37,6 +37,14 @@ type WorkloadMetricsStatusDTO struct {
 	Available bool   `json:"available"`
 	Message   string `json:"message"`
 	UpdatedAt string `json:"updatedAt"` // RFC3339; "" when never succeeded
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
+	// NoData: the read answered with no series under the cluster's scope
+	// (S3b §3.3), apart from Message's caveats
+	NoData string `json:"noData,omitempty"`
 }
 
 type WorkloadUsageDTO struct {

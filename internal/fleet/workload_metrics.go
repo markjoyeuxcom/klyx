@@ -38,11 +38,11 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 
 	cl := mr.client
 	ns := metrics.Namespace{Name: namespace}
-	cpuByPod, err := queryByPod(ctx, cl, metrics.PodCPU.With(ns))
+	cpuByPod, cpuSeries, err := queryByPod(ctx, cl, metrics.PodCPU.With(ns))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "cpu usage query failed: " + err.Error()}
 	}
-	memByPod, err := queryByPod(ctx, cl, metrics.PodMem.With(ns))
+	memByPod, memSeries, err := queryByPod(ctx, cl, metrics.PodMem.With(ns))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
@@ -50,16 +50,20 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 	if why := mr.unsettled(); why != "" {
 		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
-	return workloads.AggregateUsage(ws, cpuByPod, memByPod), workloads.UsageStatus{Available: true, UpdatedAt: now}
+	st := workloads.UsageStatus{Available: true, UpdatedAt: now, Sentence: cap.Sentence, Lineage: cap.Lineage}
+	if cpuSeries == 0 && memSeries == 0 {
+		st.NoData = mr.noData()
+	}
+	return workloads.AggregateUsage(ws, cpuByPod, memByPod), st
 }
 
 // queryByPod runs a `sum by (namespace,pod)` instant query and reduces it to
 // "<namespace>/<pod>" -> value. Samples missing either label are dropped (no
 // ambiguous key). NaN/Inf are already skipped by InstantVector.
-func queryByPod(ctx context.Context, cl *metrics.Client, q metrics.Query) (map[string]float64, error) {
-	samples, err := cl.InstantVector(ctx, q)
+func queryByPod(ctx context.Context, cl *metrics.Client, q metrics.Query) (map[string]float64, int, error) {
+	samples, series, err := cl.InstantVectorSeen(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	out := make(map[string]float64, len(samples))
 	for _, s := range samples {
@@ -69,5 +73,5 @@ func queryByPod(ctx context.Context, cl *metrics.Client, q metrics.Query) (map[s
 		}
 		out[ns+"/"+pod] = s.Value
 	}
-	return out, nil
+	return out, series, nil
 }

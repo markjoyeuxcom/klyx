@@ -24,6 +24,11 @@ const (
 type SparklineSet struct {
 	CPU []metrics.Point
 	Mem []metrics.Point
+	// Sentence and Lineage are the read's source (Settings S3b §3.2,
+	// §3.4); NoData says both series came back empty under its scope
+	Sentence string
+	Lineage  string
+	NoData   string
 }
 
 // WorkloadSparklines returns 30m cpu/mem series for one workload, summed over
@@ -72,22 +77,30 @@ func (c *ClusterConn) sparklines(ctx context.Context, cpuQ, memQ metrics.Query) 
 		}
 		return SparklineSet{}, fmt.Errorf("%s", msg)
 	}
-	set, err := querySparklines(ctx, mr.client, now, cpuQ, memQ)
+	set, series, err := querySparklines(ctx, mr.client, now, cpuQ, memQ)
 	if why := mr.unsettled(); why != "" {
 		return SparklineSet{}, errors.New("metrics unavailable: " + why)
+	}
+	if err == nil {
+		set.Sentence, set.Lineage = cap.Sentence, cap.Lineage
+		if series == 0 {
+			set.NoData = mr.noData()
+		}
 	}
 	return set, err
 }
 
-func querySparklines(ctx context.Context, cl *metrics.Client, now time.Time, cpuQ, memQ metrics.Query) (SparklineSet, error) {
+// querySparklines is the pair and how many series they held: zero is an
+// answer with no series at all, told apart from gaps (S3b §3.3).
+func querySparklines(ctx context.Context, cl *metrics.Client, now time.Time, cpuQ, memQ metrics.Query) (SparklineSet, int, error) {
 	start := now.Add(-sparklineWindow)
-	cpu, err := cl.RangeSeries(ctx, cpuQ, start, now, sparklineStep)
+	cpu, nc, err := cl.RangeSeriesSeen(ctx, cpuQ, start, now, sparklineStep)
 	if err != nil {
-		return SparklineSet{}, fmt.Errorf("cpu range query failed: %w", err)
+		return SparklineSet{}, 0, fmt.Errorf("cpu range query failed: %w", err)
 	}
-	mem, err := cl.RangeSeries(ctx, memQ, start, now, sparklineStep)
+	mem, nm, err := cl.RangeSeriesSeen(ctx, memQ, start, now, sparklineStep)
 	if err != nil {
-		return SparklineSet{}, fmt.Errorf("memory range query failed: %w", err)
+		return SparklineSet{}, 0, fmt.Errorf("memory range query failed: %w", err)
 	}
-	return SparklineSet{CPU: cpu, Mem: mem}, nil
+	return SparklineSet{CPU: cpu, Mem: mem}, nc + nm, nil
 }

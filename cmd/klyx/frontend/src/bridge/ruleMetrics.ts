@@ -40,7 +40,7 @@ export type RouteUnit = { kind: string; namespace: string; name: string; uid?: s
 export type RuleRoute = { namespace: string; name: string; uid: string; unit?: RouteUnit };
 
 export type RuleMetrics = {
-  status: { available: boolean; message: string; updatedAt: string };
+  status: { available: boolean; message: string; updatedAt: string; sentence?: string; lineage?: string };
   noEndpoint?: boolean; // no metrics endpoint configured or discovered
   scope: "owning-gateway" | "pod" | "kubernetes-pod" | "";
   scopeNote?: string;

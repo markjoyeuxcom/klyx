@@ -3,6 +3,8 @@ package alertmanager
 import (
 	"crypto/sha256"
 	"encoding/hex"
+
+	"github.com/moomora/klyx/internal/sources"
 )
 
 // Subject is the Kubernetes object an alert's labels name (S8a §5): a
@@ -89,29 +91,10 @@ type Read struct {
 	// read's time, so an unchanged read is an unchanged item.
 }
 
-// Lineage is a read's provenance (Settings S3a §3.4): identities and
-// counters only, never data, so it can travel with what the read informed
-// and be checked before a later send. Every field is fixed at the read;
-// it is never looked up again.
-type Lineage struct {
-	// Mode is how the cluster resolved: subscribed, direct, service or
-	// discovered (legacy), or off
-	Mode string `json:"mode"`
-	// Identity is the source identity the read was keyed to
-	Identity string `json:"identity"`
-	// the installation and the member's subscription, when subscribed
-	Installation string `json:"installation,omitempty"`
-	InstRev      uint64 `json:"instRev,omitempty"`
-	SubRev       uint64 `json:"subRev,omitempty"`
-	// the host, its connection and its access generation, when hosted;
-	// Access alone for a direct installation
-	Host     string `json:"host,omitempty"`
-	HostConn uint64 `json:"hostConn,omitempty"`
-	Access   string `json:"access,omitempty"`
-	Tenant   string `json:"tenant,omitempty"`
-	// CredRev is the endpoint credential's revision the read used
-	CredRev uint64 `json:"credRev,omitempty"`
-}
+// Lineage is a read's provenance (Settings S3a §3.4), now every kind's
+// (Settings S3b §3.2): an Alertmanager read leaves Kind and Match empty and
+// carries what it always did.
+type Lineage = sources.Lineage
 
 // Item is one alert of a read.
 type Item struct {

@@ -29,6 +29,12 @@ type Status struct {
 	// NoEndpoint: no metrics endpoint is configured or discovered (slice
 	// 8d-2): the one case worded "configure a metrics endpoint".
 	NoEndpoint bool
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source (Settings S3b §3.2, §3.4)
+	Sentence string
+	Lineage  string
+	// NoSeries: the read answered with no series at all (S3b §3.3)
+	NoSeries bool
 }
 
 // Source produces per-route metrics for a set of route keys ("<ns>/<name>").

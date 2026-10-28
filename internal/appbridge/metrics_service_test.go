@@ -163,3 +163,28 @@ func TestGetPodContainerUsage(t *testing.T) {
 		t.Fatalf("sidecar: %+v", dto.Items[1])
 	}
 }
+
+// Settings S3b §3.2-§3.4: every metrics DTO carries its read's sentence and
+// lineage key, and no data under the scope apart from a caveat.
+func TestMetricsDTOsCarryTheirSource(t *testing.T) {
+	const sentence, lineage, none = "from m, hosted by prd, filtered by cluster=dev", "k1", "no data for dev under cluster=dev"
+	conn := fakeMetricsConn{
+		cm:      metrics.ClusterMetrics{NoData: none},
+		cap:     metrics.MetricsCapability{Available: true, Mode: metrics.ModeSubscribed, Sentence: sentence, Lineage: lineage},
+		spark:   fleet.SparklineSet{Sentence: sentence, Lineage: lineage, NoData: none},
+		usageSt: workloads.UsageStatus{Available: true, Message: "pod list capped - node usage may under-count", Sentence: sentence, Lineage: lineage, NoData: none},
+	}
+	s := NewMetricsService(func(string) (MetricsConn, bool) { return conn, true })
+	if d := s.GetClusterMetrics("dev", false); d.Sentence != sentence || d.Lineage != lineage || d.NoData != none {
+		t.Fatalf("readout: %+v", d)
+	}
+	if d := s.GetClusterSparklines("dev"); d.Sentence != sentence || d.Lineage != lineage || d.NoData != none {
+		t.Fatalf("sparklines: %+v", d)
+	}
+	if d := s.GetNodeUtilization("dev"); d.Sentence != sentence || d.Lineage != lineage || d.NoData != none || d.Message == none {
+		t.Fatalf("nodes: %+v", d)
+	}
+	if d := s.GetPodContainerUsage("dev", "a", "p"); d.Sentence != sentence || d.Lineage != lineage || d.NoData != none {
+		t.Fatalf("containers: %+v", d)
+	}
+}

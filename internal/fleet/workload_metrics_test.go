@@ -28,7 +28,7 @@ func TestQueryByPodMapsNamespacePodLabels(t *testing.T) {
 		{"metric":{"pod":"no-ns"},"value":[0,"0.99"]}
 	]}}`
 	cl := metrics.NewClient(metrics.TransportOf(fakeQuerier{body: body}), metrics.Scope{})
-	got, err := queryByPod(context.Background(), cl, metrics.PodCPU.With(metrics.Namespace{}))
+	got, _, err := queryByPod(context.Background(), cl, metrics.PodCPU.With(metrics.Namespace{}))
 	if err != nil {
 		t.Fatal(err)
 	}

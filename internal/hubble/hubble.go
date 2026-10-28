@@ -66,6 +66,12 @@ type Status struct {
 	Available bool
 	Message   string
 	UpdatedAt time.Time
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source (Settings S3b §3.2, §3.4)
+	Sentence string
+	Lineage  string
+	// NoSeries: the read answered with no series at all (S3b §3.3)
+	NoSeries bool
 }
 
 // Source reduces Hubble metrics from a Prometheus client.
@@ -139,7 +145,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 	}
 
 	if out.Empty() {
-		return out, Status{Available: true, Message: "no Hubble metric series found - enable hubble.metrics (drop, flow, dns, http) in the Cilium config and scrape hubble-metrics (:9965)"}, nil
+		return out, Status{Available: true, NoSeries: true, Message: "no Hubble metric series found - enable hubble.metrics (drop, flow, dns, http) in the Cilium config and scrape hubble-metrics (:9965)"}, nil
 	}
 	return out, Status{Available: true}, nil
 }

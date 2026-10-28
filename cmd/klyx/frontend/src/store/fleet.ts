@@ -471,7 +471,7 @@ export type KarpenterEventDTO = { type: string; reason: string; message: string;
 export type KarpenterSnapshotDTO = { detected: boolean; asOfUnix?: number; events: KarpenterEventDTO[]; eventsError?: string; eventsTruncated?: boolean; error?: string };
 export type ExpiryScanResultDTO = { items: ExpiryItemDTO[]; warnings: string[]; error?: string };
 export type WorkloadUsageDTO = { cpuUsage: number | null; memUsage: number | null };
-export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
+export type WorkloadMetricsStatusDTO = { available: boolean; message: string; updatedAt: string; sentence?: string; lineage?: string; noData?: string };
 export type WorkloadMetricsResultDTO = { status: WorkloadMetricsStatusDTO; usage: Record<string, WorkloadUsageDTO> };
 export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet"] as const;
 export type WorkloadKind = typeof WORKLOAD_KINDS[number];
@@ -525,9 +525,9 @@ export type ContainerSummaryDTO = { name: string; image: string; ready: boolean;
 
 // Node + per-container live usage (pod-attributed; nil = no sample, never zero).
 export type NodeUsageDTO = { node: string; cpu: number | null; mem: number | null; sampledPods: number };
-export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[] };
+export type NodeUtilizationResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: NodeUsageDTO[]; sentence?: string; lineage?: string; noData?: string };
 export type ContainerUsageDTO = { container: string; cpu: number | null; mem: number | null };
-export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[] };
+export type PodUsageResultDTO = { available: boolean; message?: string; updatedAtUnix: number; items: ContainerUsageDTO[]; sentence?: string; lineage?: string; noData?: string };
 export type PodSummaryDTO = { namespace: string; name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; ready: boolean; phase: string; reason: string; rank: "unhealthy"|"degraded"|"restarts"|"healthy"; restarts: number; node: string; ip: string; ownerKind: string; ownerName: string; ownerUid?: string; ageSeconds: number; containers: ContainerSummaryDTO[]; health?: HealthLike;
   observedGeneration?: number; resize?: ResizeDTO; sched?: SchedDTO };
 // Coverage S6: a pod's resize state, its reservation and its debug containers.
@@ -918,7 +918,7 @@ export type TopologyDTO = { gateway: GatewayNodeDTO; routes: RouteNodeDTO[]; clu
 export type GatewayRef = { namespace: string; name: string };
 
 export type RouteMetricDTO = { rps: number | null; p50: number | null; p99: number | null; errRate: number | null };
-export type RouteMetricsStatusDTO = { available: boolean; message: string; updatedAt: string };
+export type RouteMetricsStatusDTO = { available: boolean; message: string; updatedAt: string; sentence?: string; lineage?: string; };
 export type RouteMetricsResultDTO = { status: RouteMetricsStatusDTO; routes: Record<string, RouteMetricDTO> };
 
 // The Gateways list is the health Observer's shared rows (health/
@@ -939,7 +939,7 @@ export type NetworkSlice = {
 };
 
 
-export type MetricsDTO = { available: boolean; mode: string; source: string; warning: string; reason: string; cpuFraction: number | null; memFraction: number | null };
+export type MetricsDTO = { available: boolean; mode: string; source: string; warning: string; reason: string; cpuFraction: number | null; memFraction: number | null; sentence?: string; lineage?: string; noData?: string };
 export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
 
 // Nodes types
@@ -1545,11 +1545,13 @@ export const useFleet = create<FleetState>()(guardRoute((set, get) => ({
       }
       // transient failure: keep last-good numbers + last-good updatedAt, mark stale
       const keptUpdatedAt = s.network.routeMetricsStatus?.updatedAt ?? "";
+      // the kept numbers keep their own read's sentence (Settings S3b §3.2)
+      const kept = s.network.routeMetricsStatus;
       return {
         network: {
           ...s.network,
           // keep s.network.routeMetrics as-is (do NOT blank)
-          routeMetricsStatus: { ...result.status, updatedAt: keptUpdatedAt },
+          routeMetricsStatus: { ...result.status, updatedAt: keptUpdatedAt, sentence: kept?.sentence, lineage: kept?.lineage },
           routeMetricsStale: Object.keys(s.network.routeMetrics).length > 0,
         },
       };
@@ -1581,7 +1583,9 @@ export const useFleet = create<FleetState>()(guardRoute((set, get) => ({
         return { workloads: { ...s.workloads, usage, metricsAvailable: true, metricsStatus: result.status, metricsStale: false } };
       }
       const keptUpdatedAt = s.workloads.metricsStatus?.updatedAt ?? "";
-      return { workloads: { ...s.workloads, metricsStatus: { ...result.status, updatedAt: keptUpdatedAt }, metricsStale: s.workloads.metricsAvailable } };
+      // the kept usage keeps its own read's sentence (Settings S3b §3.2)
+      const kept = s.workloads.metricsStatus;
+      return { workloads: { ...s.workloads, metricsStatus: { ...result.status, updatedAt: keptUpdatedAt, sentence: kept?.sentence, lineage: kept?.lineage, noData: kept?.noData }, metricsStale: s.workloads.metricsAvailable } };
     }),
   toggleNearLimitSort: () => set((s) => ({ workloads: { ...s.workloads, nearLimitSort: !s.workloads.nearLimitSort } })),
   // The view's cleanup. When the route still shows the workloads task (a

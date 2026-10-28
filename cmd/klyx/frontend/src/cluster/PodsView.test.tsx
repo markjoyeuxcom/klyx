@@ -258,6 +258,17 @@ describe("PodsView", () => {
     expect(panel.getByTitle("nginx:latest")).toBeTruthy();
   });
 
+  it("says where container usage is read, and no data under the scope (Settings S3b §3.3, §3.4)", async () => {
+    const { getPodContainerUsage } = await import("../bridge/metrics");
+    vi.mocked(getPodContainerUsage).mockResolvedValueOnce({ available: true, updatedAtUnix: 1, items: [],
+      sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=homelab", noData: "no data for homelab under cluster=homelab" });
+    const detailCrash: PodDetailDTO = { ...fakeDetail, summary: broken };
+    seed([broken]);
+    useFleet.setState((s) => ({ pods: { ...s.pods, selected: { namespace: "default", name: "api-crash", uid: "uid-api-crash" }, detail: detailCrash, detailLoading: false } }));
+    const { findByTestId } = render(<PodsView cluster="homelab" />);
+    expect((await findByTestId("pod-usage-source")).textContent).toBe("Read from lgtm-we-metrics, hosted by prd, filtered by cluster=homelab · no data for homelab under cluster=homelab");
+  });
+
   it("detail panel renders annotations as collapsed metadata", () => {
     seed([healthy]);
     useFleet.setState((s) => ({

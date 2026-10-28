@@ -11,10 +11,14 @@ import (
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
-// Sample is one scalar value from an instant query. Absent reports "no data".
+// Sample is one scalar value from an instant query. Absent reports "no
+// data"; Empty says it was an answer with no series at all, told apart from
+// a non-finite value (Settings S3b §3.3: no data under a scope is said,
+// never a zero).
 type Sample struct {
 	Value  float64
 	Absent bool
+	Empty  bool
 }
 
 // Querier executes a PromQL instant query and returns the HTTP status and body.
@@ -101,6 +105,11 @@ type MetricsCapability struct {
 	// this call's answer, never a capability to keep (Settings S3b-2b
 	// re-reviews 2 and 3, R2-1 and R3-1)
 	Withdrawn bool `json:"-"`
+	// Sentence says where the metrics come from and what makes them this
+	// cluster's, and Lineage keys the source a view shows (Settings S3b
+	// §3.2, §3.4)
+	Sentence string
+	Lineage  string
 }
 
 // ClusterMetrics is the proof-of-life readout. Nil pointers mean "no data",
@@ -108,6 +117,9 @@ type MetricsCapability struct {
 type ClusterMetrics struct {
 	CPUFraction *float64
 	MemFraction *float64
+	// NoData says that both reads answered with no series under the
+	// cluster's scope (Settings S3b §3.3); "" otherwise
+	NoData string
 }
 
 // TransportFactory builds transports. The fleet layer supplies the real one

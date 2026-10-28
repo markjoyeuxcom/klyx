@@ -29,14 +29,17 @@ import (
 // obsFake answers Prometheus and Loki, directly or behind the host's
 // service proxy, and records what it was sent.
 type obsFake struct {
-	mu          sync.Mutex
-	code        int
-	queries     []string
-	paths       []string
-	auth        []string
-	tenant      []string
-	onData      func() // run on each data query, outside the lock
-	hold        chan struct{}
+	mu      sync.Mutex
+	code    int
+	queries []string
+	paths   []string
+	auth    []string
+	tenant  []string
+	onData  func() // run on each data query, outside the lock
+	hold    chan struct{}
+	// answer is how data queries answer: "" a value, "empty" no series,
+	// "nan" a non-finite value
+	answer      string
 	inFlight    int
 	maxInFlight int
 }
@@ -52,7 +55,7 @@ func (f *obsFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f.inFlight > f.maxInFlight {
 		f.maxInFlight = f.inFlight
 	}
-	code, on, hold := f.code, f.onData, f.hold
+	code, on, hold, answer := f.code, f.onData, f.hold, f.answer
 	f.mu.Unlock()
 	defer func() {
 		f.mu.Lock()
@@ -79,8 +82,16 @@ func (f *obsFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(path, "/api/v1/query") && q == "vector(1)":
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"1"]}]}}`))
+	case strings.HasSuffix(path, "/api/v1/query") && answer == "empty":
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	case strings.HasSuffix(path, "/api/v1/query") && answer == "nan":
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"a","pod":"p","container":"c"},"value":[1,"NaN"]}]}}`))
 	case strings.HasSuffix(path, "/api/v1/query"):
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"0.5"]}]}}`))
+	case strings.HasSuffix(path, "/api/v1/query_range") && answer == "empty":
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+	case strings.HasSuffix(path, "/api/v1/query_range") && answer == "nan":
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"NaN"]]}]}}`))
 	case strings.HasSuffix(path, "/api/v1/query_range"):
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1,"0.5"]]}]}}`))
 	case strings.HasSuffix(path, "/loki/api/v1/labels"):

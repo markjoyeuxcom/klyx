@@ -10,6 +10,7 @@ import (
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
+	"github.com/moomora/klyx/internal/sources"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
@@ -55,6 +56,9 @@ type metricsCache struct {
 	// cache. A subscribed read builds its client per read, from the terms.
 	terms *sourceTerms
 	key   string
+	// lineage is the source the capability was probed under (Settings S3b
+	// §3.2); the capability carries its key and sentence
+	lineage sources.Lineage
 
 	samples    metrics.ClusterMetrics
 	samplesExp time.Time
@@ -219,6 +223,12 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	}
 	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
+	if cap.Available {
+		c.metricsState.lineage, cap.Sentence = legacyMetrics(res, c.metricsCfg, rev)
+		cap.Lineage = c.metricsState.lineage.Key()
+	} else {
+		c.metricsState.lineage = sources.Lineage{}
+	}
 	c.metricsState.cap = cap
 	c.metricsState.client = metrics.NewClient(res.Transport, metrics.ScopeOf(c.metricsCfg.Match))
 	if cap.Available {
@@ -280,6 +290,10 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		release()
 		return &cap
 	}
+	lin := t.lineage()
+	if cap.Available {
+		cap.Sentence, cap.Lineage = t.sentence(display), lin.Key()
+	}
 	// a probe across a move is neither cached nor shown as the source's
 	// availability; it settles before its host lease is released (§13)
 	why := c.readMoved(rev, &t)
@@ -288,7 +302,7 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: why}}
 		return
 	}
-	c.metricsState = metricsCache{credRev: rev, capSet: true, cap: cap, terms: &t, key: key}
+	c.metricsState = metricsCache{credRev: rev, capSet: true, cap: cap, terms: &t, key: key, lineage: lin}
 	if !cap.Available {
 		c.metricsState.capExpiry = now.Add(metricsUnavailableTTL)
 	}
@@ -311,7 +325,14 @@ type metricsRead struct {
 	rev     uint64
 	terms   *sourceTerms
 	release func()
+	// lineage is the read's source (Settings S3b §3.2): a reader's status
+	// carries its key and sentence, and an empty answer says its scope
+	lineage sources.Lineage
 }
+
+// noData is what this read says when it found no series: "" without a
+// scope.
+func (mr metricsRead) noData() string { return noData(mr.c.name, mr.lineage.Match) }
 
 // readMetrics resolves the capability (the lazy probe and its cache) and
 // takes a metricsRead of it: a subscription's client is built for this
@@ -319,9 +340,9 @@ type metricsRead struct {
 func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
 	c.metricsMu.Lock()
 	refused := c.ensureMetricsLocked(ctx, false, now)
-	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}}
+	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}, lineage: c.metricsState.lineage}
 	if refused != nil {
-		mr.cap, mr.terms = *refused, nil
+		mr.cap, mr.terms, mr.lineage = *refused, nil, sources.Lineage{}
 	}
 	c.metricsMu.Unlock()
 	if mr.terms == nil || !mr.cap.Available {
@@ -399,6 +420,9 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 		// settled before the host lease is released (§13)
 		why := c.readMoved(rev, terms)
 		release()
+		if samples.empty {
+			samples.cm.NoData = noData(c.name, c.metricsState.lineage.Match)
+		}
 		if why != "" {
 			c.metricsState = metricsCache{}
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
@@ -409,33 +433,41 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 		if refusedBy != nil {
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source, Reason: endedWhy(ctx, refusedBy), Withdrawn: true}
 		}
-		c.metricsState.samples = samples
+		c.metricsState.samples = samples.cm
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)
 	}
 	return c.metricsState.samples, cap
 }
 
-func querySamples(ctx context.Context, cl *metrics.Client) (metrics.ClusterMetrics, error) {
-	var out metrics.ClusterMetrics
+// samples are the cluster readout and whether both reads answered with no
+// series at all - told apart from a failed read and a non-finite value.
+type samples struct {
+	cm    metrics.ClusterMetrics
+	empty bool
+}
+
+func querySamples(ctx context.Context, cl *metrics.Client) (samples, error) {
+	var out samples
 	// a sample the call itself ended - its fence refused it, or its context
 	// ended - is the caller's, never an absence (Codex's re-reviews 2 and 3
 	// of S3b-2b, R2-1, R3-1)
-	s, err := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{}))
-	if callEnded(ctx, err) {
-		return metrics.ClusterMetrics{}, endedErr(ctx, err)
+	cpu, cerr := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{}))
+	if callEnded(ctx, cerr) {
+		return samples{}, endedErr(ctx, cerr)
 	}
-	if err == nil && !s.Absent {
-		v := s.Value
-		out.CPUFraction = &v
+	if cerr == nil && !cpu.Absent {
+		v := cpu.Value
+		out.cm.CPUFraction = &v
 	}
-	s, err = cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{}))
-	if callEnded(ctx, err) {
-		return metrics.ClusterMetrics{}, endedErr(ctx, err)
+	mem, merr := cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{}))
+	if callEnded(ctx, merr) {
+		return samples{}, endedErr(ctx, merr)
 	}
-	if err == nil && !s.Absent {
-		v := s.Value
-		out.MemFraction = &v
+	if merr == nil && !mem.Absent {
+		v := mem.Value
+		out.cm.MemFraction = &v
 	}
+	out.empty = cerr == nil && merr == nil && cpu.Empty && mem.Empty
 	return out, nil
 }
 

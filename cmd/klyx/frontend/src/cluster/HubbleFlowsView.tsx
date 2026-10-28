@@ -118,7 +118,7 @@ function FlowsLayout({ flows }: { flows: Flows }) {
           </div>
         </div>
       ) : null}
-      footerEnd={<span className="t-secondary">Hubble's Prometheus metrics through the cluster's metrics source · read on demand</span>}
+      footerEnd={<span className="t-secondary" data-testid="hubble-source">{s?.status.sentence ? `Hubble's Prometheus metrics, read ${s.status.sentence} · on demand` : "Hubble's Prometheus metrics through the cluster's metrics source · read on demand"}</span>}
     />
   );
 }

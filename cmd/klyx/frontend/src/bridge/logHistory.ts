@@ -14,7 +14,7 @@ export type HistoryLine = { ts: string; line: string; container?: string; branch
 export type HistoryMarker = { branch: number; ts: string; count: number; refused?: string };
 export type HistoryPage = {
   view: string; lines: HistoryLine[]; selectors: string[]; copyable: boolean; mode: "uid" | "name" | ""; uidOffer: boolean;
-  strength: string; source: string; tenant?: string; start: string; end: string; done: boolean; more?: boolean; markers?: HistoryMarker[];
+  strength: string; source: string; tenant?: string; sentence?: string; start: string; end: string; done: boolean; more?: boolean; markers?: HistoryMarker[];
   noStreams?: string; reset?: boolean; error?: string;
   set?: number; page?: number; // this page (absent: nothing to continue)
 };

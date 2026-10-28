@@ -520,6 +520,32 @@ describe("WorkloadsView", () => {
     expect(await findByText(/sparklines unavailable: metrics unavailable: no source/)).toBeTruthy();
   });
 
+  it("sparkline row says no data under the cluster's scope (Settings S3b §3.3)", async () => {
+    mockGetWorkloadSparklines.mockResolvedValueOnce({ available: true, cpu: [], mem: [], noData: "no data for homelab-nelli under cluster=nelli" });
+    seed([broken]);
+    useFleet.getState().setWorkloadUsage("homelab-nelli", "", {
+      status: { available: true, message: "", updatedAt: "2026-06-10T00:00:00Z" },
+      usage: {},
+    });
+    const { findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect((await findByTestId("spark-no-data")).textContent).toBe("no data for homelab-nelli under cluster=nelli");
+  });
+
+  it("says where usage is read, and keeps an earlier read's sentence when the latest fails (Settings S3b §3.2, §3.4)", async () => {
+    seed([broken]);
+    useFleet.getState().setWorkloadUsage("homelab-nelli", "", {
+      status: { available: true, message: "", updatedAt: "2026-06-10T00:00:00Z", sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=nelli", lineage: "k1" },
+      usage: {},
+    });
+    const { findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    expect((await findByTestId("workloads-source")).textContent).toBe("Read from lgtm-we-metrics, hosted by prd, filtered by cluster=nelli");
+    act(() => {
+      useFleet.getState().setWorkloadUsage("homelab-nelli", "", { status: { available: false, message: "metrics unavailable", updatedAt: "" }, usage: {} });
+    });
+    expect((await findByTestId("workloads-source")).textContent).toBe("Earlier read from lgtm-we-metrics, hosted by prd, filtered by cluster=nelli, not current");
+  });
+
   // --- Live-update stability (selection + pending action by stable key) ---
 
   it("selection follows the workload when a live emit re-orders the rows", () => {

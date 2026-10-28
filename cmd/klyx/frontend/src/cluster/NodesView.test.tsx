@@ -239,6 +239,34 @@ describe("NodesView", () => {
     expect(await findByText(/pod list capped/)).toBeTruthy();
   });
 
+  it("says where usage is read, and no data under the scope apart from a caveat (Settings S3b §3.3, §3.4)", async () => {
+    vi.mocked(getNodeUtilization).mockResolvedValue({
+      available: true, updatedAtUnix: 1700, message: "", items: [],
+      sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=homelab", lineage: "k1", noData: "no data for homelab under cluster=homelab",
+    });
+    seed([healthy]);
+    const { findByTestId } = render(<NodesView cluster="homelab" />);
+    expect((await findByTestId("nodes-source")).textContent).toBe("Read from lgtm-we-metrics, hosted by prd, filtered by cluster=homelab · no data for homelab under cluster=homelab");
+    expect(screen.queryByText(/Usage caveat/)).toBeNull();
+  });
+
+  it("a refreshed read's late reply never replaces a newer one (Settings S3b §3.2)", async () => {
+    let resolveFirst!: (v: Awaited<ReturnType<typeof getNodeUtilization>>) => void;
+    const read = (lineage: string) => ({ available: true, updatedAtUnix: 1700, message: "", items: [], sentence: "from " + lineage, lineage });
+    vi.mocked(getNodeUtilization)
+      .mockResolvedValueOnce(read("mount"))
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+      .mockResolvedValueOnce(read("newer"));
+    seed([healthy]);
+    const { findByTestId, getByText } = render(<NodesView cluster="homelab" />);
+    await findByTestId("nodes-source");
+    await act(async () => { fireEvent.click(getByText("Refresh usage")); });
+    await act(async () => { fireEvent.click(getByText("Refresh usage")); });
+    expect((await findByTestId("nodes-source")).textContent).toBe("Read from newer");
+    await act(async () => { resolveFirst(read("older")); });
+    expect((await findByTestId("nodes-source")).textContent).toBe("Read from newer");
+  });
+
   it("survivability: targets derive from loaded nodes and the verdict renders", async () => {
     vi.mocked(getNodeHeadroom).mockResolvedValue({
       result: { lostNodes: 1, survivorNodes: 2, displaced: 5, rescheduled: 5, unplaced: [], cpuShortfall: 0, memShortfall: 0 },
