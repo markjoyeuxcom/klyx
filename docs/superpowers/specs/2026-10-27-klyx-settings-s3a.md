@@ -845,3 +845,7 @@ Codex closed R2, R4, R5 and R6, and checked no regression in replacement plans, 
 **Tests:** a key-only edit keeping its value's spaces; removing the draft's new destination asking, Stay keeping it; `restore` removing what is shown, reading again before removing, saying an acknowledged one it cannot see, and leaving alone one neither shown nor acknowledged. **Mutation pass:** 6 mutants (rows trimmed whole, the opening source alone, no destination reported, no read again, acknowledgement ignored, a removal of what is not shown), all caught.
 
 **Smoke:** the native walk at c41b6768, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
+
+## 37. ACCEPT: S3a-4c, and S3a (2026-10-28)
+
+Codex accepted S3a-4c at 03d85b06, after its review and two re-reviews (§34 to §36), with no findings remaining: the editors keep every untouched value and field as written, a removal that would strand the open draft asks first by its current destination too, reads are ordered, editors outlive their rows, proposals carry their renamed subscriptions, anchors wait for both panels, and the smoke restores what it created, honestly when it cannot. With S3a-1 to S3a-4b accepted (§19, §23, §25, §30, §33), **S3a is complete**: Alertmanager installations and subscriptions, read in buckets, fenced, planned and edited in Settings. Loki and metrics follow on this model in S3b.
