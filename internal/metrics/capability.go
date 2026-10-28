@@ -19,7 +19,7 @@ func Probe(ctx context.Context, res Resolution) MetricsCapability {
 		// the transport already redacted its own credential; the general
 		// credential shapes go too before the reason reaches the page (C5 §5)
 		out.Reason = safehttp.NewRedactor().Text(err.Error())
-		out.Refused = readfence.Failed(err)
+		out.Withdrawn = readfence.Failed(err) || ctx.Err() != nil
 		return out
 	}
 	out.Available = true

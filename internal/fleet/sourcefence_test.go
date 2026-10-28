@@ -568,3 +568,171 @@ func TestAWithdrawnReadIsNeverTheMembersCapability(t *testing.T) {
 		fresh(t, r.dev)
 	})
 }
+
+// Codex's re-review 3 of S3b-2b, R3-1: a read its caller's context ended -
+// before the probe, during it, during the samples - is that call's answer,
+// never the member's unavailability nor an empty sample: a fresh reader,
+// without forcing, reads the source. A backend's own failure is cached as
+// before.
+func TestACancelledCallerIsNeverTheMembersCapability(t *testing.T) {
+	type stand struct {
+		dev     *ClusterConn
+		arrived chan string // the query each request carried, on arrival
+		probes  *atomic.Int32
+		hold    *atomic.Bool // the next request waits for its own end
+		fail    *atomic.Bool // the probe answers 500
+	}
+	rig := func(t *testing.T, subscribed bool) stand {
+		st := stand{arrived: make(chan string, 16), probes: new(atomic.Int32), hold: new(atomic.Bool), fail: new(atomic.Bool)}
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			query := q.URL.Query().Get("query")
+			if query == "vector(1)" {
+				st.probes.Add(1)
+			}
+			select {
+			case st.arrived <- query:
+			default:
+			}
+			if st.hold.Load() {
+				<-q.Context().Done()
+				return
+			}
+			if query == "vector(1)" && st.fail.Load() {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			(&obsFake{}).ServeHTTP(w, q)
+		}))
+		t.Cleanup(api.Close)
+		if !subscribed {
+			st.dev = NewClusterConn("dev", typedfake.NewSimpleClientset(), nil, nil, nil, clock.Real{}, config.MetricsConfig{Endpoint: api.URL})
+			st.dev.WithCredentials(Credentials{Store: &secretstore.Memory{}, Revisions: endpointcred.NewRegistry()})
+			return st
+		}
+		src := config.SourceConfig{ID: "mets", Kind: config.SourceKindMetrics, Endpoint: api.URL, MemberLabel: "cluster", Serves: []config.ServeConfig{{Cluster: "dev"}}}
+		st.dev = newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"}).conns["dev"]
+		return st
+	}
+	fresh := func(t *testing.T, st stand) {
+		t.Helper()
+		st.hold.Store(false)
+		cm, capb := st.dev.ClusterMetrics(context.Background(), false)
+		if !capb.Available || cm.CPUFraction == nil {
+			t.Fatalf("a fresh reader was given the cancelled call's answer: %+v %+v", capb, cm)
+		}
+	}
+	// cancelWhen ends the caller's context once a request carrying want
+	// has arrived
+	cancelWhen := func(st stand, want string) context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			for q := range st.arrived {
+				if q == want {
+					cancel()
+					return
+				}
+			}
+		}()
+		return ctx
+	}
+	t.Run("before the probe", func(t *testing.T) {
+		st := rig(t, true)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := st.dev.ChatMetricsRange(ctx, metrics.ClusterCPU.With(metrics.None{}), time.Unix(0, 0), time.Unix(60, 0), time.Minute); err == nil {
+			t.Fatal("a cancelled read was answered")
+		}
+		fresh(t, st)
+	})
+	t.Run("during the probe", func(t *testing.T) {
+		st := rig(t, true)
+		st.hold.Store(true)
+		if _, capb := st.dev.ClusterMetrics(cancelWhen(st, "vector(1)"), false); capb.Available {
+			t.Fatal("a cancelled probe was answered")
+		}
+		fresh(t, st)
+	})
+	t.Run("during the samples", func(t *testing.T) {
+		st := rig(t, true)
+		// the probe answers; the first sample waits for its end
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			for q := range st.arrived {
+				if q != "vector(1)" {
+					st.hold.Store(true)
+					cancel()
+					return
+				}
+			}
+		}()
+		st.hold.Store(false)
+		if cm, capb := st.dev.ClusterMetrics(ctx, false); capb.Available && (cm.CPUFraction == nil || cm.MemFraction == nil) && capb.Reason == "" {
+			t.Fatalf("a cancelled sample read was answered as empty: %+v %+v", capb, cm)
+		}
+		fresh(t, st)
+	})
+	t.Run("a cluster's own block, during the probe", func(t *testing.T) {
+		st := rig(t, false)
+		st.hold.Store(true)
+		if _, capb := st.dev.ClusterMetrics(cancelWhen(st, "vector(1)"), false); capb.Available {
+			t.Fatal("a cancelled probe was answered")
+		}
+		fresh(t, st)
+	})
+	// a discovery the caller's context ended - an installation's in its
+	// host, a cluster's own - is never "no Prometheus" kept
+	discovering := func(t *testing.T, subscribed bool) (*ClusterConn, *atomic.Int32) {
+		n := new(atomic.Int32)
+		services := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			n.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"prometheus-operated","namespace":"monitoring"},"spec":{"ports":[{"port":9090}]}}`))
+		}))
+		t.Cleanup(services.Close)
+		typed, err := kubernetes.NewForConfig(&rest.Config{Host: services.URL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if subscribed {
+			src := metricsInstallation()
+			src.ServiceRef, src.Discover = nil, true
+			r := newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
+			r.host.typed = typed
+			return r.conns["dev"], n
+		}
+		prom := httptest.NewServer(&obsFake{})
+		t.Cleanup(prom.Close)
+		dev := NewClusterConn("dev", typed, nil, nil, nil, clock.Real{}, config.MetricsConfig{})
+		dev.WithCredentials(Credentials{Store: &secretstore.Memory{}, Revisions: endpointcred.NewRegistry()})
+		dev.restConfig = &rest.Config{Host: prom.URL}
+		return dev, n
+	}
+	for _, subscribed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "an installation's discovery, cancelled", false: "a cluster's own discovery, cancelled"}[subscribed], func(t *testing.T) {
+			dev, _ := discovering(t, subscribed)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, capb := dev.ClusterMetrics(ctx, false); capb.Available {
+				t.Fatal("a cancelled discovery was answered")
+			}
+			dev.metricsMu.Lock()
+			kept := dev.metricsState.capSet
+			dev.metricsMu.Unlock()
+			if kept {
+				t.Fatal("a cancelled discovery was kept as the member's capability")
+			}
+		})
+	}
+	t.Run("the control: a backend failure is kept", func(t *testing.T) {
+		st := rig(t, true)
+		st.fail.Store(true)
+		if _, capb := st.dev.ClusterMetrics(context.Background(), false); capb.Available {
+			t.Fatal("a failing probe was available")
+		}
+		st.fail.Store(false)
+		before := st.probes.Load()
+		if _, capb := st.dev.ClusterMetrics(context.Background(), false); capb.Available || st.probes.Load() != before {
+			t.Fatalf("a backend's failure was not kept: available %v, %d probes", capb.Available, st.probes.Load()-before)
+		}
+	})
+}

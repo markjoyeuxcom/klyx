@@ -174,9 +174,12 @@ func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Contex
 // ensureMetricsLocked resolves+probes the metrics endpoint into c.metricsState
 // when the cached capability is invalid. Available is cached for the conn
 // lifetime, unavailable is short-TTL re-probed, forceReprobe bypasses the cache.
-// A read its context's fence refused - its discovery or its probe - is this
-// call's answer, returned and never kept: a later reader resolves again
-// (Codex's re-review 2 of S3b-2b, R2-1). Caller MUST hold c.metricsMu.
+// A read the call itself ended - its context's fence refused it, or its
+// context ended - in its discovery or its probe is this call's answer,
+// returned and never kept: a later reader resolves again (Codex's
+// re-reviews 2 and 3 of S3b-2b, R2-1, R3-1). A backend's own failure, the
+// direct client's timeout included, is cached as before. Caller MUST hold
+// c.metricsMu.
 func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) (refused *metrics.MetricsCapability) {
 	if c.metricsCfg.Source != "" {
 		return c.ensureSubscribedMetricsLocked(ctx, forceReprobe, now)
@@ -197,13 +200,13 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	// off or a subscription is never discovered (Settings S3b §2.4)
 	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil && !c.metricsCfg.Off && c.metricsCfg.Source == "" {
 		var derr error
-		if disco, derr = c.discoverWith(ctx, nil); readfence.Failed(derr) {
-			return &metrics.MetricsCapability{Mode: metrics.ModeUnavailable, Reason: safehttp.NewRedactor().Text(derr.Error()), Refused: true}
+		if disco, derr = c.discoverWith(ctx, nil); callEnded(ctx, derr) {
+			return &metrics.MetricsCapability{Mode: metrics.ModeUnavailable, Reason: endedWhy(ctx, derr), Withdrawn: true}
 		}
 	}
 	res := metrics.Resolve(c.metricsCfg, c.metricsAuth(rev), disco, tf)
 	cap := metrics.Probe(ctx, res)
-	if cap.Refused {
+	if cap.Withdrawn {
 		return &cap
 	}
 
@@ -265,15 +268,15 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		source += ", " + display
 	}
 	if err != nil {
-		if readfence.Failed(err) {
-			return &metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: safehttp.NewRedactor().Text(err.Error()), Refused: true}
+		if callEnded(ctx, err) {
+			return &metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: endedWhy(ctx, err), Withdrawn: true}
 		}
 		unavailable(source, safehttp.NewRedactor().Text(err.Error()))
 		c.metricsState.key, c.metricsState.terms = key, &t
 		return
 	}
 	cap := metrics.Probe(ctx, metrics.Resolution{Mode: metrics.ModeSubscribed, Source: source, Transport: q})
-	if cap.Refused {
+	if cap.Withdrawn {
 		release()
 		return &cap
 	}
@@ -401,10 +404,10 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
 				Reason: why}
 		}
-		// samples the read's fence refused are this call's answer, never
-		// kept (R2-1)
+		// samples the call itself ended are this call's answer, never kept
+		// (R2-1, R3-1)
 		if refusedBy != nil {
-			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source, Reason: safehttp.NewRedactor().Text(refusedBy.Error()), Refused: true}
+			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source, Reason: endedWhy(ctx, refusedBy), Withdrawn: true}
 		}
 		c.metricsState.samples = samples
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)
@@ -414,19 +417,20 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 
 func querySamples(ctx context.Context, cl *metrics.Client) (metrics.ClusterMetrics, error) {
 	var out metrics.ClusterMetrics
-	// a sample its read's fence refused is the caller's, never an absence
-	// (Codex's re-review 2 of S3b-2b, R2-1)
+	// a sample the call itself ended - its fence refused it, or its context
+	// ended - is the caller's, never an absence (Codex's re-reviews 2 and 3
+	// of S3b-2b, R2-1, R3-1)
 	s, err := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{}))
-	if readfence.Failed(err) {
-		return metrics.ClusterMetrics{}, err
+	if callEnded(ctx, err) {
+		return metrics.ClusterMetrics{}, endedErr(ctx, err)
 	}
 	if err == nil && !s.Absent {
 		v := s.Value
 		out.CPUFraction = &v
 	}
 	s, err = cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{}))
-	if readfence.Failed(err) {
-		return metrics.ClusterMetrics{}, err
+	if callEnded(ctx, err) {
+		return metrics.ClusterMetrics{}, endedErr(ctx, err)
 	}
 	if err == nil && !s.Absent {
 		v := s.Value
@@ -439,4 +443,25 @@ func querySamples(ctx context.Context, cl *metrics.Client) (metrics.ClusterMetri
 // now, gated on revision rev (C5 §3, §7).
 func (c *ClusterConn) metricsAuth(rev uint64) metrics.Auth {
 	return c.endpointAuth(config.EndpointMetrics, c.metricsCfg.Spec(), c.metricsCfg.Token, rev)
+}
+
+// callEnded is whether the call itself ended a read: its context's fence
+// refused it (err), or its context ended. Neither says anything of the
+// backend, so neither is kept (R2-1, R3-1).
+func callEnded(ctx context.Context, err error) bool {
+	return readfence.Failed(err) || ctx.Err() != nil
+}
+
+// endedErr is why a call ended its read: the fence's refusal, or the
+// context's end.
+func endedErr(ctx context.Context, err error) error {
+	if readfence.Failed(err) || ctx.Err() == nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// endedWhy is endedErr in words.
+func endedWhy(ctx context.Context, err error) string {
+	return safehttp.NewRedactor().Text(endedErr(ctx, err).Error())
 }
