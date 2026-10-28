@@ -45,8 +45,13 @@ type SourcesDeps struct {
 	// Store and Revs say an installation's credential state
 	Store secretstore.Store
 	Revs  *endpointcred.Registry
-	// Detect runs Detect in one cluster (the registry's DetectAlertmanager)
-	Detect func(ctx context.Context, cluster string, fleetNames []string) fleet.DetectSample
+	// Detect runs Detect in one cluster (the registry's DetectAlertmanager);
+	// DetectMetrics, Detect for metrics, within its own deadline
+	Detect        func(ctx context.Context, cluster string, fleetNames []string) fleet.DetectSample
+	DetectMetrics func(ctx context.Context, cluster string, fleetNames []string) fleet.MetricsDetect
+	// TestLoki tests a member's Loki subscription at the revisions shown
+	// (the registry's TestLokiSubscription)
+	TestLoki func(ctx context.Context, cluster string, instRev, subRev uint64) (fleet.SubscriptionTest, error)
 }
 
 // SourcesService is Observability's installations and subscriptions.
@@ -134,6 +139,10 @@ type SubscriptionRowDTO struct {
 	// block is a legacy one, which stays the file's
 	Block  *SubscriptionDTO `json:"block,omitempty"`
 	Legacy bool             `json:"legacy,omitempty"`
+	// the subscription's revisions in force, which a subscription's Test
+	// sends back: never its tenant or match (S3b §7)
+	InstRevision string `json:"instRevision,omitempty"`
+	SubRevision  string `json:"subRevision,omitempty"`
 }
 
 // SourcesStateDTO is Observability's alert sources (S3a §8).
@@ -243,6 +252,9 @@ func (s *SourcesService) GetSources(kind string) SourcesStateDTO {
 		}
 		if r.Mode == config.AMSubscribed {
 			subscribers[r.Source] = append(subscribers[r.Source], cl.Name)
+			if sub, ok := a.SubscriptionOf(kind, cl.Name); ok && sub.Source.ID == r.Source {
+				row.InstRevision, row.SubRevision = strconv.FormatUint(sub.InstRev, 10), strconv.FormatUint(sub.SubRev, 10)
+			}
 		}
 		out.Subscriptions = append(out.Subscriptions, row)
 	}

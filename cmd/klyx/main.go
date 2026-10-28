@@ -625,13 +625,15 @@ func main() {
 	// the fleet Apply lock; an installation's credential and test are
 	// endpoint actions
 	sourcesSvc := appbridge.NewSourcesService(configPath(), configSvc, appbridge.SourcesDeps{
-		Active:  func() *fleet.AlertSources { return alertSources },
-		Publish: reg.PublishSources,
-		Work:    chatSvc.SourceWork,
-		Read:    reg.InstallationRead,
-		Store:   endpointCreds.Store,
-		Revs:    endpointCreds.Revisions,
-		Detect:  reg.DetectAlertmanager,
+		Active:        func() *fleet.AlertSources { return alertSources },
+		Publish:       reg.PublishSources,
+		Work:          chatSvc.SourceWork,
+		Read:          reg.InstallationRead,
+		Store:         endpointCreds.Store,
+		Revs:          endpointCreds.Revisions,
+		Detect:        reg.DetectAlertmanager,
+		DetectMetrics: reg.DetectMetrics,
+		TestLoki:      reg.TestLokiSubscription,
 	})
 	appbridge.WireSourceCredentials(endpointsSvc, func() *fleet.AlertSources { return alertSources }, reg.InstallationStatus, reg.InstallationProbe)
 

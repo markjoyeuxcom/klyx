@@ -474,6 +474,11 @@ func (c *ClusterConn) LokiTest(ctx context.Context) (LokiTestResult, error) {
 	if err != nil {
 		return LokiTestResult{}, err
 	}
+	return lokiTestWith(ctx, r)
+}
+
+// lokiTestWith is LokiTest through the reader r.
+func lokiTestWith(ctx context.Context, r *LokiReader) (LokiTestResult, error) {
 	v, err := r.Status(ctx)
 	if err != nil {
 		return LokiTestResult{}, err

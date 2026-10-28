@@ -10,14 +10,15 @@ import (
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
-// Settings S3a §7: the migration offer. Today's per-cluster blocks keep
-// their behaviour; nothing is migrated on its own. When one direct URL,
-// the same origin and path, is on several clusters, Settings offers
-// "Make a shared installation": a proposal, which the person reviews and
-// edits (the member label above all) and applies as an ordinary plan. It
-// says each cluster's scope before and after, names what the person must
-// choose, and never copies a secret: the installation's credential is
-// stored once, by the person.
+// Settings S3a §7, S3b §7: the migration offer, for every kind. Today's
+// per-cluster blocks keep their behaviour; nothing is migrated on its own.
+// When one direct URL, the same origin and path, is on several clusters'
+// blocks of a kind, Settings offers "Make a shared installation": a
+// proposal, which the person reviews and edits (the member label above
+// all) and applies as an ordinary plan. It says each cluster's scope
+// before and after, names what the person must choose, and never copies a
+// secret: the installation's credential is stored once, by the person,
+// and a legacy metrics token is never carried over.
 
 // ScopeChangeDTO is a cluster's scope before and after a proposal:
 // broadened, narrowed, the same, or not yet valid.
@@ -30,6 +31,7 @@ type ScopeChangeDTO struct {
 
 // MigrationOfferDTO is one "Make a shared installation" proposal.
 type MigrationOfferDTO struct {
+	Kind      string           `json:"kind"`
 	Where     string           `json:"where"`
 	Clusters  []string         `json:"clusters"`
 	Draft     SourcesDraftDTO  `json:"draft"`
@@ -46,9 +48,14 @@ type MigrationOfferDTO struct {
 	Credential string `json:"credential,omitempty"`
 }
 
-// MigrationOffers are the offers the running fleet's legacy blocks make.
-func (s *SourcesService) MigrationOffers() []MigrationOfferDTO {
+// MigrationOffers are the offers the running fleet's legacy blocks of a
+// kind make (none is Alertmanager's).
+func (s *SourcesService) MigrationOffers(kind string) []MigrationOfferDTO {
 	out := []MigrationOfferDTO{}
+	kind, err := kindOf(kind)
+	if err != nil {
+		return out
+	}
 	running := s.cs.fleetClusters()
 	var active []config.SourceConfig
 	if a := s.d.Active(); a != nil {
@@ -66,7 +73,7 @@ func (s *SourcesService) MigrationOffers() []MigrationOfferDTO {
 	byKey := map[string]*group{}
 	var order []string
 	for _, cl := range running {
-		b := cl.Alertmanager
+		b := cl.Block(kind)
 		if b == nil || b.Source != "" || b.Off || b.Endpoint == "" || config.EndpointURLProblem(b.Endpoint) != "" {
 			continue
 		}
@@ -94,51 +101,68 @@ func (s *SourcesService) MigrationOffers() []MigrationOfferDTO {
 		if len(g.clusters) < 2 {
 			continue
 		}
-		out = append(out, s.offerFor(g.where, g.endpoint, g.clusters, active, running, taken))
+		out = append(out, s.offerFor(kind, g.where, g.endpoint, g.clusters, active, running, taken))
 	}
 	return out
 }
 
-// offerFor is one offer: an installation at the shared endpoint, each
-// cluster subscribed with its tenant and match carried over.
-func (s *SourcesService) offerFor(where, endpoint string, members []config.ClusterConfig, active []config.SourceConfig, running []config.ClusterConfig, taken map[string]bool) MigrationOfferDTO {
-	o := MigrationOfferDTO{Where: where, Scopes: []ScopeChangeDTO{}, Conflicts: []string{}, Unresolved: []string{}, Choices: []string{}}
+// offerIDs are each kind's offered installation ids' prefix.
+var offerIDs = map[string]string{config.EndpointAlertmanager: "am-", config.EndpointLoki: "logs-", config.EndpointMetrics: "metrics-"}
+
+// authOf is a member's auth as its block reads it: a legacy metrics token
+// without an explicit auth is bearer auth (S3b §7), whose shape, never
+// the token, an offer carries.
+func authOf(kind string, m config.ClusterConfig) *config.EndpointAuth {
+	b := m.Block(kind)
+	if b.Auth == nil && kind == config.EndpointMetrics && m.Metrics.Token != "" {
+		return &config.EndpointAuth{Type: "bearer"}
+	}
+	return b.Auth
+}
+
+// offerFor is one offer: an installation of a kind at the shared
+// endpoint, each cluster subscribed with its tenant and match carried
+// over.
+func (s *SourcesService) offerFor(kind, where, endpoint string, members []config.ClusterConfig, active []config.SourceConfig, running []config.ClusterConfig, taken map[string]bool) MigrationOfferDTO {
+	o := MigrationOfferDTO{Kind: kind, Where: where, Scopes: []ScopeChangeDTO{}, Conflicts: []string{}, Unresolved: []string{}, Choices: []string{}}
 	host := where
 	if u, err := url.Parse(endpoint); err == nil && u.Hostname() != "" {
 		host = strings.SplitN(u.Hostname(), ".", 2)[0]
 	}
-	src := SourceDraftDTO{ID: freeID("am-"+host, taken), Endpoint: endpoint}
+	src := SourceDraftDTO{ID: freeID(offerIDs[kind]+host, taken), Endpoint: endpoint}
 	taken[src.ID] = true
 
 	// what is equal on every member is the installation's; auth and the
 	// certificate check that differ are named, with no default winner
-	first := members[0].Alertmanager
-	sameAuth, sameTLS, sameTenant := true, true, true
+	first := members[0].Block(kind)
+	firstAuth := authOf(kind, members[0])
+	sameAuth, sameTLS, sameTenant, tokens := true, true, true, false
 	for _, m := range members {
-		b := m.Alertmanager
+		b := m.Block(kind)
 		o.Clusters = append(o.Clusters, m.Name)
-		sameAuth = sameAuth && reflect.DeepEqual(b.Auth, first.Auth)
+		sameAuth = sameAuth && reflect.DeepEqual(authOf(kind, m), firstAuth)
 		sameTLS = sameTLS && b.TLSSkipVerify == first.TLSSkipVerify
 		sameTenant = sameTenant && b.Tenant == first.Tenant
+		tokens = tokens || kind == config.EndpointMetrics && m.Metrics.Token != ""
 	}
-	if sameAuth && first.Auth != nil {
-		src.AuthType, src.AuthUsername = first.Auth.Type, first.Auth.Username
+	if sameAuth && firstAuth != nil {
+		src.AuthType, src.AuthUsername = firstAuth.Type, firstAuth.Username
 	}
 	if !sameAuth {
 		o.Unresolved = append(o.Unresolved, "auth")
-		o.Conflicts = append(o.Conflicts, "The clusters authenticate differently ("+describeEach(members, func(b *config.EndpointConfig) string {
-			if b.Auth == nil {
-				return "none"
+		o.Conflicts = append(o.Conflicts, "The clusters authenticate differently ("+describeEach(members, func(m config.ClusterConfig) string {
+			if a := authOf(kind, m); a != nil {
+				return a.Type
 			}
-			return b.Auth.Type
+			return "none"
 		})+"): choose the installation's auth.")
 	}
 	if sameTLS {
 		src.TLSSkipVerify = first.TLSSkipVerify
 	} else {
 		o.Unresolved = append(o.Unresolved, "tlsSkipVerify")
-		o.Conflicts = append(o.Conflicts, "The clusters check the certificate differently ("+describeEach(members, func(b *config.EndpointConfig) string {
-			return map[bool]string{true: "not verified", false: "verified"}[b.TLSSkipVerify]
+		o.Conflicts = append(o.Conflicts, "The clusters check the certificate differently ("+describeEach(members, func(m config.ClusterConfig) string {
+			return map[bool]string{true: "not verified", false: "verified"}[m.Block(kind).TLSSkipVerify]
 		})+"): choose whether the installation verifies it.")
 	}
 	if sameTenant {
@@ -146,7 +170,7 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	}
 	var subs []SubscriptionEditDTO
 	for _, m := range members {
-		b := m.Alertmanager
+		b := m.Block(kind)
 		sub := &SubscriptionDTO{Source: src.ID, Match: copyTags(b.Match)}
 		if !sameTenant {
 			sub.Tenant = b.Tenant
@@ -155,32 +179,42 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	}
 	sort.Slice(subs, func(i, j int) bool { return subs[i].Cluster < subs[j].Cluster })
 	o.Draft = SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installAdd, Source: src}, Subscriptions: subs}
+	if kind != config.EndpointAlertmanager {
+		o.Draft.Kind = kind
+	}
 	if src.AuthType != "" || !sameAuth {
 		o.Credential = "Store the installation's credential once, under " + shownInstallation(src.ID) + "; until then its reads fail as \"no credential stored for " + shownInstallation(src.ID) + "\". The clusters' own records stay until you remove them, and none is copied."
 	}
+	if tokens {
+		o.Credential += " The clusters' metrics tokens are not carried over: the installation needs its own credential, and a cluster's token leaves fleet.yaml only with its block, when the subscription replaces it."
+	}
 
 	// the result's scopes, before and after: valid, or what to choose
-	runSources := append(cloneSourceList(active), sourceOf(config.SourceKindAlertmanager, src))
+	runSources := append(cloneSourceList(active), sourceOf(kind, src))
 	runClusters := append([]config.ClusterConfig(nil), running...)
 	for i := range runClusters {
 		for _, se := range subs {
 			if runClusters[i].Name == se.Cluster {
-				runClusters[i].Alertmanager = blockOf(se.Block)
+				runClusters[i].SetBlock(kind, blockOf(se.Block))
 			}
 		}
 	}
-	after, err := config.CheckSources(runSources, runClusters)
+	_, err := config.CheckSources(runSources, runClusters)
+	var after map[string]config.AMResolution
+	if err == nil {
+		after, err = config.Resolve(kind, runSources, runClusters)
+	}
 	if err != nil {
 		o.Choices = append(o.Choices, "As proposed, the subscriptions are not valid: "+config.DisplayError(err)+". Choose a member label for the installation, or a match for each cluster.")
 	}
 	for _, m := range members {
-		b := m.Alertmanager
-		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacySentence(config.EndpointAlertmanager, config.AMDirect, b)}
+		b := m.Block(kind)
+		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacySentence(kind, config.AMDirect, b)}
 		if err != nil {
 			sc.After, sc.Change = "not valid yet", "a choice is needed"
 		} else {
 			r := after[m.Name]
-			sc.After = scopeSentence(config.EndpointAlertmanager, r, sourceOf(config.SourceKindAlertmanager, src), nil)
+			sc.After = scopeSentence(kind, r, sourceOf(kind, src), nil)
 			sc.Change = scopeChange(b.Match, r)
 		}
 		o.Scopes = append(o.Scopes, sc)
@@ -226,10 +260,10 @@ func normMatch(m map[string]string) map[string]string {
 }
 
 // describeEach names each member's value: "dev bearer, stg none".
-func describeEach(members []config.ClusterConfig, value func(*config.EndpointConfig) string) string {
+func describeEach(members []config.ClusterConfig, value func(config.ClusterConfig) string) string {
 	parts := make([]string, 0, len(members))
 	for _, m := range members {
-		parts = append(parts, m.Name+" "+value(m.Alertmanager))
+		parts = append(parts, m.Name+" "+value(m))
 	}
 	return strings.Join(parts, ", ")
 }

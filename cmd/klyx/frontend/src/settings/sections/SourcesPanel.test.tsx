@@ -280,7 +280,7 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
 
   it("leaves an offer's conflicts to the person: no auth or certificate check is preselected (S3a §7)", async () => {
     b.migrationOffers.mockResolvedValue([{
-      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [],
+      kind: "alertmanager", where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [],
       conflicts: ["The clusters authenticate differently (prd bearer, dev basic): choose the installation's auth.", "The clusters check the certificate differently (prd not verified, dev verified): choose whether the installation verifies it."],
       unresolved: ["auth", "tlsSkipVerify"],
       draft: { installation: { op: "add", source: { id: "am-am", endpoint: "https://am.example" } }, subscriptions: [{ cluster: "dev", block: { source: "am-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "am-am", match: { cluster: "prd" } } }] },
@@ -444,7 +444,7 @@ describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", (
 
   it("R5: renaming an offered installation keeps its carried subscriptions attached; others stay", async () => {
     b.migrationOffers.mockResolvedValue([{
-      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [], conflicts: [], unresolved: [],
+      kind: "alertmanager", where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [], conflicts: [], unresolved: [],
       draft: { installation: { op: "add", source: { id: "proposed-am", endpoint: "https://am.example" } }, subscriptions: [
         { cluster: "dev", block: { source: "proposed-am", match: { cluster: "dev" } } },
         { cluster: "prd", block: { source: "shared", match: { cluster: "prd" } } },

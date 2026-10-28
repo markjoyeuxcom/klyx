@@ -57,6 +57,9 @@ export type SubscriptionRow = {
   shadowed?: string[];
   block?: Subscription;
   legacy?: boolean;
+  // a subscription's revisions in force, which its Test sends back
+  instRevision?: string;
+  subRevision?: string;
 };
 
 export type SourcesState = {
@@ -74,7 +77,7 @@ export type SubscriptionEdit = { cluster: string; block: Subscription | null };
 // A draft is of one kind: its installation's and its subscription blocks'.
 export type SourcesDraft = { kind?: SourceKind; installation?: InstallationEdit; subscriptions?: SubscriptionEdit[] };
 
-export type DetectScope = { group?: string; cluster?: string };
+export type DetectScope = { kind?: SourceKind; group?: string; cluster?: string };
 export type DetectCluster = { cluster: string; outcome: "found" | "none" | "ambiguous" | "unreadable"; detail?: string };
 export type DetectProposal = {
   host: string;
@@ -91,6 +94,7 @@ export type DetectResult = { clusters: DetectCluster[]; proposals: DetectProposa
 
 export type ScopeChange = { cluster: string; before: string; after: string; change: string };
 export type MigrationOffer = {
+  kind: SourceKind;
   where: string;
   clusters: string[];
   draft: SourcesDraft;
@@ -128,9 +132,9 @@ export async function detect(scope: DetectScope): Promise<DetectResult> {
   }
 }
 
-export async function migrationOffers(): Promise<MigrationOffer[] | null> {
+export async function migrationOffers(kind: SourceKind = "alertmanager"): Promise<MigrationOffer[] | null> {
   try {
-    return (await SourcesService.MigrationOffers()) as MigrationOffer[];
+    return (await SourcesService.MigrationOffers(kind)) as MigrationOffer[];
   } catch {
     return null;
   }
@@ -147,3 +151,7 @@ const act = async (call: () => Promise<unknown>): Promise<EndpointAction> => {
 export const setSourceCredential = (id: string, revision: string, secret: string) => act(() => EndpointsService.SetSourceCredential(id, revision, secret));
 export const removeSourceCredential = (id: string, revision: string) => act(() => EndpointsService.RemoveSourceCredential(id, revision));
 export const testSource = (id: string, revision: string) => act(() => EndpointsService.TestSource(id, revision));
+// A member's Loki subscription Test: its name and the revisions its row
+// showed, never a tenant or a match.
+export const testSubscription = (cluster: string, kind: SourceKind, instRevision: string, subRevision: string) =>
+  act(() => SourcesService.TestSubscription(cluster, kind, instRevision, subRevision));
