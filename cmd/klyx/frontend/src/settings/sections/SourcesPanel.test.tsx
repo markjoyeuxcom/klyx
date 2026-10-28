@@ -461,4 +461,31 @@ describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", (
       subscriptions: [{ cluster: "dev", block: { source: "chosen-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "shared", match: { cluster: "prd" } } }],
     }));
   });
+
+  it("RR1: editing a match key keeps its untouched value as written", async () => {
+    b.getSources.mockResolvedValue(state({
+      subscriptions: [{ cluster: "dev", mode: "subscribed", via: "its own block", source: "shared", sentence: "s", block: { source: "shared", match: { team: " blue " } } }],
+    }));
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "edit dev's alert subscription" }));
+    const sub = await screen.findByTestId("subscription-editor");
+    fireEvent.change(within(sub).getByLabelText("match key 1"), { target: { value: " environment " } });
+    fireEvent.click(within(sub).getByRole("button", { name: "Review and apply" }));
+    await waitFor(() => expect(b.planSources).toHaveBeenCalledWith({ subscriptions: [{ cluster: "dev", block: { source: "shared", match: { environment: " blue " } } }] }));
+  });
+
+  it("RR2: removing the installation the draft now names asks first; Stay keeps the choice", async () => {
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "edit dev's alert subscription" }));
+    const sub = await screen.findByTestId("subscription-editor");
+    const source = within(sub).getByLabelText("Alertmanager installation") as HTMLSelectElement;
+    fireEvent.change(source, { target: { value: "other" } });
+    fireEvent.click(screen.getByRole("button", { name: "remove other" }));
+    expect(useLeaveRequest.getState().request).not.toBeNull();
+    expect(b.planSources).not.toHaveBeenCalled();
+    await act(async () => { await resolveLeave("stay"); });
+    expect((within(screen.getByTestId("subscription-editor")).getByLabelText("Alertmanager installation") as HTMLSelectElement).value).toBe("other");
+  });
 });

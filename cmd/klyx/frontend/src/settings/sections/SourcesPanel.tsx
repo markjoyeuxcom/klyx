@@ -51,6 +51,8 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
   const [detectScope, setDetectScope] = useState("");
   const [detected, setDetected] = useState<DetectResult | null>(null);
   const draftGen = useRef(0);
+  // the installation an open subscription editor's draft names now (RR2)
+  const draftSource = useRef("");
   const settling = useRef<Promise<void> | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const planBox = useRef<HTMLDivElement>(null);
@@ -114,12 +116,15 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
   // strand it, asks first; unrelated actions keep it (R1, as S2c's Fleet)
   const changed = () => !!editor && dirty;
   const guarded = (action: () => void) => (changed() ? requestLeave(action) : action());
+  // the subscription editor strands on the installation it opened with and
+  // on the one its draft names now (Codex's re-review of S3a-4c, RR2)
   const strands = (installation: string) => changed() && (editor?.kind === "installation"
     ? editor.op === "edit" && editor.draft.id === installation
-    : editor?.block?.source === installation);
+    : editor?.block?.source === installation || draftSource.current === installation);
   const openEditor = (e: Editor) => {
     if (!editor) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     draftGen.current++;
+    draftSource.current = e.kind === "subscription" ? e.block?.source ?? "" : "";
     setDirty(false);
     setOpen(null);
     setEditorKey((k) => k + 1);
@@ -251,6 +256,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       onReview={(d) => review(editor.title, d)} />
     : <SubscriptionEditor key={editorKey} cluster={editor.cluster} initial={editor.block} installations={installationIds} busy={busy}
       onCancel={dropDraft}
+      onSourceChange={(src) => { draftSource.current = src; }}
       onDraftChange={(changed) => { draftGen.current++; setDirty(changed); setOpen((o) => (o?.fromEditor ? null : o)); }}
       onReview={(d) => review(`Review ${editor.cluster}'s alert subscription`, d)} />);
 

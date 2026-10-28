@@ -246,7 +246,7 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
   );
 }
 
-export function SubscriptionEditor({ cluster, initial, installations, busy, onReview, onCancel, onDraftChange }: {
+export function SubscriptionEditor({ cluster, initial, installations, busy, onReview, onCancel, onDraftChange, onSourceChange }: {
   cluster: string;
   initial: Subscription | null;
   installations: string[];
@@ -254,17 +254,23 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
   onReview: (d: SourcesDraft) => void;
   onCancel: () => void;
   onDraftChange?: (changed: boolean) => void;
+  // the installation the draft names now: an action on it asks first (R2)
+  onSourceChange?: (source: string) => void;
 }) {
   const [off, setOff] = useState(!!initial?.off);
   const [source, setSource] = useState(initial?.source ?? "");
   const [scopeTenant, setScopeTenant] = useState(initial?.scope === "tenant");
   const [tenant, setTenant] = useState(initial?.tenant ?? "");
-  // a match as key and value rows: an untouched row is sent as written, a
-  // space in its value included (R3)
+  // a match as key and value rows: each row keeps what it was written as,
+  // and each of its two fields is sent as written until the person edits
+  // that field (R3; Codex's re-review of S3a-4c, RR1: editing a key no
+  // longer trims its value)
   const wasPairs = useRef<[string, string][]>(Object.keys(initial?.match ?? {}).sort().map((k) => [k, (initial?.match ?? {})[k]]));
-  const [pairs, setPairs] = useState<[string, string][]>(() => wasPairs.current.map(([k, v]) => [k, v]));
+  type Row = [string, string, [string, string] | undefined];
+  const [pairs, setRows] = useState<Row[]>(() => wasPairs.current.map(([k, v]): Row => [k, v, [k, v]]));
+  const setPairs = (rows: Row[]) => setRows(rows);
   const cleaned = pairs
-    .map(([k, v]): [string, string] => (wasPairs.current.some(([wk, wv]) => wk === k && wv === v) ? [k, v] : [k.trim(), v.trim()]))
+    .map(([k, v, was]): [string, string] => [asTyped(k, was?.[0] ?? "\u0000"), asTyped(v, was?.[1] ?? "\u0000")])
     .filter(([k, v]) => k !== "" || v !== "");
   const keys = cleaned.map(([k]) => k);
   const bad = [
@@ -278,9 +284,13 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
       return;
     }
     onDraftChange?.(off !== !!initial?.off || source !== (initial?.source ?? "") || scopeTenant !== (initial?.scope === "tenant")
-      || tenant !== (initial?.tenant ?? "") || JSON.stringify(pairs) !== JSON.stringify(wasPairs.current));
+      || tenant !== (initial?.tenant ?? "") || JSON.stringify(pairs.map(([k, v]) => [k, v])) !== JSON.stringify(wasPairs.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [off, source, scopeTenant, tenant, pairs]);
+  useEffect(() => {
+    onSourceChange?.(off ? "" : source);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [off, source]);
   const block = (): Subscription => {
     if (off) return { off: true };
     const b: Subscription = { source };
@@ -325,18 +335,18 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
             note={bad.length > 0 ? `Each row needs a key and a value, each key once: ${bad.join(", ")}` : "Each row a label and its value, over the installation's member label."}>
             {() => (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {pairs.map(([k, v], n) => (
+                {pairs.map(([k, v, was], n) => (
                   <div key={n} style={{ display: "flex", gap: 4, alignItems: "center" }}>
                     <input aria-label={`match key ${n + 1}`} style={input} value={k} disabled={busy} placeholder="label"
-                      onChange={(e) => setPairs(pairs.map((p, m) => (m === n ? [e.target.value, p[1]] : p)))} />
+                      onChange={(e) => setPairs(pairs.map((p, m): Row => (m === n ? [e.target.value, p[1], was] : p)))} />
                     <span aria-hidden="true">=</span>
                     <input aria-label={`match value ${n + 1}`} style={input} value={v} disabled={busy} placeholder="value"
-                      onChange={(e) => setPairs(pairs.map((p, m) => (m === n ? [p[0], e.target.value] : p)))} />
+                      onChange={(e) => setPairs(pairs.map((p, m): Row => (m === n ? [p[0], e.target.value, was] : p)))} />
                     <button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label={`remove match ${n + 1}`}
                       onClick={() => setPairs(pairs.filter((_, m) => m !== n))}>Remove</button>
                   </div>
                 ))}
-                <div><button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label="add to match" onClick={() => setPairs([...pairs, ["", ""]])}>Add</button></div>
+                <div><button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label="add to match" onClick={() => setPairs([...pairs, ["", "", undefined]])}>Add</button></div>
               </div>
             )}
           </SettingField>

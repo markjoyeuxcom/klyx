@@ -65,6 +65,23 @@ export async function afterward<T>(body: () => Promise<T>, created: () => boolea
   }
 }
 
+// restore puts back what a failed step created, when the page may not
+// show it yet (Codex's re-review of S3a-4c, RR3): it reads the rows again
+// (retry) and waits for the thing to be shown, then removes it; an
+// acknowledged creation never shown is said, never ignored; one neither
+// shown nor acknowledged is left alone.
+export async function restore(o: { shown: () => boolean; retry: () => void; remove: () => Promise<unknown>; acknowledged: boolean; waitMs?: number }): Promise<void> {
+  if (!o.shown()) {
+    o.retry();
+    await within(o.waitMs ?? 10_000, "what the step created, shown again", o.shown).catch(() => null);
+  }
+  if (o.shown()) {
+    await o.remove();
+    return;
+  }
+  if (o.acknowledged) throw new Error("it was applied but is not shown: remove it by hand");
+}
+
 export function sized(el: Element | null, what: string): DOMRect {
   if (!el) throw new Error(`no ${what}`);
   const r = el.getBoundingClientRect();
@@ -1398,13 +1415,22 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     const inst = () => $<HTMLElement>("[data-testid='installation-row'][data-installation='lab-am']");
     const own = (await within(8000, `${cluster}'s alerts`, () => sub(cluster))).querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
     if (!/klyx-s8-lab\/alertmanager:web/.test(own)) throw new Error(`${cluster}'s own block: ${own}`);
-    const applyPlan = async (what: string) => {
+    // the add's outcome, apart from what the rows show: attempted once its
+    // Apply is clicked, acknowledged once Applied is said
+    let attempted = false;
+    let acknowledged = false;
+    const applyPlan = async (what: string, onApply?: () => void) => {
       const plan = await within(8000, `the plan to ${what}`, () => $("[data-testid='settings-plan']"));
       const refused = plan.querySelector("[data-testid='plan-refused']");
       if (refused) throw new Error(`the plan to ${what} was refused: ${refused.textContent}`);
       const changes = [...plan.querySelectorAll("[data-testid='plan-changes'] li")].map((li) => li.textContent ?? "");
       (await within(4000, "Apply", () => byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
-      await within(20_000, `${what}, applied and read back`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /^Applied/));
+      onApply?.();
+      // Applied, qualified or not, is acknowledged; read back is only the
+      // plain Applied (Codex's re-review of S3a-4c, RR3)
+      const banner = await within(20_000, `${what}, applied`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /Applied:/));
+      acknowledged ||= !!onApply;
+      if (!/^Applied:/.test(banner.textContent?.trim() ?? "") || /failed/.test(banner.textContent ?? "")) throw new Error(`${what} was applied, but not read back: ${banner.textContent?.trim()}`);
       return changes;
     };
     // the walk removes what it created even when a later check fails, and
@@ -1430,7 +1456,7 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       (await within(4000, "add to cluster", () => ed.querySelector<HTMLButtonElement>("button[aria-label='add to cluster']"))).click();
       typeInto(await within(4000, "the served cluster", () => ed.querySelector<HTMLInputElement>("input[aria-label='cluster 1']")), "aks-stg-weu");
       (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='installation-editor'] button", /^Review and apply$/))).click();
-      const added = await applyPlan("add lab-am");
+      const added = await applyPlan("add lab-am", () => { attempted = true; });
       await within(8000, "lab-am in force", inst);
       const scope = await within(8000, "aks-stg-weu subscribed", () => {
         const t = sub("aks-stg-weu")?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
@@ -1440,9 +1466,15 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
       const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
       const removed = await removeIt("remove lab-am");
+      attempted = false; // removed: nothing of the step's is left to restore
       if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
       return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
-    }, () => !!inst(), () => removeIt("remove lab-am after a failure"));
+    }, () => attempted, () => restore({
+      shown: () => !!inst(),
+      retry: () => byText<HTMLButtonElement>("[data-testid='sources-reread-failed'] button", /^Retry$/)?.click(),
+      remove: () => removeIt("remove lab-am after a failure"),
+      acknowledged,
+    }));
   });
 
   // ---- Settings slice F §7: the AI section's Review and apply, on the

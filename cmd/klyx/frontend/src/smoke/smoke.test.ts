@@ -20,7 +20,7 @@ vi.mock("@wailsio/runtime", () => ({
 }));
 
 import { startSmokeWhenAsked, _resetSmokeBootForTest } from "./boot";
-import { FACES, TITLES, Unmeasurable, afterward, checkFonts, checkTokens, destinations, gatewayView, page, runSmoke, sized, verdict, walk, within } from "./run";
+import { FACES, TITLES, Unmeasurable, afterward, restore, checkFonts, checkTokens, destinations, gatewayView, page, runSmoke, sized, verdict, walk, within } from "./run";
 import { NAV_GROUPS } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 
@@ -233,5 +233,29 @@ describe("a step's cleanup", () => {
     await expect(afterward(async () => { throw new Error("before anything was added"); }, () => false, cleanup)).rejects.toThrow("before anything was added");
     await expect(afterward(async () => 7, () => true, cleanup)).resolves.toBe(7);
     expect(cleanup).not.toHaveBeenCalled();
+  });
+});
+
+// Codex's re-review of S3a-4c, RR3: what a failed step created is put
+// back even when the page does not show it yet.
+describe("restoring what a step created", () => {
+  it("removes it when it is shown", async () => {
+    const remove = vi.fn(async () => {});
+    await restore({ shown: () => true, retry: vi.fn(), remove, acknowledged: true, waitMs: 50 });
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the rows again when it is not shown, then removes it", async () => {
+    let shown = false;
+    const remove = vi.fn(async () => {});
+    await restore({ shown: () => shown, retry: () => { shown = true; }, remove, acknowledged: true, waitMs: 500 });
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("says an acknowledged creation it cannot see, and leaves alone one neither shown nor acknowledged", async () => {
+    const remove = vi.fn(async () => {});
+    await expect(restore({ shown: () => false, retry: vi.fn(), remove, acknowledged: true, waitMs: 50 })).rejects.toThrow("applied but is not shown");
+    await expect(restore({ shown: () => false, retry: vi.fn(), remove, acknowledged: false, waitMs: 50 })).resolves.toBeUndefined();
+    expect(remove).not.toHaveBeenCalled();
   });
 });
