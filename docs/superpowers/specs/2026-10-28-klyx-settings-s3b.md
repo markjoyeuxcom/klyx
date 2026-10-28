@@ -467,3 +467,9 @@ Codex closed R4-1: the keyed, reordered and gapped `[]any` spreads are folded, i
 What the scan does not claim is unchanged: a path built at run time, a variable's value, and a joining function held in a variable.
 
 **Smoke:** this revision changes only `internal/metrics/boundary_test.go`; the product code is the one smoked at 1e5bf950 (§23), 217/217 four ways, so no walk was repeated.
+
+## 26. S3b-2a ACCEPT (2026-10-28)
+
+Codex accepted S3b-2a at 801f760a, after its review and five re-reviews (§20 to §25), with no P1 or P2 remaining. Its rulings stand: the closed query surface, the Prometheus parser's proof over it, and the repository scan as a bounded regression check, not a compiler-enforced prohibition. Standing an unread argument in for a format that never consumes it is sound, and neither variable propagation nor an analysis of joining functions held as values is asked for; the stated limits are as §23 says.
+
+**R6-1, P3, fixed as a follow-up:** a zero precision (`%.0v`) erases the unread marker as it erases any string, so `fmt.Sprintf("/api/v%.0v%d/query", nil, 1)`, which Go prints as `/api/v<nil>1/query`, was flagged as the API's path: a false alarm, never a way past the scan. The fold now keeps the predeclared nil as itself (known by its type, so a constant named `nil` stays its string), and the marker stands only for an argument the source does not fix. §25's marker is opaque except where a precision erases it, and there the result is flagged as a string in that place would make it. **Tests:** nil at zero precision, directly and spread, and the omitted slot it equals, none flagged. **Mutation:** the nil left to the marker again, caught.
