@@ -253,7 +253,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 func endpointSource(kind string, e config.EndpointConfig) string {
 	switch {
 	case e.Off:
-		return "off in fleet.yaml: no alerts are read for this cluster"
+		if kind == config.EndpointLoki {
+			return "off in fleet.yaml: no log history is read for this cluster"
+		}
+		return "off in fleet.yaml: no " + kindWords(kind) + " are read for this cluster"
 	case e.Source != "":
 		return "subscribed to the installation " + e.Source + "; this version of Klyx does not read through installations yet"
 	case e.Endpoint != "":

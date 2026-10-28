@@ -64,8 +64,9 @@ func (a *AlertSources) Resolve(clusters []config.ClusterConfig) error {
 	a.mu.Lock()
 	sources := a.sourcesLocked()
 	a.mu.Unlock()
-	_, err := config.ResolveAlertmanager(sources, clusters)
-	return err
+	// every kind: a candidate whose Loki or metrics resolution fails is
+	// refused as an Alertmanager one is (S3b §2.2)
+	return config.ResolveAll(sources, clusters)
 }
 
 // Apply puts sources and the running fleet in force: an installation

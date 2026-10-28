@@ -206,7 +206,7 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 		}
 		out.Subscriptions = append(out.Subscriptions, row)
 	}
-	for _, src := range sources {
+	for _, src := range ofKind(sources, config.SourceKindAlertmanager) {
 		_, rev, _ := a.Installation(src.ID)
 		in := InstallationDTO{SourceDraftDTO: sourceDraftOf(src), Revision: strconv.FormatUint(rev, 10), Where: whereOf(src),
 			Credential: s.credentialState(src), Subscribers: append([]string{}, subscribers[src.ID]...)}
@@ -225,7 +225,8 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 		out.FileError = "fleet.yaml does not load: " + config.DisplayError(err)
 	} else {
 		srcs, blocks := fileTerms(cfg, running)
-		out.FileDiffers = !reflect.DeepEqual(normSources(srcs), normSources(sources)) || len(blocks) > 0
+		am := config.SourceKindAlertmanager
+		out.FileDiffers = !reflect.DeepEqual(normSources(ofKind(srcs, am)), normSources(ofKind(sources, am))) || len(blocks) > 0
 	}
 	return out
 }
@@ -336,6 +337,9 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 				if activeAt < 0 {
 					return refuse(shownInstallation(id) + " is not in force: add it instead")
 				}
+				if k := active[activeAt].Kind; k != config.SourceKindAlertmanager {
+					return refuse(shownInstallation(id) + " is a " + k + " installation: in this version it is edited in fleet.yaml and put in force at a restart")
+				}
 				if fileAt < 0 {
 					return refuse("fleet.yaml no longer has " + shownInstallation(id) + ": use the file's values first, or add it again")
 				}
@@ -347,6 +351,9 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 			case installRemove:
 				if activeAt < 0 {
 					return refuse(shownInstallation(id) + " is not in force")
+				}
+				if k := active[activeAt].Kind; k != config.SourceKindAlertmanager {
+					return refuse(shownInstallation(id) + " is a " + k + " installation: in this version it is removed in fleet.yaml and at a restart")
 				}
 				out.runSources = append(out.runSources[:activeAt], out.runSources[activeAt+1:]...)
 				if fileAt >= 0 {
@@ -379,10 +386,14 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 		}
 	case planFile:
 		srcs, blocks := fileTerms(file, running)
-		if reflect.DeepEqual(normSources(srcs), normSources(active)) && len(blocks) == 0 {
+		am := config.SourceKindAlertmanager
+		if reflect.DeepEqual(normSources(ofKind(srcs, am)), normSources(ofKind(active, am))) && len(blocks) == 0 {
 			return refuse("fleet.yaml's alert sources are the ones in force")
 		}
-		out.runSources = srcs
+		// the file's Alertmanager installations; the Loki and metrics ones
+		// in force stay as they are, put in force at a restart in this
+		// version (S3b §2.4)
+		out.runSources = append(ofKind(srcs, am), notOfKind(active, am)...)
 		for name, b := range blocks {
 			runClusters[runIndex[name]].Alertmanager = b
 			out.runBlocks[name] = b
@@ -1072,6 +1083,28 @@ func normSources(list []config.SourceConfig) []config.SourceConfig {
 		out = append(out, normSource(s))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// ofKind and notOfKind are the installations of a kind, and the others,
+// in their order.
+func ofKind(list []config.SourceConfig, kind string) []config.SourceConfig {
+	var out []config.SourceConfig
+	for _, s := range list {
+		if s.Kind == kind {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func notOfKind(list []config.SourceConfig, kind string) []config.SourceConfig {
+	var out []config.SourceConfig
+	for _, s := range list {
+		if s.Kind != kind {
+			out = append(out, s)
+		}
+	}
 	return out
 }
 

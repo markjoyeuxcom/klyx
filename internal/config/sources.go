@@ -4,16 +4,43 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // Settings S3a §2: observability installations and the clusters'
 // subscriptions to them. An installation is what can be reached, written
 // once under sources; a subscription is a cluster's use of one for a kind,
 // implied for every cluster it serves and written under the cluster when it
-// differs. S3a builds Alertmanager; Loki and metrics follow in S3b.
+// differs. S3a built Alertmanager; S3b adds Loki and metrics.
 
-// SourceKindAlertmanager is the only installation kind S3a reads.
-const SourceKindAlertmanager = "alertmanager"
+// The installation kinds: one per kind of reader (Settings S3b §2.1).
+const (
+	SourceKindAlertmanager = EndpointAlertmanager
+	SourceKindLoki         = EndpointLoki
+	SourceKindMetrics      = EndpointMetrics
+)
+
+// kindNoun is what a kind's readers read, in a sentence.
+func kindNoun(kind string) string {
+	switch kind {
+	case EndpointLoki:
+		return "logs"
+	case EndpointMetrics:
+		return "metrics"
+	}
+	return "alerts"
+}
+
+// kindName is a kind's installation, in a sentence.
+func kindName(kind string) string {
+	switch kind {
+	case EndpointLoki:
+		return "a Loki"
+	case EndpointMetrics:
+		return "a metrics"
+	}
+	return "an Alertmanager"
+}
 
 // ScopeTenant is a subscription's scope: everything in its tenant is the
 // member's (S3a §2.3).
@@ -73,13 +100,17 @@ func (c *Config) validateSources() error {
 			place = "sources." + s.ID
 		}
 		switch s.Kind {
-		case SourceKindAlertmanager:
-		case EndpointLoki, EndpointMetrics:
-			return fmt.Errorf("%s: kind %s is not built yet: this version reads Alertmanager installations only", place, s.Kind)
+		case SourceKindAlertmanager, SourceKindLoki, SourceKindMetrics:
 		case "":
-			return fmt.Errorf("%s: kind is required: alertmanager", place)
+			return fmt.Errorf("%s: kind is required: alertmanager, loki or metrics", place)
 		default:
-			return fmt.Errorf("%s: kind must be alertmanager", place)
+			return fmt.Errorf("%s: kind must be alertmanager, loki or metrics", place)
+		}
+		if s.Kind == SourceKindLoki && s.Discover {
+			return fmt.Errorf("%s: Loki is not discovered: give a serviceRef or an endpoint", place)
+		}
+		if s.Kind == SourceKindMetrics && strings.HasSuffix(strings.TrimRight(s.Endpoint, "/"), "/api/v1") {
+			return fmt.Errorf("%s.endpoint must be the Prometheus base URL without a trailing /api/v1", place)
 		}
 		if hasControl(s.Name) {
 			return fmt.Errorf("%s.name must not contain control characters", place)
@@ -121,26 +152,24 @@ func (c *Config) validateSources() error {
 	return nil
 }
 
-// validateSubscription checks a cluster's own Alertmanager block for the
-// subscription fields (S3a §2.1), and refuses them on Loki until S3b. Keys
-// are judged as written, never as decoded: a key written empty, or false,
-// is refused rather than read as left out, so a malformed subscription
-// never falls through to discovery (Codex's review of S3a-1, R1).
-func validateSubscription(cluster string, kind string, e *EndpointConfig) error {
+// validateSubscription checks a cluster's own block of a kind for the
+// subscription fields (S3a §2.1, S3b §2.1). Keys are judged as written,
+// never as decoded: a key written empty, or false, is refused rather than
+// read as left out, so a malformed subscription never falls through to
+// discovery (Codex's review of S3a-1, R1). legacyToken is a metrics
+// block's plaintext token, which a subscription or off refuses.
+func validateSubscription(cluster string, kind string, e *EndpointConfig, legacyToken bool) error {
 	if e == nil {
 		return nil
 	}
 	has := func(key string, set bool) bool { return set || e.wrote(key) }
-	if kind == EndpointLoki {
-		for _, k := range []struct {
-			key string
-			set bool
-		}{{"source", e.Source != ""}, {"scope", e.Scope != ""}, {"off", e.Off}} {
-			if has(k.key, k.set) {
-				return fmt.Errorf("cluster %s: loki.%s is not built yet: this version subscribes Alertmanager only", describeValue(cluster), k.key)
-			}
-		}
-		return nil
+	if kind == EndpointMetrics && has("match", len(e.Match) > 0) {
+		// read from S3b-2, which scopes every query by it: until then no file
+		// states a scope Klyx does not apply (S3b §2.1, §12 R1)
+		return fmt.Errorf("cluster %s: metrics.match is read from a later version of Klyx: remove it for now", describeValue(cluster))
+	}
+	if legacyToken && (has("source", e.Source != "") || has("off", e.Off)) {
+		return fmt.Errorf("cluster %s: metrics.token belongs to the cluster's own endpoint, so it is not allowed beside source or off", describeValue(cluster))
 	}
 	source := has("source", e.Source != "")
 	beside := []struct {
@@ -160,19 +189,19 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig) error 
 	}
 	switch {
 	case e.wrote("off") && !e.Off:
-		return fmt.Errorf("cluster %s: alertmanager.off is true, or left out", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.off is true, or left out", describeValue(cluster), kind)
 	case e.Off && besideOff:
-		return fmt.Errorf("cluster %s: alertmanager.off allows nothing beside it", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.off allows nothing beside it", describeValue(cluster), kind)
 	case source && e.Source == "":
-		return fmt.Errorf("cluster %s: alertmanager.source names an installation in sources: it cannot be empty", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.source names an installation in sources: it cannot be empty", describeValue(cluster), kind)
 	case source && locators:
-		return fmt.Errorf("cluster %s: alertmanager.source reaches its installation, so endpoint, serviceRef, auth and tlsSkipVerify are not allowed beside it", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.source reaches its installation, so endpoint, serviceRef, auth and tlsSkipVerify are not allowed beside it", describeValue(cluster), kind)
 	case has("scope", e.Scope != "") && !source:
-		return fmt.Errorf("cluster %s: alertmanager.scope is allowed only with source", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.scope is allowed only with source", describeValue(cluster), kind)
 	case has("scope", e.Scope != "") && e.Scope != ScopeTenant:
-		return fmt.Errorf("cluster %s: alertmanager.scope must be tenant", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.scope must be tenant", describeValue(cluster), kind)
 	case e.Scope == ScopeTenant && has("match", len(e.Match) > 0):
-		return fmt.Errorf("cluster %s: alertmanager.scope: tenant takes everything in the tenant, so a match is not allowed beside it", describeValue(cluster))
+		return fmt.Errorf("cluster %s: %s.scope: tenant takes everything in the tenant, so a match is not allowed beside it", describeValue(cluster), kind)
 	}
 	return nil
 }
@@ -197,13 +226,14 @@ func Withheld(v string) (n int, withheld bool) {
 	return n, n >= 25
 }
 
-// Alertmanager resolution modes (S3a §2.2).
+// Resolution modes (S3a §2.2, S3b §2.2), the same for every kind.
 const (
 	AMSubscribed = "subscribed" // through an installation
 	AMOff        = "off"        // off in fleet.yaml
 	AMDirect     = "direct"     // legacy: its own endpoint
 	AMService    = "service"    // legacy: its own serviceRef
-	AMDiscovered = "discovered" // legacy: discovery in the cluster
+	AMDiscovered = "discovered" // legacy: discovery in the cluster (never Loki)
+	AMNone       = "none"       // Loki only: none configured, and Loki is never discovered
 )
 
 // How a cluster's resolution was reached (S3a §2.2).
@@ -214,8 +244,8 @@ const (
 	ViaDiscovery = "discovery"
 )
 
-// AMResolution is one cluster's Alertmanager as its configuration
-// resolves it (S3a §2.2, §2.3).
+// AMResolution is one cluster's resolution for a kind (S3a §2.2, §2.3;
+// S3b §2.2): Alertmanager's, Loki's or metrics'.
 type AMResolution struct {
 	Mode string
 	Via  string
@@ -233,18 +263,59 @@ type AMResolution struct {
 	Shadowed []string
 }
 
-// ResolveAlertmanager resolves every cluster's Alertmanager (S3a §2.2):
-// its own block, an installation serving it by name, one serving its
-// group, or discovery in itself; then each subscription's effective scope,
-// and that subscriptions sharing a tenant are provably disjoint (§2.3).
-// Every refusal names what it names. The configuration's sources must
-// already be valid (validateSources).
+// ResolveAlertmanager resolves every cluster's Alertmanager (S3a §2.2).
 func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[string]AMResolution, error) {
+	return Resolve(EndpointAlertmanager, sources, clusters)
+}
+
+// ResolveAll resolves every kind (S3b §2.2): the load and every plan's
+// candidate check them all, so a conflict in any kind is refused.
+func ResolveAll(sources []SourceConfig, clusters []ClusterConfig) error {
+	for _, kind := range []string{EndpointAlertmanager, EndpointLoki, EndpointMetrics} {
+		if _, err := Resolve(kind, sources, clusters); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ownBlock is a cluster's own block of a kind, in the shared shape; nil
+// when it has none.
+func ownBlock(cl ClusterConfig, kind string) *EndpointConfig {
+	switch kind {
+	case EndpointLoki:
+		return cl.Loki
+	case EndpointMetrics:
+		if cl.Metrics == nil {
+			return nil
+		}
+		spec := cl.Metrics.Spec()
+		return &spec
+	}
+	return cl.Alertmanager
+}
+
+// Resolve resolves every cluster's reader of a kind (S3a §2.2, S3b §2.2):
+// its own block, an installation of that kind serving it by name, one
+// serving its group, or discovery in itself (never for Loki, which is
+// then none); then each subscription's effective scope, and that
+// subscriptions sharing a tenant are provably disjoint (§2.3). Every
+// refusal names what it names. The configuration's sources must already
+// be valid (validateSources).
+func Resolve(kind string, sources []SourceConfig, clusters []ClusterConfig) (map[string]AMResolution, error) {
+	// for a kind other than Alertmanager its conflicts name it
+	forKind := ""
+	if kind != EndpointAlertmanager {
+		forKind = " for " + kind
+	}
 	byID := map[string]SourceConfig{}
 	byName := map[string][]string{}
 	byGroup := map[string][]string{}
 	for _, s := range sources {
 		byID[s.ID] = s
+		if s.Kind != kind {
+			continue
+		}
 		for _, sv := range s.Serves {
 			if sv.Cluster != "" {
 				byName[sv.Cluster] = appendOnce(byName[sv.Cluster], s.ID)
@@ -261,9 +332,9 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		}
 		switch {
 		case len(named) > 1:
-			return nil, fmt.Errorf("cluster %s is served by name by both %s and %s: one installation serves a cluster at each step", describeValue(cl.Name), describeValue(named[0]), describeValue(named[1]))
+			return nil, fmt.Errorf("cluster %s is served by name by both %s and %s%s: one installation serves a cluster at each step", describeValue(cl.Name), describeValue(named[0]), describeValue(named[1]), forKind)
 		case len(grouped) > 1:
-			return nil, fmt.Errorf("cluster %s's group %s is served by both %s and %s: one installation serves a group", describeValue(cl.Name), describeValue(cl.Group), describeValue(grouped[0]), describeValue(grouped[1]))
+			return nil, fmt.Errorf("cluster %s's group %s is served by both %s and %s%s: one installation serves a group", describeValue(cl.Name), describeValue(cl.Group), describeValue(grouped[0]), describeValue(grouped[1]), forKind)
 		}
 		implied, via := "", ""
 		if len(named) == 1 {
@@ -272,8 +343,10 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 			implied, via = grouped[0], ViaByGroup
 		}
 		r := AMResolution{}
-		own := cl.Alertmanager
+		own := ownBlock(cl, kind)
 		switch {
+		case own == nil && implied == "" && kind == EndpointLoki:
+			r = AMResolution{Mode: AMNone, Via: ViaDiscovery}
 		case own == nil && implied == "":
 			r = AMResolution{Mode: AMDiscovered, Via: ViaDiscovery}
 		case own == nil:
@@ -283,16 +356,20 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		case own.Source != "":
 			s, ok := byID[own.Source]
 			if !ok {
-				return nil, fmt.Errorf("cluster %s: alertmanager.source %s names no installation in sources", describeValue(cl.Name), describeValue(own.Source))
+				return nil, fmt.Errorf("cluster %s: %s.source %s names no installation in sources", describeValue(cl.Name), kind, describeValue(own.Source))
 			}
-			if s.Kind != SourceKindAlertmanager {
-				return nil, fmt.Errorf("cluster %s: alertmanager.source %s is not an Alertmanager installation", describeValue(cl.Name), describeValue(own.Source))
+			if s.Kind != kind {
+				return nil, fmt.Errorf("cluster %s: %s.source %s is not %s installation: it is of kind %s", describeValue(cl.Name), kind, describeValue(own.Source), kindName(kind), describeValue(s.Kind))
 			}
 			r = AMResolution{Mode: AMSubscribed, Via: ViaOwnBlock, Source: own.Source}
 		case own.Endpoint != "":
 			r = AMResolution{Mode: AMDirect, Via: ViaOwnBlock}
 		case own.ServiceRef != nil:
 			r = AMResolution{Mode: AMService, Via: ViaOwnBlock}
+		case kind == EndpointLoki:
+			// a Loki block without a locator reads nothing: Loki is never
+			// discovered
+			r = AMResolution{Mode: AMNone, Via: ViaOwnBlock}
 		default:
 			r = AMResolution{Mode: AMDiscovered, Via: ViaOwnBlock}
 		}
@@ -302,13 +379,13 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 		if r.Mode == AMSubscribed {
 			s := byID[r.Source]
 			r.Host = s.Host
-			if err := scopeOf(&r, s, cl.Name, own); err != nil {
+			if err := scopeOf(&r, s, cl.Name, kind, own); err != nil {
 				return nil, err
 			}
 		}
 		out[cl.Name] = r
 	}
-	if err := disjoint(byID, clusters, out); err != nil {
+	if err := disjoint(byID, clusters, out, kind); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -318,7 +395,7 @@ func ResolveAlertmanager(sources []SourceConfig, clusters []ClusterConfig) (map[
 // the member label equal to the member's name, extended by the block's
 // match, or everything in the tenant. A subscription with neither is
 // refused: nothing reads "everything there" by default.
-func scopeOf(r *AMResolution, s SourceConfig, cluster string, own *EndpointConfig) error {
+func scopeOf(r *AMResolution, s SourceConfig, cluster, kind string, own *EndpointConfig) error {
 	r.Tenant = s.Tenant
 	if own != nil && own.Tenant != "" {
 		r.Tenant = own.Tenant
@@ -337,7 +414,7 @@ func scopeOf(r *AMResolution, s SourceConfig, cluster string, own *EndpointConfi
 		}
 	}
 	if len(m) == 0 {
-		return fmt.Errorf("cluster %s: the installation %s has no memberLabel, so its subscription needs a scope: give the cluster's alertmanager block that source with a match, or scope: tenant", describeValue(cluster), describeValue(s.ID))
+		return fmt.Errorf("cluster %s: the installation %s has no memberLabel, so its subscription needs a scope: give the cluster's %s block that source with a match, or scope: tenant", describeValue(cluster), describeValue(s.ID), kind)
 	}
 	r.Match = m
 	return nil
@@ -347,7 +424,7 @@ func scopeOf(r *AMResolution, s SourceConfig, cluster string, own *EndpointConfi
 // effective tenant without provably disjoint scopes (S3a §2.3): each must
 // carry the member label, with distinct values, and scope: tenant shares
 // its tenant with none.
-func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[string]AMResolution) error {
+func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[string]AMResolution, kind string) error {
 	type key struct{ source, tenant string }
 	members := map[key][]string{}
 	var order []key
@@ -387,7 +464,7 @@ func disjoint(byID map[string]SourceConfig, clusters []ClusterConfig, res map[st
 			}
 			v := r.Match[label]
 			if prev, dup := values[v]; dup {
-				return fmt.Errorf("clusters %s and %s share %s of %s, both with %s set to %s, so their alerts cannot be told apart", describeValue(prev), describeValue(m), tenant, describeValue(k.source), describeKey(label), describeValue(v))
+				return fmt.Errorf("clusters %s and %s share %s of %s, both with %s set to %s, so their %s cannot be told apart", describeValue(prev), describeValue(m), tenant, describeValue(k.source), describeKey(label), describeValue(v), kindNoun(kind))
 			}
 			values[v] = m
 		}
@@ -405,16 +482,60 @@ func appendOnce(list []string, id string) []string {
 }
 
 // ConnectionAlertmanager is the Alertmanager block a cluster's connection
-// uses (S3a §2.2): its own block, or a subscription an installation of
-// sources implies for it, by name then by group; nil for discovery. It
-// never falls through to discovery when an installation serves the
-// cluster.
+// uses (S3a §2.2).
 func ConnectionAlertmanager(sources []SourceConfig, cc ClusterConfig) *EndpointConfig {
 	if cc.Alertmanager != nil {
 		return cc.Alertmanager
 	}
+	return impliedBlock(EndpointAlertmanager, sources, cc)
+}
+
+// ConnectionLoki is the Loki block a cluster's connection uses (S3b §2.4).
+func ConnectionLoki(sources []SourceConfig, cc ClusterConfig) *EndpointConfig {
+	if cc.Loki != nil {
+		return cc.Loki
+	}
+	return impliedBlock(EndpointLoki, sources, cc)
+}
+
+// ConnectionMetrics is the metrics block a cluster's connection uses (S3b
+// §2.4): its own, or the subscription an installation implies; nil for
+// discovery.
+func ConnectionMetrics(sources []SourceConfig, cc ClusterConfig) *MetricsConfig {
+	if cc.Metrics != nil {
+		return cc.Metrics
+	}
+	if b := impliedBlock(EndpointMetrics, sources, cc); b != nil {
+		return &MetricsConfig{Source: b.Source}
+	}
+	return nil
+}
+
+// ConnectionBlock is a cluster's connection block of a kind, in the shared
+// shape (S3a §2.2, S3b §2.4); nil for discovery, or for no Loki.
+func ConnectionBlock(kind string, sources []SourceConfig, cc ClusterConfig) *EndpointConfig {
+	switch kind {
+	case EndpointLoki:
+		return ConnectionLoki(sources, cc)
+	case EndpointMetrics:
+		if m := ConnectionMetrics(sources, cc); m != nil {
+			spec := m.Spec()
+			return &spec
+		}
+		return nil
+	}
+	return ConnectionAlertmanager(sources, cc)
+}
+
+// impliedBlock is the subscription an installation of a kind implies for
+// a cluster with no block of its own, by name then by group; nil when none
+// serves it. It never falls through to discovery when one does.
+func impliedBlock(kind string, sources []SourceConfig, cc ClusterConfig) *EndpointConfig {
 	var grouped string
 	for _, s := range sources {
+		if s.Kind != kind {
+			continue
+		}
 		for _, sv := range s.Serves {
 			switch {
 			case sv.Cluster != "" && sv.Cluster == cc.Name:

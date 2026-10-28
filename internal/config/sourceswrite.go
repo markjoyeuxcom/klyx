@@ -96,9 +96,17 @@ func CheckSources(sources []SourceConfig, clusters []ClusterConfig) (map[string]
 		return nil, err
 	}
 	for _, cl := range clusters {
-		if err := validateSubscription(cl.Name, EndpointAlertmanager, cl.Alertmanager); err != nil {
-			return nil, err
+		for _, e := range cl.Endpoints() {
+			spec := e.Spec
+			if err := validateSubscription(cl.Name, e.Kind, &spec, e.LegacyToken); err != nil {
+				return nil, err
+			}
 		}
+	}
+	// every kind resolves, so an Alertmanager plan never publishes a
+	// candidate whose Loki or metrics resolution fails (S3b §2.2)
+	if err := ResolveAll(sources, clusters); err != nil {
+		return nil, err
 	}
 	return ResolveAlertmanager(sources, clusters)
 }

@@ -29,8 +29,11 @@ func TestSourcesLoadErrors(t *testing.T) {
 		{src(lgtm), ""},
 		{src(lgtm + lgtm), `duplicate source id "lgtm-we"`},
 		{src("  - id: LGTM\n    kind: alertmanager\n    host: prd\n    discover: true\n"), "sources[0]: id must be a DNS label"},
-		{src("  - id: logs\n    kind: loki\n    host: prd\n    discover: true\n"), "sources.logs: kind loki is not built yet"},
-		{src("  - id: m\n    kind: metrics\n    host: prd\n    discover: true\n"), "kind metrics is not built yet"},
+		// S3b §2.1: Loki and metrics installations; Loki is never discovered
+		{src("  - id: logs\n    kind: loki\n    host: prd\n    discover: true\n"), "sources.logs: Loki is not discovered: give a serviceRef or an endpoint"},
+		{src("  - id: logs\n    kind: loki\n    host: prd\n    serviceRef: {namespace: monitoring, name: loki, port: http}\n"), ""},
+		{src("  - id: m\n    kind: metrics\n    host: prd\n    discover: true\n"), ""},
+		{src("  - id: m\n    kind: metrics\n    endpoint: https://mimir.example/prometheus/api/v1/\n"), "sources.m.endpoint must be the Prometheus base URL without a trailing /api/v1"},
 		{src("  - id: x\n    host: prd\n    discover: true\n"), "sources.x: kind is required"},
 		{src("  - id: x\n    kind: prometheus\n    host: prd\n    discover: true\n"), "kind must be alertmanager"},
 		{src("  - id: x\n    kind: alertmanager\n    host: prd\n"), "give exactly one of serviceRef, discover: true or endpoint"},
@@ -64,9 +67,10 @@ func TestSubscriptionBlockErrors(t *testing.T) {
 		{"    alertmanager: {source: lgtm-we, scope: cluster}\n", "alertmanager.scope must be tenant"},
 		{"    alertmanager: {source: lgtm-we, scope: tenant, match: {team: a}}\n", "a match is not allowed beside it"},
 		{"    alertmanager: {source: nowhere}\n", `alertmanager.source "nowhere" names no installation`},
-		{"    loki: {source: lgtm-we}\n", `cluster "lab": loki.source is not built yet`},
-		{"    loki: {scope: tenant}\n", "loki.scope is not built yet"},
-		{"    loki: {off: true}\n", "loki.off is not built yet"},
+		// S3b §2.1: Loki's subscription fields, as Alertmanager's
+		{"    loki: {source: lgtm-we}\n", `cluster "lab": loki.source "lgtm-we" is not a Loki installation: it is of kind "alertmanager"`},
+		{"    loki: {scope: tenant}\n", "loki.scope is allowed only with source"},
+		{"    loki: {off: true}\n", ""},
 	} {
 		_, err := loadYAML(t, fleetWith("", "", tc.lab, lgtm))
 		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
@@ -209,9 +213,9 @@ func TestKeysAreJudgedAsWritten(t *testing.T) {
 		{"    alertmanager: {scope: \"\"}\n", `alertmanager.scope is allowed only with source`},
 		{"    alertmanager: {source: lgtm-we, scope: \"\"}\n", `alertmanager.scope must be tenant`},
 		{"    alertmanager: {source: lgtm-we, scope: tenant, match: {}}\n", `a match is not allowed beside it`},
-		{"    loki: {source: \"\"}\n", `loki.source is not built yet`},
-		{"    loki: {scope: \"\"}\n", `loki.scope is not built yet`},
-		{"    loki: {off: false}\n", `loki.off is not built yet`},
+		{"    loki: {source: \"\"}\n", `loki.source names an installation in sources: it cannot be empty`},
+		{"    loki: {scope: \"\"}\n", `loki.scope is allowed only with source`},
+		{"    loki: {off: false}\n", `loki.off is true, or left out`},
 	} {
 		if _, err := loadYAML(t, fleetWith("", "", tc.lab, lgtm)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: %v, want %q", tc.lab, err, tc.want)

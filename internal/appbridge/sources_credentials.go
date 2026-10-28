@@ -40,6 +40,11 @@ func (s *EndpointsService) reviewedSource(id, revision string) (config.SourceCon
 	if strconv.FormatUint(rev, 10) != revision {
 		return config.SourceConfig{}, 0, fmt.Errorf("%s changed since it was shown: review it again", shownInstallation(id))
 	}
+	if src.Kind != config.SourceKindAlertmanager {
+		// a Loki or metrics installation is read from a later version (S3b
+		// §2.4): its credential and Test come with it
+		return config.SourceConfig{}, 0, fmt.Errorf("%s is a %s installation, which this version of Klyx does not read yet", shownInstallation(id), src.Kind)
+	}
 	return src, rev, nil
 }
 

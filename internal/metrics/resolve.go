@@ -26,6 +26,16 @@ func sourceStr(c ServiceCandidate) string {
 // unavailable. disco is the single reduced discovery outcome; auth is the
 // direct endpoint's credential as resolved now (coverage C5 §3).
 func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf TransportFactory) Resolution {
+	// Settings S3b §2.4: off reads nothing; a subscription is read through
+	// its installation, which this version does not do yet. Neither is
+	// ever discovered nor read any other way.
+	switch {
+	case cfg.Off:
+		return Resolution{Mode: ModeUnavailable, Reason: ReasonOff}
+	case cfg.Source != "":
+		return Resolution{Mode: ModeUnavailable, Source: "the installation " + cfg.Source,
+			Reason: "this cluster's metrics come from the installation " + cfg.Source + ", and this version of Klyx does not read through installations yet"}
+	}
 	if cfg.Endpoint != "" {
 		// an endpoint URL carrying credentials is refused for use, and
 		// never shown with them (coverage C5 §2)
@@ -58,6 +68,9 @@ func Resolve(cfg config.MetricsConfig, auth Auth, disco DiscoveryResult, tf Tran
 	}
 	return Resolution{Mode: ModeUnavailable, Reason: ReasonNoService}
 }
+
+// ReasonOff: the cluster's own metrics block says off (Settings S3b §2.4).
+const ReasonOff = "metrics are off for this cluster in fleet.yaml"
 
 // ReasonNoService: no endpoint or Service is configured and discovery found
 // none - the one case where the remedy is to configure a metrics endpoint.

@@ -138,9 +138,9 @@ func newFleetRigWith(t *testing.T, run bool, failFirst string) *fleetRig {
 		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
 			return config.ConnectionAlertmanager(r.activeSources(), cc)
 		},
+		Sources: r.activeSources,
 		ResolveSources: func(run []config.ClusterConfig) error {
-			_, err := config.ResolveAlertmanager(r.activeSources(), run)
-			return err
+			return config.ResolveAll(r.activeSources(), run)
 		},
 		Resubscribe: func(run []config.ClusterConfig) error {
 			r.mu.Lock()

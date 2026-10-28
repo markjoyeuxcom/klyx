@@ -46,6 +46,9 @@ var lokiPages = make(chan struct{}, lokiMaxInFlight)
 // ErrNoLoki: no Loki is configured for this cluster.
 var ErrNoLoki = errors.New("no Loki is configured for this cluster; set loki in fleet.yaml")
 
+// ErrLokiOff: the cluster's own loki block says off (Settings S3b §2.4).
+var ErrLokiOff = errors.New("log history is off for this cluster in fleet.yaml")
+
 // ErrLokiSourceChanged: the cluster's Loki configuration or credential
 // changed since the reader was built; a page set over it ends (§6).
 var ErrLokiSourceChanged = errors.New("the Loki source changed; reading the newest again")
@@ -72,13 +75,16 @@ func (c *ClusterConn) WithLoki(cfg *config.EndpointConfig) *ClusterConn {
 }
 
 // logHistoryPresent is the LogHistory capability: a Loki configured where
-// Klyx can read it.
+// Klyx can read it, or through an installation.
 func (c *ClusterConn) logHistoryPresent() bool { return c.loki.configured.Load() }
 
-// lokiLocated: a Loki block names a URL or a Service. Loki is never
-// discovered, so a block with neither - a match alone - is no log history,
-// and never advertised as one (Settings review slice 0).
-func lokiLocated(cfg *config.EndpointConfig) bool { return cfg != nil && cfg.Located() }
+// lokiLocated: a Loki block names a URL or a Service, or subscribes to an
+// installation (Settings S3b §2.4). Loki is never discovered, so a block
+// with none of these - a match alone - is no log history, and never
+// advertised as one (Settings review slice 0); off is none either.
+func lokiLocated(cfg *config.EndpointConfig) bool {
+	return cfg != nil && !cfg.Off && (cfg.Located() || cfg.Source != "")
+}
 
 // LokiConfig is the configured Loki as this connection uses it.
 func (c *ClusterConn) LokiConfig() *config.EndpointConfig {
@@ -133,8 +139,14 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 	c.loki.mu.Lock()
 	defer c.loki.mu.Unlock()
 	cfg := c.loki.cfg
-	if cfg == nil {
+	switch {
+	case cfg == nil:
 		return nil, ErrNoLoki
+	case cfg.Off:
+		return nil, ErrLokiOff
+	case cfg.Source != "":
+		// read through its installation from S3b-2; never another way
+		return nil, fmt.Errorf("this cluster's logs come from the installation %s, and this version of Klyx does not read through installations yet", cfg.Source)
 	}
 	rev := uint64(0)
 	if c.creds.Revisions != nil {

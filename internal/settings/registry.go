@@ -172,24 +172,35 @@ func endpointEntries() []Entry {
 		)
 		if k.id != "metrics" {
 			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.", "none", "A map of label equality matchers."))
+		} else {
+			// Settings S3b §2.1: read from S3b-2, which scopes every query by
+			// it; until then a load error
+			m := e("match", "match", "Not read yet: a later version scopes every metrics query by these labels, for a cluster sharing a Mimir tenant. Until then fleet.yaml refuses it.", "none", "A map of label equality matchers.")
+			m.Disposition, m.Save = Deferred, "Not yet: fleet.yaml refuses it."
+			out = append(out, m)
 		}
 	}
-	// Settings S3a §2.1: a cluster's subscription to an installation. Loki's
-	// are built in S3b: until then each is a load error (S3a §12, R6).
+	// Settings S3a §2.1, S3b §2.1: a cluster's subscription to an
+	// installation. Loki's and metrics' are file-only in S3b-1: Klyx reads
+	// through their installations from S3b-2, and puts a change in force at
+	// a restart until Settings edits them.
 	sub := func(kind, id, label, effect, def, validation string) Entry {
-		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki"}[kind]
+		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki", "metrics": "Metrics"}[kind]
 		e := Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
 			TakesEffect: OnSave, Save: subscriptionSave, Disposition: Editable, Source: FromSchema}
-		if kind == "loki" {
-			e.Effect, e.Disposition, e.Save = "Not built yet: Loki subscriptions arrive in S3b, and until then this key is a load error.", Deferred, "Not yet: fleet.yaml refuses it."
+		if kind != "alertmanager" {
+			e.TakesEffect, e.Disposition = Restart, FileOnly
+			e.Save = "Edit fleet.yaml: a " + name + " subscription is put in force at a restart in this version, and read through its installation from a later one."
 		}
 		return e
 	}
-	for _, kind := range []string{"alertmanager", "loki"} {
+	for _, kind := range []string{"alertmanager", "loki", "metrics"} {
+		noun := map[string]string{"alertmanager": "alerts", "loki": "log history", "metrics": "metrics"}[kind]
+		fallback := map[string]string{"alertmanager": "else discovery", "loki": "else none: Loki is never discovered", "metrics": "else discovery"}[kind]
 		out = append(out,
-			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, else discovery", "An id in sources, of kind alertmanager."),
+			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, "+fallback, "An id in sources, of kind "+kind+"."),
 			sub(kind, "scope", "scope", "tenant takes everything in the subscription's tenant as the cluster's own. Allowed only when no other subscription of the installation shares that tenant.", "the member label equal to the cluster's name, and the match", "tenant, with source; no match beside it."),
-			sub(kind, "off", "off", "Reads no alerts for the cluster, and says so, even when an installation serves it.", "left out: alerts are read", "true, or left out; nothing else in the block."),
+			sub(kind, "off", "off", "Reads no "+noun+" for the cluster, and says so, even when an installation serves it.", "left out: "+noun+" "+map[bool]string{true: "is", false: "are"}[kind == "loki"]+" read", "true, or left out; nothing else in the block."),
 		)
 	}
 	tok := Entry{ID: "clusters[].metrics.token", Section: Observability, Label: "Metrics token (legacy)", Effect: "A plain-text bearer token, still read. External endpoints moves it to the keychain and replaces this line with auth.", Scope: "endpoint",
@@ -414,7 +425,7 @@ func sourceEntries() []Entry {
 	}
 	return []Entry{
 		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.", "none: required", "A DNS label, unique among sources."),
-		e("kind", "Installation kind", "What the installation serves.", "none: required", "alertmanager; loki and metrics are not built yet."),
+		e("kind", "Installation kind", "What the installation serves: alerts, log history or metrics. Klyx reads through Loki and metrics installations from a later version, and puts them in force at a restart until then.", "none: required", "alertmanager, loki or metrics; discover: true is not for loki."),
 		e("name", "Installation name", "A display name, for Settings and the scope sentence.", "the id", "Any string without control characters."),
 		e("host", "Host cluster", "The fleet cluster whose API server reaches a serviceRef or discovered installation. It is transport only: it grants no reads of the host's objects, and a host cannot be removed while an installation names it.", "none: required with serviceRef or discover", "A cluster of the fleet; not with endpoint."),
 		e("serviceRef.namespace", "Installation Service namespace", "The namespace of the Service, in the host, that the installation is reached through.", "none", "A namespace name."),

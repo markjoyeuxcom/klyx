@@ -82,6 +82,10 @@ type FleetPlanDeps struct {
 	// Alertmanager is the block a connection for an entry would use,
 	// resolved against the active installations (Settings S3a §2.2)
 	Alertmanager func(config.ClusterConfig) *config.EndpointConfig
+	// Sources are the installations in force, of every kind: a placement
+	// edit that would move a cluster's Loki or metrics is refused until
+	// Klyx reads through installations (Settings S3b §2.4)
+	Sources func() []config.SourceConfig
 	// ResolveSources checks that a runtime candidate - the running fleet
 	// with a plan's change - resolves against the installations in force;
 	// SourcesRevision is their revision, which a plan binds; Resubscribe
@@ -574,6 +578,19 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 			return refuse("with this change, the alert installations do not resolve: " + config.DisplayError(err))
 		}
 	}
+	// S3b §2.4: a running connection cannot follow its Loki or metrics to
+	// another source until Klyx reads through installations; a reconnect
+	// or an addition builds its connection anew, so it follows
+	if fp.d.Sources != nil && (x.class == classPlacement || x.class == classProtection) {
+		sources := fp.d.Sources()
+		for _, kind := range []string{config.EndpointLoki, config.EndpointMetrics} {
+			was, now := config.ConnectionBlock(kind, sources, run), config.ConnectionBlock(kind, sources, x.cand)
+			if amSourceKey(was) != amSourceKey(now) {
+				return refuse("with this change, " + name + "'s " + kindWords(kind) + " would come from " + amSourceOf(now) + " instead of " + amSourceOf(was) +
+					": this version of Klyx cannot move a running cluster's " + kindWords(kind) + " until it reads through installations, so leave its group as it is, or give it its own " + kind + " block")
+			}
+		}
+	}
 	if fp.d.SourcesRevision != nil {
 		x.plan.Runtime["sources"] = strconv.FormatUint(fp.d.SourcesRevision(), 10)
 	}
@@ -903,6 +920,17 @@ func amSourceOf(e *config.EndpointConfig) string {
 		return "its own Service"
 	}
 	return "discovery in the cluster"
+}
+
+// kindWords is what a kind's readers read, in a plan's words.
+func kindWords(kind string) string {
+	switch kind {
+	case config.EndpointLoki:
+		return "log history"
+	case config.EndpointMetrics:
+		return "metrics"
+	}
+	return "alerts"
 }
 
 // amSourceKey is where an Alertmanager block's alerts come from, for a

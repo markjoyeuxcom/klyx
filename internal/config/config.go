@@ -143,6 +143,17 @@ type MetricsConfig struct {
 	ServiceRef    *MetricsServiceRef `yaml:"serviceRef"`
 	Auth          *EndpointAuth      `yaml:"auth"`   // C5 §2: the secret is in the keychain
 	Tenant        string             `yaml:"tenant"` // C5 §2: X-Scope-OrgID
+	// Match scopes every query to this cluster's series in a shared tenant;
+	// Source subscribes the cluster to a metrics installation of sources,
+	// Scope "tenant" takes everything in its tenant, Off reads no metrics
+	// (Settings S3b §2.1). Match is read from S3b-2: until then a load error.
+	Match  map[string]string `yaml:"match"`
+	Source string            `yaml:"source"`
+	Scope  string            `yaml:"scope"`
+	Off    bool              `yaml:"off"`
+
+	// keys are the keys the block wrote (as EndpointConfig's)
+	keys []string
 }
 
 type MetricsServiceRef struct {
@@ -453,11 +464,9 @@ func (c *Config) validate() error {
 			}
 		}
 		for _, e := range cl.Endpoints() {
-			if e.Kind != EndpointMetrics {
-				spec := e.Spec
-				if err := validateSubscription(cl.Name, e.Kind, &spec); err != nil {
-					return err
-				}
+			spec := e.Spec
+			if err := validateSubscription(cl.Name, e.Kind, &spec, e.LegacyToken); err != nil {
+				return err
 			}
 			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
 				return fmt.Errorf("cluster %q: %w", cl.Name, err)
@@ -469,8 +478,5 @@ func (c *Config) validate() error {
 	if err := c.validateSources(); err != nil {
 		return err
 	}
-	if _, err := ResolveAlertmanager(c.Sources, c.Clusters); err != nil {
-		return err
-	}
-	return nil
+	return ResolveAll(c.Sources, c.Clusters)
 }

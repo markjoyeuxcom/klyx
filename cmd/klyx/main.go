@@ -609,6 +609,7 @@ func main() {
 		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
 			return config.ConnectionAlertmanager(alertSources.Sources(), cc)
 		},
+		Sources:         alertSources.Sources,
 		ResolveSources:  alertSources.Resolve,
 		SourcesRevision: alertSources.Revision,
 		Resubscribe:     reg.Resubscribe,

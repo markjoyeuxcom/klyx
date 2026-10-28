@@ -26,17 +26,20 @@ type Credentials struct {
 	Revisions *endpointcred.Registry
 }
 
-// SubscribingFactory is f with each cluster's Alertmanager block resolved
-// against sources (Settings S3a §2.2): its own block, or the subscription
-// an installation implies for it, by name then by group. A cluster an
-// installation serves is never built for discovery. The running fleet's
-// entry is not changed: the factory gets its own copy.
+// SubscribingFactory is f with each cluster's Alertmanager, Loki and
+// metrics blocks resolved against sources (Settings S3a §2.2, S3b §2.4):
+// its own block, or the subscription an installation of that kind implies
+// for it, by name then by group. A cluster an installation serves is never
+// built for discovery. The running fleet's entry is not changed: the
+// factory gets its own copy.
 func SubscribingFactory(sources []config.SourceConfig, f ConnFactory) ConnFactory {
 	if len(sources) == 0 {
 		return f
 	}
 	return func(cc config.ClusterConfig) (Conn, error) {
 		cc.Alertmanager = config.ConnectionAlertmanager(sources, cc)
+		cc.Loki = config.ConnectionLoki(sources, cc)
+		cc.Metrics = config.ConnectionMetrics(sources, cc)
 		return f(cc)
 	}
 }

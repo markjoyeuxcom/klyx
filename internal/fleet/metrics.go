@@ -143,7 +143,8 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 		tf = c.metricsTF
 	}
 	disco := metrics.DiscoveryResult{}
-	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil {
+	// off or a subscription is never discovered (Settings S3b §2.4)
+	if c.metricsCfg.Endpoint == "" && c.metricsCfg.ServiceRef == nil && !c.metricsCfg.Off && c.metricsCfg.Source == "" {
 		disco = c.discover(ctx)
 	}
 	res := metrics.Resolve(c.metricsCfg, c.metricsAuth(rev), disco, tf)
