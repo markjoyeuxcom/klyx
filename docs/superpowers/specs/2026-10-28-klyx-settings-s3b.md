@@ -332,3 +332,16 @@ S3b-1 is §2 and §2.4: the kinds, their subscriptions, resolution and scopes pe
 **Mutation pass:** 29 mutants over the validation, resolution, connection blocks, readers, factory, S2's refusal, Observability's stage limits and the row text: 27 caught at first; one did not build (an unused variable) and, rewritten, is caught; one is equivalent: dropping `!cfg.Off` from `lokiLocated`, since an `off` block allows nothing beside it, neither a locator nor a source.
 
 **Smoke:** the native walk at 8011c1c5, 217/217 four ways on the kind lab, the smoke fleet as it began after each. The smoke fleet has no Loki or metrics installations, so this is the regression check: nothing changes for a file without them.
+
+## 17. S3b-1 revision 1: Codex's review (2026-10-28)
+
+Codex found per-kind resolution, the connection boundary, S2's refusals (independently for protection edits and S2's file adoption too), Observability's stage limit and the registry sound, and no path where a valid off or subscription block falls back to a legacy read. It requested changes: one P2 and one P3.
+
+| Finding | Fix |
+|---|---|
+| **R1:** a metrics `token` written empty or null, directly or through a merge, was allowed beside `source` or `off`: the check read the token's value, not its key | The check reads the key as written, whatever its value: `metrics: {off: true, token: ""}`, `{source: m, token: null}` and their merged spellings are refused. An empty token beside a legacy endpoint stays valid, and is still no credential |
+| **R2, P3:** the refusal of a placement that would move a cluster's log history said it came "instead of discovery in the cluster"; Loki is never discovered | A Loki reader with no source is said as "no log history (Loki is never discovered)"; metrics and alerts keep their discovery wording, and the comparison is on the raw keys as before |
+
+**Tests:** the six empty and null spellings, direct and merged, for `source` and `off`; an empty token beside a legacy endpoint loading and advertising no credential; the Loki refusal's words. **Mutation pass:** 3 mutants (the value-only check, a key check that always fires, the discovery wording), all caught.
+
+**Smoke:** the native walk at 19d0d6d9, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
