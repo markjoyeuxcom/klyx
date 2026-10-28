@@ -82,7 +82,8 @@ func NewDirect(base string, auth Auth, client *http.Client, lim Limits) *Direct 
 			rt = liveRoundTripper{base: rt, live: auth.Live}
 		}
 		// each round trip checks its context's read fence too (AI A1
-		// implementation review, finding 3)
+		// implementation review, finding 3); a denial's status is returned
+		// with its body's error, for the fence to record (S3b-2b review, R3)
 		gated.Transport = readfence.Transport(rt)
 		client = &gated
 	}
@@ -207,7 +208,10 @@ func NewGuardedProxy(cfg *rest.Config, lim Limits) (*GuardedProxy, error) {
 		return nil, err
 	}
 	hc.CheckRedirect = safehttp.SameOriginRedirect(safehttp.MaxRedirects)
-	hc.Transport = safehttp.Cap(hc.Transport, lim.MaxBytes, lim.TooLarge)
+	// each round trip - a redirect's hop, client-go's retry - checks its
+	// context's read fence, and a denial is recorded when its headers
+	// arrive (Settings S3b-2b review, R1, R3)
+	hc.Transport = safehttp.Cap(readfence.Transport(Observe(hc.Transport)), lim.MaxBytes, lim.TooLarge)
 	rc, err := rest.RESTClientForConfigAndClient(c, hc)
 	if err != nil {
 		return nil, err
@@ -341,6 +345,8 @@ func (p *RawProxy) Get(ctx context.Context, path string, q url.Values, hdr http.
 	defer func() { _ = resp.Body.Close() }()
 	body, err := ReadCapped(resp.Body, p.lim)
 	if err != nil {
+		// a denial with a failed body is recorded by the fence's observer,
+		// which saw its headers (Settings S3b-2b review, R3)
 		return 0, nil, err
 	}
 	return resp.StatusCode, body, nil

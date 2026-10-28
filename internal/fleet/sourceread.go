@@ -12,6 +12,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -205,8 +206,14 @@ func (b *alertBuckets) metricsSource(ctx context.Context, t sourceTerms, what st
 	if sr := src.ServiceRef; sr != nil {
 		cand = metrics.ServiceCandidate{Namespace: sr.Namespace, Name: sr.Name, Port: sr.Port, Scheme: sr.Scheme, Path: sr.Path}
 	} else {
-		d := b.discoverMetrics(ctx, host, t.sub.InstRev)
+		d, err := b.discoverMetrics(ctx, life, host, t.sub.InstRev, fence.Check)
 		switch {
+		case err != nil:
+			rel()
+			if termsMoved(err) {
+				return metrics.Transport{}, "", nil, err
+			}
+			return metrics.Transport{}, "", nil, fmt.Errorf("%s's discovery in %s did not finish: %w", src.ID, src.Host, err)
 		case d.MultiMatch:
 			rel()
 			return metrics.Transport{}, "", nil, fmt.Errorf("%s found several candidate Prometheus Services in %s: give it a serviceRef", src.ID, src.Host)
@@ -240,19 +247,42 @@ type metricsDisc struct {
 }
 
 // discoverMetrics runs the existing discovery in the host, cached per host
-// connection and installation revision (§3.1).
-func (b *alertBuckets) discoverMetrics(ctx context.Context, host *ClusterConn, instRev uint64) metrics.DiscoveryResult {
+// connection and installation revision (§3.1). Its reads are hosted reads
+// (Codex's review of S3b-2b, R2): under the host lease, whose end cancels
+// them, each in one of the host's metrics slots, released before the next
+// is taken, and each with the read's terms checked before, after, and at
+// every round trip. A refused or ended discovery is returned, never
+// cached.
+func (b *alertBuckets) discoverMetrics(ctx context.Context, life context.Context, host *ClusterConn, instRev uint64, check func() error) (metrics.DiscoveryResult, error) {
 	k := discKey{host: host.ID(), inst: instRev}
 	now := b.clk.Now()
 	b.mu.Lock()
 	if d, ok := b.mdisc[k]; ok && (d.res.Chosen != nil || now.Sub(d.at) < metricsUnavailableTTL) {
 		b.mu.Unlock()
-		return d.res
+		return d.res, nil
 	}
 	b.mu.Unlock()
-	res := host.discover(ctx)
+	ctx, cancel := context.WithCancel(readfence.With(ctx, check))
+	defer cancel()
+	if life != nil {
+		defer context.AfterFunc(life, cancel)()
+	}
+	res, err := host.discoverWith(ctx, func(ctx context.Context) (func() error, error) {
+		release, err := b.slots.take(ctx, config.EndpointMetrics, host.name)
+		if err != nil {
+			return nil, err
+		}
+		if err := check(); err != nil {
+			release()
+			return nil, err
+		}
+		return func() error { release(); return check() }, nil
+	})
+	if err != nil {
+		return metrics.DiscoveryResult{}, err
+	}
 	b.mu.Lock()
 	b.mdisc[k] = metricsDisc{res: res, at: now}
 	b.mu.Unlock()
-	return res
+	return res, nil
 }

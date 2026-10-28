@@ -9,6 +9,7 @@ import (
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/safehttp"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
@@ -96,19 +97,54 @@ func (c *ClusterConn) proxyREST() (rest.Interface, error) {
 // existing named candidate, else single-hit label fallback, else multi-match
 // or none.
 func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
+	res, _ := c.discoverWith(ctx, nil)
+	return res
+}
+
+// discoverWith is discover with each Service read through gate: taken
+// before the read, which it may refuse, and released after it (an
+// installation's discovery in its host: Settings S3b-2b review, R2). A
+// refusal, or the context's end, stops discovery there, with no fallback
+// to the next candidate, and is returned; nil gates nothing.
+func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Context) (func() error, error)) (metrics.DiscoveryResult, error) {
+	step := func(read func()) error {
+		done := func() error { return nil }
+		if gate != nil {
+			var err error
+			if done, err = gate(ctx); err != nil {
+				return err
+			}
+		}
+		read()
+		if err := done(); err != nil {
+			return err
+		}
+		if gate != nil {
+			return ctx.Err()
+		}
+		return nil
+	}
 	for _, cand := range namedCandidates {
-		if _, err := c.typed.CoreV1().Services(cand.Namespace).Get(ctx, cand.Name, metav1.GetOptions{}); err == nil {
+		var err error
+		if serr := step(func() { _, err = c.typed.CoreV1().Services(cand.Namespace).Get(ctx, cand.Name, metav1.GetOptions{}) }); serr != nil {
+			return metrics.DiscoveryResult{}, serr
+		}
+		if err == nil {
 			chosen := cand
-			return metrics.DiscoveryResult{Chosen: &chosen}
+			return metrics.DiscoveryResult{Chosen: &chosen}, nil
 		}
 	}
 	for _, sel := range labelSelectors {
-		list, err := c.typed.CoreV1().Services("").List(ctx, metav1.ListOptions{LabelSelector: sel})
+		var list *corev1.ServiceList
+		var err error
+		if serr := step(func() { list, err = c.typed.CoreV1().Services("").List(ctx, metav1.ListOptions{LabelSelector: sel}) }); serr != nil {
+			return metrics.DiscoveryResult{}, serr
+		}
 		if err != nil || len(list.Items) == 0 {
 			continue
 		}
 		if len(list.Items) > 1 {
-			return metrics.DiscoveryResult{MultiMatch: true}
+			return metrics.DiscoveryResult{MultiMatch: true}, nil
 		}
 		s := list.Items[0]
 		if len(s.Spec.Ports) != 1 {
@@ -117,9 +153,9 @@ func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
 		return metrics.DiscoveryResult{Chosen: &metrics.ServiceCandidate{
 			Namespace: s.Namespace, Name: s.Name,
 			Port: strconv.Itoa(int(s.Spec.Ports[0].Port)), Scheme: "http",
-		}}
+		}}, nil
 	}
-	return metrics.DiscoveryResult{}
+	return metrics.DiscoveryResult{}, nil
 }
 
 // ensureMetricsLocked resolves+probes the metrics endpoint into c.metricsState
@@ -213,10 +249,11 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		return
 	}
 	cap := metrics.Probe(ctx, metrics.Resolution{Mode: metrics.ModeSubscribed, Source: source, Transport: q})
-	release()
 	// a probe across a move is neither cached nor shown as the source's
-	// availability
-	if why := c.readMoved(rev, &t); why != "" {
+	// availability; it settles before its host lease is released (§13)
+	why := c.readMoved(rev, &t)
+	release()
+	if why != "" {
 		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: why}}
 		return
 	}
@@ -322,8 +359,10 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 			cl, release = metrics.NewClient(q, terms.scope()), rel
 		}
 		samples := querySamples(ctx, cl)
+		// settled before the host lease is released (§13)
+		why := c.readMoved(rev, terms)
 		release()
-		if why := c.readMoved(rev, terms); why != "" {
+		if why != "" {
 			c.metricsState = metricsCache{}
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
 				Reason: why}
