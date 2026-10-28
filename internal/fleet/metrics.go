@@ -66,20 +66,9 @@ func (f transportFactory) Direct(base string, auth metrics.Auth, skip bool) metr
 
 func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metrics.Transport {
 	if f.restErr != nil {
-		return metrics.TransportOf(failedQuerier{err: f.restErr})
+		return metrics.FailedTransport(f.restErr)
 	}
 	return metrics.NewProxyTransportTenant(f.rest, c, tenant)
-}
-
-// failedQuerier reads as unavailable with the reason, never through an
-// unguarded client.
-type failedQuerier struct{ err error }
-
-func (q failedQuerier) InstantQuery(context.Context, string) (int, []byte, error) {
-	return 0, nil, q.err
-}
-func (q failedQuerier) RangeQuery(context.Context, string, time.Time, time.Time, time.Duration) (int, []byte, error) {
-	return 0, nil, q.err
 }
 
 // proxyREST is the REST client the service-proxy path uses: the guarded one

@@ -452,14 +452,14 @@ func (c *Config) validate() error {
 			return fmt.Errorf("cluster[%d]: name is required", i)
 		}
 		if seen[cl.Name] {
-			return fmt.Errorf("duplicate cluster name %q", cl.Name)
+			return fmt.Errorf("duplicate cluster name %s", describeValue(cl.Name))
 		}
 		seen[cl.Name] = true
 		if m := cl.Metrics; m != nil {
 			if m.Endpoint != "" {
 				endpoint := strings.TrimRight(m.Endpoint, "/")
 				if strings.HasSuffix(endpoint, "/api/v1") {
-					return fmt.Errorf("cluster %q: metrics.endpoint must be the Prometheus base URL without a trailing /api/v1", cl.Name)
+					return fmt.Errorf("cluster %s: metrics.endpoint must be the Prometheus base URL without a trailing /api/v1", describeValue(cl.Name))
 				}
 			}
 		}
@@ -469,11 +469,13 @@ func (c *Config) validate() error {
 				return err
 			}
 			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
-				return fmt.Errorf("cluster %q: %w", cl.Name, err)
+				return fmt.Errorf("cluster %s: %w", describeValue(cl.Name), err)
 			}
+			// a long name is withheld, as every diagnostic of the file's
+			// values (Codex's re-review of S3b-2a, RR3)
 			if e.Kind == EndpointMetrics {
 				if k := reservedMetricsLabel(e.Spec.Match); k != "" {
-					return fmt.Errorf("cluster %q: metrics.match: %s is reserved by Prometheus: a scope matches series by their labels, and each query names its own metric", cl.Name, describeKey(k))
+					return fmt.Errorf("cluster %s: metrics.match: %s is reserved by Prometheus: a scope matches series by their labels, and each query names its own metric", describeValue(cl.Name), describeKey(k))
 				}
 			}
 		}

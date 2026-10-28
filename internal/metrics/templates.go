@@ -161,12 +161,14 @@ var (
 	}, nil, nil, None{})
 )
 
-// The rule families a Gateway's per-rule reads cover, in order.
-var RuleFamilies = []string{EnvoyRqTotal, EnvoyRqXX, EnvoyRq, EnvoyRqRetry}
+// ruleFamilies are the rule families a Gateway's per-rule reads cover, in
+// order: the package's own, since RuleShared renders from them and no
+// caller may change a renderer's input (Codex's re-review of S3b-2a, RR1).
+var ruleFamilies = []string{EnvoyRqTotal, EnvoyRqXX, EnvoyRq, EnvoyRqRetry}
 
 // RuleProbe is one family's series for some rule clusters over the window.
 type RuleProbe struct {
-	Family   string // one of RuleFamilies
+	Family   string // a rule family: EnvoyRqTotal, EnvoyRqXX, EnvoyRq or EnvoyRqRetry
 	Clusters []string
 }
 
@@ -266,8 +268,8 @@ var (
 	// RuleShared asks whether a merged cluster served the proxies, every
 	// family "or"-ed so one filtered out never hides it
 	RuleShared = define("rule-shared", func(_ None, sc string) string {
-		parts := make([]string, len(RuleFamilies))
-		for i, m := range RuleFamilies {
+		parts := make([]string, len(ruleFamilies))
+		for i, m := range ruleFamilies {
 			parts[i] = `last_over_time(` + Sel(m, EnvoyClusterName+`=~`+strconv.Quote(EnvoyMergedCluster), sc) + `[` + RuleWindowText + `])`
 		}
 		return `count by (` + strings.Join(ruleScopeLabels, ", ") + `) (` + strings.Join(parts, " or ") + `)`

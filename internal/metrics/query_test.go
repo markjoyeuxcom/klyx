@@ -264,7 +264,7 @@ func TestEveryShapeTheReadersBuildIsDeclared(t *testing.T) {
 		"pod-memory every": PodMem.With(Namespace{}),
 		"pod-memory one":   PodMem.With(Namespace{Name: "a"}),
 	}
-	for _, fam := range RuleFamilies {
+	for _, fam := range ruleFamilies {
 		built["rule-probe "+fam] = RuleProbeQuery.With(RuleProbe{Family: fam, Clusters: []string{"a", "b"}})
 	}
 	for _, fam := range []string{"total", "xx", "503", "retry"} {

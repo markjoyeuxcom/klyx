@@ -252,3 +252,33 @@ func TestAReservedMetricsScopeLabelIsRefused(t *testing.T) {
 		t.Fatalf("alertmanager: %v", err)
 	}
 }
+
+// Codex's re-review of S3b-2a, RR3: the refusal withholds a long cluster
+// name and a long reserved label, as every diagnostic of the file's values.
+func TestTheReservedLabelRefusalWithholdsLongValues(t *testing.T) {
+	long := strings.Repeat("pasted-value-", 12)
+	label := "__" + strings.Repeat("x", 40)
+	doc := "clusters:\n  - name: " + long + "\n    context: a\n    metrics: {endpoint: https://mimir.example, match: {" + label + ": up}}\n"
+	_, err := loadYAML(t, doc)
+	if err == nil || !strings.Contains(err.Error(), "is reserved by Prometheus") {
+		t.Fatalf("%v", err)
+	}
+	if strings.Contains(err.Error(), long) || strings.Contains(err.Error(), label) || !strings.Contains(err.Error(), "a value of 156 characters") {
+		t.Fatalf("a long value echoed: %v", err)
+	}
+	// the loop's other refusals withhold it too
+	for what, doc := range map[string]string{
+		"duplicate":         "clusters:\n  - name: " + long + "\n    context: a\n  - name: " + long + "\n    context: b\n",
+		"trailing /api/v1":  "clusters:\n  - name: " + long + "\n    context: a\n    metrics: {endpoint: https://mimir.example/api/v1}\n",
+		"an endpoint block": "clusters:\n  - name: " + long + "\n    context: a\n    alertmanager: {serviceRef: {namespace: m}}\n",
+	} {
+		if _, err := loadYAML(t, doc); err == nil || strings.Contains(err.Error(), long) || !strings.Contains(err.Error(), "a value of 156 characters") {
+			t.Errorf("%s: %v", what, err)
+		}
+	}
+	// the control: a short name is said as it is
+	doc = "clusters:\n  - name: dev\n    context: a\n    metrics: {endpoint: https://mimir.example, match: {__name__: up}}\n"
+	if _, err := loadYAML(t, doc); err == nil || !strings.Contains(err.Error(), `cluster "dev": metrics.match: "__name__" is reserved`) {
+		t.Fatalf("%v", err)
+	}
+}

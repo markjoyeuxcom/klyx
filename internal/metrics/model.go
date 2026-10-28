@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"context"
+	"time"
 
 	"github.com/moomora/klyx/internal/endpointhttp"
 	"github.com/moomora/klyx/internal/safehttp"
@@ -30,11 +31,25 @@ type Querier interface {
 // scope (Settings S3b §3.3). The zero Transport is none.
 type Transport struct{ q Querier }
 
-// TransportOf makes q a Transport: a test's fake, or one that fails
-// without sending. A Querier written outside this package never reaches
-// Prometheus: no other package writes its query API's paths
-// (TestNoOtherPackageWritesThePrometheusQueryAPI).
+// TransportOf makes q a Transport: a test's fake. No production file
+// outside this package calls it, and none writes the Prometheus query
+// API's paths, so a Querier written elsewhere never reaches Prometheus
+// (TestNoOtherPackageWritesThePrometheusQueryAPI; Codex's re-review of
+// S3b-2a, RR2).
 func TransportOf(q Querier) Transport { return Transport{q: q} }
+
+// FailedTransport is a transport whose every request fails with err,
+// sending nothing: a connection that could not build its proxy client
+// reads as unavailable with the reason, never through an unguarded one.
+func FailedTransport(err error) Transport { return Transport{q: failed{err: err}} }
+
+type failed struct{ err error }
+
+func (f failed) InstantQuery(context.Context, string) (int, []byte, error) { return 0, nil, f.err }
+
+func (f failed) RangeQuery(context.Context, string, time.Time, time.Time, time.Duration) (int, []byte, error) {
+	return 0, nil, f.err
+}
 
 // IsZero: no transport.
 func (t Transport) IsZero() bool { return t.q == nil }
