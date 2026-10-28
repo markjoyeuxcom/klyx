@@ -247,32 +247,44 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		match = nil
 	}
 	r := &LokiReader{c: c, identity: t.key(), tenant: sub.Tenant, match: match, rev: rev, terms: &t, lineage: t.lineage()}
-	src := sub.Source
-	fence := endpointhttp.Fence{Check: func() error { return b.checkTerms(t) }, Denied: func() { b.sources.Denied(src.ID) }}
+	get, at, red, err := b.lokiSource(t, b.readFence(t), "the log history of "+c.name, c.lokiClient)
+	if err != nil {
+		return nil, err
+	}
+	r.get, r.red, r.display, r.sentence = get, red, sub.Source.ID+", "+at, t.sentence("", red)
+	if t.direct() {
+		r.sentence = t.sentence(at, red)
+	}
+	return r, nil
+}
+
+// lokiSource is an installation's Loki pages under t, each under fence's
+// check and denial: its endpoint with its own credential and the 30 s
+// page timeout, or its Service through a lease on the host's pinned
+// connection taken per page, holding one of the host's Loki slots. where
+// names it: the endpoint's origin, or "Service ns/name:port in host".
+func (b *alertBuckets) lokiSource(t sourceTerms, fence endpointhttp.Fence, what string, client func(safehttp.Policy) *http.Client) (get lokiGet, where string, red safehttp.Redactor, err error) {
+	src := t.sub.Source
 	if t.direct() {
 		at, err := endpointAt(src.Endpoint)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", src.ID, err)
+			return nil, "", red, fmt.Errorf("%s: %w", src.ID, err)
 		}
 		auth, err := b.sourceCredential(t)
 		if err != nil {
-			return nil, err
+			return nil, "", red, err
 		}
-		client := c.lokiClient(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, src.TLSSkipVerify))
-		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client, lokiLimits)
-		r.display, r.red, r.sentence = src.ID+", "+at, d.Redactor(), t.sentence(at, d.Redactor())
-		r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
+		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, src.TLSSkipVerify)), lokiLimits)
+		return func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 			return fence.Do(ctx, func(ctx context.Context) (int, []byte, error) { return d.GetWith(ctx, path, q, hdr) })
-		}
-		return r, nil
+		}, at, d.Redactor(), nil
 	}
 	if src.ServiceRef == nil {
-		return nil, fmt.Errorf("%s has no serviceRef, and Loki is not discovered", src.ID)
+		return nil, "", red, fmt.Errorf("%s has no serviceRef, and Loki is not discovered", src.ID)
 	}
 	svc := serviceOf(src.ServiceRef)
-	r.display, r.sentence = src.ID+", Service "+serviceAt(svc)+" in "+src.Host, t.sentence("", r.red)
-	r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
-		conn, life, release, err := b.lease(src.Host, "the log history of "+c.name)
+	return func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
+		conn, life, release, err := b.lease(src.Host, what)
 		if err != nil {
 			return 0, nil, fmt.Errorf("%s's host %s is not connected: %w", src.ID, src.Host, err)
 		}
@@ -285,13 +297,12 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("%s: %w", src.ID, err)
 		}
-		p := endpointhttp.NewRawProxy(g, svc, sub.Tenant, lokiLimits)
+		p := endpointhttp.NewRawProxy(g, svc, t.sub.Tenant, lokiLimits)
 		f := fence
 		f.Life = life
 		f.Slot = func(ctx context.Context) (func(), error) { return b.slots.take(ctx, config.EndpointLoki, src.Host) }
 		return f.Do(ctx, func(ctx context.Context) (int, []byte, error) { return p.Get(ctx, path, q, hdr) })
-	}
-	return r, nil
+	}, "Service " + serviceAt(svc) + " in " + src.Host, red, nil
 }
 
 func (c *ClusterConn) lokiClient(p safehttp.Policy) *http.Client {
@@ -426,17 +437,25 @@ func (r *LokiReader) Query(ctx context.Context, query string, start, end int64, 
 
 // Status reads the build info (no tenant needed): Settings' Test.
 func (r *LokiReader) Status(ctx context.Context) (string, error) {
-	body, err := r.read(ctx, "/loki/api/v1/status/buildinfo", nil, nil)
+	body, err := r.read(ctx, lokiBuildInfo, nil, nil)
 	if err != nil {
 		return "", err
 	}
+	return buildVersion(body, r.red)
+}
+
+// lokiBuildInfo is Loki's build info, which needs no tenant.
+const lokiBuildInfo = "/loki/api/v1/status/buildinfo"
+
+// buildVersion is the version a build info answer names, a display value.
+func buildVersion(body []byte, red safehttp.Redactor) (string, error) {
 	var w struct {
 		Version *string `json:"version"`
 	}
 	if err := json.Unmarshal(body, &w); err != nil || w.Version == nil {
 		return "", fmt.Errorf("%w: the build info does not decode", loki.ErrShape)
 	}
-	return alertmanager.Clip(r.red.Text(*w.Version), 64), nil
+	return alertmanager.Clip(red.Text(*w.Version), 64), nil
 }
 
 // LokiTestResult is what Settings' Test read (S8b §6): display values.

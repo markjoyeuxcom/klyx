@@ -620,19 +620,20 @@ func main() {
 		},
 	})
 
-	// Settings S3a §5, §8: Observability's installations and subscriptions,
-	// planned from what runs and applied under the fleet Apply lock; an
-	// installation's credential and test are endpoint actions
+	// Settings S3a §5, §8; S3b §5, §7: Observability's installations and
+	// subscriptions of every kind, planned from what runs and applied under
+	// the fleet Apply lock; an installation's credential and test are
+	// endpoint actions
 	sourcesSvc := appbridge.NewSourcesService(configPath(), configSvc, appbridge.SourcesDeps{
-		Active:    func() *fleet.AlertSources { return alertSources },
-		Publish:   reg.PublishSources,
-		AlertWork: chatSvc.AlertWork,
-		Read:      reg.InstallationRead,
-		Store:     endpointCreds.Store,
-		Revs:      endpointCreds.Revisions,
-		Detect:    reg.DetectAlertmanager,
+		Active:  func() *fleet.AlertSources { return alertSources },
+		Publish: reg.PublishSources,
+		Work:    chatSvc.SourceWork,
+		Read:    reg.InstallationRead,
+		Store:   endpointCreds.Store,
+		Revs:    endpointCreds.Revisions,
+		Detect:  reg.DetectAlertmanager,
 	})
-	appbridge.WireSourceCredentials(endpointsSvc, func() *fleet.AlertSources { return alertSources }, reg.InstallationStatus)
+	appbridge.WireSourceCredentials(endpointsSvc, func() *fleet.AlertSources { return alertSources }, reg.InstallationStatus, reg.InstallationProbe)
 
 	// Settings > AI writes fleet.yaml's ai block under the shared fleet write
 	// lock and swaps aiSvc's snapshot after a successful build and write.

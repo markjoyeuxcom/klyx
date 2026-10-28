@@ -47,10 +47,15 @@ func lgtmSource() SourceConfig {
 		Serves: []ServeConfig{{Group: "web"}, {Cluster: "dev"}}}
 }
 
+// amBlock names a cluster's Alertmanager block.
+func amBlock(cluster string) BlockRef {
+	return BlockRef{Cluster: cluster, Kind: EndpointAlertmanager}
+}
+
 func TestASourcesPlanWritesItsBlocksOnly(t *testing.T) {
 	sources := []SourceConfig{lgtmSource()}
-	got, err := editSources(t, sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{
-		"dev": {Source: "lgtm-we", Match: map[string]string{"team": "core"}},
+	got, err := editSources(t, sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{
+		amBlock("dev"): {Source: "lgtm-we", Match: map[string]string{"team": "core"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +106,7 @@ sources:
 // block removed takes the cluster back to resolution.
 func TestASourcesPlanReplacesAndRemoves(t *testing.T) {
 	sources := []SourceConfig{lgtmSource()}
-	written, err := editSources(t, sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{"dev": {Off: true}}})
+	written, err := editSources(t, sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): {Off: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +114,7 @@ func TestASourcesPlanReplacesAndRemoves(t *testing.T) {
 		t.Fatalf("off:\n%s", written)
 	}
 	none := []SourceConfig{}
-	got, err := editSources(t, written, SourcesEdit{Sources: &none, Blocks: map[string]*EndpointConfig{"dev": nil}})
+	got, err := editSources(t, written, SourcesEdit{Sources: &none, Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): nil}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +128,8 @@ func TestASourcesPlanReplacesAndRemoves(t *testing.T) {
 func TestASubscriptionBlockIsAddedAfterTheEntry(t *testing.T) {
 	sources := []SourceConfig{lgtmSource()}
 	doc := strings.ReplaceAll(sourcesDoc, "\n", "\r\n")
-	got, err := editSources(t, doc, SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{
-		"prd": {Source: "lgtm-we", Scope: ScopeTenant, Tenant: "ops"},
+	got, err := editSources(t, doc, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{
+		amBlock("prd"): {Source: "lgtm-we", Scope: ScopeTenant, Tenant: "ops"},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -149,11 +154,11 @@ func TestASourcesPlanRefusesWhatItCannotWrite(t *testing.T) {
 		edit SourcesEdit
 		want string
 	}{
-		"a block on the dash's line": {dash, SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{"dev": {Source: "lgtm-we"}}}, "starts on the list dash's line"},
-		"a legacy block":             {sourcesDoc, SourcesEdit{Blocks: map[string]*EndpointConfig{"dev": {Endpoint: "https://am2.example"}}}, "only a subscription block"},
-		"an unknown installation":    {sourcesDoc, SourcesEdit{Blocks: map[string]*EndpointConfig{"dev": {Source: "nope"}}}, "failed validation"},
+		"a block on the dash's line": {dash, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): {Source: "lgtm-we"}}}, "starts on the list dash's line"},
+		"a legacy block":             {sourcesDoc, SourcesEdit{Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): {Endpoint: "https://am2.example"}}}, "only a subscription block"},
+		"an unknown installation":    {sourcesDoc, SourcesEdit{Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): {Source: "nope"}}}, "failed validation"},
 		"an unknown host":            {sourcesDoc, SourcesEdit{Sources: &[]SourceConfig{{ID: "x", Kind: SourceKindAlertmanager, Host: "nope", Discover: true, Serves: []ServeConfig{{Cluster: "dev"}}}}}, "failed validation"},
-		"an unknown cluster":         {sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{"lab": {Source: "lgtm-we"}}}, "not in fleet.yaml"},
+		"an unknown cluster":         {sourcesDoc, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{amBlock("lab"): {Source: "lgtm-we"}}}, "not in fleet.yaml"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := editSources(t, tc.doc, tc.edit)
@@ -194,7 +199,7 @@ func TestASourcesPlanTakesOnlyItsPlannedVersion(t *testing.T) {
 // but the plan's blocks is refused.
 func TestOnlyThePlansBlocksMayChange(t *testing.T) {
 	sources := []SourceConfig{lgtmSource()}
-	e := SourcesEdit{Sources: &sources, Blocks: map[string]*EndpointConfig{"dev": {Source: "lgtm-we"}}}
+	e := SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{amBlock("dev"): {Source: "lgtm-we"}}}
 	good, _, err := BuildSourcesCandidate([]byte(sourcesDoc), e)
 	if err != nil {
 		t.Fatal(err)
@@ -214,5 +219,56 @@ func TestOnlyThePlansBlocksMayChange(t *testing.T) {
 		if err := onlySourcesChanged([]byte(sourcesDoc), []byte(bad), e); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// Settings S3b §5: a plan writes a cluster's loki or metrics block as it
+// writes its alertmanager block; a metrics subscription replaces a legacy
+// block whole, its token with it, and the other kinds' blocks stay.
+func TestASourcesPlanWritesEveryKindsBlock(t *testing.T) {
+	doc := strings.Replace(sourcesDoc, "    tags:\n      team: core\n", "    metrics:\n      endpoint: https://mimir.example\n      token: S3B-LEGACY-TOKEN\n    tags:\n      team: core\n", 1)
+	logs := SourceConfig{ID: "lgtm-we-logs", Kind: SourceKindLoki, Host: "prd", ServiceRef: &MetricsServiceRef{Namespace: "monitoring", Name: "loki-gateway", Port: "http"},
+		MemberLabel: "k8s_cluster_name"}
+	met := SourceConfig{ID: "lgtm-we-metrics", Kind: SourceKindMetrics, Host: "prd", Discover: true, MemberLabel: "cluster"}
+	sources := []SourceConfig{logs, met}
+	got, err := editSources(t, doc, SourcesEdit{Sources: &sources, Blocks: map[BlockRef]*EndpointConfig{
+		{Cluster: "dev", Kind: EndpointLoki}:    {Source: "lgtm-we-logs", Scope: ScopeTenant},
+		{Cluster: "dev", Kind: EndpointMetrics}: {Source: "lgtm-we-metrics", Match: map[string]string{"cluster": "dev-eu"}},
+		{Cluster: "prd", Kind: EndpointLoki}:    {Off: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"    group: web\n    loki:\n      off: true\n",
+		"    metrics:\n      source: lgtm-we-metrics\n      match:\n        cluster: dev-eu\n",
+		"    loki:\n      source: lgtm-we-logs\n      scope: tenant\n",
+		"    alertmanager:\n      endpoint: https://am.example # its own\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "S3B-LEGACY-TOKEN") || strings.Contains(got, "mimir.example") {
+		t.Fatalf("the legacy metrics block stayed:\n%s", got)
+	}
+	cfg, err := ParseFleet([]byte(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.Clusters[1].Metrics; m == nil || m.Source != "lgtm-we-metrics" || m.Token != "" {
+		t.Fatalf("dev's metrics: %+v", m)
+	}
+	// removed: the block goes, the others stay
+	none := []SourceConfig{logs, met}
+	again, err := editSources(t, got, SourcesEdit{Sources: &none, Blocks: map[BlockRef]*EndpointConfig{{Cluster: "dev", Kind: EndpointLoki}: nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(again, "source: lgtm-we-logs") || !strings.Contains(again, "source: lgtm-we-metrics") || !strings.Contains(again, "    loki:\n      off: true\n") {
+		t.Fatalf("removal:\n%s", again)
+	}
+	if _, err := editSources(t, sourcesDoc, SourcesEdit{Blocks: map[BlockRef]*EndpointConfig{{Cluster: "dev", Kind: "traces"}: {Off: true}}}); err == nil || !strings.Contains(err.Error(), "is not a kind of observability block") {
+		t.Fatalf("an unknown kind: %v", err)
 	}
 }

@@ -31,6 +31,7 @@ const inst = (over: Partial<Installation> = {}): Installation => ({
 });
 
 const state = (over: Partial<SourcesState> = {}): SourcesState => ({
+  kind: "alertmanager",
   sentence: "One installation is in force; dev subscribes to it.",
   installations: [inst()],
   subscriptions: [

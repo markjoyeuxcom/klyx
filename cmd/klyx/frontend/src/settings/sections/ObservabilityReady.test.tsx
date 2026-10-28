@@ -18,7 +18,7 @@ vi.mock("../../bridge/sources", () => ({
 }));
 import { ObservabilitySection } from "./panels";
 
-const sources: SourcesState = { sentence: "Alerts: 1 cluster", installations: [], subscriptions: [], fileDiffers: false };
+const sources: SourcesState = { kind: "alertmanager", sentence: "Alerts: 1 cluster", installations: [], subscriptions: [], fileDiffers: false };
 const endpoints: EndpointsState = { rows: [] };
 
 describe("Observability's readiness", () => {

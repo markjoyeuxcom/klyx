@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,8 +38,15 @@ func TestAMetricsReadEndsTheConversationWhenItsTermsMove(t *testing.T) {
 		t.Fatalf("recorded: %+v", got)
 	}
 	// a plan's affected work names what the conversation holds
-	if work := f.svc.AlertWork([]string{"x"}); len(work) != 1 || !strings.Contains(work[0].What, "holding metrics read under the old terms") {
+	if work := f.svc.SourceWork(map[string][]string{"metrics": {"x"}}); len(work) != 1 || !strings.Contains(work[0].What, "holding metrics read under the old terms") {
 		t.Fatalf("work: %+v", work)
+	}
+	// an Apply moving only alerts or logs there, or metrics elsewhere,
+	// leaves it be (S3b §13)
+	for _, moved := range []map[string][]string{{"alertmanager": {"x"}, "loki": {"x"}}, {"metrics": {"y"}}} {
+		if work := f.svc.SourceWork(moved); len(work) != 0 {
+			t.Fatalf("%v: %+v", moved, work)
+		}
 	}
 	lt.move(metricsCanary, metricsMovedWhy)
 	st = f.svc.Ask("x", st.ConversationID, "and now?", nil)
@@ -148,4 +156,27 @@ func TestARouteReadRecordsEachGatewaysLineage(t *testing.T) {
 			t.Fatalf("the model is told: %s", res)
 		}
 	})
+}
+
+// heldMoved keeps a call's lineages of a moved kind on its own cluster,
+// an alerts read's empty kind being Alertmanager's.
+func TestHeldMovedIsByKindAndCluster(t *testing.T) {
+	alerts := alertmanager.Lineage{Mode: "subscribed", Installation: "am"}
+	logs := alertmanager.Lineage{Kind: "loki", Mode: "subscribed", Installation: "logs"}
+	ls := []alertmanager.Lineage{alerts, logs}
+	for _, tc := range []struct {
+		moved map[string][]string
+		want  []alertmanager.Lineage
+		words string
+	}{
+		{map[string][]string{"alertmanager": {"dev"}}, []alertmanager.Lineage{alerts}, "alerts"},
+		{map[string][]string{"loki": {"dev"}, "metrics": {"dev"}}, []alertmanager.Lineage{logs}, "logs"},
+		{map[string][]string{"alertmanager": {"dev"}, "loki": {"dev"}}, ls, "alerts and logs"},
+		{map[string][]string{"alertmanager": {"prd"}}, nil, ""},
+	} {
+		got := heldMoved(ls, "dev", tc.moved)
+		if !reflect.DeepEqual(got, tc.want) || len(got) > 0 && heldNouns(got) != tc.words {
+			t.Errorf("%v: %+v", tc.moved, got)
+		}
+	}
 }

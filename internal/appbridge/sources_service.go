@@ -20,13 +20,15 @@ import (
 	"github.com/moomora/klyx/internal/secretstore"
 )
 
-// Settings S3a §5, §8: Observability's alert sources - the installations
-// in force and each cluster's subscription - planned from what runs and
-// applied as one transaction under the fleet Apply lock. A plan has two
-// candidates: the file with the plan's edits, which is written; and the
-// running fleet with the installations in force and exactly the terms the
-// plan approves, which is resolved and published. Whatever else differs in
-// the file is neither adopted nor published.
+// Settings S3a §5, §8; S3b §5: Observability's sources of every kind -
+// Alertmanager, Loki and metrics: the installations in force and each
+// cluster's subscription - planned from what runs and applied as one
+// transaction under the fleet Apply lock. A plan is of one kind, a panel's,
+// and has two candidates: the file with the plan's edits, which is
+// written; and the running fleet with the installations in force and
+// exactly the terms the plan approves, which is resolved for every kind
+// and published. Whatever else differs in the file is neither adopted nor
+// published.
 
 // SourcesDeps are what the sources service reads and publishes through.
 type SourcesDeps struct {
@@ -35,8 +37,9 @@ type SourcesDeps struct {
 	// Publish puts installations and the running fleet's subscriptions in
 	// force (the registry's PublishSources)
 	Publish func(sources []config.SourceConfig, running []config.ClusterConfig) error
-	// AlertWork is the AI work holding alerts read on clusters
-	AlertWork func(clusters []string) []PlanWorkDTO
+	// Work is the AI work holding data read under the terms that move: for
+	// each kind, the clusters whose terms of that kind move
+	Work func(moved map[string][]string) []PlanWorkDTO
 	// Read is an installation's latest read
 	Read func(id string) (fleet.InstallationRead, bool)
 	// Store and Revs say an installation's credential state
@@ -135,6 +138,8 @@ type SubscriptionRowDTO struct {
 
 // SourcesStateDTO is Observability's alert sources (S3a §8).
 type SourcesStateDTO struct {
+	// Kind is the kind the state is of: alertmanager, loki or metrics
+	Kind          string               `json:"kind"`
 	Sentence      string               `json:"sentence"`
 	Installations []InstallationDTO    `json:"installations"`
 	Subscriptions []SubscriptionRowDTO `json:"subscriptions"`
@@ -144,9 +149,11 @@ type SourcesStateDTO struct {
 	FileError   string `json:"fileError,omitempty"`
 }
 
-// SourcesDraftDTO is an Observability draft: one installation added,
-// edited or removed, and the clusters whose own block changes.
+// SourcesDraftDTO is an Observability draft of one kind (S3b §5): one
+// installation of that kind added, edited or removed, and the clusters
+// whose own block of that kind changes. No kind is Alertmanager's.
 type SourcesDraftDTO struct {
+	Kind          string                `json:"kind,omitempty"`
 	Installation  *InstallationEditDTO  `json:"installation,omitempty"`
 	Subscriptions []SubscriptionEditDTO `json:"subscriptions,omitempty"`
 }
@@ -158,8 +165,9 @@ type InstallationEditDTO struct {
 	Source SourceDraftDTO `json:"source"`
 }
 
-// SubscriptionEditDTO is a cluster's own block as it should be; nil
-// removes it, so the cluster resolves by name, group or discovery.
+// SubscriptionEditDTO is a cluster's own block of the draft's kind as it
+// should be; nil removes it, so the cluster resolves by name, group or
+// discovery (Loki: none).
 type SubscriptionEditDTO struct {
 	Cluster string           `json:"cluster"`
 	Block   *SubscriptionDTO `json:"block"`
@@ -171,18 +179,49 @@ const (
 	installRemove = "remove"
 )
 
-// GetSources is the alert sources in force, each cluster's subscription,
-// and whether the file says otherwise.
-func (s *SourcesService) GetSources() SourcesStateDTO {
-	out := SourcesStateDTO{Installations: []InstallationDTO{}, Subscriptions: []SubscriptionRowDTO{}}
+// observabilityKinds are the kinds of Observability's sources, in the page's
+// order (S3b §8).
+var observabilityKinds = []string{config.EndpointAlertmanager, config.EndpointLoki, config.EndpointMetrics}
+
+// kindOf is a request's kind: one of observabilityKinds, none Alertmanager's (S3a's
+// requests).
+func kindOf(kind string) (string, error) {
+	if kind == "" {
+		return config.EndpointAlertmanager, nil
+	}
+	for _, k := range observabilityKinds {
+		if k == kind {
+			return k, nil
+		}
+	}
+	return "", fmt.Errorf("%s is not a kind of source: alertmanager, loki or metrics", wordOf(kind))
+}
+
+// kindNames are a kind's words: its section's title and its data's noun.
+var kindNames = map[string]struct{ title, noun string }{
+	config.EndpointAlertmanager: {"Alerts", "alerts"},
+	config.EndpointLoki:         {"Logs", "logs"},
+	config.EndpointMetrics:      {"Metrics", "metrics"},
+}
+
+// GetSources is a kind's sources in force, each cluster's subscription of
+// that kind, and whether the file says otherwise.
+func (s *SourcesService) GetSources(kind string) SourcesStateDTO {
+	out := SourcesStateDTO{Kind: kind, Installations: []InstallationDTO{}, Subscriptions: []SubscriptionRowDTO{}}
+	k, err := kindOf(kind)
+	if err != nil {
+		out.FileError = err.Error()
+		return out
+	}
+	kind, out.Kind = k, k
 	a := s.d.Active()
 	if a == nil {
-		out.Sentence = "Alerts: no installations"
+		out.Sentence = kindNames[kind].title + ": no installations"
 		return out
 	}
 	sources := a.Sources()
 	running := s.cs.fleetClusters()
-	res, err := config.ResolveAlertmanager(sources, running)
+	res, err := config.Resolve(kind, sources, running)
 	if err != nil {
 		res = map[string]config.AMResolution{}
 	}
@@ -193,10 +232,11 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 	subscribers := map[string][]string{}
 	for _, cl := range running {
 		r := res[cl.Name]
-		row := SubscriptionRowDTO{Cluster: cl.Name, Mode: r.Mode, Via: r.Via, Source: r.Source, Sentence: scopeSentence(r, byID[r.Source], cl.Alertmanager), Shadowed: r.Shadowed}
-		if b := cl.Alertmanager; b != nil {
-			if b.Source != "" || b.Off {
-				row.Block = subscriptionOf(b)
+		block := cl.Block(kind)
+		row := SubscriptionRowDTO{Cluster: cl.Name, Mode: r.Mode, Via: r.Via, Source: r.Source, Sentence: scopeSentence(kind, r, byID[r.Source], block), Shadowed: r.Shadowed}
+		if block != nil {
+			if block.Source != "" || block.Off {
+				row.Block = subscriptionOf(block)
 			} else {
 				row.Legacy = true
 			}
@@ -206,10 +246,12 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 		}
 		out.Subscriptions = append(out.Subscriptions, row)
 	}
-	for _, src := range ofKind(sources, config.SourceKindAlertmanager) {
+	for _, src := range ofKind(sources, kind) {
 		_, rev, _ := a.Installation(src.ID)
 		in := InstallationDTO{SourceDraftDTO: sourceDraftOf(src), Revision: strconv.FormatUint(rev, 10), Where: whereOf(src),
 			Credential: s.credentialState(src), Subscribers: append([]string{}, subscribers[src.ID]...)}
+		// an Alertmanager installation's latest read: a Loki or metrics one
+		// has none, read only for its members' views
 		if s.d.Read != nil {
 			if r, ok := s.d.Read(src.ID); ok {
 				n := r.Unmatched
@@ -218,15 +260,14 @@ func (s *SourcesService) GetSources() SourcesStateDTO {
 		}
 		out.Installations = append(out.Installations, in)
 	}
-	out.Sentence = sourcesSentence(res, running)
+	out.Sentence = sourcesSentence(kind, res, running)
 	if raw, _, err := config.ReadFleetVersioned(s.path); err != nil {
 		out.FileError = "fleet.yaml cannot be read: " + config.DisplayError(err)
 	} else if cfg, err := config.ParseFleet(raw); err != nil {
 		out.FileError = "fleet.yaml does not load: " + config.DisplayError(err)
 	} else {
-		srcs, blocks := fileTerms(cfg, running)
-		am := config.SourceKindAlertmanager
-		out.FileDiffers = !reflect.DeepEqual(normSources(ofKind(srcs, am)), normSources(ofKind(sources, am))) || len(blocks) > 0
+		srcs, blocks := fileTerms(kind, cfg, running)
+		out.FileDiffers = !reflect.DeepEqual(normSources(ofKind(srcs, kind)), normSources(ofKind(sources, kind))) || len(blocks) > 0
 	}
 	return out
 }
@@ -242,9 +283,9 @@ func (s *SourcesService) credentialState(src config.SourceConfig) string {
 	case s.d.Store == nil || s.d.Revs == nil:
 		return "unknown: no keychain"
 	}
-	revKey := "source/" + src.ID
-	cred := endpointcred.Resolve(s.d.Store, endpointcred.Input{Cluster: revKey, Kind: config.EndpointAlertmanager, Account: endpointcred.SourceAccount(src.ID),
-		Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}, Revoked: s.d.Revs.Revoked(revKey, config.EndpointAlertmanager)})
+	revKey := endpointcred.SourceAccount(src.ID)
+	cred := endpointcred.Resolve(s.d.Store, endpointcred.Input{Cluster: revKey, Kind: src.Kind, Account: revKey,
+		Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}, Revoked: s.d.Revs.Revoked(revKey, src.Kind)})
 	if cred.Usable() {
 		return "stored"
 	}
@@ -254,10 +295,12 @@ func (s *SourcesService) credentialState(src config.SourceConfig) string {
 	return string(cred.State)
 }
 
-// sourcesCand is what a plan is of: a draft, or the file's values.
+// sourcesCand is what a plan is of: a draft, or a kind's file values.
 type sourcesCand struct {
 	Kind  string           `json:"kind"`
 	Draft *SourcesDraftDTO `json:"draft,omitempty"`
+	// Of is the kind of source the file's values are adopted for
+	Of string `json:"of,omitempty"`
 }
 
 // sourcesPlanned is a plan with what its Apply writes and publishes.
@@ -265,9 +308,9 @@ type sourcesPlanned struct {
 	plan PlanDTO
 	edit config.SourcesEdit
 	// runSources are the installations to put in force; runBlocks, the
-	// running clusters' own blocks to take
+	// running clusters' own blocks to take, of the plan's kind
 	runSources []config.SourceConfig
-	runBlocks  map[string]*config.EndpointConfig
+	runBlocks  map[config.BlockRef]*config.EndpointConfig
 }
 
 func sourcesRefused(kind, why string) PlanDTO {
@@ -279,10 +322,11 @@ func (s *SourcesService) PlanSources(d SourcesDraftDTO) PlanDTO {
 	return s.plan(sourcesCand{Kind: planSave, Draft: &d}).plan
 }
 
-// PlanSourcesFromFile plans "Use the file's values" (S3a §5): the file's
-// sources block and its clusters' subscription blocks, nothing else.
-func (s *SourcesService) PlanSourcesFromFile() PlanDTO {
-	return s.plan(sourcesCand{Kind: planFile}).plan
+// PlanSourcesFromFile plans "Use the file's values" for a kind (S3a §5,
+// S3b §5): the file's installations of that kind and its clusters'
+// subscription blocks of that kind, nothing else.
+func (s *SourcesService) PlanSourcesFromFile(kind string) PlanDTO {
+	return s.plan(sourcesCand{Kind: planFile, Of: kind}).plan
 }
 
 func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
@@ -297,14 +341,23 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 	}
 	a := s.d.Active()
 	if a == nil {
-		return refuse("alert installations are not available")
+		return refuse("the installations in force are not available")
 	}
+	kind := c.Of
+	if c.Draft != nil {
+		kind = c.Draft.Kind
+	}
+	kind, err = kindOf(kind)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	key := kind // a kind's block's key in an entry
 	active := a.Sources()
 	activeRev := a.Revision()
 	running := s.cs.fleetClusters()
 	runRev := RunningRevision(s.cs)
 
-	out := sourcesPlanned{runSources: cloneSourceList(active), runBlocks: map[string]*config.EndpointConfig{}}
+	out := sourcesPlanned{runSources: cloneSourceList(active), runBlocks: map[config.BlockRef]*config.EndpointConfig{}}
 	runClusters := append([]config.ClusterConfig(nil), running...)
 	fileHas := map[string]*config.ClusterConfig{}
 	for i := range file.Clusters {
@@ -325,7 +378,7 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 			fileSources := cloneSourceList(file.Sources)
 			id := e.Source.ID
 			activeAt, fileAt := sourceIndex(active, id), sourceIndex(fileSources, id)
-			src := sourceOf(e.Source)
+			src := sourceOf(kind, e.Source)
 			switch e.Op {
 			case installAdd:
 				if activeAt >= 0 || fileAt >= 0 {
@@ -337,8 +390,8 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 				if activeAt < 0 {
 					return refuse(shownInstallation(id) + " is not in force: add it instead")
 				}
-				if k := active[activeAt].Kind; k != config.SourceKindAlertmanager {
-					return refuse(shownInstallation(id) + " is a " + k + " installation: in this version it is edited in fleet.yaml and put in force at a restart")
+				if k := active[activeAt].Kind; k != kind {
+					return refuse(shownInstallation(id) + " is a " + k + " installation: its kind does not change; remove it and add another")
 				}
 				if fileAt < 0 {
 					return refuse("fleet.yaml no longer has " + shownInstallation(id) + ": use the file's values first, or add it again")
@@ -352,8 +405,8 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 				if activeAt < 0 {
 					return refuse(shownInstallation(id) + " is not in force")
 				}
-				if k := active[activeAt].Kind; k != config.SourceKindAlertmanager {
-					return refuse(shownInstallation(id) + " is a " + k + " installation: in this version it is removed in fleet.yaml and at a restart")
+				if k := active[activeAt].Kind; k != kind {
+					return refuse(shownInstallation(id) + " is a " + k + " installation, removed from its own panel")
 				}
 				out.runSources = append(out.runSources[:activeAt], out.runSources[activeAt+1:]...)
 				if fileAt >= 0 {
@@ -370,42 +423,39 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 				return refuse(se.Cluster + " is edited twice")
 			}
 			seen[se.Cluster] = true
-			fc := fileHas[se.Cluster]
-			if fc == nil {
+			if fileHas[se.Cluster] == nil {
 				return refuse(se.Cluster + " is not in fleet.yaml")
 			}
+			ref := config.BlockRef{Cluster: se.Cluster, Kind: kind}
 			block := blockOf(se.Block)
 			if out.edit.Blocks == nil {
-				out.edit.Blocks = map[string]*config.EndpointConfig{}
+				out.edit.Blocks = map[config.BlockRef]*config.EndpointConfig{}
 			}
-			out.edit.Blocks[se.Cluster] = block
+			out.edit.Blocks[ref] = block
 			if i, ok := runIndex[se.Cluster]; ok {
-				runClusters[i].Alertmanager = block
-				out.runBlocks[se.Cluster] = block
+				runClusters[i].SetBlock(kind, block)
+				out.runBlocks[ref] = block
 			}
 		}
 	case planFile:
-		srcs, blocks := fileTerms(file, running)
-		am := config.SourceKindAlertmanager
-		if reflect.DeepEqual(normSources(ofKind(srcs, am)), normSources(ofKind(active, am))) && len(blocks) == 0 {
-			return refuse("fleet.yaml's alert sources are the ones in force")
+		srcs, blocks := fileTerms(kind, file, running)
+		if reflect.DeepEqual(normSources(ofKind(srcs, kind)), normSources(ofKind(active, kind))) && len(blocks) == 0 {
+			return refuse("fleet.yaml's " + kindNames[kind].noun + " sources are the ones in force")
 		}
-		// the file's Alertmanager installations; the Loki and metrics ones
-		// in force stay as they are, put in force at a restart in this
-		// version (S3b §2.4)
-		out.runSources = append(ofKind(srcs, am), notOfKind(active, am)...)
-		for name, b := range blocks {
-			runClusters[runIndex[name]].Alertmanager = b
-			out.runBlocks[name] = b
+		// the file's installations of this kind; the other kinds' in force
+		// stay as they are, each adopted from its own panel
+		out.runSources = append(ofKind(srcs, kind), notOfKind(active, kind)...)
+		for ref, b := range blocks {
+			runClusters[runIndex[ref.Cluster]].SetBlock(kind, b)
+			out.runBlocks[ref] = b
 		}
 	default:
 		return refuse("unknown plan")
 	}
 
-	// the runtime candidate resolves (S3a §5, step 2)
-	after, err := config.CheckSources(out.runSources, runClusters)
-	if err != nil {
-		return refuse("with this change, the alert installations do not resolve, so nothing was planned: " + config.DisplayError(err))
+	// the runtime candidate resolves, every kind (S3a §5, step 2; S3b §2.2)
+	if _, err := config.CheckSources(out.runSources, runClusters); err != nil {
+		return refuse("with this change, the installations do not resolve, so nothing was planned: " + config.DisplayError(err))
 	}
 	// the disk candidate loads strictly, resolves and changes only the
 	// plan's blocks
@@ -415,10 +465,6 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 			return refuse(config.DisplayError(err))
 		}
 	}
-	before, err := config.ResolveAlertmanager(active, running)
-	if err != nil {
-		before = map[string]config.AMResolution{}
-	}
 
 	p := PlanDTO{Section: "observability", Kind: c.Kind, FileVersion: version, Writes: writes, Activates: true,
 		Changes: []PlanChangeDTO{}, Ends: []PlanWorkDTO{}, Continues: []PlanWorkDTO{}}
@@ -426,52 +472,60 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 	p.Changes = append(p.Changes, notes...)
 	if c.Kind == planSave {
 		for _, se := range c.Draft.Subscriptions {
-			from := fileHas[se.Cluster].Alertmanager
-			label := se.Cluster + "'s alertmanager block"
+			from := fileHas[se.Cluster].Block(kind)
+			label := se.Cluster + "'s " + key + " block"
 			if i, ok := runIndex[se.Cluster]; ok {
-				from = running[i].Alertmanager
+				from = running[i].Block(kind)
 			} else {
 				label += " (not running: checked for its later connect)"
 			}
-			p.Changes = append(p.Changes, PlanChangeDTO{ID: "clusters." + se.Cluster + ".alertmanager", Label: label, From: blockWords(from), To: blockWords(blockOf(se.Block))})
+			p.Changes = append(p.Changes, PlanChangeDTO{ID: "clusters." + se.Cluster + "." + key, Label: label, From: blockWords(kind, from), To: blockWords(kind, blockOf(se.Block))})
 		}
 	} else {
-		names := make([]string, 0, len(out.runBlocks))
-		for n := range out.runBlocks {
-			names = append(names, n)
+		refs := make([]config.BlockRef, 0, len(out.runBlocks))
+		for ref := range out.runBlocks {
+			refs = append(refs, ref)
 		}
-		sort.Strings(names)
-		for _, n := range names {
-			p.Changes = append(p.Changes, PlanChangeDTO{ID: "clusters." + n + ".alertmanager", Label: n + "'s alertmanager block", From: blockWords(running[runIndex[n]].Alertmanager), To: blockWords(out.runBlocks[n])})
+		sort.Slice(refs, func(i, j int) bool { return refs[i].Cluster < refs[j].Cluster })
+		for _, ref := range refs {
+			p.Changes = append(p.Changes, PlanChangeDTO{ID: "clusters." + ref.Cluster + "." + key, Label: ref.Cluster + "'s " + key + " block",
+				From: blockWords(kind, running[runIndex[ref.Cluster]].Block(kind)), To: blockWords(kind, out.runBlocks[ref])})
 		}
 	}
-	// the members whose alerts move, each with its scope sentence before
-	// and after; and every member whose installation or subscription
-	// changes re-keys
+	// for every kind, the members whose data moves, each with its scope
+	// sentence before and after; and every member whose installation or
+	// subscription changes re-keys. Only the plan's kind can move, and a
+	// kind that does not move ends nothing (§13)
 	oldByID, newByID := sourcesByID(active), sourcesByID(out.runSources)
-	var affected []string
-	for _, cl := range running {
-		rb, ra := before[cl.Name], after[cl.Name]
-		blockAfter := cl.Alertmanager
-		if nb, ok := out.runBlocks[cl.Name]; ok {
-			blockAfter = nb
+	moved := map[string][]string{}
+	for _, k := range observabilityKinds {
+		before, err := config.Resolve(k, active, running)
+		if err != nil {
+			before = map[string]config.AMResolution{}
 		}
-		sb, sa := scopeSentence(rb, oldByID[rb.Source], cl.Alertmanager), scopeSentence(ra, newByID[ra.Source], blockAfter)
-		if sb != sa {
-			p.Changes = append(p.Changes, PlanChangeDTO{ID: "alerts." + cl.Name, Label: "Alerts for " + cl.Name, From: sb, To: sa})
+		after, err := config.Resolve(k, out.runSources, runClusters)
+		if err != nil {
+			return refuse("with this change, the installations do not resolve, so nothing was planned: " + config.DisplayError(err))
 		}
-		moved := sb != sa || rb.Mode != ra.Mode || rb.Source != ra.Source ||
-			ra.Mode == config.AMSubscribed && !reflect.DeepEqual(normSource(oldByID[ra.Source]), normSource(newByID[ra.Source]))
-		if moved {
-			affected = append(affected, cl.Name)
-			p.Ends = append(p.Ends, PlanWorkDTO{ID: "alerts:" + cl.Name, Kind: "alerts", Cluster: cl.Name, What: cl.Name + "'s alerts are read again under the new terms"})
+		for i, cl := range running {
+			rb, ra := before[cl.Name], after[cl.Name]
+			sb, sa := scopeSentence(k, rb, oldByID[rb.Source], cl.Block(k)), scopeSentence(k, ra, newByID[ra.Source], runClusters[i].Block(k))
+			name := kindNames[k]
+			if sb != sa {
+				p.Changes = append(p.Changes, PlanChangeDTO{ID: name.noun + "." + cl.Name, Label: name.title + " for " + cl.Name, From: sb, To: sa})
+			}
+			if sb != sa || rb.Mode != ra.Mode || rb.Source != ra.Source ||
+				ra.Mode == config.AMSubscribed && !reflect.DeepEqual(normSource(oldByID[ra.Source]), normSource(newByID[ra.Source])) {
+				moved[k] = append(moved[k], cl.Name)
+				p.Ends = append(p.Ends, PlanWorkDTO{ID: name.noun + ":" + cl.Name, Kind: name.noun, Cluster: cl.Name, What: movedWords(k, cl.Name)})
+			}
 		}
 	}
 	if len(p.Changes) == 0 {
 		return refuse("the draft changes nothing")
 	}
-	if s.d.AlertWork != nil && len(affected) > 0 {
-		p.Ends = append(p.Ends, s.d.AlertWork(affected)...)
+	if s.d.Work != nil && len(moved) > 0 {
+		p.Ends = append(p.Ends, s.d.Work(moved)...)
 	}
 	p.Runtime = map[string]string{"running": strconv.FormatUint(runRev, 10), "sources": strconv.FormatUint(activeRev, 10), "work": workVersion(p.Ends)}
 	bind, _ := json.Marshal(c)
@@ -479,6 +533,19 @@ func (s *SourcesService) plan(c sourcesCand) sourcesPlanned {
 	s.cache.put(p.Digest, c)
 	out.plan = p
 	return out
+}
+
+// movedWords is what ends for a member whose terms of a kind move (S3b
+// §5): its alerts are read again, its log views start again, or its
+// metrics are read again with their cache re-keyed.
+func movedWords(kind, cluster string) string {
+	switch kind {
+	case config.EndpointLoki:
+		return cluster + "'s log views start again under the new terms"
+	case config.EndpointMetrics:
+		return cluster + "'s metrics are read again under the new terms: its cached readings are dropped"
+	}
+	return cluster + "'s alerts are read again under the new terms"
 }
 
 // ApplySources applies the plan with digest as one transaction under the
@@ -520,8 +587,8 @@ func (s *SourcesService) ApplySources(digest string) ApplyResultDTO {
 		return ApplyResultDTO{Error: "fleet.yaml changed while this was applied, so nothing was put in force: review the new plan.", Plan: &np.plan}
 	}
 	s.cache.consume(digest)
-	for name, block := range re.runBlocks {
-		SetRunningEndpoint(s.cs, name, config.EndpointAlertmanager, nil, block)
+	for ref, block := range re.runBlocks {
+		SetRunningBlock(s.cs, ref.Cluster, ref.Kind, block)
 	}
 	if s.d.Publish != nil {
 		if err := s.d.Publish(re.runSources, s.cs.fleetClusters()); err != nil {
@@ -532,44 +599,46 @@ func (s *SourcesService) ApplySources(digest string) ApplyResultDTO {
 }
 
 // fileTerms are the file's sources and, for each running cluster, its
-// subscription or off block where the file's differs from the running one
-// (S3a §5, "Use the file's values"). A legacy block in the file stays C5's
-// to adopt: a running subscription whose file block became legacy keeps
-// running as it is.
-func fileTerms(file *config.Config, running []config.ClusterConfig) ([]config.SourceConfig, map[string]*config.EndpointConfig) {
-	fileBlock := map[string]*config.EndpointConfig{}
-	inFile := map[string]bool{}
+// subscription or off block of a kind where the file's differs from the
+// running one (S3a §5, "Use the file's values"). A legacy block in the file
+// stays C5's to adopt: a running subscription whose file block became
+// legacy keeps running as it is.
+func fileTerms(kind string, file *config.Config, running []config.ClusterConfig) ([]config.SourceConfig, map[config.BlockRef]*config.EndpointConfig) {
+	inFile := map[string]config.ClusterConfig{}
 	for _, cl := range file.Clusters {
-		inFile[cl.Name] = true
-		fileBlock[cl.Name] = cl.Alertmanager
+		inFile[cl.Name] = cl
 	}
 	isSub := func(b *config.EndpointConfig) bool { return b != nil && (b.Source != "" || b.Off) }
-	blocks := map[string]*config.EndpointConfig{}
+	blocks := map[config.BlockRef]*config.EndpointConfig{}
 	for _, cl := range running {
-		if !inFile[cl.Name] {
+		fc, ok := inFile[cl.Name]
+		if !ok {
 			continue
 		}
-		fb, rb := fileBlock[cl.Name], cl.Alertmanager
+		ref := config.BlockRef{Cluster: cl.Name, Kind: kind}
+		fb, rb := fc.Block(kind), cl.Block(kind)
 		switch {
 		case isSub(fb) && !reflect.DeepEqual(subscriptionOf(fb), subscriptionOf(rb)):
-			blocks[cl.Name] = blockOf(subscriptionOf(fb))
+			blocks[ref] = blockOf(subscriptionOf(fb))
 		case fb == nil && isSub(rb):
-			blocks[cl.Name] = nil
+			blocks[ref] = nil
 		}
 	}
 	return cloneSourceList(file.Sources), blocks
 }
 
-// scopeSentence is where a cluster's alerts come from (S3a §3.5), in
-// words; a long installation id is named by its length. block is the
-// cluster's own block, which a legacy mode's sentence says.
-func scopeSentence(r config.AMResolution, src config.SourceConfig, block *config.EndpointConfig) string {
+// scopeSentence is where a cluster's data of a kind comes from (S3a §3.5,
+// S3b §3.4), in words; a long installation id is named by its length.
+// block is the cluster's own block, which a legacy mode's sentence says.
+func scopeSentence(kind string, r config.AMResolution, src config.SourceConfig, block *config.EndpointConfig) string {
 	switch r.Mode {
 	case config.AMOff:
 		return "off"
+	case config.AMNone:
+		return "none"
 	case config.AMSubscribed:
 	default:
-		return legacySentence(r.Mode, block)
+		return legacySentence(kind, r.Mode, block)
 	}
 	head := "from " + shownInstallation(r.Source)
 	if src.Host != "" {
@@ -594,11 +663,11 @@ func scopeSentence(r config.AMResolution, src config.SourceConfig, block *config
 	return strings.Join(parts, ", ")
 }
 
-// legacySentence is the scope sentence of a cluster's own block, or of
-// discovery in it (S3a §3.5), as fleet.yaml says it: where, the tenant,
-// and the filter, or that nothing is filtered. An endpoint is named by its
-// origin alone.
-func legacySentence(mode string, b *config.EndpointConfig) string {
+// legacySentence is the scope sentence of a cluster's own block of a
+// kind, or of discovery in it (S3a §3.5), as fleet.yaml says it: where,
+// the tenant, and the filter, or that nothing is filtered. An endpoint is
+// named by its origin alone.
+func legacySentence(kind, mode string, b *config.EndpointConfig) string {
 	var where string
 	switch mode {
 	case config.AMService:
@@ -622,6 +691,11 @@ func legacySentence(mode string, b *config.EndpointConfig) string {
 		parts = append(parts, "tenant "+b.Tenant)
 	}
 	if b == nil || len(b.Match) == 0 {
+		// a cluster's own Loki reads every stream there as its own (S3b
+		// §3.4, as its views say)
+		if kind == config.EndpointLoki {
+			return strings.Join(append(parts, "unfiltered: every stream there is read as this cluster's"), ", ")
+		}
 		return strings.Join(append(parts, "unfiltered: everything there is read as this cluster's"), ", ")
 	}
 	words := make([]string, 0, len(b.Match))
@@ -632,10 +706,11 @@ func legacySentence(mode string, b *config.EndpointConfig) string {
 	return strings.Join(append(parts, "filtered by "+strings.Join(words, ", ")), ", ")
 }
 
-// sourcesSentence is Observability's sentence (S3a §8): "Alerts: 9
-// clusters from 2 installations, 3 discovered in themselves, 1 off".
-func sourcesSentence(res map[string]config.AMResolution, running []config.ClusterConfig) string {
-	subscribed, discovered, off, own := 0, 0, 0, 0
+// sourcesSentence is a kind's sentence (S3a §8): "Alerts: 9 clusters from
+// 2 installations, 3 discovered in themselves, 1 off"; "Logs: ..., 4
+// with none".
+func sourcesSentence(kind string, res map[string]config.AMResolution, running []config.ClusterConfig) string {
+	subscribed, discovered, off, own, none := 0, 0, 0, 0, 0
 	installs := map[string]bool{}
 	for _, cl := range running {
 		switch r := res[cl.Name]; r.Mode {
@@ -644,6 +719,8 @@ func sourcesSentence(res map[string]config.AMResolution, running []config.Cluste
 			installs[r.Source] = true
 		case config.AMOff:
 			off++
+		case config.AMNone:
+			none++
 		case config.AMDirect, config.AMService:
 			own++
 		default:
@@ -669,10 +746,14 @@ func sourcesSentence(res map[string]config.AMResolution, running []config.Cluste
 	if off > 0 {
 		parts = append(parts, strconv.Itoa(off)+" off")
 	}
-	if len(parts) == 0 {
-		return "Alerts: no clusters"
+	if none > 0 {
+		parts = append(parts, strconv.Itoa(none)+" with none")
 	}
-	return "Alerts: " + strings.Join(parts, ", ")
+	title := kindNames[kind].title
+	if len(parts) == 0 {
+		return title + ": no clusters"
+	}
+	return title + ": " + strings.Join(parts, ", ")
 }
 
 // installationChanges are the installations added, edited and removed,
@@ -972,15 +1053,22 @@ func sourceWords(src config.SourceConfig) string {
 	return strings.Join(parts, "; ")
 }
 
-// blockWords is a cluster's own alertmanager block in words.
-func blockWords(b *config.EndpointConfig) string {
+// blockWords is a cluster's own block of a kind in words; Loki is never
+// discovered.
+func blockWords(kind string, b *config.EndpointConfig) string {
 	switch {
+	case b == nil && kind == config.EndpointLoki:
+		return "none: by name or group"
 	case b == nil:
 		return "none: by name, group or discovery"
 	case b.Off:
 		return "off"
+	case b.Source == "" && b.Endpoint != "":
+		return "its own endpoint"
+	case b.Source == "" && kind == config.EndpointLoki:
+		return "its own Service"
 	case b.Source == "":
-		return "its own " + map[bool]string{true: "endpoint", false: "Service or discovery"}[b.Endpoint != ""]
+		return "its own Service or discovery"
 	}
 	parts := []string{"subscribed to " + shownInstallation(b.Source)}
 	if b.Scope == config.ScopeTenant {
@@ -1000,8 +1088,9 @@ func blockWords(b *config.EndpointConfig) string {
 	return strings.Join(parts, ", ")
 }
 
-func sourceOf(d SourceDraftDTO) config.SourceConfig {
-	src := config.SourceConfig{ID: d.ID, Kind: config.SourceKindAlertmanager, Name: d.Name, Host: d.Host, Discover: d.Discover,
+// sourceOf is a draft's installation, of the draft's kind.
+func sourceOf(kind string, d SourceDraftDTO) config.SourceConfig {
+	src := config.SourceConfig{ID: d.ID, Kind: kind, Name: d.Name, Host: d.Host, Discover: d.Discover,
 		Endpoint: d.Endpoint, TLSSkipVerify: d.TLSSkipVerify, Tenant: d.Tenant, MemberLabel: d.MemberLabel}
 	if r := d.ServiceRef; r != nil {
 		src.ServiceRef = &config.MetricsServiceRef{Namespace: r.Namespace, Name: r.Name, Port: r.Port, Scheme: r.Scheme, Path: r.Path}

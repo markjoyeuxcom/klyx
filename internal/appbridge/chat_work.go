@@ -2,6 +2,7 @@ package appbridge
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -109,21 +110,20 @@ func offersAStep(p *actionPlan) bool {
 	return false
 }
 
-// AlertWork is the AI work holding alerts read on clusters (Settings S3a
-// §5), by identity: each open conversation that recorded an alerts
-// lineage there, which ends at its next send once an Observability Apply
-// moves the terms its alerts were read under, and its offered plan, which
-// is withdrawn then (§4.3).
-func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
-	in := map[string]bool{}
-	for _, c := range clusters {
-		in[c] = true
-	}
+// SourceWork is the AI work holding data read under terms that move
+// (Settings S3a §5, S3b §5), by identity: each open conversation that
+// recorded a lineage of a moved kind on a cluster whose terms of that
+// kind move, which ends at its next send once an Observability Apply
+// moves them, and its offered plan, which is withdrawn then (§4.3). A
+// conversation holding only other kinds' data, or another cluster's, is
+// not listed (§13). moved is, for each kind, its clusters.
+func (s *ChatService) SourceWork(moved map[string][]string) []PlanWorkDTO {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []PlanWorkDTO{}
 	for _, c := range s.convs {
-		if c.ended != "" || len(c.lineages) == 0 || !in[c.cluster] {
+		held := heldMoved(c.lineages, c.cluster, moved)
+		if c.ended != "" || len(held) == 0 {
 			continue
 		}
 		started := ""
@@ -134,7 +134,7 @@ func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
 		if c.kind == kindInvestigation {
 			what = "an investigation on " + c.cluster
 		}
-		out = append(out, PlanWorkDTO{ID: "conv:" + c.id, Kind: c.kind, Cluster: c.cluster, Started: started, What: what + " holding " + heldNouns(c.lineages) + " read under the old terms: it ends at its next send"})
+		out = append(out, PlanWorkDTO{ID: "conv:" + c.id, Kind: c.kind, Cluster: c.cluster, Started: started, What: what + " holding " + heldNouns(held) + " read under the old terms: it ends at its next send"})
 		for i := len(c.exchanges) - 1; i >= 0; i-- {
 			e := c.exchanges[i]
 			if e.plan == nil || len(e.plan.dto.Steps) == 0 {
@@ -146,8 +146,24 @@ func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
 			break
 		}
 	}
-	out = append(out, explainAlertWork(in)...)
+	out = append(out, explainWork(moved)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// heldMoved are the lineages a call holding ls on cluster holds of a kind
+// whose terms move there; an alerts read's kind is empty.
+func heldMoved(ls []alertmanager.Lineage, cluster string, moved map[string][]string) []alertmanager.Lineage {
+	var out []alertmanager.Lineage
+	for _, l := range ls {
+		kind := l.Kind
+		if kind == "" {
+			kind = config.EndpointAlertmanager
+		}
+		if slices.Contains(moved[kind], cluster) {
+			out = append(out, l)
+		}
+	}
 	return out
 }
 

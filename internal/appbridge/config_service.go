@@ -268,6 +268,24 @@ func SetRunningEndpoint(s *ConfigService, cluster, kind string, m *config.Metric
 	}
 }
 
+// SetRunningBlock replaces a running cluster's own block of a kind with an
+// Observability plan's, nil removing it (Settings S3b §5): a metrics block
+// included.
+func SetRunningBlock(s *ConfigService, cluster, kind string, b *config.EndpointConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.running {
+		if s.running[i].Name != cluster {
+			continue
+		}
+		c := s.running[i] // a copy: the entry is replaced, never changed in place
+		c.SetBlock(kind, copyEndpoint(b))
+		s.running[i] = c
+		s.runningRev++
+		return
+	}
+}
+
 func copyEndpoint(e *config.EndpointConfig) *config.EndpointConfig {
 	if e == nil {
 		return nil

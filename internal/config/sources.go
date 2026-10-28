@@ -280,6 +280,27 @@ func ResolveAll(sources []SourceConfig, clusters []ClusterConfig) error {
 	return nil
 }
 
+// Block is a cluster's own block of a kind, in the shared shape; nil when
+// it has none. A metrics block is a copy.
+func (c ClusterConfig) Block(kind string) *EndpointConfig { return ownBlock(c, kind) }
+
+// SetBlock replaces a cluster's own block of a kind (nil removes it); a
+// metrics block takes the shared shape's fields, never a token.
+func (c *ClusterConfig) SetBlock(kind string, b *EndpointConfig) {
+	switch kind {
+	case EndpointLoki:
+		c.Loki = b
+	case EndpointMetrics:
+		c.Metrics = nil
+		if b != nil {
+			c.Metrics = &MetricsConfig{Endpoint: b.Endpoint, TLSSkipVerify: b.TLSSkipVerify, ServiceRef: b.ServiceRef, Auth: b.Auth, Tenant: b.Tenant,
+				Match: b.Match, Source: b.Source, Scope: b.Scope, Off: b.Off, keys: b.keys}
+		}
+	default:
+		c.Alertmanager = b
+	}
+}
+
 // ownBlock is a cluster's own block of a kind, in the shared shape; nil
 // when it has none.
 func ownBlock(cl ClusterConfig, kind string) *EndpointConfig {

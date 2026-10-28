@@ -93,21 +93,22 @@ var explainCalls = struct {
 	sets map[uint64]*lineageSet
 }{sets: map[uint64]*lineageSet{}}
 
-// explainAlertWork is the running calls holding alerts read on clusters,
-// by identity (R6): their next send is refused once the terms move.
-func explainAlertWork(in map[string]bool) []PlanWorkDTO {
+// explainWork is the running calls holding data of a kind read on a
+// cluster whose terms of that kind move, by identity (R6): their next send
+// is refused once the terms move.
+func explainWork(moved map[string][]string) []PlanWorkDTO {
 	explainCalls.mu.Lock()
 	defer explainCalls.mu.Unlock()
 	var out []PlanWorkDTO
 	for _, set := range explainCalls.sets {
 		set.mu.Lock()
-		held := len(set.list) > 0
+		held := heldMoved(set.list, set.cluster, moved)
 		set.mu.Unlock()
-		if !held || !in[set.cluster] {
+		if len(held) == 0 {
 			continue
 		}
 		out = append(out, PlanWorkDTO{ID: fmt.Sprintf("explain:%d", set.id), Kind: "explain", Cluster: set.cluster, Started: set.started.UTC().Format(time.RFC3339),
-			What: "an Explain on " + set.cluster + " holding alerts read under the old terms: its send is refused"})
+			What: "an Explain on " + set.cluster + " holding " + heldNouns(held) + " read under the old terms: its send is refused"})
 	}
 	return out
 }

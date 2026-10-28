@@ -166,11 +166,20 @@ func (b *alertBuckets) sourceCredential(t sourceTerms) (metrics.Auth, error) {
 // hosted one holds a host slot. release ends the lease; display names
 // where the installation is read.
 func (b *alertBuckets) metricsSource(ctx context.Context, t sourceTerms, what string) (q metrics.Transport, display string, release func(), err error) {
+	return b.metricsTransport(ctx, t, b.readFence(t), what)
+}
+
+// readFence is a subscribed read's fence: its terms checked, and an
+// observed 401 or 403 a denial of the installation's access.
+func (b *alertBuckets) readFence(t sourceTerms) metrics.Fence {
+	return metrics.Fence{Check: func() error { return b.checkTerms(t) }, Denied: func() { b.sources.Denied(t.sub.Source.ID) }}
+}
+
+// metricsTransport is metricsSource under fence's check and denial: a
+// subscription's, or an installation's own for its Test (Settings S3b
+// §7), which reports a denial and never counts it.
+func (b *alertBuckets) metricsTransport(ctx context.Context, t sourceTerms, fence metrics.Fence, what string) (q metrics.Transport, display string, release func(), err error) {
 	src := t.sub.Source
-	fence := metrics.Fence{
-		Check:  func() error { return b.checkTerms(t) },
-		Denied: func() { b.sources.Denied(src.ID) },
-	}
 	if t.direct() {
 		at, err := endpointAt(src.Endpoint)
 		if err != nil {

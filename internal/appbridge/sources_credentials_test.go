@@ -43,6 +43,12 @@ func sourceCredRig(t *testing.T, sources ...config.SourceConfig) (*EndpointsServ
 			return alertmanager.Status{}, "", errors.New("down: the credential is missing")
 		}
 		return alertmanager.Status{Version: "0.28.1", ClusterStatus: "ready", Peers: 3}, "https://am.example:443", nil
+	}, func(_ context.Context, id string, _ uint64) (string, string, error) {
+		src, _, _ := a.Installation(id)
+		if src.Kind == config.SourceKindLoki {
+			return "Loki 3.4.2 answered", "https://loki.example:443", nil
+		}
+		return "", "Service monitoring/prom:9090 in prd", errors.New(id + " refused Klyx's read (401 or 403)")
 	})
 	return es, a, store, revs
 }
@@ -105,5 +111,49 @@ func TestAnInstallationsTest(t *testing.T) {
 	}
 	if r := es.TestSource("gone", "1"); r.OK || !strings.Contains(r.Message, "is not in force") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// Settings S3b §7: a Loki or metrics installation's credential is its own,
+// under its kind: storing or removing it moves that kind's revision, never
+// Alertmanager's; and its Test is its reachability, Loki's build info or
+// metrics' liveness.
+func TestEveryKindsInstallationTakesItsCredentialAndTest(t *testing.T) {
+	logs := directSource("lgtm-logs", "https://loki.example/loki")
+	logs.Kind = config.SourceKindLoki
+	met := hostedOnPrd("lgtm-metrics", config.ServeConfig{Cluster: "dev"})
+	met.Kind = config.SourceKindMetrics
+	es, a, store, revs := sourceCredRig(t, logs, met)
+	am := revs.Revision("source/lgtm-logs", config.EndpointAlertmanager)
+	before := revs.Revision("source/lgtm-logs", config.EndpointLoki)
+	if r := es.SetSourceCredential("lgtm-logs", revisionOf(a, "lgtm-logs"), "S3B-LOKI-SECRET"); !r.OK || strings.Contains(r.Message, "S3B-LOKI-SECRET") {
+		t.Fatalf("%+v", r)
+	}
+	if revs.Revision("source/lgtm-logs", config.EndpointLoki) == before {
+		t.Fatal("the Loki credential's revision did not move")
+	}
+	if revs.Revision("source/lgtm-logs", config.EndpointAlertmanager) != am {
+		t.Fatal("Alertmanager's revision moved for a Loki installation")
+	}
+	src, _, _ := a.Installation("lgtm-logs")
+	got := endpointcred.Resolve(store, endpointcred.Input{Cluster: "source/lgtm-logs", Kind: config.EndpointLoki, Account: endpointcred.SourceAccount("lgtm-logs"),
+		Spec: config.EndpointConfig{Endpoint: src.Endpoint, Auth: src.Auth}})
+	if !got.Usable() || got.Header() != "Bearer S3B-LOKI-SECRET" {
+		t.Fatalf("the stored credential: %+v", got.State)
+	}
+	if r := es.SetSourceCredential("lgtm-metrics", revisionOf(a, "lgtm-metrics"), "S3B-SECRET"); r.OK || !strings.Contains(r.Message, "takes no credential") {
+		t.Fatalf("a hosted metrics installation: %+v", r)
+	}
+	if r := es.RemoveSourceCredential("lgtm-logs", revisionOf(a, "lgtm-logs")); !r.OK || !revs.Revoked("source/lgtm-logs", config.EndpointLoki) || revs.Revoked("source/lgtm-logs", config.EndpointAlertmanager) {
+		t.Fatalf("removed under another kind: %+v", r)
+	}
+	if r := es.TestSource("lgtm-logs", revisionOf(a, "lgtm-logs")); !r.OK || r.Message != "Available: Loki 3.4.2 answered at https://loki.example:443." {
+		t.Fatalf("%+v", r)
+	}
+	if r := es.TestSource("lgtm-metrics", revisionOf(a, "lgtm-metrics")); r.OK || r.Message != "Unavailable: lgtm-metrics refused Klyx's read (401 or 403)" {
+		t.Fatalf("%+v", r)
+	}
+	if r := es.TestSource("lgtm-metrics", "stale"); r.OK || !strings.Contains(r.Message, "changed since it was shown") {
+		t.Fatalf("a stale revision was tested: %+v", r)
 	}
 }

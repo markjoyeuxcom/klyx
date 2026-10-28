@@ -80,14 +80,14 @@ func TestFileAdoptionRechecksTheFileAtPublication(t *testing.T) {
 			if _, err := config.EditSourcesAt(r.path, v, config.SourcesEdit{Sources: &[]config.SourceConfig{next}}); err != nil {
 				t.Fatal(err)
 			}
-			p := r.svc.PlanSourcesFromFile()
+			p := r.svc.PlanSourcesFromFile("")
 			if p.Refused != "" || p.Writes {
 				t.Fatalf("%+v", p)
 			}
 			oldRev := r.active.Revision()
-			prior := r.svc.d.AlertWork
-			r.svc.d.AlertWork = func(clusters []string) []PlanWorkDTO {
-				work := prior(clusters)
+			prior := r.svc.d.Work
+			r.svc.d.Work = func(moved map[string][]string) []PlanWorkDTO {
+				work := prior(moved)
 				if move {
 					raw := r.file()
 					if err := os.WriteFile(r.path, []byte(strings.Replace(raw, "tenant: ops", "tenant: later", 1)), 0o600); err != nil {
@@ -196,7 +196,7 @@ func TestAPlanNamesAnExplainHoldingItsAlerts(t *testing.T) {
 	sub, _ := r.active.Subscription("dev")
 	lineage := alertmanager.Lineage{Mode: config.AMSubscribed, Installation: old.ID, SubRev: sub.SubRev, InstRev: sub.InstRev, Identity: "read-old"}
 	chat := newToolsFixture(t)
-	r.svc.d.AlertWork = chat.svc.AlertWork // the production wiring
+	r.svc.d.Work = chat.svc.SourceWork // the production wiring
 	conn := &fakeExplainConn{details: map[string]crd.InstanceDetail{"/pods/ns/p": {Kind: "Pod", Namespace: "ns", Name: "p", UID: "p-uid"}}, rows: map[string]observe.Rows{
 		healthsrc.TaskAlerts + "/alerts": {Part: observe.Part{ID: "alerts"}, Rows: healthsrc.AlertRows{Lineage: lineage, Alerts: []healthsrc.AlertRow{alertRow("Mine", "active", true, "p-uid", healthsrc.SubjectFound)}}},
 	}}
@@ -231,7 +231,7 @@ func TestAPlanNamesAnExplainHoldingItsAlerts(t *testing.T) {
 	if res := <-done; res.OK || !strings.Contains(res.Error, "subscription changed") {
 		t.Fatalf("the Explain was not refused: %+v", res)
 	}
-	if left := explainAlertWork(map[string]bool{"dev": true}); len(left) != 0 {
+	if left := explainWork(map[string][]string{config.EndpointAlertmanager: {"dev"}}); len(left) != 0 {
 		t.Fatalf("a finished Explain is still named: %+v", left)
 	}
 }
@@ -252,7 +252,7 @@ func TestNoAlertDependencyStartsDuringAnApply(t *testing.T) {
 	row.Rows = ar
 	conn.rows[healthsrc.TaskAlerts+"/alerts"] = row
 	f.useConn(conn)
-	r.svc.d.AlertWork = f.svc.AlertWork
+	r.svc.d.Work = f.svc.SourceWork
 	d := sourceDraftOf(old)
 	d.Tenant = "ops"
 	p := r.svc.PlanSources(SourcesDraftDTO{Installation: &InstallationEditDTO{Op: installEdit, Source: d}})
@@ -261,8 +261,8 @@ func TestNoAlertDependencyStartsDuringAnApply(t *testing.T) {
 	}
 	var st ChatStateDTO
 	asked := make(chan struct{})
-	r.svc.d.AlertWork = func(clusters []string) []PlanWorkDTO {
-		work := f.svc.AlertWork(clusters)
+	r.svc.d.Work = func(moved map[string][]string) []PlanWorkDTO {
+		work := f.svc.SourceWork(moved)
 		// a conversation starts and reads dev's alerts while the Apply holds
 		// its final work list
 		go func() {
@@ -299,10 +299,10 @@ func TestReorderedInstallationsAreNotADifference(t *testing.T) {
 	if _, err := config.EditSourcesAt(r.path, v, config.SourcesEdit{Sources: &reordered}); err != nil {
 		t.Fatal(err)
 	}
-	if r.svc.GetSources().FileDiffers {
+	if r.svc.GetSources("").FileDiffers {
 		t.Fatal("an order-only difference is offered")
 	}
-	if p := r.svc.PlanSourcesFromFile(); !strings.Contains(p.Refused, "the ones in force") {
+	if p := r.svc.PlanSourcesFromFile(""); !strings.Contains(p.Refused, "the ones in force") {
 		t.Fatalf("%+v", p)
 	}
 }

@@ -160,7 +160,7 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	}
 
 	// the result's scopes, before and after: valid, or what to choose
-	runSources := append(cloneSourceList(active), sourceOf(src))
+	runSources := append(cloneSourceList(active), sourceOf(config.SourceKindAlertmanager, src))
 	runClusters := append([]config.ClusterConfig(nil), running...)
 	for i := range runClusters {
 		for _, se := range subs {
@@ -175,12 +175,12 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	}
 	for _, m := range members {
 		b := m.Alertmanager
-		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacySentence(config.AMDirect, b)}
+		sc := ScopeChangeDTO{Cluster: m.Name, Before: legacySentence(config.EndpointAlertmanager, config.AMDirect, b)}
 		if err != nil {
 			sc.After, sc.Change = "not valid yet", "a choice is needed"
 		} else {
 			r := after[m.Name]
-			sc.After = scopeSentence(r, sourceOf(src), nil)
+			sc.After = scopeSentence(config.EndpointAlertmanager, r, sourceOf(config.SourceKindAlertmanager, src), nil)
 			sc.Change = scopeChange(b.Match, r)
 		}
 		o.Scopes = append(o.Scopes, sc)
