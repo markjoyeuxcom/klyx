@@ -273,6 +273,37 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
     await waitFor(() => expect(document.activeElement).toBe(edit));
   });
 
+  it("leaves an offer's conflicts to the person: no auth or certificate check is preselected (S3a §7)", async () => {
+    b.migrationOffers.mockResolvedValue([{
+      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [],
+      conflicts: ["The clusters authenticate differently (prd bearer, dev basic): choose the installation's auth.", "The clusters check the certificate differently (prd not verified, dev verified): choose whether the installation verifies it."],
+      unresolved: ["auth", "tlsSkipVerify"],
+      draft: { installation: { op: "add", source: { id: "am-am", endpoint: "https://am.example" } }, subscriptions: [{ cluster: "dev", block: { source: "am-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "am-am", match: { cluster: "prd" } } }] },
+    }]);
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    const offer = await screen.findByTestId("migration-offer");
+    fireEvent.click(within(offer).getByRole("button", { name: "Edit and review…" }));
+    const ed = await screen.findByTestId("installation-editor");
+    const review = within(ed).getByRole("button", { name: "Review and apply" }) as HTMLButtonElement;
+    const auth = within(ed).getByLabelText("Installation authentication") as HTMLSelectElement;
+    const tls = within(ed).getByRole("radiogroup", { name: "Installation certificate check" });
+    expect(auth.value).toBe("?"); // neither the draft's empty auth nor any cluster's
+    expect(within(tls).getAllByRole("radio").every((r) => !(r as HTMLInputElement).checked)).toBe(true);
+    expect(review.disabled).toBe(true);
+    expect(within(ed).getByTestId("installation-editor-undecided").textContent).toContain("auth and certificate check");
+    expect(ed.textContent).toContain("prd bearer, dev basic");
+    fireEvent.change(auth, { target: { value: "bearer" } });
+    expect(review.disabled).toBe(true); // the certificate check is still open
+    fireEvent.click(within(tls).getByLabelText("do not verify it (tlsSkipVerify: true)"));
+    expect(review.disabled).toBe(false);
+    fireEvent.click(review);
+    await waitFor(() => expect(b.planSources).toHaveBeenCalledWith({
+      installation: { op: "add", source: { id: "am-am", endpoint: "https://am.example", tlsSkipVerify: true, authType: "bearer" } },
+      subscriptions: [{ cluster: "dev", block: { source: "am-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "am-am", match: { cluster: "prd" } } }],
+    }));
+  });
+
   it("opens Detect's proposal as an editor that lists the subscriptions it carries", async () => {
     b.detect.mockResolvedValue({
       clusters: [{ cluster: "prd", outcome: "found" }],

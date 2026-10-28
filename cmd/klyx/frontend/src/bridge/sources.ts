@@ -91,6 +91,9 @@ export type MigrationOffer = {
   draft: SourcesDraft;
   scopes: ScopeChange[];
   conflicts: string[];
+  // the installation's fields the conflicts leave to the person: auth,
+  // tlsSkipVerify. The draft holds no value for them; the editor asks.
+  unresolved: string[];
   choices: string[];
   credential?: string;
 };

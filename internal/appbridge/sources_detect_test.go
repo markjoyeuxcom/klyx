@@ -112,8 +112,8 @@ func TestMigrationOffers(t *testing.T) {
 	if r.file() != before || r.active.Revision() != revBefore {
 		t.Fatal("an offer applied itself")
 	}
-	if len(o.Conflicts) != 1 || !strings.Contains(o.Conflicts[0], "prd bearer, dev basic") {
-		t.Fatalf("conflicts: %v", o.Conflicts)
+	if len(o.Conflicts) != 1 || !strings.Contains(o.Conflicts[0], "prd bearer, dev basic") || strings.Join(o.Unresolved, ",") != "auth" {
+		t.Fatalf("conflicts: %v %v", o.Conflicts, o.Unresolved)
 	}
 	if len(o.Choices) != 1 || o.Scopes[1].After != "not valid yet" || o.Scopes[1].Before != "from its own endpoint at https://am.example:443, tenant ops, unfiltered: everything there is read as this cluster's" {
 		t.Fatalf("an unscoped block: %+v %+v", o.Choices, o.Scopes)
@@ -192,6 +192,30 @@ func TestAMigrationOfferKeepsEscapedPathsApart(t *testing.T) {
 			SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: tc.dev, Tenant: "dev", Match: map[string]string{"cluster": "dev"}})
 			offers := r.svc.MigrationOffers()
 			if len(offers) != tc.offers || tc.offers == 1 && offers[0].Where != tc.where {
+				t.Fatalf("%+v", offers)
+			}
+		})
+	}
+}
+
+// Codex's review of S3a-4b, the S3a-4c checkpoint: the fields a conflict
+// leaves to the person are named, for the page to ask; clusters that
+// agree leave nothing unresolved.
+func TestAnOffersConflictsAreLeftUnresolved(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		prd, dev   bool
+		unresolved string
+	}{
+		{"the certificate check differs", true, false, "tlsSkipVerify"},
+		{"the clusters agree", false, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newSourcesRig(t)
+			SetRunningEndpoint(r.cs, "prd", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example", TLSSkipVerify: tc.prd, Match: map[string]string{"cluster": "prd"}})
+			SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example", TLSSkipVerify: tc.dev, Match: map[string]string{"cluster": "dev"}})
+			offers := r.svc.MigrationOffers()
+			if len(offers) != 1 || strings.Join(offers[0].Unresolved, ",") != tc.unresolved || len(offers[0].Conflicts) != len(offers[0].Unresolved) {
 				t.Fatalf("%+v", offers)
 			}
 		})

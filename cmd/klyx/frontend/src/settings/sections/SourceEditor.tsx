@@ -33,8 +33,8 @@ function draftOfForm(f: Form): SourceDraft {
   if (f.locator === "discover") d.discover = true;
   if (f.locator === "endpoint") {
     d.endpoint = f.endpoint.trim();
-    if (f.tlsSkipVerify) d.tlsSkipVerify = true;
-    if (f.authType) {
+    if (f.tlsSkipVerify === true) d.tlsSkipVerify = true;
+    if (f.authType && f.authType !== UNDECIDED) {
       d.authType = f.authType;
       if (f.authType === "basic" && f.username.trim()) d.authUsername = f.username.trim();
     }
@@ -48,18 +48,23 @@ function draftOfForm(f: Form): SourceDraft {
   return d;
 }
 
+// An offer's conflict leaves a field undecided (S3a §7: no default winner):
+// auth is UNDECIDED, the certificate check null, until the person chooses.
+const UNDECIDED = "?";
+
 type Form = {
   id: string; name: string; locator: Locator; host: string;
   namespace: string; service: string; port: string; scheme: string; path: string;
-  endpoint: string; tlsSkipVerify: boolean; authType: string; username: string;
+  endpoint: string; tlsSkipVerify: boolean | null; authType: string; username: string;
   tenant: string; memberLabel: string; groups: string; clusters: string;
 };
 
-function formOf(d: SourceDraft): Form {
+function formOf(d: SourceDraft, unresolved: string[] = []): Form {
   return {
     id: d.id, name: d.name ?? "", locator: locatorOf(d), host: d.host ?? "",
     namespace: d.serviceRef?.namespace ?? "", service: d.serviceRef?.name ?? "", port: d.serviceRef?.port ?? "", scheme: d.serviceRef?.scheme ?? "", path: d.serviceRef?.path ?? "",
-    endpoint: d.endpoint ?? "", tlsSkipVerify: !!d.tlsSkipVerify, authType: d.authType ?? "", username: d.authUsername ?? "",
+    endpoint: d.endpoint ?? "", tlsSkipVerify: unresolved.includes("tlsSkipVerify") ? null : !!d.tlsSkipVerify,
+    authType: unresolved.includes("auth") ? UNDECIDED : d.authType ?? "", username: d.authUsername ?? "",
     tenant: d.tenant ?? "", memberLabel: d.memberLabel ?? "", groups: listText(d.servesGroups), clusters: listText(d.servesClusters),
   };
 }
@@ -76,19 +81,25 @@ export function subscriptionWords(b: Subscription | null): string {
   return parts.join(", ");
 }
 
-export function InstallationEditor({ initial, op, subscriptions, hosts, busy, onReview, onCancel, onDraftChange }: {
+export function InstallationEditor({ initial, op, subscriptions, unresolved = [], conflicts = [], hosts, busy, onReview, onCancel, onDraftChange }: {
   initial: SourceDraft;
   op: "add" | "edit";
   // the subscriptions a proposal or an offer carries with it, listed
   subscriptions?: SubscriptionEdit[];
+  // an offer's fields left to the person, with the conflicts that say why
+  // (one each, in the same order)
+  unresolved?: string[];
+  conflicts?: string[];
   hosts: string[];
   busy: boolean;
   onReview: (d: SourcesDraft) => void;
   onCancel: () => void;
   onDraftChange?: (changed: boolean) => void;
 }) {
-  const [f, setF] = useState<Form>(() => formOf(initial));
-  const start = useRef(JSON.stringify(formOf(initial)));
+  const [f, setF] = useState<Form>(() => formOf(initial, unresolved));
+  const start = useRef(JSON.stringify(formOf(initial, unresolved)));
+  const why = (field: string) => (unresolved.length === conflicts.length ? conflicts[unresolved.indexOf(field)] : undefined) ?? "The clusters differ: choose.";
+  const undecided = f.authType === UNDECIDED || f.tlsSkipVerify === null;
   const opened = useRef(true);
   useEffect(() => {
     if (opened.current) {
@@ -150,17 +161,32 @@ export function InstallationEditor({ initial, op, subscriptions, hosts, busy, on
       </>)}
       {f.locator === "endpoint" && (<>
         {text("sources[].endpoint", "endpoint", { placeholder: "https://am.example" })}
-        <SettingField id="sources[].tlsSkipVerify" instance={key}>
-          {(ids) => (
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12 }}>
-              <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={f.tlsSkipVerify} disabled={busy} onChange={(e) => set("tlsSkipVerify")(e.target.checked)} />
-              tlsSkipVerify: true
-            </label>
-          )}
-        </SettingField>
-        <SettingField id="sources[].auth.type" instance={key}>
+        {unresolved.includes("tlsSkipVerify") ? (
+          <SettingField id="sources[].tlsSkipVerify" instance={key} group note={why("tlsSkipVerify")}>
+            {() => (
+              <div role="radiogroup" aria-label="Installation certificate check" style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
+                {([[false, "verify the certificate"], [true, "do not verify it (tlsSkipVerify: true)"]] as const).map(([v, label]) => (
+                  <label key={String(v)} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                    <input type="radio" name={`tls-${key}`} checked={f.tlsSkipVerify === v} disabled={busy} onChange={() => set("tlsSkipVerify")(v)} />{label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </SettingField>
+        ) : (
+          <SettingField id="sources[].tlsSkipVerify" instance={key}>
+            {(ids) => (
+              <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={f.tlsSkipVerify === true} disabled={busy} onChange={(e) => set("tlsSkipVerify")(e.target.checked)} />
+                tlsSkipVerify: true
+              </label>
+            )}
+          </SettingField>
+        )}
+        <SettingField id="sources[].auth.type" instance={key} note={unresolved.includes("auth") ? why("auth") : undefined}>
           {(ids) => (
             <select id={ids.id} aria-describedby={ids.describedBy} style={input} value={f.authType} disabled={busy} onChange={(e) => set("authType")(e.target.value)}>
+              {unresolved.includes("auth") && <option value={UNDECIDED} disabled>choose: the clusters differ</option>}
               <option value="">none</option>
               <option value="bearer">bearer</option>
               <option value="basic">basic</option>
@@ -181,8 +207,9 @@ export function InstallationEditor({ initial, op, subscriptions, hosts, busy, on
           ))}
         </div>
       )}
+      {undecided && <div data-testid="installation-editor-undecided" style={{ fontSize: 12, color: "var(--color-text-warning)" }}>Choose the installation&apos;s {[f.authType === UNDECIDED && "auth", f.tlsSkipVerify === null && "certificate check"].filter(Boolean).join(" and ")} first: the clusters differ, and neither wins by default.</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-        <button className="l-btn l-btn-primary" disabled={busy || !f.id.trim()} onClick={review}>Review and apply</button>
+        <button className="l-btn l-btn-primary" disabled={busy || !f.id.trim() || undecided} onClick={review}>Review and apply</button>
         <button className="l-btn" disabled={busy} onClick={onCancel}>Cancel</button>
       </div>
     </div>

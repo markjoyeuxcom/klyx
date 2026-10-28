@@ -24,7 +24,7 @@ const rowStyle: React.CSSProperties = { padding: "6px 0", borderBottom: "0.5px s
 const line: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" };
 
 type Editor =
-  | { kind: "installation"; op: "add" | "edit"; draft: SourceDraft; subscriptions?: SourcesDraft["subscriptions"]; title: string }
+  | { kind: "installation"; op: "add" | "edit"; draft: SourceDraft; subscriptions?: SourcesDraft["subscriptions"]; unresolved?: string[]; conflicts?: string[]; title: string }
   | { kind: "subscription"; cluster: string; block: Subscription | null };
 
 type OpenPlan = { plan: Plan; title: string; draft?: SourcesDraft; fromEditor?: boolean };
@@ -216,7 +216,7 @@ export function SourcesPanel({ onLoaded, refreshMs = 30_000 }: { onLoaded?: (s: 
     </div>
   );
   const editorView = editor && (editor.kind === "installation"
-    ? <InstallationEditor key={editorKey} initial={editor.draft} op={editor.op} subscriptions={editor.subscriptions} hosts={clusters} busy={busy}
+    ? <InstallationEditor key={editorKey} initial={editor.draft} op={editor.op} subscriptions={editor.subscriptions} unresolved={editor.unresolved} conflicts={editor.conflicts} hosts={clusters} busy={busy}
       onCancel={dropDraft}
       onDraftChange={(changed) => { draftGen.current++; setDirty(changed); setOpen((o) => (o?.fromEditor ? null : o)); }}
       onReview={(d) => review(editor.title, d)} />
@@ -381,7 +381,7 @@ export function SourcesPanel({ onLoaded, refreshMs = 30_000 }: { onLoaded?: (s: 
             {o.credential && <div style={hint}>{o.credential}</div>}
             {o.draft.installation && (
               <button className="l-btn" style={small} disabled={busy}
-                onClick={() => openEditor({ kind: "installation", op: "add", draft: o.draft.installation!.source, subscriptions: o.draft.subscriptions, title: `Review the shared installation for ${o.clusters.join(", ")}` })}>Edit and review…</button>
+                onClick={() => openEditor({ kind: "installation", op: "add", draft: o.draft.installation!.source, subscriptions: o.draft.subscriptions, unresolved: o.unresolved, conflicts: o.conflicts, title: `Review the shared installation for ${o.clusters.join(", ")}` })}>Edit and review…</button>
             )}
           </div>
         ))}

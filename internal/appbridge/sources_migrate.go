@@ -35,7 +35,12 @@ type MigrationOfferDTO struct {
 	Draft     SourcesDraftDTO  `json:"draft"`
 	Scopes    []ScopeChangeDTO `json:"scopes"`
 	Conflicts []string         `json:"conflicts"`
-	Choices   []string         `json:"choices"`
+	// Unresolved are the installation's fields the conflicts leave to the
+	// person, auth and tlsSkipVerify: the draft holds no value for them,
+	// and the page asks for one before it plans (Codex's review of S3a-4b,
+	// the S3a-4c checkpoint: no default winner)
+	Unresolved []string `json:"unresolved"`
+	Choices    []string `json:"choices"`
 	// Credential says the secret is stored once, by the person; the
 	// clusters' old records stay until they are removed
 	Credential string `json:"credential,omitempty"`
@@ -97,7 +102,7 @@ func (s *SourcesService) MigrationOffers() []MigrationOfferDTO {
 // offerFor is one offer: an installation at the shared endpoint, each
 // cluster subscribed with its tenant and match carried over.
 func (s *SourcesService) offerFor(where, endpoint string, members []config.ClusterConfig, active []config.SourceConfig, running []config.ClusterConfig, taken map[string]bool) MigrationOfferDTO {
-	o := MigrationOfferDTO{Where: where, Scopes: []ScopeChangeDTO{}, Conflicts: []string{}, Choices: []string{}}
+	o := MigrationOfferDTO{Where: where, Scopes: []ScopeChangeDTO{}, Conflicts: []string{}, Unresolved: []string{}, Choices: []string{}}
 	host := where
 	if u, err := url.Parse(endpoint); err == nil && u.Hostname() != "" {
 		host = strings.SplitN(u.Hostname(), ".", 2)[0]
@@ -120,6 +125,7 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 		src.AuthType, src.AuthUsername = first.Auth.Type, first.Auth.Username
 	}
 	if !sameAuth {
+		o.Unresolved = append(o.Unresolved, "auth")
 		o.Conflicts = append(o.Conflicts, "The clusters authenticate differently ("+describeEach(members, func(b *config.EndpointConfig) string {
 			if b.Auth == nil {
 				return "none"
@@ -130,6 +136,7 @@ func (s *SourcesService) offerFor(where, endpoint string, members []config.Clust
 	if sameTLS {
 		src.TLSSkipVerify = first.TLSSkipVerify
 	} else {
+		o.Unresolved = append(o.Unresolved, "tlsSkipVerify")
 		o.Conflicts = append(o.Conflicts, "The clusters check the certificate differently ("+describeEach(members, func(b *config.EndpointConfig) string {
 			return map[bool]string{true: "not verified", false: "verified"}[b.TLSSkipVerify]
 		})+"): choose whether the installation verifies it.")
