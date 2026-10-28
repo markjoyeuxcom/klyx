@@ -441,3 +441,15 @@ What the scan does not claim, as before: a path built at run time, including fro
 **Tests:** the fixtures add a keyed literal, a keyed literal with gaps, a spread `path.Join`, a spread `url.JoinPath`, a spread `Sprintf`, a literal slice and an array in variables, and pieces run together, with Loki's path, another API and other strings in pieces as controls; the listing failing on a failing command, an empty listing, an error record and a dependency's, the build directories out of scope; cmd/klyx without its dist failing the repository scan with the hint (checked by moving the dist away). **Mutation pass:** 11 mutants (keys refused, spreads ignored for the joins and for `Sprintf`, the slice check and its run-together form dropped, each listing check dropped, the build directories brought into scope, and Codex's keyed and spread senders planted in the fleet), all caught.
 
 **Smoke:** the native walk at 1e5bf950, 217/217 four ways on the kind lab, the smoke fleet as it began after each.
+
+## 24. S3b-2a revision 5: Codex's fourth re-review (2026-10-28)
+
+Codex closed R3-1 (the keyed `strings.Join` and spread `path.Join` senders are caught in production source) and R3-2 (a missing dist fails the scan with its hint; CI's prepared job passes), and accepted the stated limits - a variable passed to a join, and a join held in a variable - as those of a bounded regression check. One P2 remained.
+
+| Finding | Fix |
+|---|---|
+| **R4-1:** a keyed `[]any` spread into `fmt.Sprintf` (`fmt.Sprintf("/api/%s/query", []any{0: "v1"}...)`, a reordered key, or a gap read by `%[2]s`) was flattened as written, leaving a keyed element that abandoned the fold, and the literal check took string element types only; a planted sender passed the scan and the parser proof | One layout of a slice or array literal, as Go makes it - a keyed element at its constant index, the next unkeyed one after it, a gap, an array to its length - serves the string folds and `Sprintf`'s spread arguments, where a gap is a nil argument. A literal of any type whose elements are all strings is checked as a string one |
+
+**Tests:** the fixtures add a keyed spread, a reordered keyed spread, a gapped spread read by an explicit index, and a literal of `any` holding the path in pieces; the unkeyed spread stays as the control. **Mutation pass:** 5 mutants (the spread flattened again, keys refused, gaps dropped from the arguments, `any` elements refused, and Codex's sender planted in the fleet), all caught.
+
+**Smoke:** this revision changes only `internal/metrics/boundary_test.go`; the product code is the one smoked at 1e5bf950 (§23), 217/217 four ways, so no walk was repeated.
