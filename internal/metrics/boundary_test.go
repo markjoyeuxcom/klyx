@@ -3,6 +3,7 @@ package metrics
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -42,12 +43,24 @@ type listed struct {
 	GoFiles    []string
 	CgoFiles   []string
 	Export     string
+	// go list -e exits 0 with these: a package it could not list whole
+	// (Codex's re-review 3 of S3b-2a, R3-2)
+	Error      *listError
+	DepsErrors []*listError
 }
+
+type listError struct{ Err string }
 
 var repoOnce = sync.OnceValues(func() (map[string]*listed, error) {
 	// the fixtures' standard packages are listed beside the repository's
-	cmd := exec.Command("go", "list", "-e", "-export", "-deps", "-json", "./internal/...", "./cmd/...", "fmt", "path", "path/filepath", "strings", "net/url")
-	cmd.Dir = filepath.Join("..", "..")
+	return goList("go", filepath.Join("..", ".."), "./internal/...", "./cmd/...", "fmt", "path", "path/filepath", "strings", "net/url")
+})
+
+// goList runs name's list over patterns in dir; a command that fails, or
+// says nothing, is an error.
+func goList(name, dir string, patterns ...string) (map[string]*listed, error) {
+	cmd := exec.Command(name, append([]string{"list", "-e", "-export", "-deps", "-json"}, patterns...)...)
+	cmd.Dir = dir
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil {
@@ -61,8 +74,41 @@ var repoOnce = sync.OnceValues(func() (map[string]*listed, error) {
 		}
 		all[p.ImportPath] = &p
 	}
+	if len(all) == 0 {
+		return nil, errors.New("go list listed nothing")
+	}
 	return all, nil
-})
+}
+
+// scanScope is the repository's packages the scan reads, refusing one go
+// list could not read whole (Codex's re-review 3 of S3b-2a, R3-2): it
+// exits 0 with the error recorded.
+func scanScope(all map[string]*listed) ([]string, error) {
+	var names []string
+	for path := range all {
+		// the platform build directories hold other platforms' entry points
+		// only; CI vets and tests the same set
+		if strings.HasPrefix(path, "github.com/moomora/klyx/") && path != metricsPath && !strings.Contains(path, "/cmd/klyx/build/") {
+			names = append(names, path)
+		}
+	}
+	sort.Strings(names)
+	for _, path := range names {
+		p := all[path]
+		// cmd/klyx needs its frontend's dist: CI stubs it, a build makes it
+		if p.Error != nil {
+			hint := ""
+			if strings.Contains(p.Error.Err, "frontend/dist") {
+				hint = " (cmd/klyx embeds its frontend's dist: build the frontend, or create cmd/klyx/frontend/dist as CI does)"
+			}
+			return nil, fmt.Errorf("go list could not read %s, so the scan cannot: %s%s", path, p.Error.Err, hint)
+		}
+		if len(p.DepsErrors) > 0 {
+			return nil, fmt.Errorf("go list could not read a dependency of %s, so the scan cannot: %s", path, p.DepsErrors[0].Err)
+		}
+	}
+	return names, nil
+}
 
 // exportImporter imports a package from the export data go list built.
 func exportImporter(fset *token.FileSet, all map[string]*listed) types.Importer {
@@ -101,15 +147,10 @@ func TestNoOtherPackageWritesThePrometheusQueryAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for path := range all {
-		// the platform build directories hold other platforms' entry points
-		// only; CI vets and tests the same set
-		if strings.HasPrefix(path, "github.com/moomora/klyx/") && path != metricsPath && !strings.Contains(path, "/cmd/klyx/build/") {
-			names = append(names, path)
-		}
+	names, err := scanScope(all)
+	if err != nil {
+		t.Fatal(err)
 	}
-	sort.Strings(names)
 	files := 0
 	for _, path := range names {
 		p := all[path]
@@ -185,6 +226,16 @@ func scanTyped(fset *token.FileSet, files []*ast.File, info *types.Info, rel fun
 			if !ok {
 				return true
 			}
+			// a string slice or array literal whose pieces name the API,
+			// joined as a path or run together: wherever it is held
+			if elems, ok := foldSlice(info, e); ok {
+				for _, v := range []string{strings.Join(elems, "/"), strings.Join(elems, "")} {
+					if promAPI(v) {
+						add(e.Pos(), fmt.Sprintf("holds the Prometheus API's path in pieces (%q): only internal/metrics sends to Prometheus", v))
+						break
+					}
+				}
+			}
 			v, ok := foldTyped(info, e)
 			if !ok || !promAPI(v) || allowedAPIText[rel(fset.Position(e.Pos()).Filename)+"\x00"+v] {
 				return true
@@ -217,13 +268,13 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 	}
 	switch fn.FullName() {
 	case "path.Join", "path/filepath.Join":
-		args, ok := foldAll(info, call.Args)
+		args, ok := foldArgs(info, call)
 		if !ok {
 			return "", false
 		}
 		return pathpkg.Join(args...), true
 	case "net/url.JoinPath":
-		args, ok := foldAll(info, call.Args)
+		args, ok := foldArgs(info, call)
 		if !ok || len(args) == 0 {
 			return "", false
 		}
@@ -236,11 +287,7 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 		if len(call.Args) != 2 {
 			return "", false
 		}
-		lit, ok := ast.Unparen(call.Args[0]).(*ast.CompositeLit)
-		if !ok {
-			return "", false
-		}
-		elems, ok := foldAll(info, lit.Elts)
+		elems, ok := foldSlice(info, call.Args[0])
 		if !ok {
 			return "", false
 		}
@@ -257,8 +304,17 @@ func foldTyped(info *types.Info, e ast.Expr) (string, bool) {
 		if !ok {
 			return "", false
 		}
-		vals := make([]any, 0, len(call.Args)-1)
-		for _, a := range call.Args[1:] {
+		rest := call.Args[1:]
+		if call.Ellipsis.IsValid() && len(rest) > 0 {
+			// a spread []any literal: its elements are the arguments
+			lit, ok := ast.Unparen(rest[len(rest)-1]).(*ast.CompositeLit)
+			if !ok {
+				return "", false
+			}
+			rest = append(append([]ast.Expr{}, rest[:len(rest)-1]...), lit.Elts...)
+		}
+		vals := make([]any, 0, len(rest))
+		for _, a := range rest {
 			v, ok := constantOf(info, a)
 			if !ok {
 				return "", false
@@ -284,6 +340,79 @@ func callee(info *types.Info, call *ast.CallExpr) *types.Func {
 	}
 	fn, _ := info.Uses[id].(*types.Func)
 	return fn
+}
+
+// foldArgs is a call's arguments as strings, a spread literal slice's
+// elements in its place.
+func foldArgs(info *types.Info, call *ast.CallExpr) ([]string, bool) {
+	if !call.Ellipsis.IsValid() || len(call.Args) == 0 {
+		return foldAll(info, call.Args)
+	}
+	head, ok := foldAll(info, call.Args[:len(call.Args)-1])
+	if !ok {
+		return nil, false
+	}
+	tail, ok := foldSlice(info, call.Args[len(call.Args)-1])
+	if !ok {
+		return nil, false
+	}
+	return append(head, tail...), true
+}
+
+// foldSlice is a string slice or array literal's elements in Go's order: a
+// keyed element at its constant index, a gap the empty string, an array
+// filled to its length (Codex's re-review 3 of S3b-2a, R3-1).
+func foldSlice(info *types.Info, e ast.Expr) ([]string, bool) {
+	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
+	if !ok {
+		return nil, false
+	}
+	tv, ok := info.Types[lit]
+	if !ok {
+		return nil, false
+	}
+	var elem types.Type
+	length := int64(-1)
+	switch t := tv.Type.Underlying().(type) {
+	case *types.Slice:
+		elem = t.Elem()
+	case *types.Array:
+		elem, length = t.Elem(), t.Len()
+	default:
+		return nil, false
+	}
+	if b, ok := elem.Underlying().(*types.Basic); !ok || b.Info()&types.IsString == 0 {
+		return nil, false
+	}
+	var out []string
+	idx := 0
+	for _, el := range lit.Elts {
+		v := el
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			kt, ok := info.Types[kv.Key]
+			if !ok || kt.Value == nil {
+				return nil, false
+			}
+			i, exact := constant.Int64Val(constant.ToInt(kt.Value))
+			if !exact || i < 0 || i > 1<<16 {
+				return nil, false
+			}
+			idx, v = int(i), kv.Value
+		}
+		s, ok := foldTyped(info, v)
+		if !ok {
+			return nil, false
+		}
+		for len(out) <= idx {
+			out = append(out, "")
+		}
+		out[idx] = s
+		idx++
+	}
+	for int64(len(out)) < length {
+		out = append(out, "")
+	}
+	return out, true
 }
 
 func foldAll(info *types.Info, es []ast.Expr) ([]string, bool) {
@@ -393,26 +522,34 @@ func (f importerFunc) Import(path string) (*types.Package, error) { return f(pat
 func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 	m := `"github.com/moomora/klyx/internal/metrics"`
 	for name, srcs := range map[string][]string{
-		"a literal":                    {`package x; var p = "/api/v1/query"`},
-		"a range literal":              {`package x; var p = "/prometheus/api/v1/query_range"`},
-		"constant concatenation":       {`package x; const p = "/api/v1/" + "query"`},
-		"pieces with no api/v1 in one": {`package x; const base = "/api"`, `package x; var p = base + "/" + "v" + "1/query"`},
-		"a joined path":                {`package x; import "path"; var p = path.Join("/api", "v1", "query")`},
-		"an aliased path.Join":         {`package x; import pp "path"; var p = pp.Join("/api", "v1", "query")`},
-		"a dot-imported path.Join":     {`package x; import . "path"; var p = Join("/api", "v1", "query")`},
-		"a filepath.Join":              {`package x; import "path/filepath"; var p = filepath.Join("/api", "v1", "query")`},
-		"a strings.Join":               {`package x; import "strings"; var p = strings.Join([]string{"", "api", "v1", "query"}, "/")`},
-		"an aliased strings.Join":      {`package x; import ss "strings"; var p = ss.Join([]string{"", "api", "v1", "query"}, "/")`},
-		"a url.JoinPath":               {`package x; import "net/url"; var p, _ = url.JoinPath("http://h/api", "v1", "query")`},
-		"a formatted path":             {`package x; import "fmt"; var p = fmt.Sprintf("/api/%s/query", "v1")`},
-		"a numeric format argument":    {`package x; import "fmt"; var p = fmt.Sprintf("/api/v%d/query", 1)`},
-		"a nested fold":                {`package x; import ("fmt"; "path"); var p = path.Join(fmt.Sprintf("/api/v%d", 1), "query")`},
-		"lexically distinct constants": {`package x; import "path"; func a() string { const version = "v2"; return path.Join("/api", version, "x") }; func b() string { const version = "v1"; return path.Join("/api", version, "query") }`},
-		"the API base alone":           {`package x; var p = "/api/v1"`},
-		"a direct TransportOf":         {`package x; import ` + m + `; var t = metrics.TransportOf(nil)`},
-		"an aliased TransportOf":       {`package x; import mm ` + m + `; var t = mm.TransportOf(nil)`},
-		"TransportOf as a value":       {`package x; import ` + m + `; var wrap = metrics.TransportOf`},
-		"a dot-imported TransportOf":   {`package x; import . ` + m + `; var t = TransportOf(nil)`},
+		"a literal":                     {`package x; var p = "/api/v1/query"`},
+		"a range literal":               {`package x; var p = "/prometheus/api/v1/query_range"`},
+		"constant concatenation":        {`package x; const p = "/api/v1/" + "query"`},
+		"pieces with no api/v1 in one":  {`package x; const base = "/api"`, `package x; var p = base + "/" + "v" + "1/query"`},
+		"a joined path":                 {`package x; import "path"; var p = path.Join("/api", "v1", "query")`},
+		"an aliased path.Join":          {`package x; import pp "path"; var p = pp.Join("/api", "v1", "query")`},
+		"a dot-imported path.Join":      {`package x; import . "path"; var p = Join("/api", "v1", "query")`},
+		"a filepath.Join":               {`package x; import "path/filepath"; var p = filepath.Join("/api", "v1", "query")`},
+		"a strings.Join":                {`package x; import "strings"; var p = strings.Join([]string{"", "api", "v1", "query"}, "/")`},
+		"an aliased strings.Join":       {`package x; import ss "strings"; var p = ss.Join([]string{"", "api", "v1", "query"}, "/")`},
+		"a url.JoinPath":                {`package x; import "net/url"; var p, _ = url.JoinPath("http://h/api", "v1", "query")`},
+		"a formatted path":              {`package x; import "fmt"; var p = fmt.Sprintf("/api/%s/query", "v1")`},
+		"a numeric format argument":     {`package x; import "fmt"; var p = fmt.Sprintf("/api/v%d/query", 1)`},
+		"a nested fold":                 {`package x; import ("fmt"; "path"); var p = path.Join(fmt.Sprintf("/api/v%d", 1), "query")`},
+		"lexically distinct constants":  {`package x; import "path"; func a() string { const version = "v2"; return path.Join("/api", version, "x") }; func b() string { const version = "v1"; return path.Join("/api", version, "query") }`},
+		"a keyed strings.Join":          {`package x; import "strings"; var p = strings.Join([]string{0: "", 1: "api", 2: "v1", 3: "query"}, "/")`},
+		"a keyed literal with gaps":     {`package x; import "strings"; var p = strings.Join([]string{3: "query", 1: "api", 2: "v1"}, "/")`},
+		"a spread path.Join":            {`package x; import "path"; var p = path.Join([]string{"/api", "v1", "query"}...)`},
+		"a spread url.JoinPath":         {`package x; import "net/url"; var p, _ = url.JoinPath("http://h/api", []string{"v1", "query"}...)`},
+		"a spread Sprintf":              {`package x; import "fmt"; var p = fmt.Sprintf("/api/%s/query", []any{"v1"}...)`},
+		"a literal slice in a variable": {`package x; var parts = []string{"", "api", "v1", "query"}`},
+		"an array literal":              {`package x; var parts = [4]string{"", "api", "v1", "query"}`},
+		"pieces run together":           {`package x; var parts = []string{"/ap", "i/v1", "/query"}`},
+		"the API base alone":            {`package x; var p = "/api/v1"`},
+		"a direct TransportOf":          {`package x; import ` + m + `; var t = metrics.TransportOf(nil)`},
+		"an aliased TransportOf":        {`package x; import mm ` + m + `; var t = mm.TransportOf(nil)`},
+		"TransportOf as a value":        {`package x; import ` + m + `; var wrap = metrics.TransportOf`},
+		"a dot-imported TransportOf":    {`package x; import . ` + m + `; var t = TransportOf(nil)`},
 	} {
 		if len(fixtureScan(t, srcs...)) == 0 {
 			t.Errorf("%s: not found", name)
@@ -425,6 +562,9 @@ func TestTheScanFindsEveryWayToWriteThePath(t *testing.T) {
 		"a query parameter":        `package x; var p = map[string]string{"query": "x"}`,
 		"another package's":        `package x; import "example.com/other"; var t = other.TransportOf(nil)`,
 		"a join of other paths":    `package x; import "path"; var p = path.Join("/api", "v2", "alerts")`,
+		"Loki's path in pieces":    `package x; var parts = []string{"/loki", "api", "v1", "labels"}`,
+		"another API in pieces":    `package x; var parts = []string{"", "api", "v2", "alerts"}`,
+		"a slice of other strings": `package x; var parts = []string{"query", "range"}`,
 		"a constant of another fn": `package x; import "path"; func a() string { const version = "v1"; return version }; func b() string { const version = "v2"; return path.Join("/api", version, "x") }`,
 	} {
 		if p := fixtureScan(t, src); len(p) != 0 {
@@ -488,4 +628,30 @@ func templateOrError(e ast.Expr) bool {
 		return ok && (pkg.Name == "errors" && fn.Sel.Name == "New" || pkg.Name == "fmt" && fn.Sel.Name == "Errorf")
 	}
 	return false
+}
+
+// The listing fails loudly: a command that fails, and a package go list
+// could not read whole though it exited 0 (Codex's re-review 3 of S3b-2a,
+// R3-2).
+func TestTheListingFailsLoudly(t *testing.T) {
+	if _, err := goList("false", "."); err == nil {
+		t.Fatal("a failing list passed")
+	}
+	if _, err := goList("true", "."); err == nil {
+		t.Fatal("a list that said nothing passed")
+	}
+	klyx := "github.com/moomora/klyx/cmd/klyx"
+	for name, p := range map[string]*listed{
+		"an error record": {ImportPath: klyx, Error: &listError{Err: "cmd/klyx/main.go:40:12: pattern all:frontend/dist: no matching files found"}},
+		"a dependency's":  {ImportPath: klyx, DepsErrors: []*listError{{Err: "a dependency could not be built"}}},
+	} {
+		if _, err := scanScope(map[string]*listed{klyx: p}); err == nil || !strings.Contains(err.Error(), "so the scan cannot") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// the platform build directories stay out of scope, errors and all
+	build := "github.com/moomora/klyx/cmd/klyx/build/ios"
+	if names, err := scanScope(map[string]*listed{build: {ImportPath: build, Error: &listError{Err: "build constraints exclude all Go files"}}}); err != nil || len(names) != 0 {
+		t.Fatalf("build dir: %v %v", names, err)
+	}
 }
