@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -64,6 +65,8 @@ func (p PodSet) matchers() string {
 	return Equals("namespace", p.Namespace) + "," + MatchAnyOf("pod", "", p.Pods, "")
 }
 
+func (p PodSet) clone() PodSet { p.Pods = slices.Clone(p.Pods); return p }
+
 // Pod is one pod of a namespace.
 type Pod struct{ Namespace, Name string }
 
@@ -83,77 +86,79 @@ func (n Namespace) shape() string { return map[bool]string{true: "every", false:
 // clusters.
 type Routes struct{ Keys []string }
 
+func (r Routes) clone() Routes { r.Keys = slices.Clone(r.Keys); return r }
+
 func (r Routes) matcher() string {
 	return MatchAnyOf(EnvoyClusterName, "httproute/", r.Keys, "/rule/[0-9]+")
 }
 
 // The cluster's utilisation (the Overview readout and its sparklines).
 var (
-	ClusterCPU = Define("cluster-cpu", func(_ None, sc string) string {
+	ClusterCPU = define("cluster-cpu", func(_ None, sc string) string {
 		return `1 - avg(rate(` + Sel("node_cpu_seconds_total", `mode="idle"`, sc) + `[5m]))`
-	}, nil, None{})
-	ClusterMem = Define("cluster-memory", func(_ None, sc string) string {
+	}, nil, nil, None{})
+	ClusterMem = define("cluster-memory", func(_ None, sc string) string {
 		return `1 - sum(` + Sel("node_memory_MemAvailable_bytes", "", sc) + `) / sum(` + Sel("node_memory_MemTotal_bytes", "", sc) + `)`
-	}, nil, None{})
+	}, nil, nil, None{})
 )
 
 // Usage by pod, cluster-wide (workloads and nodes), and by container.
 var (
-	PodCPU = Define("pod-cpu", func(n Namespace, sc string) string {
+	PodCPU = define("pod-cpu", func(n Namespace, sc string) string {
 		return `sum by (namespace,pod) (rate(` + Sel(cpuSeries, n.matcher()+realContainers, sc) + `[` + shortRate + `]))`
-	}, Namespace.shape, Namespace{}, Namespace{Name: "shop"})
-	PodMem = Define("pod-memory", func(n Namespace, sc string) string {
+	}, Namespace.shape, nil, Namespace{}, Namespace{Name: "shop"})
+	PodMem = define("pod-memory", func(n Namespace, sc string) string {
 		return `sum by (namespace,pod) (` + Sel(memSeries, n.matcher()+realContainers, sc) + `)`
-	}, Namespace.shape, Namespace{}, Namespace{Name: "shop"})
-	ContainerCPU = Define("container-cpu", func(p Pod, sc string) string {
+	}, Namespace.shape, nil, Namespace{}, Namespace{Name: "shop"})
+	ContainerCPU = define("container-cpu", func(p Pod, sc string) string {
 		return `sum by (container) (rate(` + Sel(cpuSeries, Equals("namespace", p.Namespace)+","+Equals("pod", p.Name)+","+realContainers, sc) + `[` + shortRate + `]))`
-	}, nil, Pod{Namespace: "shop", Name: "web-0"})
-	ContainerMem = Define("container-memory", func(p Pod, sc string) string {
+	}, nil, nil, Pod{Namespace: "shop", Name: "web-0"})
+	ContainerMem = define("container-memory", func(p Pod, sc string) string {
 		return `sum by (container) (` + Sel(memSeries, Equals("namespace", p.Namespace)+","+Equals("pod", p.Name)+","+realContainers, sc) + `)`
-	}, nil, Pod{Namespace: "shop", Name: "web-0"})
+	}, nil, nil, Pod{Namespace: "shop", Name: "web-0"})
 )
 
 // A workload's pods: their sum (sparklines, chat), by container, and their
 // restarts (chat).
 var (
-	WorkloadCPU = Define("workload-cpu", func(p PodSet, sc string) string {
+	WorkloadCPU = define("workload-cpu", func(p PodSet, sc string) string {
 		return `sum(rate(` + Sel(cpuSeries, p.matchers()+","+realContainers, sc) + `[` + shortRate + `]))`
-	}, nil, PodSet{Namespace: "shop", Pods: []string{"web-0", "web-1"}})
-	WorkloadMem = Define("workload-memory", func(p PodSet, sc string) string {
+	}, nil, PodSet.clone, PodSet{Namespace: "shop", Pods: []string{"web-0", "web-1"}})
+	WorkloadMem = define("workload-memory", func(p PodSet, sc string) string {
 		return `sum(` + Sel(memSeries, p.matchers()+","+realContainers, sc) + `)`
-	}, nil, PodSet{Namespace: "shop", Pods: []string{"web-0", "web-1"}})
-	PodsCPUByContainer = Define("pods-cpu-by-container", func(p PodSet, sc string) string {
+	}, nil, PodSet.clone, PodSet{Namespace: "shop", Pods: []string{"web-0", "web-1"}})
+	PodsCPUByContainer = define("pods-cpu-by-container", func(p PodSet, sc string) string {
 		return `sum by (container) (rate(` + Sel(cpuSeries, p.matchers()+","+realContainers, sc) + `[` + shortRate + `]))`
-	}, nil, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
-	PodsMemByContainer = Define("pods-memory-by-container", func(p PodSet, sc string) string {
+	}, nil, PodSet.clone, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
+	PodsMemByContainer = define("pods-memory-by-container", func(p PodSet, sc string) string {
 		return `sum by (container) (` + Sel(memSeries, p.matchers()+","+realContainers, sc) + `)`
-	}, nil, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
-	PodsRestarts = Define("pods-restarts", func(p PodSet, sc string) string {
+	}, nil, PodSet.clone, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
+	PodsRestarts = define("pods-restarts", func(p PodSet, sc string) string {
 		return `sum by (pod) (` + Sel(restartSeries, p.matchers(), sc) + `)`
-	}, nil, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
+	}, nil, PodSet.clone, PodSet{Namespace: "shop", Pods: []string{"web-0"}})
 )
 
 // An HTTPRoute's Envoy metrics (the topology's route readout).
 var (
-	RouteRPS = Define("route-rps", func(r Routes, sc string) string {
+	RouteRPS = define("route-rps", func(r Routes, sc string) string {
 		return `sum by (` + EnvoyClusterName + `)(rate(` + Sel(EnvoyRqTotal, r.matcher(), sc) + `[` + shortRate + `]))`
-	}, nil, Routes{Keys: []string{"shop/web"}})
-	RouteP50 = Define("route-p50", func(r Routes, sc string) string {
+	}, nil, Routes.clone, Routes{Keys: []string{"shop/web"}})
+	RouteP50 = define("route-p50", func(r Routes, sc string) string {
 		return `histogram_quantile(0.50, sum by (` + EnvoyClusterName + `, le)(rate(` + Sel(EnvoyRqTime, r.matcher(), sc) + `[` + shortRate + `])))`
-	}, nil, Routes{Keys: []string{"shop/web"}})
-	RouteP99 = Define("route-p99", func(r Routes, sc string) string {
+	}, nil, Routes.clone, Routes{Keys: []string{"shop/web"}})
+	RouteP99 = define("route-p99", func(r Routes, sc string) string {
 		return `histogram_quantile(0.99, sum by (` + EnvoyClusterName + `, le)(rate(` + Sel(EnvoyRqTime, r.matcher(), sc) + `[` + shortRate + `])))`
-	}, nil, Routes{Keys: []string{"shop/web"}})
-	Route5xx = Define("route-5xx", func(r Routes, sc string) string {
+	}, nil, Routes.clone, Routes{Keys: []string{"shop/web"}})
+	Route5xx = define("route-5xx", func(r Routes, sc string) string {
 		return `sum by (` + EnvoyClusterName + `)(rate(` + Sel(EnvoyRqXX, r.matcher()+","+EnvoyRespClass+`="5"`, sc) + `[` + shortRate + `]))`
-	}, nil, Routes{Keys: []string{"shop/web"}})
-	RouteAll = Define("route-all", func(r Routes, sc string) string {
+	}, nil, Routes.clone, Routes{Keys: []string{"shop/web"}})
+	RouteAll = define("route-all", func(r Routes, sc string) string {
 		return `sum by (` + EnvoyClusterName + `)(rate(` + Sel(EnvoyRqXX, r.matcher(), sc) + `[` + shortRate + `]))`
-	}, nil, Routes{Keys: []string{"shop/web"}})
+	}, nil, Routes.clone, Routes{Keys: []string{"shop/web"}})
 	// EnvoyScraped asks whether any Envoy series exists under the scope
-	EnvoyScraped = Define("envoy-scraped", func(_ None, sc string) string {
+	EnvoyScraped = define("envoy-scraped", func(_ None, sc string) string {
 		return `count(` + Sel(EnvoyRqTotal, "", sc) + `)`
-	}, nil, None{})
+	}, nil, nil, None{})
 )
 
 // The rule families a Gateway's per-rule reads cover, in order.
@@ -164,6 +169,8 @@ type RuleProbe struct {
 	Family   string // one of RuleFamilies
 	Clusters []string
 }
+
+func (p RuleProbe) clone() RuleProbe { p.Clusters = slices.Clone(p.Clusters); return p }
 
 // RuleRange is one family's rate for some rule clusters, from some of the
 // Gateway's proxies: each Proxies entry scopes one operand, joined by "or".
@@ -181,6 +188,16 @@ type ProxySet struct {
 	Equal     [][2]string
 	NameLabel string
 	Names     []string
+}
+
+func (r RuleRange) clone() RuleRange {
+	r.Clusters = slices.Clone(r.Clusters)
+	proxies := make([]ProxySet, len(r.Proxies))
+	for i, p := range r.Proxies {
+		proxies[i] = ProxySet{Equal: slices.Clone(p.Equal), NameLabel: p.NameLabel, Names: slices.Clone(p.Names)}
+	}
+	r.Proxies = proxies
+	return r
 }
 
 func (p ProxySet) matchers() string {
@@ -215,14 +232,14 @@ var ruleScopeLabels = []string{EnvoyOwnGatewayName, EnvoyOwnGatewayNamespace, "p
 
 // The per-rule reads (the data path).
 var (
-	RuleProbeQuery = Define("rule-probe", func(p RuleProbe, sc string) string {
+	RuleProbeQuery = define("rule-probe", func(p RuleProbe, sc string) string {
 		return `last_over_time(` + Sel(p.Family, MatchAnyOf(EnvoyClusterName, "", p.Clusters, ""), sc) + `[` + RuleWindowText + `])`
-	}, func(p RuleProbe) string { return p.Family },
+	}, func(p RuleProbe) string { return p.Family }, RuleProbe.clone,
 		RuleProbe{Family: EnvoyRqTotal, Clusters: []string{"httproute/shop/web/rule/0"}},
 		RuleProbe{Family: EnvoyRqXX, Clusters: []string{"httproute/shop/web/rule/0"}},
 		RuleProbe{Family: EnvoyRq, Clusters: []string{"httproute/shop/web/rule/0"}},
 		RuleProbe{Family: EnvoyRqRetry, Clusters: []string{"httproute/shop/web/rule/0"}})
-	RuleRangeQuery = Define("rule-range", func(p RuleRange, sc string) string {
+	RuleRangeQuery = define("rule-range", func(p RuleRange, sc string) string {
 		extra, by := "", ""
 		switch p.Family {
 		case "xx":
@@ -245,16 +262,16 @@ var (
 			}
 		}
 		return p.Family + map[bool]string{true: "/one", false: "/or"}[len(p.Proxies) == 1]
-	}, ruleRangeCases()...)
+	}, RuleRange.clone, ruleRangeCases()...)
 	// RuleShared asks whether a merged cluster served the proxies, every
 	// family "or"-ed so one filtered out never hides it
-	RuleShared = Define("rule-shared", func(_ None, sc string) string {
+	RuleShared = define("rule-shared", func(_ None, sc string) string {
 		parts := make([]string, len(RuleFamilies))
 		for i, m := range RuleFamilies {
 			parts[i] = `last_over_time(` + Sel(m, EnvoyClusterName+`=~`+strconv.Quote(EnvoyMergedCluster), sc) + `[` + RuleWindowText + `])`
 		}
 		return `count by (` + strings.Join(ruleScopeLabels, ", ") + `) (` + strings.Join(parts, " or ") + `)`
-	}, nil, None{})
+	}, nil, nil, None{})
 )
 
 // ruleRangeCases are RuleRange's shapes: every family, from one proxy
@@ -275,16 +292,16 @@ func ruleRangeCases() []RuleRange {
 
 // Hubble's flow metrics.
 var (
-	HubbleVerdicts = Define("hubble-verdicts", func(_ None, sc string) string {
+	HubbleVerdicts = define("hubble-verdicts", func(_ None, sc string) string {
 		return `sum by (` + HubbleVerdict + `)(rate(` + Sel(HubbleFlows, "", sc) + `[` + shortRate + `]))`
-	}, nil, None{})
-	HubbleDropReasons = Define("hubble-drops", func(_ None, sc string) string {
+	}, nil, nil, None{})
+	HubbleDropReasons = define("hubble-drops", func(_ None, sc string) string {
 		return `sum by (` + HubbleReason + `, ` + HubbleProto + `)(rate(` + Sel(HubbleDrops, "", sc) + `[` + shortRate + `]))`
-	}, nil, None{})
-	HubbleDNSRcodes = Define("hubble-dns", func(_ None, sc string) string {
+	}, nil, nil, None{})
+	HubbleDNSRcodes = define("hubble-dns", func(_ None, sc string) string {
 		return `sum by (` + HubbleRcode + `)(rate(` + Sel(HubbleDNS, "", sc) + `[` + shortRate + `]))`
-	}, nil, None{})
-	HubbleHTTPStatus = Define("hubble-http", func(_ None, sc string) string {
+	}, nil, nil, None{})
+	HubbleHTTPStatus = define("hubble-http", func(_ None, sc string) string {
 		return `sum by (` + HubbleStatus + `)(rate(` + Sel(HubbleHTTP, "", sc) + `[` + shortRate + `]))`
-	}, nil, None{})
+	}, nil, nil, None{})
 )

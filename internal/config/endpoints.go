@@ -173,6 +173,23 @@ func EndpointURLProblem(endpoint string) string {
 	return ""
 }
 
+// reservedMetricsLabel is a label of a metrics scope that Prometheus
+// reserves - a "__" prefix, __name__ among them - in label order; "" when
+// none (Codex's review of S3b-2a, R3).
+func reservedMetricsLabel(match map[string]string) string {
+	names := make([]string, 0, len(match))
+	for k := range match {
+		if strings.HasPrefix(k, "__") {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
+}
+
 // labelName is a label name Klyx can send as an equality matcher.
 var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 

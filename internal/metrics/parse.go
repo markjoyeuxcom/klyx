@@ -11,7 +11,7 @@ import (
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
-// Client runs queries through a Querier and parses Prometheus responses.
+// Client runs queries through a Transport and parses Prometheus responses.
 // Every error it returns passes, after decoding, through the redactor of the
 // credential its transport carries (coverage C5 §5): a JSON-escaped echo of
 // the secret is whole again only once decoded. Samples - label names and
@@ -24,12 +24,12 @@ import (
 // of the reader's own terms (Settings S3b §3.3), fixed when the reader makes
 // it, never one a caller chooses.
 type Client struct {
-	q     Querier
+	q     Querier // its Transport's
 	scope Scope
 }
 
 // NewClient is a client reading through q under scope.
-func NewClient(q Querier, scope Scope) *Client { return &Client{q: q, scope: scope} }
+func NewClient(t Transport, scope Scope) *Client { return &Client{q: t.q, scope: scope} }
 
 // Scope is the scope this client renders every query with.
 func (c *Client) Scope() Scope { return c.scope }

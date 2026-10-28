@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"errors"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -47,10 +48,12 @@ func (s Scope) Words() string {
 }
 
 // valid: every label of the scope is a label name, so no scope writes
-// PromQL of its own.
+// PromQL of its own, and none is one Prometheus reserves (a "__" prefix,
+// __name__ among them): a scope matches series labels, and each query names
+// its own metric (Codex's review of S3b-2a, R3).
 func (s Scope) valid() bool {
 	for _, p := range s.pairs {
-		if !isLabelName(p[0]) {
+		if !isLabelName(p[0]) || strings.HasPrefix(p[0], "__") {
 			return false
 		}
 	}
@@ -104,9 +107,10 @@ func (q Query) Name() string { return q.name }
 // request.
 var ErrUnregisteredQuery = errors.New("an unregistered metrics query is refused")
 
-// ErrInvalidScope: a scope whose label is not a label name, refused before
-// any request (the configuration admits none).
-var ErrInvalidScope = errors.New("a metrics scope whose label is not a label name is refused")
+// ErrInvalidScope: a scope whose label is not a label name, or is one
+// Prometheus reserves, refused before any request (the configuration admits
+// none).
+var ErrInvalidScope = errors.New("a metrics scope whose label is not a label name, or is reserved by Prometheus, is refused")
 
 // Text is q rendered under scope, as a sink would send it; a zero Query is
 // refused. It sends nothing: tests and display read it.
@@ -127,11 +131,15 @@ func (q Query) text(scope Scope) (string, error) {
 // the scope's matchers, every selector through Sel. shape names a
 // parameter's structural form (how many operands an "or" has, say); a
 // parameter whose shape no declared case has is refused, so the proof that
-// renders every declared case covers every query sent.
+// renders every declared case covers every query sent. clone copies a
+// parameter deeply: a Query keeps its own copy, so a caller changing a
+// slice it passed never changes a query admitted (Codex's review of
+// S3b-2a, R2).
 type Template[P any] struct {
 	name   string
 	render func(p P, scope string) string
 	shape  func(P) string
+	clone  func(P) P
 	shapes map[string]bool
 }
 
@@ -147,17 +155,27 @@ var (
 	registry []registered
 )
 
-// Define registers a template with the cases that cover its shapes; shape
-// may be nil for a template whose structure never varies. A template with
-// no case is never defined: the proof could not see it.
-func Define[P any](name string, render func(p P, scope string) string, shape func(P) string, cases ...P) *Template[P] {
+// define registers a template with the cases that cover its shapes; shape
+// may be nil for a template whose structure never varies, and clone for a
+// parameter type holding no slice, map or pointer. A template with no case
+// is never defined: the proof could not see it. Only this package defines
+// templates, so the proof's registry is every template there is (Codex's
+// review of S3b-2a, R1).
+func define[P any](name string, render func(p P, scope string) string, shape func(P) string, clone func(P) P, cases ...P) *Template[P] {
 	if len(cases) == 0 {
 		panic("metrics: template " + name + " declares no case")
 	}
 	if shape == nil {
 		shape = func(P) string { return "" }
 	}
-	t := &Template[P]{name: name, render: render, shape: shape, shapes: map[string]bool{}}
+	if clone == nil {
+		var zero P
+		if holdsReferences(reflect.TypeOf(zero)) {
+			panic("metrics: template " + name + "'s parameters hold references, so it needs a clone")
+		}
+		clone = func(p P) P { return p }
+	}
+	t := &Template[P]{name: name, render: render, shape: shape, clone: clone, shapes: map[string]bool{}}
 	for _, c := range cases {
 		t.shapes[shape(c)] = true
 	}
@@ -178,19 +196,43 @@ func Define[P any](name string, render func(p P, scope string) string, shape fun
 	return t
 }
 
-// With is the template with these parameters; a zero Query when their
-// shape is not one the template declared.
+// With is the template with its own copy of these parameters; a zero Query
+// when their shape is not one the template declared.
 func (t *Template[P]) With(p P) Query {
+	p = t.clone(p)
 	if !t.shapes[t.shape(p)] {
 		return Query{}
 	}
 	return Query{name: t.name, render: func(scope string) string { return t.render(p, scope) }}
 }
 
+// holdsReferences: a value of t shares memory with its copies (a slice, a
+// map, a pointer, an interface, a channel or a function, at any depth).
+func holdsReferences(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Pointer, reflect.Interface, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return true
+	case reflect.Array:
+		return holdsReferences(t.Elem())
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if holdsReferences(t.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Rendered is every registered template's declared cases rendered under a
-// scope, by name: the proof's input (Settings S3b §3.3).
+// scope, by name: the proof's input (Settings S3b §3.3). A scope a reader
+// refuses renders nothing: nil.
 func Rendered(match map[string]string) map[string][]string {
-	sc := ScopeOf(match).matchers()
+	scope := ScopeOf(match)
+	if !scope.valid() {
+		return nil
+	}
+	sc := scope.matchers()
 	regMu.Lock()
 	defer regMu.Unlock()
 	out := make(map[string][]string, len(registry))

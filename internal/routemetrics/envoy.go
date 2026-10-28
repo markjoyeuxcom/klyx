@@ -57,9 +57,10 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 
 	// No matched series: distinguish "Envoy not scraped at all" from "these
 	// routes are just idle / mislabeled". Reuse the verified rq-total constant.
-	// Existence probe is intentionally UNSCOPED (counts all Envoy rq_total
-	// series, not just httproute). Per the spec it answers "is Envoy scraped at
-	// all"; the exact wording vs scoping is a native-verification decision.
+	// The existence probe counts every Envoy rq_total series, not just
+	// httproute's, under the reader's scope (Settings S3b §3.3): it answers
+	// "is Envoy scraped for this cluster at all"; its wording under a scope
+	// is S3b-2c's.
 	exist, err := s.client.InstantScalar(ctx, metrics.EnvoyScraped.With(metrics.None{}))
 	if err != nil {
 		return nil, Status{}, err

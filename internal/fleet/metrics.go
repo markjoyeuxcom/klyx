@@ -60,13 +60,13 @@ type transportFactory struct {
 	restErr error // the guarded proxy client could not be built
 }
 
-func (f transportFactory) Direct(base string, auth metrics.Auth, skip bool) metrics.Querier {
+func (f transportFactory) Direct(base string, auth metrics.Auth, skip bool) metrics.Transport {
 	return metrics.NewDirectTransportAuth(base, auth, safehttp.NewClient(metrics.DirectPolicy(metricsHTTPTimeout, skip)))
 }
 
-func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metrics.Querier {
+func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metrics.Transport {
 	if f.restErr != nil {
-		return failedQuerier{err: f.restErr}
+		return metrics.TransportOf(failedQuerier{err: f.restErr})
 	}
 	return metrics.NewProxyTransportTenant(f.rest, c, tenant)
 }

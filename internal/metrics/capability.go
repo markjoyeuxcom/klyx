@@ -11,7 +11,7 @@ import (
 // unavailable with the real error.
 func Probe(ctx context.Context, res Resolution) MetricsCapability {
 	out := MetricsCapability{Mode: res.Mode, Source: res.Source, Warning: res.Warning, Reason: res.Reason}
-	if res.Transport == nil {
+	if res.Transport.IsZero() {
 		return out // Available stays false; Reason already set for unavailable
 	}
 	if err := NewClient(res.Transport, Scope{}).Liveness(ctx); err != nil {

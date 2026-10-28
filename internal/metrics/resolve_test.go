@@ -16,13 +16,13 @@ type markerQ struct{ tag string }
 // satisfies Querier; Resolve only constructs the transport, never calls it.
 func (markerQ) InstantQuery(context.Context, string) (int, []byte, error) { return 200, nil, nil }
 
-func (f *fakeFactory) Direct(base string, _ Auth, _ bool) Querier {
+func (f *fakeFactory) Direct(base string, _ Auth, _ bool) Transport {
 	f.built = "direct:" + base
-	return markerQ{f.built}
+	return TransportOf(markerQ{f.built})
 }
-func (f *fakeFactory) Proxy(c ServiceCandidate, _ string) Querier {
+func (f *fakeFactory) Proxy(c ServiceCandidate, _ string) Transport {
 	f.built = "proxy:" + c.Namespace + "/" + c.Name + ":" + c.Port
-	return markerQ{f.built}
+	return TransportOf(markerQ{f.built})
 }
 
 func TestResolve(t *testing.T) {
@@ -61,13 +61,13 @@ func TestResolve(t *testing.T) {
 	})
 	t.Run("multi-match unavailable", func(t *testing.T) {
 		r := Resolve(config.MetricsConfig{}, Auth{}, DiscoveryResult{MultiMatch: true}, &fakeFactory{})
-		if r.Mode != ModeUnavailable || r.Reason == "" || r.Transport != nil {
+		if r.Mode != ModeUnavailable || r.Reason == "" || !r.Transport.IsZero() {
 			t.Fatalf("got %+v", r)
 		}
 	})
 	t.Run("none unavailable", func(t *testing.T) {
 		r := Resolve(config.MetricsConfig{}, Auth{}, DiscoveryResult{}, &fakeFactory{})
-		if r.Mode != ModeUnavailable || r.Transport != nil {
+		if r.Mode != ModeUnavailable || !r.Transport.IsZero() {
 			t.Fatalf("got %+v", r)
 		}
 	})
@@ -77,7 +77,7 @@ func TestResolve(t *testing.T) {
 // is sent to it, and its source is shown without the credentials.
 func TestResolveRefusesUserinfo(t *testing.T) {
 	r := Resolve(config.MetricsConfig{Endpoint: "https://admin:hunter2@prom.example/prometheus"}, Auth{}, DiscoveryResult{}, &fakeFactory{})
-	if r.Transport != nil || r.Mode != ModeUnavailable || !strings.Contains(r.Reason, "carries credentials") {
+	if !r.Transport.IsZero() || r.Mode != ModeUnavailable || !strings.Contains(r.Reason, "carries credentials") {
 		t.Fatalf("refused for use: %+v", r)
 	}
 	if strings.Contains(r.Source, "hunter2") || strings.Contains(r.Source, "admin") || r.Source != "https://prom.example/prometheus" {

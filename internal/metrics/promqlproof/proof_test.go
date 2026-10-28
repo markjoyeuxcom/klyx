@@ -38,6 +38,16 @@ func TestEveryTemplateCarriesTheScopeInEverySelector(t *testing.T) {
 	}
 }
 
+// A scope a reader refuses - a label Prometheus reserves - renders nothing,
+// so the proof has no query for it (Codex's review of S3b-2a, R3).
+func TestAReservedScopeHasNoQuery(t *testing.T) {
+	for _, scope := range []map[string]string{{"__name__": "up"}, {"cluster": "dev", "__meta_x": "y"}} {
+		if r := metrics.Rendered(scope); r != nil {
+			t.Fatalf("%v rendered %d templates", scope, len(r))
+		}
+	}
+}
+
 // With an empty scope every template still parses and reads a series.
 func TestEveryTemplateParsesUnscoped(t *testing.T) {
 	for name, cases := range metrics.Rendered(nil) {

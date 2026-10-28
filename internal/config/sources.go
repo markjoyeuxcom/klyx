@@ -143,6 +143,9 @@ func (c *Config) validateSources() error {
 		if s.MemberLabel != "" && !labelName.MatchString(s.MemberLabel) {
 			return fmt.Errorf("%s.memberLabel: %s is not a label name", place, describeKey(s.MemberLabel))
 		}
+		if s.Kind == SourceKindMetrics && reservedMetricsLabel(map[string]string{s.MemberLabel: "x"}) != "" {
+			return fmt.Errorf("%s.memberLabel: %s is reserved by Prometheus: a scope matches series by their labels, and each query names its own metric", place, describeKey(s.MemberLabel))
+		}
 		for j, sv := range s.Serves {
 			if (sv.Group == "") == (sv.Cluster == "") {
 				return fmt.Errorf("%s.serves[%d]: give exactly one of group or cluster", place, j)

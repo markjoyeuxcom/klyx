@@ -40,7 +40,7 @@ func TestRemoveStopsAnAuthenticatedRedirectHop(t *testing.T) {
 	auth.Live = reg.Live("prd", config.EndpointMetrics, reg.Revision("prd", config.EndpointMetrics))
 	q := NewDirectTransportAuth(srv.URL, auth, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
 	done := make(chan error, 1)
-	go func() { _, _, err := q.InstantQuery(context.Background(), "up"); done <- err }()
+	go func() { _, _, err := q.q.InstantQuery(context.Background(), "up"); done <- err }()
 	<-entered
 	reg.Revoke("prd", config.EndpointMetrics)
 	close(release)
@@ -75,7 +75,7 @@ func TestProxiedNon2xxBodyIsCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransport(rc, ServiceCandidate{Namespace: "n", Name: "prom", Port: "9090"})
-	code, _, err := q.InstantQuery(context.Background(), "up")
+	code, _, err := q.q.InstantQuery(context.Background(), "up")
 	if err == nil || !strings.Contains(err.Error(), "exceeded") {
 		t.Fatalf("oversized non-2xx body was not rejected by cap: code=%d err=%v", code, err)
 	}
@@ -95,7 +95,7 @@ func TestResponseCompletingAfterARevocationIsDropped(t *testing.T) {
 	auth.Live = reg.Live("prd", config.EndpointMetrics, reg.Revision("prd", config.EndpointMetrics))
 	q := NewDirectTransportAuth(srv.URL, auth, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
 	done := make(chan error, 1)
-	go func() { _, _, err := q.InstantQuery(context.Background(), "up"); done <- err }()
+	go func() { _, _, err := q.q.InstantQuery(context.Background(), "up"); done <- err }()
 	<-entered
 	reg.Revoke("prd", config.EndpointMetrics)
 	close(release)

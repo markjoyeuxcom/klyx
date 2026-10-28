@@ -27,7 +27,7 @@ var rangeWindow = struct {
 
 func runRange(t *testing.T, body string) ([]Point, error) {
 	t.Helper()
-	c := NewClient(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: body}}, Scope{})
+	c := NewClient(TransportOf(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: body}}), Scope{})
 	return c.RangeSeries(context.Background(), raw("q"), rangeWindow.start, rangeWindow.end, rangeWindow.step)
 }
 
@@ -77,7 +77,7 @@ func TestRangeSeriesErrors(t *testing.T) {
 		}
 	}
 	// HTTP failure status.
-	c := NewClient(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 503, body: "down"}}, Scope{})
+	c := NewClient(TransportOf(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 503, body: "down"}}), Scope{})
 	if _, err := c.RangeSeries(context.Background(), raw("q"), rangeWindow.start, rangeWindow.end, rangeWindow.step); err == nil {
 		t.Error("want error on HTTP 503")
 	}
@@ -85,7 +85,7 @@ func TestRangeSeriesErrors(t *testing.T) {
 
 func TestRangeSeriesUnsupportedTransport(t *testing.T) {
 	// A Querier without RangeQuery must produce a clear error, not a panic.
-	c := NewClient(&fakeQuerier{status: 200, body: "{}"}, Scope{})
+	c := NewClient(TransportOf(&fakeQuerier{status: 200, body: "{}"}), Scope{})
 	if _, err := c.RangeSeries(context.Background(), raw("q"), rangeWindow.start, rangeWindow.end, rangeWindow.step); err == nil {
 		t.Fatal("want error for transport without range support")
 	}
@@ -93,7 +93,7 @@ func TestRangeSeriesUnsupportedTransport(t *testing.T) {
 
 func TestRangeSeriesPassesWindowThrough(t *testing.T) {
 	fq := &fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"matrix","result":[]}}`}}
-	c := NewClient(fq, Scope{})
+	c := NewClient(TransportOf(fq), Scope{})
 	if _, err := c.RangeSeries(context.Background(), raw("my-query"), rangeWindow.start, rangeWindow.end, rangeWindow.step); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestRangeMatrixKeepsEverySeries(t *testing.T) {
 		{"metric":{"envoy_cluster_name":"httproute/a/web/rule/0"},"values":[[1000,"2"],[1060,"NaN"],[1120,"3"]]},
 		{"metric":{"envoy_cluster_name":"httproute/a/web/rule/1"},"values":[]}
 	]}}`
-	c := NewClient(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: body}}, Scope{})
+	c := NewClient(TransportOf(&fakeRangeQuerier{fakeQuerier: fakeQuerier{status: 200, body: body}}), Scope{})
 	out, err := c.RangeMatrix(context.Background(), raw("q"), rangeWindow.start, rangeWindow.end, rangeWindow.step)
 	if err != nil || len(out) != 2 {
 		t.Fatalf("got %+v %v", out, err)

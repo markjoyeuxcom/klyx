@@ -43,7 +43,7 @@ type directTransport struct{ d *endpointhttp.Direct }
 
 // NewDirectTransport builds a direct HTTP transport with a bearer token.
 // The caller supplies the *http.Client (DirectPolicy's).
-func NewDirectTransport(base, token string, client *http.Client) Querier {
+func NewDirectTransport(base, token string, client *http.Client) Transport {
 	return NewDirectTransportAuth(base, BearerAuth(token), client)
 }
 
@@ -51,8 +51,8 @@ func NewDirectTransport(base, token string, client *http.Client) Querier {
 // resolved credential and tenant. With a revision gate, every round trip -
 // the first request and each redirect hop - is refused once the
 // credential's revision has moved (C5 §7).
-func NewDirectTransportAuth(base string, auth Auth, client *http.Client) Querier {
-	return &directTransport{d: endpointhttp.NewDirect(base, auth, client, limits)}
+func NewDirectTransportAuth(base string, auth Auth, client *http.Client) Transport {
+	return Transport{q: &directTransport{d: endpointhttp.NewDirect(base, auth, client, limits)}}
 }
 
 func (t *directTransport) redactor() safehttp.Redactor { return t.d.Redactor() }
@@ -86,14 +86,14 @@ func NewGuardedProxyREST(cfg *rest.Config) (rest.Interface, error) {
 type proxyTransport struct{ p *endpointhttp.Proxy }
 
 // NewProxyTransport builds a proxy transport over a cluster REST client.
-func NewProxyTransport(r rest.Interface, c ServiceCandidate) Querier {
+func NewProxyTransport(r rest.Interface, c ServiceCandidate) Transport {
 	return NewProxyTransportTenant(r, c, "")
 }
 
 // NewProxyTransportTenant is NewProxyTransport with a tenant header.
-func NewProxyTransportTenant(r rest.Interface, c ServiceCandidate, tenant string) Querier {
+func NewProxyTransportTenant(r rest.Interface, c ServiceCandidate, tenant string) Transport {
 	svc := endpointhttp.Service{Namespace: c.Namespace, Name: c.Name, Port: c.Port, Scheme: schemeOr(c.Scheme), Path: c.Path}
-	return &proxyTransport{p: endpointhttp.NewProxy(r, svc, tenant, limits)}
+	return Transport{q: &proxyTransport{p: endpointhttp.NewProxy(r, svc, tenant, limits)}}
 }
 
 func (t *proxyTransport) InstantQuery(ctx context.Context, promql string) (int, []byte, error) {

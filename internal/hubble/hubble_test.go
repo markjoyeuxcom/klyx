@@ -64,7 +64,7 @@ func TestQueryFlowStats_FullReadout(t *testing.T) {
 		dns:  vec(el(`"rcode":"No Error"`, "50"), el(`"rcode":"Non-Existent Domain"`, "2.5")),
 		http: vec(el(`"status":"200"`, "80"), el(`"status":"503"`, "1.5")),
 	}
-	stats, st, err := NewSource(metrics.NewClient(q, metrics.Scope{})).QueryFlowStats(context.Background())
+	stats, st, err := NewSource(metrics.NewClient(metrics.TransportOf(q), metrics.Scope{})).QueryFlowStats(context.Background())
 	if err != nil || !st.Available {
 		t.Fatalf("want available, got %+v (%v)", st, err)
 	}
@@ -87,7 +87,7 @@ func TestQueryFlowStats_OptInSectionsStayNil(t *testing.T) {
 	// Only the flow metric set is enabled: dns/http/drop sections stay nil/empty
 	// (never fabricated zeros).
 	q := &scriptedQ{flows: vec(el(`"verdict":"FORWARDED"`, "10"))}
-	stats, st, err := NewSource(metrics.NewClient(q, metrics.Scope{})).QueryFlowStats(context.Background())
+	stats, st, err := NewSource(metrics.NewClient(metrics.TransportOf(q), metrics.Scope{})).QueryFlowStats(context.Background())
 	if err != nil || !st.Available {
 		t.Fatalf("want available: %v %+v", err, st)
 	}
@@ -100,7 +100,7 @@ func TestQueryFlowStats_OptInSectionsStayNil(t *testing.T) {
 }
 
 func TestQueryFlowStats_NothingEnabledSaysHow(t *testing.T) {
-	stats, st, err := NewSource(metrics.NewClient(&scriptedQ{}, metrics.Scope{})).QueryFlowStats(context.Background())
+	stats, st, err := NewSource(metrics.NewClient(metrics.TransportOf(&scriptedQ{}), metrics.Scope{})).QueryFlowStats(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestQueryFlowStats_NothingEnabledSaysHow(t *testing.T) {
 }
 
 func TestQueryFlowStats_TransportErrorIsDegradedNotEmpty(t *testing.T) {
-	_, _, err := NewSource(metrics.NewClient(&scriptedQ{err: errors.New("connection refused")}, metrics.Scope{})).QueryFlowStats(context.Background())
+	_, _, err := NewSource(metrics.NewClient(metrics.TransportOf(&scriptedQ{err: errors.New("connection refused")}), metrics.Scope{})).QueryFlowStats(context.Background())
 	if err == nil {
 		t.Fatal("a transport failure must error, never render as empty")
 	}

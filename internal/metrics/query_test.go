@@ -150,7 +150,7 @@ func (r *recording) RangeQuery(_ context.Context, q string, _, _ time.Time, _ ti
 
 func TestTheReaderRendersWithItsOwnScope(t *testing.T) {
 	rec := &recording{}
-	c := NewClient(rec, ScopeOf(map[string]string{"team": "a b", "cluster": "dev"}))
+	c := NewClient(TransportOf(rec), ScopeOf(map[string]string{"team": "a b", "cluster": "dev"}))
 	if _, err := c.InstantScalar(context.Background(), ClusterCPU.With(None{})); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestTheReaderRendersWithItsOwnScope(t *testing.T) {
 	// the same query under another reader's scope is that reader's: the query
 	// carries none of its own
 	other := &recording{}
-	_, _ = NewClient(other, Scope{}).InstantScalar(context.Background(), ClusterCPU.With(None{}))
+	_, _ = NewClient(TransportOf(other), Scope{}).InstantScalar(context.Background(), ClusterCPU.With(None{}))
 	if other.sent[0] != `1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))` {
 		t.Fatalf("unscoped: %s", other.sent[0])
 	}
@@ -175,7 +175,7 @@ func TestTheReaderRendersWithItsOwnScope(t *testing.T) {
 
 func TestAZeroOrUndeclaredQueryIsRefusedBeforeAnyRequest(t *testing.T) {
 	rec := &recording{}
-	c := NewClient(rec, Scope{})
+	c := NewClient(TransportOf(rec), Scope{})
 	pod := ProxySet{Equal: [][2]string{{"pod", "a"}}}
 	for _, q := range []Query{
 		{},
@@ -209,9 +209,9 @@ func TestAZeroOrUndeclaredQueryIsRefusedBeforeAnyRequest(t *testing.T) {
 // before any request. The configuration admits none; this is the reader's
 // own check.
 func TestAScopeWithAForeignLabelIsRefused(t *testing.T) {
-	for _, label := range []string{`cluster="x"} or vector(1) or up{a`, "a-b", "0a", ""} {
+	for _, label := range []string{`cluster="x"} or vector(1) or up{a`, "a-b", "0a", "", "__name__", "__meta_kubernetes_pod_name"} {
 		rec := &recording{}
-		_, err := NewClient(rec, ScopeOf(map[string]string{"cluster": "dev", label: "x"})).InstantScalar(context.Background(), ClusterCPU.With(None{}))
+		_, err := NewClient(TransportOf(rec), ScopeOf(map[string]string{"cluster": "dev", label: "x"})).InstantScalar(context.Background(), ClusterCPU.With(None{}))
 		if !errors.Is(err, ErrInvalidScope) || len(rec.sent) != 0 {
 			t.Fatalf("%q: %v, sent %v", label, err, rec.sent)
 		}
@@ -223,8 +223,8 @@ func TestATemplateNeedsACaseAndItsOwnName(t *testing.T) {
 		name string
 		f    func()
 	}{
-		{"no case", func() { Define("test-no-case", func(None, string) string { return "x" }, nil) }},
-		{"defined twice", func() { Define("cluster-cpu", func(None, string) string { return "x" }, nil, None{}) }},
+		{"no case", func() { define("test-no-case", func(None, string) string { return "x" }, nil, nil) }},
+		{"defined twice", func() { define("cluster-cpu", func(None, string) string { return "x" }, nil, nil, None{}) }},
 	} {
 		func() {
 			defer func() {
@@ -278,5 +278,71 @@ func TestEveryShapeTheReadersBuildIsDeclared(t *testing.T) {
 		if q.Name() == "" {
 			t.Errorf("%s: refused: its shape is no declared case", name)
 		}
+	}
+}
+
+// Codex's review of S3b-2a, R2: a Query keeps its own copy of its
+// parameters. Changing a slice the caller passed - a proxy's label, the
+// proxies themselves, a name or a rule cluster - changes no query admitted.
+func TestAQueryKeepsItsOwnParameters(t *testing.T) {
+	scope := ScopeOf(map[string]string{"cluster": "dev"})
+	equal := [][2]string{{"pod", "a"}}
+	names := []string{"envoy-0"}
+	clusters := []string{"x"}
+	proxies := []ProxySet{{Equal: equal}, {Equal: [][2]string{{"namespace", "edge"}}, NameLabel: "pod", Names: names}}
+	q := RuleRangeQuery.With(RuleRange{Family: "total", Clusters: clusters, Proxies: proxies})
+	before, err := q.Text(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal[0][0] = `pod="a",cluster="other"}[1m]) or rate(up{pod`
+	names[0] = "other"
+	clusters[0] = "y"
+	proxies[1] = ProxySet{Equal: [][2]string{{"evil", "1"}}}
+	after, err := q.Text(scope)
+	if err != nil || after != before {
+		t.Fatalf("the admitted query changed:\n%s\n%s (%v)", before, after, err)
+	}
+	// every template's parameters: those holding references are copied
+	pods := []string{"web-0"}
+	w := WorkloadCPU.With(PodSet{Namespace: "shop", Pods: pods})
+	keys := []string{"shop/web"}
+	r := RouteRPS.With(Routes{Keys: keys})
+	probeClusters := []string{"c0"}
+	p := RuleProbeQuery.With(RuleProbe{Family: EnvoyRqTotal, Clusters: probeClusters})
+	w0, _ := w.Text(scope)
+	r0, _ := r.Text(scope)
+	p0, _ := p.Text(scope)
+	pods[0], keys[0], probeClusters[0] = "x", "x/x", "x"
+	if w1, _ := w.Text(scope); w1 != w0 {
+		t.Fatal("pods")
+	}
+	if r1, _ := r.Text(scope); r1 != r0 {
+		t.Fatal("routes")
+	}
+	if p1, _ := p.Text(scope); p1 != p0 {
+		t.Fatal("rule clusters")
+	}
+}
+
+// A template whose parameters hold references is never defined without a
+// clone.
+func TestATemplateHoldingReferencesNeedsAClone(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("defined without a clone")
+		}
+	}()
+	define("test-no-clone", func(PodSet, string) string { return "x" }, nil, nil, PodSet{})
+}
+
+// Codex's review of S3b-2a, R3: a scope Prometheus reserves renders
+// nothing for the proof, as the reader refuses it.
+func TestAReservedScopeRendersNothing(t *testing.T) {
+	if Rendered(map[string]string{"__name__": "node_cpu_seconds_total"}) != nil {
+		t.Fatal("rendered under __name__")
+	}
+	if Rendered(map[string]string{"cluster": "dev"}) == nil {
+		t.Fatal("the control rendered nothing")
 	}
 }

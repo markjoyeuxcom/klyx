@@ -226,3 +226,29 @@ func TestSharedMetricsEndpointWithoutMatchWarns(t *testing.T) {
 		}
 	}
 }
+
+// Codex's review of S3b-2a, R3: a metrics scope never names a label
+// Prometheus reserves - not in a cluster's match, a subscription's, or a
+// metrics installation's member label - while Alertmanager's and Loki's
+// member labels are as before.
+func TestAReservedMetricsScopeLabelIsRefused(t *testing.T) {
+	for _, block := range []string{
+		"    metrics: {endpoint: https://mimir.example, match: {__name__: node_cpu_seconds_total}}\n",
+		"    metrics: {endpoint: https://mimir.example, match: {cluster: dev, __meta_x: y}}\n",
+		"    metrics: {source: m, match: {__name__: up}}\n",
+	} {
+		doc := strings.Replace(kindsFleet, "    metrics: {source: m, scope: tenant}\n", block, 1)
+		if _, err := loadYAML(t, doc); err == nil || !strings.Contains(err.Error(), "is reserved by Prometheus") {
+			t.Errorf("%q: %v", block, err)
+		}
+	}
+	doc := "clusters:\n  - name: a\n    context: a\nsources:\n  - id: m\n    kind: metrics\n    endpoint: https://mimir.example\n    memberLabel: __name__\n    serves: [{cluster: a}]\n"
+	if _, err := loadYAML(t, doc); err == nil || !strings.Contains(err.Error(), "sources.m.memberLabel") || !strings.Contains(err.Error(), "is reserved by Prometheus") {
+		t.Fatalf("memberLabel: %v", err)
+	}
+	// the control: an Alertmanager installation's member label is as before
+	doc = strings.Replace(strings.Replace(doc, "kind: metrics", "kind: alertmanager", 1), "https://mimir.example", "https://am.example", 1)
+	if _, err := loadYAML(t, doc); err != nil {
+		t.Fatalf("alertmanager: %v", err)
+	}
+}

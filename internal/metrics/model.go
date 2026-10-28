@@ -17,10 +17,27 @@ type Sample struct {
 }
 
 // Querier executes a PromQL instant query and returns the HTTP status and body.
-// Transports implement it; the Client parses.
+// Transports implement it; the Client parses. Outside this package a
+// Querier is only implemented (a test's fake), never sent to: transports
+// travel as a Transport, which only a Client sends through (Settings S3b
+// §3.3).
 type Querier interface {
 	InstantQuery(ctx context.Context, promql string) (status int, body []byte, err error)
 }
+
+// Transport is a transport, opaque: its requests take PromQL text, so only
+// a Client sends through it, rendering a registered template under its own
+// scope (Settings S3b §3.3). The zero Transport is none.
+type Transport struct{ q Querier }
+
+// TransportOf makes q a Transport: a test's fake, or one that fails
+// without sending. A Querier written outside this package never reaches
+// Prometheus: no other package writes its query API's paths
+// (TestNoOtherPackageWritesThePrometheusQueryAPI).
+func TransportOf(q Querier) Transport { return Transport{q: q} }
+
+// IsZero: no transport.
+func (t Transport) IsZero() bool { return t.q == nil }
 
 // Mode is how the connection was resolved.
 type Mode string
@@ -50,7 +67,7 @@ type DiscoveryResult struct {
 type Resolution struct {
 	Mode      Mode
 	Source    string // URL, or "ns/name:port" for service modes
-	Transport Querier
+	Transport Transport
 	Warning   string // non-fatal context on a working connection
 	Reason    string // why unavailable
 }
@@ -74,8 +91,8 @@ type ClusterMetrics struct {
 // TransportFactory builds transports. The fleet layer supplies the real one
 // (it owns the cluster REST client); tests supply a fake.
 type TransportFactory interface {
-	Direct(base string, auth Auth, tlsSkipVerify bool) Querier
-	Proxy(c ServiceCandidate, tenant string) Querier
+	Direct(base string, auth Auth, tlsSkipVerify bool) Transport
+	Proxy(c ServiceCandidate, tenant string) Transport
 }
 
 // Auth is what a direct request to an endpoint carries (coverage C5 §3-§7);

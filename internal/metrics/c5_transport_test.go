@@ -49,7 +49,7 @@ func TestGuardedProxyRedirectDoesNotExportKubeCredential(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "echo", Port: "80", Scheme: "http"})
-			_, _, err = q.InstantQuery(context.Background(), "vector(1)")
+			_, _, err = q.q.InstantQuery(context.Background(), "vector(1)")
 			if err == nil || !strings.Contains(err.Error(), "another origin") {
 				t.Fatalf("the redirect is refused: %v", err)
 			}
@@ -118,7 +118,7 @@ func TestDirectReadPastTheCapIsAnError(t *testing.T) {
 	}))
 	defer big.Close()
 	q := NewDirectTransport(big.URL, "", safehttp.NewClient(DirectPolicy(5*time.Second, false)))
-	if _, _, err := q.InstantQuery(context.Background(), "up"); !strings.Contains(errStr(err), "exceeded") {
+	if _, _, err := q.q.InstantQuery(context.Background(), "up"); !strings.Contains(errStr(err), "exceeded") {
 		t.Fatalf("past the cap: %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestProxyReadPastTheCapIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "p", Port: "9090", Scheme: "http"})
-	if _, _, err := q.InstantQuery(context.Background(), "up"); !errors.Is(err, ErrResponseTooLarge) {
+	if _, _, err := q.q.InstantQuery(context.Background(), "up"); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("past the cap: %v", err)
 	}
 }

@@ -471,6 +471,11 @@ func (c *Config) validate() error {
 			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
 				return fmt.Errorf("cluster %q: %w", cl.Name, err)
 			}
+			if e.Kind == EndpointMetrics {
+				if k := reservedMetricsLabel(e.Spec.Match); k != "" {
+					return fmt.Errorf("cluster %q: metrics.match: %s is reserved by Prometheus: a scope matches series by their labels, and each query names its own metric", cl.Name, describeKey(k))
+				}
+			}
 		}
 	}
 	// Settings S3a §2: the installations, then every cluster's resolution

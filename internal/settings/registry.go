@@ -174,7 +174,7 @@ func endpointEntries() []Entry {
 			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.", "none", "A map of label equality matchers."))
 		} else {
 			// Settings S3b §3.3: every metrics query of the cluster carries it
-			out = append(out, e("match", "match", "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's.", "none", "A map of label equality matchers."))
+			out = append(out, e("match", "match", "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's.", "none", "A map of label equality matchers, none of them a label Prometheus reserves (__name__ or another __ prefix)."))
 		}
 	}
 	// Settings S3a §2.1, S3b §2.1: a cluster's subscription to an
@@ -436,7 +436,7 @@ func sourceEntries() []Entry {
 		e("auth.type", "Installation authentication", "How Klyx authenticates to the endpoint. The secret is in the keychain as source/<id>, never in the file.", "none", "bearer or basic; endpoint only."),
 		e("auth.username", "Installation username", "The basic-authentication username; the password is in the keychain.", "none", "Any string; basic only."),
 		e("tenant", "Installation tenant", "The default tenant of its subscriptions, sent as X-Scope-OrgID.", "none", "Any string without control characters."),
-		e("memberLabel", "Member label", "The default scope of every subscription: this label equal to the member cluster's name. Subscriptions sharing a tenant need it, with distinct values.", "none: then each subscription states a match or scope: tenant", "A label name."),
+		e("memberLabel", "Member label", "The default scope of every subscription: this label equal to the member cluster's name. Subscriptions sharing a tenant need it, with distinct values.", "none: then each subscription states a match or scope: tenant", "A label name; for metrics, not one Prometheus reserves (__name__ or another __ prefix)."),
 		e("serves[].group", "Serves a group", "Every cluster of this group without its own alertmanager block subscribes to the installation.", "none", "A group name; one key per entry."),
 		e("serves[].cluster", "Serves a cluster", "This cluster, without its own alertmanager block, subscribes to the installation, before any group installation.", "none", "A cluster name; one key per entry."),
 	}
