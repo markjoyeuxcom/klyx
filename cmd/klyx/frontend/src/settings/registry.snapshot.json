@@ -186,7 +186,7 @@
       "id": "clusters[].alertmanager.match",
       "section": "observability",
       "label": "Alertmanager match",
-      "effect": "The labels that make an alert or a log stream this cluster's in a shared Alertmanager: sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.",
+      "effect": "The labels that make an alert or a log stream this cluster's in a shared Alertmanager: sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's. On a subscription block Observability edits it; on the cluster's own endpoint block it is set in fleet.yaml.",
       "scope": "endpoint",
       "default": "none",
       "validation": "A map of label equality matchers.",
@@ -205,7 +205,7 @@
       "default": "left out: alerts are read",
       "validation": "true, or left out; nothing else in the block.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability's Alertmanager panel writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -218,7 +218,7 @@
       "default": "the member label equal to the cluster's name, and the match",
       "validation": "tenant, with source; no match beside it.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability's Alertmanager panel writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -301,7 +301,7 @@
       "default": "none: an installation serving the cluster by name or group, else discovery",
       "validation": "An id in sources, of kind alertmanager.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability's Alertmanager panel writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -379,7 +379,7 @@
       "id": "clusters[].loki.match",
       "section": "observability",
       "label": "Loki match",
-      "effect": "The labels that make an alert or a log stream this cluster's in a shared Loki: sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.",
+      "effect": "The labels that make an alert or a log stream this cluster's in a shared Loki: sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's. On a subscription block Observability edits it; on the cluster's own endpoint block it is set in fleet.yaml.",
       "scope": "endpoint",
       "default": "none",
       "validation": "A map of label equality matchers.",
@@ -397,9 +397,9 @@
       "scope": "subscription",
       "default": "left out: log history is read",
       "validation": "true, or left out; nothing else in the block.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Loki panel writes the cluster's loki block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -410,9 +410,9 @@
       "scope": "subscription",
       "default": "the member label equal to the cluster's name, and the match",
       "validation": "tenant, with source; no match beside it.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Loki panel writes the cluster's loki block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -493,9 +493,9 @@
       "scope": "subscription",
       "default": "none: an installation serving the cluster by name or group, else none: Loki is never discovered",
       "validation": "An id in sources, of kind loki.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Loki panel writes the cluster's loki block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -572,7 +572,7 @@
       "id": "clusters[].metrics.match",
       "section": "observability",
       "label": "Metrics match",
-      "effect": "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's.",
+      "effect": "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's. On a subscription block Observability's Metrics panel edits it; on the cluster's own endpoint, Service or discovery block it is set in fleet.yaml, beside a legacy token if one is there.",
       "scope": "endpoint",
       "default": "none",
       "validation": "A map of label equality matchers, none of them a label Prometheus reserves (__name__ or another __ prefix).",
@@ -590,9 +590,9 @@
       "scope": "subscription",
       "default": "left out: metrics are read",
       "validation": "true, or left out; nothing else in the block.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Metrics panel writes the cluster's metrics block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -603,9 +603,9 @@
       "scope": "subscription",
       "default": "the member label equal to the cluster's name, and the match",
       "validation": "tenant, with source; no match beside it.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Metrics panel writes the cluster's metrics block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -686,9 +686,9 @@
       "scope": "subscription",
       "default": "none: an installation serving the cluster by name or group, else discovery",
       "validation": "An id in sources, of kind metrics.",
-      "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
-      "disposition": "effective-file-only",
+      "takesEffect": "on Save",
+      "save": "Review and apply in Observability's Metrics panel writes the cluster's metrics block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+      "disposition": "editable",
       "source": "schema"
     },
     {
@@ -755,7 +755,7 @@
       "default": "none stored",
       "validation": "Not empty.",
       "takesEffect": "on Test or a credential action",
-      "test": "Test reads the installation's status with it.",
+      "test": "Test reads the installation with it: Alertmanager's status, Loki's build info, or metrics' liveness.",
       "save": "Store and Remove change the keychain at once; nothing goes to fleet.yaml.",
       "disposition": "editable",
       "source": "credential"
@@ -769,7 +769,7 @@
       "default": "none",
       "validation": "bearer or basic; endpoint only.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -782,7 +782,7 @@
       "default": "none",
       "validation": "Any string; basic only.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -795,7 +795,7 @@
       "default": "false",
       "validation": "true or false; exactly one of serviceRef, discover and endpoint.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -808,7 +808,7 @@
       "default": "none",
       "validation": "An http or https URL with no credential in it.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -821,7 +821,7 @@
       "default": "none: required with serviceRef or discover",
       "validation": "A cluster of the fleet; not with endpoint.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -829,12 +829,12 @@
       "id": "sources[].id",
       "section": "observability",
       "label": "Installation id",
-      "effect": "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.",
+      "effect": "Names the installation: subscriptions, its keychain credential and every read through it carry it.",
       "scope": "installation",
       "default": "none: required",
-      "validation": "A DNS label, unique among sources.",
+      "validation": "A DNS label, unique among sources of every kind.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -842,12 +842,12 @@
       "id": "sources[].kind",
       "section": "observability",
       "label": "Installation kind",
-      "effect": "What the installation serves: alerts, log history or metrics. Settings edits Loki and metrics installations from a later version; until then a change to one is put in force at a restart.",
+      "effect": "What the installation serves: alerts, log history or metrics. Each kind has its own panel; an installation's kind does not change, so another kind is a new installation.",
       "scope": "installation",
       "default": "none: required",
       "validation": "alertmanager, loki or metrics; discover: true is not for loki.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -860,7 +860,7 @@
       "default": "none: then each subscription states a match or scope: tenant",
       "validation": "A label name; for metrics, not one Prometheus reserves (__name__ or another __ prefix).",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -873,7 +873,7 @@
       "default": "the id",
       "validation": "Any string without control characters.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -881,12 +881,12 @@
       "id": "sources[].serves[].cluster",
       "section": "observability",
       "label": "Serves a cluster",
-      "effect": "This cluster, without its own alertmanager block, subscribes to the installation, before any group installation.",
+      "effect": "This cluster, without its own block of the installation's kind, subscribes to the installation, before any group installation.",
       "scope": "installation",
       "default": "none",
       "validation": "A cluster name; one key per entry.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -894,12 +894,12 @@
       "id": "sources[].serves[].group",
       "section": "observability",
       "label": "Serves a group",
-      "effect": "Every cluster of this group without its own alertmanager block subscribes to the installation.",
+      "effect": "Every cluster of this group without its own block of the installation's kind subscribes to the installation.",
       "scope": "installation",
       "default": "none",
       "validation": "A group name; one key per entry.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -912,7 +912,7 @@
       "default": "none",
       "validation": "A Service name.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -925,7 +925,7 @@
       "default": "none",
       "validation": "A namespace name.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -938,7 +938,7 @@
       "default": "none",
       "validation": "A path; empty for none.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -951,7 +951,7 @@
       "default": "none: required with serviceRef",
       "validation": "A port name or number.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -964,7 +964,7 @@
       "default": "http",
       "validation": "http or https.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -977,7 +977,7 @@
       "default": "none",
       "validation": "Any string without control characters.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },
@@ -990,7 +990,7 @@
       "default": "false",
       "validation": "true or false; endpoint only.",
       "takesEffect": "on Save",
-      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\".",
+      "save": "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\".",
       "disposition": "editable",
       "source": "schema"
     },

@@ -1,22 +1,45 @@
 import { useEffect, useRef, useState } from "react";
 import { lostAnswer, type ApplyResult, type Plan } from "../../bridge/plan";
 import {
-  applySources, detect, getSources, migrationOffers, planSources, planSourcesFromFile, removeSourceCredential, setSourceCredential, testSource,
-  type DetectResult, type Installation, type MigrationOffer, type SourceDraft, type SourcesDraft, type SourcesState, type Subscription,
+  applySources, detect, getSources, migrationOffers, planSources, planSourcesFromFile, removeSourceCredential, setSourceCredential, testSource, testSubscription,
+  type DetectResult, type Installation, type MigrationOffer, type SourceDraft, type SourceKind, type SourcesDraft, type SourcesState, type Subscription,
 } from "../../bridge/sources";
 import { ellipsis } from "../../chrome/primitives";
 import { requestLeave, setSectionDraft } from "../navGuard";
 import { PlanView } from "../PlanView";
 import { SettingField } from "../SettingField";
 import { anchorOf } from "../registry";
-import { InstallationEditor, SubscriptionEditor } from "./SourceEditor";
+import { InstallationEditor, SubscriptionEditor, subscriptionNoun } from "./SourceEditor";
 
-// Observability's alert sources (Settings S3a §8): the installations in
-// force and each running cluster's subscription, with their plans, an
-// installation's credential, Detect and the migration offer. It keeps S2c's
-// discipline: a change to a draft withdraws its plan, a changed draft is a
-// draft to the leave guard, nothing is called current before the readback,
-// and drafts are kept across live refreshes.
+// Observability's sources of one kind (Settings S3a §8, S3b §8): the
+// installations in force and each running cluster's subscription, with
+// their plans, an installation's credential and Test, Detect (never for
+// Loki), a Loki subscription's Test and the migration offer. One panel per
+// kind, each its own leave-guard owner. It keeps S2c's discipline: a change
+// to a draft withdraws its plan, a changed draft is a draft to the leave
+// guard, nothing is called current before the readback, and drafts are
+// kept across live refreshes.
+
+// A kind's words.
+const KINDS: Record<SourceKind, { noun: string; sources: string; one: string; rows: string; own: string; none: string; detect?: string }> = {
+  alertmanager: {
+    noun: "alerts", sources: "alert sources", one: "an Alertmanager", rows: "Each cluster's alerts",
+    own: "Its own Alertmanager block is set in fleet.yaml; External endpoints tests it.",
+    none: "No installation is in force: each cluster reads its own Alertmanager.",
+    detect: "Detect looks for an Alertmanager in a group's clusters, or one cluster, and reads one small sample of its alerts to propose an installation. It proposes; it never proves one shared.",
+  },
+  loki: {
+    noun: "logs", sources: "log sources", one: "a Loki", rows: "Each cluster's logs",
+    own: "Its own loki block is set in fleet.yaml; External endpoints tests it.",
+    none: "No installation is in force: each cluster reads its own Loki, or none.",
+  },
+  metrics: {
+    noun: "metrics", sources: "metrics sources", one: "a metrics", rows: "Each cluster's metrics",
+    own: "Its own metrics block is set in fleet.yaml; External endpoints tests it.",
+    none: "No installation is in force: each cluster reads its own Prometheus.",
+    detect: "Detect looks for Prometheus in a group's clusters, or one cluster, and reads one bounded sample of its label names, never series, to propose an installation. It proposes; it never proves one shared.",
+  },
+};
 
 const hint: React.CSSProperties = { fontSize: 11, color: "var(--color-text-tertiary)" };
 const small: React.CSSProperties = { padding: "1px 8px", fontSize: 11 };
@@ -33,9 +56,11 @@ type OpenPlan = { plan: Plan; title: string; draft?: SourcesDraft; fromEditor?: 
 // revision, and dropped when that revision is gone.
 const credKey = (i: Pick<Installation, "id" | "revision">) => `${i.id}@${i.revision}`;
 
-const okText = (p: Plan) => (p.writes ? "Applied: fleet.yaml says so, and Klyx reads the alerts under the new terms." : "Applied: Klyx reads the alerts as fleet.yaml says them.");
-
-export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLoaded?: (s: SourcesState) => void; onSettled?: () => void; refreshMs?: number }) {
+export function SourcesPanel({ kind = "alertmanager", onLoaded, onSettled, refreshMs = 30_000 }: { kind?: SourceKind; onLoaded?: (s: SourcesState) => void; onSettled?: () => void; refreshMs?: number }) {
+  const words = KINDS[kind];
+  const okText = (p: Plan) => (p.writes ? `Applied: fleet.yaml says so, and Klyx reads the ${words.noun} under the new terms.` : `Applied: Klyx reads the ${words.noun} as fleet.yaml says them.`);
+  // a draft is of the panel's kind; Alertmanager's carries none, as S3a's
+  const ofKind = (d: SourcesDraft): SourcesDraft => (kind === "alertmanager" ? d : { ...d, kind });
   const [state, setState] = useState<SourcesState | null>(null);
   const [offers, setOffers] = useState<MigrationOffer[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -70,7 +95,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
   const load = (): Promise<boolean> => {
     const seq = ++issued.current;
     const read = (async (): Promise<boolean> => {
-      const [st, of] = await Promise.all([getSources(), migrationOffers()]);
+      const [st, of] = await Promise.all([getSources(kind), migrationOffers(kind)]);
       if (seq !== issued.current) return latest.current;
       if (!st) {
         setLoadFailed(true);
@@ -132,10 +157,10 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
   };
   useEffect(() => {
     const typed = (state?.installations ?? []).filter((i) => (inputs[credKey(i)] ?? "").trim() !== "");
-    setSectionDraft("observability-sources", {
+    setSectionDraft(`observability-sources-${kind}`, {
       settings: false,
       credentials: typed.map((i) => `an unsaved ${i.id} ${i.authType === "basic" ? "password" : "token"}`),
-      unsaved: editor && dirty ? ["a change to the alert sources not yet applied"] : [],
+      unsaved: editor && dirty ? [`a change to the ${words.sources} not yet applied`] : [],
       discard: () => {
         setInputs({});
         dropDraft();
@@ -143,7 +168,8 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       settling: () => settling.current,
     });
   });
-  useEffect(() => () => setSectionDraft("observability-sources", null), []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => setSectionDraft(`observability-sources-${kind}`, null), []);
 
   // keyboard: an editor opens at its first control; closed, the focus goes
   // back to what opened it once nothing is busy; a new plan takes the focus
@@ -180,16 +206,19 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       setBusy(false);
     }
   };
-  const review = (title: string, d: SourcesDraft) => void plan(title, () => planSources(d), { draft: d, fromEditor: true });
+  const review = (title: string, d: SourcesDraft) => {
+    const draft = ofKind(d);
+    void plan(title, () => planSources(draft), { draft, fromEditor: true });
+  };
 
   // settle says an Apply's result, then reads back what is in force before
   // anything is called current; a lost answer is not a refusal
   const settle = async (r: ApplyResult, o: OpenPlan) => {
     if (r.unknown) {
       setOpen(null);
-      setBanner({ kind: "error", text: `${lostAnswer(r)}. Reading the alert sources again…` });
+      setBanner({ kind: "error", text: `${lostAnswer(r)}. Reading the ${words.sources} again…` });
       const read = await load();
-      setBanner({ kind: "error", text: read ? `${lostAnswer(r)}: what is shown is what is in force now.` : `${lostAnswer(r)}, and reading the alert sources again failed: what is shown may not be what is in force.` });
+      setBanner({ kind: "error", text: read ? `${lostAnswer(r)}: what is shown is what is in force now.` : `${lostAnswer(r)}, and reading the ${words.sources} again failed: what is shown may not be what is in force.` });
     } else if (r.plan) {
       setOpen({ ...o, plan: r.plan });
       setBanner(r.error ? { kind: "error", text: `Not applied: ${r.error}` } : null);
@@ -199,7 +228,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       if (o.fromEditor) dropDraft();
       setOpen(null);
       setBanner({ kind: "success", text: okText(o.plan) });
-      if (!(await load())) setBanner({ kind: "warn", text: `${okText(o.plan)} Reading the alert sources again failed: what is shown may be out of date.` });
+      if (!(await load())) setBanner({ kind: "warn", text: `${okText(o.plan)} Reading the ${words.sources} again failed: what is shown may be out of date.` });
     }
   };
 
@@ -218,8 +247,8 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
 
   if (!state) {
     return loadFailed
-      ? <div data-testid="sources-load-failed" style={{ ...hint, color: "var(--color-text-danger)" }}>Could not read the alert sources. <button className="l-btn" onClick={() => void load()}>Retry</button></div>
-      : <div style={hint}>Reading the alert sources…</div>;
+      ? <div data-testid="sources-load-failed" style={{ ...hint, color: "var(--color-text-danger)" }}>Could not read the {words.sources}. <button className="l-btn" onClick={() => void load()}>Retry</button></div>
+      : <div style={hint}>Reading the {words.sources}…</div>;
   }
   const installationIds = state.installations.map((i) => i.id);
   const clusters = state.subscriptions.map((s) => s.cluster);
@@ -250,18 +279,18 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
     </div>
   );
   const editorView = editor && (editor.kind === "installation"
-    ? <InstallationEditor key={editorKey} initial={editor.draft} op={editor.op} subscriptions={editor.subscriptions} unresolved={editor.unresolved} conflicts={editor.conflicts} hosts={clusters} busy={busy}
+    ? <InstallationEditor key={editorKey} kind={kind} initial={editor.draft} op={editor.op} subscriptions={editor.subscriptions} unresolved={editor.unresolved} conflicts={editor.conflicts} hosts={clusters} busy={busy}
       onCancel={dropDraft}
       onDraftChange={(changed) => { draftGen.current++; setDirty(changed); setOpen((o) => (o?.fromEditor ? null : o)); }}
       onReview={(d) => review(editor.title, d)} />
-    : <SubscriptionEditor key={editorKey} cluster={editor.cluster} initial={editor.block} installations={installationIds} busy={busy}
+    : <SubscriptionEditor key={editorKey} kind={kind} cluster={editor.cluster} initial={editor.block} installations={installationIds} busy={busy}
       onCancel={dropDraft}
       onSourceChange={(src) => { draftSource.current = src; }}
       onDraftChange={(changed) => { draftGen.current++; setDirty(changed); setOpen((o) => (o?.fromEditor ? null : o)); }}
-      onReview={(d) => review(`Review ${editor.cluster}'s alert subscription`, d)} />);
+      onReview={(d) => review(`Review ${editor.cluster}'s ${subscriptionNoun[kind]} subscription`, d)} />);
 
   return (
-    <div data-testid="sources-panel" ref={root}>
+    <div data-testid="sources-panel" data-kind={kind} ref={root}>
       {banner && (
         <div data-testid="sources-banner" role="status" className="t-body" style={{ color: banner.kind === "error" ? "var(--color-text-danger)" : banner.kind === "warn" ? "var(--color-text-warning)" : "var(--color-text-primary)", overflowWrap: "anywhere" }}>
           {banner.kind !== "success" ? "▲ " : ""}{banner.text}
@@ -269,7 +298,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       )}
       {loadFailed && (
         <div role="status" data-testid="sources-reread-failed" style={{ fontSize: 11, color: "var(--color-text-warning)", marginBottom: 8 }}>
-          Klyx could not read the alert sources again: what is shown is as last read and may be out of date. <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
+          Klyx could not read the {words.sources} again: what is shown is as last read and may be out of date. <button className="l-btn" disabled={busy} onClick={() => void load()}>Retry</button>
         </div>
       )}
       <p data-testid="sources-sentence" className="settings-group-note" style={{ fontWeight: 600 }}>{state.sentence}</p>
@@ -277,12 +306,12 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
       {state.fileDiffers && (
         <div data-testid="sources-file-differs" style={{ ...line, fontSize: 12, color: "var(--color-text-warning)", margin: "4px 0 8px" }}>
           fleet.yaml&apos;s installations or subscription blocks are not the ones in force.
-          <button className="l-btn" style={small} disabled={busy} onClick={() => guarded(() => void plan("Use the file's alert sources", () => planSourcesFromFile()))}>Use the file&apos;s values</button>
+          <button className="l-btn" style={small} disabled={busy} aria-label={`use the file's ${words.sources}`} onClick={() => guarded(() => void plan(`Use the file's ${words.sources}`, () => planSourcesFromFile(kind)))}>Use the file&apos;s values</button>
         </div>
       )}
 
       <h4 className="settings-subhead">Installations</h4>
-      {state.installations.length === 0 && <div style={hint}>No installation is in force: each cluster reads its own Alertmanager.</div>}
+      {state.installations.length === 0 && <div style={hint}>{words.none}</div>}
       {state.installations.map((i) => {
         const ck = credKey(i);
         const value = inputs[ck] ?? "";
@@ -332,7 +361,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
                 onClick={() => {
                   // its subscribers by their own block go with it, as one plan
                   const own = state.subscriptions.filter((s) => s.block?.source === i.id).map((s) => ({ cluster: s.cluster, block: null }));
-                  const d: SourcesDraft = { installation: { op: "remove", source: { id: i.id } }, subscriptions: own };
+                  const d: SourcesDraft = ofKind({ installation: { op: "remove", source: { id: i.id } }, subscriptions: own });
                   const go = () => void plan(`Remove ${i.id}`, () => planSources(d), { draft: d });
                   if (strands(i.id)) requestLeave(go);
                   else go();
@@ -342,7 +371,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
         );
       })}
       <div style={{ ...line, margin: "6px 0" }}>
-        <button className="l-btn" disabled={busy} onClick={() => guarded(() => openEditor({ kind: "installation", op: "add", draft: { id: "" }, title: "Review the new installation" }))}>Add an installation</button>
+        <button className="l-btn" disabled={busy} aria-label={`add ${words.one} installation`} onClick={() => guarded(() => openEditor({ kind: "installation", op: "add", draft: { id: "" }, title: "Review the new installation" }))}>Add an installation</button>
       </div>
       {editor?.kind === "installation" && (<>
         {editor.op === "edit" && !state.installations.some((i) => i.id === editor.draft.id) && (
@@ -353,9 +382,9 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
         {editorView}
       </>)}
 
-      <h4 className="settings-subhead">Each cluster&apos;s alerts</h4>
+      <h4 className="settings-subhead">{words.rows}</h4>
       {state.subscriptions.map((s) => (
-        <div key={s.cluster} data-testid="subscription-row" data-cluster={s.cluster} data-anchor={anchorOf("clusters[].alertmanager.source", s.cluster)} tabIndex={-1} role="group" aria-label={`${s.cluster}'s alerts`} style={rowStyle}>
+        <div key={s.cluster} data-testid="subscription-row" data-cluster={s.cluster} data-anchor={anchorOf(`clusters[].${kind}.source`, s.cluster)} tabIndex={-1} role="group" aria-label={`${s.cluster}'s ${words.noun}`} style={rowStyle}>
           <div style={line}>
             <span style={{ fontWeight: 600, fontFamily: "var(--font-mono)" }}>{s.cluster}</span>
             <span className="t-secondary" style={{ fontSize: 11 }}>{s.mode}{s.via ? `, ${s.via}` : ""}</span>
@@ -363,11 +392,16 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
           <div data-testid="subscription-sentence" style={{ fontSize: 12, overflowWrap: "anywhere" }}>{s.sentence}</div>
           {s.shadowed && s.shadowed.length > 0 && <div style={hint}>its own block wins over {s.shadowed.join(", ")}</div>}
           {s.legacy
-            ? <div style={hint}>Its own Alertmanager block is set in fleet.yaml; External endpoints tests it.</div>
+            ? <div style={hint}>{words.own}</div>
             : (
               <div style={{ ...line, marginTop: 4 }}>
-                <button className="l-btn" style={small} disabled={busy} aria-label={`edit ${s.cluster}'s alert subscription`}
+                <button className="l-btn" style={small} disabled={busy} aria-label={`edit ${s.cluster}'s ${subscriptionNoun[kind]} subscription`}
                   onClick={() => guarded(() => openEditor({ kind: "subscription", cluster: s.cluster, block: s.block ?? null }))}>{s.block ? "Edit its block" : "Give it a block"}</button>
+                {/* a Loki subscription's own Test: the member and the revisions shown, never its scope (S3b §7) */}
+                {kind === "loki" && s.instRevision && s.subRevision && (
+                  <button className="l-btn" style={small} disabled={busy} aria-label={`test ${s.cluster}'s log subscription`}
+                    onClick={() => void run(() => testSubscription(s.cluster, kind, s.instRevision!, s.subRevision!))}>Test</button>
+                )}
               </div>
             )}
         </div>
@@ -382,18 +416,20 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
         {editorView}
       </>)}
 
+      {words.detect && (<>
       <h4 className="settings-subhead">Detect</h4>
-      <p style={hint}>Detect looks for an Alertmanager in a group&apos;s clusters, or one cluster, and reads one small sample of its alerts to propose an installation. It proposes; it never proves one shared.</p>
+      <p style={hint}>{words.detect}</p>
       <div style={line}>
-        <select aria-label="what Detect looks in" className="l-input" value={detectScope} disabled={busy} onChange={(e) => setDetectScope(e.target.value)}>
+        <select aria-label={`what ${kind} Detect looks in`} className="l-input" value={detectScope} disabled={busy} onChange={(e) => setDetectScope(e.target.value)}>
           <option value="">choose a group or a cluster</option>
           {clusters.map((c) => <option key={`c:${c}`} value={`c:${c}`}>cluster {c}</option>)}
         </select>
-        <input aria-label="or a group" className="l-input" placeholder="or a group" disabled={busy}
+        <input aria-label={`or a group, for ${kind} Detect`} className="l-input" placeholder="or a group" disabled={busy}
           onChange={(e) => setDetectScope(e.target.value.trim() ? `g:${e.target.value.trim()}` : "")} />
-        <button className="l-btn" disabled={busy || !detectScope} onClick={async () => {
+        <button className="l-btn" disabled={busy || !detectScope} aria-label={`detect ${kind}`} onClick={async () => {
           setBusy(true);
-          const scope = detectScope.startsWith("g:") ? { group: detectScope.slice(2) } : { cluster: detectScope.slice(2) };
+          const where = detectScope.startsWith("g:") ? { group: detectScope.slice(2) } : { cluster: detectScope.slice(2) };
+          const scope = kind === "alertmanager" ? where : { ...where, kind };
           setDetected(await detect(scope));
           setBusy(false);
         }}>Detect</button>
@@ -418,6 +454,7 @@ export function SourcesPanel({ onLoaded, onSettled, refreshMs = 30_000 }: { onLo
           ))}
         </div>
       )}
+      </>)}
 
       {offers.length > 0 && (<>
         <h4 className="settings-subhead">Make a shared installation</h4>

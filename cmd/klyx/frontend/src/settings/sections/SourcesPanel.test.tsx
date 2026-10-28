@@ -318,8 +318,8 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
       }],
     });
     renderPanel();
-    fireEvent.change(await screen.findByLabelText("what Detect looks in"), { target: { value: "c:prd" } });
-    fireEvent.click(screen.getByRole("button", { name: "Detect" }));
+    fireEvent.change(await screen.findByLabelText("what alertmanager Detect looks in"), { target: { value: "c:prd" } });
+    fireEvent.click(screen.getByRole("button", { name: "detect alertmanager" }));
     const proposal = await screen.findByTestId("detect-proposal");
     expect(b.detect).toHaveBeenCalledWith({ cluster: "prd" });
     expect(proposal.textContent).toContain("never proof");
@@ -345,7 +345,7 @@ describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", (
     renderPanel();
     const ed = await editShared();
     fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/typed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add an installation" }));
+    fireEvent.click(screen.getByRole("button", { name: "add an Alertmanager installation" }));
     expect(useLeaveRequest.getState().request?.unsaved).toEqual(["a change to the alert sources not yet applied"]);
     await act(async () => { await resolveLeave("stay"); });
     expect(endpointOf(screen.getByTestId("installation-editor")).value).toBe("https://am.example/typed");

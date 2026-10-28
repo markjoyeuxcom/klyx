@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { SourceDraft, SourcesDraft, Subscription, SubscriptionEdit } from "../../bridge/sources";
+import type { SourceDraft, SourceKind, SourcesDraft, Subscription, SubscriptionEdit } from "../../bridge/sources";
 import { SettingField } from "../SettingField";
 
-// The installation and subscription editors (Settings S3a §8): an
-// installation's fields, or a cluster's own subscription block, as
-// fleet.yaml would say them, edited as a draft. Review and apply plans the
-// draft against what runs; nothing is written until the plan is applied.
+// The installation and subscription editors (Settings S3a §8, S3b §8): an
+// installation's fields, or a cluster's own subscription block of a kind,
+// as fleet.yaml would say them, edited as a draft. Review and apply plans
+// the draft against what runs; nothing is written until the plan is
+// applied.
+
+// subscriptionNoun is what a kind's subscription brings, in its editor's
+// name: "dev's log subscription".
+export const subscriptionNoun: Record<SourceKind, string> = { alertmanager: "alert", loki: "log", metrics: "metrics" };
 
 const input: React.CSSProperties = { width: "100%", fontFamily: "var(--font-mono)", fontSize: 12 };
 const editorBox: React.CSSProperties = { padding: "8px 0 4px", fontFamily: "var(--font-sans)" };
@@ -102,7 +107,9 @@ export function subscriptionWords(b: Subscription | null): string {
   return parts.join(", ");
 }
 
-export function InstallationEditor({ initial, op, subscriptions, unresolved = [], conflicts = [], hosts, busy, onReview, onCancel, onDraftChange }: {
+export function InstallationEditor({ kind = "alertmanager", initial, op, subscriptions, unresolved = [], conflicts = [], hosts, busy, onReview, onCancel, onDraftChange }: {
+  // the installation's kind: Loki is never discovered
+  kind?: SourceKind;
   initial: SourceDraft;
   op: "add" | "edit";
   // the subscriptions a proposal or an offer carries with it, listed
@@ -152,7 +159,7 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
       <SettingField id="sources[].discover" instance={key} label="Where it is read" group>
         {() => (
           <div role="radiogroup" aria-label="Where it is read" style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-            {([["service", "a Service in a host"], ["discover", "discovered in a host"], ["endpoint", "an endpoint"]] as const).map(([v, label]) => (
+            {([["service", "a Service in a host"], ["discover", "discovered in a host"], ["endpoint", "an endpoint"]] as const).filter(([v]) => kind !== "loki" || v !== "discover").map(([v, label]) => (
               <label key={v} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
                 <input type="radio" name={`locator-${key}`} checked={f.locator === v} disabled={busy} onChange={() => set("locator")(v)} />{label}
               </label>
@@ -246,7 +253,9 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
   );
 }
 
-export function SubscriptionEditor({ cluster, initial, installations, busy, onReview, onCancel, onDraftChange, onSourceChange }: {
+export function SubscriptionEditor({ kind = "alertmanager", cluster, initial, installations, busy, onReview, onCancel, onDraftChange, onSourceChange }: {
+  // the block's kind: its fields are clusters[].<kind>.*
+  kind?: SourceKind;
   cluster: string;
   initial: Subscription | null;
   installations: string[];
@@ -301,8 +310,8 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
     return b;
   };
   return (
-    <div data-testid="subscription-editor" role="group" aria-label={`Edit ${cluster}'s alert subscription`} style={editorBox}>
-      <SettingField id="clusters[].alertmanager.off" instance={cluster}>
+    <div data-testid="subscription-editor" role="group" aria-label={`Edit ${cluster}'s ${subscriptionNoun[kind]} subscription`} style={editorBox}>
+      <SettingField id={`clusters[].${kind}.off`} instance={cluster}>
         {(ids) => (
           <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12 }}>
             <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={off} disabled={busy} onChange={(e) => setOff(e.target.checked)} />
@@ -311,7 +320,7 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
         )}
       </SettingField>
       {!off && (<>
-        <SettingField id="clusters[].alertmanager.source" instance={cluster}>
+        <SettingField id={`clusters[].${kind}.source`} instance={cluster}>
           {(ids) => (
             <select id={ids.id} aria-describedby={ids.describedBy} style={input} value={source} disabled={busy} onChange={(e) => setSource(e.target.value)}>
               <option value="">choose an installation</option>
@@ -319,7 +328,7 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
             </select>
           )}
         </SettingField>
-        <SettingField id="clusters[].alertmanager.scope" instance={cluster}>
+        <SettingField id={`clusters[].${kind}.scope`} instance={cluster}>
           {(ids) => (
             <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12 }}>
               <input id={ids.id} aria-describedby={ids.describedBy} type="checkbox" checked={scopeTenant} disabled={busy} onChange={(e) => setScopeTenant(e.target.checked)} />
@@ -327,11 +336,11 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
             </label>
           )}
         </SettingField>
-        <SettingField id="clusters[].alertmanager.tenant" instance={cluster}>
+        <SettingField id={`clusters[].${kind}.tenant`} instance={cluster}>
           {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} style={input} value={tenant} disabled={busy} placeholder="the installation's" onChange={(e) => setTenant(e.target.value)} />}
         </SettingField>
         {!scopeTenant && (
-          <SettingField id="clusters[].alertmanager.match" instance={cluster} group
+          <SettingField id={`clusters[].${kind}.match`} instance={cluster} group
             note={bad.length > 0 ? `Each row needs a key and a value, each key once: ${bad.join(", ")}` : "Each row a label and its value, over the installation's member label."}>
             {() => (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

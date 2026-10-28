@@ -1409,10 +1409,12 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
   // shows as it is. ----
   await step(steps, "Settings > Observability: an installation applied as a plan, tested, then removed", async () => {
     useFleet.getState().openSettings("observability");
-    await within(8000, "the alert sources", () => $("[data-testid='sources-sentence']"));
-    if ($("[data-testid='sources-file-differs']")) throw new Error("the smoke fleet's alert sources differ from the ones in force");
-    const sub = (c: string) => [...document.querySelectorAll<HTMLElement>("[data-testid='subscription-row']")].find((r) => r.dataset.cluster === c) ?? null;
-    const inst = () => $<HTMLElement>("[data-testid='installation-row'][data-installation='lab-am']");
+    // the Alertmanager panel's, one of three (S3b §8)
+    const AM = "[data-testid='sources-alertmanager']";
+    await within(8000, "the alert sources", () => $(`${AM} [data-testid='sources-sentence']`));
+    if ($(`${AM} [data-testid='sources-file-differs']`)) throw new Error("the smoke fleet's alert sources differ from the ones in force");
+    const sub = (c: string) => [...document.querySelectorAll<HTMLElement>(`${AM} [data-testid='subscription-row']`)].find((r) => r.dataset.cluster === c) ?? null;
+    const inst = () => $<HTMLElement>(`${AM} [data-testid='installation-row'][data-installation='lab-am']`);
     const own = (await within(8000, `${cluster}'s alerts`, () => sub(cluster))).querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
     if (!/klyx-s8-lab\/alertmanager:web/.test(own)) throw new Error(`${cluster}'s own block: ${own}`);
     // the add's outcome, apart from what the rows show: attempted once its
@@ -1428,7 +1430,7 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       onApply?.();
       // Applied, qualified or not, is acknowledged; read back is only the
       // plain Applied (Codex's re-review of S3a-4c, RR3)
-      const banner = await within(20_000, `${what}, applied`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /Applied:/));
+      const banner = await within(20_000, `${what}, applied`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>(`${AM} [data-testid='sources-banner']`, /Applied:/));
       acknowledged ||= !!onApply;
       if (!/^Applied:/.test(banner.textContent?.trim() ?? "") || /failed/.test(banner.textContent ?? "")) throw new Error(`${what} was applied, but not read back: ${banner.textContent?.trim()}`);
       return changes;
@@ -1444,7 +1446,7 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       return changes;
     };
     return afterward(async () => {
-      (await within(4000, "Add an installation", () => byText<HTMLButtonElement>("[data-testid='sources-panel'] button", /^Add an installation$/))).click();
+      (await within(4000, "Add an installation", () => byText<HTMLButtonElement>(`${AM} button`, /^Add an installation$/))).click();
       const ed = await within(8000, "the installation editor", () => $<HTMLElement>("[data-testid='installation-editor']"));
       const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
       typeInto(input("sources[].id"), "lab-am");
@@ -1464,17 +1466,116 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       });
       // Test reads the installation's status through its host
       (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
-      const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
+      const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>(`${AM} [data-testid='sources-banner']`, /^Available: Alertmanager 0\.34\.1/));
       const removed = await removeIt("remove lab-am");
       attempted = false; // removed: nothing of the step's is left to restore
-      if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
+      if ($(`${AM} [data-testid='sources-file-differs']`)) throw new Error("fleet.yaml and the sources in force differ after the removal");
       return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
     }, () => attempted, () => restore({
       shown: () => !!inst(),
-      retry: () => byText<HTMLButtonElement>("[data-testid='sources-reread-failed'] button", /^Retry$/)?.click(),
+      retry: () => byText<HTMLButtonElement>(`${AM} [data-testid='sources-reread-failed'] button`, /^Retry$/)?.click(),
       remove: () => removeIt("remove lab-am after a failure"),
       acknowledged,
     }));
+  });
+
+  // ---- Settings S3b §9: a metrics and a Loki installation, each hosted by
+  // the lab cluster, applied through its own panel's plan, tested, read
+  // where its kind is shown, then removed, so the smoke fleet ends as it
+  // began. The metrics one serves the lab cluster, which has no metrics
+  // block of its own, against the lab's Prometheus (lab-ss3b), and the
+  // Nodes view then says where its metrics come from. The lab cluster
+  // keeps its own Loki block, which wins over an installation and which
+  // Settings never replaces: the Loki installation serves aks-stg-weu,
+  // whose connection is down, and that member's own Test, which leases the
+  // member, says so. ----
+  await step(steps, "Settings > Observability: a metrics and a Loki installation, applied, tested, read, removed", async () => {
+    useFleet.getState().openSettings("observability");
+    const P = (k: string) => `[data-testid='sources-${k}']`;
+    await within(8000, "the metrics and logs panels", () => $(`${P("metrics")} [data-testid='sources-sentence']`) && $(`${P("loki")} [data-testid='sources-sentence']`));
+    const row = (k: string, c: string) => [...document.querySelectorAll<HTMLElement>(`${P(k)} [data-testid='subscription-row']`)].find((r) => r.dataset.cluster === c) ?? null;
+    const inst = (k: string, id: string) => $<HTMLElement>(`${P(k)} [data-testid='installation-row'][data-installation='${id}']`);
+    for (const [k, id] of [["metrics", "lab-metrics"], ["loki", "lab-logs"]]) {
+      if (inst(k, id)) throw new Error(`${id} is in force before the walk: a previous run left it; remove it by hand`);
+      if ($(`${P(k)} [data-testid='sources-file-differs']`)) throw new Error(`the smoke fleet's ${k} sources differ from the ones in force`);
+    }
+    const created: Record<string, boolean> = {};
+    const acknowledged: Record<string, boolean> = {};
+    const applyPlan = async (k: string, what: string, onApply?: () => void) => {
+      const plan = await within(8000, `the plan to ${what}`, () => $(`${P(k)} [data-testid='settings-plan']`));
+      const refused = plan.querySelector("[data-testid='plan-refused']");
+      if (refused) throw new Error(`the plan to ${what} was refused: ${refused.textContent}`);
+      const changes = [...plan.querySelectorAll("[data-testid='plan-changes'] li")].map((li) => li.textContent ?? "");
+      (await within(4000, "Apply", () => byText<HTMLButtonElement>(`${P(k)} [data-testid='settings-plan'] button`, /^Apply$/))).click();
+      onApply?.();
+      const banner = await within(20_000, `${what}, applied`, () => !$(`${P(k)} [data-testid='settings-plan']`) && byText<HTMLElement>(`${P(k)} [data-testid='sources-banner']`, /Applied:/));
+      if (onApply) acknowledged[k] = true;
+      if (!/^Applied:/.test(banner.textContent?.trim() ?? "") || /failed/.test(banner.textContent ?? "")) throw new Error(`${what} was applied, but not read back: ${banner.textContent?.trim()}`);
+      return changes;
+    };
+    const add = async (k: string, f: { id: string; ns: string; name: string; port: string; tenant?: string; memberLabel: string; serves: string }) => {
+      (await within(4000, `add ${f.id}`, () => $<HTMLButtonElement>(`${P(k)} button[aria-label='add ${k === "loki" ? "a Loki" : "a metrics"} installation']:not([disabled])`))).click();
+      const ed = await within(8000, "the installation editor", () => $<HTMLElement>(`${P(k)} [data-testid='installation-editor']`));
+      const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
+      typeInto(input("sources[].id"), f.id);
+      chooseOption(ed.querySelector<HTMLSelectElement>("[data-setting='sources[].host'] select")!, cluster);
+      typeInto(input("sources[].serviceRef.namespace"), f.ns);
+      typeInto(input("sources[].serviceRef.name"), f.name);
+      typeInto(input("sources[].serviceRef.port"), f.port);
+      if (f.tenant) typeInto(input("sources[].tenant"), f.tenant);
+      typeInto(input("sources[].memberLabel"), f.memberLabel);
+      (await within(4000, "add to cluster", () => ed.querySelector<HTMLButtonElement>("button[aria-label='add to cluster']"))).click();
+      typeInto(await within(4000, "the served cluster", () => ed.querySelector<HTMLInputElement>("input[aria-label='cluster 1']")), f.serves);
+      (await within(4000, "Review and apply", () => byText<HTMLButtonElement>(`${P(k)} [data-testid='installation-editor'] button`, /^Review and apply$/))).click();
+      const changes = await applyPlan(k, `add ${f.id}`, () => { created[k] = true; });
+      await within(8000, `${f.id} in force`, () => inst(k, f.id));
+      return changes;
+    };
+    const removeIt = async (k: string, id: string) => {
+      byText<HTMLButtonElement>(`${P(k)} [data-testid='settings-plan'] button`, /^Cancel$/)?.click();
+      (await within(8000, `remove ${id}`, () => $<HTMLButtonElement>(`${P(k)} button[aria-label='remove ${id}']:not([disabled])`))).click();
+      const changes = await applyPlan(k, `remove ${id}`);
+      await within(8000, `${id} gone`, () => !inst(k, id));
+      created[k] = false;
+      return changes;
+    };
+    const sentence = (k: string, c: string) => row(k, c)?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+    const tested = async (k: string, label: string, answer: RegExp) => {
+      (await within(4000, label, () => $<HTMLButtonElement>(`${P(k)} button[aria-label="${label}"]:not([disabled])`))).click();
+      return (await within(30_000, `${label}'s answer`, () => byText<HTMLElement>(`${P(k)} [data-testid='sources-banner']`, answer))).textContent?.trim();
+    };
+    const cleanup = async () => {
+      for (const [k, id] of [["metrics", "lab-metrics"], ["loki", "lab-logs"]]) {
+        if (!created[k]) continue;
+        useFleet.getState().openSettings("observability");
+        await restore({
+          shown: () => !!inst(k, id),
+          retry: () => byText<HTMLButtonElement>(`${P(k)} [data-testid='sources-reread-failed'] button`, /^Retry$/)?.click(),
+          remove: () => removeIt(k, id),
+          acknowledged: !!acknowledged[k],
+        });
+      }
+    };
+    return afterward(async () => {
+      // metrics: the lab cluster subscribes by name, under its member label
+      const mAdded = await add("metrics", { id: "lab-metrics", ns: "klyx-ss3b-lab", name: "lab-prometheus", port: "web", memberLabel: "cluster", serves: cluster });
+      const mScope = await within(8000, `${cluster}'s metrics subscribed`, () => { const t = sentence("metrics", cluster); return /lab-metrics/.test(t) && new RegExp(`cluster=${cluster}`).test(t) ? t : null; });
+      const mTest = await tested("metrics", "test lab-metrics", /^Available: the Prometheus API answered/);
+      await open("nodes");
+      const nodes = await within(30_000, "the Nodes view's source line", () => { const t = $("[data-testid='nodes-source']")?.textContent ?? ""; return /lab-metrics/.test(t) ? t : null; });
+      useFleet.getState().openSettings("observability");
+      await within(8000, "the metrics panel again", () => inst("metrics", "lab-metrics"));
+      const mRemoved = await removeIt("metrics", "lab-metrics");
+      // Loki: aks-stg-weu subscribes by name; its connection is down
+      const lAdded = await add("loki", { id: "lab-logs", ns: "klyx-s8b-lab", name: "loki", port: "http", tenant: "lab", memberLabel: "k8s_cluster_name", serves: "aks-stg-weu" });
+      const lScope = await within(8000, "aks-stg-weu's logs subscribed", () => { const t = sentence("loki", "aks-stg-weu"); return /lab-logs/.test(t) && /k8s_cluster_name=aks-stg-weu/.test(t) ? t : null; });
+      const lTest = await tested("loki", "test lab-logs", /^Available: Loki /);
+      // a refusal's banner is marked ▲
+      const memberTest = await tested("loki", "test aks-stg-weu's log subscription", /^▲ Unavailable: .*aks-stg-weu/);
+      const lRemoved = await removeIt("loki", "lab-logs");
+      for (const k of ["metrics", "loki"]) if ($(`${P(k)} [data-testid='sources-file-differs']`)) throw new Error(`fleet.yaml and the ${k} sources in force differ after the removal`);
+      return { metrics: { added: mAdded, scope: mScope.trim(), test: mTest, nodes: nodes.trim(), removed: mRemoved }, loki: { added: lAdded, scope: lScope.trim(), test: lTest, member: memberTest, removed: lRemoved } };
+    }, () => !!created.metrics || !!created.loki, cleanup);
   });
 
   // ---- Settings slice F §7: the AI section's Review and apply, on the
