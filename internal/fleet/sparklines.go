@@ -62,6 +62,7 @@ func (c *ClusterConn) sparklines(ctx context.Context, cpuQ, memQ metrics.Query) 
 	now := clk.Now()
 
 	mr := c.readMetrics(ctx, now)
+	defer mr.release()
 	cap := mr.cap
 
 	if !cap.Available {
@@ -72,8 +73,8 @@ func (c *ClusterConn) sparklines(ctx context.Context, cpuQ, memQ metrics.Query) 
 		return SparklineSet{}, fmt.Errorf("%s", msg)
 	}
 	set, err := querySparklines(ctx, mr.client, now, cpuQ, memQ)
-	if err == nil && c.credentialMoved(mr.rev) {
-		return SparklineSet{}, errors.New("metrics unavailable: " + reasonCredentialChanged)
+	if why := mr.unsettled(); why != "" {
+		return SparklineSet{}, errors.New("metrics unavailable: " + why)
 	}
 	return set, err
 }

@@ -82,9 +82,8 @@ type FleetPlanDeps struct {
 	// Alertmanager is the block a connection for an entry would use,
 	// resolved against the active installations (Settings S3a §2.2)
 	Alertmanager func(config.ClusterConfig) *config.EndpointConfig
-	// Sources are the installations in force, of every kind: a placement
-	// edit that would move a cluster's Loki or metrics is refused until
-	// Klyx reads through installations (Settings S3b §2.4)
+	// Sources are the installations in force, of every kind: a plan lists
+	// where a change moves a cluster's Loki and metrics (Settings S3b §3.5)
 	Sources func() []config.SourceConfig
 	// ResolveSources checks that a runtime candidate - the running fleet
 	// with a plan's change - resolves against the installations in force;
@@ -578,19 +577,6 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 			return refuse("with this change, the alert installations do not resolve: " + config.DisplayError(err))
 		}
 	}
-	// S3b §2.4: a running connection cannot follow its Loki or metrics to
-	// another source until Klyx reads through installations; a reconnect
-	// or an addition builds its connection anew, so it follows
-	if fp.d.Sources != nil && (x.class == classPlacement || x.class == classProtection) {
-		sources := fp.d.Sources()
-		for _, kind := range []string{config.EndpointLoki, config.EndpointMetrics} {
-			was, now := config.ConnectionBlock(kind, sources, run), config.ConnectionBlock(kind, sources, x.cand)
-			if amSourceKey(was) != amSourceKey(now) {
-				return refuse("with this change, " + name + "'s " + kindWords(kind) + " would come from " + kindSourceOf(kind, now) + " instead of " + kindSourceOf(kind, was) +
-					": this version of Klyx cannot move a running cluster's " + kindWords(kind) + " until it reads through installations, so leave its group as it is, or give it its own " + kind + " block")
-			}
-		}
-	}
 	if fp.d.SourcesRevision != nil {
 		x.plan.Runtime["sources"] = strconv.FormatUint(fp.d.SourcesRevision(), 10)
 	}
@@ -624,6 +610,19 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		if fp.d.Alertmanager != nil && running {
 			if was, now := fp.d.Alertmanager(run), fp.d.Alertmanager(x.cand); amSourceKey(was) != amSourceKey(now) {
 				x.plan.Changes = append(x.plan.Changes, PlanChangeDTO{ID: "fleet.alerts", Label: "Alerts", From: amSourceOf(was), To: amSourceOf(now)})
+			}
+		}
+		// where its log history and metrics come from, when the change
+		// moves them: the running connection follows (S3b §3.5)
+		if fp.d.Sources != nil && running {
+			sources := fp.d.Sources()
+			for _, k := range []struct{ kind, id, label string }{
+				{config.EndpointLoki, "fleet.logs", "Log history"},
+				{config.EndpointMetrics, "fleet.metrics", "Metrics"},
+			} {
+				if was, now := config.ConnectionBlock(k.kind, sources, run), config.ConnectionBlock(k.kind, sources, x.cand); amSourceKey(was) != amSourceKey(now) {
+					x.plan.Changes = append(x.plan.Changes, PlanChangeDTO{ID: k.id, Label: k.label, From: kindSourceOf(k.kind, was), To: kindSourceOf(k.kind, now)})
+				}
 			}
 		}
 		x.plan.Writes = x.edit != nil

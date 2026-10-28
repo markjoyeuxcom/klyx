@@ -178,16 +178,16 @@ func endpointEntries() []Entry {
 		}
 	}
 	// Settings S3a §2.1, S3b §2.1: a cluster's subscription to an
-	// installation. Loki's and metrics' are file-only in S3b-1: Klyx reads
-	// through their installations from S3b-2, and puts a change in force at
-	// a restart until Settings edits them.
+	// installation. Loki's and metrics' are read through their installations
+	// (S3b-2b) and file-only until Settings edits them (S3b-4): a change is
+	// put in force at a restart.
 	sub := func(kind, id, label, effect, def, validation string) Entry {
 		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki", "metrics": "Metrics"}[kind]
 		e := Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
 			TakesEffect: OnSave, Save: subscriptionSave, Disposition: Editable, Source: FromSchema}
 		if kind != "alertmanager" {
 			e.TakesEffect, e.Disposition = Restart, FileOnly
-			e.Save = "Edit fleet.yaml: a " + name + " subscription is put in force at a restart in this version, and read through its installation from a later one."
+			e.Save = "Edit fleet.yaml: a " + name + " subscription is put in force at a restart in this version; Settings edits it from a later one."
 		}
 		return e
 	}
@@ -422,7 +422,7 @@ func sourceEntries() []Entry {
 	}
 	return []Entry{
 		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.", "none: required", "A DNS label, unique among sources."),
-		e("kind", "Installation kind", "What the installation serves: alerts, log history or metrics. Klyx reads through Loki and metrics installations from a later version, and puts them in force at a restart until then.", "none: required", "alertmanager, loki or metrics; discover: true is not for loki."),
+		e("kind", "Installation kind", "What the installation serves: alerts, log history or metrics. Settings edits Loki and metrics installations from a later version; until then a change to one is put in force at a restart.", "none: required", "alertmanager, loki or metrics; discover: true is not for loki."),
 		e("name", "Installation name", "A display name, for Settings and the scope sentence.", "the id", "Any string without control characters."),
 		e("host", "Host cluster", "The fleet cluster whose API server reaches a serviceRef or discovered installation. It is transport only: it grants no reads of the host's objects, and a host cannot be removed while an installation names it.", "none: required with serviceRef or discover", "A cluster of the fleet; not with endpoint."),
 		e("serviceRef.namespace", "Installation Service namespace", "The namespace of the Service, in the host, that the installation is reached through.", "none", "A namespace name."),

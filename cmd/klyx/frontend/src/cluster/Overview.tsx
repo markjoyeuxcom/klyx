@@ -494,8 +494,9 @@ function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; l
     text = `monitoring unavailable: ${dto.reason || "unknown"}`;
     color = "var(--color-text-warning)";
   } else {
-    const where = dto.mode === "explicit-endpoint" ? `endpoint ${dto.source}` : `svc ${dto.source}`;
-    const label = dto.mode === "discovered-service" ? "discovered" : dto.mode === "explicit-service-ref" ? "service" : "endpoint";
+    // a subscription names its installation and where it is read (Settings S3b §3.1)
+    const where = dto.mode === "explicit-endpoint" ? `endpoint ${dto.source}` : dto.mode === "subscribed" ? dto.source : `svc ${dto.source}`;
+    const label = dto.mode === "discovered-service" ? "discovered" : dto.mode === "explicit-service-ref" ? "service" : dto.mode === "subscribed" ? "installation" : "endpoint";
     text = `monitoring: ${label} · ${where}`;
     if (dto.warning) text += ` ⚠︎ ${dto.warning}`;
   }

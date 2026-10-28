@@ -131,8 +131,14 @@ type LokiReader struct {
 	match    map[string]string
 	rev      uint64
 	red      safehttp.Redactor
-	get      func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error)
+	get      lokiGet
+	// terms are a subscription's, pinned when the reader was built
+	// (Settings S3b §3.1): every page is fenced by them
+	terms *sourceTerms
 }
+
+// lokiGet is one page's GET.
+type lokiGet func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error)
 
 // Loki resolves the cluster's Loki as configured now.
 func (c *ClusterConn) Loki() (*LokiReader, error) {
@@ -145,8 +151,8 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 	case cfg.Off:
 		return nil, ErrLokiOff
 	case cfg.Source != "":
-		// read through its installation from S3b-2; never another way
-		return nil, fmt.Errorf("this cluster's logs come from the installation %s, and this version of Klyx does not read through installations yet", cfg.Source)
+		// read through its installation, never another way (S3b §3.1)
+		return c.subscribedLokiLocked(cfg.Source)
 	}
 	rev := uint64(0)
 	if c.creds.Revisions != nil {
@@ -170,6 +176,19 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 	if cfg.ServiceRef == nil {
 		return nil, ErrNoLoki
 	}
+	g, err := c.lokiProxyLocked()
+	if err != nil {
+		return nil, err
+	}
+	svc := serviceOf(cfg.ServiceRef)
+	p := endpointhttp.NewRawProxy(g, svc, cfg.Tenant, lokiLimits)
+	r.identity, r.display, r.get = amIdentity("service", serviceAt(svc), cfg.Tenant, cfg.Match), "Service "+serviceAt(svc), p.Get
+	return r, nil
+}
+
+// lokiProxyLocked is the connection's guarded service-proxy client for
+// Loki, built once. Caller holds c.loki.mu.
+func (c *ClusterConn) lokiProxyLocked() (*endpointhttp.GuardedProxy, error) {
 	if c.restConfig == nil {
 		return nil, errors.New("this connection has no service-proxy client")
 	}
@@ -179,9 +198,91 @@ func (c *ClusterConn) Loki() (*LokiReader, error) {
 	if c.loki.proxyErr != nil {
 		return nil, fmt.Errorf("the service-proxy client could not be built: %w", c.loki.proxyErr)
 	}
-	svc := serviceOf(cfg.ServiceRef)
-	p := endpointhttp.NewRawProxy(c.loki.proxy, svc, cfg.Tenant, lokiLimits)
-	r.identity, r.display, r.get = amIdentity("service", serviceAt(svc), cfg.Tenant, cfg.Match), "Service "+serviceAt(svc), p.Get
+	return c.loki.proxy, nil
+}
+
+// lokiProxy is lokiProxyLocked for a member reading through an
+// installation this connection hosts (S3b §3.1).
+func (c *ClusterConn) lokiProxy() (*endpointhttp.GuardedProxy, error) {
+	c.loki.mu.Lock()
+	defer c.loki.mu.Unlock()
+	return c.lokiProxyLocked()
+}
+
+// subscribedLokiLocked is the reader of the cluster's Loki subscription
+// (Settings S3b §3.1), its terms pinned now: the installation's endpoint
+// with its own credential and the 30 s page timeout, or its Service
+// through a lease on the host's current connection taken per page. Every
+// page is fenced by the terms; a hosted one holds one of the host's Loki
+// slots, beside the member's and the fleet's. The match is the
+// subscription's effective one, none for scope: tenant. Caller holds
+// c.loki.mu.
+func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
+	b := c.am.buckets
+	if b == nil {
+		return nil, fmt.Errorf("this cluster's logs come from the installation %s, and this connection was built without the installations in force", id)
+	}
+	sub, ok := b.sources.SubscriptionOf(config.EndpointLoki, c.name)
+	if !ok || sub.Source.ID != id {
+		return nil, fmt.Errorf("this cluster's subscription to %s is not in force yet; Klyx reads it once it is applied", id)
+	}
+	t := b.termsOf(sub)
+	if err := b.checkTerms(t); err != nil {
+		return nil, err
+	}
+	rev := uint64(0)
+	if c.creds.Revisions != nil {
+		rev = c.creds.Revisions.Revision(c.name, config.EndpointLoki)
+	}
+	match := sub.Match
+	if sub.ScopeTenant {
+		match = nil
+	}
+	r := &LokiReader{c: c, identity: t.key(), tenant: sub.Tenant, match: match, rev: rev, terms: &t}
+	src := sub.Source
+	fence := endpointhttp.Fence{Check: func() error { return b.checkTerms(t) }, Denied: func() { b.sources.Denied(src.ID) }}
+	if t.direct() {
+		at, err := endpointAt(src.Endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", src.ID, err)
+		}
+		auth, err := b.sourceCredential(t)
+		if err != nil {
+			return nil, err
+		}
+		client := c.lokiClient(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, src.TLSSkipVerify))
+		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client, lokiLimits)
+		r.display, r.red = src.ID+", "+at, d.Redactor()
+		r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
+			return fence.Do(ctx, func(ctx context.Context) (int, []byte, error) { return d.GetWith(ctx, path, q, hdr) })
+		}
+		return r, nil
+	}
+	if src.ServiceRef == nil {
+		return nil, fmt.Errorf("%s has no serviceRef, and Loki is not discovered", src.ID)
+	}
+	svc := serviceOf(src.ServiceRef)
+	r.display = src.ID + ", Service " + serviceAt(svc) + " in " + src.Host
+	r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
+		conn, life, release, err := b.lease(src.Host, "the log history of "+c.name)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%s's host %s is not connected: %w", src.ID, src.Host, err)
+		}
+		defer release()
+		host, ok := conn.(*ClusterConn)
+		if !ok || host.ID() != t.hostConn {
+			return 0, nil, errAccessMoved
+		}
+		g, err := host.lokiProxy()
+		if err != nil {
+			return 0, nil, fmt.Errorf("%s: %w", src.ID, err)
+		}
+		p := endpointhttp.NewRawProxy(g, svc, sub.Tenant, lokiLimits)
+		f := fence
+		f.Life = life
+		f.Slot = func(ctx context.Context) (func(), error) { return b.slots.take(ctx, config.EndpointLoki, src.Host) }
+		return f.Do(ctx, func(ctx context.Context) (int, []byte, error) { return p.Get(ctx, path, q, hdr) })
+	}
 	return r, nil
 }
 
@@ -240,6 +341,16 @@ func (r *LokiReader) Slot(ctx context.Context) (func(), error) {
 // tenant says what to set. A read across a credential change fails (C5 §7).
 func (r *LokiReader) read(ctx context.Context, path string, q url.Values, hdr http.Header) ([]byte, error) {
 	code, body, err := r.get(ctx, path, q, hdr)
+	// a page read across a move of the subscription's terms is of a new
+	// source (S3b §3.2); a host that went down says so
+	if r.terms != nil && r.c.am.buckets != nil {
+		if terr := r.c.am.buckets.checkTerms(*r.terms); terr != nil {
+			if termsMoved(terr) {
+				return nil, ErrLokiSourceChanged
+			}
+			return nil, terr
+		}
+	}
 	if err != nil {
 		return nil, r.red.Err(err, errLokiTooLarge, endpointhttp.ErrCredentialChanged, context.Canceled, context.DeadlineExceeded)
 	}

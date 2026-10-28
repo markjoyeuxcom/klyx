@@ -61,7 +61,9 @@ const (
 	ModeExplicitEndpoint Mode = "explicit-endpoint"
 	ModeExplicitService  Mode = "explicit-service-ref"
 	ModeDiscovered       Mode = "discovered-service"
-	ModeUnavailable      Mode = "unavailable"
+	// ModeSubscribed reads through an installation (Settings S3b §3.1)
+	ModeSubscribed  Mode = "subscribed"
+	ModeUnavailable Mode = "unavailable"
 )
 
 // ServiceCandidate is an in-cluster Prometheus Service to proxy to.

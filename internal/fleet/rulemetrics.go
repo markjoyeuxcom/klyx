@@ -64,6 +64,7 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 	q.Unattributable = c.envoyProxyReason(ctx, gw)
 
 	mr := c.readMetrics(ctx, q.End)
+	defer mr.release()
 	mcap := mr.cap
 	if !mcap.Available {
 		msg := "metrics unavailable"
@@ -87,8 +88,8 @@ func (c *ClusterConn) RuleMetrics(ctx context.Context, namespace, name string) (
 		return out, nil
 	}
 	res := routemetrics.NewEnvoyRuleSource(mr.client).QueryRules(ctx, q)
-	if c.credentialMoved(mr.rev) {
-		return routemetrics.Unavailable(q, "metrics unavailable: "+reasonCredentialChanged), nil
+	if why := mr.unsettled(); why != "" {
+		return routemetrics.Unavailable(q, "metrics unavailable: "+why), nil
 	}
 	res.Status.UpdatedAt = q.End
 	return res, nil

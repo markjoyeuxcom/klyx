@@ -48,6 +48,11 @@ type metricsCache struct {
 	// holds the transport, whose requests take PromQL text (Settings S3b
 	// §3.3)
 	client *metrics.Client
+	// terms are a subscription's, pinned when it was probed, and key their
+	// lineage key (Settings S3b §3.1, §3.2): another key now discards the
+	// cache. A subscribed read builds its client per read, from the terms.
+	terms *sourceTerms
+	key   string
 
 	samples    metrics.ClusterMetrics
 	samplesExp time.Time
@@ -74,11 +79,13 @@ func (f transportFactory) Proxy(c metrics.ServiceCandidate, tenant string) metri
 // proxyREST is the REST client the service-proxy path uses: the guarded one
 // built from the cluster's rest.Config, which refuses redirects off the API
 // server's origin (C5 §4). A connection without a rest.Config (fake clients
-// in tests) uses its clientset's. Caller MUST hold c.metricsMu.
+// in tests) uses its clientset's.
 func (c *ClusterConn) proxyREST() (rest.Interface, error) {
 	if c.restConfig == nil {
 		return c.typed.CoreV1().RESTClient(), nil
 	}
+	c.guardedMu.Lock()
+	defer c.guardedMu.Unlock()
 	if c.guardedREST == nil && c.guardedRESTErr == nil {
 		c.guardedREST, c.guardedRESTErr = metrics.NewGuardedProxyREST(c.restConfig)
 	}
@@ -120,6 +127,10 @@ func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
 // lifetime, unavailable is short-TTL re-probed, forceReprobe bypasses the cache.
 // Caller MUST hold c.metricsMu.
 func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
+	if c.metricsCfg.Source != "" {
+		c.ensureSubscribedMetricsLocked(ctx, forceReprobe, now)
+		return
+	}
 	revs := c.creds.Revisions
 	rev := revs.Revision(c.name, config.EndpointMetrics)
 	capValid := c.metricsState.capSet && !forceReprobe && c.metricsState.credRev == rev &&
@@ -161,6 +172,60 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	c.metricsState.samplesExp = time.Time{}
 }
 
+// ensureSubscribedMetricsLocked probes a subscription's metrics through
+// its installation (Settings S3b §3.1) into c.metricsState, keyed by its
+// lineage: the cache is valid while the key and the block's revision are,
+// available for their life and unavailable for the short TTL. Caller MUST
+// hold c.metricsMu.
+func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceReprobe bool, now time.Time) {
+	rev := c.creds.Revisions.Revision(c.name, config.EndpointMetrics)
+	id := c.metricsCfg.Source
+	unavailable := func(source, why string) {
+		c.metricsState = metricsCache{credRev: rev, capSet: true, capExpiry: now.Add(metricsUnavailableTTL),
+			cap: metrics.MetricsCapability{Mode: metrics.ModeUnavailable, Source: source, Reason: why}}
+	}
+	b := c.am.buckets
+	if b == nil {
+		unavailable("the installation "+id, "this connection was built without the installations in force, so it reads no installation")
+		return
+	}
+	sub, ok := b.sources.SubscriptionOf(config.EndpointMetrics, c.name)
+	if !ok || sub.Source.ID != id {
+		unavailable("the installation "+id, "this cluster's subscription to "+id+" is not in force yet; Klyx reads it once it is applied")
+		return
+	}
+	t := b.termsOf(sub)
+	key := t.key()
+	st := c.metricsState
+	// a known-down host, or terms moved since, serve nothing cached (§13)
+	if st.capSet && !forceReprobe && st.key == key && st.credRev == rev && (st.cap.Available || now.Before(st.capExpiry)) &&
+		(st.terms == nil || b.checkTerms(*st.terms) == nil) {
+		return
+	}
+	q, display, release, err := b.metricsSource(ctx, t, "the metrics of "+c.name)
+	source := id
+	if display != "" {
+		source += ", " + display
+	}
+	if err != nil {
+		unavailable(source, safehttp.NewRedactor().Text(err.Error()))
+		c.metricsState.key, c.metricsState.terms = key, &t
+		return
+	}
+	cap := metrics.Probe(ctx, metrics.Resolution{Mode: metrics.ModeSubscribed, Source: source, Transport: q})
+	release()
+	// a probe across a move is neither cached nor shown as the source's
+	// availability
+	if why := c.readMoved(rev, &t); why != "" {
+		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: why}}
+		return
+	}
+	c.metricsState = metricsCache{credRev: rev, capSet: true, cap: cap, terms: &t, key: key}
+	if !cap.Available {
+		c.metricsState.capExpiry = now.Add(metricsUnavailableTTL)
+	}
+}
+
 // reasonCredentialChanged is what a read that crossed a change to the
 // endpoint's credential or configuration says (C5 §7).
 const reasonCredentialChanged = "the endpoint's credential changed during the read; it is read again next time"
@@ -168,20 +233,53 @@ const reasonCredentialChanged = "the endpoint's credential changed during the re
 // metricsRead is what a reader takes under c.metricsMu and queries outside
 // it: the capability, the client (its transport under its own scope, never
 // a caller's: Settings S3b §3.3), and the credential revision both were
-// built under.
+// built under. A subscribed read also pins its terms, and release ends its
+// host lease; a reader defers it.
 type metricsRead struct {
-	cap    metrics.MetricsCapability
-	client *metrics.Client
-	rev    uint64
+	c       *ClusterConn
+	cap     metrics.MetricsCapability
+	client  *metrics.Client
+	rev     uint64
+	terms   *sourceTerms
+	release func()
 }
 
 // readMetrics resolves the capability (the lazy probe and its cache) and
-// takes a metricsRead of it.
+// takes a metricsRead of it: a subscription's client is built for this
+// read alone, under the terms it was probed with (S3b §3.1, §13).
 func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
 	c.metricsMu.Lock()
-	defer c.metricsMu.Unlock()
 	c.ensureMetricsLocked(ctx, false, now)
-	return metricsRead{cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev}
+	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}}
+	c.metricsMu.Unlock()
+	if mr.terms == nil || !mr.cap.Available {
+		return mr
+	}
+	q, _, release, err := c.am.buckets.metricsSource(ctx, *mr.terms, "the metrics of "+c.name)
+	if err != nil {
+		mr.cap = metrics.MetricsCapability{Mode: mr.cap.Mode, Source: mr.cap.Source, Reason: safehttp.NewRedactor().Text(err.Error())}
+		return mr
+	}
+	mr.client, mr.release = metrics.NewClient(q, mr.terms.scope()), release
+	return mr
+}
+
+// unsettled is "" while the read's result stands; otherwise why it is not
+// shown: the endpoint's revision moved (its credential or its block), or a
+// subscribed read's terms did, whichever of its queries the move landed in.
+func (mr metricsRead) unsettled() string { return mr.c.readMoved(mr.rev, mr.terms) }
+
+// readMoved is why a read under rev and terms is not shown, "" when it is.
+func (c *ClusterConn) readMoved(rev uint64, terms *sourceTerms) string {
+	if c.credentialMoved(rev) {
+		return reasonCredentialChanged
+	}
+	if terms != nil && c.am.buckets != nil {
+		if err := c.am.buckets.checkTerms(*terms); err != nil {
+			return "the read was dropped: " + err.Error() + "; it is read again next time"
+		}
+	}
+	return ""
 }
 
 // credentialMoved reports whether the endpoint's revision moved since rev.
@@ -213,12 +311,22 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 	}
 
 	if c.metricsState.samplesExp.IsZero() || now.After(c.metricsState.samplesExp) {
-		rev := c.metricsState.credRev
-		samples := querySamples(ctx, c.metricsState.client)
-		if c.credentialMoved(rev) {
+		rev, terms, cl := c.metricsState.credRev, c.metricsState.terms, c.metricsState.client
+		release := func() {}
+		if terms != nil {
+			// a subscription's client, for this read alone (S3b §3.1)
+			q, _, rel, err := c.am.buckets.metricsSource(ctx, *terms, "the metrics of "+c.name)
+			if err != nil {
+				return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source, Reason: safehttp.NewRedactor().Text(err.Error())}
+			}
+			cl, release = metrics.NewClient(q, terms.scope()), rel
+		}
+		samples := querySamples(ctx, cl)
+		release()
+		if why := c.readMoved(rev, terms); why != "" {
 			c.metricsState = metricsCache{}
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
-				Reason: reasonCredentialChanged}
+				Reason: why}
 		}
 		c.metricsState.samples = samples
 		c.metricsState.samplesExp = now.Add(metricsSampleTTL)

@@ -398,7 +398,7 @@
       "default": "left out: log history is read",
       "validation": "true, or left out; nothing else in the block.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -411,7 +411,7 @@
       "default": "the member label equal to the cluster's name, and the match",
       "validation": "tenant, with source; no match beside it.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -494,7 +494,7 @@
       "default": "none: an installation serving the cluster by name or group, else none: Loki is never discovered",
       "validation": "An id in sources, of kind loki.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Loki subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -591,7 +591,7 @@
       "default": "left out: metrics are read",
       "validation": "true, or left out; nothing else in the block.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -604,7 +604,7 @@
       "default": "the member label equal to the cluster's name, and the match",
       "validation": "tenant, with source; no match beside it.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -687,7 +687,7 @@
       "default": "none: an installation serving the cluster by name or group, else discovery",
       "validation": "An id in sources, of kind metrics.",
       "takesEffect": "at restart",
-      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version, and read through its installation from a later one.",
+      "save": "Edit fleet.yaml: a Metrics subscription is put in force at a restart in this version; Settings edits it from a later one.",
       "disposition": "effective-file-only",
       "source": "schema"
     },
@@ -842,7 +842,7 @@
       "id": "sources[].kind",
       "section": "observability",
       "label": "Installation kind",
-      "effect": "What the installation serves: alerts, log history or metrics. Klyx reads through Loki and metrics installations from a later version, and puts them in force at a restart until then.",
+      "effect": "What the installation serves: alerts, log history or metrics. Settings edits Loki and metrics installations from a later version; until then a change to one is put in force at a restart.",
       "scope": "installation",
       "default": "none: required",
       "validation": "alertmanager, loki or metrics; discover: true is not for loki.",

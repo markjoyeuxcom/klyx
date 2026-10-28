@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -115,7 +116,7 @@ func (r *Registry) PublishSources(sources []config.SourceConfig, running []confi
 		return err
 	}
 	moved := map[string]bool{}
-	for _, name := range changed {
+	for _, name := range changed[config.EndpointAlertmanager] {
 		moved[name] = true
 	}
 	for _, cc := range running {
@@ -130,6 +131,19 @@ func (r *Registry) PublishSources(sources []config.SourceConfig, running []confi
 			// its installation or subscription moved under the same block:
 			// re-keyed now, not at its next read (Codex's review of S3a-4a, R5)
 			cl.reidentify()
+		}
+		// Loki and metrics follow too (Settings S3b §3.5): a changed block is
+		// adopted, moving its revision; a subscription moved under the same
+		// block re-keys its reads by their lineage at the next one
+		if want := config.ConnectionLoki(sources, cc); !sameEndpoint(cl.LokiConfig(), want) {
+			cl.SetLokiConfig(want)
+		}
+		wantMetrics := config.MetricsConfig{}
+		if m := config.ConnectionMetrics(sources, cc); m != nil {
+			wantMetrics = *m
+		}
+		if !reflect.DeepEqual(cl.MetricsConfig(), wantMetrics) {
+			cl.SetMetricsConfig(wantMetrics)
 		}
 	}
 	return nil

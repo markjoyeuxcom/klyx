@@ -32,6 +32,7 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 	}
 
 	mr := c.readMetrics(ctx, now)
+	defer mr.release()
 	cap := mr.cap
 
 	if !cap.Available {
@@ -47,8 +48,8 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 	if err != nil {
 		return nil, routemetrics.Status{Available: false, Message: "route metrics query failed: " + err.Error()}
 	}
-	if c.credentialMoved(mr.rev) {
-		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + why}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
 	return out, st

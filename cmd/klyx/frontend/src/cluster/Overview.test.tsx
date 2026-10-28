@@ -210,6 +210,12 @@ describe("Overview metrics", () => {
     expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
 
+  it("names a subscription's installation and where it is read", () => {
+    setMetrics({ available: true, mode: "subscribed", source: "lgtm-we-metrics, Service monitoring/mimir:8080 in aks-we-prd", warning: "", reason: "", cpuFraction: 0.2, memFraction: 0.3 });
+    render(<Overview c={blue} />);
+    expect(screen.getByText(/monitoring: installation · lgtm-we-metrics, Service monitoring\/mimir:8080 in aks-we-prd/)).toBeTruthy();
+  });
+
   it("renders — for null fractions", () => {
     setMetrics({ available: true, mode: "explicit-endpoint", source: "https://h", warning: "", reason: "", cpuFraction: null, memFraction: null });
     render(<Overview c={blue} />);

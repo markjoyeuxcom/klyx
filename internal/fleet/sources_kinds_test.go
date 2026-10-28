@@ -48,7 +48,9 @@ func TestMetricsOffOrSubscribedIsNeverDiscovered(t *testing.T) {
 	}
 	c, lookups = metricsDiscoveryCounted(config.MetricsConfig{Source: "lgtm-we-metrics", Scope: config.ScopeTenant})
 	_, capb = c.ClusterMetrics(context.Background(), true)
-	if capb.Available || !strings.Contains(capb.Reason, "the installation lgtm-we-metrics") || !strings.Contains(capb.Reason, "does not read through installations yet") || lookups.Load() != 0 {
+	// read through its installation (S3b-2b), never discovered in the
+	// member: with no installation readers it reads nothing
+	if capb.Available || !strings.Contains(capb.Source, "the installation lgtm-we-metrics") || lookups.Load() != 0 {
 		t.Fatalf("subscribed: %+v, %d lookups", capb, lookups.Load())
 	}
 }

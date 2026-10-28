@@ -284,6 +284,7 @@ func (c *ClusterConn) ChatMetricsRange(ctx context.Context, q metrics.Query, sta
 		clk = clock.Real{}
 	}
 	mr := c.readMetrics(ctx, clk.Now())
+	defer mr.release()
 	if !mr.cap.Available {
 		if mr.cap.Reason != "" {
 			return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, mr.cap.Reason)
@@ -291,8 +292,8 @@ func (c *ClusterConn) ChatMetricsRange(ctx context.Context, q metrics.Query, sta
 		return nil, ErrChatMetricsUnavailable
 	}
 	res, err := mr.client.RangeMatrix(ctx, q, start, end, step)
-	if err == nil && c.credentialMoved(mr.rev) {
-		return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, reasonCredentialChanged)
+	if why := mr.unsettled(); why != "" {
+		return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, why)
 	}
 	return res, err
 }

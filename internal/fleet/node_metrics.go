@@ -28,6 +28,7 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 	}
 
 	mr := c.readMetrics(ctx, now)
+	defer mr.release()
 	cap := mr.cap
 
 	if !cap.Available {
@@ -48,8 +49,8 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
-	if c.credentialMoved(mr.rev) {
-		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
 	st := workloads.UsageStatus{Available: true, UpdatedAt: now}
 	if truncated {
@@ -70,6 +71,7 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 	now := clk.Now()
 
 	mr := c.readMetrics(ctx, now)
+	defer mr.release()
 	cap := mr.cap
 
 	if !cap.Available {
@@ -90,8 +92,8 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
-	if c.credentialMoved(mr.rev) {
-		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
 	out := make(map[string]workloads.Usage, len(cpuByCt)+len(memByCt))
 	for name, v := range cpuByCt {

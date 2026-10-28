@@ -9,9 +9,10 @@ import (
 	"github.com/moomora/klyx/internal/config"
 )
 
-// Settings S3b-1 in the plans and the page: a running connection cannot
-// follow its Loki or metrics to another source yet, and Observability's
-// plans, page and credentials are Alertmanager's only in this stage.
+// Settings S3b in the plans and the page: a running connection follows its
+// Loki and metrics to another source, each move listed (S3b-2b, §3.5), and
+// Observability's plans, page and credentials are Alertmanager's only until
+// S3b-4.
 
 func lokiOn(id, host, group string) config.SourceConfig {
 	return config.SourceConfig{ID: id, Kind: config.SourceKindLoki, Host: host,
@@ -22,7 +23,7 @@ func metricsOn(id, host, group string) config.SourceConfig {
 	return config.SourceConfig{ID: id, Kind: config.SourceKindMetrics, Host: host, Discover: true, MemberLabel: "cluster", Serves: []config.ServeConfig{{Group: group}}}
 }
 
-func TestAPlacementThatWouldMoveLogsOrMetricsIsRefused(t *testing.T) {
+func TestAPlacementThatMovesLogsOrMetricsListsEach(t *testing.T) {
 	r := newFleetRig(t, true)
 	r.mu.Lock()
 	r.sources = []config.SourceConfig{servesGroup("lgtm-we", "prd", "web"), metricsOn("lgtm-we-metrics", "prd", "web")}
@@ -30,23 +31,29 @@ func TestAPlacementThatWouldMoveLogsOrMetricsIsRefused(t *testing.T) {
 	d := devDraft()
 	d.Group = "web"
 	p := r.cs.PlanClusterEdit("dev", d)
-	if !strings.Contains(p.Refused, "dev's metrics would come from the installation lgtm-we-metrics instead of discovery in the cluster") || !strings.Contains(p.Refused, "until it reads through installations") {
+	if p.Refused != "" || !hasChange(p, "fleet.metrics", "discovery in the cluster", "the installation lgtm-we-metrics") ||
+		!hasChange(p, "fleet.alerts", "discovery in the cluster", "the installation lgtm-we") {
 		t.Fatalf("metrics moved: %+v", p)
 	}
-	// the control: an installation of another group moves nothing, and the
-	// alerts' move is listed as before
+	// the control: an installation of another group moves nothing
 	r.mu.Lock()
 	r.sources = []config.SourceConfig{servesGroup("lgtm-we", "prd", "web"), metricsOn("lgtm-ne-metrics", "prd", "elsewhere"), lokiOn("lgtm-ne-logs", "prd", "elsewhere")}
 	r.mu.Unlock()
 	p = r.cs.PlanClusterEdit("dev", d)
+	for _, c := range p.Changes {
+		if c.ID == "fleet.metrics" || c.ID == "fleet.logs" {
+			t.Fatalf("control: %+v", p)
+		}
+	}
 	if p.Refused != "" || !hasChange(p, "fleet.alerts", "discovery in the cluster", "the installation lgtm-we") {
 		t.Fatalf("control: %+v", p)
 	}
-	// a Loki installation serving the new group: refused too
+	// a Loki installation serving the new group: listed, from no log
+	// history, never from discovery
 	r.mu.Lock()
 	r.sources = []config.SourceConfig{lokiOn("lgtm-we-logs", "prd", "web")}
 	r.mu.Unlock()
-	if p := r.cs.PlanClusterEdit("dev", d); !strings.Contains(p.Refused, "dev's log history would come from the installation lgtm-we-logs instead of no log history (Loki is never discovered)") || strings.Contains(p.Refused, "discovery in the cluster") {
+	if p := r.cs.PlanClusterEdit("dev", d); p.Refused != "" || !hasChange(p, "fleet.logs", "no log history (Loki is never discovered)", "the installation lgtm-we-logs") {
 		t.Fatalf("logs moved: %+v", p)
 	}
 }
