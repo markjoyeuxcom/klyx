@@ -50,8 +50,9 @@ type ChatConn interface {
 	PodLogSnapshot(ctx context.Context, ns, pod, container string, previous bool, tail int64) (fleet.LogSnapshot, error)
 	// FluxObject reads one Flux object live at its served version (AI A1 §3.1).
 	FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error)
-	// ChatMetricsRange runs a range query Klyx built from a template (§3.4).
-	ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
+	// ChatMetricsRange runs a registered template (§3.4; Settings S3b §3.3),
+	// rendered by the cluster's reader with its own scope.
+	ChatMetricsRange(ctx context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error)
 	// RuleMetrics reads one Gateway's per-rule Envoy metrics (The Line 7c).
 	RuleMetrics(ctx context.Context, namespace, name string) (routemetrics.GatewayRules, error)
 	// The drawings get_dependencies reads (A1 §3.3).

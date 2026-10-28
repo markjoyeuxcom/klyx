@@ -127,11 +127,11 @@ func TestCredentialRevisionReachesCachedClients(t *testing.T) {
 	}
 	// a reader holds the transport; Remove revokes before anything else
 	c.metricsMu.Lock()
-	held := c.metricsState.transport
+	held := c.metricsState.client
 	c.metricsMu.Unlock()
 	reg.Revoke("prd", config.EndpointMetrics)
 	_, _, before := p.last()
-	if _, _, err := held.InstantQuery(context.Background(), "up"); !errors.Is(err, metrics.ErrCredentialChanged) {
+	if _, err := held.InstantScalar(context.Background(), metrics.ClusterCPU.With(metrics.None{})); !errors.Is(err, metrics.ErrCredentialChanged) {
 		t.Fatalf("a held client stops: %v", err)
 	}
 	_, capb := c.ClusterMetrics(context.Background(), false)

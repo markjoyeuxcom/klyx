@@ -12,8 +12,8 @@ func TestInstantVector(t *testing.T) {
 		{"metric":{"envoy_cluster_name":"d"},"value":[1,"+Inf"]},
 		{"metric":{"envoy_cluster_name":"c"},"value":[1,"3"]}
 	]}}`
-	c := NewClient(&fakeQuerier{status: 200, body: body})
-	out, err := c.InstantVector(context.Background(), "q")
+	c := NewClient(&fakeQuerier{status: 200, body: body}, Scope{})
+	out, err := c.InstantVector(context.Background(), raw("q"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -30,17 +30,17 @@ func TestInstantVector(t *testing.T) {
 }
 
 func TestInstantVectorEmptyAndErrors(t *testing.T) {
-	empty := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"vector","result":[]}}`})
-	out, err := empty.InstantVector(context.Background(), "q")
+	empty := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"vector","result":[]}}`}, Scope{})
+	out, err := empty.InstantVector(context.Background(), raw("q"))
 	if err != nil || len(out) != 0 {
 		t.Fatalf("empty vector: want 0/nil, got %d/%v", len(out), err)
 	}
-	notvec := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"scalar","result":[1,"1"]}}`})
-	if _, err := notvec.InstantVector(context.Background(), "q"); err == nil {
+	notvec := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"scalar","result":[1,"1"]}}`}, Scope{})
+	if _, err := notvec.InstantVector(context.Background(), raw("q")); err == nil {
 		t.Fatal("want error on non-vector result")
 	}
-	bad := NewClient(&fakeQuerier{status: 503, body: "down"})
-	if _, err := bad.InstantVector(context.Background(), "q"); err == nil {
+	bad := NewClient(&fakeQuerier{status: 503, body: "down"}, Scope{})
+	if _, err := bad.InstantVector(context.Background(), raw("q")); err == nil {
 		t.Fatal("want error on HTTP 503")
 	}
 }

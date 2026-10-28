@@ -1137,11 +1137,11 @@ func (g guardedConn) RuleMetrics(ctx context.Context, namespace, name string) (r
 	return g.r.c.conn.RuleMetrics(ctx, namespace, name)
 }
 
-func (g guardedConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+func (g guardedConn) ChatMetricsRange(ctx context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
 	if err := g.r.check(); err != nil {
 		return nil, err
 	}
-	return g.r.c.conn.ChatMetricsRange(ctx, promql, start, end, step)
+	return g.r.c.conn.ChatMetricsRange(ctx, q, start, end, step)
 }
 
 func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {

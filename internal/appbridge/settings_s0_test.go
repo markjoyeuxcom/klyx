@@ -135,8 +135,10 @@ func TestAnEndpointRowShowsItsTLSAndScope(t *testing.T) {
 	if r := rows["b/alertmanager"]; r.TLSOff || r.Scope != "" || !r.Unscoped {
 		t.Fatalf("b/alertmanager: %+v", r)
 	}
-	// a proxied endpoint's TLS is the API server's: tlsSkipVerify does not apply
-	if r := rows["b/metrics"]; r.Source != "Service mon/mimir:http (https, path /prometheus, through the API server)" || r.Unscoped || r.TLSOff {
+	// a proxied endpoint's TLS is the API server's: tlsSkipVerify does not
+	// apply; a metrics block without match reads every series there as its
+	// own, so it is unscoped as the others are (Settings S3b §2.1)
+	if r := rows["b/metrics"]; r.Source != "Service mon/mimir:http (https, path /prometheus, through the API server)" || !r.Unscoped || r.TLSOff {
 		t.Fatalf("b/metrics: %+v", r)
 	}
 	cfg, err := config.Load(svc.path)

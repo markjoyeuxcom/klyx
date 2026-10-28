@@ -123,7 +123,7 @@ func TestACredentialNeverRewritesTheResponse(t *testing.T) {
 		if capb := Probe(context.Background(), Resolution{Transport: q}); !capb.Available {
 			t.Fatalf("%q: a valid response read unavailable: %+v", token, capb)
 		}
-		got, err := NewClient(q).InstantVector(context.Background(), "up")
+		got, err := NewClient(q, Scope{}).InstantVector(context.Background(), raw("up"))
 		if err != nil || len(got) != 1 || got[0].Labels["pod"] != "api-7" || got[0].Labels["namespace"] != "team" || got[0].Value != 42 {
 			t.Fatalf("%q: the data changed: %+v %v", token, got, err)
 		}

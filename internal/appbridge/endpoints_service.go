@@ -226,7 +226,7 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 		// only a legacy reader that filters nothing: off reads nothing, and a
 		// subscription's scope is its installation's (Codex's review of
 		// S3a-1, R3)
-		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
+		Unscoped: len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
 		State:    string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
 		Revision: snap.EndpointRevision(cl.Name, ne.Kind)}
 	if a := ne.Spec.Auth; a != nil {

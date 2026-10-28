@@ -2,21 +2,17 @@ package routemetrics
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moomora/klyx/internal/metrics"
 )
 
-// Envoy metric and label names. SINGLE source of truth — native verification
-// confirms/adjusts these before merge (see the spec's hard gate). Do not
-// inline these strings elsewhere.
+// Envoy metric and label names, as the registered templates read them
+// (Settings S3b §3.3: the queries are metrics' templates).
 const (
-	mRqTotal     = "envoy_cluster_upstream_rq_total"
-	mRqTime      = "envoy_cluster_upstream_rq_time_bucket"
-	mRqXX        = "envoy_cluster_upstream_rq_xx"
-	lClusterName = "envoy_cluster_name"
-	lRespClass   = "envoy_response_code_class"
-	rateWindow   = "5m"
+	mRqTotal     = metrics.EnvoyRqTotal
+	mRqXX        = metrics.EnvoyRqXX
+	lClusterName = metrics.EnvoyClusterName
+	lRespClass   = metrics.EnvoyRespClass
 )
 
 // EnvoyClusterSource builds Envoy-cluster PromQL and reduces the result into
@@ -31,25 +27,25 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	if len(routeKeys) == 0 {
 		return map[string]RouteMetrics{}, Status{Available: true}, nil
 	}
-	sel := buildSelector(routeKeys)
+	routes := metrics.Routes{Keys: routeKeys}
 
-	rps, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s}[%s]))", lClusterName, mRqTotal, sel, rateWindow))
+	rps, err := s.client.InstantVector(ctx, metrics.RouteRPS.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p50, err := s.client.InstantVector(ctx, fmt.Sprintf("histogram_quantile(0.50, sum by (%s, le)(rate(%s{%s}[%s])))", lClusterName, mRqTime, sel, rateWindow))
+	p50, err := s.client.InstantVector(ctx, metrics.RouteP50.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p99, err := s.client.InstantVector(ctx, fmt.Sprintf("histogram_quantile(0.99, sum by (%s, le)(rate(%s{%s}[%s])))", lClusterName, mRqTime, sel, rateWindow))
+	p99, err := s.client.InstantVector(ctx, metrics.RouteP99.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rq5xx, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s,%s=\"5\"}[%s]))", lClusterName, mRqXX, sel, lRespClass, rateWindow))
+	rq5xx, err := s.client.InstantVector(ctx, metrics.Route5xx.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rqall, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s}[%s]))", lClusterName, mRqXX, sel, rateWindow))
+	rqall, err := s.client.InstantVector(ctx, metrics.RouteAll.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
@@ -64,7 +60,7 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	// Existence probe is intentionally UNSCOPED (counts all Envoy rq_total
 	// series, not just httproute). Per the spec it answers "is Envoy scraped at
 	// all"; the exact wording vs scoping is a native-verification decision.
-	exist, err := s.client.InstantScalar(ctx, fmt.Sprintf("count(%s)", mRqTotal))
+	exist, err := s.client.InstantScalar(ctx, metrics.EnvoyScraped.With(metrics.None{}))
 	if err != nil {
 		return nil, Status{}, err
 	}

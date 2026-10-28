@@ -368,6 +368,11 @@ func TestAReconnectIsHeldUntilItsOwnConnectionIsUsable(t *testing.T) {
 	if !waitUntil(t, 5*time.Second, func() bool { return r.snap("dev").State == policy.Active }) {
 		t.Fatal("never released")
 	}
+	// the release hooks run outside the gate, after the publication: wait
+	// for them too (Codex's re-review of S3b-1)
+	if !waitUntil(t, 5*time.Second, func() bool { return r.released() >= 1 }) {
+		t.Fatal("the release hook never ran")
+	}
 	if n := r.released(); n != 1 {
 		t.Fatalf("released %d times", n)
 	}

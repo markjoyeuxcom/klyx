@@ -19,24 +19,19 @@ import (
 	"github.com/moomora/klyx/internal/metrics"
 )
 
-// Hubble metric and label names. Single source of truth - do not inline these
-// strings elsewhere. Names match Cilium's hubble metrics exporter.
+// Hubble label names, as the registered templates read them (Settings S3b
+// §3.3: the queries are metrics' templates). Names match Cilium's hubble
+// metrics exporter.
 const (
-	mFlows   = "hubble_flows_processed_total" // labels: type, subtype, verdict
-	mDrops   = "hubble_drop_total"            // labels: reason, protocol
-	mDNS     = "hubble_dns_responses_total"   // labels: rcode, ...
-	mHTTP    = "hubble_http_requests_total"   // labels: method, status, ...
-	lVerdict = "verdict"
-	lReason  = "reason"
-	lProto   = "protocol"
-	lRcode   = "rcode"
-	lStatus  = "status"
+	lVerdict = metrics.HubbleVerdict
+	lReason  = metrics.HubbleReason
+	lProto   = metrics.HubbleProto
+	lRcode   = metrics.HubbleRcode
+	lStatus  = metrics.HubbleStatus
 
 	verdictForwarded = "FORWARDED"
 	verdictDropped   = "DROPPED"
 	dnsRcodeOK       = "No Error"
-
-	rateWindow = "5m"
 )
 
 // ReasonRate is one drop reason's rate (flows/s over the rate window).
@@ -84,7 +79,7 @@ func NewSource(c *metrics.Client) *Source { return &Source{client: c} }
 func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) {
 	out := FlowStats{}
 
-	verdicts, err := s.client.InstantVector(ctx, `sum by (`+lVerdict+`)(rate(`+mFlows+`[`+rateWindow+`]))`)
+	verdicts, err := s.client.InstantVector(ctx, metrics.HubbleVerdicts.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -98,7 +93,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 		}
 	}
 
-	drops, err := s.client.InstantVector(ctx, `sum by (`+lReason+`, `+lProto+`)(rate(`+mDrops+`[`+rateWindow+`]))`)
+	drops, err := s.client.InstantVector(ctx, metrics.HubbleDropReasons.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -113,7 +108,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 	}
 	sort.Slice(out.DropReasons, func(i, j int) bool { return out.DropReasons[i].Rate > out.DropReasons[j].Rate })
 
-	dns, err := s.client.InstantVector(ctx, `sum by (`+lRcode+`)(rate(`+mDNS+`[`+rateWindow+`]))`)
+	dns, err := s.client.InstantVector(ctx, metrics.HubbleDNSRcodes.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -128,7 +123,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 		out.DNSTotalRate, out.DNSErrorRate = &total, &errs
 	}
 
-	http, err := s.client.InstantVector(ctx, `sum by (`+lStatus+`)(rate(`+mHTTP+`[`+rateWindow+`]))`)
+	http, err := s.client.InstantVector(ctx, metrics.HubbleHTTPStatus.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}

@@ -278,7 +278,7 @@ var ErrChatMetricsUnavailable = errors.New("metrics unavailable on this cluster"
 // A1 §3.4; the model never writes PromQL) through the cluster's metrics
 // transport: the same lazy probe and cache as every metrics read, and a
 // result read across a credential change is dropped (C5 §7).
-func (c *ClusterConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+func (c *ClusterConn) ChatMetricsRange(ctx context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
 	clk := c.clk
 	if clk == nil {
 		clk = clock.Real{}
@@ -290,7 +290,7 @@ func (c *ClusterConn) ChatMetricsRange(ctx context.Context, promql string, start
 		}
 		return nil, ErrChatMetricsUnavailable
 	}
-	res, err := metrics.NewClient(mr.transport).RangeMatrix(ctx, promql, start, end, step)
+	res, err := mr.client.RangeMatrix(ctx, q, start, end, step)
 	if err == nil && c.credentialMoved(mr.rev) {
 		return nil, fmt.Errorf("%w: %s", ErrChatMetricsUnavailable, reasonCredentialChanged)
 	}

@@ -146,7 +146,7 @@ type MetricsConfig struct {
 	// Match scopes every query to this cluster's series in a shared tenant;
 	// Source subscribes the cluster to a metrics installation of sources,
 	// Scope "tenant" takes everything in its tenant, Off reads no metrics
-	// (Settings S3b §2.1). Match is read from S3b-2: until then a load error.
+	// (Settings S3b §2.1, §3.3).
 	Match  map[string]string `yaml:"match"`
 	Source string            `yaml:"source"`
 	Scope  string            `yaml:"scope"`

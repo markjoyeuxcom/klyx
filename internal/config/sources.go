@@ -163,11 +163,6 @@ func validateSubscription(cluster string, kind string, e *EndpointConfig, legacy
 		return nil
 	}
 	has := func(key string, set bool) bool { return set || e.wrote(key) }
-	if kind == EndpointMetrics && has("match", len(e.Match) > 0) {
-		// read from S3b-2, which scopes every query by it: until then no file
-		// states a scope Klyx does not apply (S3b §2.1, §12 R1)
-		return fmt.Errorf("cluster %s: metrics.match is read from a later version of Klyx: remove it for now", describeValue(cluster))
-	}
 	// the token as written, an empty or null one included: a subscription
 	// or off allows none (Codex's review of S3b-1, R1); an empty token is
 	// still no credential for a legacy block

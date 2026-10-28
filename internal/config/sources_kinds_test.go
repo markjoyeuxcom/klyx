@@ -72,8 +72,6 @@ func TestEachKindResolvesItsOwnInstallations(t *testing.T) {
 func TestKindLoadErrors(t *testing.T) {
 	for _, tc := range []struct{ old, new, want string }{
 		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {source: logs}\n", `cluster "dev": metrics.source "logs" is not a metrics installation: it is of kind "loki"`},
-		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {source: m, match: {cluster: dev}}\n", `cluster "dev": metrics.match is read from a later version of Klyx`},
-		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {endpoint: https://mimir.example, match: {cluster: dev}}\n", "metrics.match is read from a later version"},
 		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {source: m, scope: tenant, token: abc}\n", "metrics.token belongs to the cluster's own endpoint, so it is not allowed beside source or off"},
 		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {off: true, token: abc}\n", "metrics.token belongs to the cluster's own endpoint"},
 		{"    metrics: {source: m, scope: tenant}\n", "    metrics: {off: false}\n", "metrics.off is true, or left out"},
@@ -179,6 +177,52 @@ func TestATokenWrittenAtAllIsRefusedBesideSourceOrOff(t *testing.T) {
 	for _, e := range c.Clusters[1].Endpoints() {
 		if e.Kind == EndpointMetrics && e.LegacyToken {
 			t.Fatal("an empty token is advertised as a credential")
+		}
+	}
+}
+
+// S3b-2 §3.3: metrics.match is read now, on a legacy block and on a
+// subscription; a legacy token may stand beside a legacy match.
+func TestMetricsMatchIsAdmitted(t *testing.T) {
+	for _, block := range []string{
+		"    metrics: {endpoint: https://mimir.example, match: {cluster: dev}}\n",
+		"    metrics: {endpoint: https://mimir.example, token: abc, match: {cluster: dev}}\n",
+		"    metrics: {source: m, match: {cluster: dev}}\n",
+	} {
+		doc := strings.Replace(kindsFleet, "    metrics: {source: m, scope: tenant}\n", block, 1)
+		c, err := loadYAML(t, doc)
+		if err != nil {
+			t.Fatalf("%q: %v", block, err)
+		}
+		if m := c.Clusters[1].Metrics.Match; m["cluster"] != "dev" {
+			t.Fatalf("%q: match %v", block, m)
+		}
+	}
+}
+
+// Two clusters reading the same metrics endpoint, one without match, are
+// warned about as Alertmanager and Loki are: metrics.match is now applied
+// (Settings S3b §2.1, §3.3).
+func TestSharedMetricsEndpointWithoutMatchWarns(t *testing.T) {
+	doc := func(a, b string) string {
+		return "clusters:\n  - name: a\n    context: a\n    metrics: " + a + "\n  - name: b\n    context: b\n    metrics: " + b + "\n"
+	}
+	for _, tc := range []struct {
+		a, b string
+		warn bool
+	}{
+		{"{endpoint: https://mimir.example}", "{endpoint: https://MIMIR.example:443/}", true},
+		{"{endpoint: https://mimir.example, match: {cluster: a}}", "{endpoint: https://mimir.example}", true},
+		{"{endpoint: https://mimir.example, match: {cluster: a}}", "{endpoint: https://mimir.example, match: {cluster: b}}", false},
+		{"{endpoint: https://mimir.example/a}", "{endpoint: https://mimir.example/b}", false},
+	} {
+		c, err := loadYAML(t, doc(tc.a, tc.b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Contains(strings.Join(c.Warnings(), "\n"), "clusters a, b read the same metrics endpoint, and at least one has no metrics.match")
+		if got != tc.warn {
+			t.Errorf("%q / %q: warned %v, want %v: %q", tc.a, tc.b, got, tc.warn, c.Warnings())
 		}
 	}
 }

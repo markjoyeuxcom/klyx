@@ -19,9 +19,20 @@ import (
 // are what joins and measurements use, and a credential that happens to
 // equal one of them must not change the data. A decoded string Klyx shows
 // passes through Display.
-type Client struct{ q Querier }
+//
+// A Client is the pinned reader's: it renders every query with the scope
+// of the reader's own terms (Settings S3b §3.3), fixed when the reader makes
+// it, never one a caller chooses.
+type Client struct {
+	q     Querier
+	scope Scope
+}
 
-func NewClient(q Querier) *Client { return &Client{q: q} }
+// NewClient is a client reading through q under scope.
+func NewClient(q Querier, scope Scope) *Client { return &Client{q: q, scope: scope} }
+
+// Scope is the scope this client renders every query with.
+func (c *Client) Scope() Scope { return c.scope }
 
 // credentialed is a Querier that carries a credential.
 type credentialed interface{ redactor() safehttp.Redactor }
@@ -38,7 +49,7 @@ func (c *Client) redact(err error) error {
 	if err == nil {
 		return nil
 	}
-	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge)
+	return c.red().Err(err, ErrCredentialChanged, ErrResponseTooLarge, ErrUnregisteredQuery, ErrInvalidScope)
 }
 
 // Display is a decoded string from a response (a label value Klyx shows)
@@ -91,8 +102,12 @@ func parseValueTuple(raw json.RawMessage) (float64, error) {
 // InstantScalar runs an instant query expecting a scalar or single-element
 // vector. Empty vector or a non-finite (NaN/Inf) value → Sample{Absent:true}.
 // Multi-element vector → error.
-func (c *Client) InstantScalar(ctx context.Context, promql string) (s Sample, err error) {
+func (c *Client) InstantScalar(ctx context.Context, q Query) (s Sample, err error) {
 	defer func() { err = c.redact(err) }()
+	promql, err := q.text(c.scope)
+	if err != nil {
+		return Sample{}, err
+	}
 	status, body, err := c.q.InstantQuery(ctx, promql)
 	if err != nil {
 		return Sample{}, err
@@ -144,11 +159,17 @@ func (c *Client) InstantScalar(ctx context.Context, promql string) (s Sample, er
 	}
 }
 
+// liveness is the one query outside data admission (Settings S3b §3.3): it
+// reads no series, so no scope applies, and it is never a registered data
+// template.
+var liveness = Query{name: "liveness", render: func(string) string { return "vector(1)" }}
+
 // Liveness runs vector(1) and returns nil only on a valid Prometheus 200 whose
-// single value parses to 1.0.
+// single value parses to 1.0. It proves the API answers, not that any
+// series exists under the scope.
 func (c *Client) Liveness(ctx context.Context) (err error) {
 	defer func() { err = c.redact(err) }()
-	s, err := c.InstantScalar(ctx, "vector(1)")
+	s, err := c.InstantScalar(ctx, liveness)
 	if err != nil {
 		return err
 	}

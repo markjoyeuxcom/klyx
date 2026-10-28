@@ -14,9 +14,6 @@ import (
 )
 
 const (
-	cpuQuery = `1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))`
-	memQuery = `1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)`
-
 	metricsSampleTTL      = 15 * time.Second
 	metricsUnavailableTTL = 45 * time.Second
 	metricsHTTPTimeout    = 3 * time.Second // UI status line must fail fast
@@ -46,7 +43,11 @@ type metricsCache struct {
 	capSet    bool
 	cap       metrics.MetricsCapability
 	capExpiry time.Time // zero = cached for lifetime (available)
-	transport metrics.Querier
+	// client is the transport under the reader's effective match, pinned
+	// together: every query is rendered under that scope, and no reader
+	// holds the transport, whose requests take PromQL text (Settings S3b
+	// §3.3)
+	client *metrics.Client
 
 	samples    metrics.ClusterMetrics
 	samplesExp time.Time
@@ -160,7 +161,7 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
 	c.metricsState.cap = cap
-	c.metricsState.transport = res.Transport
+	c.metricsState.client = metrics.NewClient(res.Transport, metrics.ScopeOf(c.metricsCfg.Match))
 	if cap.Available {
 		c.metricsState.capExpiry = time.Time{}
 	} else {
@@ -176,12 +177,13 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 const reasonCredentialChanged = "the endpoint's credential changed during the read; it is read again next time"
 
 // metricsRead is what a reader takes under c.metricsMu and queries outside
-// it: the capability, the transport, and the credential revision both were
+// it: the capability, the client (its transport under its own scope, never
+// a caller's: Settings S3b §3.3), and the credential revision both were
 // built under.
 type metricsRead struct {
-	cap       metrics.MetricsCapability
-	transport metrics.Querier
-	rev       uint64
+	cap    metrics.MetricsCapability
+	client *metrics.Client
+	rev    uint64
 }
 
 // readMetrics resolves the capability (the lazy probe and its cache) and
@@ -190,7 +192,7 @@ func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRea
 	c.metricsMu.Lock()
 	defer c.metricsMu.Unlock()
 	c.ensureMetricsLocked(ctx, false, now)
-	return metricsRead{cap: c.metricsState.cap, transport: c.metricsState.transport, rev: c.metricsState.credRev}
+	return metricsRead{cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev}
 }
 
 // credentialMoved reports whether the endpoint's revision moved since rev.
@@ -223,7 +225,7 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 
 	if c.metricsState.samplesExp.IsZero() || now.After(c.metricsState.samplesExp) {
 		rev := c.metricsState.credRev
-		samples := querySamples(ctx, c.metricsState.transport)
+		samples := querySamples(ctx, c.metricsState.client)
 		if c.credentialMoved(rev) {
 			c.metricsState = metricsCache{}
 			return metrics.ClusterMetrics{}, metrics.MetricsCapability{Mode: cap.Mode, Source: cap.Source,
@@ -235,14 +237,13 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 	return c.metricsState.samples, cap
 }
 
-func querySamples(ctx context.Context, q metrics.Querier) metrics.ClusterMetrics {
-	cl := metrics.NewClient(q)
+func querySamples(ctx context.Context, cl *metrics.Client) metrics.ClusterMetrics {
 	var out metrics.ClusterMetrics
-	if s, err := cl.InstantScalar(ctx, cpuQuery); err == nil && !s.Absent {
+	if s, err := cl.InstantScalar(ctx, metrics.ClusterCPU.With(metrics.None{})); err == nil && !s.Absent {
 		v := s.Value
 		out.CPUFraction = &v
 	}
-	if s, err := cl.InstantScalar(ctx, memQuery); err == nil && !s.Absent {
+	if s, err := cl.InstantScalar(ctx, metrics.ClusterMem.With(metrics.None{})); err == nil && !s.Absent {
 		v := s.Value
 		out.MemFraction = &v
 	}

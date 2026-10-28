@@ -252,9 +252,10 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	return w
 }
 
-// sharedWithoutMatch warns when two clusters read the same Alertmanager or
-// Loki endpoint and one of them has no match (coverage S8a §2): without
-// match, every alert or stream there is read as that cluster's own.
+// sharedWithoutMatch warns when two clusters read the same Alertmanager,
+// Loki or metrics endpoint and one of them has no match (coverage S8a §2;
+// Settings S3b §2.1): without match, every alert, stream or series there is
+// read as that cluster's own.
 func sharedWithoutMatch(clusters []ClusterConfig) []string {
 	type key struct{ kind, at string }
 	users := map[key][]string{}
@@ -262,7 +263,7 @@ func sharedWithoutMatch(clusters []ClusterConfig) []string {
 	var order []key
 	for _, cl := range clusters {
 		for _, e := range cl.Endpoints() {
-			if e.Kind == EndpointMetrics || e.Spec.Endpoint == "" || EndpointURLProblem(e.Spec.Endpoint) != "" {
+			if e.Spec.Endpoint == "" || EndpointURLProblem(e.Spec.Endpoint) != "" {
 				continue
 			}
 			u, err := url.Parse(strings.TrimRight(e.Spec.Endpoint, "/"))

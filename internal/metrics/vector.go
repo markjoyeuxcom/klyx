@@ -23,8 +23,12 @@ type vectorElem struct {
 // "not meaningful", consistent with InstantScalar's absent handling), so they
 // never reach the reducer or the DTO. An empty vector returns an empty slice
 // and nil error.
-func (c *Client) InstantVector(ctx context.Context, promql string) (res []LabeledSample, err error) {
+func (c *Client) InstantVector(ctx context.Context, q Query) (res []LabeledSample, err error) {
 	defer func() { err = c.redact(err) }()
+	promql, err := q.text(c.scope)
+	if err != nil {
+		return nil, err
+	}
 	status, body, err := c.q.InstantQuery(ctx, promql)
 	if err != nil {
 		return nil, err

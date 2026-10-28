@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	typedfake "k8s.io/client-go/kubernetes/fake"
@@ -106,5 +107,59 @@ func TestTheCandidateCheckResolvesEveryKind(t *testing.T) {
 	}
 	if err := a.Resolve([]config.ClusterConfig{{Name: "prd", Group: "we"}}); err == nil || !strings.Contains(err.Error(), "for loki") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// recordingQ answers liveness and records every query it is sent.
+type recordingQ struct{ sent []string }
+
+func (q *recordingQ) InstantQuery(_ context.Context, promql string) (int, []byte, error) {
+	q.sent = append(q.sent, promql)
+	if promql == "vector(1)" {
+		return 200, []byte(`{"status":"success","data":{"resultType":"vector","result":[{"value":[1,"1"]}]}}`), nil
+	}
+	return 200, []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`), nil
+}
+
+func (q *recordingQ) RangeQuery(_ context.Context, promql string, _, _ time.Time, _ time.Duration) (int, []byte, error) {
+	q.sent = append(q.sent, promql)
+	return 200, []byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`), nil
+}
+
+// A cluster's own metrics block with match reads every series through it:
+// each data query carries every matcher, the liveness probe none (Settings
+// S3b §3.3). Without match, nothing is added.
+func TestALegacyMetricsMatchScopesEveryQuery(t *testing.T) {
+	for _, tc := range []struct {
+		match map[string]string
+		want  string
+	}{
+		{map[string]string{"cluster": "dev", "team": `a"b`}, `cluster="dev",team="a\"b"`},
+		{nil, ""},
+	} {
+		q := &recordingQ{}
+		c := connWithTF(clock.NewFake(time.Unix(0, 0)), q)
+		c.metricsCfg.Match = tc.match
+		if _, cap := c.ClusterMetrics(context.Background(), false); !cap.Available {
+			t.Fatalf("unavailable: %+v", cap)
+		}
+		c.WorkloadMetrics(context.Background(), "shop")
+		c.RouteMetrics(context.Background(), []string{"shop/web"})
+		var data int
+		for _, s := range q.sent {
+			if s == "vector(1)" {
+				continue
+			}
+			data++
+			if tc.want != "" && strings.Count(s, tc.want) == 0 {
+				t.Errorf("%v: unscoped query %s", tc.match, s)
+			}
+			if tc.want == "" && (strings.Contains(s, "cluster=") || strings.Contains(s, "team=")) {
+				t.Errorf("unscoped reader scoped %s", s)
+			}
+		}
+		if data < 3 {
+			t.Fatalf("%v: %d data queries: %v", tc.match, data, q.sent)
+		}
 	}
 }

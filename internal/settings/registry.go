@@ -173,11 +173,8 @@ func endpointEntries() []Entry {
 		if k.id != "metrics" {
 			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.", "none", "A map of label equality matchers."))
 		} else {
-			// Settings S3b §2.1: read from S3b-2, which scopes every query by
-			// it; until then a load error
-			m := e("match", "match", "Not read yet: a later version scopes every metrics query by these labels, for a cluster sharing a Mimir tenant. Until then fleet.yaml refuses it.", "none", "A map of label equality matchers.")
-			m.Disposition, m.Save = Deferred, "Not yet: fleet.yaml refuses it."
-			out = append(out, m)
+			// Settings S3b §3.3: every metrics query of the cluster carries it
+			out = append(out, e("match", "match", "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's.", "none", "A map of label equality matchers."))
 		}
 	}
 	// Settings S3a §2.1, S3b §2.1: a cluster's subscription to an

@@ -102,7 +102,11 @@ func (f *fakeChatConn) RuleMetrics(_ context.Context, ns, name string) (routemet
 	return r, nil
 }
 
-func (f *fakeChatConn) ChatMetricsRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+func (f *fakeChatConn) ChatMetricsRange(_ context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+	promql, err := q.Text(metrics.Scope{})
+	if err != nil {
+		return nil, err
+	}
 	f.queries, f.steps = append(f.queries, promql), append(f.steps, step)
 	if f.seriesErr != nil {
 		return nil, f.seriesErr

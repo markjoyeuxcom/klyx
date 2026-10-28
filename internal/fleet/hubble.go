@@ -5,7 +5,6 @@ import (
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/hubble"
-	"github.com/moomora/klyx/internal/metrics"
 )
 
 // HubbleFlowStats returns the cluster's Hubble flow/drop triage readout from
@@ -27,7 +26,7 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -37,7 +36,7 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: msg}
 	}
 
-	src := hubble.NewSource(metrics.NewClient(transport))
+	src := hubble.NewSource(mr.client)
 	stats, st, err := src.QueryFlowStats(ctx)
 	if err != nil {
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "hubble metrics query failed: " + err.Error()}

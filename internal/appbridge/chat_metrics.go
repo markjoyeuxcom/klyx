@@ -197,20 +197,22 @@ func (t *chatTools) metricSeries(ctx context.Context, template, kind, ns, name, 
 		env.Data = data
 		return t.finish(env, ChatRead{Tool: toolMetrics, Target: target, Outcome: "completed", Detail: "no pods", About: metricsAbout(kind, ns, name, nil)})
 	}
-	sel := metrics.Equals("namespace", ns) + "," + metrics.MatchAnyOf("pod", "", pods, "")
-	ctr := sel + `,container!="",container!="POD"`
-	var q, by string
+	// a registered template, rendered by the cluster's reader with its own
+	// scope (Settings S3b §3.3)
+	set := metrics.PodSet{Namespace: ns, Pods: pods}
+	var q metrics.Query
+	var by string
 	switch template {
 	case "pod_cpu":
-		q, by = fmt.Sprintf(`sum by (container) (rate(container_cpu_usage_seconds_total{%s}[5m]))`, ctr), "container"
+		q, by = metrics.PodsCPUByContainer.With(set), "container"
 	case "pod_memory":
-		q, by = fmt.Sprintf(`sum by (container) (container_memory_working_set_bytes{%s})`, ctr), "container"
+		q, by = metrics.PodsMemByContainer.With(set), "container"
 	case "workload_cpu":
-		q = fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, ctr)
+		q = metrics.WorkloadCPU.With(set)
 	case "workload_memory":
-		q = fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, ctr)
+		q = metrics.WorkloadMem.With(set)
 	case "restarts":
-		q, by = fmt.Sprintf(`sum by (pod) (kube_pod_container_status_restarts_total{%s})`, sel), "pod"
+		q, by = metrics.PodsRestarts.With(set), "pod"
 	}
 	series, err := t.conn.ChatMetricsRange(ctx, q, start, end, step)
 	if err != nil {

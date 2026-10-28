@@ -153,6 +153,9 @@ func TestClusterSparklinesUsesFractionQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// the queries sent before scopes, byte for byte (Settings S3b §3.3)
+	const cpuQuery = `1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))`
+	const memQuery = `1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)`
 	if len(q.rangeQueries) != 2 || q.rangeQueries[0] != cpuQuery || q.rangeQueries[1] != memQuery {
 		t.Fatalf("want the instant cpu/mem fraction queries as range twins, got %v", q.rangeQueries)
 	}

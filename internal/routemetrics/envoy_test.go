@@ -59,7 +59,7 @@ func TestEnvoyClusterSource_MultiRuleAndIdle(t *testing.T) {
 		rq5xx: vec(el("httproute/default/web/rule/0", "0.03") + "," + el("httproute/default/web/rule/1", "0.01")),
 		rqAll: vec(el("httproute/default/web/rule/0", "10.0") + "," + el("httproute/default/web/rule/1", "2.4")),
 	}
-	out, st, err := NewEnvoyClusterSource(metrics.NewClient(q)).QueryRouteMetrics(context.Background(), []string{"default/web", "default/api"})
+	out, st, err := NewEnvoyClusterSource(metrics.NewClient(q, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web", "default/api"})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -88,13 +88,13 @@ func TestEnvoyClusterSource_MultiRuleAndIdle(t *testing.T) {
 func TestEnvoyClusterSource_NoSeriesVsNoMatch(t *testing.T) {
 	// All scoped queries empty (zero-value scriptedVecQ). Existence probe decides.
 	noSeries := &scriptedVecQ{count: emptyVec} // count of nothing -> empty vector
-	_, st, err := NewEnvoyClusterSource(metrics.NewClient(noSeries)).QueryRouteMetrics(context.Background(), []string{"default/web"})
+	_, st, err := NewEnvoyClusterSource(metrics.NewClient(noSeries, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
 	if err != nil || st.Available || !strings.Contains(st.Message, "no envoy_cluster_* series") {
 		t.Fatalf("no-series: want unavailable + reason, got %+v / %v", st, err)
 	}
 
 	noMatch := &scriptedVecQ{count: vec(el("", "5"))} // series exist (count=5) but none matched
-	_, st2, err := NewEnvoyClusterSource(metrics.NewClient(noMatch)).QueryRouteMetrics(context.Background(), []string{"default/web"})
+	_, st2, err := NewEnvoyClusterSource(metrics.NewClient(noMatch, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
 	if err != nil || !st2.Available || !strings.Contains(st2.Message, "no route series matched") {
 		t.Fatalf("no-match: want available + note, got %+v / %v", st2, err)
 	}
@@ -107,7 +107,7 @@ func TestEnvoyClusterSource_ErrRateClampedToOne(t *testing.T) {
 		rq5xx:   vec(el("httproute/default/web/rule/0", "8")),
 		rqAll:   vec(el("httproute/default/web/rule/0", "4")),
 	}
-	out, _, err := NewEnvoyClusterSource(metrics.NewClient(q)).QueryRouteMetrics(context.Background(), []string{"default/web"})
+	out, _, err := NewEnvoyClusterSource(metrics.NewClient(q, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestEnvoyClusterSource_P50CanExceedP99MultiRule(t *testing.T) {
 		p50:     vec(el("httproute/default/web/rule/0", "90") + "," + el("httproute/default/web/rule/1", "10")),
 		p99:     vec(el("httproute/default/web/rule/0", "20") + "," + el("httproute/default/web/rule/1", "80")),
 	}
-	out, _, err := NewEnvoyClusterSource(metrics.NewClient(q)).QueryRouteMetrics(context.Background(), []string{"default/web"})
+	out, _, err := NewEnvoyClusterSource(metrics.NewClient(q, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestEnvoyClusterSource_RouteWithoutRpsDropped(t *testing.T) {
 		rqAll: vec(el("httproute/default/web/rule/0", "10")),
 		count: vec(el("", "5")),
 	}
-	out, st, err := NewEnvoyClusterSource(metrics.NewClient(q)).QueryRouteMetrics(context.Background(), []string{"default/web"})
+	out, st, err := NewEnvoyClusterSource(metrics.NewClient(q, metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestEnvoyClusterSource_RouteWithoutRpsDropped(t *testing.T) {
 }
 
 func TestEnvoyClusterSource_EmptyKeys(t *testing.T) {
-	out, st, err := NewEnvoyClusterSource(metrics.NewClient(&scriptedVecQ{})).QueryRouteMetrics(context.Background(), nil)
+	out, st, err := NewEnvoyClusterSource(metrics.NewClient(&scriptedVecQ{}, metrics.Scope{})).QueryRouteMetrics(context.Background(), nil)
 	if err != nil || !st.Available || len(out) != 0 {
 		t.Fatalf("empty keys: want available empty, got %+v %+v %v", out, st, err)
 	}

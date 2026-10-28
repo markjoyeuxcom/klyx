@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/moomora/klyx/internal/clock"
-	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
 )
 
@@ -33,7 +32,7 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -43,7 +42,7 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 		return nil, routemetrics.Status{Available: false, Message: msg}
 	}
 
-	src := routemetrics.NewEnvoyClusterSource(metrics.NewClient(transport))
+	src := routemetrics.NewEnvoyClusterSource(mr.client)
 	out, st, err := src.QueryRouteMetrics(ctx, routeKeys)
 	if err != nil {
 		return nil, routemetrics.Status{Available: false, Message: "route metrics query failed: " + err.Error()}

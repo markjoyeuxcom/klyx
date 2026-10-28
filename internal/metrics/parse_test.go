@@ -42,8 +42,8 @@ func TestInstantScalar(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewClient(&fakeQuerier{status: tc.status, body: tc.body})
-			s, err := c.InstantScalar(context.Background(), "q")
+			c := NewClient(&fakeQuerier{status: tc.status, body: tc.body}, Scope{})
+			s, err := c.InstantScalar(context.Background(), raw("q"))
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("want error, got %+v", s)
@@ -64,11 +64,11 @@ func TestInstantScalar(t *testing.T) {
 }
 
 func TestLiveness(t *testing.T) {
-	ok := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"vector","result":[{"value":[1,"1"]}]}}`})
+	ok := NewClient(&fakeQuerier{status: 200, body: `{"status":"success","data":{"resultType":"vector","result":[{"value":[1,"1"]}]}}`}, Scope{})
 	if err := ok.Liveness(context.Background()); err != nil {
 		t.Fatalf("want nil, got %v", err)
 	}
-	bad := NewClient(&fakeQuerier{status: 401, body: `unauthorized`})
+	bad := NewClient(&fakeQuerier{status: 401, body: `unauthorized`}, Scope{})
 	if err := bad.Liveness(context.Background()); err == nil {
 		t.Fatal("want error on 401")
 	}

@@ -23,7 +23,7 @@ func TestADropReasonEchoingTheCredentialIsShownWithoutIt(t *testing.T) {
 	}))
 	defer srv.Close()
 	q := metrics.NewDirectTransport(srv.URL, token, safehttp.NewClient(metrics.DirectPolicy(3*time.Second, false)))
-	stats, st, err := NewSource(metrics.NewClient(q)).QueryFlowStats(context.Background())
+	stats, st, err := NewSource(metrics.NewClient(q, metrics.Scope{})).QueryFlowStats(context.Background())
 	if err != nil || !st.Available || len(stats.DropReasons) != 1 {
 		t.Fatalf("read: %+v %+v %v", stats, st, err)
 	}

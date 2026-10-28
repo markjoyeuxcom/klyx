@@ -141,7 +141,7 @@ func TestParseRuleCluster(t *testing.T) {
 func TestRulesDedicated(t *testing.T) {
 	f := newFixture(t, "dedicated")
 	listed := false
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(func(context.Context) ([]ProxyPod, error) {
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(func(context.Context) ([]ProxyPod, error) {
 		listed = true
 		return nil, nil
 	}))
@@ -228,7 +228,7 @@ func TestRulesMetricFails(t *testing.T) {
 	f := newFixture(t, "dedicated")
 	f.fail["retries"] = errors.New("query timed out")
 	f.fail["r503"] = errors.New("bad gateway")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	web0 := ruleOf(t, g, "web", 0)
 	if web0.Requests.Availability != MetricAvailable || web0.Classes.Availability != MetricAvailable {
 		t.Fatalf("unaffected metrics: %+v %+v", web0.Requests, web0.Classes)
@@ -241,7 +241,7 @@ func TestRulesMetricFails(t *testing.T) {
 	}
 	f = newFixture(t, "dedicated")
 	f.fail["classes"] = errors.New("boom")
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	web0 = ruleOf(t, g, "web", 0)
 	if web0.Classes.Availability != MetricFailed || web0.Share503.Availability != MetricFailed || web0.Requests.Availability != MetricAvailable {
 		t.Fatalf("classes failing: %+v %+v", web0.Classes, web0.Share503)
@@ -253,7 +253,7 @@ func TestRulesMetricFails(t *testing.T) {
 // does not count.
 func TestRulesSharedClusters(t *testing.T) {
 	f := newFixture(t, "merged")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	if g.Unattributable != ReasonSharedClusters || !g.Status.Available {
 		t.Fatalf("gateway: %+v", g)
 	}
@@ -267,12 +267,12 @@ func TestRulesSharedClusters(t *testing.T) {
 	}
 	// Known by its pod pair: the pod is a current proxy of this Gateway.
 	f = newFixture(t, "mergedpods")
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(pods(egPod1)))
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(pods(egPod1)))
 	if g.Unattributable != ReasonSharedClusters {
 		t.Fatalf("by pod pair: %+v", g)
 	}
 	// The pod list failing cannot rule it out.
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(func(context.Context) ([]ProxyPod, error) {
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(func(context.Context) ([]ProxyPod, error) {
 		return nil, errors.New("forbidden")
 	}))
 	if !strings.Contains(g.Unattributable, "could not check for shared clusters") {
@@ -281,7 +281,7 @@ func TestRulesSharedClusters(t *testing.T) {
 	// A failing check is unattributable too.
 	f = newFixture(t, "dedicated")
 	f.fail["merged"] = errors.New("boom")
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	if !strings.Contains(g.Unattributable, "could not check for shared clusters") {
 		t.Fatalf("check failing: %+v", g)
 	}
@@ -291,7 +291,7 @@ func TestRulesSharedClusters(t *testing.T) {
 // by "or"; the result says only the current pods count.
 func TestRulesPodScope(t *testing.T) {
 	f := newFixture(t, "podform")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(pods(egPod2, egPod1)))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(pods(egPod2, egPod1)))
 	if !g.Status.Available || g.Scope != ScopePod || g.ScopeNote != NoteCurrentPods {
 		t.Fatalf("gateway: %+v", g)
 	}
@@ -306,7 +306,7 @@ func TestRulesPodScope(t *testing.T) {
 	}
 	// No proxy pods: cannot scope.
 	f = newFixture(t, "podform")
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(pods()))
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(pods()))
 	if g.Status.Available || !strings.HasPrefix(g.Status.Message, ReasonCannotScope) {
 		t.Fatalf("no pods: %+v", g.Status)
 	}
@@ -318,7 +318,7 @@ func TestRulesPodScope(t *testing.T) {
 // A pod name with no namespace label never scopes; nor do mixed label sets.
 func TestRulesCannotScope(t *testing.T) {
 	f := newFixture(t, "podnameonly")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(pods(egPod1)))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(pods(egPod1)))
 	if g.Status.Available || g.Status.Message != ReasonCannotScope {
 		t.Fatalf("pod name only: %+v", g.Status)
 	}
@@ -339,7 +339,7 @@ func TestRulesCannotScope(t *testing.T) {
 // custom stat name from the controller's defaults gives): absent, apart.
 func TestRulesNoSeries(t *testing.T) {
 	f := newFixture(t, "none")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	if !g.Status.Available || g.Scope != "" {
 		t.Fatalf("gateway: %+v", g)
 	}
@@ -359,7 +359,7 @@ func TestRulesUnattributable(t *testing.T) {
 	f := newFixture(t, "dedicated")
 	q := egQuery(nil)
 	q.Routes[1].SameGatewayTwice = true
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), q)
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), q)
 	if api0 := ruleOf(t, g, "api", 0); api0.Unattributable != ReasonSameGateway || api0.Requests.Availability != "" {
 		t.Fatalf("api#0: %+v", api0)
 	}
@@ -373,7 +373,7 @@ func TestRulesUnattributable(t *testing.T) {
 	f = newFixture(t, "dedicated")
 	q = egQuery(nil)
 	q.Unattributable = "shared or custom cluster names: the EnvoyProxy infra/eg sets spec.mergeBackends"
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), q)
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), q)
 	if len(f.queries) != 0 || g.Unattributable != q.Unattributable || ruleOf(t, g, "web", 0).Unattributable != q.Unattributable {
 		t.Fatalf("gateway-wide: %+v queries %v", g, f.queries)
 	}
@@ -406,7 +406,7 @@ func TestEnvoyProxySettings(t *testing.T) {
 func TestRulesScrapedOnce(t *testing.T) {
 	for name, want := range map[string]string{"scrapedtwice": ReasonScrapedTwice, "severalclusters": ReasonSeveralClusters} {
 		f := newFixture(t, name)
-		g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(pods(egPod1)))
+		g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(pods(egPod1)))
 		if g.Status.Available || g.Status.Message != want {
 			t.Errorf("%s: %+v", name, g.Status)
 		}
@@ -461,7 +461,7 @@ func TestSharesKeepGaps(t *testing.T) {
 // others (design review of a6d5c4e).
 func TestRulesFamiliesApart(t *testing.T) {
 	f := newFixture(t, "nototal")
-	g := NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g := NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	web0 := ruleOf(t, g, "web", 0)
 	if !g.Status.Available || web0.Requests.Availability != MetricAbsent || web0.Classes.Availability != MetricAvailable || web0.Retries.Availability != MetricAvailable {
 		t.Fatalf("no request total: %+v / %+v", g.Status, web0)
@@ -471,7 +471,7 @@ func TestRulesFamiliesApart(t *testing.T) {
 	}
 	f = newFixture(t, "dedicated")
 	f.fail["probe-"+mRqRetry] = errors.New("boom")
-	g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	web0 = ruleOf(t, g, "web", 0)
 	if !g.Status.Available || web0.Retries.Availability != MetricFailed || web0.Requests.Availability != MetricAvailable {
 		t.Fatalf("a failing probe: %+v / %+v", g.Status, web0)
@@ -481,7 +481,7 @@ func TestRulesFamiliesApart(t *testing.T) {
 	for _, m := range ruleMetrics {
 		f.fail["probe-"+m] = errors.New("down")
 	}
-	if g = NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil)); g.Status.Available {
+	if g = NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil)); g.Status.Available {
 		t.Fatalf("every probe failing: %+v", g.Status)
 	}
 	// The merged check reads every family.
@@ -492,6 +492,6 @@ func TestRulesFamiliesApart(t *testing.T) {
 
 func newFixtureQueries(t *testing.T) string {
 	f := newFixture(t, "dedicated")
-	NewEnvoyRuleSource(metrics.NewClient(f)).QueryRules(context.Background(), egQuery(nil))
+	NewEnvoyRuleSource(metrics.NewClient(f, metrics.Scope{})).QueryRules(context.Background(), egQuery(nil))
 	return f.queries["merged"]
 }

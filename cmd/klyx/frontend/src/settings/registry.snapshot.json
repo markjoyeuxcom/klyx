@@ -572,14 +572,14 @@
       "id": "clusters[].metrics.match",
       "section": "observability",
       "label": "Metrics match",
-      "effect": "Not read yet: a later version scopes every metrics query by these labels, for a cluster sharing a Mimir tenant. Until then fleet.yaml refuses it.",
+      "effect": "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's.",
       "scope": "endpoint",
       "default": "none",
       "validation": "A map of label equality matchers.",
       "takesEffect": "at restart",
       "test": "Test under External endpoints reads this endpoint and says what answered.",
-      "save": "Not yet: fleet.yaml refuses it.",
-      "disposition": "deferred",
+      "save": "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs.",
+      "disposition": "effective-file-only",
       "source": "schema"
     },
     {

@@ -14,7 +14,7 @@ func Probe(ctx context.Context, res Resolution) MetricsCapability {
 	if res.Transport == nil {
 		return out // Available stays false; Reason already set for unavailable
 	}
-	if err := NewClient(res.Transport).Liveness(ctx); err != nil {
+	if err := NewClient(res.Transport, Scope{}).Liveness(ctx); err != nil {
 		// the transport already redacted its own credential; the general
 		// credential shapes go too before the reason reaches the page (C5 §5)
 		out.Reason = safehttp.NewRedactor().Text(err.Error())
