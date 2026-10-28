@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/readfence"
 )
 
 // Codex's review of S3b-2b: a read's terms are checked at every round
@@ -277,5 +279,119 @@ func TestADiscoveryCancelledInItsLastReadIsNotCached(t *testing.T) {
 	r.b.mu.Unlock()
 	if cached != 0 {
 		t.Fatal("a cancelled discovery was cached as no Prometheus")
+	}
+}
+
+// Codex's re-review of S3b-2b, RR1: a refusal by the caller's own read
+// fence - a withdrawn chat read - is the discovery's refusal, through the
+// cluster's client as production wraps it, and nothing is cached of it; a
+// fresh read discovers again. The control finds the Service.
+func TestACallerFenceRefusalIsNotCachedAsNoPrometheus(t *testing.T) {
+	withdrawn := errors.New("the chat withdrew its reads")
+	for _, when := range []string{"before discovery", "after the first candidate", "never"} {
+		t.Run(when, func(t *testing.T) {
+			src := metricsInstallation()
+			src.ServiceRef, src.Discover = nil, true
+			r := newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
+			var refused atomic.Bool
+			refused.Store(when == "before discovery")
+			var requests atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+				n := requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				if when == "after the first candidate" && n == 1 {
+					refused.Store(true)
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"prometheus-operated","namespace":"monitoring"},"spec":{"ports":[{"port":9090}]}}`))
+			}))
+			defer api.Close()
+			cfg := &rest.Config{Host: api.URL}
+			cfg.Wrap(readfence.Transport) // as the cluster's client is
+			typed, err := kubernetes.NewForConfig(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.host.typed = typed
+			sub, _ := r.sources.SubscriptionOf(config.EndpointMetrics, "dev")
+			ctx := readfence.With(context.Background(), func() error {
+				if refused.Load() {
+					return withdrawn
+				}
+				return nil
+			})
+			_, _, rel, err := r.b.metricsSource(ctx, r.b.termsOf(sub), "a chat read")
+			r.b.mu.Lock()
+			cached := len(r.b.mdisc)
+			r.b.mu.Unlock()
+			if when == "never" {
+				if err != nil || requests.Load() != 1 || cached != 1 {
+					t.Fatalf("control: %d requests, %d cached: %v", requests.Load(), cached, err)
+				}
+				rel()
+				return
+			}
+			want := map[string]int32{"before discovery": 0, "after the first candidate": 1}[when]
+			if !errors.Is(err, withdrawn) || !readfence.Failed(err) || requests.Load() != want || cached != 0 {
+				t.Fatalf("%d requests, %d cached: %v", requests.Load(), cached, err)
+			}
+			// a fresh read, its fence holding, discovers again
+			refused.Store(false)
+			before := requests.Load()
+			if _, _, rel, err := r.b.metricsSource(context.Background(), r.b.termsOf(sub), "a fresh read"); err != nil && requests.Load() == before {
+				t.Fatalf("a fresh read was given the refused attempt's result: %v", err)
+			} else if err == nil {
+				rel()
+			}
+		})
+	}
+}
+
+// Each of RR1's two checks on its own: the gate's check of the composed
+// fence stops a read through a client that does not check it, and a read
+// refused at one round trip alone - the gate's checks before and after
+// passing - is the discovery's refusal, never taken as an absence.
+func TestEachDiscoveryFenceCheckOnItsOwn(t *testing.T) {
+	withdrawn := errors.New("the chat withdrew its reads")
+	for _, tc := range []string{"an unwrapped client", "one round trip refused"} {
+		t.Run(tc, func(t *testing.T) {
+			src := metricsInstallation()
+			src.ServiceRef, src.Discover = nil, true
+			r := newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
+			var requests atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"prometheus-operated","namespace":"monitoring"},"spec":{"ports":[{"port":9090}]}}`))
+			}))
+			defer api.Close()
+			cfg := &rest.Config{Host: api.URL}
+			if tc == "one round trip refused" {
+				cfg.Wrap(readfence.Transport)
+			}
+			typed, err := kubernetes.NewForConfig(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.host.typed = typed
+			var calls atomic.Int32
+			ctx := readfence.With(context.Background(), func() error {
+				n := calls.Add(1)
+				if tc == "an unwrapped client" || n == 2 { // the gate's before, the round trip, the gate's after
+					return withdrawn
+				}
+				return nil
+			})
+			sub, _ := r.sources.SubscriptionOf(config.EndpointMetrics, "dev")
+			_, _, _, err = r.b.metricsSource(ctx, r.b.termsOf(sub), "a chat read")
+			r.b.mu.Lock()
+			cached := len(r.b.mdisc)
+			r.b.mu.Unlock()
+			if !errors.Is(err, withdrawn) || cached != 0 || requests.Load() != 0 {
+				t.Fatalf("%d requests, %d cached: %v", requests.Load(), cached, err)
+			}
+		})
 	}
 }

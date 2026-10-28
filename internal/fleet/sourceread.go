@@ -250,9 +250,9 @@ type metricsDisc struct {
 // connection and installation revision (§3.1). Its reads are hosted reads
 // (Codex's review of S3b-2b, R2): under the host lease, whose end cancels
 // them, each in one of the host's metrics slots, released before the next
-// is taken, and each with the read's terms checked before, after, and at
-// every round trip. A refused or ended discovery is returned, never
-// cached.
+// is taken, and each with the context's fence - the caller's, then the
+// read's terms - checked before, after, and at every round trip. A refused
+// or ended discovery is returned, never cached (RR1).
 func (b *alertBuckets) discoverMetrics(ctx context.Context, life context.Context, host *ClusterConn, instRev uint64, check func() error) (metrics.DiscoveryResult, error) {
 	k := discKey{host: host.ID(), inst: instRev}
 	now := b.clk.Now()
@@ -272,11 +272,11 @@ func (b *alertBuckets) discoverMetrics(ctx context.Context, life context.Context
 		if err != nil {
 			return nil, err
 		}
-		if err := check(); err != nil {
+		if err := readfence.Check(ctx); err != nil {
 			release()
 			return nil, err
 		}
-		return func() error { release(); return check() }, nil
+		return func() error { release(); return readfence.Check(ctx) }, nil
 	})
 	if err != nil {
 		return metrics.DiscoveryResult{}, err

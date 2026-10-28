@@ -8,6 +8,7 @@ import (
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/metrics"
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,7 +108,7 @@ func (c *ClusterConn) discover(ctx context.Context) metrics.DiscoveryResult {
 // refusal, or the context's end, stops discovery there, with no fallback
 // to the next candidate, and is returned; nil gates nothing.
 func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Context) (func() error, error)) (metrics.DiscoveryResult, error) {
-	step := func(read func()) error {
+	step := func(read func() error) error {
 		done := func() error { return nil }
 		if gate != nil {
 			var err error
@@ -115,18 +116,27 @@ func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Contex
 				return err
 			}
 		}
-		read()
+		rerr := read()
 		if err := done(); err != nil {
 			return err
 		}
 		if gate != nil {
+			// a read the context's fence refused - a round trip, a retry, a
+			// redirect's hop - is the discovery's refusal, never an absence
+			// (Codex's re-review of S3b-2b, RR1)
+			if readfence.Failed(rerr) {
+				return rerr
+			}
 			return ctx.Err()
 		}
 		return nil
 	}
 	for _, cand := range namedCandidates {
 		var err error
-		if serr := step(func() { _, err = c.typed.CoreV1().Services(cand.Namespace).Get(ctx, cand.Name, metav1.GetOptions{}) }); serr != nil {
+		if serr := step(func() error {
+			_, err = c.typed.CoreV1().Services(cand.Namespace).Get(ctx, cand.Name, metav1.GetOptions{})
+			return err
+		}); serr != nil {
 			return metrics.DiscoveryResult{}, serr
 		}
 		if err == nil {
@@ -137,7 +147,10 @@ func (c *ClusterConn) discoverWith(ctx context.Context, gate func(context.Contex
 	for _, sel := range labelSelectors {
 		var list *corev1.ServiceList
 		var err error
-		if serr := step(func() { list, err = c.typed.CoreV1().Services("").List(ctx, metav1.ListOptions{LabelSelector: sel}) }); serr != nil {
+		if serr := step(func() error {
+			list, err = c.typed.CoreV1().Services("").List(ctx, metav1.ListOptions{LabelSelector: sel})
+			return err
+		}); serr != nil {
 			return metrics.DiscoveryResult{}, serr
 		}
 		if err != nil || len(list.Items) == 0 {
