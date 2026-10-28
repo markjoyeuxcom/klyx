@@ -20,7 +20,7 @@ vi.mock("@wailsio/runtime", () => ({
 }));
 
 import { startSmokeWhenAsked, _resetSmokeBootForTest } from "./boot";
-import { FACES, TITLES, Unmeasurable, checkFonts, checkTokens, destinations, gatewayView, page, runSmoke, sized, verdict, walk, within } from "./run";
+import { FACES, TITLES, Unmeasurable, afterward, checkFonts, checkTokens, destinations, gatewayView, page, runSmoke, sized, verdict, walk, within } from "./run";
 import { NAV_GROUPS } from "../nav/registry";
 import { useFleet } from "../store/fleet";
 
@@ -208,4 +208,30 @@ describe("a destination's page", () => {
       vi.unstubAllGlobals();
     }
   }, 30_000);
+});
+
+// Codex's review of S3a-4c, R7: a step that fails after creating something
+// removes it, reports both failures, and never removes what it did not
+// create.
+describe("a step's cleanup", () => {
+  it("removes what the step created when a later check fails, and keeps the step's failure", async () => {
+    let created = false;
+    const cleanup = vi.fn(async () => { created = false; });
+    await expect(afterward(async () => { created = true; throw new Error("the Test's answer timed out"); }, () => created, cleanup)).rejects.toThrow("the Test's answer timed out");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(created).toBe(false);
+  });
+
+  it("reports a failed cleanup beside the step's failure", async () => {
+    const cleanup = vi.fn(async () => { throw new Error("Remove was refused"); });
+    await expect(afterward(async () => { throw new Error("the scope sentence never showed"); }, () => true, cleanup))
+      .rejects.toThrow("the scope sentence never showed; and what the step created could not be removed: Remove was refused");
+  });
+
+  it("removes nothing the step did not create, and nothing when it passes", async () => {
+    const cleanup = vi.fn(async () => {});
+    await expect(afterward(async () => { throw new Error("before anything was added"); }, () => false, cleanup)).rejects.toThrow("before anything was added");
+    await expect(afterward(async () => 7, () => true, cleanup)).resolves.toBe(7);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
 });

@@ -44,8 +44,9 @@ export function stateText(r: EndpointRow): { text: string; warn: boolean } {
   return { text: r.why ? `${r.state}: ${r.why}` : r.state, warn: true };
 }
 
-// onLoaded hands the rows to the section (its sentence reads them).
-export function EndpointsPanel({ onLoaded }: { onLoaded?: (s: EndpointsState) => void } = {}) {
+// onLoaded hands the rows to the section (its sentence reads them);
+// onSettled says the first read finished, read or failed.
+export function EndpointsPanel({ onLoaded, onSettled }: { onLoaded?: (s: EndpointsState) => void; onSettled?: () => void } = {}) {
   const [state, setState] = useState<EndpointsState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -63,7 +64,7 @@ export function EndpointsPanel({ onLoaded }: { onLoaded?: (s: EndpointsState) =>
     }
   };
   useEffect(() => {
-    void load();
+    void load().finally(() => onSettled?.());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

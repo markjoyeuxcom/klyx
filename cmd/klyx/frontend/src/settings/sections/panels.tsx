@@ -64,17 +64,24 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
   const onLoaded = (s: EndpointsState) => {
     last.current = s;
     say(sources.current ?? observabilitySentence(s, parts));
-    ready();
+  };
+  // the section is ready, and an anchor applied, once both panels have
+  // read, or failed to: an installation's row must exist before its anchor
+  // is judged gone (Codex's review of S3a-4c, R6)
+  const settled = useRef({ endpoints: false, sources: false });
+  const settle = (which: "endpoints" | "sources") => {
+    settled.current[which] = true;
+    if (settled.current.endpoints && settled.current.sources) ready();
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (last.current && !sources.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
   return (
     <>
       <Group title="Alert sources">
-        <SourcesPanel onLoaded={(s) => { sources.current = s.sentence; say(s.sentence); }} />
+        <SourcesPanel onLoaded={(s) => { sources.current = s.sentence; say(s.sentence); }} onSettled={() => settle("sources")} />
       </Group>
       <Group title="External endpoints">
-        <EndpointsPanel onLoaded={onLoaded} />
+        <EndpointsPanel onLoaded={onLoaded} onSettled={() => settle("endpoints")} />
       </Group>
       <Group title="Endpoint fields">
         <p className="settings-group-note">What each field of a cluster&apos;s metrics, alertmanager and loki block does. They are set in fleet.yaml in this version.</p>

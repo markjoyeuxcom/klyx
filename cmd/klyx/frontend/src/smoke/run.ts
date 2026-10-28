@@ -48,6 +48,23 @@ export async function within<T>(ms: number, what: string, f: () => T | null | un
 
 // sized: an element with a measurable box. A hidden window that lays nothing
 // out is unmeasurable - never a pass.
+// afterward runs a step's body; when it fails after creating something,
+// cleanup removes it, and both failures are reported - the body's, and the
+// cleanup's (Codex's review of S3a-4c, R7). Nothing the body did not
+// create is ever removed: created says whether it did.
+export async function afterward<T>(body: () => Promise<T>, created: () => boolean, cleanup: () => Promise<unknown>): Promise<T> {
+  try {
+    return await body();
+  } catch (e) {
+    if (created()) {
+      let left = "";
+      await cleanup().catch((c: unknown) => { left = c instanceof Error ? c.message : String(c); });
+      if (left && e instanceof Error) e.message += `; and what the step created could not be removed: ${left}`;
+    }
+    throw e;
+  }
+}
+
 export function sized(el: Element | null, what: string): DOMRect {
   if (!el) throw new Error(`no ${what}`);
   const r = el.getBoundingClientRect();
@@ -1390,31 +1407,42 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
       await within(20_000, `${what}, applied and read back`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /^Applied/));
       return changes;
     };
-    (await within(4000, "Add an installation", () => byText<HTMLButtonElement>("[data-testid='sources-panel'] button", /^Add an installation$/))).click();
-    const ed = await within(8000, "the installation editor", () => $<HTMLElement>("[data-testid='installation-editor']"));
-    const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
-    typeInto(input("sources[].id"), "lab-am");
-    chooseOption(ed.querySelector<HTMLSelectElement>("[data-setting='sources[].host'] select")!, cluster);
-    typeInto(input("sources[].serviceRef.namespace"), "klyx-s8-lab");
-    typeInto(input("sources[].serviceRef.name"), "alertmanager");
-    typeInto(input("sources[].serviceRef.port"), "web");
-    typeInto(input("sources[].memberLabel"), "cluster");
-    typeInto(input("sources[].serves[].cluster"), "aks-stg-weu");
-    (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='installation-editor'] button", /^Review and apply$/))).click();
-    const added = await applyPlan("add lab-am");
-    await within(8000, "lab-am in force", inst);
-    const scope = await within(8000, "aks-stg-weu subscribed", () => {
-      const t = sub("aks-stg-weu")?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
-      return /lab-am/.test(t) && /cluster=aks-stg-weu/.test(t) ? t : null;
-    });
-    // Test reads the installation's status through its host
-    (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
-    const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
-    (await within(4000, "Remove", () => $<HTMLButtonElement>("button[aria-label='remove lab-am']:not([disabled])"))).click();
-    const removed = await applyPlan("remove lab-am");
-    await within(8000, "lab-am gone", () => !inst());
-    if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
-    return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
+    // the walk removes what it created even when a later check fails, and
+    // never what it did not create (Codex's review of S3a-4c, R7)
+    if (inst()) throw new Error("lab-am is in force before the walk: a previous run left it; remove it by hand");
+    const removeIt = async (what: string) => {
+      byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Cancel$/)?.click();
+      (await within(8000, "Remove", () => $<HTMLButtonElement>("button[aria-label='remove lab-am']:not([disabled])"))).click();
+      const changes = await applyPlan(what);
+      await within(8000, "lab-am gone", () => !inst());
+      return changes;
+    };
+    return afterward(async () => {
+      (await within(4000, "Add an installation", () => byText<HTMLButtonElement>("[data-testid='sources-panel'] button", /^Add an installation$/))).click();
+      const ed = await within(8000, "the installation editor", () => $<HTMLElement>("[data-testid='installation-editor']"));
+      const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
+      typeInto(input("sources[].id"), "lab-am");
+      chooseOption(ed.querySelector<HTMLSelectElement>("[data-setting='sources[].host'] select")!, cluster);
+      typeInto(input("sources[].serviceRef.namespace"), "klyx-s8-lab");
+      typeInto(input("sources[].serviceRef.name"), "alertmanager");
+      typeInto(input("sources[].serviceRef.port"), "web");
+      typeInto(input("sources[].memberLabel"), "cluster");
+      (await within(4000, "add to cluster", () => ed.querySelector<HTMLButtonElement>("button[aria-label='add to cluster']"))).click();
+      typeInto(await within(4000, "the served cluster", () => ed.querySelector<HTMLInputElement>("input[aria-label='cluster 1']")), "aks-stg-weu");
+      (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='installation-editor'] button", /^Review and apply$/))).click();
+      const added = await applyPlan("add lab-am");
+      await within(8000, "lab-am in force", inst);
+      const scope = await within(8000, "aks-stg-weu subscribed", () => {
+        const t = sub("aks-stg-weu")?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+        return /lab-am/.test(t) && /cluster=aks-stg-weu/.test(t) ? t : null;
+      });
+      // Test reads the installation's status through its host
+      (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
+      const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
+      const removed = await removeIt("remove lab-am");
+      if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
+      return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
+    }, () => !!inst(), () => removeIt("remove lab-am after a failure"));
   });
 
   // ---- Settings slice F §7: the AI section's Review and apply, on the

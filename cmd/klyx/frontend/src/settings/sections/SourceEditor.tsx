@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SourceDraft, SourcesDraft, Subscription, SubscriptionEdit } from "../../bridge/sources";
 import { SettingField } from "../SettingField";
-import { parseTags } from "./ClusterEditor";
 
 // The installation and subscription editors (Settings S3a §8): an
 // installation's fields, or a cluster's own subscription block, as
@@ -15,34 +14,56 @@ type Locator = "service" | "discover" | "endpoint";
 
 const locatorOf = (d: SourceDraft): Locator => (d.endpoint ? "endpoint" : d.discover ? "discover" : "service");
 
-// listText and parseList: a comma-separated list, trimmed, empties dropped.
-const listText = (l?: string[]) => (l ?? []).join(", ");
-const parseList = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+// A value the person did not touch is sent as fleet.yaml says it, byte for
+// byte; one they typed is trimmed. A list is edited one entry per input, so
+// a comma or a space in a value is never a boundary (Codex's review of
+// S3a-4c, R3: a group "blue, green" read back as two groups).
+const asTyped = (now: string, was: string) => (now === was ? now : now.trim());
+const entries = (now: string[], was: string[]) => now.map((v) => (was.includes(v) ? v : v.trim())).filter((v) => v !== "");
+
+// ListEntries edits a list, one input per entry.
+function ListEntries({ label, values, onChange, busy, placeholder }: { label: string; values: string[]; onChange: (v: string[]) => void; busy: boolean; placeholder?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {values.map((v, n) => (
+        <div key={n} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <input aria-label={`${label} ${n + 1}`} style={input} value={v} disabled={busy} placeholder={placeholder}
+            onChange={(e) => onChange(values.map((x, m) => (m === n ? e.target.value : x)))} />
+          <button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label={`remove ${label} ${n + 1}`}
+            onClick={() => onChange(values.filter((_, m) => m !== n))}>Remove</button>
+        </div>
+      ))}
+      <div><button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label={`add to ${label}`} onClick={() => onChange([...values, ""])}>Add</button></div>
+    </div>
+  );
+}
 
 // matchText is a match, one key=value a line.
 export function matchText(m?: Record<string, string>): string {
   return Object.keys(m ?? {}).sort().map((k) => `${k}=${(m ?? {})[k]}`).join("\n");
 }
 
-// draftOfForm is the installation the form says: only its locator's fields.
-function draftOfForm(f: Form): SourceDraft {
-  const d: SourceDraft = { id: f.id.trim() };
-  if (f.name.trim()) d.name = f.name.trim();
-  if (f.locator !== "endpoint") d.host = f.host.trim();
-  if (f.locator === "service") d.serviceRef = { namespace: f.namespace.trim(), name: f.service.trim(), port: f.port.trim(), scheme: f.scheme || undefined, path: f.path.trim() || undefined };
+// draftOfForm is the installation the form says: only its locator's
+// fields, each untouched one as it was.
+function draftOfForm(f: Form, was: Form): SourceDraft {
+  const t = (k: "id" | "name" | "host" | "namespace" | "service" | "port" | "path" | "endpoint" | "username" | "tenant" | "memberLabel") => asTyped(f[k], was[k]);
+  const d: SourceDraft = { id: t("id") };
+  if (t("name")) d.name = t("name");
+  if (f.locator !== "endpoint") d.host = t("host");
+  if (f.locator === "service") d.serviceRef = { namespace: t("namespace"), name: t("service"), port: t("port"), scheme: f.scheme || undefined, path: t("path") || undefined };
   if (f.locator === "discover") d.discover = true;
   if (f.locator === "endpoint") {
-    d.endpoint = f.endpoint.trim();
+    d.endpoint = t("endpoint");
     if (f.tlsSkipVerify === true) d.tlsSkipVerify = true;
     if (f.authType && f.authType !== UNDECIDED) {
       d.authType = f.authType;
-      if (f.authType === "basic" && f.username.trim()) d.authUsername = f.username.trim();
+      if (f.authType === "basic" && t("username")) d.authUsername = t("username");
     }
   }
-  if (f.tenant.trim()) d.tenant = f.tenant.trim();
-  if (f.memberLabel.trim()) d.memberLabel = f.memberLabel.trim();
-  const groups = parseList(f.groups);
-  const clusters = parseList(f.clusters);
+  if (t("tenant")) d.tenant = t("tenant");
+  if (t("memberLabel")) d.memberLabel = t("memberLabel");
+  const groups = entries(f.groups, was.groups);
+  const clusters = entries(f.clusters, was.clusters);
   if (groups.length) d.servesGroups = groups;
   if (clusters.length) d.servesClusters = clusters;
   return d;
@@ -56,7 +77,7 @@ type Form = {
   id: string; name: string; locator: Locator; host: string;
   namespace: string; service: string; port: string; scheme: string; path: string;
   endpoint: string; tlsSkipVerify: boolean | null; authType: string; username: string;
-  tenant: string; memberLabel: string; groups: string; clusters: string;
+  tenant: string; memberLabel: string; groups: string[]; clusters: string[];
 };
 
 function formOf(d: SourceDraft, unresolved: string[] = []): Form {
@@ -65,7 +86,7 @@ function formOf(d: SourceDraft, unresolved: string[] = []): Form {
     namespace: d.serviceRef?.namespace ?? "", service: d.serviceRef?.name ?? "", port: d.serviceRef?.port ?? "", scheme: d.serviceRef?.scheme ?? "", path: d.serviceRef?.path ?? "",
     endpoint: d.endpoint ?? "", tlsSkipVerify: unresolved.includes("tlsSkipVerify") ? null : !!d.tlsSkipVerify,
     authType: unresolved.includes("auth") ? UNDECIDED : d.authType ?? "", username: d.authUsername ?? "",
-    tenant: d.tenant ?? "", memberLabel: d.memberLabel ?? "", groups: listText(d.servesGroups), clusters: listText(d.servesClusters),
+    tenant: d.tenant ?? "", memberLabel: d.memberLabel ?? "", groups: [...(d.servesGroups ?? [])], clusters: [...(d.servesClusters ?? [])],
   };
 }
 
@@ -97,7 +118,8 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
   onDraftChange?: (changed: boolean) => void;
 }) {
   const [f, setF] = useState<Form>(() => formOf(initial, unresolved));
-  const start = useRef(JSON.stringify(formOf(initial, unresolved)));
+  const was = useRef(formOf(initial, unresolved));
+  const start = useRef(JSON.stringify(was.current));
   const why = (field: string) => (unresolved.length === conflicts.length ? conflicts[unresolved.indexOf(field)] : undefined) ?? "The clusters differ: choose.";
   const undecided = f.authType === UNDECIDED || f.tlsSkipVerify === null;
   const opened = useRef(true);
@@ -118,7 +140,11 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
         placeholder={opts.placeholder} onChange={(e) => set(k)(e.target.value as never)} />}
     </SettingField>
   );
-  const review = () => onReview({ installation: { op, source: draftOfForm(f) }, subscriptions });
+  // the subscriptions a proposal carries follow its id when the person
+  // renames it; references to other installations stay (R5)
+  const id = asTyped(f.id, was.current.id);
+  const carried = subscriptions?.map((s) => (op === "add" && s.block?.source === initial.id && id !== initial.id ? { ...s, block: { ...s.block, source: id } } : s));
+  const review = () => onReview({ installation: { op, source: draftOfForm(f, was.current) }, subscriptions: carried });
   return (
     <div data-testid="installation-editor" role="group" aria-label={op === "add" ? "Add an installation" : `Edit ${initial.id}`} style={editorBox}>
       {text("sources[].id", "id", { disabled: op === "edit", note: op === "edit" ? "An installation keeps its id: remove it and add another to rename it." : undefined })}
@@ -197,12 +223,16 @@ export function InstallationEditor({ initial, op, subscriptions, unresolved = []
       </>)}
       {text("sources[].tenant", "tenant", { placeholder: "none" })}
       {text("sources[].memberLabel", "memberLabel", { placeholder: "none" })}
-      {text("sources[].serves[].group", "groups", { label: "Serves the groups", placeholder: "comma-separated" })}
-      {text("sources[].serves[].cluster", "clusters", { label: "Serves the clusters", placeholder: "comma-separated" })}
-      {subscriptions && subscriptions.length > 0 && (
+      <SettingField id="sources[].serves[].group" instance={key} label="Serves the groups" group>
+        {() => <ListEntries label="group" values={f.groups} onChange={set("groups")} busy={busy} placeholder="a group" />}
+      </SettingField>
+      <SettingField id="sources[].serves[].cluster" instance={key} label="Serves the clusters" group>
+        {() => <ListEntries label="cluster" values={f.clusters} onChange={set("clusters")} busy={busy} placeholder="a cluster" />}
+      </SettingField>
+      {carried && carried.length > 0 && (
         <div data-testid="installation-editor-subscriptions" style={{ fontSize: 12, margin: "6px 0" }}>
           <div className="t-secondary">With this plan, each cluster&apos;s own block:</div>
-          {subscriptions.map((s) => (
+          {carried.map((s) => (
             <div key={s.cluster} style={{ fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>{s.cluster}: {subscriptionWords(s.block)}</div>
           ))}
         </div>
@@ -229,8 +259,18 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
   const [source, setSource] = useState(initial?.source ?? "");
   const [scopeTenant, setScopeTenant] = useState(initial?.scope === "tenant");
   const [tenant, setTenant] = useState(initial?.tenant ?? "");
-  const [match, setMatch] = useState(matchText(initial?.match));
-  const parsed = parseTags(match);
+  // a match as key and value rows: an untouched row is sent as written, a
+  // space in its value included (R3)
+  const wasPairs = useRef<[string, string][]>(Object.keys(initial?.match ?? {}).sort().map((k) => [k, (initial?.match ?? {})[k]]));
+  const [pairs, setPairs] = useState<[string, string][]>(() => wasPairs.current.map(([k, v]) => [k, v]));
+  const cleaned = pairs
+    .map(([k, v]): [string, string] => (wasPairs.current.some(([wk, wv]) => wk === k && wv === v) ? [k, v] : [k.trim(), v.trim()]))
+    .filter(([k, v]) => k !== "" || v !== "");
+  const keys = cleaned.map(([k]) => k);
+  const bad = [
+    ...cleaned.filter(([k, v]) => k === "" || v === "").map(([k, v]) => (k === "" ? `a value with no key (${v})` : `${k} with no value`)),
+    ...keys.filter((k, n) => k !== "" && keys.indexOf(k) !== n).map((k) => `${k} twice`),
+  ];
   const opened = useRef(true);
   useEffect(() => {
     if (opened.current) {
@@ -238,15 +278,16 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
       return;
     }
     onDraftChange?.(off !== !!initial?.off || source !== (initial?.source ?? "") || scopeTenant !== (initial?.scope === "tenant")
-      || tenant !== (initial?.tenant ?? "") || match !== matchText(initial?.match));
+      || tenant !== (initial?.tenant ?? "") || JSON.stringify(pairs) !== JSON.stringify(wasPairs.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [off, source, scopeTenant, tenant, match]);
+  }, [off, source, scopeTenant, tenant, pairs]);
   const block = (): Subscription => {
     if (off) return { off: true };
     const b: Subscription = { source };
     if (scopeTenant) b.scope = "tenant";
-    if (tenant.trim()) b.tenant = tenant.trim();
-    if (!scopeTenant && Object.keys(parsed.tags).length) b.match = parsed.tags;
+    const tn = asTyped(tenant, initial?.tenant ?? "");
+    if (tn) b.tenant = tn;
+    if (!scopeTenant && cleaned.length) b.match = Object.fromEntries(cleaned);
     return b;
   };
   return (
@@ -280,14 +321,29 @@ export function SubscriptionEditor({ cluster, initial, installations, busy, onRe
           {(ids) => <input id={ids.id} aria-describedby={ids.describedBy} style={input} value={tenant} disabled={busy} placeholder="the installation's" onChange={(e) => setTenant(e.target.value)} />}
         </SettingField>
         {!scopeTenant && (
-          <SettingField id="clusters[].alertmanager.match" instance={cluster}
-            note={parsed.bad.length > 0 ? `Each line needs key=value: ${parsed.bad.join(", ")}` : "One key=value a line, over the installation's member label."}>
-            {(ids) => <textarea id={ids.id} aria-describedby={ids.describedBy} rows={3} style={input} value={match} disabled={busy} onChange={(e) => setMatch(e.target.value)} />}
+          <SettingField id="clusters[].alertmanager.match" instance={cluster} group
+            note={bad.length > 0 ? `Each row needs a key and a value, each key once: ${bad.join(", ")}` : "Each row a label and its value, over the installation's member label."}>
+            {() => (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {pairs.map(([k, v], n) => (
+                  <div key={n} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input aria-label={`match key ${n + 1}`} style={input} value={k} disabled={busy} placeholder="label"
+                      onChange={(e) => setPairs(pairs.map((p, m) => (m === n ? [e.target.value, p[1]] : p)))} />
+                    <span aria-hidden="true">=</span>
+                    <input aria-label={`match value ${n + 1}`} style={input} value={v} disabled={busy} placeholder="value"
+                      onChange={(e) => setPairs(pairs.map((p, m) => (m === n ? [p[0], e.target.value] : p)))} />
+                    <button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label={`remove match ${n + 1}`}
+                      onClick={() => setPairs(pairs.filter((_, m) => m !== n))}>Remove</button>
+                  </div>
+                ))}
+                <div><button className="l-btn" style={{ padding: "1px 8px", fontSize: 11 }} disabled={busy} aria-label="add to match" onClick={() => setPairs([...pairs, ["", ""]])}>Add</button></div>
+              </div>
+            )}
           </SettingField>
         )}
       </>)}
       <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <button className="l-btn l-btn-primary" disabled={busy || (!off && !source) || parsed.bad.length > 0}
+        <button className="l-btn l-btn-primary" disabled={busy || (!off && !source) || (!off && !scopeTenant && bad.length > 0)}
           onClick={() => onReview({ subscriptions: [{ cluster, block: block() }] })}>Review and apply</button>
         {initial && <button className="l-btn" disabled={busy} onClick={() => onReview({ subscriptions: [{ cluster, block: null }] })}>Remove its own block…</button>}
         <button className="l-btn" disabled={busy} onClick={onCancel}>Cancel</button>

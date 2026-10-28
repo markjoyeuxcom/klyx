@@ -230,17 +230,21 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
     expect(await screen.findByTestId("sources-sentence")).toBeTruthy();
   });
 
-  it("edits a cluster's own block: a match a line, a bad line blocks review, and removing the block is a plan", async () => {
+  it("edits a cluster's own block: a match as rows, a row without its value blocks review, and removing the block is a plan", async () => {
     b.planSources.mockResolvedValue(aPlan());
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "edit dev's alert subscription" }));
     const ed = await screen.findByTestId("subscription-editor");
-    const match = within(ed).getByLabelText("Alertmanager match");
     const review = within(ed).getByRole("button", { name: "Review and apply" }) as HTMLButtonElement;
-    fireEvent.change(match, { target: { value: "team=platform\nnot a pair" } });
-    expect(review.disabled).toBe(true);
-    expect(ed.textContent).toContain("Each line needs key=value: not a pair");
-    fireEvent.change(match, { target: { value: "team=platform\nenv=dev" } });
+    fireEvent.click(within(ed).getByRole("button", { name: "add to match" }));
+    fireEvent.change(within(ed).getByLabelText("match key 1"), { target: { value: "team" } });
+    expect(review.disabled).toBe(true); // a key with no value
+    expect(ed.textContent).toContain("team with no value");
+    fireEvent.change(within(ed).getByLabelText("match value 1"), { target: { value: "platform" } });
+    fireEvent.click(within(ed).getByRole("button", { name: "add to match" }));
+    fireEvent.change(within(ed).getByLabelText("match key 2"), { target: { value: "env" } });
+    fireEvent.change(within(ed).getByLabelText("match value 2"), { target: { value: "dev" } });
+    expect(review.disabled).toBe(false);
     fireEvent.click(review);
     await waitFor(() => expect(b.planSources).toHaveBeenCalledWith({ subscriptions: [{ cluster: "dev", block: { source: "shared", match: { team: "platform", env: "dev" } } }] }));
     fireEvent.click(within(ed).getByRole("button", { name: "Remove its own block…" }));
@@ -322,5 +326,139 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
     const ed = await screen.findByTestId("installation-editor");
     expect((within(ed).getByLabelText("Installation id") as HTMLInputElement).value).toBe("prd-am");
     expect(within(ed).getByTestId("installation-editor-subscriptions").textContent).toContain("dev: subscribed to prd-am");
+  });
+});
+
+// Codex's review of S3a-4c (2026-10-28): its probes, R1 to R5, as
+// regression tests.
+describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetNavGuardForTest();
+    b.getSources.mockResolvedValue(state({ installations: [inst(), inst({ id: "other", revision: "o1", subscribers: [] })] }));
+    b.migrationOffers.mockResolvedValue([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("R1: asks before replacing a changed editor; Stay keeps it, Discard opens the other", async () => {
+    renderPanel();
+    const ed = await editShared();
+    fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/typed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add an installation" }));
+    expect(useLeaveRequest.getState().request?.unsaved).toEqual(["a change to the alert sources not yet applied"]);
+    await act(async () => { await resolveLeave("stay"); });
+    expect(endpointOf(screen.getByTestId("installation-editor")).value).toBe("https://am.example/typed");
+    fireEvent.click(screen.getByRole("button", { name: "edit dev's alert subscription" }));
+    await act(async () => { await resolveLeave("discard"); });
+    expect(screen.queryByTestId("installation-editor")).toBeNull();
+    expect(screen.getByTestId("subscription-editor")).toBeTruthy();
+  });
+
+  it("R1: a removal that would strand the changed editor asks first; another installation's does not", async () => {
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    const ed = await editShared();
+    fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/typed" } });
+    fireEvent.click(screen.getByRole("button", { name: "remove shared" }));
+    expect(useLeaveRequest.getState().request).not.toBeNull();
+    expect(b.planSources).not.toHaveBeenCalled();
+    await act(async () => { await resolveLeave("stay"); });
+    fireEvent.click(screen.getByRole("button", { name: "remove other" }));
+    expect(useLeaveRequest.getState().request).toBeNull();
+    await waitFor(() => expect(b.planSources).toHaveBeenCalledWith({ installation: { op: "remove", source: { id: "other" } }, subscriptions: [] }));
+    expect(endpointOf(screen.getByTestId("installation-editor")).value).toBe("https://am.example/typed");
+  });
+
+  it("R2: a poll sent before an Apply never overwrites the Apply's readback", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answerPoll: (s: SourcesState) => void = () => {};
+    b.getSources
+      .mockResolvedValueOnce(state())
+      .mockImplementationOnce(() => new Promise<SourcesState>((r) => { answerPoll = r; }))
+      .mockResolvedValue(state({ sentence: "NEW CURRENT TERMS" }));
+    b.planSources.mockResolvedValue(aPlan());
+    b.applySources.mockResolvedValue({ ok: true });
+    renderPanel(30_000);
+    const ed = await editShared();
+    await act(async () => { vi.advanceTimersByTime(30_000); }); // the poll is in flight
+    fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/v2" } });
+    fireEvent.click(within(ed).getByRole("button", { name: "Review and apply" }));
+    await screen.findByTestId("settings-plan");
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(screen.getByTestId("sources-sentence").textContent).toBe("NEW CURRENT TERMS"));
+    await act(async () => { answerPoll(state({ sentence: "OLD TERMS" })); });
+    expect(screen.getByTestId("sources-sentence").textContent).toBe("NEW CURRENT TERMS");
+    expect(screen.getByTestId("sources-banner").textContent).toContain("Applied");
+  });
+
+  it("R2: a credential action stays busy until its readback", async () => {
+    let answer: (s: SourcesState) => void = () => {};
+    b.setSourceCredential.mockResolvedValue({ ok: true, message: "Stored." });
+    renderPanel();
+    fireEvent.change(await screen.findByLabelText("shared token"), { target: { value: "s3cret" } });
+    b.getSources.mockImplementationOnce(() => new Promise<SourcesState>((r) => { answer = r; }));
+    fireEvent.click(screen.getByRole("button", { name: "Store the shared credential" }));
+    await waitFor(() => expect(b.getSources).toHaveBeenCalledTimes(2));
+    expect((screen.getByRole("button", { name: "edit shared" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { answer(state()); });
+    await waitFor(() => expect((screen.getByRole("button", { name: "edit shared" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("R3: editing only the name keeps a group holding a comma, and an untouched match keeps its spaces", async () => {
+    b.getSources.mockResolvedValue(state({
+      installations: [inst({ servesGroups: ["blue, green"], servesClusters: [" spaced "], tenant: " ops " })],
+      subscriptions: [{ cluster: "dev", mode: "subscribed", via: "its own block", source: "shared", sentence: "s", block: { source: "shared", match: { team: " blue " } } }],
+    }));
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    const ed = await editShared();
+    expect((within(ed).getByLabelText("group 1") as HTMLInputElement).value).toBe("blue, green");
+    fireEvent.change(within(ed).getByLabelText("Installation name"), { target: { value: "Shared" } });
+    fireEvent.click(within(ed).getByRole("button", { name: "Review and apply" }));
+    await waitFor(() => expect(b.planSources).toHaveBeenCalled());
+    const sent = b.planSources.mock.calls[0][0].installation.source;
+    expect(sent.servesGroups).toEqual(["blue, green"]);
+    expect(sent.servesClusters).toEqual([" spaced "]);
+    expect(sent.tenant).toBe(" ops "); // an untouched field, as written
+    expect(sent.name).toBe("Shared");
+    fireEvent.click(within(ed).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "edit dev's alert subscription" }));
+    const sub = await screen.findByTestId("subscription-editor");
+    fireEvent.change(within(sub).getByLabelText("Alertmanager tenant"), { target: { value: "ops" } });
+    fireEvent.click(within(sub).getByRole("button", { name: "Review and apply" }));
+    await waitFor(() => expect(b.planSources).toHaveBeenLastCalledWith({ subscriptions: [{ cluster: "dev", block: { source: "shared", tenant: "ops", match: { team: " blue " } } }] }));
+  });
+
+  it("R4: a refresh that removes the edited installation keeps the editor and what was typed, and says why", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPanel(30_000);
+    const ed = await editShared();
+    fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/typed" } });
+    b.getSources.mockResolvedValue(state({ installations: [inst({ id: "other", revision: "o1" })] }));
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    await waitFor(() => expect(screen.getByTestId("editor-target-gone").textContent).toContain("shared is no longer in force"));
+    expect(endpointOf(screen.getByTestId("installation-editor")).value).toBe("https://am.example/typed");
+    expect(mustAsk()).toBe(true);
+  });
+
+  it("R5: renaming an offered installation keeps its carried subscriptions attached; others stay", async () => {
+    b.migrationOffers.mockResolvedValue([{
+      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [], conflicts: [], unresolved: [],
+      draft: { installation: { op: "add", source: { id: "proposed-am", endpoint: "https://am.example" } }, subscriptions: [
+        { cluster: "dev", block: { source: "proposed-am", match: { cluster: "dev" } } },
+        { cluster: "prd", block: { source: "shared", match: { cluster: "prd" } } },
+      ] },
+    }]);
+    b.planSources.mockResolvedValue(aPlan());
+    renderPanel();
+    fireEvent.click(within(await screen.findByTestId("migration-offer")).getByRole("button", { name: "Edit and review…" }));
+    const ed = await screen.findByTestId("installation-editor");
+    fireEvent.change(within(ed).getByLabelText("Installation id"), { target: { value: "chosen-am" } });
+    expect(within(ed).getByTestId("installation-editor-subscriptions").textContent).toContain("dev: subscribed to chosen-am");
+    fireEvent.click(within(ed).getByRole("button", { name: "Review and apply" }));
+    await waitFor(() => expect(b.planSources).toHaveBeenCalledWith({
+      installation: { op: "add", source: { id: "chosen-am", endpoint: "https://am.example" } },
+      subscriptions: [{ cluster: "dev", block: { source: "chosen-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "shared", match: { cluster: "prd" } } }],
+    }));
   });
 });
