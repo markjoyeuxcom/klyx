@@ -7,7 +7,7 @@ Opened 2026-10-28, on `feat/settings-s3b`, with S3a-1 to S3a-4b accepted and S3a
 - lineage on every AI read of logs and metrics, and the fences that end later sends when the terms move: S3a §0's gap, closed for Loki and metrics;
 - Settings: the installations and subscriptions of each kind, their plans, credentials, Test, Detect for metrics, and the migration offer.
 
-This note is for Codex's review before anything is built; revision 1 the same day, after that review (§12), with the implementation contracts it set (§13); revision 2 after its re-review (§14).
+This note is for Codex's review before anything is built; revision 1 the same day, after that review (§12), with the implementation contracts it set (§13); revision 2 after its re-review (§14); accepted (§15).
 
 ## 0. What exists
 
@@ -302,3 +302,7 @@ Codex closed R1, R3, R4 and R5, and closed R2 but for its residue; the rulings s
 | **RR3, P3:** "2,000 values kept" counted after filtering, so a fleet name past the sample could still count | §6: the sample is the first 2,000 values of each response, counted before filtering; nothing past them is examined; a longer response is said to be cut |
 
 **Codex's further details,** pinned in the design and its tests: Detect counts one Service found by name and by a selector once, keeps distinct ports or paths apart, and never takes an unreadable discovery as exhaustive (§6, step 1); the wait for Detect's pool is inside its per-member deadline (§6, step 5); the grid of parameter cases is declared beside each template and enforced, so a removed case fails (§3.3); a subscription's Test pins the member, installation and subscription as one target from admission to settlement (§7). §2.4's rules apply per kind: one kind turned off leaves the others as they are.
+
+## 15. ACCEPT (2026-10-28)
+
+Codex accepted the design at 87f8d14a, after its review and two re-reviews (§12, §14), with no findings remaining. Its four rulings stand: legacy `metrics.match`, admitted in S3b-2; the pinned Prometheus parser over the closed query surface; four hosted metrics requests and two Loki pages per host; Detect's bounded, metadata-only sample. The implementation reviews are to check these at their boundaries: a query refused before I/O when it names no template, rendering from the pinned reader's terms only, an enforced missing-grid-case negative, a slot released when its body has finished, Detect's input counted before filtering, and a Test settled before its lease is released. The page builds on S3a-4c after its review fixes; this acceptance is not that page's.
