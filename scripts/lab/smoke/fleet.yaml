@@ -1,0 +1,53 @@
+# The native smoke's fleet (walk.sh copies it into the state directory
+# before every walk and compares it after). kind-klyx is the lab; the two
+# AKS entries name contexts that are deliberately absent from the smoke's
+# kubeconfig, so the walk reads a fleet with clusters that cannot connect.
+# The Git URLs are fixtures for the approved-URL checks: the credential in
+# one is invented, and only the last repository is read.
+clusters:
+  - name: kind-klyx
+    context: kind-klyx
+    environment: dev
+    group: local
+    tags:
+      env: dev
+      region: westeurope
+    # coverage S8a: the lab's real Alertmanager (lab-s8a)
+    alertmanager:
+      serviceRef: {namespace: klyx-s8-lab, name: alertmanager, port: web}
+      match: {cluster: kind-klyx}
+    # coverage S8b: the lab's real Loki (lab-s8b), the OTLP shape
+    loki:
+      serviceRef: {namespace: klyx-s8b-lab, name: loki, port: http}
+      tenant: lab
+      match: {k8s_cluster_name: kind-klyx}
+  - name: aks-stg-weu
+    context: klyx-capture-missing-stg
+    environment: stg
+    tags:
+      region: westeurope
+  - name: aks-prd-weu
+    context: klyx-capture-missing-prd
+    environment: prd
+    tags:
+      region: westeurope
+git:
+  repos:
+    - url: ssh://git@git.example.com/platform/fleet-infrastructure.git
+    - url: gl-work:platform/workloads.git
+      matches:
+        - gitlab.example.com/platform/workloads
+    - url: https://glpat-secret@gitlab.example.com/platform/observability.git
+    - url: https://github.com/markjoyeuxcom/klyx-lab-a1
+ai:
+  provider: openaiCompatible
+  model: a3-plan
+  keySource: none
+  baseUrl: http://127.0.0.1:18792
+  allowProtectedEgress: false
+  refusalFallback: true
+  proposeActions: true
+notifications:
+  enabled: false
+  scope: protected
+  recoveries: false
