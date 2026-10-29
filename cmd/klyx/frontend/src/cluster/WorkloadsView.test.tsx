@@ -532,6 +532,18 @@ describe("WorkloadsView", () => {
     expect((await findByTestId("spark-no-data")).textContent).toBe("no data for homelab-nelli under cluster=nelli");
   });
 
+  it("sparkline row says its own source where the usage readout reads another (Codex's S3b-2c review, R3)", async () => {
+    mockGetWorkloadSparklines.mockResolvedValueOnce({ available: true, cpu: [{ t: 1, v: 0.1 }, { t: 61, v: 0.2 }], mem: [{ t: 1, v: 0.3 }, { t: 61, v: 0.4 }], sentence: "from source-A", lineage: "A" });
+    seed([broken]);
+    useFleet.getState().setWorkloadUsage("homelab-nelli", "", {
+      status: { available: true, message: "", updatedAt: "2026-06-10T00:00:00Z", sentence: "from source-B", lineage: "B" },
+      usage: {},
+    });
+    const { findByTestId } = render(<WorkloadsView cluster="homelab-nelli" />);
+    select("ollama");
+    expect((await findByTestId("spark-source")).textContent).toBe("Earlier read from source-A, not current");
+  });
+
   it("says where usage is read, and keeps an earlier read's sentence when the latest fails (Settings S3b §3.2, §3.4)", async () => {
     seed([broken]);
     useFleet.getState().setWorkloadUsage("homelab-nelli", "", {

@@ -260,7 +260,7 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		}
 		client := c.lokiClient(endpointhttp.DirectPolicy(lokiLimits, lokiPageTimeout, src.TLSSkipVerify))
 		d := endpointhttp.NewDirect(strings.TrimRight(src.Endpoint, "/"), auth, client, lokiLimits)
-		r.display, r.red, r.sentence = src.ID+", "+at, d.Redactor(), t.sentence(at)
+		r.display, r.red, r.sentence = src.ID+", "+at, d.Redactor(), t.sentence(at, d.Redactor())
 		r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 			return fence.Do(ctx, func(ctx context.Context) (int, []byte, error) { return d.GetWith(ctx, path, q, hdr) })
 		}
@@ -270,7 +270,7 @@ func (c *ClusterConn) subscribedLokiLocked(id string) (*LokiReader, error) {
 		return nil, fmt.Errorf("%s has no serviceRef, and Loki is not discovered", src.ID)
 	}
 	svc := serviceOf(src.ServiceRef)
-	r.display, r.sentence = src.ID+", Service "+serviceAt(svc)+" in "+src.Host, t.sentence("")
+	r.display, r.sentence = src.ID+", Service "+serviceAt(svc)+" in "+src.Host, t.sentence("", r.red)
 	r.get = func(ctx context.Context, path string, q url.Values, hdr http.Header) (int, []byte, error) {
 		conn, life, release, err := b.lease(src.Host, "the log history of "+c.name)
 		if err != nil {
@@ -315,7 +315,7 @@ func (r *LokiReader) Source() string { return alertmanager.Clip(r.red.Text(r.dis
 func (r *LokiReader) Tenant() string { return alertmanager.Clip(r.red.Text(r.tenant), 256) }
 
 // Sentence is the reader's scope sentence (S3b §3.4), a display value.
-func (r *LokiReader) Sentence() string { return alertmanager.Clip(r.red.Text(r.sentence), 1024) }
+func (r *LokiReader) Sentence() string { return alertmanager.Clip(r.red.Text(r.sentence), sentenceMax) }
 
 // Lineage is the reader's lineage (S3b §3.2).
 func (r *LokiReader) Lineage() sources.Lineage { return r.lineage }

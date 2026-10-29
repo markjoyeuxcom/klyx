@@ -57,8 +57,11 @@ type metricsCache struct {
 	terms *sourceTerms
 	key   string
 	// lineage is the source the capability was probed under (Settings S3b
-	// §3.2); the capability carries its key and sentence
+	// §3.2); the capability carries its key and sentence. words is its
+	// scope as display, without the reading credential: what an empty
+	// answer says (§3.3)
 	lineage sources.Lineage
+	words   string
 
 	samples    metrics.ClusterMetrics
 	samplesExp time.Time
@@ -224,10 +227,10 @@ func (c *ClusterConn) ensureMetricsLocked(ctx context.Context, forceReprobe bool
 	c.metricsState.credRev = rev
 	c.metricsState.capSet = true
 	if cap.Available {
-		c.metricsState.lineage, cap.Sentence = legacyMetrics(res, c.metricsCfg, rev)
+		c.metricsState.lineage, cap.Sentence, c.metricsState.words = legacyMetrics(res, c.metricsCfg, rev)
 		cap.Lineage = c.metricsState.lineage.Key()
 	} else {
-		c.metricsState.lineage = sources.Lineage{}
+		c.metricsState.lineage, c.metricsState.words = sources.Lineage{}, ""
 	}
 	c.metricsState.cap = cap
 	c.metricsState.client = metrics.NewClient(res.Transport, metrics.ScopeOf(c.metricsCfg.Match))
@@ -290,9 +293,9 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		release()
 		return &cap
 	}
-	lin := t.lineage()
+	lin, red := t.lineage(), q.Redactor()
 	if cap.Available {
-		cap.Sentence, cap.Lineage = t.sentence(display), lin.Key()
+		cap.Sentence, cap.Lineage = t.sentence(display, red), lin.Key()
 	}
 	// a probe across a move is neither cached nor shown as the source's
 	// availability; it settles before its host lease is released (§13)
@@ -302,7 +305,7 @@ func (c *ClusterConn) ensureSubscribedMetricsLocked(ctx context.Context, forceRe
 		c.metricsState = metricsCache{cap: metrics.MetricsCapability{Mode: metrics.ModeSubscribed, Source: source, Reason: why}}
 		return
 	}
-	c.metricsState = metricsCache{credRev: rev, capSet: true, cap: cap, terms: &t, key: key, lineage: lin}
+	c.metricsState = metricsCache{credRev: rev, capSet: true, cap: cap, terms: &t, key: key, lineage: lin, words: t.words(red)}
 	if !cap.Available {
 		c.metricsState.capExpiry = now.Add(metricsUnavailableTTL)
 	}
@@ -326,13 +329,15 @@ type metricsRead struct {
 	terms   *sourceTerms
 	release func()
 	// lineage is the read's source (Settings S3b §3.2): a reader's status
-	// carries its key and sentence, and an empty answer says its scope
+	// carries its key and sentence, and an empty answer says its scope, in
+	// words (display, without the credential)
 	lineage sources.Lineage
+	words   string
 }
 
 // noData is what this read says when it found no series: "" without a
 // scope.
-func (mr metricsRead) noData() string { return noData(mr.c.name, mr.lineage.Match) }
+func (mr metricsRead) noData() string { return noData(mr.c.name, mr.words) }
 
 // readMetrics resolves the capability (the lazy probe and its cache) and
 // takes a metricsRead of it: a subscription's client is built for this
@@ -340,9 +345,9 @@ func (mr metricsRead) noData() string { return noData(mr.c.name, mr.lineage.Matc
 func (c *ClusterConn) readMetrics(ctx context.Context, now time.Time) metricsRead {
 	c.metricsMu.Lock()
 	refused := c.ensureMetricsLocked(ctx, false, now)
-	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}, lineage: c.metricsState.lineage}
+	mr := metricsRead{c: c, cap: c.metricsState.cap, client: c.metricsState.client, rev: c.metricsState.credRev, terms: c.metricsState.terms, release: func() {}, lineage: c.metricsState.lineage, words: c.metricsState.words}
 	if refused != nil {
-		mr.cap, mr.terms, mr.lineage = *refused, nil, sources.Lineage{}
+		mr.cap, mr.terms, mr.lineage, mr.words = *refused, nil, sources.Lineage{}, ""
 	}
 	c.metricsMu.Unlock()
 	if mr.terms == nil || !mr.cap.Available {
@@ -421,7 +426,7 @@ func (c *ClusterConn) ClusterMetrics(ctx context.Context, forceReprobe bool) (me
 		why := c.readMoved(rev, terms)
 		release()
 		if samples.empty {
-			samples.cm.NoData = noData(c.name, c.metricsState.lineage.Match)
+			samples.cm.NoData = noData(c.name, c.metricsState.words)
 		}
 		if why != "" {
 			c.metricsState = metricsCache{}

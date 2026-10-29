@@ -112,6 +112,25 @@ func TestQueryFlowStats_NothingEnabledSaysHow(t *testing.T) {
 	}
 }
 
+// Settings S3b §3.3: series with no usable value are not an answer with no
+// series, and nor are series holding no rate Klyx reads.
+func TestQueryFlowStats_NonFiniteIsNotNoSeries(t *testing.T) {
+	read := func(q *scriptedQ) Status {
+		t.Helper()
+		stats, st, err := NewSource(metrics.NewClient(metrics.TransportOf(q), metrics.Scope{})).QueryFlowStats(context.Background())
+		if err != nil || !stats.Empty() {
+			t.Fatalf("%+v %v", stats, err)
+		}
+		return st
+	}
+	if st := read(&scriptedQ{flows: vec(el(`"verdict":"FORWARDED"`, "NaN")), http: vec(el(`"status":"200"`, "+Inf"))}); st.NoSeries || !strings.Contains(st.Message, "no usable value") {
+		t.Fatalf("non-finite: %+v", st)
+	}
+	if st := read(&scriptedQ{drops: vec(el(`"reason":"POLICY_DENIED","protocol":"TCP"`, "0"))}); st.NoSeries || strings.Contains(st.Message, "hubble.metrics") {
+		t.Fatalf("settled drops: %+v", st)
+	}
+}
+
 func TestQueryFlowStats_TransportErrorIsDegradedNotEmpty(t *testing.T) {
 	_, _, err := NewSource(metrics.NewClient(metrics.TransportOf(&scriptedQ{err: errors.New("connection refused")}), metrics.Scope{})).QueryFlowStats(context.Background())
 	if err == nil {

@@ -38,8 +38,15 @@ func (c *Client) Scope() Scope { return c.scope }
 // credentialed is a Querier that carries a credential.
 type credentialed interface{ redactor() safehttp.Redactor }
 
-func (c *Client) red() safehttp.Redactor {
-	if r, ok := c.q.(credentialed); ok {
+func (c *Client) red() safehttp.Redactor { return redactorOf(c.q) }
+
+// Redactor is the credential the transport carries, as a redactor: what a
+// read's own words about itself are said without (Settings S3b §3.2); none
+// for a transport without a credential.
+func (t Transport) Redactor() safehttp.Redactor { return redactorOf(t.q) }
+
+func redactorOf(q Querier) safehttp.Redactor {
+	if r, ok := q.(credentialed); ok {
 		return r.redactor()
 	}
 	return safehttp.Redactor{}

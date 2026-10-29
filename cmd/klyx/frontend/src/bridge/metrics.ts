@@ -16,9 +16,11 @@ export async function getClusterMetrics(cluster: string, forceReprobe: boolean):
     useFleet.getState().setMetrics(cluster, dto);
   } catch (e) {
     console.error("getClusterMetrics", e);
-    // Clear the loading flag so the overview doesn't get stuck on "Loading…".
+    // Clear the loading flag so the overview doesn't get stuck on "Loading…";
+    // a readout kept from an earlier read is said as such (Settings S3b
+    // §3.4). Only the latest request's failure marks it.
     if (g === metricsGen && useFleet.getState().metrics.cluster === cluster) {
-      useFleet.setState((s) => ({ metrics: { ...s.metrics, loading: false } }));
+      useFleet.setState((s) => ({ metrics: { ...s.metrics, loading: false, stale: s.metrics.dto != null } }));
     }
   }
 }

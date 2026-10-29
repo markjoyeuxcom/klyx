@@ -100,6 +100,30 @@ func TestEnvoyClusterSource_NoSeriesVsNoMatch(t *testing.T) {
 	}
 }
 
+// Settings S3b §3.3: a series with no usable value is not an answer with no
+// series - neither a route's nor the existence check's.
+func TestEnvoyClusterSource_NonFiniteIsNotNoSeries(t *testing.T) {
+	read := func(q *scriptedVecQ) Status {
+		t.Helper()
+		_, st, err := NewEnvoyClusterSource(metrics.NewClient(metrics.TransportOf(q), metrics.Scope{})).QueryRouteMetrics(context.Background(), []string{"default/web"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	nan := vec(el("httproute/default/web/rule/0", "NaN"))
+	if st := read(&scriptedVecQ{rqTotal: nan, p50: nan, p99: nan, rq5xx: nan, rqAll: nan, count: vec(el("", "5"))}); st.NoSeries || st.Message != msgNoUsableRouteValue {
+		t.Fatalf("non-finite routes: %+v", st)
+	}
+	if st := read(&scriptedVecQ{count: vec(el("", "+Inf"))}); st.NoSeries || st.Message != msgNoUsableEnvoyCount {
+		t.Fatalf("non-finite check: %+v", st)
+	}
+	// a zero count is still none
+	if st := read(&scriptedVecQ{count: vec(el("", "0"))}); !st.NoSeries {
+		t.Fatalf("zero count: %+v", st)
+	}
+}
+
 func TestEnvoyClusterSource_ErrRateClampedToOne(t *testing.T) {
 	// 5xx rate (8) exceeds total rate (4) -> raw 2.0, must clamp to 1.0.
 	q := &scriptedVecQ{

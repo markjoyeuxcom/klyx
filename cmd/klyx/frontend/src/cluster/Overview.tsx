@@ -20,7 +20,7 @@ import { reveal, selectsOnReveal } from "../nav/reveal";
 import { StationVerdict } from "./StationVerdict";
 import { clusterDisplayName } from "../fleet/clusterName";
 import { NeedsYou } from "../fleet/NeedsYou";
-import { SourceLine } from "./SourceLine";
+import { ChartSource, SourceLine } from "./SourceLine";
 
 
 // Overview on the workspace template (redesign step 7e). Its attention
@@ -104,7 +104,9 @@ export function Overview({ c }: { c: ClusterDTO }) {
                   {spark?.available && <Sparkline points={spark.mem} height={16} width={90} />}
                 </span>
               </div>
-              <MonitoringLine dto={m} loading={loading} onRefresh={() => getClusterMetrics(c.name, true)} />
+              <MonitoringLine dto={m} loading={loading} stale={metrics.cluster === c.name && !!metrics.stale} onRefresh={() => getClusterMetrics(c.name, true)} />
+              {/* the charts' own read: another source than the readout's now, or no data under its scope (Settings S3b §3.2, §3.4) */}
+              <ChartSource spark={spark} readout={m?.available ? m : null} testid="sparkline-source" />
             </section>
             <section aria-label="Cluster facts" className="ov-section">
               <h3 className="t-section-label">Cluster</h3>
@@ -484,7 +486,7 @@ function Usage({ frac }: { frac: number | null }) {
   );
 }
 
-function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; loading: boolean; onRefresh: () => void }) {
+function MonitoringLine({ dto, loading, stale, onRefresh }: { dto: MetricsDTO | null; loading: boolean; stale: boolean; onRefresh: () => void }) {
   let text: string;
   let color = "var(--color-text-tertiary)";
   if (loading && !dto) {
@@ -515,7 +517,7 @@ function MonitoringLine({ dto, loading, onRefresh }: { dto: MetricsDTO | null; l
       </button>
     </div>
     {/* where the readout comes from, and no data under its scope said as such (Settings S3b §3.3, §3.4) */}
-    {dto?.available && <SourceLine sentence={dto.sentence} noData={dto.noData} testid="monitoring-source" />}
+    {dto?.available && <SourceLine sentence={dto.sentence} noData={dto.noData} stale={stale} testid="monitoring-source" />}
     </>
   );
 }

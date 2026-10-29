@@ -29,23 +29,32 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	}
 	routes := metrics.Routes{Keys: routeKeys}
 
-	rps, err := s.client.InstantVector(ctx, metrics.RouteRPS.With(routes))
+	// seen counts the series the answers held, a non-finite one included,
+	// and usable those with a value: an answer whose series all lack one is
+	// not an answer with none (Settings S3b §3.3)
+	seen, usable := 0, 0
+	vector := func(q metrics.Query) ([]metrics.LabeledSample, error) {
+		v, n, err := s.client.InstantVectorSeen(ctx, q)
+		seen, usable = seen+n, usable+len(v)
+		return v, err
+	}
+	rps, err := vector(metrics.RouteRPS.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p50, err := s.client.InstantVector(ctx, metrics.RouteP50.With(routes))
+	p50, err := vector(metrics.RouteP50.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p99, err := s.client.InstantVector(ctx, metrics.RouteP99.With(routes))
+	p99, err := vector(metrics.RouteP99.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rq5xx, err := s.client.InstantVector(ctx, metrics.Route5xx.With(routes))
+	rq5xx, err := vector(metrics.Route5xx.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rqall, err := s.client.InstantVector(ctx, metrics.RouteAll.With(routes))
+	rqall, err := vector(metrics.RouteAll.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
@@ -53,6 +62,9 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	out := reduce(rps, p50, p99, rq5xx, rqall)
 	if len(out) > 0 {
 		return out, Status{Available: true}, nil
+	}
+	if seen > 0 && usable == 0 {
+		return out, Status{Available: true, Message: msgNoUsableRouteValue}, nil
 	}
 
 	// No matched series: distinguish "Envoy not scraped at all" from "these
@@ -65,13 +77,24 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	if err != nil {
 		return nil, Status{}, err
 	}
-	// Real Prometheus count() over no series returns an empty vector (-> Absent);
-	// the ==0 check is defensive against a malformed response.
-	if exist.Absent || exist.Value == 0 {
+	// Real Prometheus count() over no series returns an empty vector
+	// (-> Empty); the ==0 check is defensive against a malformed response. A
+	// count with no usable value proves no absence (S3b §3.3).
+	switch {
+	case exist.Empty || (!exist.Absent && exist.Value == 0):
 		return out, Status{Available: false, NoSeries: true, Message: "no envoy_cluster_* series found"}, nil
+	case exist.Absent:
+		return out, Status{Available: true, Message: msgNoUsableEnvoyCount}, nil
 	}
 	return out, Status{Available: true, Message: "no route series matched this topology"}, nil
 }
+
+// What a read whose series have no usable value says: never that it found
+// none (Settings S3b §3.3).
+const (
+	msgNoUsableRouteValue = "the route series have no usable value (NaN or Inf)"
+	msgNoUsableEnvoyCount = "no route series matched this topology, and the check for Envoy's series has no usable value (NaN or Inf)"
+)
 
 type acc struct {
 	rps     float64

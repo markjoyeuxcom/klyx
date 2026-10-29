@@ -84,8 +84,17 @@ func NewSource(c *metrics.Client) *Source { return &Source{client: c} }
 // its section nil (that metric set is not enabled).
 func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) {
 	out := FlowStats{}
+	// seen counts the series the answers held, a non-finite one included,
+	// and usable those with a value: an answer whose series all lack one is
+	// not an answer with none (Settings S3b §3.3)
+	seen, usable := 0, 0
+	vector := func(q metrics.Query) ([]metrics.LabeledSample, error) {
+		v, n, err := s.client.InstantVectorSeen(ctx, q)
+		seen, usable = seen+n, usable+len(v)
+		return v, err
+	}
 
-	verdicts, err := s.client.InstantVector(ctx, metrics.HubbleVerdicts.With(metrics.None{}))
+	verdicts, err := vector(metrics.HubbleVerdicts.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -99,7 +108,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 		}
 	}
 
-	drops, err := s.client.InstantVector(ctx, metrics.HubbleDropReasons.With(metrics.None{}))
+	drops, err := vector(metrics.HubbleDropReasons.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -114,7 +123,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 	}
 	sort.Slice(out.DropReasons, func(i, j int) bool { return out.DropReasons[i].Rate > out.DropReasons[j].Rate })
 
-	dns, err := s.client.InstantVector(ctx, metrics.HubbleDNSRcodes.With(metrics.None{}))
+	dns, err := vector(metrics.HubbleDNSRcodes.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -129,7 +138,7 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 		out.DNSTotalRate, out.DNSErrorRate = &total, &errs
 	}
 
-	http, err := s.client.InstantVector(ctx, metrics.HubbleHTTPStatus.With(metrics.None{}))
+	http, err := vector(metrics.HubbleHTTPStatus.With(metrics.None{}))
 	if err != nil {
 		return FlowStats{}, Status{}, err
 	}
@@ -144,8 +153,15 @@ func (s *Source) QueryFlowStats(ctx context.Context) (FlowStats, Status, error) 
 		out.HTTPTotalRate, out.HTTPErrorRate = &total, &errs
 	}
 
-	if out.Empty() {
+	switch {
+	case !out.Empty():
+		return out, Status{Available: true}, nil
+	case seen == 0:
 		return out, Status{Available: true, NoSeries: true, Message: "no Hubble metric series found - enable hubble.metrics (drop, flow, dns, http) in the Cilium config and scrape hubble-metrics (:9965)"}, nil
+	case usable == 0:
+		return out, Status{Available: true, Message: "Hubble's metric series have no usable value (NaN or Inf)"}, nil
 	}
-	return out, Status{Available: true}, nil
+	// series with values, none of them a rate Klyx reads: a verdict it does
+	// not show, or settled drop reasons at zero
+	return out, Status{Available: true, Message: "Hubble's metric series hold none of the rates Klyx reads"}, nil
 }

@@ -8,10 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moomora/klyx/internal/alertmanager"
 	"github.com/moomora/klyx/internal/capability"
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/endpointcred"
+	"github.com/moomora/klyx/internal/secretstore"
+	typedfake "k8s.io/client-go/kubernetes/fake"
 )
 
 // Settings S3b §3.2-§3.4: what a Loki or metrics read says about itself.
@@ -125,6 +128,12 @@ func TestAnEmptyReadUnderAScopeSaysSo(t *testing.T) {
 	if set, err := dev.ClusterSparklines(ctx); err != nil || set.NoData != "" {
 		t.Fatalf("gapped sparklines: %+v %v", set, err)
 	}
+	if _, st := dev.RouteMetrics(ctx, []string{"default/web"}); st.NoSeries || strings.Contains(st.Message, "no data for") {
+		t.Fatalf("non-finite routes: %+v", st)
+	}
+	if _, st := dev.HubbleFlowStats(ctx); st.NoSeries || strings.Contains(st.Message, "no data for") {
+		t.Fatalf("non-finite hubble: %+v", st)
+	}
 	// nor is a failed read
 	r.fake.mu.Lock()
 	r.fake.answer, r.fake.onData = "empty", func() {}
@@ -171,5 +180,72 @@ func TestEveryLokiReaderSaysItsSource(t *testing.T) {
 	c.WithLoki(&config.EndpointConfig{Endpoint: srv.URL, Match: map[string]string{"k8s_cluster_name": "dev"}})
 	if lr, err := c.Loki(); err != nil || lr.Sentence() != "from "+srv.URL+", filtered by k8s_cluster_name=dev" {
 		t.Fatalf("legacy match: %v %q", err, lr.Sentence())
+	}
+}
+
+// What a read says about itself never shows the credential it reads with:
+// a tenant or match value equal to it is shown redacted, in the sentence
+// and the empty answer's words alike, while the request still carries it
+// raw (Codex's S3b-2c review, R1). Invented fixture secrets only.
+func TestAMetricsReadsWordsNeverShowItsCredential(t *testing.T) {
+	ctx := context.Background()
+	words := func(t *testing.T, c *ClusterConn, f *obsFake, key string) {
+		t.Helper()
+		cm, capb := c.ClusterMetrics(ctx, false)
+		if !capb.Available || cm.NoData == "" {
+			t.Fatalf("not an available empty read: %+v %+v", cm, capb)
+		}
+		// a key past a part's clip is redacted before it is clipped, so no
+		// prefix of it is shown either
+		shown := key[:min(len(key), 40)]
+		if strings.Contains(capb.Sentence+cm.NoData, shown) || !strings.Contains(capb.Sentence, "[redacted]") || !strings.Contains(cm.NoData, "[redacted]") {
+			t.Fatalf("sentence %q, no data %q", capb.Sentence, cm.NoData)
+		}
+		// a range read says its empty answer in the same words
+		if set, err := c.ClusterSparklines(ctx); err != nil || !strings.Contains(set.NoData, "[redacted]") || strings.Contains(set.NoData+set.Sentence, shown) {
+			t.Fatalf("range: %+v %v", set, err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if !strings.Contains(strings.Join(f.queries, " "), `cluster="`+key+`"`) || !strings.Contains(strings.Join(f.tenant, " "), key) {
+			t.Fatalf("the request did not carry the raw scope: %q %q", f.queries, f.tenant)
+		}
+	}
+	t.Run("a cluster's own block", func(t *testing.T) {
+		const key = "S3BCREDENTIAL-opaque-fixture-7941"
+		f := &obsFake{answer: "empty"}
+		api := httptest.NewServer(f)
+		t.Cleanup(api.Close)
+		dev := NewClusterConn("dev", typedfake.NewSimpleClientset(), nil, nil, nil, clock.Real{}, config.MetricsConfig{Endpoint: api.URL, Token: key, Tenant: key, Match: map[string]string{"cluster": key}})
+		dev.WithCredentials(Credentials{Store: &secretstore.Memory{}, Revisions: endpointcred.NewRegistry()})
+		words(t, dev, f, key)
+	})
+	installation := func(t *testing.T, key string) {
+		f := &obsFake{answer: "empty"}
+		api := httptest.NewServer(f)
+		t.Cleanup(api.Close)
+		src := config.SourceConfig{ID: "mimir", Kind: config.SourceKindMetrics, Endpoint: api.URL, Auth: &config.EndpointAuth{Type: "bearer"}, Tenant: key, MemberLabel: "cluster", Serves: []config.ServeConfig{{Cluster: "dev"}}}
+		member := config.ClusterConfig{Name: "dev", Context: "dev", Metrics: &config.MetricsConfig{Source: "mimir", Match: map[string]string{"cluster": key}}}
+		r := newSrcRig(t, []config.SourceConfig{src}, member)
+		v, _ := endpointcred.Record{V: 1, Origin: api.URL, Type: "bearer", Secret: key}.Encode()
+		if err := r.store.Set(endpointcred.SourceAccount("mimir"), v); err != nil {
+			t.Fatal(err)
+		}
+		words(t, r.conns["dev"], f, key)
+	}
+	t.Run("a direct installation", func(t *testing.T) { installation(t, "S3BCREDENTIAL-opaque-installation-fixture-6852") })
+	t.Run("a credential longer than a part's clip", func(t *testing.T) {
+		installation(t, "S3BCREDENTIAL-long-fixture-"+strings.Repeat("k", alertmanager.MaxLabelValue))
+	})
+}
+
+// A subscription's tenant is clipped in its sentence, as every part is.
+func TestASubscribedSentenceClipsItsTenant(t *testing.T) {
+	src := metricsInstallation()
+	src.Tenant = strings.Repeat("t", 600)
+	r := newSrcRig(t, []config.SourceConfig{src}, config.ClusterConfig{Name: "dev", Context: "dev"})
+	_, capb := r.conns["dev"].ClusterMetrics(context.Background(), true)
+	if !capb.Available || strings.Contains(capb.Sentence, src.Tenant) || !strings.Contains(capb.Sentence, "tenant ttt") {
+		t.Fatalf("%+v", capb)
 	}
 }

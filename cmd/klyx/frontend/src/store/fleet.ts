@@ -940,7 +940,9 @@ export type NetworkSlice = {
 
 
 export type MetricsDTO = { available: boolean; mode: string; source: string; warning: string; reason: string; cpuFraction: number | null; memFraction: number | null; sentence?: string; lineage?: string; noData?: string };
-export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean };
+// stale: the last request for this cluster's readout failed, so dto is an
+// earlier read's, kept and said as such (Settings S3b §3.4)
+export type MetricsSlice = { cluster: string | null; dto: MetricsDTO | null; loading: boolean; stale?: boolean };
 
 // Nodes types
 export type NodeSummaryDTO = { name: string; uid?: string; gvr?: string; generation?: number; createdUnix?: number; roles: string[]; ready: boolean; unschedulable: boolean; problems: string[]; version: string; os: string; arch: string; taintCount: number; cpuCapacity: number; cpuAllocatable: number; memCapacity: number; memAllocatable: number; podCapacity: number; ageSeconds?: number; pool?: string; zone?: string; health?: HealthLike; extended?: ExtendedDTO };
@@ -1557,8 +1559,11 @@ export const useFleet = create<FleetState>()(guardRoute((set, get) => ({
       };
     }),
   metrics: { cluster: null, dto: null, loading: false },
-  setMetricsLoading: (cluster) => set((s) => ({ metrics: { cluster, dto: s.metrics.cluster === cluster ? s.metrics.dto : null, loading: true } })),
-  setMetrics: (cluster, dto) => set({ metrics: { cluster, dto, loading: false } }),
+  setMetricsLoading: (cluster) => set((s) => {
+    const same = s.metrics.cluster === cluster;
+    return { metrics: { cluster, dto: same ? s.metrics.dto : null, stale: same ? s.metrics.stale : false, loading: true } };
+  }),
+  setMetrics: (cluster, dto) => set({ metrics: { cluster, dto, loading: false, stale: false } }),
   clearMetrics: () => set({ metrics: { cluster: null, dto: null, loading: false } }),
   workloads: { cluster: null, namespace: "", items: [], namespaces: [], fluxPresent: false, loading: false, usage: {},
     kindFilter: workloadKindFilterFor(WORKLOAD_KINDS), needsAttention: false, search: "", expanded: [],

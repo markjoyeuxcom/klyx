@@ -47,7 +47,7 @@ import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
-import { SourceLine } from "./SourceLine";
+import { chartSentence, SourceLine, sourceText } from "./SourceLine";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -884,6 +884,9 @@ function WorkloadInspector({
 // loading and a muted reason when the series are unavailable.
 function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string; kind: string; namespace: string; name: string }) {
   const [spark, setSpark] = useState<SparklinesDTO | null>(null);
+  // the lens's usage readout, when it reads this cluster: the charts say
+  // their own source where it is not that readout's (Settings S3b §3.2)
+  const readout = useFleet((s) => (s.workloads.cluster === cluster && s.workloads.metricsAvailable ? s.workloads.metricsStatus : null));
 
   useEffect(() => {
     let cancelled = false;
@@ -894,6 +897,7 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
   }, [cluster, namespace, kind, name]);
 
   if (spark === null) return null;
+  const own = chartSentence(spark, readout ?? null);
   if (!spark.available) {
     return (
       <div style={{ padding: "0 8px 6px 32px", background: "var(--color-background-secondary)", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
@@ -914,6 +918,7 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
       </span>
       {/* no series under the cluster's scope, said rather than drawn as nothing (Settings S3b §3.3) */}
       {spark.noData && <span data-testid="spark-no-data" style={{ color: "var(--color-text-tertiary)" }}>{spark.noData}</span>}
+      {own.sentence && <span data-testid="spark-source" style={{ color: "var(--color-text-tertiary)" }}>{sourceText(own.sentence, own.stale)}</span>}
     </div>
   );
 }
