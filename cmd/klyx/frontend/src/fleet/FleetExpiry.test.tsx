@@ -11,7 +11,10 @@ vi.mock("../bridge/expiry", () => ({
 import { getExpiryScan } from "../bridge/expiry";
 
 const cl = (name: string): ClusterDTO => ({ name, env: "dev" } as unknown as ClusterDTO);
-const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400;
+// half a day past n whole days: the lens floors (notAfter - now) to days,
+// and its now is read at render, so a fixture on the exact boundary read a
+// second later fell a day short
+const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400 + 43200;
 
 describe("FleetExpiry", () => {
   beforeEach(() => {
