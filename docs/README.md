@@ -11,6 +11,6 @@ Start with `CLAUDE.md` at the repository root: what Klyx is, its locked decision
 | [`checklists/`](checklists/) | The native eyeball checklists the v1.0.0 gate refers to. |
 | [`design/`](design/) | The design record: the June mockups, the three July directions with Signal Bench's notes and tokens, and the redesign prompt. Signal Bench's visuals are retired; The Line replaced them in v0.14.0. |
 | [`history/`](history/) | The founding prompt, rewritten with hindsight, and the June open questions. |
-| [`../scripts/lab/`](../scripts/lab/) | The kind labs: the native smoke's labs and walk (`smoke/`), the health 1c parity fixture and the AI eval. |
+| [`../scripts/`](../scripts/) | The kind labs (`lab/`: the native smoke's labs and walk in `lab/smoke/`, the health 1c parity fixture, the AI eval) and the local gates and mutation runner (`dev/`). |
 
 How work is recorded: a spec in `superpowers/specs/` is written and reviewed before it is built, and gains an as-built section once built; release notes are written when a version is tagged; `backlog.md` is pruned as work ships. Review reports (`docs/reviews/`) and working files stay out of the repository.
